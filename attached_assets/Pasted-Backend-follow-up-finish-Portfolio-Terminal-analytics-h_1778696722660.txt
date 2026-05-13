@@ -1,0 +1,77 @@
+Backend follow-up: finish Portfolio Terminal analytics hydration.
+
+The last backend pass fixed cache signature validation, FMP fundamentals enrichment, theme_mapping, dynamic risk suggestions, and empty schema consistency. Good.
+
+Now verify and finish the remaining Terminal analytics sections. Do not touch the frontend yet except as needed for response shape compatibility.
+
+Required audit:
+1. Inspect the live /api/caelyn-terminal response for my current portfolio.
+2. Confirm whether these fields are populated with real data or explicit unavailable reasons:
+   - performance_charts / portfolio vs S&P 500
+   - correlation_matrix
+   - volatility
+   - weighted_volatility
+   - max_drawdown
+   - beta
+   - Sharpe
+   - Sortino
+   - period returns: 1D, 5D, 1M, 6M, 1Y
+   - risk_suggestions
+   - theme_mapping
+   - asset_allocation
+3. Return the exact JSON keys and counts for each section.
+
+Required fixes:
+A. Correlation matrix
+- Use historical daily prices/returns for current holdings.
+- Prefer existing historical price/FMP service.
+- Support all-stock portfolios.
+- Compute pairwise correlation when at least 2 holdings have enough history.
+- Exclude only symbols with insufficient data and return excluded_symbols with reasons.
+- Do not show demo matrix.
+
+B. Volatility
+- Use historical daily returns per holding.
+- Return annualized volatility by symbol.
+- Include lookback window.
+- Include unavailable reasons for missing symbols.
+
+C. Risk metrics
+Compute from actual holdings/history where available:
+- top concentration %
+- top concentration symbol
+- portfolio beta vs S&P 500 if possible
+- weighted volatility
+- max drawdown if portfolio series exists
+- Sharpe/Sortino only if enough return history exists
+Return explicit unavailable reasons where data is insufficient.
+
+D. Portfolio vs S&P 500 chart
+- Use existing portfolio value history if available.
+- If not available, return clean unavailable reason.
+- If reconstructing from holdings/date_added/historical prices, mark estimated=true.
+- Do not fake a chart.
+
+E. Data providers
+- Confirm live quotes/daily changes are coming from Tradier or the existing quote service.
+- Confirm historicals/fundamentals are coming from FMP or existing historical service.
+- Confirm theme mapping uses the same thematic universe as Themes page.
+
+Validation:
+Run /api/caelyn-terminal against the current real portfolio and report:
+- holdings_count
+- symbols
+- theme_mapping count
+- correlation matrix dimensions
+- volatility count
+- risk metrics populated/unavailable
+- performance chart points or unavailable reason
+- top movers count
+- risk suggestions count
+- cache_hit behavior with holdings_signature
+
+Return:
+- What was already working from prior pass.
+- What was missing.
+- Exact files changed.
+- Live validation output.

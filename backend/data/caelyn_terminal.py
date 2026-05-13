@@ -265,8 +265,8 @@ async def _cg_prices(coin_ids: list[str]) -> dict[str, dict]:
 _YF_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 _YF_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-def _yf_fetch_sync(symbol: str, range_: str = "5d") -> dict:
-    url = f"{_YF_CHART.format(symbol=symbol)}?interval=1d&range={range_}"
+def _yf_fetch_sync(symbol: str, range_: str = "5d", interval: str = "1d") -> dict:
+    url = f"{_YF_CHART.format(symbol=symbol)}?interval={interval}&range={range_}"
     req = urllib.request.Request(url, headers=_YF_HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -532,14 +532,16 @@ class CaelynTerminalProvider:
         perf_charts = self._build_perf_charts(positions, all_history, spy_bars)
         perf_chart  = perf_charts.get("1Y", [])   # backward-compat field
 
+        _lookback_days = 420  # calendar days of history requested for every ticker
+
         # 7. Correlation matrix — ALL holdings (inner-join on date) ───────
-        corr = self._build_correlation(tickers, all_history)
+        corr = self._build_correlation(tickers, all_history, lookback_days=_lookback_days)
 
         # 8. Risk metrics ─────────────────────────────────────────────────
         risk = self._build_risk(positions, all_history, spy_bars)
 
         # 9. Volatility (all holdings) ────────────────────────────────────
-        vol_list = self._build_volatility(positions, all_history)
+        vol_list, vol_unavailable = self._build_volatility(positions, all_history, lookback_days=_lookback_days)
 
         # 10. Risk suggestions ────────────────────────────────────────────
         suggestions = self._build_suggestions(positions, alloc, risk, theme_mapping_raw)
@@ -569,37 +571,57 @@ class CaelynTerminalProvider:
         # 18. Build theme mapping list for response ───────────────────────
         theme_mapping_list = self._build_theme_mapping_list(positions, theme_mapping_raw)
 
+        # 19. Performance chart metadata (per-period transparency) ─────────
+        _perf_meta: dict[str, dict] = {}
+        for _p in ("1D", "5D", "1M", "6M", "1Y"):
+            _pts = perf_charts.get(_p, [])
+            _perf_meta[_p] = {
+                "points":    len(_pts),
+                "source":    "tradier_daily_history",
+                "estimated": True,  # reconstructed from close prices, not live NAV
+            }
+            if _p == "1D" and len(_pts) < 5:
+                _perf_meta[_p]["note"] = "intraday_sparse — market may be closed or pre-market"
+            if not _pts:
+                _perf_meta[_p]["unavailable_reason"] = "no_history"
+
         return {
             "portfolio": {
-                "value":            round(total_value, 2),
-                "change_today":     round(change_today, 2),
-                "change_pct_today": change_pct_today,
-                "perf_1d":          periods["perf_1d"],
-                "perf_5d":          periods["perf_5d"],
-                "perf_1m":          periods["perf_1m"],
-                "perf_6m":          periods["perf_6m"],
-                "perf_1y":          periods["perf_1y"],
-                "total_return_pct": total_return_pct,
+                "value":              round(total_value, 2),
+                "change_today":       round(change_today, 2),
+                "change_pct_today":   change_pct_today,
+                "perf_1d":            periods["perf_1d"],
+                "perf_5d":            periods["perf_5d"],
+                "perf_1m":            periods["perf_1m"],
+                "perf_6m":            periods["perf_6m"],
+                "perf_1y":            periods["perf_1y"],
+                "total_return_pct":   total_return_pct,
                 "total_return_value": round(total_return_val, 2),
-                "sentiment":        sentiment,
-                "market_status":    _market_status_et(),
+                "sentiment":          sentiment,
+                "market_status":      _market_status_et(),
             },
-            "positions_count":    len(positions),
-            "holdings":           self._format_holdings(positions),
-            "performance_chart":  perf_chart,
-            "performance_charts": perf_charts,
-            "asset_allocation":   alloc,
-            "theme_mapping":      theme_mapping_list,
-            "correlation_matrix": corr,
-            "risk_metrics":       risk,
-            "volatility":         vol_list,
-            "risk_suggestions":   suggestions,
-            "top_movers":         top_movers,
-            "earnings_calendar":  earnings_cal,
-            "ticker_tape":        ticker_tape,
-            "news_ticker":        news_ticker,
-            "as_of":              datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "_holdings_sig":      self._holdings_sig(holdings_raw),
+            "positions_count":        len(positions),
+            "holdings":               self._format_holdings(positions),
+            "performance_chart":      perf_chart,
+            "performance_charts":     perf_charts,
+            "performance_chart_meta": _perf_meta,
+            "asset_allocation":       alloc,
+            "theme_mapping":          theme_mapping_list,
+            "correlation_matrix":     corr,
+            "risk_metrics":           risk,
+            "volatility":             vol_list,
+            "volatility_meta": {
+                "method":              "annualized_daily_returns",
+                "lookback_days":       _lookback_days,
+                "unavailable_reasons": vol_unavailable,
+            },
+            "risk_suggestions":       suggestions,
+            "top_movers":             top_movers,
+            "earnings_calendar":      earnings_cal,
+            "ticker_tape":            ticker_tape,
+            "news_ticker":            news_ticker,
+            "as_of":                  datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "_holdings_sig":          self._holdings_sig(holdings_raw),
         }
 
     # ── Data fetchers ─────────────────────────────────────────────────────
@@ -1046,13 +1068,17 @@ class CaelynTerminalProvider:
     ) -> list[dict]:
         """
         1D intraday chart using Yahoo Finance 5-min data.
+
+        Uses SPY timestamps as the primary axis and forward-fills each holding's
+        last-available intraday price so that timestamp sparsity in individual
+        holdings never collapses the chart to a single point.
         Falls back to empty list if market is closed / data unavailable.
         """
         import zoneinfo
         et = datetime.now(zoneinfo.ZoneInfo("America/New_York"))
         today_str = et.strftime("%Y-%m-%d")
 
-        # Collect all yahoo symbols for holdings
+        # Collect yahoo symbols for all holdings + SPY
         yahoo_syms: dict[str, str] = {}  # display_sym → yahoo_sym
         for p in positions:
             sym   = p["_sym"]
@@ -1065,17 +1091,15 @@ class CaelynTerminalProvider:
                 yahoo_syms[sym] = sym
         yahoo_syms["SPY"] = "SPY"
 
-        # Fetch intraday data synchronously (we're inside a to_thread already? No — we're async)
-        # We do a quick sync fetch via urllib for each ticker
+        # Fetch intraday 5-min data for every symbol (interval=5m, range=1d)
         intraday_map: dict[str, list[tuple[str, float]]] = {}
         for sym, ysym in yahoo_syms.items():
             try:
-                raw = _yf_fetch_sync(ysym, "1d")
+                raw = _yf_fetch_sync(ysym, "1d", interval="5m")
                 res = raw.get("chart", {}).get("result", [{}])[0]
-                meta = res.get("meta", {})
-                ts   = res.get("timestamp", [])
+                ts     = res.get("timestamp", [])
                 closes = res.get("indicators", {}).get("quote", [{}])[0].get("close", [])
-                bars = []
+                bars: list[tuple[str, float]] = []
                 for i in range(min(len(ts), len(closes))):
                     c = closes[i]
                     if c is not None:
@@ -1086,43 +1110,38 @@ class CaelynTerminalProvider:
             except Exception:
                 intraday_map[sym] = []
 
-        spy_bars_1d = intraday_map.get("SPY", [])
+        spy_bars_1d = sorted(intraday_map.get("SPY", []))
         if not spy_bars_1d:
             return []
 
-        # Common timestamps: intersection of all holding timestamps and SPY
-        spy_times = [t for t, _ in spy_bars_1d]
-        holding_time_sets = []
-        for p in positions:
-            b = intraday_map.get(p["_sym"], [])
-            if b:
-                holding_time_sets.append(set(t for t, _ in b))
+        # Pre-sort each holding's intraday bars for linear-scan forward-fill
+        holding_sorted: dict[str, list[tuple[str, float]]] = {
+            p["_sym"]: sorted(intraday_map.get(p["_sym"], []))
+            for p in positions
+        }
 
-        if not holding_time_sets:
-            return []
+        # Initialise last-known price from Tradier quote (already fetched this request)
+        last_px:     dict[str, float] = {p["_sym"]: (p.get("price") or 0.0) for p in positions}
+        holding_ptr: dict[str, int]   = {p["_sym"]: 0 for p in positions}
 
-        common_times = sorted(
-            set(spy_times).intersection(*holding_time_sets) if holding_time_sets else set(spy_times)
-        )
-        if not common_times:
-            common_times = spy_times
-
-        spy_time_map = {t: v for t, v in spy_bars_1d}
-        holding_time_maps: dict[str, dict[str, float]] = {}
-        for p in positions:
-            bars_1d = intraday_map.get(p["_sym"], [])
-            holding_time_maps[p["_sym"]] = {t: v for t, v in bars_1d}
-
-        result_pairs = []
-        for t_label in common_times:
-            spy_v = spy_time_map.get(t_label)
+        # Walk SPY timestamps; for each bar advance every holding's pointer and
+        # forward-fill its last-known price.  This guarantees we always have a
+        # portfolio value even when a holding's last reported bar was 5 min ago.
+        result_pairs: list[tuple[str, float, float]] = []
+        for t_label, spy_v in spy_bars_1d:
             if not spy_v:
                 continue
-            port_v = 0.0
             for p in positions:
-                hm = holding_time_maps.get(p["_sym"], {})
-                px = hm.get(t_label, p.get("price") or 0)
-                port_v += p["_shares"] * px
+                sym  = p["_sym"]
+                bars = holding_sorted[sym]
+                ptr  = holding_ptr[sym]
+                # Consume all holding bars whose timestamp ≤ current SPY bar
+                while ptr < len(bars) and bars[ptr][0] <= t_label:
+                    last_px[sym] = bars[ptr][1]
+                    ptr += 1
+                holding_ptr[sym] = ptr
+
+            port_v = sum(p["_shares"] * last_px[p["_sym"]] for p in positions)
             result_pairs.append((t_label, port_v, spy_v))
 
         if not result_pairs or result_pairs[0][1] == 0:
@@ -1154,17 +1173,25 @@ class CaelynTerminalProvider:
             })
         return result
 
-    def _build_correlation(self, all_tickers: list[str], all_history: dict) -> dict:
+    def _build_correlation(
+        self, all_tickers: list[str], all_history: dict, lookback_days: int = 420
+    ) -> dict:
         """
         Compute NxN Pearson correlation matrix for ALL holdings.
         Uses an inner-join on calendar dates so crypto/commodity/equity
         date mismatches are handled correctly.
+        Returns excluded_symbols with reasons for any tickers with insufficient data.
         """
+        excluded_symbols: list[dict] = []
         returns_map: dict[str, dict[str, float]] = {}
         for t in all_tickers:
             bars = all_history.get(t, [])
             closes = [(b["date"], b["close"]) for b in bars if b.get("close")]
             if len(closes) < 15:
+                excluded_symbols.append({
+                    "symbol": t,
+                    "reason": f"insufficient_history ({len(closes)} bars, min 15)",
+                })
                 continue
             rets: dict[str, float] = {}
             for i in range(1, len(closes)):
@@ -1174,20 +1201,34 @@ class CaelynTerminalProvider:
                     rets[d] = (c - prev) / prev
             if len(rets) >= 15:
                 returns_map[t] = rets
+            else:
+                excluded_symbols.append({
+                    "symbol": t,
+                    "reason": f"insufficient_returns ({len(rets)} dates, min 15)",
+                })
 
         valid = [t for t in all_tickers if t in returns_map]
         n = len(valid)
+        _base = {
+            "method": "pearson",
+            "lookback_days": lookback_days,
+            "excluded_symbols": excluded_symbols,
+        }
         if n == 0:
-            return {"tickers": [], "values": []}
+            return {**_base, "tickers": [], "values": [], "common_dates_count": 0}
 
         # Inner-join: only dates where ALL tickers have data
         date_sets = [set(returns_map[t].keys()) for t in valid]
         common_dates = sorted(set.intersection(*date_sets)) if len(date_sets) > 1 else sorted(date_sets[0])
 
         if len(common_dates) < 10:
-            # Fallback: use the most recent 60 days from each ticker independently
-            return {"tickers": valid, "values": [[1.0 if i == j else 0.0
-                    for j in range(n)] for i in range(n)]}
+            return {
+                **_base,
+                "tickers": valid,
+                "values": [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)],
+                "common_dates_count": len(common_dates),
+                "note": "insufficient_common_dates — identity matrix used",
+            }
 
         vecs = {t: [returns_map[t][d] for d in common_dates] for t in valid}
 
@@ -1204,7 +1245,7 @@ class CaelynTerminalProvider:
                     row.append(c if c is not None else 0.0)
             mat.append(row)
 
-        return {"tickers": valid, "values": mat}
+        return {**_base, "tickers": valid, "values": mat, "common_dates_count": len(common_dates)}
 
     def _build_risk(self, positions, all_history: dict, spy_bars: list) -> dict:
         spy_closes = [b["close"] for b in spy_bars if b.get("close")]
@@ -1275,24 +1316,54 @@ class CaelynTerminalProvider:
         top_conc = int(round(top_pos["allocation_pct"])) if top_pos else 0
         top_conc_label = top_pos["ticker"] if top_pos else ""
 
+        # Collect reasons for any metrics that couldn't be computed
+        unavailable_reasons: dict[str, str] = {}
+        if not weighted_beta:
+            unavailable_reasons["portfolio_beta"] = (
+                "insufficient_common_returns with SPY (min 20 matching trading days)"
+            )
+        if not port_rets_list:
+            unavailable_reasons["sharpe_ratio"]  = "no portfolio return history"
+            unavailable_reasons["sortino_ratio"] = "no portfolio return history"
+            unavailable_reasons["max_drawdown"]  = "no portfolio return history"
+
         return {
-            "weighted_volatility":  round(weighted_vol, 1),
-            "max_drawdown":         max_dd,
-            "top_concentration":    top_conc,
-            "top_concentration_label": top_conc_label,
-            "portfolio_beta":       round(weighted_beta, 2) if weighted_beta else None,
-            "sharpe_ratio":         sharpe,
-            "sortino_ratio":        sortino,
+            "weighted_volatility":      round(weighted_vol, 1),
+            "max_drawdown":             max_dd,
+            "top_concentration":        top_conc,
+            "top_concentration_label":  top_conc_label,
+            "portfolio_beta":           round(weighted_beta, 2) if weighted_beta else None,
+            "sharpe_ratio":             sharpe,
+            "sortino_ratio":            sortino,
+            "data_source":              "tradier_daily_history",
+            "unavailable_reasons":      unavailable_reasons,
         }
 
-    def _build_volatility(self, positions, all_history: dict) -> list[dict]:
-        vols = []
+    def _build_volatility(
+        self, positions, all_history: dict, lookback_days: int = 420
+    ) -> tuple[list[dict], dict[str, str]]:
+        """Return (items_list, unavailable_reasons).
+        Each item includes lookback_days and data_points for transparency.
+        unavailable_reasons maps ticker → human-readable explanation for any
+        symbol that could not be computed.
+        """
+        vols: list[dict] = []
+        unavailable: dict[str, str] = {}
         for p in positions:
             closes = self._get_closes(p["_sym"], all_history)
             v = _annualized_vol(closes)
             if v is not None:
-                vols.append({"ticker": p["ticker"], "vol": v})
-        return sorted(vols, key=lambda x: -x["vol"])
+                vols.append({
+                    "ticker":       p["ticker"],
+                    "vol":          v,
+                    "lookback_days": lookback_days,
+                    "data_points":  len(closes),
+                })
+            else:
+                unavailable[p["ticker"]] = (
+                    f"insufficient_history ({len(closes)} closes, min 10)"
+                )
+        return sorted(vols, key=lambda x: -x["vol"]), unavailable
 
     def _build_suggestions(
         self, positions, alloc, risk, theme_mapping: dict | None = None
@@ -1573,10 +1644,13 @@ class CaelynTerminalProvider:
             # Find this ticker in raw data
             raw_entry = next((e for e in raw if (e.get("ticker") or "").upper() == t), {})
 
+            # Use FMP company name when available, fall back to ticker
+            _company_name = (pos.get("_name") or t) if pos else t
+
             if is_etf:
                 results.append({
                     "ticker":       t,
-                    "company":      t,
+                    "company":      _company_name,
                     "in_portfolio": True,
                     "next_date":    "N/A",
                     "est_eps":      None,
@@ -1587,7 +1661,7 @@ class CaelynTerminalProvider:
                 next_dt = raw_entry.get("next_date")
                 results.append({
                     "ticker":       t,
-                    "company":      t,
+                    "company":      _company_name,
                     "in_portfolio": True,
                     "next_date":    _fmt_date(next_dt),
                     "est_eps":      raw_entry.get("est_eps"),
