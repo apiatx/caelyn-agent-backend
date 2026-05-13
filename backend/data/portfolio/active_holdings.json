@@ -2,35 +2,119 @@
   "holdings": [
     {
       "ticker": "AEHR",
-      "shares": 500.0,
-      "avg_cost": 14.5,
+      "shares": 232.0,
+      "avg_cost": 45.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "SIVEF",
+      "shares": 3996.0,
+      "avg_cost": 1.41,
       "asset_type": "stock"
     },
     {
       "ticker": "MRVL",
-      "shares": 200.0,
-      "avg_cost": 58.2,
+      "shares": 111.0,
+      "avg_cost": 110.0,
       "asset_type": "stock"
     },
     {
-      "ticker": "PLAB",
-      "shares": 300.0,
-      "avg_cost": 22.1,
+      "ticker": "PENG",
+      "shares": 422.0,
+      "avg_cost": 35.0,
       "asset_type": "stock"
     },
     {
       "ticker": "AMKR",
-      "shares": 150.0,
-      "avg_cost": 31.4,
+      "shares": 216.0,
+      "avg_cost": 48.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "IQEPF",
+      "shares": 19875.0,
+      "avg_cost": 0.35,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "SLOIF",
+      "shares": 79.0,
+      "avg_cost": 61.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "TRT",
+      "shares": 1160.0,
+      "avg_cost": 6.2,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "NBIS",
+      "shares": 76.0,
+      "avg_cost": 87.0,
       "asset_type": "stock"
     },
     {
       "ticker": "VECO",
-      "shares": 250.0,
-      "avg_cost": 19.8,
+      "shares": 234.0,
+      "avg_cost": 42.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "AMPX",
+      "shares": 625.0,
+      "avg_cost": 15.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "LWLG",
+      "shares": 473.0,
+      "avg_cost": 8.33,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "OUST",
+      "shares": 302.0,
+      "avg_cost": 26.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "SLNH",
+      "shares": 5404.0,
+      "avg_cost": 1.59,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "NRGV",
+      "shares": 1969.0,
+      "avg_cost": 5.17,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "P",
+      "shares": 123.0,
+      "avg_cost": 81.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "VPG",
+      "shares": 104.0,
+      "avg_cost": 63.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "FPLSF",
+      "shares": 197.0,
+      "avg_cost": 25.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "SILC",
+      "shares": 176.0,
+      "avg_cost": 28.07,
       "asset_type": "stock"
     }
   ],
-  "_saved_at": "2026-05-13T22:02:45.077151Z",
+  "_saved_at": "2026-05-13T23:00:52.286827Z",
   "_source": "portfolio_store"
 }

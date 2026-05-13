@@ -1,0 +1,92 @@
+BACKEND REPLIT AGENT — Final Portfolio stale ticker purge + delete validation
+
+Frontend now appears fixed and validated:
+- FastAPI canonical matches local portfolio: 19/19
+- /api/caelyn-terminal returns real FastAPI analytics
+- volatility has 19 entries
+- correlation matrix is 19×19
+- risk metrics and suggestions are working
+
+Now do one final backend verification to make sure stale/deleted tickers can never reappear in Portfolio Terminal.
+
+Known stale/demo/test tickers that should NOT appear unless currently in the Portfolio Dashboard:
+- NVDA
+- BTC
+- GOLD
+- OSS
+- BUZZ
+- PLAB, if PLAB is not currently in the Dashboard
+- any archived/test portfolio symbols not present in the current canonical portfolio
+
+Task:
+Verify the backend/Neon/caches only contain the current active Dashboard portfolio and that deleting a ticker removes it from Terminal permanently.
+
+Do NOT hardcode the current portfolio.
+Do NOT seed holdings.
+Do NOT preserve stale test portfolios.
+Do NOT ask the user for tickers.
+
+Audit:
+1. Check Neon canonical active portfolio.
+2. Check any active holdings JSON fallback files.
+3. Check archived legacy holdings files are not read by active endpoints.
+4. Check /api/portfolio/holdings.
+5. Check /api/caelyn-terminal.
+6. Check terminal cache key/signature.
+7. Search for stale tickers in active runtime/cache/fallback paths.
+
+Required verification:
+A. Current active portfolio
+Return:
+- canonical_count
+- canonical_symbols
+- terminal_count
+- terminal_symbols
+- holdings_signature
+- cache_key
+- cache_hit/cache_miss
+
+B. Stale ticker purge
+Confirm these do not appear in active holdings or Terminal unless they are actually in canonical holdings:
+- NVDA
+- BTC
+- GOLD
+- OSS
+- BUZZ
+- PLAB
+
+Check:
+- Neon active holdings
+- /api/portfolio/holdings
+- /api/caelyn-terminal holdings
+- /api/caelyn-terminal correlation matrix symbols
+- /api/caelyn-terminal volatility symbols
+- /api/caelyn-terminal risk suggestions text
+- /api/caelyn-terminal performance chart source symbols
+- any local JSON fallback currently used by production
+
+C. Delete behavior
+Run a safe test with a temporary holding:
+1. Add TEST_DELETE to portfolio through the same endpoint/frontend sync path used by Dashboard.
+2. Confirm Neon active holdings includes TEST_DELETE.
+3. Confirm /api/caelyn-terminal includes TEST_DELETE.
+4. Delete TEST_DELETE through the same delete/sync path used by Dashboard.
+5. Confirm Neon active holdings does not include TEST_DELETE.
+6. Confirm /api/caelyn-terminal does not include TEST_DELETE.
+7. Confirm correlation matrix, volatility, risk suggestions, and performance chart do not include TEST_DELETE.
+8. Confirm cache invalidated/rebuilt with a new holdings_signature.
+
+D. Production guarantee
+If a ticker is deleted from Dashboard and the updated holdings list is synced to FastAPI/Neon:
+- it must be removed from Neon active holdings
+- terminal cache must be invalidated
+- /api/caelyn-terminal must rebuild from the new signature
+- deleted symbol must not appear again unless re-added by the Dashboard
+
+If any stale ticker appears, identify exactly where it came from and remove that active read path.
+
+Return:
+- stale ticker audit result
+- delete test result
+- exact files changed if any
+- final proof that deleted symbols cannot reappear in Terminal
