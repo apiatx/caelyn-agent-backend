@@ -1,0 +1,178 @@
+BACKEND REPLIT AGENT — Portfolio Terminal analytics are still broken for the real portfolio
+
+The Portfolio Terminal is not working end-to-end.
+
+Current UI state:
+- Holdings list is now showing the current 19 positions.
+- Asset Allocation is now working.
+- Top Movers / Losers are working.
+- But these are still not working:
+  - Portfolio vs S&P 500
+  - Correlation Matrix
+  - Risk Analysis, except Top Concentration
+  - Volatility
+  - Risk Suggestions
+
+Important:
+These sections worked before when the Terminal was using the old stale/hardcoded portfolio assets. After switching to the current real portfolio, the sections broke. So do not rebuild everything from scratch. Find the old working analytics path and reconnect it to the current/canonical holdings.
+
+Please take the reins and diagnose this from the actual repo. Do not assume prior prompts or prior fixes were correct.
+
+Goal:
+Make the existing Portfolio Terminal analytics work with the current 19-position portfolio.
+
+Do NOT:
+- hardcode tickers
+- reintroduce old demo/stale holdings
+- create another portfolio source
+- fake analytics
+- redesign response shape unless necessary
+- break the holdings sync that now works
+- break Asset Allocation or Top Movers, which are currently working
+- make broad unrelated changes
+
+Audit the actual live chain:
+1. Identify the current canonical holdings source used by Terminal.
+2. Identify the old/stale holdings source that made all analytics work before.
+3. Compare the data shape passed into analytics before vs now.
+4. Find why these sections are unavailable now:
+   - Portfolio vs S&P 500
+   - Correlation Matrix
+   - Risk Analysis
+   - Volatility
+   - Risk Suggestions
+5. Determine whether the failure is caused by:
+   - analytics functions still reading old schema fields
+   - current holdings missing fields the old analytics expected
+   - symbol normalization issue
+   - historical price fetch failing
+   - FMP/Tradier/Yahoo helper not being called
+   - cache returning partial placeholder response
+   - frontend proxy stripping fields
+   - frontend expecting old field names
+   - insufficient diagnostics hiding the actual error
+6. Reuse existing services and helpers wherever possible.
+
+What each section should do:
+
+A. Portfolio vs S&P 500
+This should use the same historical price/data path that worked before.
+For the current holdings:
+- fetch or reuse historical price series for each holding
+- fetch S&P 500/SPY benchmark series
+- support existing buttons:
+  - 1D
+  - 5D
+  - 1M
+  - 6M
+  - 1Y
+- if using current holdings + shares + avg price, build the best available portfolio series from those positions
+- if account value snapshots are needed for perfect accuracy, return a clear reason, but the chart should not be blank if the old analytics path can estimate from price history
+
+B. Correlation Matrix
+This is not a theme map itself. It should calculate correlations between the portfolio assets using historical returns.
+But it should also include each holding’s mapped theme from the Themes Universe if available so the UI can show context.
+For each holding:
+- symbol
+- primary_theme / theme
+- enough historical returns to compute correlation
+Return:
+- matrix
+- tickers/symbols
+- method
+- lookback
+- excluded symbols with exact reasons
+
+C. Risk Analysis
+Restore the working calculations using the current portfolio:
+- Weighted Volatility
+- Max Drawdown
+- Portfolio Beta
+- Sharpe Ratio
+- Sortino Ratio
+- Top Concentration
+If a metric is unavailable, return the exact reason and missing dependency.
+Do not just return dashes.
+
+D. Volatility
+Use the existing historical price/return path that worked before.
+Return per-holding annualized volatility for all symbols where possible.
+Return excluded symbols with exact reasons.
+
+E. Risk Suggestions
+Stop showing only generic “Portfolio Synced.”
+Generate actual deterministic suggestions from the current holdings:
+- concentration risk
+- sector/theme concentration
+- high-volatility positions
+- highly correlated positions
+- earnings clustering if available
+- no hedge/defensive allocation if relevant
+Use current symbols and current theme/sector mapping.
+
+F. Theme mapping
+Use the same Themes Universe logic that powers the Themes page.
+For every current holding, return:
+- symbol
+- sector if available
+- industry if available
+- primary_theme if available
+- theme source/confidence if available
+This should help correlation/risk suggestions, but correlation still needs price-return math.
+
+Diagnostics:
+Add one backend debug object to the /api/caelyn-terminal response temporarily or log it clearly:
+
+[portfolio-terminal-backend-debug]
+{
+  holdings_count,
+  symbols,
+  holdings_source,
+  holdings_signature,
+  analytics_input_sample,
+  historical_fetch_attempted_symbols,
+  historical_fetch_success_symbols,
+  historical_fetch_failed_symbols_with_reason,
+  performance_chart_points_by_period,
+  correlation_available,
+  correlation_dimensions,
+  volatility_count,
+  risk_metric_keys,
+  risk_metric_unavailable_reasons,
+  risk_suggestions_count,
+  theme_mapping_count,
+  cache_hit,
+  cache_key
+}
+
+Validation required before saying done:
+Use the current real 19-position portfolio, not AEHR/MRVL/PLAB only.
+
+Return a live validation table:
+- holdings_count and symbols
+- Portfolio vs S&P 500:
+  - 1D points
+  - 5D points
+  - 1M points
+  - 6M points
+  - 1Y points
+  - benchmark points
+- Correlation Matrix:
+  - dimensions
+  - included symbols
+  - excluded symbols and reasons
+- Risk Analysis:
+  - each metric value or exact unavailable reason
+- Volatility:
+  - count
+  - top/bottom examples
+  - excluded symbols and reasons
+- Risk Suggestions:
+  - count
+  - examples referencing current holdings
+- Theme Mapping:
+  - count
+  - examples
+- Confirm no old/stale demo holdings are used.
+
+If the backend response has the data but the UI does not render it, stop and tell frontend exactly which fields are present and which UI paths need wiring.
