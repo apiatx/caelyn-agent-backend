@@ -1453,7 +1453,18 @@ class CaelynTerminalProvider:
     # ── Holdings loader ───────────────────────────────────────────────────
 
     def _load_holdings(self, portfolio_file: Path) -> list[dict]:
-        candidates = [portfolio_file, Path("data/portfolio_holdings.json")]
+        # Rule: if the per-user file exists (even when empty), use it exclusively.
+        # The legacy demo fallback fires ONLY when no per-user file has been
+        # created yet (unauthenticated / first-run dev mode).  This prevents
+        # demo holdings from ever appearing for authenticated users who have
+        # deliberately cleared their portfolio.
+        if portfolio_file.exists():
+            candidates = [portfolio_file]
+            source_label = "user_file"
+        else:
+            candidates = [Path("data/portfolio_holdings.json")]
+            source_label = "legacy_fallback"
+
         for path in candidates:
             try:
                 if not path.exists():
@@ -1467,10 +1478,19 @@ class CaelynTerminalProvider:
                     and h.get("ticker")
                     and float(h.get("shares") or 0) > 0
                 ]
-                if result:
-                    return result
+                print(
+                    f"[CAELYN] _load_holdings  source={source_label}  "
+                    f"file={path.name}  raw={len(holdings)}  "
+                    f"valid={len(result)}"
+                )
+                return result
             except Exception as e:
                 print(f"[CAELYN] Holdings load error ({path}): {e}")
+
+        print(
+            f"[CAELYN] _load_holdings  source={source_label}  "
+            f"file={portfolio_file.name}  result=empty (no file or parse error)"
+        )
         return []
 
     def _empty(self) -> dict:
