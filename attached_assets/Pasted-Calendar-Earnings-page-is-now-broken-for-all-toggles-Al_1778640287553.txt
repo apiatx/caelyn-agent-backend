@@ -1,0 +1,105 @@
+Calendar Earnings page is now broken for all toggles:
+- All
+- Watchlist
+- Portfolio
+
+UI error:
+"Could not load curated earnings for this week."
+
+This is likely a route/response-shape/regression issue, not FMP overload. Do not expand the feature. Diagnose and restore the working forward-looking earnings calendar.
+
+Backend repo:
+apiatx/caelyn-agent-backend
+
+Context:
+The previous backend change added:
+- backend/services/user_earnings_service.py
+- user_earnings_cache table
+- symbol-driven path for scope=watchlist|portfolio
+- sync triggers from POST /api/watchlist and POST /api/portfolio/holdings
+
+Previous validation claimed:
+- scope=all unchanged, 1,000 events
+- scope=watchlist returned only watchlist symbols
+- scope=portfolio returned only portfolio symbols
+- second requests were cache hits with 0 FMP calls
+
+Current problem:
+The frontend now says "Could not load curated earnings for this week" for ALL scopes, including scope=all. That means something in the shared Calendar Earnings endpoint, mode handling, date range handling, or response shape is broken.
+
+Do this as a debugging/rollback-safe fix:
+
+1. Inspect the exact backend route used by the Calendar Earnings page.
+Likely:
+GET /api/catalysts/events?tab=earnings_dates...
+or the current catalyst/calendar route.
+
+2. Run these curl tests exactly and capture status code + JSON shape:
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming&scope=all
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming&scope=watchlist
+GET /api/catalysts/events?tab=earnings_dates&mode=upcoming&scope=portfolio
+
+Also test whatever the frontend actually calls for "curated earnings for this week":
+- find the failing request in backend logs
+- copy its exact path/query params
+- run that exact URL with curl
+
+3. Confirm whether the failure is:
+- exception in catalyst_calendar_service.py
+- wrong mode branch
+- wrong response shape
+- missing required query param
+- user_earnings_service import/init error
+- Neon user_earnings_cache table/init error
+- FMP 429/rate-limit
+- empty data incorrectly treated as error
+
+4. Hard rule:
+scope=all must bypass the new user_earnings_service completely.
+The new symbol-driven service should only run for:
+tab=earnings_dates AND scope in ["watchlist", "portfolio"]
+
+5. Do not let the new Watchlist/Portfolio code affect:
+- scope=all
+- non-earnings tabs
+- existing curated weekly earnings path
+
+6. Add defensive fallback:
+If scope=watchlist or scope=portfolio fails because user_earnings_service throws, return a scoped empty response with metadata and error_detail in logs.
+Do NOT crash the entire Calendar Earnings endpoint.
+Do NOT make scope=all fail because watchlist/portfolio cache code failed.
+
+7. Check response shape compatibility.
+The frontend probably expects one of the existing earnings shapes:
+- days[]
+- events[]
+- items[]
+- or whatever current Calendar component reads.
+
+Preserve the exact same response shape for scope=all.
+For scope=watchlist/portfolio, return the same top-level shape expected by the frontend, just with scoped events.
+
+8. Check mode compatibility.
+If the frontend uses mode=week, mode=curated, or another value, map it safely to the existing earnings logic.
+The symbol-driven path should not only work for mode=upcoming if the frontend actually calls week/curated.
+
+9. Logging needed:
+For each request log:
+- full path/query params
+- tab
+- mode
+- scope
+- selected branch: all_broad_calendar | user_symbol_earnings | curated_week
+- status code
+- event count
+- exception traceback if any
+
+10. Validation required before done:
+- Exact frontend failing URL returns 200
+- All toggle returns broad earnings
+- Watchlist returns only watchlist earnings or clean empty state
+- Portfolio returns only portfolio earnings or clean empty state
+- No "Could not load curated earnings for this week" caused by backend 500
+- Logs show whether FMP calls were made or cache hit
+
+Do not add previous earnings, EPS beats, revenue beats, or new enrichment. This fix is forward-looking upcoming earnings only.
