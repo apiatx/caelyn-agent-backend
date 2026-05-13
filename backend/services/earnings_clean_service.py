@@ -1062,6 +1062,14 @@ async def get_day_clean(
     """
     max_live = min(max(0, max_live), _MAX_LIVE_CAP)
 
+    # ── Watchlist short-circuit ────────────────────────────────────────────────
+    # For scope=watchlist we bypass FMP direct calendar calls and use the
+    # symbol-driven user_earnings_service path so the day view shows only events
+    # for the user's actual saved Watchlist tickers — not the FMP raw pool.
+    if scope == "watchlist":
+        return await _get_day_watchlist_scope(api_key, date, search, "clean")
+    # ── End watchlist short-circuit ────────────────────────────────────────────
+
     # Phase 1: raw calendar fetch — shared Mon-Fri chunk cache
     raw_result   = await get_raw_earnings_chunks(
         date, date, api_key, max_weeks=_BUDGET_DAY_CHUNKS,
@@ -1958,6 +1966,127 @@ async def get_curated_earnings_range(
     return result
 
 
+# ── Shared day watchlist helpers ──────────────────────────────────────────────
+
+
+def _day_watchlist_response(
+    date:        str,
+    events:      list[dict],
+    view:        str,        # "clean" | "curated"
+    meta:        dict,
+    wl_us_count: int,
+    message:     Optional[str] = None,
+) -> dict:
+    """Standardised response dict for day watchlist short-circuit."""
+    result: dict = {
+        "asOf":         _today(),
+        "source":       "fmp",
+        "date":         date,
+        "events":       events,
+        "count":        len(events),
+        "status":       "ok",
+        "errors":       [],
+        "scope":        "watchlist",
+        "symbolsCount": wl_us_count,
+        "meta":         meta,
+    }
+    if view == "clean":
+        result["fmpCallsUsed"] = 0
+        result["rateLimited"]  = False
+        result["staleLKG"]     = False
+    if message:
+        result["message"] = message
+    return result
+
+
+async def _get_day_watchlist_scope(
+    api_key: str,
+    date:    str,
+    search:  Optional[str],
+    view:    str,   # "clean" | "curated"
+) -> dict:
+    """
+    Symbol-driven watchlist earnings for day-clean and day-curated endpoints.
+
+    Bypasses FMP direct calendar calls and the curated scoring pipeline.
+    Loads the user's saved Watchlist symbols from Neon and reads the same
+    120-day user_earnings_service cache used by week-clean — then filters to
+    the specific requested date.
+
+    Never returns All-calendar or curated-pool symbols.
+    If the cache is empty (FMP transient failure) returns an empty day response.
+    Response shapes match what day-clean and day-curated already return so
+    the frontend needs no changes.
+    """
+    from services.user_earnings_service import get_or_sync_user_earnings  # lazy
+
+    wl_syms_raw      = _load_watchlist()
+    wl_syms_us_count = sum(1 for s in wl_syms_raw if s and ":" not in s)
+
+    print(
+        f"[day_watchlist] view={view} date={date} "
+        f"neon_total={len(wl_syms_raw)} us_tickers={wl_syms_us_count}"
+    )
+
+    # ── Empty watchlist ────────────────────────────────────────────────────────
+    if not wl_syms_raw:
+        return _day_watchlist_response(
+            date, [], view,
+            meta={"cache_status": "empty"}, wl_us_count=0,
+            message="No watchlist symbols found",
+        )
+
+    # ── Fetch from 120-day Neon cache, filtered to requested date ─────────────
+    try:
+        events, meta = await get_or_sync_user_earnings(
+            universe  = "watchlist",
+            symbols   = wl_syms_raw,
+            fmp_key   = api_key,
+            from_date = date,
+            to_date   = date,
+        )
+    except Exception as _err:
+        print(f"[day_watchlist] user_earnings_service error: {_err}")
+        events, meta = [], {
+            "cache_status":  "error",
+            "symbols_count": wl_syms_us_count,
+            "events_count":  0,
+        }
+
+    # ── Optional text search ───────────────────────────────────────────────────
+    if search:
+        sl = search.strip().lower()
+        events = [
+            e for e in events
+            if sl in (e.get("symbol") or "").lower()
+            or sl in (e.get("companyName") or "").lower()
+        ]
+
+    # ── Stamp scope / defaults on every event ─────────────────────────────────
+    for ev in events:
+        ev["scope"] = "watchlist"
+        ev.setdefault("source", "fmp")
+        ev.setdefault("session", "unknown")
+        ev.setdefault("importanceScore", 0)
+        ev.setdefault("themeTags", [])
+
+    cache_status = meta.get("cache_status", "unknown")
+    print(
+        f"[day_watchlist] returning {len(events)} events "
+        f"cache_status={cache_status} "
+        f"symbols_count={meta.get('symbols_count', wl_syms_us_count)}"
+    )
+
+    message = None
+    if wl_syms_raw and not events:
+        message = f"No watchlist earnings found on {date}"
+
+    return _day_watchlist_response(
+        date, events, view, meta=meta, wl_us_count=wl_syms_us_count,
+        message=message,
+    )
+
+
 # ── Watchlist-scoped week-clean (symbol-driven, not curated-pool filtered) ─────
 
 async def _get_week_clean_watchlist_scope(
@@ -2826,6 +2955,16 @@ async def get_day_curated(
     themeTags, isThemeAnchor, isBottleneck, importanceScore, scoreBreakdown.
     """
     limit = min(max(1, limit), _DAY_LIMIT_MAX)
+
+    # ── Watchlist short-circuit ────────────────────────────────────────────────
+    # For scope=watchlist we bypass the curated scoring pipeline entirely and use
+    # the symbol-driven user_earnings_service path so the day view shows only
+    # events for the user's actual saved Watchlist tickers — not the curated pool.
+    # The curated pipeline's importance-score filter would silently discard most
+    # watchlist events that don't clear the signal threshold.
+    if scope == "watchlist":
+        return await _get_day_watchlist_scope(api_key, date, search, "curated")
+    # ── End watchlist short-circuit ────────────────────────────────────────────
 
     # Determine the Mon–Fri week that contains this date.
     # Fetching the full week (same range as week-clean) ensures we reuse the

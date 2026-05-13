@@ -1,0 +1,246 @@
+Fix the Watchlist scope regression on the Earnings Calendar.
+
+Backend repo:
+apiatx/caelyn-agent-backend
+
+Current user-visible bug:
+- All toggle works. Do not change it.
+- Watchlist toggle is broken again.
+- Watchlist + Day and Watchlist + Week were working before the last Month fix, but are now gone/blank.
+- Watchlist + Month still shows the All/curated earnings calendar instead of the user’s saved Watchlist symbols.
+- This is getting caused by route/helper regression, not by FMP capacity.
+
+Critical prior working state:
+- week-clean?scope=watchlist previously returned real saved Neon watchlist events.
+- It used user_earnings_service / user_earnings_cache, not the curated All pool.
+- It synced 137 watchlist symbols and cached ~115 user-symbol upcoming earnings events.
+- week-clean?scope=watchlist returned 14 real watchlist events for the current week.
+- Repeated requests were cache hits with 0 FMP calls.
+- All toggle remained unchanged.
+
+Hard rules:
+1. Do not touch scope=all behavior.
+2. Do not change the curated/thematic All earnings calendar.
+3. Do not implement Portfolio in this pass.
+4. Do not add historical earnings, EPS actuals, revenue actuals, beats/misses, transcripts, etc.
+5. For scope=watchlist, never use or filter the curated All pool.
+6. For scope=watchlist, every returned symbol must exist in the saved Watchlist source from Neon/watchlist_service.
+
+Goal:
+Restore and lock in correct Watchlist behavior across:
+- Day
+- Current week
+- Next week
+- Month
+- Next month if navigated
+
+Expected:
+- Watchlist + Day: saved Watchlist events for that day.
+- Watchlist + Week/current week: saved Watchlist events for current week.
+- Watchlist + Week/next week: saved Watchlist events for next week.
+- Watchlist + Month: saved Watchlist events for visible month.
+- No Watchlist view should show curated All symbols unless that symbol is actually in the user’s saved Watchlist.
+
+Step 1 — Stop guessing; trace live frontend calls
+Use backend logs while clicking each UI state, or inspect the route usage.
+
+Capture the exact request URLs for:
+- All + Week
+- Watchlist + Day
+- Watchlist + Week current week
+- Watchlist + Week next week
+- Watchlist + Month
+- Watchlist + next month if supported
+
+For each request, log:
+- route name
+- query params
+- scope
+- date window
+- backend function entered
+- response shape
+
+Do not edit code until these exact routes are identified.
+
+Step 2 — Restore last-known-good week/day path first
+Find the implementation that previously made week-clean?scope=watchlist work.
+
+The working behavior was:
+- get_week_clean or equivalent sees scope=watchlist.
+- It short-circuits BEFORE curated All logic.
+- It loads saved Watchlist symbols from the same service/table used by the Watchlist page.
+- It reads user_earnings_service / user_earnings_cache.
+- It filters cached forward-window earnings to the requested week/date window.
+- It returns the exact same response shape week-clean expects.
+
+Restore this behavior exactly.
+
+Important:
+Do not let the new month helper replace or alter the week/day response builder unless it preserves the exact old shape.
+
+Validation before moving on:
+- Watchlist + current week returns non-empty real watchlist events if events exist.
+- Every returned symbol is in saved Watchlist.
+- Zero curated-only symbols.
+- All + current week unchanged.
+
+Step 3 — Fix next-week without breaking current week
+The likely bug:
+- current week was hardcoded somewhere, or the watchlist helper ignores requested week start/end.
+
+Fix:
+- week-clean?scope=watchlist must use the requested from/to or weekStart/weekEnd params from the frontend.
+- Filter the same forward-window user_earnings_cache to that exact requested week.
+
+Validation:
+- Current week request returns current week Watchlist events.
+- Next week request returns next week Watchlist events if they exist.
+- If next week is empty, prove by checking cached forward-window events that no Watchlist earnings fall inside that requested next-week date range.
+- Do not fall back to All.
+
+Step 4 — Fix Month separately and safely
+Find the exact Month route/function:
+- month-all?scope=watchlist
+- month-curated?scope=watchlist
+- get_month_all()
+- get_month_curated()
+- or whatever the live frontend actually calls.
+
+For Month + scope=watchlist:
+- short-circuit before curated All logic.
+- use saved Watchlist symbols from Neon/watchlist_service.
+- use user_earnings_service / user_earnings_cache.
+- filter cached forward-window events to the visible month date window.
+- return the exact same top-level response shape that Month All returns, but with Watchlist events only.
+
+Do not reuse the All events list.
+Do not call get_curated_earnings_range for scope=watchlist.
+
+Step 5 — Confirm response-shape compatibility
+This is probably part of the bug.
+
+For each route:
+- week-clean all vs week-clean watchlist should have compatible shape.
+- month-all all vs month-all watchlist should have compatible shape.
+- month-curated all vs month-curated watchlist should have compatible shape.
+
+If the frontend expects:
+- days[]
+- topEvents[]
+- topSymbols[]
+- byDate{}
+- weekStart/weekEnd
+- range/from/to
+then the watchlist response must include those same fields.
+
+Do not invent a new shape for Watchlist.
+
+Step 6 — Use one source of truth, but not one broken response builder
+It is okay to share the data loader:
+- load saved Watchlist symbols
+- read user_earnings_cache
+- filter by date range
+
+But do not force Day/Week/Month into one generic response builder if the frontend expects different shapes.
+
+Preferred architecture:
+- shared helper returns filtered watchlist earnings events:
+  get_watchlist_earnings_events_for_window(from_date, to_date)
+- route-specific builders then shape those events for:
+  - day/week clean response
+  - month-all response
+  - month-curated response
+
+This avoids breaking week while fixing month.
+
+Step 7 — Cache rules
+Use the existing user_earnings_cache table and user_earnings_service.
+
+Do not create another cache.
+
+Cache should cover:
+- today through at least today + 2 months
+- keep existing 120-day forward window if already implemented
+
+All Watchlist routes must use the same normalized symbol set and cache key.
+Do not let one path use 121 symbols and another use 137 symbols again.
+
+Keep the poison-cache guard:
+- if FMP returns 0 raw events for a broad future window, do not overwrite existing non-empty cache.
+
+Step 8 — No fallback to All
+If Watchlist has no events for a requested date window:
+- return a valid empty Watchlist response
+- include metadata saying scope=watchlist and events_count=0
+- do not show All curated events
+- do not silently call All logic
+
+Step 9 — Required validation matrix
+Do not mark complete until all of this passes.
+
+A. All unchanged:
+- All + Week returns curated All events as before.
+- All + Month returns curated All events as before.
+
+B. Watchlist current week restored:
+- Exact frontend current-week URL with scope=watchlist returns 200.
+- Returns real saved Watchlist symbols only.
+- Event count should match the previously working behavior if same date range/cache.
+
+C. Watchlist Day restored:
+- Exact frontend day URL with scope=watchlist returns 200.
+- Uses only saved Watchlist symbols.
+- Does not show curated All.
+
+D. Watchlist next week:
+- Exact frontend next-week URL with scope=watchlist returns 200.
+- Uses requested next-week date window.
+- Returns Watchlist events if any exist.
+- If empty, prove no cached Watchlist events fall in that window.
+
+E. Watchlist Month:
+- Exact frontend Month URL with scope=watchlist returns 200.
+- Shows saved Watchlist symbols only.
+- Includes events beyond current week inside the visible month.
+- Does not match curated All except legitimate overlap where ticker is actually on Watchlist.
+
+F. Watchlist next month:
+- Exact frontend next-month URL if available returns 200.
+- Uses same forward-window cache.
+- Watchlist symbols only.
+
+G. Symbol assertion:
+For every Watchlist route response:
+- collect returned symbols
+- collect saved Watchlist symbols from Neon/watchlist_service
+- assert returned_symbols - saved_watchlist_symbols == empty set
+- fail the task if any returned Watchlist symbol is not saved in Watchlist.
+
+H. Cache hit:
+Repeat Watchlist current week and Month requests.
+Expected:
+- cache hit
+- 0 FMP calls
+- same counts.
+
+Step 10 — Add temporary diagnostics endpoint or log block if needed
+If debugging is still unclear, add a temporary backend-only diagnostics log for scope=watchlist requests:
+
+{
+  route,
+  scope,
+  requested_from,
+  requested_to,
+  selected_branch,
+  saved_watchlist_count,
+  cached_forward_events_count,
+  filtered_window_events_count,
+  first_20_returned_symbols,
+  all_leakage_symbols,
+  response_shape_keys
+}
+
+Remove noisy logs after validation or keep lightweight logs only.
+
+Success definition:
+Watchlist Day, current Week, next Week, Month, and next Month all read from saved Watchlist symbols via user_earnings_service/user_earnings_cache, return the frontend-compatible response shape, and never fall back to curated All. All toggle remains untouched.
