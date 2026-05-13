@@ -1,0 +1,212 @@
+BACKEND REPLIT AGENT — Finish Portfolio Terminal theme-aware analytics for real 19-holding portfolio
+
+Good progress: the existing analytics path was restored by merging Yahoo fallback histories into all_history. That fixed Portfolio vs S&P 500, Risk Analysis, Volatility, Correlation Matrix, and Risk Suggestions for the test set.
+
+But the validation was done on a 5-holding test portfolio. The real user portfolio has 19 holdings. Do not validate on AEHR/MRVL/PLAB or any 5-stock test set. The final backend validation must use the current canonical 19-holding portfolio synced from frontend.
+
+Current remaining requirements:
+1. Volatility must run on the real current portfolio, not a 5-ticker test set.
+2. Correlation Matrix should remain ticker-to-ticker correlation math, but it must be theme-aware using the backend Themes universe.
+3. Asset Allocation should no longer primarily be generic asset class buckets like Stocks / ETFs / Crypto / Commodities. For this product, the useful allocation is thematic allocation using the same Themes page / backend thematic universe.
+4. Old demo/test/hardcoded asset-class assumptions must not survive anywhere in Terminal analytics.
+
+Do not rebuild analytics from scratch.
+Do not hardcode the 19 tickers.
+Do not ask user for holdings.
+Do not fake history.
+Do not use the old 5 asset-class demo worldview as the main grouping.
+Do not break the restored all_history/Yahoo fallback fix.
+
+Audit first:
+1. Confirm current canonical portfolio count:
+   - GET /api/portfolio/holdings
+   - GET /api/portfolio/source-audit
+2. If canonical still has only a test set, do not validate against it as final. Report that frontend sync has not populated the real 19 yet.
+3. Once canonical has the real 19, run /api/caelyn-terminal and validate analytics against all 19.
+4. Search caelyn_terminal.py and related terminal providers for any leftover hardcoded/demo/test assumptions:
+   - 5 holdings
+   - asset classes: stock/ETF/index/crypto/commodity as primary allocation
+   - old demo symbols
+   - fallback test portfolio
+   - stale cached 5-ticker response
+5. Keep the existing restored analytics path. Only adjust the grouping/enrichment layer.
+
+Required changes:
+
+A. Volatility
+Volatility should be calculated for every current canonical holding that has enough historical data.
+
+Return:
+- volatility list for all valid current holdings
+- valid_count
+- total_holdings_count
+- coverage_pct
+- excluded_symbols with exact reasons
+- lookback_days / method
+
+Validation must say something like:
+volatility_count = X / 19
+excluded = [...]
+
+Do not return “5/5” unless the canonical portfolio truly only has 5 holdings. If canonical has 19, the validation must be 19-based.
+
+B. Correlation Matrix
+Keep the existing Pearson ticker-to-ticker correlation math.
+
+But enrich and organize it using the backend thematic universe:
+For each ticker in the matrix, return ticker_meta:
+- symbol
+- primary_theme from backend Themes universe
+- theme_group / sector_theme if available
+- sector
+- industry
+- theme_source
+- confidence if available
+
+Also return optional grouping metadata:
+- theme_groups: {
+    theme_name: [symbols...]
+  }
+- sector_groups: {
+    sector_name: [symbols...]
+  }
+
+Important:
+The matrix itself is still ticker correlation, not just a sector map.
+But the UI should be able to show/sort/group the matrix by backend theme/sector instead of generic asset class.
+
+C. Asset Allocation → Theme Allocation
+Keep old asset_allocation only if other UI still needs it, but add or replace with the useful product-level allocation:
+
+Return:
+- theme_allocation
+- sector_allocation
+- industry_allocation if available
+
+theme_allocation should be based on the same backend thematic universe used by the Themes page, not generic asset_type.
+
+Each allocation item should include:
+- name
+- weight_pct
+- market_value
+- symbols
+- source: "thematic_universe" or fallback source
+- fallback_used true/false
+
+If theme mapping is missing for a ticker:
+- classify as "Unclassified"
+- include the symbol in unclassified_symbols
+- do not break allocation
+
+D. Risk Suggestions
+Risk suggestions should use theme-aware concentration and correlation.
+
+Examples:
+- “Technology/Semiconductor theme concentration is X%”
+- “High correlation cluster: AEHR, AMKR, VECO mapped to Semiconductor Equipment”
+- “Clean Energy exposure is concentrated in NRGV/AMPX/etc.”
+- “Portfolio has X% in one backend theme group”
+- “OTC/data-quality warning for symbols with Yahoo fallback only”
+
+Do not output generic “Portfolio synced” unless analytics truly cannot run.
+
+E. Backend thematic universe alignment
+Find and reuse the existing Themes page / thematic universe mapping logic. Do not invent a separate hardcoded theme taxonomy inside Terminal.
+
+Use existing helpers/services/cache wherever possible:
+- theme mapper
+- thematic universe snapshot
+- Themes page mappings
+- sector/theme performance engine mappings
+
+If the current theme mapper only returns generic sector/industry, extend the response shape to also include those fields, but clearly label source/fallback.
+
+F. Debug object
+Update _debug / [portfolio-terminal-existing-path-debug] to include:
+
+{
+  canonical_holdings_count,
+  canonical_symbols,
+  analytics_holdings_count,
+  analytics_symbols,
+  volatility_valid_count,
+  volatility_total_count,
+  volatility_excluded_symbols,
+  correlation_dimensions,
+  correlation_included_symbols,
+  correlation_excluded_symbols,
+  ticker_meta_count,
+  theme_allocation_count,
+  sector_allocation_count,
+  unclassified_symbols,
+  old_demo_symbols_present,
+  test_portfolio_detected,
+  cache_key,
+  cache_hit,
+  holdings_signature
+}
+
+Validation required before saying done:
+
+1. Canonical holdings
+Return:
+- canonical_count
+- canonical_symbols
+
+If canonical_count is not 19:
+- stop and say the backend still does not have the real portfolio.
+- do not pretend 5-ticker validation proves this is done.
+
+2. Terminal holdings
+Return:
+- terminal_count
+- terminal_symbols
+- confirm terminal_count == canonical_count
+
+3. Volatility
+Return:
+- volatility_count / canonical_count
+- excluded symbols with reasons
+- examples
+
+4. Correlation Matrix
+Return:
+- matrix dimensions
+- included symbols
+- excluded symbols/reasons
+- ticker_meta examples showing primary_theme/sector/industry
+- theme_groups examples
+
+5. Theme Allocation
+Return:
+- theme_allocation groups and weights
+- sector_allocation groups and weights
+- unclassified symbols
+
+6. Risk Suggestions
+Return:
+- count
+- examples that reference current holdings and current backend themes
+
+7. Portfolio vs S&P 500 / Risk Analysis
+Confirm the existing restored analytics still work after the theme changes:
+- chart points by period
+- weighted_volatility
+- max_drawdown
+- beta
+- sharpe
+- sortino
+- top_concentration
+
+8. No zombie/test portfolio
+Confirm:
+- no old 5-asset-class demo portfolio is used
+- no old NVDA/OSS/BUZZ/GOLD/BTC demo set is used unless actually in canonical holdings
+- no AEHR/MRVL/PLAB-only test set is used as final validation
+- cache rebuilt from current holdings_signature
+
+Return:
+- exact files changed
+- what existing theme mapper/service was reused
+- what was still using old asset-class grouping
+- final 19-holding validation table

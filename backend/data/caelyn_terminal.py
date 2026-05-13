@@ -443,7 +443,7 @@ class CaelynTerminalProvider:
         crypto_history     = R["crypto_history"] or {}
         commodity_history  = R["commodity_history"] or {}
         spy_bars           = R["spy_history"] or []
-        theme_mapping_raw  = R["theme_mapping"] or {}   # {ticker: primary_theme | None}
+        theme_mapping_raw  = R["theme_mapping"] or {}   # {ticker: {primary_theme, theme_id, classification, parent_sector, source}}
         fundamentals_raw   = R["fundamentals"] or {}    # {ticker: {name, sector, ...}}
 
         # ── Yahoo Finance fallback for tickers Tradier didn't cover ───────────
@@ -650,13 +650,17 @@ class CaelynTerminalProvider:
         if not sector_allocation:
             _theme_totals: dict[str, float] = {}
             for _p in positions:
-                _t = theme_mapping_raw.get(_p["_sym"]) or _asset_class(_p["_sym"], _p.get("_atype", "stock"))
+                _td = theme_mapping_raw.get(_p["_sym"]) or {}
+                _t = _td.get("primary_theme") or _asset_class(_p["_sym"], _p.get("_atype", "stock"))
                 _theme_totals[_t] = _theme_totals.get(_t, 0) + _p["market_val"]
             for _t, _val in sorted(_theme_totals.items(), key=lambda x: -x[1]):
                 sector_allocation.append({
                     "label": _t,
                     "pct":   round(_val / total_value * 100, 1) if total_value else 0.0,
                 })
+
+        # 18c. Theme allocation — thematic universe as primary grouping ────
+        theme_allocation = self._build_theme_allocation(positions, total_value, theme_mapping_raw)
 
         # 19. Performance chart metadata (per-period transparency) ─────────
         _perf_meta: dict[str, dict] = {}
@@ -682,34 +686,49 @@ class CaelynTerminalProvider:
             if "avgCost" in _h and "avg_cost" not in _h:
                 _schema_mismatches.append(f"{_h.get('ticker','?')}: field=avgCost (expected avg_cost)")
 
+        _corr_tickers   = corr.get("tickers", [])
+        _corr_excluded  = [e["symbol"] for e in corr.get("excluded_symbols", [])]
+        _vol_excl       = list(vol_unavailable.keys())
+        _unclassified   = [a["symbols"] for a in theme_allocation if a["name"] == "Unclassified"]
+        _unclassified_s = _unclassified[0] if _unclassified else []
+        _classified_tms = [a["name"] for a in theme_allocation if a["name"] != "Unclassified"]
+        _old_demo_syms  = {"NVDA", "OSS", "BUZZ", "GOLD", "BTC", "AEHR", "MRVL", "PLAB"}
         _existing_path_debug = {
-            "holdings_count":                     len(holdings_raw),
-            "symbols":                            tickers,
-            "existing_chart_builder_found":       True,  # _build_perf_charts
-            "existing_risk_builder_found":        True,  # _build_risk
-            "existing_volatility_builder_found":  True,  # _build_volatility
-            "existing_suggestions_builder_found": True,  # _build_suggestions
-            "existing_correlation_builder_found": True,  # _build_correlation
-            "analytics_branch_used":              "caelyn_terminal._build",
-            "old_expected_holding_fields":        ["ticker", "shares", "avg_cost", "asset_type"],
-            "current_holding_fields":             list({k for h in holdings_raw for k in h}),
-            "schema_mismatches_found":            _schema_mismatches,
+            # Holdings provenance
+            "canonical_holdings_count":           len(holdings_raw),
+            "canonical_symbols":                  tickers,
+            "analytics_holdings_count":           len(positions),
+            "analytics_symbols":                  [p["ticker"] for p in positions],
+            "holdings_signature":                 self._holdings_sig(holdings_raw),
             "cache_key":                          self.cache_key_for(portfolio_file),
-            "cache_hit":                          False,  # always False here (we're building)
-            "stale_cache_detected":               False,
-            "missing_dependencies":               _tickers_no_hist,
+            "cache_hit":                          False,
+            # Volatility
+            "volatility_valid_count":             len(vol_list),
+            "volatility_total_count":             len(positions),
+            "volatility_excluded_symbols":        _vol_excl,
+            # Correlation
+            "correlation_dimensions":             [len(_corr_tickers), len(_corr_tickers)],
+            "correlation_included_symbols":       _corr_tickers,
+            "correlation_excluded_symbols":       _corr_excluded,
+            "ticker_meta_count":                  len(corr.get("ticker_meta", [])),
+            # Theme allocation
+            "theme_allocation_count":             len(theme_allocation),
+            "sector_allocation_count":            len(sector_allocation),
+            "unclassified_symbols":               _unclassified_s,
+            "theme_groups_in_portfolio":          _classified_tms,
+            # Zombie / test portfolio detection
+            "old_demo_symbols_present":           list(_old_demo_syms & set(tickers)),
+            "test_portfolio_detected":            set(tickers) <= {"AEHR", "MRVL", "PLAB"},
+            # History / YF
             "tickers_with_history":               _tickers_with_hist,
+            "missing_history":                    _tickers_no_hist,
             "yf_fallback_tickers":                list(_yf_fb_h.keys()),
             "tradier_miss_history":               _tdr_miss_h,
-            "hist_coverage_bars":                 _hist_coverage,
-            "root_cause_fixed":                   "_yf_fb_h merged into all_history (OTC/Tradier-miss fallback)",
-            "correlation_has_ticker_meta":        True,
+            # Analytics checks
             "perf_chart_points":                  {_p: len(perf_charts.get(_p, [])) for _p in ("1D","5D","1M","6M","1Y")},
             "risk_has_values":                    any(v for v in risk.values() if isinstance(v, (int, float)) and v),
-            "volatility_count":                   len(vol_list),
             "suggestions_count":                  len(suggestions),
-            "correlation_tickers":                corr.get("tickers", []),
-            "correlation_dimensions":             [len(corr.get("tickers", [])), len(corr.get("tickers", []))],
+            "schema_mismatches":                  _schema_mismatches,
         }
         print(f"[portfolio-terminal-existing-path-debug] {json.dumps(_existing_path_debug, default=str)}")
 
@@ -734,6 +753,7 @@ class CaelynTerminalProvider:
             "performance_charts":     perf_charts,
             "performance_chart_meta": _perf_meta,
             "asset_allocation":       alloc,
+            "theme_allocation":       theme_allocation,
             "sector_allocation":      sector_allocation,
             "theme_mapping":          theme_mapping_list,
             "correlation_matrix":     corr,
@@ -742,6 +762,10 @@ class CaelynTerminalProvider:
             "volatility_meta": {
                 "method":              "annualized_daily_returns",
                 "lookback_days":       _lookback_days,
+                "valid_count":         len(vol_list),
+                "total_holdings_count": len(positions),
+                "coverage_pct":        round(len(vol_list) / len(positions) * 100, 1) if positions else 0.0,
+                "excluded_symbols":    {k: v for k, v in vol_unavailable.items()},
                 "unavailable_reasons": vol_unavailable,
             },
             "risk_suggestions":       suggestions,
@@ -990,15 +1014,39 @@ class CaelynTerminalProvider:
 
         return tape
 
-    async def _fetch_theme_mapping(self, tickers: list[str]) -> dict[str, str | None]:
-        """Return {TICKER: primary_theme_name | None} using the thematic engine.
-        Synchronous lookups run in a thread pool so they don't block the event loop.
+    async def _fetch_theme_mapping(self, tickers: list[str]) -> dict[str, dict]:
+        """Return {TICKER: theme_dict} using the backend thematic universe.
+
+        theme_dict keys:
+          primary_theme   — human display name (e.g. "Semiconductor Equipment")
+          theme_id        — machine key (e.g. "semicap_equipment")
+          classification  — "sector" | "theme" | "sub_theme"
+          parent_sector   — parent theme_id or ""
+          source          — "theme_ticker_mapper" | None
+
+        Never raises — falls back to empty dicts for unknown tickers.
         """
-        try:
-            from services.theme_ticker_mapper import map_ticker_to_primary_theme
-            return await asyncio.to_thread(
-                lambda: {t: map_ticker_to_primary_theme(t) for t in tickers}
+        def _lookup_all(tickers: list[str]) -> dict[str, dict]:
+            from services.theme_ticker_mapper import (
+                map_ticker_to_primary_theme,
+                map_ticker_to_theme_id,
+                map_ticker_to_classification,
+                map_ticker_to_parent_sector,
             )
+            result: dict[str, dict] = {}
+            for t in tickers:
+                theme = map_ticker_to_primary_theme(t)
+                result[t] = {
+                    "primary_theme":  theme,
+                    "theme_id":       map_ticker_to_theme_id(t),
+                    "classification": map_ticker_to_classification(t),
+                    "parent_sector":  map_ticker_to_parent_sector(t) or "",
+                    "source":         "theme_ticker_mapper" if theme else None,
+                }
+            return result
+
+        try:
+            return await asyncio.to_thread(_lookup_all, tickers)
         except Exception as e:
             print(f"[CAELYN] theme_mapping error: {e}")
             return {}
@@ -1077,24 +1125,28 @@ class CaelynTerminalProvider:
     # ── Builders ──────────────────────────────────────────────────────────
 
     def _build_theme_mapping_list(
-        self, positions: list[dict], theme_mapping_raw: dict[str, str | None]
+        self, positions: list[dict], theme_mapping_raw: dict[str, dict]
     ) -> list[dict]:
         """Build the theme_mapping response array: one entry per holding with
-        ticker, theme name (from thematic engine), asset class, and sector."""
+        full thematic universe metadata per ticker."""
         result = []
         for p in positions:
-            sym   = p["ticker"]
-            theme = theme_mapping_raw.get(sym)
-            ac    = _asset_class(sym, p.get("_atype", "stock"))
+            sym    = p["ticker"]
+            td     = theme_mapping_raw.get(sym) or {}
+            theme  = td.get("primary_theme")
+            ac     = _asset_class(sym, p.get("_atype", "stock"))
             sector = p.get("_sector") or ""
-            # Fallback: use asset class as display theme when no thematic match
             display_theme = theme or (sector if sector else ac)
             result.append({
-                "ticker":      sym,
-                "theme":       display_theme,
-                "theme_raw":   theme,
-                "asset_class": ac,
-                "sector":      sector,
+                "ticker":         sym,
+                "theme":          display_theme,
+                "theme_raw":      theme,
+                "theme_id":       td.get("theme_id"),
+                "classification": td.get("classification"),
+                "parent_sector":  td.get("parent_sector") or "",
+                "theme_source":   td.get("source"),
+                "asset_class":    ac,
+                "sector":         sector,
                 "allocation_pct": p.get("allocation_pct", 0.0),
             })
         return result
@@ -1339,6 +1391,67 @@ class CaelynTerminalProvider:
             for t, pv, sv in result_pairs
         ]
 
+    def _build_theme_allocation(
+        self,
+        positions: list[dict],
+        total_value: float,
+        theme_mapping_raw: dict[str, dict],
+    ) -> list[dict]:
+        """Build theme_allocation using the backend thematic universe as primary grouping.
+
+        Each item:
+          name          — theme display name (or "Unclassified" for unknown tickers)
+          weight_pct    — % of total portfolio market value
+          market_value  — absolute USD value
+          symbols       — list of tickers in this theme
+          source        — "thematic_universe" | "fallback_asset_class"
+          fallback_used — True when theme was not found in thematic universe
+        """
+        theme_groups: dict[str, dict] = {}
+        unclassified: list[str] = []
+
+        for p in positions:
+            sym  = p["_sym"]
+            mval = p["market_val"]
+            td   = theme_mapping_raw.get(sym) or {}
+            name = td.get("primary_theme")
+            src  = td.get("source") or ""
+            fallback_used = not bool(name)
+
+            if not name:
+                name = "Unclassified"
+                unclassified.append(sym)
+
+            if name not in theme_groups:
+                theme_groups[name] = {
+                    "name":          name,
+                    "market_value":  0.0,
+                    "symbols":       [],
+                    "source":        "thematic_universe" if not fallback_used else "fallback_asset_class",
+                    "fallback_used": fallback_used,
+                }
+
+            theme_groups[name]["market_value"] += mval
+            theme_groups[name]["symbols"].append(sym)
+            # Mark as classified if any ticker in group has a real theme
+            if not fallback_used:
+                theme_groups[name]["source"]        = "thematic_universe"
+                theme_groups[name]["fallback_used"] = False
+
+        result = []
+        for name, g in sorted(theme_groups.items(), key=lambda x: -x[1]["market_value"]):
+            pct = round(g["market_value"] / total_value * 100, 1) if total_value else 0.0
+            result.append({
+                "name":          name,
+                "weight_pct":    pct,
+                "market_value":  round(g["market_value"], 2),
+                "symbols":       g["symbols"],
+                "source":        g["source"],
+                "fallback_used": g["fallback_used"],
+            })
+
+        return result
+
     def _build_allocation(self, positions, total_value) -> list[dict]:
         class_totals: dict[str, float] = {}
         for p in positions:
@@ -1408,26 +1521,41 @@ class CaelynTerminalProvider:
 
         # Build per-ticker metadata for frontend grouping/colouring
         def _ticker_meta(t: str) -> dict:
-            f = fundamentals.get(t, {})
-            theme = theme_mapping.get(t)
-            sector = (f.get("sector") or "").strip()
+            f  = fundamentals.get(t, {})
+            td = theme_mapping.get(t) or {}
+            theme    = td.get("primary_theme")
+            sector   = (f.get("sector")   or "").strip()
             industry = (f.get("industry") or "").strip()
-            # Fallback display theme: sector → asset_class → ticker
             display_theme = theme or sector or _asset_class(t) or t
             return {
-                "ticker":        t,
-                "primary_theme": display_theme,
-                "theme_raw":     theme,
-                "sector":        sector,
-                "industry":      industry,
+                "ticker":         t,
+                "primary_theme":  display_theme,
+                "theme_raw":      theme,
+                "theme_id":       td.get("theme_id"),
+                "classification": td.get("classification"),
+                "parent_sector":  td.get("parent_sector") or "",
+                "theme_source":   td.get("source"),
+                "sector":         sector,
+                "industry":       industry,
             }
 
         ticker_meta = [_ticker_meta(t) for t in valid]
+
+        # Build theme_groups and sector_groups for frontend grouping/sorting
+        _theme_groups: dict[str, list[str]] = {}
+        _sector_groups: dict[str, list[str]] = {}
+        for tm in ticker_meta:
+            _tg = tm["theme_raw"] or tm["primary_theme"] or "Unclassified"
+            _sg = tm["sector"] or "Unknown"
+            _theme_groups.setdefault(_tg, []).append(tm["ticker"])
+            _sector_groups.setdefault(_sg, []).append(tm["ticker"])
 
         _base = {
             "method":           "pearson",
             "lookback_days":    lookback_days,
             "excluded_symbols": excluded_symbols,
+            "theme_groups":     _theme_groups,
+            "sector_groups":    _sector_groups,
         }
         if n == 0:
             return {**_base, "tickers": [], "ticker_meta": [], "values": [], "common_dates_count": 0}
@@ -1725,25 +1853,31 @@ class CaelynTerminalProvider:
                 ),
             })
 
-        # ── Rule 7: Correlated theme cluster ──────────────────────────────
+        # ── Rule 7: Thematic concentration (backend thematic universe) ───
         if len(suggestions) < 5 and theme_mapping:
-            theme_groups: dict[str, list[str]] = {}
+            _ttheme_groups: dict[str, list[str]] = {}
+            _ttheme_pcts:   dict[str, float]     = {}
             for p in positions:
-                t = theme_mapping.get(p["ticker"])
+                td = theme_mapping.get(p["ticker"]) or {}
+                t  = td.get("primary_theme")
                 if t:
-                    theme_groups.setdefault(t, []).append(p["ticker"])
-            for theme, tks in sorted(theme_groups.items(), key=lambda x: -len(x[1])):
-                if len(tks) >= 3:
-                    total_theme_pct = sum(ticker_alloc.get(t, 0) for t in tks)
+                    _ttheme_groups.setdefault(t, []).append(p["ticker"])
+                    _ttheme_pcts[t] = _ttheme_pcts.get(t, 0.0) + p["allocation_pct"]
+            # Fire on largest theme cluster (≥2 holdings OR ≥30% concentration)
+            for theme, tks in sorted(_ttheme_groups.items(), key=lambda x: -_ttheme_pcts.get(x[0], 0)):
+                pct = _ttheme_pcts.get(theme, 0.0)
+                if len(tks) >= 2 or pct >= 30:
+                    level = "RISK" if pct >= 50 else "WARN" if pct >= 30 else "INFO"
+                    tks_str = ", ".join(tks[:5])
                     suggestions.append({
-                        "level": "INFO",
-                        "title": f"Theme Cluster — {theme}",
+                        "level": level,
+                        "title": f"Theme Concentration — {theme}",
                         "body": (
-                            f"{', '.join(tks)} all map to the '{theme}' theme "
-                            f"and together represent {total_theme_pct:.0f}% of the portfolio. "
-                            f"High thematic overlap increases correlation, especially during "
-                            f"sector-level drawdowns. Diversifying into a different theme "
-                            f"could reduce correlated downside risk."
+                            f"{tks_str} all map to the '{theme}' thematic universe "
+                            f"and together represent {pct:.0f}% of the portfolio. "
+                            f"High thematic overlap increases correlation risk — a single "
+                            f"sector-wide event (supply chain shock, regulatory change, "
+                            f"earnings cycle) can impact all positions simultaneously."
                         ),
                     })
                     break
