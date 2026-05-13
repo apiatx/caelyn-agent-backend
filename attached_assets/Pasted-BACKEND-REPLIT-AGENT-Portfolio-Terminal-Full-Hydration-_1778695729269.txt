@@ -1,0 +1,269 @@
+BACKEND REPLIT AGENT — Portfolio Terminal Full Hydration Fix
+
+We need to fix the Portfolio Terminal backend so it works for the real Portfolio Dashboard holdings, not just the old demo/mixed-asset portfolio.
+
+Current bug:
+- Portfolio Dashboard has the correct current user holdings.
+- Portfolio Terminal eventually shows the correct holdings in the left rail.
+- But on initial load it briefly shows old/stale holdings for 30+ seconds before updating.
+- Most Terminal analytics sections are blank or unavailable:
+  - Portfolio vs S&P 500 chart
+  - Correlation matrix
+  - Risk Analysis
+  - Volatility
+  - Risk Suggestions
+  - Performance period returns
+- Only top movers / losers are mostly working.
+
+Important existing context:
+- The Dashboard source is the current active holdings from the Portfolio Dashboard / stock-holdings store.
+- The Terminal route was recently patched to inject stock-holdings.json holdings when FastAPI returned placeholder data.
+- That fixed the holdings sidebar, but not the full Terminal analytics payload.
+- Do not invent a new portfolio source. The Portfolio Dashboard holdings are the canonical source.
+- The backend FastAPI server already has thematic universe / Themes page data. Terminal holdings should map to that same theme universe where possible.
+- Data providers:
+  - Tradier should be primary for live quotes, 1D price change, volume, relative volume, and options-related data.
+  - FMP should be used for fundamentals, profiles, historical price series, earnings/calendar/reference data.
+  - Use existing project services/helpers/caches if they already exist.
+  - Do not add expensive per-render API calls if cached/batched equivalents exist.
+
+Goal:
+Make `/api/caelyn-terminal` return a complete, fresh, fully hydrated Terminal payload for the current Dashboard portfolio holdings.
+
+Do NOT:
+- Redesign the Terminal.
+- Change unrelated endpoints.
+- Hardcode tickers.
+- Reintroduce demo holdings.
+- Create a new portfolio store.
+- Wipe or mutate user holdings.
+- Fake historical/risk data.
+- Break Dashboard add/edit/delete.
+- Replace existing FMP/Tradier/thematic services if reusable ones already exist.
+
+Audit first:
+1. Locate the backend/frontend-server route currently serving `/api/caelyn-terminal`.
+2. Locate the canonical active holdings source used by Portfolio Dashboard.
+3. Locate existing services/helpers for:
+   - FMP historical price data
+   - FMP company profiles/fundamentals
+   - Tradier live quotes
+   - Tradier volume / relative volume if available
+   - theme/thematic universe used by Themes page
+   - options data if already available
+   - existing portfolio/risk analytics utilities
+4. Locate all cache layers used by `/api/caelyn-terminal`.
+5. Identify why old holdings appear first:
+   - stale backend cache?
+   - stale frontend cache?
+   - old `/api/caelyn-terminal` cached response?
+   - placeholder response?
+   - LKG response?
+6. Identify every response field consumed by the Terminal frontend.
+
+Required backend behavior:
+`/api/caelyn-terminal` must always build from current Dashboard holdings.
+
+If active holdings exist:
+- Never return demo holdings.
+- Never return old cached holdings from a previous portfolio.
+- Never return placeholder holdings.
+- Cache key must include a holdings signature, for example symbols + shares + avg_price + updated_at/date_added.
+- When holdings mutate, invalidate the Terminal cache immediately.
+- If using stale-while-revalidate, do not serve holdings from a different signature.
+
+Required response payload:
+
+1. Holdings sidebar
+For each holding return:
+- symbol
+- company name
+- shares
+- avg_price / cost basis
+- current price
+- daily change
+- daily change %
+- market value
+- allocation %
+- asset type/classification
+- mapped theme(s)
+- date_added if available
+- earnings date if available
+
+2. Header metrics
+Return:
+- total account/portfolio value
+- daily P&L
+- daily P&L %
+- total unrealized P&L
+- total unrealized P&L %
+- period returns when historical account value exists:
+  - 1D
+  - 5D
+  - 1M
+  - 6M
+  - 1Y
+- if not enough portfolio value history exists, return an explicit unavailable reason, not fake data.
+
+3. Portfolio vs S&P 500 chart
+Use portfolio value history snapshots if they exist.
+If enough snapshots do not exist yet:
+- return a clean empty-state payload:
+  reason: "Performance history starts after portfolio tracking is enabled."
+Do not fake a full chart from current holdings only.
+Optional acceptable fallback:
+- if each holding has date_added and historical prices are available, reconstruct an approximate portfolio series from entry dates and shares, but mark it as `estimated: true`.
+- If doing this is risky or expensive, do not do it yet.
+
+4. Asset allocation
+Must work now.
+For the current all-stock portfolio:
+- group by asset type and/or mapped theme.
+- If all are stocks, still return valid allocation:
+  - Individual Stocks = 100%
+  - and also theme-level allocation if theme mapping exists.
+Do not leave blank.
+
+5. Theme mapping
+For each holding, map it to the same thematic universe used by the Themes page / FastAPI thematic engine.
+Use existing theme universe/cache/endpoints/services.
+Return:
+- primary_theme
+- secondary_themes if available
+- parent_sector if available
+- theme_source
+- confidence if available
+
+If no theme match:
+- return "Unclassified" but do not break Terminal.
+
+6. Correlation matrix
+Must support all-stock portfolios.
+Use historical daily returns from FMP or the existing historical price service.
+Requirements:
+- use enough lookback, ideally 60 trading days or configurable.
+- compute pairwise correlation from aligned daily returns.
+- support stocks, ETFs, indices, commodities, crypto, forex if existing services already support them.
+- for stocks, FMP historicals are acceptable.
+- If historical data is missing for some symbols, exclude only those symbols and report excluded symbols.
+- Return a valid matrix when at least 2 symbols have enough history.
+- Do not show the old demo matrix.
+
+7. Risk Analysis
+Compute what can be computed:
+- top concentration %
+- top concentration symbol
+- portfolio beta vs S&P 500 if beta values or historical returns are available
+- max drawdown from portfolio series if portfolio history or reconstructed estimated history exists
+- Sharpe / Sortino only if enough return history exists
+- weighted volatility from per-symbol historical returns if available
+If unavailable, include explicit reason per metric.
+Do not show blank dashes without a reason.
+
+8. Volatility section
+Use historical daily returns per holding.
+Return:
+- symbol
+- annualized volatility
+- ranked high to low
+- lookback window
+- excluded symbols with reasons
+If not available, return intentional unavailable payload.
+
+9. Risk Suggestions
+Generate deterministic backend suggestions from actual portfolio:
+- concentration risk
+- single-theme concentration
+- high-volatility holdings
+- lack of hedges/defensive allocation if relevant
+- earnings clustering if earnings dates available
+- correlated holdings if matrix available
+Do not use old BTC/GOLD/crypto suggestions.
+Risk suggestions must reference current holdings and mapped themes.
+
+10. Top movers
+Already working, preserve it.
+Use current holdings and Tradier quote data.
+
+11. Earnings calendar
+Use current holdings only.
+Use existing FMP earnings calendar/profile service.
+Do not show stale demo symbols.
+
+Data provider rules:
+- Tradier:
+  - live quote
+  - 1D change
+  - volume
+  - relative volume if already available
+  - options/flow if existing service supports it
+- FMP:
+  - historical price series
+  - fundamentals/profile
+  - earnings
+  - beta if available
+  - sector/industry/profile metadata
+- Thematic engine:
+  - primary source for theme mapping
+  - align with Themes page universe
+
+Performance / caching:
+- Batch requests where possible.
+- Reuse existing caches.
+- Cache key must be based on holdings signature.
+- Do not serve stale analytics for old symbols.
+- Return partial payload quickly if some enrichment is slow, but never return old holdings.
+- Add diagnostics showing cache hit/miss and holdings signature.
+
+Required diagnostics:
+Add backend logs:
+
+[portfolio-terminal] holdings_source=...
+[portfolio-terminal] holdings_signature=...
+[portfolio-terminal] symbols=[...]
+[portfolio-terminal] cache_hit=true/false
+[portfolio-terminal] quote_source=tradier/fallback
+[portfolio-terminal] fmp_historical_symbols=[...]
+[portfolio-terminal] theme_mapped={symbol: theme}
+[portfolio-terminal] correlation_symbols=[...]
+[portfolio-terminal] risk_metrics_available={...}
+[portfolio-terminal] unavailable_reasons={...}
+
+Validation:
+A. Freshness / stale holdings
+1. Load Portfolio Terminal.
+2. Confirm response symbols are immediately the current Dashboard symbols.
+3. Confirm no old portfolio/demo symbols appear in the response.
+4. Confirm cache key changes when holdings change.
+5. Confirm mutation invalidates Terminal cache.
+
+B. Full hydration for current 19-stock portfolio
+Confirm `/api/caelyn-terminal` returns:
+- holdings_count = 19
+- holdings symbols match Dashboard exactly
+- top movers populated
+- asset allocation populated
+- theme allocation populated or Unclassified where necessary
+- risk suggestions populated from current holdings
+- volatility populated if historical returns available
+- correlation matrix populated if at least 2 holdings have historical data
+- risk metrics populated where enough data exists
+- explicit unavailable reasons where data is insufficient
+
+C. Add/edit/delete
+1. Add a test holding in Dashboard.
+2. Terminal response includes it immediately.
+3. Edit shares/avg price.
+4. Terminal values recalculate.
+5. Delete/close it.
+6. Terminal removes it and cache invalidates.
+
+Return:
+- Root cause of old holdings showing first.
+- Root cause of blank Terminal panels.
+- Exact files changed.
+- Existing services reused.
+- Which fields now use Tradier.
+- Which fields now use FMP.
+- Which fields now use thematic engine.
+- Validation output with current Dashboard symbols matching Terminal symbols.

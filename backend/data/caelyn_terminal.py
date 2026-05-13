@@ -338,16 +338,46 @@ class CaelynTerminalProvider:
         """
         return f"caelyn:terminal:v8:{portfolio_file.resolve()}"
 
+    @staticmethod
+    def _holdings_sig(holdings: list[dict]) -> str:
+        """Stable hash of (ticker, shares, avg_cost) so stale cached payloads
+        from a prior holdings state are never returned — even if the file-path
+        key was not explicitly invalidated (e.g. manual file edits, restarts)."""
+        import hashlib
+        parts = sorted(
+            (
+                str(h.get("ticker", "")).upper(),
+                str(h.get("shares", 0)),
+                str(h.get("avg_cost", 0)),
+            )
+            for h in holdings
+            if h.get("ticker")
+        )
+        return hashlib.md5(json.dumps(parts).encode()).hexdigest()[:16]
+
     @traceable(name="caelyn_terminal.get")
     async def get(self, portfolio_file: Path) -> dict:
         cache_key = self.cache_key_for(portfolio_file)
         cached = cache.get(cache_key)
         if cached is not None:
+            # Validate that the cached payload was built from the CURRENT holdings.
+            # This catches file edits / restarts that bypass the save_holdings
+            # invalidation path.
+            current_holdings = self._load_holdings(portfolio_file)
+            current_sig = self._holdings_sig(current_holdings)
+            if cached.get("_holdings_sig") == current_sig:
+                print(
+                    f"[TERMINAL] cache=HIT  file={portfolio_file.name}  "
+                    f"sig={current_sig}"
+                )
+                return cached
+            # Signature mismatch — holdings changed since this was cached.
             print(
-                f"[TERMINAL] cache=HIT  file={portfolio_file.name}  "
-                f"key={cache_key}"
+                f"[TERMINAL] cache=STALE  file={portfolio_file.name}  "
+                f"cached_sig={cached.get('_holdings_sig')}  "
+                f"current_sig={current_sig}  — rebuilding"
             )
-            return cached
+            cache.delete(cache_key)
 
         # Cache miss — load from disk and build
         holdings_raw_check = self._load_holdings(portfolio_file)
@@ -359,7 +389,7 @@ class CaelynTerminalProvider:
         )
 
         result = await self._build(portfolio_file)
-        cache.set(cache_key, result, 90)
+        cache.set(cache_key, result, 300)
         return result
 
     async def _build(self, portfolio_file: Path) -> dict:
@@ -396,6 +426,8 @@ class CaelynTerminalProvider:
             "earnings":          self._fetch_earnings_calendar(tickers),
             "news":              self._fetch_news(equity_tickers[:4] or tickers[:4]),
             "tape":              self._fetch_tape(equity_tickers),
+            "theme_mapping":     self._fetch_theme_mapping(tickers),
+            "fundamentals":      self._fetch_fundamentals(equity_tickers),
         }
 
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -411,6 +443,8 @@ class CaelynTerminalProvider:
         crypto_history     = R["crypto_history"] or {}
         commodity_history  = R["commodity_history"] or {}
         spy_bars           = R["spy_history"] or []
+        theme_mapping_raw  = R["theme_mapping"] or {}   # {ticker: primary_theme | None}
+        fundamentals_raw   = R["fundamentals"] or {}    # {ticker: {name, sector, ...}}
 
         # Merge all quotes and history
         def _q(sym: str) -> dict:
@@ -456,11 +490,14 @@ class CaelynTerminalProvider:
             total_value += mval
             total_cost  += shares * cost
 
+            funda = fundamentals_raw.get(sym, {})
             positions.append({
                 "_sym":       sym,
                 "_shares":    shares,
                 "_cost":      cost,
                 "_atype":     asset_map.get(sym, "stock"),
+                "_sector":    funda.get("sector", ""),
+                "_name":      funda.get("name", sym),
                 "ticker":     sym,
                 "price":      _sr(price),
                 "change":     _sr(chg),
@@ -505,7 +542,7 @@ class CaelynTerminalProvider:
         vol_list = self._build_volatility(positions, all_history)
 
         # 10. Risk suggestions ────────────────────────────────────────────
-        suggestions = self._build_suggestions(positions, alloc, risk)
+        suggestions = self._build_suggestions(positions, alloc, risk, theme_mapping_raw)
 
         # 11. Period performance ──────────────────────────────────────────
         periods = self._build_periods(positions, all_history, change_pct_today)
@@ -529,6 +566,9 @@ class CaelynTerminalProvider:
         total_return_val = total_value - total_cost
         total_return_pct = round(total_return_val / total_cost * 100, 1) if total_cost else 0.0
 
+        # 18. Build theme mapping list for response ───────────────────────
+        theme_mapping_list = self._build_theme_mapping_list(positions, theme_mapping_raw)
+
         return {
             "portfolio": {
                 "value":            round(total_value, 2),
@@ -549,6 +589,7 @@ class CaelynTerminalProvider:
             "performance_chart":  perf_chart,
             "performance_charts": perf_charts,
             "asset_allocation":   alloc,
+            "theme_mapping":      theme_mapping_list,
             "correlation_matrix": corr,
             "risk_metrics":       risk,
             "volatility":         vol_list,
@@ -558,6 +599,7 @@ class CaelynTerminalProvider:
             "ticker_tape":        ticker_tape,
             "news_ticker":        news_ticker,
             "as_of":              datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "_holdings_sig":      self._holdings_sig(holdings_raw),
         }
 
     # ── Data fetchers ─────────────────────────────────────────────────────
@@ -796,16 +838,85 @@ class CaelynTerminalProvider:
 
         return tape
 
+    async def _fetch_theme_mapping(self, tickers: list[str]) -> dict[str, str | None]:
+        """Return {TICKER: primary_theme_name | None} using the thematic engine.
+        Synchronous lookups run in a thread pool so they don't block the event loop.
+        """
+        try:
+            from services.theme_ticker_mapper import map_ticker_to_primary_theme
+            return await asyncio.to_thread(
+                lambda: {t: map_ticker_to_primary_theme(t) for t in tickers}
+            )
+        except Exception as e:
+            print(f"[CAELYN] theme_mapping error: {e}")
+            return {}
+
+    async def _fetch_fundamentals(self, equity_tickers: list[str]) -> dict[str, dict]:
+        """Fetch FMP company profiles (name, sector, industry, market_cap) for
+        equity tickers.  Returns {TICKER: profile_dict}.  Gracefully returns {}
+        per-ticker on any error so the rest of the build is unaffected.
+        """
+        if not equity_tickers or not self.fmp:
+            return {}
+
+        async def _one(sym: str) -> tuple[str, dict]:
+            try:
+                profile = await asyncio.wait_for(
+                    self.fmp.get_company_profile(sym), timeout=6.0
+                )
+                return sym, profile or {}
+            except Exception as e:
+                print(f"[CAELYN] fundamentals fetch {sym}: {e}")
+                return sym, {}
+
+        results = await asyncio.gather(*[_one(t) for t in equity_tickers], return_exceptions=True)
+        out: dict[str, dict] = {}
+        for item in results:
+            if isinstance(item, tuple):
+                sym, prof = item
+                out[sym] = prof
+        return out
+
     # ── Builders ──────────────────────────────────────────────────────────
+
+    def _build_theme_mapping_list(
+        self, positions: list[dict], theme_mapping_raw: dict[str, str | None]
+    ) -> list[dict]:
+        """Build the theme_mapping response array: one entry per holding with
+        ticker, theme name (from thematic engine), asset class, and sector."""
+        result = []
+        for p in positions:
+            sym   = p["ticker"]
+            theme = theme_mapping_raw.get(sym)
+            ac    = _asset_class(sym, p.get("_atype", "stock"))
+            sector = p.get("_sector") or ""
+            # Fallback: use asset class as display theme when no thematic match
+            display_theme = theme or (sector if sector else ac)
+            result.append({
+                "ticker":      sym,
+                "theme":       display_theme,
+                "theme_raw":   theme,
+                "asset_class": ac,
+                "sector":      sector,
+                "allocation_pct": p.get("allocation_pct", 0.0),
+            })
+        return result
 
     def _format_holdings(self, positions: list[dict]) -> list[dict]:
         return [
             {
                 "ticker":        p["ticker"],
+                "name":          p.get("_name", p["ticker"]),
+                "sector":        p.get("_sector", ""),
                 "price":         p["price"],
                 "change":        p["change"],
                 "change_pct":    p["change_pct"],
                 "allocation_pct": p["allocation_pct"],
+                "avg_cost":      p.get("_cost"),
+                "shares":        p.get("_shares"),
+                "market_val":    _sr(p.get("market_val"), 2),
+                "w52_high":      p.get("w52_high"),
+                "w52_low":       p.get("w52_low"),
             }
             for p in positions
         ]
@@ -1183,18 +1294,21 @@ class CaelynTerminalProvider:
                 vols.append({"ticker": p["ticker"], "vol": v})
         return sorted(vols, key=lambda x: -x["vol"])
 
-    def _build_suggestions(self, positions, alloc, risk) -> list[dict]:
+    def _build_suggestions(
+        self, positions, alloc, risk, theme_mapping: dict | None = None
+    ) -> list[dict]:
         """
-        Generate 2-4 portfolio-specific risk suggestions based on actual allocation.
-        Rules applied in priority order; only triggered rules are returned.
+        Generate up to 5 portfolio-specific risk suggestions from the ACTUAL
+        holdings.  All rules are fully dynamic — no ticker names are hardcoded.
+        Rules are evaluated in priority order; only triggered rules are returned.
         """
         suggestions: list[dict] = []
-        alloc_map = {a["label"]: a["pct"] for a in alloc}
+        alloc_map    = {a["label"]: a["pct"] for a in alloc}
         ticker_alloc = {p["ticker"]: p["allocation_pct"] for p in positions}
-        vol_map = {p["ticker"]: None for p in positions}
+        theme_mapping = theme_mapping or {}
 
-        # ── Rule 1: Single-position concentration risk (>40%) ───────────
-        for p in positions:
+        # ── Rule 1: Single-position concentration risk (≥40%) ────────────
+        for p in sorted(positions, key=lambda x: -x["allocation_pct"]):
             pct = p["allocation_pct"]
             if pct >= 40:
                 dd_impact = round(pct * 0.2)
@@ -1203,74 +1317,143 @@ class CaelynTerminalProvider:
                     "title": f"High Concentration in {p['ticker']}",
                     "body": (
                         f"{p['ticker']} represents {pct:.0f}% of total portfolio value. "
-                        f"A 20% drawdown in {p['ticker']} alone would reduce your total portfolio "
-                        f"by ~{dd_impact}%. Consider trimming to below 30%, or hedging with a "
-                        f"covered call on the position."
+                        f"A 20% drawdown in {p['ticker']} alone would reduce your total "
+                        f"portfolio by ~{dd_impact}%. Consider trimming to below 30%, or "
+                        f"hedging with a covered call on the position."
                     ),
                 })
-                break   # Only flag the top one to avoid repetition
+                break  # Flag only the top one to avoid repetition
 
-        # ── Rule 2: Tech/AI sector overexposure ─────────────────────────
-        nvda_pct  = ticker_alloc.get("NVDA", 0)
-        buzz_pct  = ticker_alloc.get("BUZZ", 0)
-        ai_combined = nvda_pct + buzz_pct
-        if ai_combined > 60:
-            suggestions.append({
-                "level": "RISK",
-                "title": "AI Sector Overexposure",
-                "body": (
-                    f"NVDA ({nvda_pct:.0f}%) and BUZZ ({buzz_pct:.0f}%) together represent "
-                    f"{ai_combined:.0f}% of the portfolio. BUZZ holds AI-heavy equities that "
-                    f"significantly overlap with NVDA's sector, doubling your concentration "
-                    f"in semiconductors/AI during a sell-off. Consider diversifying into "
-                    f"non-correlated sectors."
-                ),
-            })
+        # ── Rule 2: Single-sector overexposure (same FMP sector > 70%) ──
+        # Only fires when we have real FMP sector data (non-empty _sector).
+        # Skips asset-class fallback labels so "Individual Stocks" never
+        # triggers a spurious sector-concentration warning.
+        if len(suggestions) < 4:
+            sector_alloc: dict[str, float] = {}
+            sector_tickers: dict[str, list[str]] = {}
+            for p in positions:
+                sec = (p.get("_sector") or "").strip()
+                if not sec:
+                    continue  # Skip positions without real FMP sector data
+                sector_alloc[sec]   = sector_alloc.get(sec, 0.0) + p["allocation_pct"]
+                sector_tickers.setdefault(sec, []).append(p["ticker"])
+            for sec, pct in sorted(sector_alloc.items(), key=lambda x: -x[1]):
+                if pct >= 70:
+                    tks = sector_tickers[sec]
+                    tks_str = ", ".join(tks[:4])
+                    suggestions.append({
+                        "level": "RISK",
+                        "title": f"Sector Concentration — {sec}",
+                        "body": (
+                            f"{tks_str} together represent {pct:.0f}% of the portfolio, "
+                            f"all within the {sec} sector. High intra-sector correlation "
+                            f"means a single sector-wide event (earnings miss, regulation, "
+                            f"macro shock) could impact all positions simultaneously. "
+                            f"Consider adding exposure to an uncorrelated sector."
+                        ),
+                    })
+                    break
 
-        # ── Rule 3: No defensive allocation (0% fixed income) ───────────
+        # ── Rule 3: No defensive allocation (0% fixed income) ────────────
         fi_pct = alloc_map.get(_FIXED, 0)
         if fi_pct == 0 and len(suggestions) < 4:
+            # Build a short description of the portfolio tilt for context
+            crypto_pct  = alloc_map.get(_CRYPTO, 0)
+            stock_pct   = alloc_map.get(_STOCK, 0)
+            tilt_parts  = []
+            if stock_pct >= 50:
+                tilt_parts.append("individual stocks")
+            if crypto_pct > 0:
+                tilt_parts.append(f"crypto ({crypto_pct:.0f}%)")
+            tilt_desc = " and ".join(tilt_parts) if tilt_parts else "growth assets"
             suggestions.append({
                 "level": "WARN",
                 "title": "No Defensive Allocation",
                 "body": (
-                    "The portfolio is 100% risk-on with no fixed income buffer. "
-                    "Given the growth/AI tilt (NVDA, BUZZ) and crypto exposure (BTC), "
-                    "a 5-10% allocation to TLT (long-duration Treasuries) can act as a "
-                    "flight-to-quality hedge during equity drawdowns — not as a core holding, "
-                    "but as a volatility dampener."
+                    f"The portfolio is 100% risk-on with no fixed income buffer. "
+                    f"With exposure concentrated in {tilt_desc}, a 5-10% allocation "
+                    f"to TLT (long-duration Treasuries) or AGG can act as a "
+                    f"flight-to-quality hedge during equity drawdowns — not as a "
+                    f"core holding, but as a volatility dampener."
                 ),
             })
 
-        # ── Rule 4: Crypto tail risk (BTC > 3%) ─────────────────────────
-        btc_pct = ticker_alloc.get("BTC", 0)
-        btc_vol = risk.get("weighted_volatility")
-        if btc_pct > 3 and len(suggestions) < 4:
-            wv = btc_vol or 0
-            contrib_est = round(btc_pct / 100 * wv, 1)
+        # ── Rule 4: Crypto tail risk (any crypto holding > 3%) ────────────
+        if len(suggestions) < 4:
+            crypto_positions = [
+                p for p in positions
+                if p.get("_atype") == "crypto" and p["allocation_pct"] > 3
+            ]
+            for cp in sorted(crypto_positions, key=lambda x: -x["allocation_pct"])[:1]:
+                cpct = cp["allocation_pct"]
+                wv   = risk.get("weighted_volatility") or 0
+                contrib_est = round(cpct / 100 * wv, 1)
+                suggestions.append({
+                    "level": "WARN",
+                    "title": f"Crypto Tail Risk — {cp['ticker']}",
+                    "body": (
+                        f"{cp['ticker']} (~{cpct:.0f}% allocation) has historically "
+                        f"drawn down 50%+ in risk-off regimes. At current sizing it "
+                        f"contributes an estimated ~{contrib_est:.1f}% to portfolio "
+                        f"volatility. Consider sizing down if VIX spikes above 25 or "
+                        f"DXY strengthens — both signal crypto headwinds."
+                    ),
+                })
+
+        # ── Rule 5: Low diversification (< 4 holdings) ───────────────────
+        if len(positions) < 4 and len(suggestions) < 4:
+            tks = [p["ticker"] for p in positions]
             suggestions.append({
                 "level": "WARN",
-                "title": "Crypto Tail Risk",
+                "title": "Low Diversification",
                 "body": (
-                    f"BTC (~{btc_pct:.0f}% allocation) has historically drawn down 50%+ in "
-                    f"risk-off regimes. At current sizing it contributes an estimated "
-                    f"~{contrib_est:.1f}% to portfolio volatility. Consider sizing down if VIX "
-                    f"spikes above 25 or DXY strengthens — both signal crypto headwinds."
+                    f"The portfolio holds only {len(positions)} position"
+                    f"{'s' if len(positions) != 1 else ''} ({', '.join(tks)}). "
+                    f"Concentrated portfolios can outperform, but also expose you to "
+                    f"idiosyncratic risk. Consider adding 2-3 uncorrelated positions "
+                    f"from different sectors to reduce single-name risk."
                 ),
             })
 
-        # ── Rule 5: Small-cap liquidity risk (OSS > 2%) ─────────────────
-        oss_pct = ticker_alloc.get("OSS", 0)
-        if oss_pct > 2 and len(suggestions) < 4:
+        # ── Rule 6: High portfolio volatility (weighted vol > 45%) ───────
+        wvol = risk.get("weighted_volatility") or 0
+        if wvol > 45 and len(suggestions) < 5:
+            top_vol_p = max(positions, key=lambda x: x["allocation_pct"], default=None)
+            anchor = top_vol_p["ticker"] if top_vol_p else "top holding"
             suggestions.append({
                 "level": "INFO",
-                "title": "Small Cap Liquidity Risk",
+                "title": "High Portfolio Volatility",
                 "body": (
-                    f"OSS is a micro-cap with thin daily volume (~{oss_pct:.0f}% of portfolio). "
-                    f"In volatile markets, exits can move the stock against you significantly. "
-                    f"Use limit orders and plan position sizing accordingly. Avoid market orders."
+                    f"Weighted annualized volatility is {wvol:.0f}% — significantly "
+                    f"above the S&P 500's typical 15-18%. This amplifies both gains "
+                    f"and losses. If this exceeds your risk tolerance, consider "
+                    f"reducing position size in {anchor} or adding a lower-vol "
+                    f"asset such as a broad-market ETF."
                 ),
             })
+
+        # ── Rule 7: Correlated theme cluster ──────────────────────────────
+        if len(suggestions) < 5 and theme_mapping:
+            theme_groups: dict[str, list[str]] = {}
+            for p in positions:
+                t = theme_mapping.get(p["ticker"])
+                if t:
+                    theme_groups.setdefault(t, []).append(p["ticker"])
+            for theme, tks in sorted(theme_groups.items(), key=lambda x: -len(x[1])):
+                if len(tks) >= 3:
+                    total_theme_pct = sum(ticker_alloc.get(t, 0) for t in tks)
+                    suggestions.append({
+                        "level": "INFO",
+                        "title": f"Theme Cluster — {theme}",
+                        "body": (
+                            f"{', '.join(tks)} all map to the '{theme}' theme "
+                            f"and together represent {total_theme_pct:.0f}% of the portfolio. "
+                            f"High thematic overlap increases correlation, especially during "
+                            f"sector-level drawdowns. Diversifying into a different theme "
+                            f"could reduce correlated downside risk."
+                        ),
+                    })
+                    break
 
         return suggestions[:5]
 
@@ -1494,6 +1677,7 @@ class CaelynTerminalProvider:
         return []
 
     def _empty(self) -> dict:
+        _empty_charts = {"1D": [], "5D": [], "1M": [], "6M": [], "1Y": []}
         return {
             "portfolio": {
                 "value": 0, "change_today": 0, "change_pct_today": 0,
@@ -1503,7 +1687,10 @@ class CaelynTerminalProvider:
                 "sentiment": "NEUTRAL", "market_status": _market_status_et(),
             },
             "positions_count": 0, "holdings": [],
-            "performance_chart": [], "asset_allocation": [],
+            "performance_chart": [],
+            "performance_charts": _empty_charts,
+            "asset_allocation": [],
+            "theme_mapping": [],
             "correlation_matrix": {"tickers": [], "values": []},
             "risk_metrics": {
                 "weighted_volatility": None, "max_drawdown": None,
@@ -1514,4 +1701,5 @@ class CaelynTerminalProvider:
             "top_movers": {"gainers": [], "losers": []},
             "earnings_calendar": [], "ticker_tape": [], "news_ticker": [],
             "as_of": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "_holdings_sig": "",
         }
