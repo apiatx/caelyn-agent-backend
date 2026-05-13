@@ -23,9 +23,137 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+
+# ── Neon PostgreSQL persistence (survives autoscale cold starts) ──────────────
+# Uses the same connection URL as pg_storage.py.
+# Falls back gracefully to file-only mode when DB is unavailable.
+
+_DB_URL = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+_db_pool = None
+
+
+def _get_db_conn():
+    """Lazy pool init with one retry. Returns None when DB unavailable."""
+    global _db_pool
+    if not _DB_URL:
+        return None
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+    def _clean(url: str) -> str:
+        try:
+            p = urlparse(url)
+            qs = parse_qs(p.query, keep_blank_values=True)
+            qs.pop("channel_binding", None)
+            return urlunparse(p._replace(query=urlencode(qs, doseq=True)))
+        except Exception:
+            return url
+
+    for _ in range(2):
+        if _db_pool is None:
+            try:
+                from psycopg2 import pool as _pgpool
+                _db_pool = _pgpool.SimpleConnectionPool(1, 3, _clean(_DB_URL))
+            except Exception as e:
+                print(f"[PORTFOLIO_STORE][DB] pool init failed: {e}")
+                return None
+        try:
+            conn = _db_pool.getconn()
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            conn.commit()
+            cur.close()
+            return conn
+        except Exception:
+            try:
+                _db_pool.closeall()
+            except Exception:
+                pass
+            _db_pool = None
+    return None
+
+
+def _put_db_conn(conn):
+    global _db_pool
+    if _db_pool and conn:
+        try:
+            _db_pool.putconn(conn)
+        except Exception:
+            pass
+
+
+def _db_ensure_table(conn) -> None:
+    """Create the portfolio_holdings table if it does not exist."""
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS portfolio_holdings (
+            slot_id    INTEGER PRIMARY KEY DEFAULT 1,
+            holdings   JSONB       NOT NULL DEFAULT '[]'::jsonb,
+            saved_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    cur.close()
+
+
+def _db_load_holdings() -> list[dict] | None:
+    """Load holdings from Neon DB. Returns None if DB unavailable or empty."""
+    conn = _get_db_conn()
+    if not conn:
+        return None
+    try:
+        _db_ensure_table(conn)
+        cur = conn.cursor()
+        cur.execute("SELECT holdings FROM portfolio_holdings WHERE slot_id = 1")
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            return None
+        raw = row[0]
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if isinstance(raw, list) and raw:
+            print(f"[PORTFOLIO_STORE][DB] loaded count={len(raw)} symbols={[h.get('ticker','?') for h in raw[:5]]}")
+            return raw
+        return None
+    except Exception as e:
+        print(f"[PORTFOLIO_STORE][DB] load error: {e}")
+        return None
+    finally:
+        _put_db_conn(conn)
+
+
+def _db_save_holdings(holdings: list[dict]) -> bool:
+    """Upsert holdings to Neon DB. Returns True on success."""
+    conn = _get_db_conn()
+    if not conn:
+        return False
+    try:
+        _db_ensure_table(conn)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO portfolio_holdings (slot_id, holdings, saved_at)
+            VALUES (1, %s::jsonb, NOW())
+            ON CONFLICT (slot_id) DO UPDATE
+              SET holdings = EXCLUDED.holdings, saved_at = NOW()
+        """, (json.dumps(holdings, default=str),))
+        conn.commit()
+        cur.close()
+        syms = [h.get("ticker", "?") for h in holdings[:5]]
+        print(f"[PORTFOLIO_STORE][DB] saved count={len(holdings)} symbols={syms}")
+        return True
+    except Exception as e:
+        print(f"[PORTFOLIO_STORE][DB] save error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_db_conn(conn)
 
 # ── Canonical location ────────────────────────────────────────────────────────
 # Relative to backend/ CWD (where uvicorn runs from).
@@ -136,14 +264,32 @@ def canonical_file() -> Path:
 
 def load_active_holdings() -> list[dict]:
     """Load and return the canonical normalised holdings list.
-    Returns [] if the file is missing or malformed.
+
+    Priority:
+      1. Neon DB (slot_id=1) — survives autoscale cold starts
+      2. Canonical file       — local dev fallback
+    Returns [] if both sources are empty or unavailable.
     """
     _ensure_dirs()
     _migrate_legacy_if_needed()
+
+    # 1. Try Neon DB first (persists across autoscale restarts)
+    db_holdings = _db_load_holdings()
+    if db_holdings:
+        # Keep the file in sync so local dev always matches
+        _write_canonical(db_holdings)
+        syms = [h.get("ticker", "?") for h in db_holdings[:25]]
+        print(
+            f"[portfolio-source-audit] endpoint=load  source=neon_db  "
+            f"count={len(db_holdings)}  symbols={syms}"
+        )
+        return db_holdings
+
+    # 2. Fall back to file
     holdings = _read_from(_CANONICAL_FILE) if _CANONICAL_FILE.exists() else []
     syms = [h.get("ticker", "?") for h in holdings[:25]]
     print(
-        f"[portfolio-source-audit] endpoint=load  "
+        f"[portfolio-source-audit] endpoint=load  source=file  "
         f"source_file={_CANONICAL_FILE}  "
         f"count={len(holdings)}  symbols={syms}"
     )
@@ -151,16 +297,24 @@ def load_active_holdings() -> list[dict]:
 
 
 def save_active_holdings(holdings: list[dict]) -> None:
-    """Persist holdings to the canonical file (normalised).
+    """Persist holdings to both Neon DB (primary) and canonical file (fallback).
+    Neon DB survives autoscale cold starts; file is a local dev safety net.
     Silently drops entries with no ticker/symbol.
     """
     valid = [h for h in holdings if isinstance(h, dict) and (h.get("ticker") or h.get("symbol"))]
-    _write_canonical(valid)
-    syms = [_normalise(h)["ticker"] for h in valid[:25]]
+    normalised = [_normalise(h) for h in valid]
+
+    # 1. Write to Neon DB (primary — survives restarts)
+    db_ok = _db_save_holdings(normalised)
+
+    # 2. Always write to file as well (local dev / cold-start seed)
+    _write_canonical(normalised)
+
+    syms = [h["ticker"] for h in normalised[:25]]
     print(
-        f"[portfolio-source-audit] endpoint=save  "
+        f"[portfolio-source-audit] endpoint=save  db={db_ok}  "
         f"source_file={_CANONICAL_FILE}  "
-        f"count={len(valid)}  symbols={syms}"
+        f"count={len(normalised)}  symbols={syms}"
     )
 
 

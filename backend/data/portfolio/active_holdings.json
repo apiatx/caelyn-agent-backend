@@ -2,23 +2,35 @@
   "holdings": [
     {
       "ticker": "AEHR",
-      "shares": 100.0,
-      "avg_cost": 12.5,
+      "shares": 500.0,
+      "avg_cost": 14.5,
       "asset_type": "stock"
     },
     {
       "ticker": "MRVL",
-      "shares": 50.0,
-      "avg_cost": 62.0,
+      "shares": 200.0,
+      "avg_cost": 58.2,
       "asset_type": "stock"
     },
     {
       "ticker": "PLAB",
-      "shares": 200.0,
-      "avg_cost": 19.0,
+      "shares": 300.0,
+      "avg_cost": 22.1,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "AMKR",
+      "shares": 150.0,
+      "avg_cost": 31.4,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "VECO",
+      "shares": 250.0,
+      "avg_cost": 19.8,
       "asset_type": "stock"
     }
   ],
-  "_saved_at": "2026-05-13T20:47:17.029480Z",
+  "_saved_at": "2026-05-13T21:14:09.438175Z",
   "_source": "portfolio_store"
 }
