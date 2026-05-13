@@ -1,0 +1,216 @@
+BACKEND REPLIT AGENT — Consolidate Portfolio Holdings Source of Truth
+
+Stop patching Portfolio Terminal symptoms. We need to eliminate duplicate portfolio holdings sources.
+
+Current finding:
+The backend currently has multiple portfolio files:
+
+- portfolio_holdings_default.json → 3 holdings: AEHR, MRVL, PLAB
+- portfolio_holdings_aidan.json → 5 holdings: NVDA, OSS, BUZZ, GOLD, BTC
+- portfolio_holdings.json → 5 holdings: same as aidan
+
+None match the current Portfolio Dashboard UI, which shows ~19 active holdings.
+
+This means the system has multiple competing portfolio sources and the Terminal analytics are reading the wrong one.
+
+Goal:
+Create ONE canonical active portfolio holdings source used by every Portfolio-related backend path:
+- Portfolio Dashboard
+- Portfolio Terminal
+- AI Portfolio Review
+- risk metrics
+- correlation
+- volatility
+- trade history
+- value history
+- any future portfolio analytics
+
+Do NOT:
+- ask the user to re-enter holdings
+- hardcode tickers
+- wipe any existing holdings
+- keep multiple active holdings files
+- leave demo fallback active for real users
+- let Terminal read one source while Dashboard reads another
+- make frontend localStorage the long-term source of truth
+- change unrelated pages
+
+Critical instruction:
+Before changing code, find where the current 19 holdings visible in the Dashboard are coming from.
+
+Audit every possible portfolio source:
+1. backend data files:
+   - portfolio_holdings_default.json
+   - portfolio_holdings_aidan.json
+   - portfolio_holdings.json
+   - stock-holdings.json
+   - any stock_holdings / holdings / portfolio JSON files
+2. frontend server data files
+3. browser/localStorage persistence logic in frontend code
+4. React Query cache / Zustand / local state
+5. API endpoints:
+   - GET /api/portfolio/holdings
+   - POST /api/portfolio/holdings
+   - GET /api/stock-holdings
+   - POST /api/stock-holdings
+   - PUT /api/stock-holdings/:id
+   - DELETE /api/stock-holdings/:id
+   - GET /api/caelyn-terminal
+   - any AI portfolio review endpoint
+6. auth/session user_id logic:
+   - confirm whether auth middleware is disabled
+   - confirm whether everything resolves to "default"
+   - confirm whether "aidan" is still used anywhere
+
+Required diagnostics:
+Add temporary logs to every holdings read/write path:
+
+[portfolio-source-audit] endpoint=...
+[portfolio-source-audit] source_file=...
+[portfolio-source-audit] user_id=...
+[portfolio-source-audit] count=...
+[portfolio-source-audit] symbols=[...]
+
+Also add a one-time startup audit log:
+
+[portfolio-source-audit] discovered_files=[
+  {file, count, symbols, modified_at}
+]
+
+Main fix:
+Create a single canonical holdings repository/helper, for example:
+
+backend/data/portfolio_store.py
+
+or use the existing best equivalent if one already exists.
+
+It must expose:
+- load_active_holdings(user_id/default)
+- save_active_holdings(holdings, user_id/default)
+- update_active_holding(...)
+- delete_or_close_holding(...)
+- get_holdings_signature(...)
+
+Every endpoint must use this same helper.
+
+Canonical source:
+Use one file only for active holdings, preferably:
+
+data/portfolio/active_holdings.json
+
+or if keeping current pattern is safer:
+
+data/portfolio_holdings_default.json
+
+But whichever you choose, all active holdings reads/writes must go through that one source.
+
+Migration:
+1. Do not delete old files immediately.
+2. Rename/archive old non-canonical files:
+   - portfolio_holdings.json
+   - portfolio_holdings_aidan.json
+   - any stale demo file
+3. Store them under an archive folder:
+   - data/archive/portfolio_holdings_legacy_<timestamp>.json
+4. If multiple files have holdings, do not blindly merge duplicates.
+5. Choose the source matching the current Dashboard’s 19 visible holdings as the canonical source.
+6. If the 19 holdings are only in frontend/localStorage/stock-holdings.json, migrate those into the canonical backend source automatically.
+7. Preserve:
+   - ticker
+   - shares
+   - avg price / avg_cost
+   - asset type
+   - date_added if exists
+   - notes/tags if exists
+   - any IDs used by dashboard editing
+
+Important:
+The current Dashboard-visible 19 holdings must be preserved without requiring user re-entry.
+
+Endpoint alignment:
+After the fix, these must all return the same active holdings:
+- GET /api/portfolio/holdings
+- GET /api/stock-holdings
+- GET /api/caelyn-terminal holdings section
+- AI Portfolio Review context, if applicable
+
+Mutation alignment:
+These must all write to the same canonical source and invalidate the same terminal cache:
+- POST /api/portfolio/holdings
+- POST /api/stock-holdings
+- PUT /api/stock-holdings/:id
+- DELETE /api/stock-holdings/:id
+
+Cache alignment:
+- Terminal cache key must include holdings_signature from the canonical source.
+- Any holdings mutation must invalidate Terminal cache.
+- No cache should serve holdings from archived/demo files.
+
+Demo fallback:
+Disable demo portfolio fallback for production/user flows.
+Demo holdings may only be used if:
+- explicit DEMO_MODE=true, or
+- no canonical holdings file exists and the request is unauthenticated dev mode.
+
+If auth middleware is disabled and everything resolves to default, then "default" is the real canonical user for now. Do not create aidan/default split unless auth is actually working.
+
+Validation:
+A. Source discovery
+Return every holdings file found:
+- path
+- count
+- symbols
+- modified_at
+- whether active or archived
+
+B. Current 19 holdings
+Find the exact source of the 19 holdings currently shown in Dashboard.
+Return:
+- source file/store
+- count
+- symbols
+- endpoint feeding Dashboard
+
+C. Canonical migration
+After migration:
+- canonical source count should equal the current Dashboard count
+- canonical symbols should match Dashboard symbols exactly
+- old stale/demo files should no longer be read by active endpoints
+
+D. Endpoint equality
+Call all active holdings endpoints:
+- GET /api/portfolio/holdings
+- GET /api/stock-holdings
+- GET /api/caelyn-terminal
+
+Prove:
+- same count
+- same symbols
+- same holdings_signature
+
+E. Mutation test
+1. Add a test holding.
+2. Confirm Dashboard endpoint includes it.
+3. Confirm Terminal endpoint includes it.
+4. Edit it.
+5. Confirm all endpoints update.
+6. Delete/close it.
+7. Confirm all endpoints remove it.
+8. Confirm trade history records it if close-position history exists.
+
+F. No zombie holdings
+Prove these old holdings do not appear unless they are actually in the canonical portfolio:
+- NVDA
+- OSS
+- BUZZ
+- GOLD
+- BTC
+- AEHR/MRVL/PLAB-only stale test set
+
+Return:
+- root cause
+- source of current Dashboard 19 holdings
+- canonical file chosen
+- files archived
+- endpoints changed
+- validation output
