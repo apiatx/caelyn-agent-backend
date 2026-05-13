@@ -2027,69 +2027,90 @@ async def get_events(
     ):
         syms = watchlist if scope == "watchlist" else portfolio
         print(
-            f"[catalyst] symbol-driven earnings path: "
-            f"universe={scope} symbols={len(syms)} "
-            f"first_10={sorted(syms)[:10]}"
+            f"[catalyst] branch=user_symbol_earnings "
+            f"tab={tab} mode={mode} scope={scope} "
+            f"symbols={len(syms)} first_10={sorted(syms)[:10]}"
         )
-        from services.user_earnings_service import get_or_sync_user_earnings  # lazy
+        _use_symbol_path = True
+        try:
+            from services.user_earnings_service import get_or_sync_user_earnings  # lazy
 
-        req_from = from_date or _today()
-        req_to   = to_date   or _date_offset(120)
+            req_from = from_date or _today()
+            req_to   = to_date   or _date_offset(120)
 
-        events, meta = await get_or_sync_user_earnings(
-            universe  = scope,
-            symbols   = syms,
-            fmp_key   = fmp_key,
-            from_date = req_from,
-            to_date   = req_to,
-        )
+            events, meta = await get_or_sync_user_earnings(
+                universe  = scope,
+                symbols   = syms,
+                fmp_key   = fmp_key,
+                from_date = req_from,
+                to_date   = req_to,
+            )
+        except Exception as _ue_err:
+            # Defensive fallback: user_earnings_service failed (e.g. Neon unavailable).
+            # Log the error and fall through to the standard broad-FMP path below.
+            print(
+                f"[catalyst] user_earnings_service error for scope={scope}: {_ue_err} "
+                f"— falling back to broad FMP path"
+            )
+            _use_symbol_path = False
 
-        # Apply any additional caller filters (sector, mc_bucket, eventType,
-        # explicit symbol list).  Never filter to symbols=None here — that would
-        # return All events for non-watchlist symbols.
-        events = _filter_events(events, symbols_filter, sector, mc_bucket, event_type_filter)
-        events = sorted(
-            events,
-            key=lambda e: (e.get("date", ""), e.get("symbol", "")),
-        )[:limit]
+        if _use_symbol_path:
+            # Apply any additional caller filters (sector, mc_bucket, eventType,
+            # explicit symbol list).  Never filter to symbols=None here — that would
+            # return All events for non-watchlist symbols.
+            events = _filter_events(events, symbols_filter, sector, mc_bucket, event_type_filter)
+            events = sorted(
+                events,
+                key=lambda e: (e.get("date", ""), e.get("symbol", "")),
+            )[:limit]
 
-        ms = int((time.monotonic() - t0) * 1000)
-        _fmp_this = get_total_calls("fmp") - _fmp_before
+            ms = int((time.monotonic() - t0) * 1000)
+            _fmp_this = get_total_calls("fmp") - _fmp_before
+            print(
+                f"[catalyst] symbol-driven earnings done: "
+                f"scope={scope} events={len(events)} fmp_calls={_fmp_this} ms={ms}"
+            )
+            record_request(
+                route   = f"/api/catalysts/events?tab={tab}&scope={scope}",
+                page    = "calendar",
+                feature = "earnings_symbol_driven",
+                provider_calls = {"fmp": _fmp_this, "finnhub": 0, "finviz": 0,
+                                  "polygon": 0, "alpha_vantage": 0, "tradier": 0},
+                cache_hits   = 0,
+                cache_misses = 0,
+                elapsed_ms   = ms,
+                http_status  = 200,
+                extra        = {"tab": tab, "scope": scope, "events": len(events)},
+            )
+            return {
+                "asOf":   datetime.now(timezone.utc).isoformat(),
+                "tab":    tab,
+                "mode":   mode,
+                "from":   req_from,
+                "to":     req_to,
+                "filters": {
+                    "scope":     scope,
+                    "sector":    sector,
+                    "marketCap": mc_bucket,
+                    "eventType": event_type_filter,
+                    "symbols":   sorted(symbols_filter) if symbols_filter else None,
+                },
+                "events":  events,
+                "count":   len(events),
+                "status":  "ok",
+                "errors":  [],
+                "meta":    meta,
+            }
+        # _use_symbol_path=False → fall through to broad FMP path below
         print(
-            f"[catalyst] symbol-driven earnings done: "
-            f"scope={scope} events={len(events)} fmp_calls={_fmp_this} ms={ms}"
+            f"[catalyst] branch=all_broad_calendar (fallback) "
+            f"tab={tab} mode={mode} scope={scope}"
         )
-        record_request(
-            route   = f"/api/catalysts/events?tab={tab}&scope={scope}",
-            page    = "calendar",
-            feature = "earnings_symbol_driven",
-            provider_calls = {"fmp": _fmp_this, "finnhub": 0, "finviz": 0,
-                              "polygon": 0, "alpha_vantage": 0, "tradier": 0},
-            cache_hits   = 0,
-            cache_misses = 0,
-            elapsed_ms   = ms,
-            http_status  = 200,
-            extra        = {"tab": tab, "scope": scope, "events": len(events)},
+    else:
+        print(
+            f"[catalyst] branch={'all_broad_calendar' if scope == 'all' else 'user_symbol_earnings'} "
+            f"tab={tab} mode={mode} scope={scope}"
         )
-        return {
-            "asOf":   datetime.now(timezone.utc).isoformat(),
-            "tab":    tab,
-            "mode":   mode,
-            "from":   req_from,
-            "to":     req_to,
-            "filters": {
-                "scope":     scope,
-                "sector":    sector,
-                "marketCap": mc_bucket,
-                "eventType": event_type_filter,
-                "symbols":   sorted(symbols_filter) if symbols_filter else None,
-            },
-            "events":  events,
-            "count":   len(events),
-            "status":  "ok",
-            "errors":  [],
-            "meta":    meta,
-        }
     # ── End symbol-driven short-circuit ──────────────────────────────────────
 
     tabs_to_fetch = ALL_TABS if tab == "all" else [tab]

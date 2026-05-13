@@ -196,10 +196,10 @@ async def catalyst_events(
         )
 
     if mode not in ("upcoming", "recent"):
-        return JSONResponse(
-            status_code=400,
-            content={"error": f"Invalid mode {mode!r}. Valid: upcoming, recent"},
-        )
+        # Silently map legacy / unknown modes (e.g. "curated", "week") → upcoming
+        # so frontend clients that pass non-standard mode strings still get data.
+        print(f"[catalyst] mode={mode!r} not in (upcoming|recent) — remapping to upcoming")
+        mode = "upcoming"
 
     # ── Snapshot short-circuit for weekly-cached tabs ──────────────────────
     # Dividends, IPOs, Splits, Economic Releases, Treasury/Macro are served
