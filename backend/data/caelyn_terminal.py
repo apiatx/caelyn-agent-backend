@@ -566,6 +566,7 @@ class CaelynTerminalProvider:
 
         # 6. Asset allocation ─────────────────────────────────────────────
         alloc = self._build_allocation(positions, total_value)
+        asset_class_alloc = self._build_asset_class_allocation(positions, total_value)
 
         # Merge all per-ticker histories into one dict.
         # IMPORTANT: _yf_fb_h MUST be included here — it holds history for OTC /
@@ -752,7 +753,9 @@ class CaelynTerminalProvider:
             "performance_chart":      perf_chart,
             "performance_charts":     perf_charts,
             "performance_chart_meta": _perf_meta,
+            "period_returns":          periods["period_returns"],
             "asset_allocation":       alloc,
+            "asset_class_allocation": asset_class_alloc,
             "theme_allocation":       theme_allocation,
             "sector_allocation":      sector_allocation,
             "theme_mapping":          theme_mapping_list,
@@ -1468,6 +1471,35 @@ class CaelynTerminalProvider:
             })
         return result
 
+    def _build_asset_class_allocation(self, positions, total_value) -> list[dict]:
+        """Dashboard-compatible asset class grouping: Stocks / ETFs / Crypto / Commodities / Indices.
+        Maps holding asset_type directly to the same five buckets shown on Portfolio Dashboard.
+        """
+        _DASH: dict[str, tuple[str, str]] = {
+            "stock":     ("Stocks",      "#a78bfa"),
+            "etf":       ("ETFs",        "#38bdf8"),
+            "fund":      ("ETFs",        "#38bdf8"),
+            "crypto":    ("Crypto",      "#e879f9"),
+            "commodity": ("Commodities", "#fb923c"),
+            "index":     ("Indices",     "#22c55e"),
+        }
+        totals: dict[str, float] = {}
+        colors: dict[str, str]   = {}
+        for p in positions:
+            atype = (p.get("_atype") or "stock").lower().strip()
+            label, color = _DASH.get(atype, ("Stocks", "#a78bfa"))
+            totals[label] = totals.get(label, 0.0) + p["market_val"]
+            colors[label] = color
+
+        result = []
+        for label, val in sorted(totals.items(), key=lambda x: -x[1]):
+            result.append({
+                "label": label,
+                "pct":   round(val / total_value * 100, 1) if total_value else 0.0,
+                "color": colors[label],
+            })
+        return result
+
     def _build_correlation(
         self,
         all_tickers: list[str],
@@ -1900,16 +1932,46 @@ class CaelynTerminalProvider:
 
         cur = _port_value_at(today)
 
-        def _perf(days):
+        def _perf_and_val(days: int):
+            """Returns (pct, dollar_value) or (None, None) if insufficient history."""
             past = _port_value_at(_days_ago(days))
-            return round((cur - past) / past * 100, 1) if past else None
+            if not past:
+                return None, None
+            return round((cur - past) / past * 100, 1), round(cur - past, 2)
+
+        def _perf(days):
+            pct, _ = _perf_and_val(days)
+            return pct
+
+        def _pr(pct, val, days=None):
+            reason = None
+            if pct is None:
+                reason = "insufficient_history" if days and days > 5 else "unavailable"
+            return {"pct": pct, "value": val, "reason": reason}
+
+        pct_5d,  val_5d  = _perf_and_val(5)
+        pct_1m,  val_1m  = _perf_and_val(30)
+        pct_6m,  val_6m  = _perf_and_val(182)
+        pct_1y,  val_1y  = _perf_and_val(365)
+
+        change_today_val = round(sum(p["_shares"] * (p.get("change") or 0) for p in positions), 2)
+        change_pct_1d_r  = round(change_pct_1d, 2)
+
+        period_returns = {
+            "1D": _pr(change_pct_1d_r, change_today_val),
+            "5D": _pr(pct_5d,  val_5d,  days=5),
+            "1M": _pr(pct_1m,  val_1m,  days=30),
+            "6M": _pr(pct_6m,  val_6m,  days=182),
+            "1Y": _pr(pct_1y,  val_1y,  days=365),
+        }
 
         return {
             "perf_1d": round(change_pct_1d, 1),
-            "perf_5d": _perf(5),
-            "perf_1m": _perf(30),
-            "perf_6m": _perf(182),
-            "perf_1y": _perf(365),
+            "perf_5d": pct_5d,
+            "perf_1m": pct_1m,
+            "perf_6m": pct_6m,
+            "perf_1y": pct_1y,
+            "period_returns": period_returns,
         }
 
     def _sentiment(self, change_pct: float) -> str:
