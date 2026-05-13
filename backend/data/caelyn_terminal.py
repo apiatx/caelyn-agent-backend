@@ -446,7 +446,45 @@ class CaelynTerminalProvider:
         theme_mapping_raw  = R["theme_mapping"] or {}   # {ticker: primary_theme | None}
         fundamentals_raw   = R["fundamentals"] or {}    # {ticker: {name, sector, ...}}
 
-        # Merge all quotes and history
+        # ── Yahoo Finance fallback for tickers Tradier didn't cover ───────────
+        # Handles OTC/pink-sheet/international tickers that Tradier rejects.
+        _yf_fb_q: dict[str, dict] = {}
+        _yf_fb_h: dict[str, list[dict]] = {}
+        _tdr_miss_q = [t for t in tradier_tickers if t not in tradier_quotes]
+        _tdr_miss_h = [t for t in tradier_tickers
+                       if not tradier_history.get(t) or len(tradier_history[t]) < 5]
+        _yf_miss_all = sorted(set(_tdr_miss_q) | set(_tdr_miss_h))
+        if _yf_miss_all:
+            print(f"[CAELYN] YF fallback needed  miss_quotes={_tdr_miss_q}  miss_hist={_tdr_miss_h}")
+            _yf_tasks: list = []
+            _yf_keys:  list = []
+            for _t in _yf_miss_all:
+                _ys = YAHOO_SYMBOL_MAP.get(_t, _t)
+                if _t in _tdr_miss_q:
+                    _yf_tasks.append(_yf_quote(_ys, _t))
+                    _yf_keys.append(("q", _t))
+                if _t in _tdr_miss_h:
+                    _yf_tasks.append(_yf_history(_ys, "2y"))
+                    _yf_keys.append(("h", _t))
+            _yf_res = await asyncio.gather(*_yf_tasks, return_exceptions=True)
+            for (_kind, _t), _v in zip(_yf_keys, _yf_res):
+                if isinstance(_v, Exception) or _v is None:
+                    print(f"[CAELYN] YF fallback {_kind} {_t}: {type(_v).__name__ if isinstance(_v, Exception) else 'None'}")
+                    continue
+                if _kind == "q" and isinstance(_v, dict) and _v.get("price"):
+                    _yf_fb_q[_t] = {
+                        "price":      _v.get("price"),
+                        "change":     _v.get("change"),
+                        "change_pct": _v.get("change_pct"),
+                        "w52_high":   _v.get("week_52_high"),
+                        "w52_low":    _v.get("week_52_low"),
+                    }
+                    print(f"[CAELYN] YF fallback quote OK  {_t}  price={_v.get('price')}")
+                elif _kind == "h" and isinstance(_v, list) and len(_v) >= 5:
+                    _yf_fb_h[_t] = _v
+                    print(f"[CAELYN] YF fallback history OK  {_t}  bars={len(_v)}")
+
+        # Merge all quotes and history (Tradier → YF fallback → crypto → commodity)
         def _q(sym: str) -> dict:
             if sym in tradier_quotes:
                 q = tradier_quotes[sym]
@@ -457,6 +495,8 @@ class CaelynTerminalProvider:
                     "w52_high":   _sf(q.get("week_52_high")),
                     "w52_low":    _sf(q.get("week_52_low")),
                 }
+            if sym in _yf_fb_q:
+                return _yf_fb_q[sym]
             if sym in crypto_quotes:
                 return crypto_quotes[sym]
             if sym in commodity_quotes:
@@ -464,8 +504,10 @@ class CaelynTerminalProvider:
             return {}
 
         def _hist(sym: str) -> list[dict]:
-            if sym in tradier_history:
+            if sym in tradier_history and len(tradier_history[sym]) >= 5:
                 return tradier_history[sym]
+            if sym in _yf_fb_h:
+                return _yf_fb_h[sym]
             if sym in crypto_history:
                 return crypto_history[sym]
             if sym in commodity_history:
@@ -571,6 +613,31 @@ class CaelynTerminalProvider:
         # 18. Build theme mapping list for response ───────────────────────
         theme_mapping_list = self._build_theme_mapping_list(positions, theme_mapping_raw)
 
+        # 18b. Sector allocation — from FMP sector data when available ────
+        _sector_totals: dict[str, float] = {}
+        for _p in positions:
+            _sec = (_p.get("_sector") or "").strip()
+            if _sec:
+                _sector_totals[_sec] = _sector_totals.get(_sec, 0) + _p["market_val"]
+        sector_allocation: list[dict] = []
+        if _sector_totals and total_value:
+            for _sec, _val in sorted(_sector_totals.items(), key=lambda x: -x[1]):
+                sector_allocation.append({
+                    "label": _sec,
+                    "pct":   round(_val / total_value * 100, 1),
+                })
+        # If no FMP sector data yet, fall back to theme-based grouping
+        if not sector_allocation:
+            _theme_totals: dict[str, float] = {}
+            for _p in positions:
+                _t = theme_mapping_raw.get(_p["_sym"]) or _asset_class(_p["_sym"], _p.get("_atype", "stock"))
+                _theme_totals[_t] = _theme_totals.get(_t, 0) + _p["market_val"]
+            for _t, _val in sorted(_theme_totals.items(), key=lambda x: -x[1]):
+                sector_allocation.append({
+                    "label": _t,
+                    "pct":   round(_val / total_value * 100, 1) if total_value else 0.0,
+                })
+
         # 19. Performance chart metadata (per-period transparency) ─────────
         _perf_meta: dict[str, dict] = {}
         for _p in ("1D", "5D", "1M", "6M", "1Y"):
@@ -606,6 +673,7 @@ class CaelynTerminalProvider:
             "performance_charts":     perf_charts,
             "performance_chart_meta": _perf_meta,
             "asset_allocation":       alloc,
+            "sector_allocation":      sector_allocation,
             "theme_mapping":          theme_mapping_list,
             "correlation_matrix":     corr,
             "risk_metrics":           risk,
@@ -874,29 +942,74 @@ class CaelynTerminalProvider:
             return {}
 
     async def _fetch_fundamentals(self, equity_tickers: list[str]) -> dict[str, dict]:
-        """Fetch FMP company profiles (name, sector, industry, market_cap) for
-        equity tickers.  Returns {TICKER: profile_dict}.  Gracefully returns {}
-        per-ticker on any error so the rest of the build is unaffected.
+        """Fetch company profiles (name, sector, industry, market_cap) for equity tickers.
+
+        Priority:
+          1. fmp_cache_service.get_company_profiles_bulk_cached() — DB + in-memory, zero latency
+          2. Live FMP get_company_profile()  for cache misses
+          3. Finnhub get_company_profile()   for remaining misses (sync → thread)
+
+        Returns {TICKER: profile_dict}.  Never raises.
         """
-        if not equity_tickers or not self.fmp:
+        if not equity_tickers:
             return {}
 
-        async def _one(sym: str) -> tuple[str, dict]:
-            try:
-                profile = await asyncio.wait_for(
-                    self.fmp.get_company_profile(sym), timeout=6.0
-                )
-                return sym, profile or {}
-            except Exception as e:
-                print(f"[CAELYN] fundamentals fetch {sym}: {e}")
-                return sym, {}
-
-        results = await asyncio.gather(*[_one(t) for t in equity_tickers], return_exceptions=True)
+        # 1. Bulk DB cache — fastest, no network
         out: dict[str, dict] = {}
-        for item in results:
-            if isinstance(item, tuple):
-                sym, prof = item
-                out[sym] = prof
+        try:
+            from services.fmp_cache_service import get_company_profiles_bulk_cached as _bulk
+            out = _bulk(equity_tickers)
+            hits = [t for t in equity_tickers if out.get(t, {}).get("name")]
+            print(f"[CAELYN] fundamentals bulk_cache  hits={hits}  total={len(equity_tickers)}")
+        except Exception as e:
+            print(f"[CAELYN] fundamentals bulk_cache error: {e}")
+
+        # 2. Live FMP for cache misses
+        misses = [t for t in equity_tickers if not out.get(t, {}).get("name")]
+        if misses and self.fmp:
+            async def _fmp_one(sym: str) -> tuple[str, dict]:
+                try:
+                    p = await asyncio.wait_for(self.fmp.get_company_profile(sym), timeout=6.0)
+                    return sym, p or {}
+                except Exception as e:
+                    print(f"[CAELYN] FMP profile {sym}: {e}")
+                    return sym, {}
+            fmp_res = await asyncio.gather(*[_fmp_one(t) for t in misses], return_exceptions=True)
+            for item in fmp_res:
+                if isinstance(item, tuple):
+                    sym, prof = item
+                    if prof.get("name") or prof.get("sector"):
+                        out[sym] = prof
+                        print(f"[CAELYN] FMP profile OK  {sym}  name={prof.get('name')}  sector={prof.get('sector')}")
+
+        # 3. Finnhub fallback for still-missing tickers (sync call in thread)
+        still_miss = [t for t in equity_tickers if not out.get(t, {}).get("name")]
+        if still_miss and self.finnhub:
+            async def _fh_one(sym: str) -> tuple[str, dict]:
+                try:
+                    p = await asyncio.wait_for(
+                        asyncio.to_thread(self.finnhub.get_company_profile, sym), timeout=5.0
+                    )
+                    if p and p.get("name"):
+                        return sym, {
+                            "name":     p.get("name", sym),
+                            "sector":   p.get("finnhubIndustry", ""),
+                            "industry": p.get("finnhubIndustry", ""),
+                            "market_cap": p.get("marketCapitalization"),
+                            "exchange": p.get("exchange", ""),
+                            "country":  p.get("country", ""),
+                        }
+                except Exception as e:
+                    print(f"[CAELYN] Finnhub profile {sym}: {e}")
+                return sym, {}
+            fh_res = await asyncio.gather(*[_fh_one(t) for t in still_miss], return_exceptions=True)
+            for item in fh_res:
+                if isinstance(item, tuple):
+                    sym, prof = item
+                    if prof.get("name"):
+                        out[sym] = prof
+                        print(f"[CAELYN] Finnhub profile OK  {sym}  name={prof.get('name')}")
+
         return out
 
     # ── Builders ──────────────────────────────────────────────────────────
@@ -925,23 +1038,30 @@ class CaelynTerminalProvider:
         return result
 
     def _format_holdings(self, positions: list[dict]) -> list[dict]:
-        return [
-            {
-                "ticker":        p["ticker"],
-                "name":          p.get("_name", p["ticker"]),
-                "sector":        p.get("_sector", ""),
-                "price":         p["price"],
-                "change":        p["change"],
-                "change_pct":    p["change_pct"],
-                "allocation_pct": p["allocation_pct"],
-                "avg_cost":      p.get("_cost"),
-                "shares":        p.get("_shares"),
-                "market_val":    _sr(p.get("market_val"), 2),
-                "w52_high":      p.get("w52_high"),
-                "w52_low":       p.get("w52_low"),
-            }
-            for p in positions
-        ]
+        result = []
+        for p in positions:
+            price = p.get("price") or 0.0
+            cost  = p.get("_cost") or 0.0
+            shares = p.get("_shares") or 0.0
+            unreal_val = _sr((price - cost) * shares, 2) if price and cost else None
+            unreal_pct = _sr((price - cost) / cost * 100, 2) if price and cost else None
+            result.append({
+                "ticker":             p["ticker"],
+                "name":               p.get("_name", p["ticker"]),
+                "sector":             p.get("_sector", ""),
+                "price":              p["price"],
+                "change":             p["change"],
+                "change_pct":         p["change_pct"],
+                "allocation_pct":     p["allocation_pct"],
+                "avg_cost":           cost or None,
+                "shares":             shares or None,
+                "market_val":         _sr(p.get("market_val"), 2),
+                "w52_high":           p.get("w52_high"),
+                "w52_low":            p.get("w52_low"),
+                "total_return_value": unreal_val,
+                "total_return_pct":   unreal_pct,
+            })
+        return result
 
     def _get_closes(self, sym: str, all_history: dict) -> list[float]:
         bars = all_history.get(sym, [])
@@ -1710,19 +1830,27 @@ class CaelynTerminalProvider:
     # ── Holdings loader ───────────────────────────────────────────────────
 
     def _load_holdings(self, portfolio_file: Path) -> list[dict]:
-        # Rule: if the per-user file exists (even when empty), use it exclusively.
-        # The legacy demo fallback fires ONLY when no per-user file has been
-        # created yet (unauthenticated / first-run dev mode).  This prevents
-        # demo holdings from ever appearing for authenticated users who have
-        # deliberately cleared their portfolio.
-        if portfolio_file.exists():
-            candidates = [portfolio_file]
-            source_label = "user_file"
-        else:
-            candidates = [Path("data/portfolio_holdings.json")]
-            source_label = "legacy_fallback"
+        """Load holdings from the canonical portfolio store (single source of truth).
 
-        for path in candidates:
+        Primary:  portfolio_store.load_active_holdings() — always canonical
+        Fallback: direct file read of portfolio_file (backward compat)
+        """
+        # 1. Canonical store — always the right answer
+        try:
+            from data.portfolio_store import load_active_holdings as _canon
+            holdings = _canon()
+            valid = [h for h in holdings if float(h.get("shares") or 0) > 0]
+            syms  = [h.get("ticker") for h in valid[:25]]
+            print(
+                f"[CAELYN] _load_holdings  source=portfolio_store  "
+                f"count={len(valid)}  symbols={syms}"
+            )
+            return valid
+        except Exception as e:
+            print(f"[CAELYN] portfolio_store load error: {e}")
+
+        # 2. Direct file fallback (backward compat — should rarely fire)
+        for path in [portfolio_file]:
             try:
                 if not path.exists():
                     continue
@@ -1736,18 +1864,14 @@ class CaelynTerminalProvider:
                     and float(h.get("shares") or 0) > 0
                 ]
                 print(
-                    f"[CAELYN] _load_holdings  source={source_label}  "
-                    f"file={path.name}  raw={len(holdings)}  "
-                    f"valid={len(result)}"
+                    f"[CAELYN] _load_holdings  source=file_fallback  "
+                    f"file={path.name}  raw={len(holdings)}  valid={len(result)}"
                 )
                 return result
             except Exception as e:
                 print(f"[CAELYN] Holdings load error ({path}): {e}")
 
-        print(
-            f"[CAELYN] _load_holdings  source={source_label}  "
-            f"file={portfolio_file.name}  result=empty (no file or parse error)"
-        )
+        print(f"[CAELYN] _load_holdings  result=empty — no canonical data")
         return []
 
     def _empty(self) -> dict:

@@ -1,0 +1,93 @@
+BACKEND REPLIT AGENT — Portfolio Terminal is still not working end-to-end
+
+The Portfolio Terminal still does not show the analytics I need, even though the holdings list now shows the current 19 positions.
+
+Current visible problem:
+- Holdings sidebar shows current holdings.
+- Portfolio vs S&P 500 chart is still basically empty/useless.
+- Correlation Matrix says unavailable.
+- Risk Analysis is mostly dashes.
+- Volatility says unavailable.
+- Risk Suggestions only shows a generic “Portfolio Synced” message instead of actual useful risk intelligence.
+- Asset allocation only shows Individual Stocks 100%, but does not meaningfully map holdings to themes/sectors.
+- Terminal still feels like it is not actually running analytics on the real current portfolio.
+
+Please stop assuming prior fixes worked. Audit the actual live backend response and figure out what is missing.
+
+Goal:
+Make the backend return a complete, usable Portfolio Terminal analytics payload for the current canonical 19-holding portfolio.
+
+Do not blindly follow older prompts. Use the repo as source of truth. Make the smartest fix based on what the code actually does.
+
+What I need:
+1. The Terminal backend should read the same canonical current holdings that Dashboard uses.
+2. It should return enough data for every Terminal panel to render:
+   - holdings
+   - total value
+   - daily P&L
+   - portfolio performance chart
+   - asset allocation
+   - theme/sector allocation
+   - correlation matrix
+   - volatility
+   - risk metrics
+   - risk suggestions
+   - earnings list
+   - top movers/losers
+3. If a section cannot be calculated, return a specific reason and the missing dependency, not a generic unavailable state.
+4. Do not return old demo holdings or stale cached analytics.
+5. Do not fake analytics.
+
+Important:
+The frontend agent found the 19 holdings in frontend/data/stock-holdings.json and added migration/dual-write to the canonical backend. Verify the backend is actually receiving and using that canonical 19-holding portfolio now.
+
+Audit:
+1. Hit the live `/api/portfolio/source-audit`.
+2. Hit the live `/api/portfolio/holdings`.
+3. Hit the live `/api/caelyn-terminal`.
+4. Compare all three:
+   - holdings count
+   - symbols
+   - holdings signature
+   - source file/store
+5. Inspect the actual `/api/caelyn-terminal` JSON and list which fields are missing, empty, stale, or unavailable.
+6. Identify whether the missing analytics are caused by:
+   - missing historical price data
+   - wrong endpoint reading wrong holdings
+   - cache serving stale/partial payload
+   - frontend proxy stripping fields
+   - FastAPI backend not calculating fields
+   - unsupported symbols
+   - bad field names / schema mismatch
+   - provider failure
+   - timeout/fallback logic
+
+Use existing services where possible:
+- Tradier / quote service for live prices, daily change, volume, relative volume.
+- FMP / historical service for historical prices, fundamentals, earnings.
+- Thematic universe / Themes page engine for theme mapping.
+- Existing cache patterns, but cache by holdings signature.
+
+Required validation:
+After your fix, return a live validation table for the current 19 holdings:
+
+- `/api/portfolio/holdings` count and symbols
+- `/api/caelyn-terminal` count and symbols
+- performance chart: available? points count? reason if unavailable
+- correlation matrix: available? dimensions? excluded symbols and reasons
+- volatility: available? count? excluded symbols and reasons
+- risk metrics: which metrics populated? which unavailable and why?
+- risk suggestions: count and examples
+- theme mapping: count and examples
+- asset allocation: groups and weights
+- earnings: count and examples
+- top movers: count and examples
+- cache status and holdings signature
+
+Do not declare done unless the live `/api/caelyn-terminal` response proves the current 19-holding portfolio has real analytics or clear section-specific reasons.
+
+Return:
+- exact root cause
+- files changed
+- what was broken despite previous fixes
+- live response validation
