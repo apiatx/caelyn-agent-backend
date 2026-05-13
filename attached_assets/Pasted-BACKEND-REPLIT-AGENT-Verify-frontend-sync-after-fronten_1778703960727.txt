@@ -1,0 +1,102 @@
+BACKEND REPLIT AGENT — Verify frontend sync after frontend republish, then fix only true backend gaps
+
+Frontend has been instructed to republish after fixing the real sync path. Do not ask for manual tickers. Do not seed hardcoded holdings. Do not create new workaround endpoints unless the live incoming request proves a backend issue.
+
+Your job:
+Verify the live FastAPI backend receives the frontend’s current 19 holdings and that /api/caelyn-terminal rebuilds analytics from those exact holdings.
+
+Use the actual FastAPI logs, source-audit, canonical store, and live API responses. Do not assume previous fixes worked.
+
+Required checks:
+1. Watch for frontend GET /ping.
+2. Watch for frontend POST /api/portfolio/sync.
+3. Confirm payload count and symbols.
+4. Confirm canonical active holdings persisted.
+5. Confirm /api/portfolio/source-audit reports the same canonical count/symbols.
+6. Confirm /api/portfolio/holdings returns the same count/symbols.
+7. Confirm /api/caelyn-terminal rebuilds from the same count/symbols/signature.
+8. Confirm no stale cache or old test/demo holdings are used.
+
+Required output table:
+- ping_received: yes/no
+- sync_received: yes/no
+- payload_shape:
+- payload_count:
+- payload_symbols:
+- canonical_count_after:
+- canonical_symbols_after:
+- terminal_count_after:
+- terminal_symbols_after:
+- holdings_signature:
+- cache_status:
+- stale_cache_used: yes/no
+- old_test_symbols_present: yes/no
+- old_demo_symbols_present: yes/no
+
+If no POST arrives:
+Say exactly: “Frontend still is not reaching FastAPI.”
+Do not ask user for holdings.
+
+If POST arrives but canonical store does not update:
+Fix backend persistence.
+
+If canonical store updates but Terminal still uses stale holdings:
+Fix cache invalidation/signature rebuild.
+
+If Terminal has correct holdings but analytics are missing:
+Debug the actual backend analytics path using current holdings. Reuse existing services/helpers. Do not rebuild from scratch.
+
+For /api/caelyn-terminal, validate each section against the current canonical portfolio:
+1. Holdings:
+   - count
+   - symbols
+2. Portfolio vs S&P 500:
+   - periods available
+   - points per period
+   - benchmark points
+   - exact unavailable reason if missing
+3. Correlation Matrix:
+   - available yes/no
+   - dimensions
+   - included symbols
+   - excluded symbols with reasons
+4. Risk Analysis:
+   - Weighted Volatility value or reason
+   - Max Drawdown value or reason
+   - Portfolio Beta value or reason
+   - Sharpe value or reason
+   - Sortino value or reason
+   - Top Concentration value
+5. Volatility:
+   - count
+   - examples
+   - excluded symbols with reasons
+6. Risk Suggestions:
+   - count
+   - example suggestions
+   - confirm they reference current holdings/themes, not old demo symbols
+7. Sector/theme allocation:
+   - groups
+   - weights
+8. Earnings:
+   - count/examples if available
+9. Top movers/losers:
+   - count/examples
+
+Important:
+The old analytics worked with stale holdings. If analytics fail now, find why the old working analytics path does not accept the current canonical holdings shape. Likely causes to check:
+- schema mismatch: ticker vs symbol, avg_cost vs avgPrice, shares type
+- OTC/pink-sheet symbols not supported by primary provider
+- fallback quote/history not firing
+- historical fetch failures hidden as unavailable
+- frontend/Express proxy stripping response fields
+- cache built before canonical sync
+- terminal provider reading a different holdings source
+
+Return:
+- whether frontend sync reached FastAPI
+- whether canonical store is correct
+- whether Terminal rebuilt from canonical holdings
+- exact backend root cause for any remaining missing analytics
+- files changed, if any
+- live validation output

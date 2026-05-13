@@ -567,8 +567,23 @@ class CaelynTerminalProvider:
         # 6. Asset allocation ─────────────────────────────────────────────
         alloc = self._build_allocation(positions, total_value)
 
-        # Merge all per-ticker histories into one dict
-        all_history: dict[str, list[dict]] = {**tradier_history, **crypto_history, **commodity_history}
+        # Merge all per-ticker histories into one dict.
+        # IMPORTANT: _yf_fb_h MUST be included here — it holds history for OTC /
+        # Tradier-miss tickers fetched via Yahoo Finance fallback.  Without it,
+        # analytics sections (correlation, volatility, risk, perf charts) see those
+        # tickers as having zero history even though the data was fetched successfully.
+        all_history: dict[str, list[dict]] = {
+            **tradier_history,
+            **_yf_fb_h,          # ← Yahoo Finance fallback histories (OTC / Tradier misses)
+            **crypto_history,
+            **commodity_history,
+        }
+        _hist_coverage = {t: len(all_history.get(t, [])) for t in tickers}
+        print(
+            f"[TERMINAL] all_history built  tickers={len(tickers)}  "
+            f"coverage={_hist_coverage}  "
+            f"tradier_miss_h={_tdr_miss_h}  yf_fb_h_tickers={list(_yf_fb_h.keys())}"
+        )
 
         # 5 (deferred). Performance charts (multi-period) ────────────────
         perf_charts = self._build_perf_charts(positions, all_history, spy_bars)
@@ -577,7 +592,12 @@ class CaelynTerminalProvider:
         _lookback_days = 420  # calendar days of history requested for every ticker
 
         # 7. Correlation matrix — ALL holdings (inner-join on date) ───────
-        corr = self._build_correlation(tickers, all_history, lookback_days=_lookback_days)
+        corr = self._build_correlation(
+            tickers, all_history,
+            lookback_days=_lookback_days,
+            theme_mapping=theme_mapping_raw,
+            fundamentals=fundamentals_raw,
+        )
 
         # 8. Risk metrics ─────────────────────────────────────────────────
         risk = self._build_risk(positions, all_history, spy_bars)
@@ -652,6 +672,47 @@ class CaelynTerminalProvider:
             if not _pts:
                 _perf_meta[_p]["unavailable_reason"] = "no_history"
 
+        # 20. Required diagnostics debug object ───────────────────────────
+        _tickers_with_hist = [t for t in tickers if len(all_history.get(t, [])) >= 15]
+        _tickers_no_hist   = [t for t in tickers if len(all_history.get(t, [])) < 15]
+        _schema_mismatches: list[str] = []
+        for _h in holdings_raw:
+            if "symbol" in _h and "ticker" not in _h:
+                _schema_mismatches.append(f"{_h.get('symbol')}: field=symbol (expected ticker)")
+            if "avgCost" in _h and "avg_cost" not in _h:
+                _schema_mismatches.append(f"{_h.get('ticker','?')}: field=avgCost (expected avg_cost)")
+
+        _existing_path_debug = {
+            "holdings_count":                     len(holdings_raw),
+            "symbols":                            tickers,
+            "existing_chart_builder_found":       True,  # _build_perf_charts
+            "existing_risk_builder_found":        True,  # _build_risk
+            "existing_volatility_builder_found":  True,  # _build_volatility
+            "existing_suggestions_builder_found": True,  # _build_suggestions
+            "existing_correlation_builder_found": True,  # _build_correlation
+            "analytics_branch_used":              "caelyn_terminal._build",
+            "old_expected_holding_fields":        ["ticker", "shares", "avg_cost", "asset_type"],
+            "current_holding_fields":             list({k for h in holdings_raw for k in h}),
+            "schema_mismatches_found":            _schema_mismatches,
+            "cache_key":                          self.cache_key_for(portfolio_file),
+            "cache_hit":                          False,  # always False here (we're building)
+            "stale_cache_detected":               False,
+            "missing_dependencies":               _tickers_no_hist,
+            "tickers_with_history":               _tickers_with_hist,
+            "yf_fallback_tickers":                list(_yf_fb_h.keys()),
+            "tradier_miss_history":               _tdr_miss_h,
+            "hist_coverage_bars":                 _hist_coverage,
+            "root_cause_fixed":                   "_yf_fb_h merged into all_history (OTC/Tradier-miss fallback)",
+            "correlation_has_ticker_meta":        True,
+            "perf_chart_points":                  {_p: len(perf_charts.get(_p, [])) for _p in ("1D","5D","1M","6M","1Y")},
+            "risk_has_values":                    any(v for v in risk.values() if isinstance(v, (int, float)) and v),
+            "volatility_count":                   len(vol_list),
+            "suggestions_count":                  len(suggestions),
+            "correlation_tickers":                corr.get("tickers", []),
+            "correlation_dimensions":             [len(corr.get("tickers", [])), len(corr.get("tickers", []))],
+        }
+        print(f"[portfolio-terminal-existing-path-debug] {json.dumps(_existing_path_debug, default=str)}")
+
         return {
             "portfolio": {
                 "value":              round(total_value, 2),
@@ -690,6 +751,7 @@ class CaelynTerminalProvider:
             "news_ticker":            news_ticker,
             "as_of":                  datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "_holdings_sig":          self._holdings_sig(holdings_raw),
+            "_debug":                 _existing_path_debug,
         }
 
     # ── Data fetchers ─────────────────────────────────────────────────────
@@ -1294,14 +1356,28 @@ class CaelynTerminalProvider:
         return result
 
     def _build_correlation(
-        self, all_tickers: list[str], all_history: dict, lookback_days: int = 420
+        self,
+        all_tickers: list[str],
+        all_history: dict,
+        lookback_days: int = 420,
+        theme_mapping: dict | None = None,
+        fundamentals: dict | None = None,
     ) -> dict:
         """
         Compute NxN Pearson correlation matrix for ALL holdings.
         Uses an inner-join on calendar dates so crypto/commodity/equity
         date mismatches are handled correctly.
         Returns excluded_symbols with reasons for any tickers with insufficient data.
+
+        Each ticker in the result is enriched with:
+          - primary_theme  (from the thematic universe / theme_ticker_mapper)
+          - sector         (from FMP fundamentals)
+          - industry       (from FMP fundamentals, when available)
+        so the frontend can group/colour by theme without losing correlation values.
         """
+        theme_mapping = theme_mapping or {}
+        fundamentals  = fundamentals  or {}
+
         excluded_symbols: list[dict] = []
         returns_map: dict[str, dict[str, float]] = {}
         for t in all_tickers:
@@ -1329,13 +1405,32 @@ class CaelynTerminalProvider:
 
         valid = [t for t in all_tickers if t in returns_map]
         n = len(valid)
+
+        # Build per-ticker metadata for frontend grouping/colouring
+        def _ticker_meta(t: str) -> dict:
+            f = fundamentals.get(t, {})
+            theme = theme_mapping.get(t)
+            sector = (f.get("sector") or "").strip()
+            industry = (f.get("industry") or "").strip()
+            # Fallback display theme: sector → asset_class → ticker
+            display_theme = theme or sector or _asset_class(t) or t
+            return {
+                "ticker":        t,
+                "primary_theme": display_theme,
+                "theme_raw":     theme,
+                "sector":        sector,
+                "industry":      industry,
+            }
+
+        ticker_meta = [_ticker_meta(t) for t in valid]
+
         _base = {
-            "method": "pearson",
-            "lookback_days": lookback_days,
+            "method":           "pearson",
+            "lookback_days":    lookback_days,
             "excluded_symbols": excluded_symbols,
         }
         if n == 0:
-            return {**_base, "tickers": [], "values": [], "common_dates_count": 0}
+            return {**_base, "tickers": [], "ticker_meta": [], "values": [], "common_dates_count": 0}
 
         # Inner-join: only dates where ALL tickers have data
         date_sets = [set(returns_map[t].keys()) for t in valid]
@@ -1344,10 +1439,11 @@ class CaelynTerminalProvider:
         if len(common_dates) < 10:
             return {
                 **_base,
-                "tickers": valid,
-                "values": [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)],
+                "tickers":            valid,
+                "ticker_meta":        ticker_meta,
+                "values":             [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)],
                 "common_dates_count": len(common_dates),
-                "note": "insufficient_common_dates — identity matrix used",
+                "note":               "insufficient_common_dates — identity matrix used",
             }
 
         vecs = {t: [returns_map[t][d] for d in common_dates] for t in valid}
@@ -1365,7 +1461,13 @@ class CaelynTerminalProvider:
                     row.append(c if c is not None else 0.0)
             mat.append(row)
 
-        return {**_base, "tickers": valid, "values": mat, "common_dates_count": len(common_dates)}
+        return {
+            **_base,
+            "tickers":            valid,
+            "ticker_meta":        ticker_meta,
+            "values":             mat,
+            "common_dates_count": len(common_dates),
+        }
 
     def _build_risk(self, positions, all_history: dict, spy_bars: list) -> dict:
         spy_closes = [b["close"] for b in spy_bars if b.get("close")]

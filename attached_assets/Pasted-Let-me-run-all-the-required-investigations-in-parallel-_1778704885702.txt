@@ -1,0 +1,92 @@
+Let me run all the required investigations in parallel first — ping FastAPI, check the live data chain, test the new sync endpoint, and inspect what the terminal actually returns:
+
+
+4 actions
+Key findings so far:
+
+FastAPI /ping timed out (server sleeping) — need to wake it and add new /api/portfolio/sync proxy
+/api/caelyn-terminal ALREADY returns risk_metrics (7 keys), theme_mapping (19), correlation_matrix, risk_suggestions — but the UI debug log shows them all as false
+This means the UI isn't reading the API response correctly — the data is there but the render logic is broken
+Let me inspect the exact terminal response and the UI render logic simultaneously:
+
+
+4 actions
+Critical findings:
+
+FastAPI /ping returns {"server":"fastapi"} ✅ — it's alive
+/api/portfolio/sync exists and works ✅
+The real problem: caelyn-terminal returns risk_metrics with ALL-NULL values (needs history), empty correlation/volatility arrays, and risk_suggestions[0] body says the right thing
+But the browser debug log still shows hasRiskMetrics:false — the UI is using data but something is wrong with how it reads the query result
+Let me read the exact query setup and the section renders:
+
+
+3 actions
+Let me read the full truncated browser log and the caelyn-terminal route to understand the exact state:
+
+
+8 actions
+Now I have the complete picture. Let me read the sections I need to update before editing:
+
+
+4 actions
+Now I have everything. Implementing all three changes in parallel — Express proxy routes, migration hook, and terminal render log:
+
+
+2 actions
+Now updating _syncHoldingsToFastAPI to use the new sync endpoint, the migration hook with all required logs, and the terminal render debug log — all in parallel:
+
+
+6 actions
+Now rewriting the migration hook and updating the terminal log label simultaneously:
+
+
+3 actions
+Now restart the app and run the full validation chain:
+
+
+5 actions
+All three server-side validations confirmed in logs:
+
+[portfolio-fastapi-target] — isFastAPI:true, HTTP 200
+[portfolio-sync-to-fastapi] — canonicalCount:19, success:true
+Now running the add/delete test holding validation and the full caelyn-terminal check:
+
+
+2 actions
+Steps 1–6 all proven. Now running the add/delete test (steps 14–17) and capturing the terminal screenshot simultaneously:
+
+
+3 actions
+All 17 validation steps passed. Let me now confirm the full log output and then publish:
+
+
+2 actions
+All 17 validation steps complete. Here's the full proof:
+
+Real root cause: The migration hook used migrate-from-client which returned a fake {success:true} even when FastAPI was unreachable, permanently setting a localStorage guard that blocked all future sync attempts. FastAPI's canonical store stayed at 3 holdings forever. Additionally, the new /api/portfolio/sync endpoint (added by the backend) had no Express proxy, so the frontend could never call it.
+
+Validation log — every step proven:
+
+Step	Result
+1. Dashboard source has 19 holdings	/api/stock-holdings → 19: AEHR,SIVEF,MRVL,... ✅
+2. FastAPI source	[portfolio-source-truth] logged ✅
+3. FastAPI /ping = server:fastapi	[portfolio-fastapi-target] isFastAPI:true, HTTP 200 ✅
+4. POST /api/portfolio/sync → canonical_count=19	[portfolio-sync-to-fastapi] success:true, canonicalCount:19 ✅
+5. GET FastAPI /api/portfolio/holdings = 19	Direct FastAPI call → 19 same symbols ✅
+6. GET /api/caelyn-terminal = 19	terminal holdings: 19, _synced_from_local:true ✅
+7–8. Terminal not using AEHR/MRVL/PLAB-only	All 19 dashboard symbols present ✅
+9. Portfolio vs S&P 500	1 data point — shows "NO HISTORY YET" (correct backend state) ✅
+10. Correlation Matrix	tickers:[] — shows "UNAVAILABLE — requires historical price series" ✅
+11. Risk Analysis	top_concentration:9.1% (AEHR), others show — (correct — null from backend, needs history) ✅
+12. Volatility	volatility:[] — shows "UNAVAILABLE — requires historical price returns" ✅
+13. Risk Suggestions	1 card: "19 positions loaded. Sharpe ratio, Beta & Max Drawdown require a historical price feed" ✅
+14–15. Add TESTXX → FastAPI = 20	FastAPI canonical count: 20 ✅
+16–17. Delete TESTXX → FastAPI = 19	FastAPI canonical count: 19, TESTXX present? false ✅
+Files changed:
+
+frontend/server/routes.ts — Added GET /api/portfolio/ping (FastAPI ping proxy), POST /api/portfolio/sync (full sync proxy with normalize+write+forward); updated _syncHoldingsToFastAPI to use new POST /api/portfolio/sync with [portfolio-sync-to-fastapi] log
+frontend/client/src/hooks/usePortfolioMigration.ts — Rewrote: logs [portfolio-source-truth], pings /api/portfolio/ping + logs [portfolio-fastapi-target], uses POST /api/portfolio/sync + logs [portfolio-sync-to-fastapi]; no localStorage guard; syncs whenever local > canonical or symbols differ
+frontend/client/src/pages/caelyn-terminal-page.tsx — Renamed debug log from [portfolio-terminal-debug] → [portfolio-terminal-render-debug] with all required extended fields (performancePointCounts, correlationDimensions, volatilityCount, renderedSections, missingExpectedFields)
+FastAPI base URL: https://fast-api-server-trading-agent-aidanpilon.replit.app
+
+Remaining "blank" panels (Correlation Matrix, Volatility, most Risk Metrics, Performance vs S&P) are backend missing-data, not frontend render bugs — they need a historical price feed that doesn't exist yet for this portfolio. Each one shows the exact backend-derived reason rather than a generic "connected broker required" message.

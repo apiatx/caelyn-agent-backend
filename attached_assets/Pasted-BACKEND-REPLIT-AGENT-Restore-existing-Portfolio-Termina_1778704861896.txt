@@ -1,0 +1,140 @@
+BACKEND REPLIT AGENT — Restore existing Portfolio Terminal analytics path for dynamic holdings
+
+Do not rebuild the Portfolio Terminal analytics from scratch.
+
+The Portfolio Terminal analytics sections already existed and worked before the portfolio source/sync changes. If they are missing now, they were either disconnected, bypassed, schema-broken, cached incorrectly, or accidentally removed during the recent portfolio source consolidation/migration work.
+
+Current state:
+- Frontend sync is now working.
+- FastAPI canonical portfolio receives the current 19 holdings.
+- /api/caelyn-terminal returns 19 holdings.
+- Asset Allocation works.
+- Top Movers/Losers work.
+- But these existing Terminal sections are not showing useful output:
+  - Portfolio vs S&P 500
+  - Risk Analysis
+  - Volatility
+  - Risk Suggestions
+  - Correlation Matrix
+
+Important instruction:
+Do NOT build new replacements for these sections unless the old code was actually deleted. First find the existing working code path from before the holdings-source changes and reconnect it to the current canonical holdings.
+
+Goal:
+Restore the existing analytics pipeline so the same sections that worked before now run against the current dynamic 19-holding portfolio.
+
+Do NOT:
+- hardcode tickers
+- ask user for holdings
+- create a new portfolio source
+- rewrite analytics unnecessarily
+- fake historical data
+- replace existing services/helpers if they already exist
+- break current holdings sync
+- break Asset Allocation or Top Movers
+- return generic unavailable text if the existing analytics path can run
+
+Audit first:
+1. Use git history / current code search to find the existing implementations for:
+   - Portfolio vs S&P 500 chart
+   - Risk Analysis metrics
+   - Volatility section
+   - Risk Suggestions
+   - Correlation Matrix
+2. Identify what data shape those existing functions expected before.
+3. Identify what data shape the canonical dynamic holdings now provide.
+4. Find exactly where the pipeline broke:
+   - old functions still reading old portfolio file
+   - old functions expecting hardcoded/demo symbols
+   - old functions expecting asset_class/type fields that changed
+   - old functions expecting `ticker` but now receiving `symbol`, or vice versa
+   - old functions expecting `avg_cost`, `avgPrice`, `avg_price`, etc.
+   - old cache still keyed to stale/demo holdings
+   - old historical fetch helper not called
+   - old response fields renamed or dropped
+   - frontend/Express/FastAPI response wrapper mismatch
+   - old analytics code bypassed by new “synced portfolio” fallback branch
+5. Restore the existing path with the smallest safe changes.
+
+Specific section expectations:
+
+A. Portfolio vs S&P 500
+This section already existed.
+Find the existing chart builder and reconnect it to the current canonical holdings.
+Do not invent a new chart builder unless the old one is gone.
+It should run for the current dynamic portfolio using the same historical price logic it used before.
+
+B. Risk Analysis
+This section already existed.
+Restore existing calculations for:
+- Weighted Volatility
+- Max Drawdown
+- Portfolio Beta
+- Sharpe
+- Sortino
+- Top Concentration
+
+If some values are unavailable, return the exact old/new dependency failure, not generic text.
+
+C. Volatility
+This section already existed.
+Reconnect existing volatility builder to the current holdings.
+
+D. Risk Suggestions
+This section already existed.
+Restore existing risk suggestion logic, but make sure it references current holdings, not old demo symbols.
+
+E. Correlation Matrix
+This section needs one intentional change:
+Correlation math should remain based on historical return correlations.
+But the grouping/context/labels should use the backend thematic universe instead of generic asset classes like Stocks, Crypto, Commodities, etc.
+
+Do not turn correlation into just a theme map.
+It should still be a correlation matrix.
+But each ticker should be enriched with:
+- primary_theme from Themes/thematic universe
+- sector
+- industry if available
+
+Use the same theme universe logic used by the Themes page.
+
+Required backend diagnostics:
+Add or return one debug object/log:
+
+[portfolio-terminal-existing-path-debug] {
+  holdings_count,
+  symbols,
+  existing_chart_builder_found,
+  existing_risk_builder_found,
+  existing_volatility_builder_found,
+  existing_suggestions_builder_found,
+  existing_correlation_builder_found,
+  analytics_branch_used,
+  old_expected_holding_fields,
+  current_holding_fields,
+  schema_mismatches_found,
+  cache_key,
+  cache_hit,
+  stale_cache_detected,
+  missing_dependencies
+}
+
+Validation:
+Use the current real 19-holding canonical portfolio.
+
+Return:
+1. Which existing functions/builders were found for each section.
+2. What broke after the holdings-source changes.
+3. What minimal changes were made to reconnect them.
+4. Live /api/caelyn-terminal validation:
+   - holdings count/symbols
+   - Portfolio vs S&P 500 data present? points/counts
+   - Risk Analysis values present? list values/reasons
+   - Volatility present? count
+   - Risk Suggestions present? count/examples
+   - Correlation Matrix present? dimensions
+   - Correlation theme labels present? examples
+5. Confirm no old demo/stale holdings are used.
+6. Confirm no hardcoded 19-holding list was added.
+
+If a section cannot be restored because the old implementation was deleted, say exactly where it used to be or what commit removed it before writing a new replacement.
