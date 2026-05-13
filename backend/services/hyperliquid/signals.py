@@ -774,6 +774,47 @@ def _build_idea(asset: ScreenerAsset) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Asset deduplication helper (shared by agent briefing + hero signals)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _dedup_assets_by_coin(assets: list) -> list:
+    """
+    Deduplicate a list of ScreenerAssets by canonical display symbol.
+
+    Hyperliquid lists the same underlying asset across multiple DEX prefixes
+    (xyz:SILVER, cash:SILVER, km:SILVER → all display as "SILVER").
+    This mirrors the Market Matrix per-tab dedup in categorizer.build_market_matrix.
+
+    For each duplicate group, keep the single best row by:
+      1. highest opportunity_score (if present)
+      2. then highest overall_score
+      3. then highest day_ntl_vlm (volume tiebreak)
+      4. otherwise preserve first occurrence in input order
+
+    Input order is preserved for the winning rows so that the caller's
+    sort/slice logic is not disturbed.
+    """
+    best: dict[str, tuple[int, object]] = {}   # key → (input_index, asset)
+    for idx, a in enumerate(assets):
+        key = ((a.display_name or a.coin) or "").upper()
+        if key not in best:
+            best[key] = (idx, a)
+            continue
+        _, existing = best[key]
+        # Compare: opportunity_score first, then overall_score, then volume
+        def _score(x):
+            return (
+                x.opportunity_score  if x.opportunity_score  is not None else -1e9,
+                x.overall_score      if x.overall_score      is not None else -1e9,
+                x.day_ntl_vlm        if x.day_ntl_vlm        is not None else 0.0,
+            )
+        if _score(a) > _score(existing):
+            best[key] = (idx, a)
+    # Return in original input order (stable sort by saved index)
+    return [a for _, a in sorted(best.values(), key=lambda t: t[0])]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Agent Briefing (primary output)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -806,6 +847,11 @@ def generate_agent_briefing(
         and a.overall_score is not None
         and (not state.universe_allowlist or state.in_universe(a.coin))
     ]
+
+    # Deduplicate by canonical display symbol before any ranking.
+    # Same underlying asset may appear as multiple DEX listings
+    # (e.g. xyz:SILVER, cash:SILVER, km:SILVER → all display as "SILVER").
+    perps = _dedup_assets_by_coin(perps)
 
     # Sort first by structural_quality_score (hierarchical), then overall_score
     # This ensures we evaluate structurally sound assets before weak bounces
@@ -949,6 +995,8 @@ def generate_hero_signals(
         and a.setup_type not in ("avoid", "exhaustion", "collapse_risk")
         and (not state.universe_allowlist or state.in_universe(a.coin))
     ]
+    # Deduplicate same underlying asset across multiple DEX listings
+    assets = _dedup_assets_by_coin(assets)
     assets.sort(key=lambda a: -(a.overall_score or 0))
     top = assets[:top_n]
     return [_to_hero_signal(a) for a in top]

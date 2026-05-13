@@ -1,0 +1,102 @@
+You are working in the CaelynAI backend Replit project.
+
+Goal:
+Fix duplicate assets in the Hyperliquid “agent analysis” / top-ranked analysis payload while preserving all existing Hyperliquid signal logic.
+
+Do NOT rebuild the Hyperliquid signal engine.
+Do NOT change scoring calibration.
+Do NOT remove existing fields.
+Do NOT change frontend contracts except additive/debug fields if needed.
+Do NOT create new endpoints unless there is already an established pattern and it is necessary.
+Do NOT worry about Git.
+
+Context:
+The frontend Hyperliquid page has:
+- Market Matrix screener
+- Agent Market Brief / agent analysis area
+- top-ranked mini analysis list showing best setups
+- supporting cards like Relative Strength Leaders, Order Book Pressure, OI Regime Shift, OI Cap Risk
+- Time-Series Momentum
+- lower cards
+
+The Market Matrix already has deduplication logic that prevents duplicate assets like SILVER showing multiple times.
+
+Problem:
+The “agent analysis” / top 10 ranking section is still showing duplicates, for example SILVER appearing 4 times. This section is not truly an AI agent response; it appears to be custom coded criteria/ranking over Hyperliquid signal data. It should reuse the same canonical asset deduplication logic already used by the Market Matrix.
+
+Tasks:
+
+1. Find the backend source for the “agent analysis” / top-ranked analysis payload
+Locate the route/service/function that returns the ranked rows used by the frontend section showing:
+- numbered rows
+- coin
+- side/setup
+- score/confidence
+- top trade now / watch breakout / watch collapse / avoid buckets
+
+This may be the same or related to:
+- /api/hyperliquid/screener/agent-rank
+- /api/hyperliquid/screener/snapshot
+- /api/hyperliquid/screener/market-matrix
+- categorizer/ranking helpers
+
+Do a targeted audit only. Do not audit unrelated app areas.
+
+2. Reuse existing Market Matrix dedupe logic
+Find how Market Matrix dedupes duplicate assets.
+
+Apply the same logic to the “agent analysis” / top-ranked analysis section.
+
+Important:
+- Do not invent a second dedupe implementation if a reusable helper already exists.
+- If the dedupe logic is currently inline in the Market Matrix path, extract it to a small helper and reuse it in both places.
+- Preserve existing ranking/scoring behavior after dedupe.
+
+3. Dedupe rule
+Canonicalize assets by a stable key:
+- Prefer canonical symbol/coin if already available.
+- Normalize casing.
+- Strip/exclude duplicate route/source variants if the existing Matrix logic already does this.
+- Keep only one row per canonical asset.
+
+When duplicates exist, keep the strongest/best row by:
+1. highest opportunityScore / opportunity_score if available
+2. then highest matrix/agent/composite score fallback
+3. then highest volume / OI if scores tie
+4. otherwise preserve first sorted row
+
+Do not collapse unrelated assets that merely share a similar display name.
+
+4. Ensure all ranked buckets dedupe
+Apply dedupe to every list used by the agent analysis section:
+- top 10 overall / preview ranking
+- trade now
+- watch breakout
+- watch collapse
+- avoid
+- best long
+- best short
+- best watch
+- crowded/avoid
+
+If some of these buckets are generated frontend-side from snapshot rows, then make sure the backend rows are deduped before the frontend receives them, or clearly report that the frontend must dedupe those derived buckets too.
+
+5. Preserve Market Matrix behavior
+Do not change Market Matrix output except to share the dedupe helper if needed.
+
+6. Validation
+After implementation, validate:
+- agent analysis top 10 has no duplicate canonical coins
+- SILVER no longer appears multiple times
+- Market Matrix still has no duplicates
+- signal distribution remains unchanged except duplicate rows removed from ranked lists
+- top-ranked rows still sort by score descending
+- bucket lists still populate
+- old fields remain intact
+
+Report back:
+- files changed
+- exact route/payload used by the agent analysis section
+- dedupe helper used or added
+- before/after duplicate count for SILVER or any repeated asset
+- validation output for top 10 unique coins
