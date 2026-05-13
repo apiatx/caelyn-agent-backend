@@ -328,12 +328,36 @@ class CaelynTerminalProvider:
         self.yahoo      = yahoo
         self.coingecko  = coingecko
 
+    @staticmethod
+    def cache_key_for(portfolio_file: Path) -> str:
+        """Return the terminal cache key for a given portfolio file.
+
+        Keyed by the resolved file path so each user's Terminal has its own
+        cache slot — mutations in one user's Dashboard never serve stale data
+        to another user, and `save_holdings` can target exactly the right key.
+        """
+        return f"caelyn:terminal:v8:{portfolio_file.resolve()}"
+
     @traceable(name="caelyn_terminal.get")
     async def get(self, portfolio_file: Path) -> dict:
-        cache_key = "caelyn:terminal:v7"
+        cache_key = self.cache_key_for(portfolio_file)
         cached = cache.get(cache_key)
         if cached is not None:
+            print(
+                f"[TERMINAL] cache=HIT  file={portfolio_file.name}  "
+                f"key={cache_key}"
+            )
             return cached
+
+        # Cache miss — load from disk and build
+        holdings_raw_check = self._load_holdings(portfolio_file)
+        print(
+            f"[TERMINAL] cache=MISS  file={portfolio_file.name}  "
+            f"holdings_on_disk={len(holdings_raw_check)}  "
+            f"symbols={[h.get('ticker') for h in holdings_raw_check[:20]]}  "
+            f"source={'user_file' if portfolio_file.exists() else 'legacy_fallback'}"
+        )
+
         result = await self._build(portfolio_file)
         cache.set(cache_key, result, 90)
         return result

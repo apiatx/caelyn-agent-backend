@@ -1,0 +1,102 @@
+Fix the Portfolio page Dashboard/Terminal sync issue without changing existing portfolio logic, UI behavior, scoring logic, metrics formulas, or unrelated endpoints.
+
+Problem:
+The Portfolio page has two toggles:
+1. Dashboard — user adds/edits/removes holdings here.
+2. Terminal — comprehensive portfolio view/risk/metrics/earnings/allocations.
+
+Right now, when holdings are updated in Dashboard, the Terminal toggle does not reflect the same holdings. Example: Dashboard shows holdings like AEHR, SIVEF, PENG, MRVL, AMKR, VECO, SLOIF, NBIS, IQEPF, TRT, etc., but Terminal still shows an older/stale set like BTC, GOLD, BUZZ, NVDA, OSS. These two tabs must always use the same current portfolio holdings.
+
+Goal:
+Make the Terminal tab read from the exact same source of truth as the Dashboard tab. When the user adds, edits, or deletes a holding in Dashboard, Terminal should immediately show the same tickers/positions and calculate its metrics from that updated portfolio.
+
+Important constraints:
+- Do NOT rebuild the portfolio page.
+- Do NOT change portfolio math, risk formulas, allocation logic, P&L logic, chart logic, or AI review logic unless required only to point them at the current holdings source.
+- Do NOT create a second portfolio store.
+- Do NOT add mock/default holdings to Terminal.
+- Do NOT hardcode tickers.
+- Do NOT change unrelated portfolio endpoints.
+- Preserve existing Dashboard behavior.
+- Preserve existing Terminal layout and calculations.
+- This is a source-of-truth/sync fix, not a redesign.
+
+Audit first:
+1. Locate all backend endpoints/services used by the Portfolio Dashboard tab.
+2. Locate all backend endpoints/services used by the Portfolio Terminal tab.
+3. Identify where holdings are persisted/read:
+   - database/Neon table
+   - disk JSON
+   - in-memory cache
+   - frontend local storage
+   - default/mock seed list
+4. Confirm whether Terminal is using:
+   - stale cached holdings
+   - a separate endpoint
+   - hardcoded sample portfolio
+   - an old snapshot
+   - a different user/session key
+   - a local/in-memory fallback that does not update after Dashboard mutations.
+
+Expected fix:
+- Make Terminal’s backend data loader resolve holdings from the same current holdings source that Dashboard uses after add/edit/delete.
+- If Terminal currently uses a snapshot/cache, invalidate or refresh that cache whenever holdings mutate.
+- If Terminal uses a separate portfolio summary endpoint, update that endpoint so it builds from the canonical holdings source, not a stale/default list.
+- If there is already a shared portfolio service/repository, reuse it. Do not invent a new one.
+- If the Dashboard mutation endpoint returns updated holdings, ensure Terminal’s endpoint sees that same updated state on the next request.
+- If there is user/session scoping, make sure both Dashboard and Terminal use the same user/session identifier.
+
+Likely files/areas to inspect:
+- portfolio routers/endpoints
+- portfolio services/repositories
+- holdings add/edit/delete handlers
+- terminal portfolio summary endpoint
+- portfolio risk/metrics endpoint
+- any cache/LKG/snapshot layer used by Terminal
+- any seeded/default portfolio data used as fallback
+
+Implementation requirements:
+1. Add minimal logging around Portfolio Terminal data loading:
+   - endpoint name
+   - number of holdings loaded
+   - symbols loaded
+   - source used: db/json/cache/default/etc.
+   - user/session key if available, without leaking secrets
+2. Add minimal logging around Dashboard holding mutations:
+   - action: add/update/delete
+   - symbol
+   - resulting holdings count
+   - whether terminal cache/snapshot was invalidated, if applicable
+3. If there is a cache for terminal metrics, key it by the actual holdings signature or invalidate it after every holdings mutation.
+4. Terminal should never silently fall back to old demo/default holdings when real holdings exist.
+
+Validation:
+After fix, run these exact checks:
+
+A. Start with current Dashboard holdings.
+- Call the Dashboard holdings endpoint.
+- Call the Terminal portfolio/metrics endpoint.
+- Confirm both return the same symbols.
+
+B. Add a new test stock in Dashboard through the existing mutation endpoint or UI.
+- Confirm Dashboard endpoint includes the new ticker.
+- Confirm Terminal endpoint includes the new ticker immediately after refresh.
+- Confirm Terminal metrics/risk/allocation are calculated from the new holdings set.
+
+C. Edit shares or avg price of an existing holding.
+- Confirm Dashboard reflects the edit.
+- Confirm Terminal reflects the same shares/avg price and recalculated allocation/metrics.
+
+D. Delete the test holding.
+- Confirm Dashboard removes it.
+- Confirm Terminal removes it too.
+
+E. Confirm no fallback/mock holdings appear when real portfolio holdings exist.
+
+Return:
+- Root cause.
+- Exact files changed.
+- Which endpoint/source Dashboard uses.
+- Which endpoint/source Terminal used before.
+- What Terminal uses after the fix.
+- Validation output showing matching symbols between Dashboard and Terminal.

@@ -4662,18 +4662,40 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
         raise HTTPException(status_code=400, detail="holdings must be a list")
     portfolio_file = _portfolio_file(user_id)
     portfolio_file.parent.mkdir(parents=True, exist_ok=True)
+
+    holdings = body.get("holdings", [])
+    new_syms = [
+        (h.get("symbol") or h.get("ticker") or "").strip().upper()
+        for h in holdings if isinstance(h, dict)
+        if (h.get("symbol") or h.get("ticker") or "").strip()
+    ]
+
     with open(portfolio_file, "w") as f:
         _json.dump(body, f)
 
-    # Trigger symbol-driven earnings sync for the portfolio universe
+    print(
+        f"[DASHBOARD] save_holdings  user={user_id}  "
+        f"count={len(new_syms)}  symbols={new_syms[:20]}  "
+        f"file={portfolio_file.name}"
+    )
+
+    # ── Invalidate Terminal cache so the next GET /api/caelyn-terminal
+    #    rebuilds from the freshly written file rather than serving stale data.
     try:
-        holdings = body.get("holdings", [])
-        pf_syms: set[str] = set()
-        for h in holdings:
-            if isinstance(h, dict):
-                sym = h.get("symbol") or h.get("ticker") or ""
-                if sym:
-                    pf_syms.add(sym.strip().upper())
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        term_ck = CaelynTerminalProvider.cache_key_for(portfolio_file)
+        _app_cache.delete(term_ck)
+        print(
+            f"[DASHBOARD] Terminal cache invalidated  "
+            f"key={term_ck}  holdings_count={len(new_syms)}"
+        )
+    except Exception as _inv_err:
+        print(f"[DASHBOARD] Terminal cache invalidation failed: {_inv_err}")
+
+    # ── Trigger symbol-driven earnings sync for the portfolio universe ────────
+    try:
+        pf_syms: set[str] = set(new_syms)
         if pf_syms:
             from services.user_earnings_service import (
                 invalidate_user_earnings,
@@ -4685,11 +4707,11 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
             _aio.create_task(
                 sync_universe_background("portfolio", pf_syms, _fmp_key_pf or "")
             )
-            print(f"[API] Portfolio earnings sync triggered ({len(pf_syms)} symbols)")
+            print(f"[DASHBOARD] Portfolio earnings sync triggered ({len(pf_syms)} symbols)")
     except Exception as _pf_sync_err:
-        print(f"[API] Portfolio earnings sync trigger failed: {_pf_sync_err}")
+        print(f"[DASHBOARD] Portfolio earnings sync trigger failed: {_pf_sync_err}")
 
-    return {"success": True}
+    return {"success": True, "holdings_count": len(new_syms), "symbols": new_syms}
 
 
 # ============================================================
