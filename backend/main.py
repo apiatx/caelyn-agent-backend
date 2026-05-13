@@ -1181,7 +1181,14 @@ async def root():
 @app.get("/ping")
 @traceable(name="main.ping")
 async def ping():
-    return {"status": "ok", "code_version": "2026-03-08-v3-pure-asgi"}
+    import os as _os
+    return {
+        "status": "ok",
+        "code_version": "2026-03-08-v3-pure-asgi",
+        "server": "fastapi",
+        "port": 5000,
+        "public_url": f"https://{_os.getenv('REPLIT_DEV_DOMAIN', 'unknown')}",
+    }
 
 
 @app.get("/health")
@@ -4664,30 +4671,53 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
 @traceable(name="main.save_holdings")
 async def save_holdings(request: Request, api_key: str = Header(None, alias="X-API-Key")):
     """Save portfolio holdings to the canonical source.
-    Expects {holdings: [{ticker, shares, avg_cost, ...}]}.
+    Accepts {holdings: [...]} OR a raw array [...].
     Invalidates Terminal cache and triggers earnings sync.
     """
     from data.portfolio_store import save_active_holdings as _save, canonical_file as _cf
     user_id = getattr(request.state, "user_id", "default")
-    body = await request.json()
-    if not isinstance(body, dict) or "holdings" not in body:
-        raise HTTPException(status_code=400, detail="Body must be {holdings: [...]}")
-    if not isinstance(body["holdings"], list):
-        raise HTTPException(status_code=400, detail="holdings must be a list")
 
-    holdings = body.get("holdings", [])
-    new_syms = [
-        (h.get("symbol") or h.get("ticker") or "").strip().upper()
-        for h in holdings if isinstance(h, dict)
-        if (h.get("symbol") or h.get("ticker") or "").strip()
-    ]
+    raw_bytes = await request.body()
+    print(f"[portfolio-save] raw_body_preview={raw_bytes[:200]!r}  len={len(raw_bytes)}")
+
+    try:
+        body = __import__("json").loads(raw_bytes)
+    except Exception as _je:
+        print(f"[portfolio-save] JSON parse error: {_je}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    # Accept both {holdings:[...]} and a bare array [...]
+    if isinstance(body, list):
+        holdings = body
+    elif isinstance(body, dict):
+        holdings = body.get("holdings") or body.get("positions") or []
+        if not isinstance(holdings, list):
+            raise HTTPException(status_code=400, detail="holdings must be a list")
+    else:
+        raise HTTPException(status_code=400, detail="Body must be {holdings:[...]} or [...]")
+
+    # Normalize: accept both ticker and symbol keys
+    normalized = []
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        ticker = (h.get("ticker") or h.get("symbol") or "").strip().upper()
+        if not ticker:
+            continue
+        normalized.append({
+            "ticker":     ticker,
+            "shares":     float(h.get("shares") or h.get("quantity") or 0),
+            "avg_cost":   float(h.get("avg_cost") or h.get("avgCost") or h.get("average_cost") or h.get("cost_basis") or 0),
+            "asset_type": (h.get("asset_type") or h.get("assetType") or h.get("type") or "stock").lower(),
+        })
+    holdings = normalized
+    new_syms = [h["ticker"] for h in holdings if h.get("ticker")]
 
     # ── Write to canonical source ─────────────────────────────────────────────
     _save(holdings)
     print(
-        f"[portfolio-source-audit] endpoint=dashboard-save  user_id={user_id}  "
-        f"source_file=data/portfolio/active_holdings.json  "
-        f"count={len(new_syms)}  symbols={new_syms[:20]}"
+        f"[portfolio-save] endpoint=POST-holdings  user_id={user_id}  "
+        f"count={len(new_syms)}  symbols={new_syms[:25]}"
     )
 
     # ── Invalidate Terminal cache ──────────────────────────────────────────────
@@ -4722,6 +4752,89 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
         print(f"[portfolio-source-audit] earnings_sync_trigger_failed: {_pf_sync_err}")
 
     return {"success": True, "holdings_count": len(new_syms), "symbols": new_syms}
+
+
+@app.post("/api/portfolio/sync")
+async def portfolio_sync(request: Request):
+    """Maximally-permissive portfolio sync endpoint.
+
+    Accepts any of:
+      - {holdings: [...]}
+      - {positions: [...]}
+      - bare array [...]
+
+    Accepts any field names: ticker|symbol, shares|quantity,
+    avg_cost|avgCost|average_cost|cost_basis, asset_type|assetType|type.
+    No auth required. No size guard. Always writes if incoming non-empty.
+    Designed so the frontend can verify FastAPI connectivity and push holdings.
+    """
+    import json as _json
+    from data.portfolio_store import save_active_holdings as _save, canonical_file as _cf, load_active_holdings as _load
+
+    raw = await request.body()
+    print(f"[portfolio-sync] received  len={len(raw)}  preview={raw[:300]!r}")
+
+    try:
+        body = _json.loads(raw)
+    except Exception as e:
+        print(f"[portfolio-sync] JSON parse error: {e}")
+        return JSONResponse(status_code=400, content={"error": f"Invalid JSON: {e}"})
+
+    # Extract list regardless of shape
+    if isinstance(body, list):
+        raw_list = body
+    elif isinstance(body, dict):
+        raw_list = body.get("holdings") or body.get("positions") or body.get("data") or []
+    else:
+        return JSONResponse(status_code=400, content={"error": "Body must be object or array"})
+
+    if not isinstance(raw_list, list):
+        return JSONResponse(status_code=400, content={"error": "Holdings must be an array"})
+
+    # Normalize fields
+    normalized = []
+    for h in raw_list:
+        if not isinstance(h, dict):
+            continue
+        ticker = (h.get("ticker") or h.get("symbol") or "").strip().upper()
+        if not ticker:
+            continue
+        normalized.append({
+            "ticker":     ticker,
+            "shares":     float(h.get("shares") or h.get("quantity") or 0),
+            "avg_cost":   float(h.get("avg_cost") or h.get("avgCost") or h.get("average_cost") or h.get("cost_basis") or 0),
+            "asset_type": (h.get("asset_type") or h.get("assetType") or h.get("type") or "stock").lower(),
+        })
+
+    prev_count = len(_load())
+    symbols = [h["ticker"] for h in normalized]
+
+    if not normalized:
+        return JSONResponse(content={
+            "synced": False,
+            "reason": "incoming_empty",
+            "canonical_count": prev_count,
+        })
+
+    _save(normalized)
+
+    # Invalidate Terminal cache
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    print(f"[portfolio-sync] saved  count={len(normalized)}  symbols={symbols[:25]}")
+
+    return JSONResponse(content={
+        "synced": True,
+        "canonical_count": len(normalized),
+        "canonical_symbols": symbols,
+        "prev_count": prev_count,
+        "source_file": str(_cf()),
+    })
 
 
 @app.post("/api/portfolio/holdings/migrate-from-client")
