@@ -2704,6 +2704,21 @@ async def get_month_all(
 
     top_n = min(max(1, top_n), 20)
 
+    # ── Watchlist short-circuit ────────────────────────────────────────────────
+    # For scope=watchlist we bypass the curated All pipeline entirely and use the
+    # symbol-driven user_earnings_service path so the calendar shows only events
+    # for the user's actual saved Watchlist tickers — not the curated pool.
+    if scope == "watchlist":
+        return await _get_month_watchlist_scope(
+            api_key     = api_key,
+            year        = year,
+            month       = month,
+            search      = search,
+            view        = "all",
+            max_per_day = top_n,
+        )
+    # ── End watchlist short-circuit ────────────────────────────────────────────
+
     last_day_num  = _cal.monthrange(year, month)[1]
     month_start_d = datetime(year, month, 1).date()
     month_end_d   = datetime(year, month, last_day_num).date()
@@ -2919,6 +2934,21 @@ async def get_month_curated(
     import calendar as _cal
 
     max_per_day = min(max(1, max_per_day), _MONTH_PER_DAY_MAX)
+
+    # ── Watchlist short-circuit ────────────────────────────────────────────────
+    # For scope=watchlist we bypass the curated snapshot pipeline entirely and
+    # use the symbol-driven user_earnings_service path so the calendar shows
+    # only events for the user's actual saved Watchlist tickers.
+    if scope == "watchlist":
+        return await _get_month_watchlist_scope(
+            api_key     = api_key,
+            year        = year,
+            month       = month,
+            search      = search,
+            view        = "curated",
+            max_per_day = max_per_day,
+        )
+    # ── End watchlist short-circuit ────────────────────────────────────────────
 
     last_day_num  = _cal.monthrange(year, month)[1]
     month_start_d = datetime(year, month, 1).date()
