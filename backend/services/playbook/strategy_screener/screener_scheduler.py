@@ -62,8 +62,8 @@ def enqueue_background_refresh():
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.create_task(_svc.generate_snapshot(manual_override=False))
-            print("[SCREENER][SCHEDULER] Background snapshot generation enqueued")
+            asyncio.create_task(_svc.generate_snapshot_from_cr(manual_override=False))
+            print("[SCREENER][SCHEDULER] Background CR snapshot generation enqueued (30 candidates)")
         else:
             print("[SCREENER][SCHEDULER] No running event loop — cannot enqueue background task")
     except RuntimeError:

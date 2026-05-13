@@ -48,6 +48,7 @@ from services.playbook.strategy_screener.screener_service import (
     SHORTLIST_SIZE,
     VERSION,
     generate_snapshot,
+    generate_snapshot_from_cr,
     _cadence_label,
 )
 from services.playbook.strategy_screener.screener_storage import (
@@ -152,7 +153,7 @@ async def get_latest_screener(
         description="Sort order: best_fit (default) | market_cap | layer | grade",
     ),
     limit: int = Query(
-        default=20,
+        default=30,
         description="Max results to return (1–100)",
         ge=1, le=100,
     ),
@@ -174,7 +175,7 @@ async def get_latest_screener(
         market_cap_bucket is not None
         or layer is not None
         or sort_by is not None
-        or limit != 20
+        or limit != 30
     )
 
     if market_cap_bucket is not None and market_cap_bucket not in VALID_BUCKETS:
@@ -428,7 +429,7 @@ async def manual_refresh(background_tasks: BackgroundTasks):
 
 async def _run_refresh_task():
     try:
-        await generate_snapshot(manual_override=True)
+        await generate_snapshot_from_cr(manual_override=True)
     except Exception as e:
         print(f"[SCREENER] Manual refresh task error: {e}")
 

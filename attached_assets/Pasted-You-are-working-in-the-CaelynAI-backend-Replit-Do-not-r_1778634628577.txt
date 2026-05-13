@@ -1,0 +1,76 @@
+You are working in the CaelynAI backend Replit.
+
+Do not rebuild or replace the Bottlenecks / Chain Reaction architecture.
+
+Current working architecture:
+- Canonical frontend endpoint is GET /api/strategy-screener/latest
+- Refresh endpoint is POST /api/admin/bottlenecks/refresh
+- New CR/diversity candidates are merged into the old Strategy Screener snapshot/report path
+- Reports are generated through the existing screener_reports flow
+- /api/bottlenecks/current can remain raw/debug/internal, but the page uses /api/strategy-screener/latest
+
+Goal:
+Make the canonical Chain Reaction / Bottlenecks page return 30 ranked tickers instead of 20, and confirm weekly refresh produces 30 fresh page-visible candidates.
+
+Tasks:
+
+1. Change visible snapshot size from 20 to 30.
+Find where generate_snapshot_from_cr(), build_cross_theme_top(), strategy screener latest response, or the refresh pipeline caps visible candidates at 20.
+
+Update the canonical page-visible snapshot to produce 30 entries.
+
+Important:
+- Do not just make the frontend display 30 if backend only writes 20.
+- The screener_snapshots and screener_reports tables should have 30 visible entries/reports after refresh.
+- Every visible ticker must still have a report/detail payload.
+
+2. Preserve existing scoring/report logic.
+Do not alter the custom Strategy Screener report builder, grade logic, thesis fields, or existing response contract except for returning 30 entries.
+
+3. Weekly refresh.
+Confirm the weekly refresh path uses the same 30-entry generation path.
+
+Audit:
+- Scheduler path
+- POST /api/admin/bottlenecks/refresh
+- generate_snapshot_from_cr()
+- any default limit value
+- any slice(0, 20)
+- any top_n=20 / limit=20 constant
+
+Update all relevant backend constants so both manual refresh and weekly refresh create 30 page-visible rows.
+
+4. Anchor labeling.
+If the backend already has role_type / anchor fields, preserve them.
+If not, minimally add role_type where obvious:
+- NVDA should be role_type: "anchor" for current AI infrastructure theme if it appears.
+- Other anchor candidates can be marked only if already clearly identified by existing logic.
+
+Do not build a new anchor system right now.
+Just expose enough fielding for frontend to label anchors cleanly:
+- role_type: "anchor" | "bottleneck"
+or
+- is_anchor: true/false
+
+5. Validation:
+Run:
+- POST /api/admin/bottlenecks/refresh
+- GET /api/strategy-screener/latest
+
+Confirm:
+- latest returns 30 entries
+- snapshot/report storage contains 30 report-compatible entries
+- at least 30 reports exist for the current snapshot_id
+- CEVA/BWXT/MP or equivalent new hidden-gem/diverse rows still have working reports
+- weekly/scheduled refresh uses same 30-entry generator
+- no response shape breakage for frontend
+
+Report back:
+- files changed
+- exact old 20 limit locations found
+- new limit value
+- canonical endpoint result count
+- report count for current snapshot
+- visible ticker list of 30
+- confirmation weekly refresh uses 30
+- whether role_type/is_anchor was added or already existed

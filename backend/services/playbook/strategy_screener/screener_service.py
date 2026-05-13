@@ -31,7 +31,7 @@ from services.playbook.strategy_screener.screener_storage import (
 
 # Cadence: configurable via env, default 14 days
 CADENCE_DAYS  = int(os.environ.get("SCREENER_CADENCE_DAYS", "14"))
-SHORTLIST_SIZE = int(os.environ.get("SCREENER_SHORTLIST_SIZE", "20"))
+SHORTLIST_SIZE = int(os.environ.get("SCREENER_SHORTLIST_SIZE", "30"))
 PLAYBOOK_ID   = "serenity"
 VERSION       = "1.0"
 
@@ -481,6 +481,9 @@ def _cr_row_to_candidate_dict(
         "cr_final_score":                final_score,
         "discovery_sources":             cr_row.get("discovery_sources") or ["node_registry"],
         "revenueSignal":                 cr_row.get("revenueSignal"),
+        # ── Anchor label (minimal; derived from chain_role_type) ─────────────
+        "is_anchor":                     chain_role_type == "platform_anchor",
+        "role_type":                     "anchor" if chain_role_type == "platform_anchor" else "bottleneck",
     }
 
 

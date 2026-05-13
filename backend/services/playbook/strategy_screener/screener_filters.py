@@ -186,7 +186,7 @@ def apply_filters_and_sort(
     market_cap_bucket: Optional[str] = None,
     layer: Optional[int] = None,
     sort_by: str = "best_fit",
-    limit: int = 20,
+    limit: int = 30,
 ) -> Dict[str, Any]:
     """
     Apply optional filters and sort to a list of stored screener candidate dicts.

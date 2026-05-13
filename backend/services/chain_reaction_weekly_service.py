@@ -463,7 +463,7 @@ _PHASE6_HIDDEN_GEMS: frozenset[str] = frozenset({
     "RYCEY",                                        # UK nuclear / defense ADR
 })
 
-_VISIBLE_TOP_DEFAULT: int = 20
+_VISIBLE_TOP_DEFAULT: int = 30
 _VIS_THEMES_REQUIRED: int = 4      # min distinct themes in visible set
 _VIS_SMALL_MID_MIN:   int = 5      # min <$20B names in visible set
 _VIS_GEM_MIN:         int = 2      # min Phase 6 hidden gems in visible set

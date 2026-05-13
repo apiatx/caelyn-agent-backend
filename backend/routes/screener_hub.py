@@ -375,9 +375,9 @@ async def bottlenecks_force_refresh(
     try:
         from services.chain_reaction_weekly_service import build_cross_theme_top
         # Capture the previous visible tickers before the refresh so tickers_changed is accurate
-        _prev_vis = build_cross_theme_top(limit=20, max_age_days=30)
+        _prev_vis = build_cross_theme_top(limit=30, max_age_days=30)
         prev_visible_tickers = _prev_vis.get("visible_tickers") or []
-        vis_result = build_cross_theme_top(limit=20, max_age_days=10,
+        vis_result = build_cross_theme_top(limit=30, max_age_days=10,
                                            prev_visible_tickers=prev_visible_tickers)
         if vis_result.get("status") == "ok":
             visible_diag = {

@@ -120,6 +120,18 @@ async def _run_chain_reaction_dynamic() -> None:
         print(f"[SCREENER_HUB][SCHED] chain_reaction_dynamic error: {e}")
 
 
+async def _run_screener_snapshot_rebuild() -> None:
+    """Rebuild strategy screener snapshot from the fresh CR weekly data (30 candidates)."""
+    print("[SCREENER_HUB][SCHED] screener_snapshot_rebuild starting")
+    try:
+        from services.playbook.strategy_screener.screener_service import generate_snapshot_from_cr
+        snap = await generate_snapshot_from_cr(manual_override=False)
+        count = (snap or {}).get("results_count", 0)
+        print(f"[SCREENER_HUB][SCHED] screener_snapshot_rebuild done: {count} candidates")
+    except Exception as e:
+        print(f"[SCREENER_HUB][SCHED] screener_snapshot_rebuild error: {e}")
+
+
 async def _run_bottlenecks_warm() -> None:
     from services.screener_hub_service import (
         rebuild_universe, warm_tab_fundamentals,
@@ -212,6 +224,7 @@ _SLOTS: list[tuple[Callable[[int], bool], int, int, str, Callable[[], Awaitable[
     (_is_sunday,  1, 45, "returns_warm",              _run_returns_warm),
     (_is_sunday,  2, 15, "chain_reaction_dynamic",    _run_chain_reaction_dynamic),
     (_is_sunday,  3, 15, "bottlenecks_warm",          _run_bottlenecks_warm),
+    (_is_sunday,  3, 45, "screener_snapshot_rebuild", _run_screener_snapshot_rebuild),
     (_is_weekday, 0,  0, "social_scan",               _run_social_scan),
     (_is_weekday, 0, 45, "social_warm",               _run_social_warm),
     (_is_friday,  2,  0, "watchlist_portfolio_warm",  _run_watchlist_portfolio_warm),
