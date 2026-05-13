@@ -1,0 +1,95 @@
+BACKEND REPLIT AGENT — Portfolio Terminal final data cleanup: period returns + allocation datasets
+
+The Portfolio Terminal is now mostly working. Do not rebuild the page or analytics.
+
+We need two focused backend cleanups for /api/caelyn-terminal.
+
+Current issue #1:
+The top header section shows:
+
+Change
+1D —
+5D —
+1M —
+6M —
+1Y —
+
+Those values are blank on Terminal, even though portfolio return/P&L logic already exists elsewhere and the Portfolio Dashboard has total balance, daily P&L, total P&L, etc.
+
+Goal:
+Return usable portfolio period change values for:
+- 1D
+- 5D
+- 1M
+- 6M
+- 1Y
+
+Do not fake data. Reuse existing portfolio performance chart / return series logic that is already producing Portfolio vs S&P 500 data.
+
+Expected behavior:
+- 1D should come from current daily portfolio P&L / current total value or existing 1D performance series.
+- 5D / 1M / 6M / 1Y should come from existing performance chart series when available.
+- If a period cannot be calculated, return a specific unavailable reason for that period.
+- Do not leave the values as blank/null if the data exists.
+
+Return shape can be whatever is already closest to current schema, but include something like:
+
+period_returns: {
+  "1D": { "pct": number|null, "value": number|null, "reason": string|null },
+  "5D": { "pct": number|null, "value": number|null, "reason": string|null },
+  "1M": { "pct": number|null, "value": number|null, "reason": string|null },
+  "6M": { "pct": number|null, "value": number|null, "reason": string|null },
+  "1Y": { "pct": number|null, "value": number|null, "reason": string|null }
+}
+
+Current issue #2:
+Asset Allocation on Terminal needs to support three allocation modes:
+
+1. Asset Class
+- This should match/reuse the same active-holdings logic already working on Portfolio Dashboard.
+- Categories: Stocks, Crypto, Commodities, ETFs, Indices.
+- Do not rebuild this if there is already Dashboard logic/helper.
+- If all current holdings are stocks, it can show Stocks 100%, but it must use the same classification logic as Dashboard.
+
+2. Sectors
+- This is already working on Terminal.
+- Keep as-is.
+
+3. Themes
+- Use the theme mapping already added from backend thematic universe.
+- Group holdings by primary_theme.
+- Include weight %, market value, symbols, and source/fallback metadata.
+
+Required /api/caelyn-terminal output:
+- asset_class_allocation or existing asset_allocation using Dashboard-compatible asset classes
+- sector_allocation exactly as currently working
+- theme_allocation from backend thematic universe
+- period_returns for 1D/5D/1M/6M/1Y
+
+Do not break:
+- holdings sync
+- Neon canonical store
+- correlation matrix
+- volatility
+- risk metrics
+- risk suggestions
+- top movers/losers
+- performance chart
+
+Audit first:
+1. Find how Dashboard computes its Asset Allocation donut.
+2. Reuse the same classification/categories if possible.
+3. Find where Terminal header reads 1D/5D/1M/6M/1Y change values.
+4. Reuse existing performance chart / portfolio series calculations to populate those values.
+
+Validation:
+Use the current live 19-holding portfolio.
+
+Return:
+- period_returns values for 1D, 5D, 1M, 6M, 1Y
+- asset_class_allocation groups/weights
+- sector_allocation groups/weights
+- theme_allocation groups/weights
+- confirm Terminal holdings count remains 19
+- confirm no stale/deleted tickers appear
+- files changed
