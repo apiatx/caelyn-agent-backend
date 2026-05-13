@@ -781,34 +781,24 @@ def _dedup_assets_by_coin(assets: list) -> list:
     """
     Deduplicate a list of ScreenerAssets by canonical display symbol.
 
-    Hyperliquid lists the same underlying asset across multiple DEX prefixes
-    (xyz:SILVER, cash:SILVER, km:SILVER → all display as "SILVER").
-    This mirrors the Market Matrix per-tab dedup in categorizer.build_market_matrix.
+    Mirrors the Market Matrix per-tab dedup in categorizer.build_market_matrix
+    exactly:
+      - Key:  (display_name or coin or "").upper()
+              same as Matrix key  (row.get("coin") or "").upper()
+              where row["coin"] == asset.display_name
+      - Keep: highest day_ntl_vlm (== volume_24h_usd in matrix row dict)
+      - Tie:  first occurrence wins (strict >, no replacement on equal volume)
 
-    For each duplicate group, keep the single best row by:
-      1. highest opportunity_score (if present)
-      2. then highest overall_score
-      3. then highest day_ntl_vlm (volume tiebreak)
-      4. otherwise preserve first occurrence in input order
-
-    Input order is preserved for the winning rows so that the caller's
+    Input order is preserved for the surviving rows so the caller's
     sort/slice logic is not disturbed.
     """
     best: dict[str, tuple[int, object]] = {}   # key → (input_index, asset)
     for idx, a in enumerate(assets):
         key = ((a.display_name or a.coin) or "").upper()
+        vol = a.day_ntl_vlm or 0.0
         if key not in best:
             best[key] = (idx, a)
-            continue
-        _, existing = best[key]
-        # Compare: opportunity_score first, then overall_score, then volume
-        def _score(x):
-            return (
-                x.opportunity_score  if x.opportunity_score  is not None else -1e9,
-                x.overall_score      if x.overall_score      is not None else -1e9,
-                x.day_ntl_vlm        if x.day_ntl_vlm        is not None else 0.0,
-            )
-        if _score(a) > _score(existing):
+        elif vol > (best[key][1].day_ntl_vlm or 0.0):
             best[key] = (idx, a)
     # Return in original input order (stable sort by saved index)
     return [a for _, a in sorted(best.values(), key=lambda t: t[0])]

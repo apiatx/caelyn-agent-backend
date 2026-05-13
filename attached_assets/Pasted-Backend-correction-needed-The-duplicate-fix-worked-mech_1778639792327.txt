@@ -1,0 +1,81 @@
+Backend correction needed.
+
+The duplicate fix worked mechanically, but it did not exactly reuse the Market Matrix dedupe behavior.
+
+Current issue:
+A new helper _dedup_assets_by_coin() was added in backend/services/hyperliquid/signals.py, but it keeps duplicates by:
+1. highest opportunity_score
+2. highest overall_score
+3. highest day_ntl_vlm
+
+That is NOT the same as the Market Matrix dedupe logic.
+
+The Market Matrix dedupe keeps only the highest-volume row per normalized display symbol. That is the canonical behavior we want everywhere.
+
+Goal:
+Make the agent briefing / hero signals dedupe match Market Matrix exactly.
+
+Do NOT change scoring calibration.
+Do NOT change frontend contracts.
+Do NOT alter Market Matrix behavior.
+Do NOT invent a separate ranking-based dedupe rule.
+Do NOT keep the opportunity_score-first dedupe.
+
+Tasks:
+
+1. Inspect the existing Market Matrix dedupe in categorizer.py
+Find the exact logic used by build_market_matrix() to dedupe duplicate assets/tickers.
+
+The expected behavior is:
+- group by normalized display symbol / display_name / coin
+- keep the highest-volume row
+- exclude the other duplicates
+
+2. Reuse or mirror that exact rule
+Preferred:
+- Extract the Market Matrix dedupe into a shared helper if easy and safe.
+- Use that helper in both:
+  - build_market_matrix()
+  - generate_agent_briefing()
+  - generate_hero_signals()
+
+Acceptable if extraction is too risky:
+- Update _dedup_assets_by_coin() so it exactly mirrors Market Matrix behavior:
+  - same canonical key
+  - same volume field
+  - same tie-breaking behavior
+  - no opportunity_score-first selection
+
+3. Correct helper ranking
+Change _dedup_assets_by_coin() from:
+
+highest opportunity_score
+then overall_score
+then volume
+
+to:
+
+highest volume / day_ntl_vlm using the same field Market Matrix uses
+then only if volume tie, preserve existing Market Matrix tie behavior or first row
+
+Do not let opportunity_score decide which duplicate listing survives.
+
+Reason:
+Different DEX listings of the same underlying asset can have different liquidity. The canonical listing should be the most liquid one, not whichever one happened to have the highest computed score. This keeps the briefing aligned with the Market Matrix and avoids drift.
+
+4. Validation
+After correction, validate:
+
+- generate_agent_briefing() has zero duplicate display coins
+- generate_hero_signals() has zero duplicate display coins
+- Market Matrix still has zero duplicates
+- For any duplicated asset such as SILVER, the surviving row in agent briefing / hero signals is the same highest-volume row the Market Matrix would keep
+- No scoring fields were removed
+- Sorting after dedupe still works as before
+
+Report back:
+- exact Market Matrix dedupe rule found
+- whether helper was extracted/reused or mirrored
+- files changed
+- sample duplicate group before/after, including volumes
+- confirmation that surviving duplicate is highest-volume, not highest-score
