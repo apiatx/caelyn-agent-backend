@@ -1,0 +1,50 @@
+Backend Replit Agent — environment mismatch / final validation required
+
+Good work on the theme-aware changes, but the validation is not sufficient.
+
+You validated on the dev server with 3 holdings:
+AEHR, MRVL, PLAB.
+
+The actual frontend/live app has synced 19 holdings to the deployed FastAPI instance. The remaining issue is whether the deployed/live backend that the frontend actually calls has these changes and returns analytics for the real 19 holdings.
+
+Do not say done based on the 3-holding dev server.
+
+Required now:
+1. Identify the exact FastAPI base URL the frontend is using in production/live preview.
+2. Hit that exact URL, not a local/dev server:
+   - GET /ping
+   - GET /api/portfolio/holdings
+   - GET /api/portfolio/source-audit
+   - GET /api/caelyn-terminal
+3. Confirm the live/deployed backend has canonical_count=19.
+4. Confirm /api/caelyn-terminal on that same live backend returns:
+   - holdings_count=19
+   - theme_allocation populated
+   - sector_allocation populated
+   - correlation_matrix populated or exact excluded reasons
+   - correlation ticker_meta includes primary_theme/theme_id/classification/parent_sector
+   - theme_groups populated
+   - volatility_meta total_holdings_count=19
+   - risk suggestions reference actual 19-holding themes
+   - _debug.test_portfolio_detected=false
+5. If the live backend does not include your latest code, deploy/publish the backend changes.
+6. Clear/bust the Terminal cache on the live backend after deployment.
+7. Re-run validation against the live backend after cache bust.
+
+Return a live validation table using the actual frontend FastAPI URL:
+- fastapi_url
+- canonical_count
+- canonical_symbols
+- terminal_count
+- terminal_symbols
+- theme_allocation_count
+- theme_allocation examples
+- correlation dimensions
+- ticker_meta examples
+- volatility valid_count/total_holdings_count
+- risk metric values/reasons
+- risk suggestions examples
+- _debug.test_portfolio_detected
+- cache_hit/cache_key/holdings_signature
+
+Do not validate against the 3-holding dev server unless the frontend is actually using that dev server.
