@@ -2135,6 +2135,211 @@ async def _get_week_clean_watchlist_scope(
     return result
 
 
+# ── Shared month watchlist helpers ────────────────────────────────────────────
+
+
+def _build_month_watchlist_days(
+    year:        int,
+    month:       int,
+    events:      list[dict],
+    view:        str,        # "all" → topSymbols, "curated" → topEvents
+    max_per_day: int,
+) -> list[dict]:
+    """
+    Build the days[] array for watchlist month responses.
+    view="all"     → month-all shape:     { count, topSymbols[] }
+    view="curated" → month-curated shape: { count, topEvents[] }
+    """
+    import calendar as _cal
+    today_str = _today()
+    this_ym   = today_str[:7]
+    month_ym  = f"{year:04d}-{month:02d}"
+    num_days  = _cal.monthrange(year, month)[1]
+
+    events_by_date: dict[str, list[dict]] = {}
+    for ev in events:
+        d = ev.get("date", "")
+        if d:
+            events_by_date.setdefault(d, []).append(ev)
+
+    days: list[dict] = []
+    for day_num in range(1, num_days + 1):
+        d_str   = f"{year:04d}-{month:02d}-{day_num:02d}"
+        day_evs = events_by_date.get(d_str, [])
+        count   = len(day_evs)
+        if view == "all":
+            sorted_evs = sorted(
+                day_evs,
+                key=lambda e: -(e.get("importanceScore") or e.get("revenueEstimated") or 0),
+            )
+            top_syms = [e["symbol"] for e in sorted_evs[:max_per_day] if e.get("symbol")]
+            days.append({
+                "date":           d_str,
+                "dayOfMonth":     day_num,
+                "isCurrentMonth": month_ym == this_ym,
+                "count":          count,
+                "topSymbols":     top_syms,
+            })
+        else:
+            sorted_evs = sorted(
+                day_evs,
+                key=lambda e: -(e.get("importanceScore") or 0),
+            )
+            days.append({
+                "date":           d_str,
+                "dayOfMonth":     day_num,
+                "isCurrentMonth": month_ym == this_ym,
+                "count":          count,
+                "topEvents":      sorted_evs[:max_per_day],
+            })
+    return days
+
+
+def _month_watchlist_response(
+    year:        int,
+    month:       int,
+    month_label: str,
+    month_start: str,
+    month_end:   str,
+    days:        list[dict],
+    view:        str,
+    meta:        dict,
+    wl_us_count: int,
+    message:     Optional[str] = None,
+) -> dict:
+    """Standardised response dict for month watchlist short-circuit."""
+    total_events = sum(d.get("count", 0) for d in days)
+    result: dict = {
+        "asOf":         _today(),
+        "source":       "fmp",
+        "year":         year,
+        "month":        month,
+        "monthLabel":   month_label,
+        "monthStart":   month_start,
+        "monthEnd":     month_end,
+        "days":         days,
+        "status":       "ok",
+        "errors":       [],
+        "scope":        "watchlist",
+        "symbolsCount": wl_us_count,
+        "eventsCount":  total_events,
+        "meta":         meta,
+    }
+    if view == "all":
+        result["fmpCallsUsed"] = 0
+        result["rateLimited"]  = False
+        result["staleLKG"]     = False
+    if message:
+        result["message"] = message
+    return result
+
+
+async def _get_month_watchlist_scope(
+    api_key:     str,
+    year:        int,
+    month:       int,
+    search:      Optional[str],
+    view:        str,        # "all" | "curated"
+    max_per_day: int = 5,
+) -> dict:
+    """
+    Symbol-driven watchlist earnings for month-all and month-curated endpoints.
+
+    Bypasses the curated pipeline entirely.  Loads the user's saved Watchlist
+    symbols from Neon (same source as the Watchlist page), reads/syncs the
+    120-day user_earnings_service cache, then filters to the requested month
+    window and builds the month-shaped response.
+
+    Never returns All-calendar symbols — only symbols actually in the Watchlist.
+    If the forward-window cache is empty (FMP transient failure), returns an
+    empty month response rather than falling back to All curated data.
+    """
+    import calendar as _cal
+    from services.user_earnings_service import get_or_sync_user_earnings  # lazy
+
+    last_day_num  = _cal.monthrange(year, month)[1]
+    month_start_d = datetime(year, month, 1).date()
+    month_end_d   = datetime(year, month, last_day_num).date()
+    month_label   = datetime(year, month, 1).strftime("%B %Y")
+    month_start   = month_start_d.strftime("%Y-%m-%d")
+    month_end     = month_end_d.strftime("%Y-%m-%d")
+
+    # Load watchlist symbols from Neon (same source as Watchlist page and
+    # _get_week_clean_watchlist_scope — must be the SAME set so the Neon cache
+    # key is stable across all watchlist earnings code paths).
+    wl_syms_raw      = _load_watchlist()
+    wl_syms_us_count = sum(1 for s in wl_syms_raw if s and ":" not in s)
+
+    print(
+        f"[month_watchlist] view={view} {year}-{month:02d} "
+        f"neon_total={len(wl_syms_raw)} us_tickers={wl_syms_us_count} "
+        f"window={month_start}→{month_end}"
+    )
+    if wl_syms_raw:
+        us_only = sorted(s for s in wl_syms_raw if ":" not in s)
+        print(f"[month_watchlist] first 20 US tickers: {us_only[:20]}")
+
+    # ── Empty watchlist ────────────────────────────────────────────────────────
+    if not wl_syms_raw:
+        days = _build_month_watchlist_days(year, month, [], view, max_per_day)
+        return _month_watchlist_response(
+            year, month, month_label, month_start, month_end, days,
+            view, meta={"cache_status": "empty"}, wl_us_count=0,
+            message="No watchlist symbols found",
+        )
+
+    # ── Fetch from 120-day Neon cache, filter to requested month ───────────────
+    try:
+        events, meta = await get_or_sync_user_earnings(
+            universe  = "watchlist",
+            symbols   = wl_syms_raw,
+            fmp_key   = api_key,
+            from_date = month_start,
+            to_date   = month_end,
+        )
+    except Exception as _err:
+        print(f"[month_watchlist] user_earnings_service error: {_err}")
+        events, meta = [], {
+            "cache_status":  "error",
+            "symbols_count": wl_syms_us_count,
+            "events_count":  0,
+        }
+
+    # ── Optional text search ───────────────────────────────────────────────────
+    if search:
+        sl = search.strip().lower()
+        events = [
+            e for e in events
+            if sl in (e.get("symbol") or "").lower()
+            or sl in (e.get("companyName") or "").lower()
+        ]
+
+    # ── Stamp scope / defaults on every event ─────────────────────────────────
+    for ev in events:
+        ev["scope"] = "watchlist"
+        ev.setdefault("source", "fmp")
+        ev.setdefault("session", "unknown")
+        ev.setdefault("importanceScore", 0)
+        ev.setdefault("themeTags", [])
+
+    cache_status = meta.get("cache_status", "unknown")
+    print(
+        f"[month_watchlist] returning {len(events)} events "
+        f"cache_status={cache_status} "
+        f"symbols_count={meta.get('symbols_count', wl_syms_us_count)}"
+    )
+
+    days    = _build_month_watchlist_days(year, month, events, view, max_per_day)
+    message = None
+    if wl_syms_raw and not events:
+        message = f"No upcoming earnings found for your watchlist in {month_label}"
+
+    return _month_watchlist_response(
+        year, month, month_label, month_start, month_end, days,
+        view, meta=meta, wl_us_count=wl_syms_us_count, message=message,
+    )
+
+
 # ── Public API: get_week_clean ─────────────────────────────────────────────────
 
 async def get_week_clean(
