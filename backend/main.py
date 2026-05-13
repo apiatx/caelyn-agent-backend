@@ -4639,14 +4639,32 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
     user_id = getattr(request.state, "user_id", "default")
     portfolio_file = _portfolio_file(user_id)
     if not portfolio_file.exists():
+        print(
+            f"[portfolio-sync-backend] endpoint=dashboard-get  user={user_id}  "
+            f"file={portfolio_file.name}  count=0  symbols=[]  note=file_missing"
+        )
         return {"holdings": []}
     try:
         with open(portfolio_file) as f:
             data = _json.load(f)
         if isinstance(data, dict) and "holdings" in data:
+            holdings = data["holdings"]
+            syms = [h.get("ticker") or h.get("symbol") for h in holdings if isinstance(h, dict)]
+            print(
+                f"[portfolio-sync-backend] endpoint=dashboard-get  user={user_id}  "
+                f"file={portfolio_file.name}  count={len(holdings)}  symbols={syms[:20]}"
+            )
             return data
+        print(
+            f"[portfolio-sync-backend] endpoint=dashboard-get  user={user_id}  "
+            f"file={portfolio_file.name}  count=0  symbols=[]  note=bad_format"
+        )
         return {"holdings": []}
-    except Exception:
+    except Exception as _e:
+        print(
+            f"[portfolio-sync-backend] endpoint=dashboard-get  user={user_id}  "
+            f"file={portfolio_file.name}  count=0  symbols=[]  note=error:{_e}"
+        )
         return {"holdings": []}
 
 
@@ -4674,9 +4692,8 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
         _json.dump(body, f)
 
     print(
-        f"[DASHBOARD] save_holdings  user={user_id}  "
-        f"count={len(new_syms)}  symbols={new_syms[:20]}  "
-        f"file={portfolio_file.name}"
+        f"[portfolio-sync-backend] endpoint=dashboard-save  user={user_id}  "
+        f"file={portfolio_file.name}  count={len(new_syms)}  symbols={new_syms[:20]}"
     )
 
     # ── Invalidate Terminal cache so the next GET /api/caelyn-terminal
@@ -5423,6 +5440,25 @@ async def caelyn_terminal(
 
     user_id = getattr(request.state, "user_id", "default")
     portfolio_file = _portfolio_file(user_id)
+
+    # Diagnostic: log user/file/count BEFORE building (reads directly from disk,
+    # bypasses Terminal cache, so the log always reflects the current file state).
+    try:
+        import json as _pf_json
+        if portfolio_file.exists():
+            _pf_data = _pf_json.load(open(portfolio_file))
+            _pf_h = _pf_data.get("holdings", []) if isinstance(_pf_data, dict) else []
+            _pf_syms = [h.get("ticker") or h.get("symbol") for h in _pf_h if isinstance(h, dict)]
+        else:
+            _pf_syms = []
+        print(
+            f"[portfolio-sync-backend] endpoint=terminal  user={user_id}  "
+            f"file={portfolio_file.name}  "
+            f"file_exists={portfolio_file.exists()}  "
+            f"count={len(_pf_syms)}  symbols={_pf_syms[:20]}"
+        )
+    except Exception as _log_err:
+        print(f"[portfolio-sync-backend] endpoint=terminal  user={user_id}  log_error={_log_err}")
 
     provider = CaelynTerminalProvider(
         tradier=data_service.tradier if data_service else None,
