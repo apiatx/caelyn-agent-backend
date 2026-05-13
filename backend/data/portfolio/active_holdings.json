@@ -1,0 +1,24 @@
+{
+  "holdings": [
+    {
+      "ticker": "AEHR",
+      "shares": 100.0,
+      "avg_cost": 12.5,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "MRVL",
+      "shares": 50.0,
+      "avg_cost": 62.0,
+      "asset_type": "stock"
+    },
+    {
+      "ticker": "PLAB",
+      "shares": 200.0,
+      "avg_cost": 19.0,
+      "asset_type": "stock"
+    }
+  ],
+  "_saved_at": "2026-05-13T18:55:03.648251Z",
+  "_source": "portfolio_store"
+}

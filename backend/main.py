@@ -250,6 +250,13 @@ async def lifespan(app):
     except Exception as _e:
         print(f"[STARTUP] Storage diagnostic error: {_e}")
 
+    # Portfolio holdings source-of-truth audit (runs migration if first boot)
+    try:
+        from data.portfolio_store import startup_audit as _portfolio_startup_audit
+        _portfolio_startup_audit()
+    except Exception as _psa_err:
+        print(f"[portfolio-source-audit] startup_audit error: {_psa_err}")
+
     import threading
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())
@@ -4628,58 +4635,45 @@ async def health_budget(request: Request):
 # ============================================================
 
 @traceable(name="main.portfolio_file")
-def _portfolio_file(user_id: str) -> Path:
-    return Path(f"data/portfolio_holdings_{user_id}.json")
+def _portfolio_file(user_id: str = "default") -> Path:
+    """Return the canonical portfolio file path.
+    Auth is disabled — all requests share one canonical source.
+    When auth is re-enabled, extend portfolio_store to support per-user files.
+    """
+    from data.portfolio_store import canonical_file as _canonical
+    return _canonical()
 
 
 @app.get("/api/portfolio/holdings")
 @traceable(name="main.get_holdings")
 async def get_holdings(request: Request, api_key: str = Header(None, alias="X-API-Key")):
-    """Return saved portfolio holdings (JSON file, per-user)."""
+    """Return saved portfolio holdings from the canonical source."""
+    from data.portfolio_store import load_active_holdings as _load
     user_id = getattr(request.state, "user_id", "default")
-    portfolio_file = _portfolio_file(user_id)
-    if not portfolio_file.exists():
-        print(
-            f"[portfolio-sync-backend] endpoint=dashboard-get  user={user_id}  "
-            f"file={portfolio_file.name}  count=0  symbols=[]  note=file_missing"
-        )
-        return {"holdings": []}
-    try:
-        with open(portfolio_file) as f:
-            data = _json.load(f)
-        if isinstance(data, dict) and "holdings" in data:
-            holdings = data["holdings"]
-            syms = [h.get("ticker") or h.get("symbol") for h in holdings if isinstance(h, dict)]
-            print(
-                f"[portfolio-sync-backend] endpoint=dashboard-get  user={user_id}  "
-                f"file={portfolio_file.name}  count={len(holdings)}  symbols={syms[:20]}"
-            )
-            return data
-        print(
-            f"[portfolio-sync-backend] endpoint=dashboard-get  user={user_id}  "
-            f"file={portfolio_file.name}  count=0  symbols=[]  note=bad_format"
-        )
-        return {"holdings": []}
-    except Exception as _e:
-        print(
-            f"[portfolio-sync-backend] endpoint=dashboard-get  user={user_id}  "
-            f"file={portfolio_file.name}  count=0  symbols=[]  note=error:{_e}"
-        )
-        return {"holdings": []}
+    holdings = _load()
+    syms = [h.get("ticker", "?") for h in holdings]
+    print(
+        f"[portfolio-source-audit] endpoint=dashboard-get  user_id={user_id}  "
+        f"source_file=data/portfolio/active_holdings.json  "
+        f"count={len(holdings)}  symbols={syms[:20]}"
+    )
+    return {"holdings": holdings}
 
 
 @app.post("/api/portfolio/holdings")
 @traceable(name="main.save_holdings")
 async def save_holdings(request: Request, api_key: str = Header(None, alias="X-API-Key")):
-    """Save portfolio holdings. Expects {holdings: [{ticker, shares, avg_cost, ...}]}."""
+    """Save portfolio holdings to the canonical source.
+    Expects {holdings: [{ticker, shares, avg_cost, ...}]}.
+    Invalidates Terminal cache and triggers earnings sync.
+    """
+    from data.portfolio_store import save_active_holdings as _save, canonical_file as _cf
     user_id = getattr(request.state, "user_id", "default")
     body = await request.json()
     if not isinstance(body, dict) or "holdings" not in body:
         raise HTTPException(status_code=400, detail="Body must be {holdings: [...]}")
     if not isinstance(body["holdings"], list):
         raise HTTPException(status_code=400, detail="holdings must be a list")
-    portfolio_file = _portfolio_file(user_id)
-    portfolio_file.parent.mkdir(parents=True, exist_ok=True)
 
     holdings = body.get("holdings", [])
     new_syms = [
@@ -4688,29 +4682,28 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
         if (h.get("symbol") or h.get("ticker") or "").strip()
     ]
 
-    with open(portfolio_file, "w") as f:
-        _json.dump(body, f)
-
+    # ── Write to canonical source ─────────────────────────────────────────────
+    _save(holdings)
     print(
-        f"[portfolio-sync-backend] endpoint=dashboard-save  user={user_id}  "
-        f"file={portfolio_file.name}  count={len(new_syms)}  symbols={new_syms[:20]}"
+        f"[portfolio-source-audit] endpoint=dashboard-save  user_id={user_id}  "
+        f"source_file=data/portfolio/active_holdings.json  "
+        f"count={len(new_syms)}  symbols={new_syms[:20]}"
     )
 
-    # ── Invalidate Terminal cache so the next GET /api/caelyn-terminal
-    #    rebuilds from the freshly written file rather than serving stale data.
+    # ── Invalidate Terminal cache ──────────────────────────────────────────────
     try:
         from data.caelyn_terminal import CaelynTerminalProvider
         from data.cache import cache as _app_cache
-        term_ck = CaelynTerminalProvider.cache_key_for(portfolio_file)
+        term_ck = CaelynTerminalProvider.cache_key_for(_cf())
         _app_cache.delete(term_ck)
         print(
-            f"[DASHBOARD] Terminal cache invalidated  "
+            f"[portfolio-source-audit] terminal_cache_invalidated  "
             f"key={term_ck}  holdings_count={len(new_syms)}"
         )
     except Exception as _inv_err:
-        print(f"[DASHBOARD] Terminal cache invalidation failed: {_inv_err}")
+        print(f"[portfolio-source-audit] terminal_cache_invalidation_failed: {_inv_err}")
 
-    # ── Trigger symbol-driven earnings sync for the portfolio universe ────────
+    # ── Trigger earnings sync for the new universe ────────────────────────────
     try:
         pf_syms: set[str] = set(new_syms)
         if pf_syms:
@@ -4724,11 +4717,87 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
             _aio.create_task(
                 sync_universe_background("portfolio", pf_syms, _fmp_key_pf or "")
             )
-            print(f"[DASHBOARD] Portfolio earnings sync triggered ({len(pf_syms)} symbols)")
+            print(f"[portfolio-source-audit] earnings_sync_triggered  count={len(pf_syms)}")
     except Exception as _pf_sync_err:
-        print(f"[DASHBOARD] Portfolio earnings sync trigger failed: {_pf_sync_err}")
+        print(f"[portfolio-source-audit] earnings_sync_trigger_failed: {_pf_sync_err}")
 
     return {"success": True, "holdings_count": len(new_syms), "symbols": new_syms}
+
+
+@app.post("/api/portfolio/holdings/migrate-from-client")
+@traceable(name="main.migrate_holdings_from_client")
+async def migrate_holdings_from_client(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """One-time migration endpoint: the frontend posts its localStorage holdings
+    here to persist them to the canonical backend source.
+
+    Body: {holdings: [{ticker, shares, avg_cost, asset_type?, ...}]}
+
+    Returns current canonical count and symbols so the frontend can verify.
+    Only writes if the incoming list is non-empty and LARGER than what the
+    backend already has (prevents accidental overwrite with an empty array).
+    Use force=true in the body to override the size guard.
+    """
+    from data.portfolio_store import (
+        load_active_holdings as _load,
+        save_active_holdings as _save,
+        canonical_file as _cf,
+    )
+    user_id = getattr(request.state, "user_id", "default")
+    body = await request.json()
+    if not isinstance(body, dict) or "holdings" not in body:
+        raise HTTPException(status_code=400, detail="Body must be {holdings: [...]}")
+
+    incoming = [h for h in body["holdings"] if isinstance(h, dict) and (h.get("ticker") or h.get("symbol"))]
+    force    = bool(body.get("force", False))
+    existing = _load()
+
+    if not incoming:
+        return {
+            "migrated": False,
+            "reason":   "incoming_empty",
+            "canonical_count":   len(existing),
+            "canonical_symbols": [h.get("ticker") for h in existing],
+        }
+
+    if not force and len(incoming) <= len(existing):
+        return {
+            "migrated": False,
+            "reason":   f"incoming ({len(incoming)}) not larger than existing ({len(existing)}) — pass force=true to override",
+            "canonical_count":   len(existing),
+            "canonical_symbols": [h.get("ticker") for h in existing],
+        }
+
+    _save(incoming)
+    new_syms = [(h.get("ticker") or h.get("symbol") or "").upper().strip() for h in incoming]
+
+    # Invalidate Terminal cache
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    print(
+        f"[portfolio-source-audit] migrate-from-client  user_id={user_id}  "
+        f"count={len(incoming)}  symbols={new_syms[:20]}  force={force}"
+    )
+    return {
+        "migrated":          True,
+        "canonical_count":   len(incoming),
+        "canonical_symbols": new_syms,
+        "source_file":       str(_cf()),
+    }
+
+
+@app.get("/api/portfolio/source-audit")
+@traceable(name="main.portfolio_source_audit")
+async def portfolio_source_audit(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Return a full audit of all portfolio-related files: canonical + legacy.
+    Shows count, symbols, modified_at, and whether each file is active or archived.
+    """
+    from data.portfolio_store import startup_audit as _audit
+    return _audit()
 
 
 # ============================================================
@@ -5438,27 +5507,21 @@ async def caelyn_terminal(
 
     from data.caelyn_terminal import CaelynTerminalProvider
 
+    from data.portfolio_store import canonical_file as _cf, load_active_holdings as _load_h
     user_id = getattr(request.state, "user_id", "default")
-    portfolio_file = _portfolio_file(user_id)
+    portfolio_file = _cf()
 
-    # Diagnostic: log user/file/count BEFORE building (reads directly from disk,
-    # bypasses Terminal cache, so the log always reflects the current file state).
+    # Diagnostic: log canonical state before building
     try:
-        import json as _pf_json
-        if portfolio_file.exists():
-            _pf_data = _pf_json.load(open(portfolio_file))
-            _pf_h = _pf_data.get("holdings", []) if isinstance(_pf_data, dict) else []
-            _pf_syms = [h.get("ticker") or h.get("symbol") for h in _pf_h if isinstance(h, dict)]
-        else:
-            _pf_syms = []
+        _pf_h = _load_h()
+        _pf_syms = [h.get("ticker", "?") for h in _pf_h]
         print(
-            f"[portfolio-sync-backend] endpoint=terminal  user={user_id}  "
-            f"file={portfolio_file.name}  "
-            f"file_exists={portfolio_file.exists()}  "
+            f"[portfolio-source-audit] endpoint=terminal  user_id={user_id}  "
+            f"source_file={portfolio_file}  "
             f"count={len(_pf_syms)}  symbols={_pf_syms[:20]}"
         )
     except Exception as _log_err:
-        print(f"[portfolio-sync-backend] endpoint=terminal  user={user_id}  log_error={_log_err}")
+        print(f"[portfolio-source-audit] endpoint=terminal  log_error={_log_err}")
 
     provider = CaelynTerminalProvider(
         tradier=data_service.tradier if data_service else None,
@@ -6119,24 +6182,13 @@ async def compare_watchlist_run(
     from services.watchlist_service import load_watchlist
     from services.portfolio_compare_service import run_comparison
 
-    # ── Load portfolio ────────────────────────────────────────────────────────
-    portfolio_file = _portfolio_file(user_id)
-    if not portfolio_file.exists():
-        raise HTTPException(
-            status_code=400,
-            detail="No portfolio found. Please add or upload your holdings first.",
-        )
-    try:
-        with open(portfolio_file) as f:
-            pf_data = _json.load(f)
-        portfolio_holdings = pf_data.get("holdings", [])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read portfolio: {e}")
-
+    # ── Load portfolio from canonical source ──────────────────────────────────
+    from data.portfolio_store import load_active_holdings as _load_pf
+    portfolio_holdings = _load_pf()
     if not portfolio_holdings:
         raise HTTPException(
             status_code=400,
-            detail="Portfolio has no holdings. Please add positions first.",
+            detail="No portfolio found. Please add or upload your holdings first.",
         )
 
     # ── Load watchlist ────────────────────────────────────────────────────────
