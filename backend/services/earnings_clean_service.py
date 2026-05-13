@@ -922,30 +922,35 @@ def _load_watchlist() -> set[str]:
 
 
 def _load_portfolio() -> set[str]:
-    """Load portfolio symbols from disk JSON files (mirrors catalyst_calendar_service logic)."""
+    """Load portfolio symbols — exact same source as GET /api/portfolio/holdings.
+
+    The Portfolio page resolves the file as:
+        data/portfolio_holdings_{user_id}.json
+    where user_id = request.state.user_id (defaults to "default" with auth
+    disabled).  We must read the identical file so that scope=portfolio on the
+    Earnings Calendar always matches what the user sees on the Portfolio page.
+
+    We do NOT glob all portfolio_holdings*.json files — doing so would union
+    holdings from other users (e.g. portfolio_holdings_aidan.json) and legacy
+    demo files (portfolio_holdings.json), producing a superset that has never
+    been saved by the current user and would silently corrupt the scope filter.
+    """
     syms: set[str] = set()
     try:
         import json as _json
         from pathlib import Path as _Path
-        candidates = [
-            "data/portfolio_holdings.json",
-            *[str(p) for p in _Path("data").glob("portfolio_holdings_*.json")],
-        ]
-        for fname in candidates:
-            p = _Path(fname)
-            if not p.exists():
-                continue
-            try:
-                data = _json.loads(p.read_text())
-                holdings = data.get("holdings", data) if isinstance(data, dict) else data
-                if isinstance(holdings, list):
-                    for h in holdings:
-                        if isinstance(h, dict):
-                            sym = h.get("symbol") or h.get("ticker")
-                            if sym:
-                                syms.add(sym.upper())
-            except Exception:
-                pass
+        # Mirror _portfolio_file("default") in main.py exactly.
+        # When auth is disabled every request resolves to user_id="default".
+        p = _Path("data/portfolio_holdings_default.json")
+        if p.exists():
+            data = _json.loads(p.read_text())
+            holdings = data.get("holdings", data) if isinstance(data, dict) else data
+            if isinstance(holdings, list):
+                for h in holdings:
+                    if isinstance(h, dict):
+                        sym = h.get("symbol") or h.get("ticker")
+                        if sym:
+                            syms.add(sym.upper())
     except Exception:
         pass
     return syms
