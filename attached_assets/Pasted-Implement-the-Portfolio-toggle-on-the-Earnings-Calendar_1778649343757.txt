@@ -1,0 +1,229 @@
+Implement the Portfolio toggle on the Earnings Calendar using the exact same architecture that now works for Watchlist.
+
+Backend repo:
+apiatx/caelyn-agent-backend
+
+Goal:
+Calendar → Earnings → Portfolio should show upcoming earnings events only for tickers saved on the user’s Portfolio page.
+
+This should mirror the working Watchlist implementation exactly, except:
+- Watchlist symbols come from saved Watchlist service/Neon source.
+- Portfolio symbols must come from saved Portfolio holdings service/Neon source.
+
+Do not touch:
+- All toggle
+- curated/thematic All earnings logic
+- Watchlist behavior
+- frontend rendering
+- historical earnings
+- EPS actuals
+- revenue actuals
+- beat/miss
+- transcripts
+
+This is forward-looking upcoming earnings only.
+
+Current known-good Watchlist architecture:
+- scope=watchlist short-circuits before curated All logic.
+- It loads saved Neon Watchlist symbols.
+- It uses user_earnings_service / user_earnings_cache with a forward-looking 120-day cache.
+- Day, Week, next Week, Month, and next Month all filter that cached forward-window data to the requested date window.
+- Every route returns route-specific response shapes compatible with the frontend.
+- Strict assertion passed:
+  returned_symbols - saved_watchlist_symbols == empty set
+
+Now implement the same for:
+scope=portfolio
+
+Required behavior:
+- Portfolio + Day: show portfolio earnings for selected day.
+- Portfolio + Week current: show portfolio earnings for current week.
+- Portfolio + Week next: show portfolio earnings for next week.
+- Portfolio + Month current: show portfolio earnings for visible month.
+- Portfolio + Month next: show portfolio earnings for next month.
+- If a portfolio ticker has no earnings in the visible window, omit it.
+- If no portfolio tickers have earnings, return a valid empty Portfolio response.
+- Never fall back to All curated events.
+- Never include symbols not saved in Portfolio.
+
+Implementation steps:
+
+1. Find the portfolio holdings source.
+Use the exact backend source/table/service that powers the Portfolio page.
+
+Do NOT use:
+- frontend-provided tickers
+- hardcoded symbols
+- curated All symbols
+- Watchlist symbols
+- old demo portfolio JSON unless that is explicitly the current Portfolio page source
+
+Load current portfolio stock tickers from Neon/saved holdings.
+
+Normalize:
+- uppercase
+- trim
+- dedupe
+- remove blanks
+- remove malformed non-stock rows where appropriate
+
+2. Extend/reuse user_earnings_service for portfolio.
+If user_earnings_service already supports universe/scope="portfolio", verify it loads and caches correctly.
+If not, add support.
+
+Cache key must include:
+- universe/scope = "portfolio"
+- sorted portfolio symbol hash
+- forward date window
+- fetched_at
+- events JSON
+
+Use existing durable Neon user_earnings_cache.
+Do not create a separate memory-only cache.
+
+Cache window:
+- use the same 120-day forward window as Watchlist if already implemented.
+- minimum acceptable: today through today + 2 months.
+- Do not fetch only this week.
+
+Cache behavior:
+- cache hit on repeat requests
+- 0 FMP calls on repeat cache-hit requests
+- invalidate/resync when Portfolio holdings are added/updated/removed
+- lazy sync on Calendar request if missing/stale
+
+Keep the FMP empty-poison guard:
+- if FMP returns 0 raw events for a broad forward window, do not overwrite a valid non-empty cache.
+
+3. Add Portfolio short-circuits to every Earnings route that Watchlist uses.
+Mirror the existing Watchlist short-circuit pattern for:
+
+- day-clean?scope=portfolio
+- day-curated?scope=portfolio
+- week-clean?scope=portfolio
+- week-clean next week?scope=portfolio
+- month-all?scope=portfolio
+- month-curated?scope=portfolio
+- month-curated next month?scope=portfolio
+- upcoming-clean?scope=portfolio if used
+
+Hard rule:
+For scope=portfolio, short-circuit before:
+- curated scoring
+- get_curated_earnings_range
+- All pool filtering
+- _apply_scope on curated All data
+
+Portfolio should start from saved Portfolio symbols + user_earnings_service cache.
+
+4. Reuse the good Watchlist pattern, but avoid copy-paste drift.
+Preferred structure:
+- shared scoped helper loads events for user universe:
+  get_user_scope_earnings_events_for_window(scope, from_date, to_date)
+- scope can be "watchlist" or "portfolio"
+- route-specific builders preserve response shapes for day/week/month
+
+Do not force all views into one generic response shape if frontend expects different shapes.
+Return the same shape as each existing route.
+
+5. Response shape:
+For Portfolio, response should include:
+- scope: "portfolio"
+- same top-level fields as the corresponding All/Watchlist route
+- event fields matching existing renderer expectations:
+  - symbol/ticker
+  - companyName if available
+  - earningsDate/date
+  - reportTime if available
+  - epsEstimate if available
+  - revenueEstimate if available
+  - source: "fmp"
+
+If Watchlist entries land in day.entries, Portfolio entries can do the same.
+
+6. Portfolio update triggers:
+Find portfolio save/update endpoints, likely POST /api/portfolio/holdings or equivalent.
+
+On successful portfolio update:
+- invalidate portfolio earnings cache
+- trigger background portfolio earnings sync
+- do not block the portfolio save response if sync is slow
+
+7. Logging:
+For every scope=portfolio earnings request, log:
+{
+  route,
+  scope,
+  requested_from,
+  requested_to,
+  selected_branch,
+  portfolio_symbol_count,
+  cached_forward_events_count,
+  filtered_event_count,
+  first_20_symbols,
+  cache_status,
+  fmp_calls_used
+}
+
+8. Validation matrix:
+Do not mark complete until all pass.
+
+A. All unchanged:
+- All + Week unchanged
+- All + Month unchanged
+- scope should remain None/all as before
+
+B. Watchlist unchanged:
+- day-clean?scope=watchlist
+- week-clean?scope=watchlist
+- month-curated?scope=watchlist
+Expected:
+- still works
+- zero symbol leakage
+- no regression
+
+C. Portfolio current week:
+Call exact current-week endpoint with scope=portfolio.
+Expected:
+- returns only saved Portfolio symbols
+- zero symbols outside Portfolio
+
+D. Portfolio next week:
+Call exact next-week endpoint with scope=portfolio.
+Expected:
+- returns only saved Portfolio symbols
+- if empty, prove no cached Portfolio events fall in that date range
+
+E. Portfolio Day:
+Call exact day endpoint with scope=portfolio for a day with Portfolio events.
+Expected:
+- returns only saved Portfolio symbols
+
+F. Portfolio Month current:
+Call month-all?scope=portfolio and month-curated?scope=portfolio for current month.
+Expected:
+- returns only saved Portfolio symbols
+- includes events beyond current week if they exist
+- no curated All leakage
+
+G. Portfolio next month:
+Call Month endpoint for next month with scope=portfolio.
+Expected:
+- returns only saved Portfolio symbols
+- uses same forward-window cache
+
+H. Strict leakage assertion:
+For every Portfolio route:
+returned_symbols - saved_portfolio_symbols == empty set
+
+Fail the task if any returned Portfolio symbol is not saved in the user’s Portfolio holdings.
+
+I. Cache hit:
+Repeat Portfolio Week and Month requests.
+Expected:
+- cache hit
+- 0 FMP calls
+- same event count
+
+Success definition:
+Portfolio toggle uses saved Portfolio holdings from Neon, not All curated symbols and not Watchlist symbols, across Day, Week, next Week, Month, and next Month. All and Watchlist remain unchanged.

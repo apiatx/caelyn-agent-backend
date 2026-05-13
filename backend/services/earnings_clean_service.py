@@ -1070,6 +1070,11 @@ async def get_day_clean(
         return await _get_day_watchlist_scope(api_key, date, search, "clean")
     # ── End watchlist short-circuit ────────────────────────────────────────────
 
+    # ── Portfolio short-circuit ────────────────────────────────────────────────
+    if scope == "portfolio":
+        return await _get_day_portfolio_scope(api_key, date, search, "clean")
+    # ── End portfolio short-circuit ────────────────────────────────────────────
+
     # Phase 1: raw calendar fetch — shared Mon-Fri chunk cache
     raw_result   = await get_raw_earnings_chunks(
         date, date, api_key, max_weeks=_BUDGET_DAY_CHUNKS,
@@ -2087,6 +2092,122 @@ async def _get_day_watchlist_scope(
     )
 
 
+# ── Shared day portfolio helpers ──────────────────────────────────────────────
+
+
+def _day_portfolio_response(
+    date:        str,
+    events:      list[dict],
+    view:        str,        # "clean" | "curated"
+    meta:        dict,
+    port_count:  int,
+    message:     Optional[str] = None,
+) -> dict:
+    """Standardised response dict for day portfolio short-circuit."""
+    result: dict = {
+        "asOf":         _today(),
+        "source":       "fmp",
+        "date":         date,
+        "events":       events,
+        "count":        len(events),
+        "status":       "ok",
+        "errors":       [],
+        "scope":        "portfolio",
+        "symbolsCount": port_count,
+        "meta":         meta,
+    }
+    if view == "clean":
+        result["fmpCallsUsed"] = 0
+        result["rateLimited"]  = False
+        result["staleLKG"]     = False
+    if message:
+        result["message"] = message
+    return result
+
+
+async def _get_day_portfolio_scope(
+    api_key: str,
+    date:    str,
+    search:  Optional[str],
+    view:    str,   # "clean" | "curated"
+) -> dict:
+    """
+    Symbol-driven portfolio earnings for day-clean and day-curated endpoints.
+
+    Bypasses FMP direct calendar calls and the curated scoring pipeline.
+    Loads the user's saved Portfolio holdings from disk and reads the same
+    120-day user_earnings_service cache — then filters to the specific date.
+
+    Never returns All-calendar or curated-pool symbols.
+    """
+    from services.user_earnings_service import get_or_sync_user_earnings  # lazy
+
+    port_syms_raw = _load_portfolio()
+    port_count    = len(port_syms_raw)
+
+    print(
+        f"[day_portfolio] view={view} date={date} "
+        f"portfolio_symbols={port_count}"
+    )
+
+    # ── Empty portfolio ────────────────────────────────────────────────────────
+    if not port_syms_raw:
+        return _day_portfolio_response(
+            date, [], view,
+            meta={"cache_status": "empty"}, port_count=0,
+            message="No portfolio holdings found",
+        )
+
+    # ── Fetch from 120-day Neon cache, filtered to requested date ─────────────
+    try:
+        events, meta = await get_or_sync_user_earnings(
+            universe  = "portfolio",
+            symbols   = port_syms_raw,
+            fmp_key   = api_key,
+            from_date = date,
+            to_date   = date,
+        )
+    except Exception as _err:
+        print(f"[day_portfolio] user_earnings_service error: {_err}")
+        events, meta = [], {
+            "cache_status":  "error",
+            "symbols_count": port_count,
+            "events_count":  0,
+        }
+
+    # ── Optional text search ───────────────────────────────────────────────────
+    if search:
+        sl = search.strip().lower()
+        events = [
+            e for e in events
+            if sl in (e.get("symbol") or "").lower()
+            or sl in (e.get("companyName") or "").lower()
+        ]
+
+    # ── Stamp scope / defaults on every event ─────────────────────────────────
+    for ev in events:
+        ev["scope"] = "portfolio"
+        ev.setdefault("source", "fmp")
+        ev.setdefault("session", "unknown")
+        ev.setdefault("importanceScore", 0)
+        ev.setdefault("themeTags", [])
+
+    cache_status = meta.get("cache_status", "unknown")
+    print(
+        f"[day_portfolio] returning {len(events)} events "
+        f"cache_status={cache_status} symbols_count={port_count}"
+    )
+
+    message = None
+    if port_syms_raw and not events:
+        message = f"No portfolio earnings found on {date}"
+
+    return _day_portfolio_response(
+        date, events, view, meta=meta, port_count=port_count,
+        message=message,
+    )
+
+
 # ── Watchlist-scoped week-clean (symbol-driven, not curated-pool filtered) ─────
 
 async def _get_week_clean_watchlist_scope(
@@ -2256,6 +2377,171 @@ async def _get_week_clean_watchlist_scope(
         "errors":       [],
         "scope":        "watchlist",
         "symbolsCount": wl_syms_us_count,
+        "eventsCount":  len(events),
+        "meta":         meta,
+    }
+    if message:
+        result["message"] = message
+    return result
+
+
+# ── Portfolio-scoped week-clean (symbol-driven, not curated-pool filtered) ─────
+
+
+async def _get_week_clean_portfolio_scope(
+    api_key:           str,
+    from_str:          str,
+    to_str:            str,
+    week_start,
+    week_end,
+    search:            Optional[str],
+    limit_per_session: int,
+    max_total:         int,
+) -> dict:
+    """
+    Symbol-driven portfolio earnings for the week-clean endpoint.
+
+    Bypasses the curated pipeline entirely.  Loads the user's saved Portfolio
+    holdings from disk, then reads/syncs a 120-day earnings window from
+    user_earnings_service (Neon cache keyed by universe="portfolio") and
+    filters to the requested week window.
+
+    Never returns All-calendar symbols — only symbols actually in the portfolio.
+    """
+    from services.user_earnings_service import get_or_sync_user_earnings  # lazy
+
+    port_syms_raw = _load_portfolio()
+    port_count    = len(port_syms_raw)
+
+    print(
+        f"[week_clean_portfolio] scope=portfolio "
+        f"portfolio_symbols={port_count} "
+        f"window={from_str}→{to_str}"
+    )
+    if port_syms_raw:
+        print(f"[week_clean_portfolio] first 20 tickers: {sorted(port_syms_raw)[:20]}")
+
+    # ── Empty portfolio ────────────────────────────────────────────────────────
+    if not port_syms_raw:
+        return {
+            "asOf":         _today(),
+            "source":       "fmp",
+            "weekStart":    from_str,
+            "weekEnd":      to_str,
+            "days":         _build_empty_days(week_start, week_end),
+            "topEvents":    [],
+            "status":       "ok",
+            "errors":       [],
+            "scope":        "portfolio",
+            "symbolsCount": 0,
+            "eventsCount":  0,
+            "message":      "No portfolio holdings found",
+        }
+
+    # ── Fetch from 120-day Neon cache, filter to requested week ────────────────
+    try:
+        events, meta = await get_or_sync_user_earnings(
+            universe  = "portfolio",
+            symbols   = port_syms_raw,
+            fmp_key   = api_key,
+            from_date = from_str,
+            to_date   = to_str,
+        )
+    except Exception as _err:
+        print(f"[week_clean_portfolio] user_earnings_service error: {_err}")
+        events, meta = [], {
+            "cache_status": "error",
+            "universe":     "portfolio",
+            "symbols_count": port_count,
+            "events_count":  0,
+        }
+
+    # ── Optional text search ───────────────────────────────────────────────────
+    if search:
+        sl = search.strip().lower()
+        events = [
+            e for e in events
+            if sl in (e.get("symbol") or "").lower()
+            or sl in (e.get("companyName") or "").lower()
+        ]
+
+    # ── Stamp each event with scope/source/session defaults ───────────────────
+    for ev in events:
+        ev["scope"] = "portfolio"
+        ev.setdefault("source", "fmp")
+        ev.setdefault("session", "unknown")
+        ev.setdefault("importanceScore", 0)
+        ev.setdefault("themeTags", [])
+
+    print(
+        f"[week_clean_portfolio] returning {len(events)} events "
+        f"cache_status={meta.get('cache_status')} "
+        f"symbols_count={meta.get('symbols_count', port_count)}"
+    )
+
+    # ── Build days[] (same structure as standard week-clean) ──────────────────
+    days_map: dict[str, list[dict]] = {}
+    cur = week_start
+    while cur <= week_end:
+        days_map[cur.strftime("%Y-%m-%d")] = []
+        cur += timedelta(days=1)
+
+    seen: set[tuple[str, str]] = set()
+    for ev in events:
+        sym = (ev.get("symbol") or "").upper()
+        d   = (ev.get("date") or "")
+        key = (sym, d)
+        if key in seen:
+            continue
+        seen.add(key)
+        if d in days_map:
+            days_map[d].append(ev)
+
+    days: list[dict] = []
+    for date_str in sorted(days_map.keys()):
+        day_evs   = days_map[date_str]
+        pre_mkt   = [e for e in day_evs if e.get("session") == "preMarket"][:limit_per_session]
+        after_hrs = [e for e in day_evs if e.get("session") == "afterHours"][:limit_per_session]
+        during    = [e for e in day_evs if e.get("session") == "duringMarket"][:limit_per_session]
+        unknown   = [
+            e for e in day_evs
+            if e.get("session") not in ("preMarket", "afterHours", "duringMarket")
+        ][:limit_per_session]
+        entries   = pre_mkt + during + after_hrs + unknown
+        d_obj     = datetime.strptime(date_str, "%Y-%m-%d")
+        label     = d_obj.strftime("%a, %b ") + str(d_obj.day)
+        days.append({
+            "date":         date_str,
+            "label":        label,
+            "weekday":      _WEEKDAY_NAMES.get(d_obj.weekday(), ""),
+            "count":        len(day_evs),
+            "preMarket":    pre_mkt,
+            "afterHours":   after_hrs,
+            "duringMarket": during,
+            "unknown":      unknown,
+            "entries":      entries,
+        })
+
+    all_deduped = [ev for evs in days_map.values() for ev in evs]
+    top_events  = sorted(
+        all_deduped, key=lambda e: -(e.get("importanceScore") or 0)
+    )[:max_total]
+
+    message = None
+    if port_syms_raw and not events:
+        message = "No upcoming earnings found for your portfolio this week"
+
+    result = {
+        "asOf":         _today(),
+        "source":       "fmp",
+        "weekStart":    from_str,
+        "weekEnd":      to_str,
+        "days":         days,
+        "topEvents":    top_events,
+        "status":       "ok",
+        "errors":       [],
+        "scope":        "portfolio",
+        "symbolsCount": port_count,
         "eventsCount":  len(events),
         "meta":         meta,
     }
@@ -2469,6 +2755,148 @@ async def _get_month_watchlist_scope(
     )
 
 
+# ── Shared month portfolio helpers ────────────────────────────────────────────
+
+
+def _month_portfolio_response(
+    year:        int,
+    month:       int,
+    month_label: str,
+    month_start: str,
+    month_end:   str,
+    days:        list[dict],
+    view:        str,
+    meta:        dict,
+    port_count:  int,
+    message:     Optional[str] = None,
+) -> dict:
+    """Standardised response dict for month portfolio short-circuit."""
+    total_events = sum(d.get("count", 0) for d in days)
+    result: dict = {
+        "asOf":         _today(),
+        "source":       "fmp",
+        "year":         year,
+        "month":        month,
+        "monthLabel":   month_label,
+        "monthStart":   month_start,
+        "monthEnd":     month_end,
+        "days":         days,
+        "status":       "ok",
+        "errors":       [],
+        "scope":        "portfolio",
+        "symbolsCount": port_count,
+        "eventsCount":  total_events,
+        "meta":         meta,
+    }
+    if view == "all":
+        result["fmpCallsUsed"] = 0
+        result["rateLimited"]  = False
+        result["staleLKG"]     = False
+    if message:
+        result["message"] = message
+    return result
+
+
+async def _get_month_portfolio_scope(
+    api_key:     str,
+    year:        int,
+    month:       int,
+    search:      Optional[str],
+    view:        str,        # "all" | "curated"
+    max_per_day: int = 5,
+) -> dict:
+    """
+    Symbol-driven portfolio earnings for month-all and month-curated endpoints.
+
+    Bypasses the curated pipeline entirely.  Loads the user's saved Portfolio
+    holdings from disk, reads/syncs the 120-day user_earnings_service cache,
+    then filters to the requested month window and builds the month-shaped response.
+
+    Never returns All-calendar symbols — only symbols actually in the portfolio.
+    If the forward-window cache is empty (FMP transient failure), returns an
+    empty month response rather than falling back to All curated data.
+    """
+    import calendar as _cal
+    from services.user_earnings_service import get_or_sync_user_earnings  # lazy
+
+    last_day_num  = _cal.monthrange(year, month)[1]
+    month_start_d = datetime(year, month, 1).date()
+    month_end_d   = datetime(year, month, last_day_num).date()
+    month_label   = datetime(year, month, 1).strftime("%B %Y")
+    month_start   = month_start_d.strftime("%Y-%m-%d")
+    month_end     = month_end_d.strftime("%Y-%m-%d")
+
+    port_syms_raw = _load_portfolio()
+    port_count    = len(port_syms_raw)
+
+    print(
+        f"[month_portfolio] view={view} {year}-{month:02d} "
+        f"portfolio_symbols={port_count} "
+        f"window={month_start}→{month_end}"
+    )
+    if port_syms_raw:
+        print(f"[month_portfolio] first 20 tickers: {sorted(port_syms_raw)[:20]}")
+
+    # ── Empty portfolio ────────────────────────────────────────────────────────
+    if not port_syms_raw:
+        days = _build_month_watchlist_days(year, month, [], view, max_per_day)
+        return _month_portfolio_response(
+            year, month, month_label, month_start, month_end, days,
+            view, meta={"cache_status": "empty"}, port_count=0,
+            message="No portfolio holdings found",
+        )
+
+    # ── Fetch from 120-day Neon cache, filter to requested month ───────────────
+    try:
+        events, meta = await get_or_sync_user_earnings(
+            universe  = "portfolio",
+            symbols   = port_syms_raw,
+            fmp_key   = api_key,
+            from_date = month_start,
+            to_date   = month_end,
+        )
+    except Exception as _err:
+        print(f"[month_portfolio] user_earnings_service error: {_err}")
+        events, meta = [], {
+            "cache_status":  "error",
+            "symbols_count": port_count,
+            "events_count":  0,
+        }
+
+    # ── Optional text search ───────────────────────────────────────────────────
+    if search:
+        sl = search.strip().lower()
+        events = [
+            e for e in events
+            if sl in (e.get("symbol") or "").lower()
+            or sl in (e.get("companyName") or "").lower()
+        ]
+
+    # ── Stamp scope / defaults on every event ─────────────────────────────────
+    for ev in events:
+        ev["scope"] = "portfolio"
+        ev.setdefault("source", "fmp")
+        ev.setdefault("session", "unknown")
+        ev.setdefault("importanceScore", 0)
+        ev.setdefault("themeTags", [])
+
+    cache_status = meta.get("cache_status", "unknown")
+    print(
+        f"[month_portfolio] returning {len(events)} events "
+        f"cache_status={cache_status} symbols_count={port_count}"
+    )
+
+    days    = _build_month_watchlist_days(year, month, events, view, max_per_day)
+    message = None
+    if port_syms_raw and not events:
+        message = f"No upcoming earnings found for your portfolio in {month_label}"
+
+    return _month_portfolio_response(
+        year, month, month_label, month_start, month_end, days,
+        view, meta=meta, port_count=port_count, message=message,
+    )
+
+
 # ── Public API: get_week_clean ─────────────────────────────────────────────────
 
 async def get_week_clean(
@@ -2537,6 +2965,20 @@ async def get_week_clean(
             max_total         = max_total,
         )
     # ── End watchlist short-circuit ───────────────────────────────────────────
+
+    # ── Portfolio short-circuit ────────────────────────────────────────────────
+    if scope == "portfolio":
+        return await _get_week_clean_portfolio_scope(
+            api_key           = api_key,
+            from_str          = from_str,
+            to_str            = to_str,
+            week_start        = ws,
+            week_end          = we,
+            search            = search,
+            limit_per_session = limit_per_session,
+            max_total         = max_total,
+        )
+    # ── End portfolio short-circuit ────────────────────────────────────────────
 
     # -- Result cache (skip for filtered views)
     _wk_ck = f"earnings:curated:week:{from_str}:{to_str}"
@@ -2848,6 +3290,18 @@ async def get_month_all(
         )
     # ── End watchlist short-circuit ────────────────────────────────────────────
 
+    # ── Portfolio short-circuit ────────────────────────────────────────────────
+    if scope == "portfolio":
+        return await _get_month_portfolio_scope(
+            api_key     = api_key,
+            year        = year,
+            month       = month,
+            search      = search,
+            view        = "all",
+            max_per_day = top_n,
+        )
+    # ── End portfolio short-circuit ────────────────────────────────────────────
+
     last_day_num  = _cal.monthrange(year, month)[1]
     month_start_d = datetime(year, month, 1).date()
     month_end_d   = datetime(year, month, last_day_num).date()
@@ -2965,6 +3419,11 @@ async def get_day_curated(
     if scope == "watchlist":
         return await _get_day_watchlist_scope(api_key, date, search, "curated")
     # ── End watchlist short-circuit ────────────────────────────────────────────
+
+    # ── Portfolio short-circuit ────────────────────────────────────────────────
+    if scope == "portfolio":
+        return await _get_day_portfolio_scope(api_key, date, search, "curated")
+    # ── End portfolio short-circuit ────────────────────────────────────────────
 
     # Determine the Mon–Fri week that contains this date.
     # Fetching the full week (same range as week-clean) ensures we reuse the
@@ -3088,6 +3547,18 @@ async def get_month_curated(
             max_per_day = max_per_day,
         )
     # ── End watchlist short-circuit ────────────────────────────────────────────
+
+    # ── Portfolio short-circuit ────────────────────────────────────────────────
+    if scope == "portfolio":
+        return await _get_month_portfolio_scope(
+            api_key     = api_key,
+            year        = year,
+            month       = month,
+            search      = search,
+            view        = "curated",
+            max_per_day = max_per_day,
+        )
+    # ── End portfolio short-circuit ────────────────────────────────────────────
 
     last_day_num  = _cal.monthrange(year, month)[1]
     month_start_d = datetime(year, month, 1).date()
