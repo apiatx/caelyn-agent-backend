@@ -5719,6 +5719,85 @@ async def caelyn_terminal(
     return await provider.get(portfolio_file)
 
 
+@app.get("/api/portfolio/relative-volume")
+@limiter.limit("60/minute")
+@traceable(name="main.portfolio_relative_volume")
+async def portfolio_relative_volume(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    tickers: str = "",
+):
+    """
+    Batch relative-volume (VolX) for portfolio holdings.
+
+    One Tradier batch call for all requested tickers — returns for each:
+      volume      — today's shares traded so far
+      avg_volume  — 3-month average daily volume (Tradier)
+      vol_x       — volume / avg_volume, null when volume=0 (pre-market / closed)
+                    or when Tradier has no data for the ticker (OTC/pink-sheet)
+
+    Frontend should call this instead of N per-ticker Tradier quote calls.
+    Cached 60 s matching the Tradier quote TTL.
+    """
+    from data.cache import cache as _cache
+
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    await _wait_for_init()
+
+    if not data_service or not data_service.tradier:
+        return {"tickers": {}, "error": "tradier_unavailable"}
+
+    syms = [t.strip().upper() for t in tickers.split(",") if t.strip()][:25]
+    if not syms:
+        return {"tickers": {}}
+
+    _ck = f"portfolio:relvol:{','.join(sorted(syms))}"
+    _cached = _cache.get(_ck)
+    if _cached is not None:
+        return {"tickers": _cached, "from_cache": True}
+
+    try:
+        raw = await __import__("asyncio").wait_for(
+            data_service.tradier.get_quotes(syms), timeout=8.0
+        )
+    except Exception as _e:
+        print(f"[PORTFOLIO_RELVOL] Tradier batch error: {_e}")
+        return {"tickers": {}, "error": str(_e)}
+
+    result: dict = {}
+    for q in (raw or []):
+        sym = (q.get("symbol") or "").upper()
+        if not sym:
+            continue
+        vol     = q.get("volume")      # int — 0 when market closed
+        avg_vol = q.get("average_volume")  # int — 3-month avg
+        # vol_x is null when no trades yet today (pre-market / closed) or no avg data
+        if vol and avg_vol and avg_vol > 0:
+            vol_x = round(vol / avg_vol, 2)
+        else:
+            vol_x = None
+        result[sym] = {
+            "volume":     vol,
+            "avg_volume": avg_vol,
+            "vol_x":      vol_x,
+        }
+
+    # Tickers Tradier returned no data for (OTC / pink-sheet / delisted)
+    for sym in syms:
+        if sym not in result:
+            result[sym] = {"volume": None, "avg_volume": None, "vol_x": None}
+
+    _cache.set(_ck, result, 60)
+    print(
+        f"[PORTFOLIO_RELVOL] tickers={syms} "
+        f"found={sum(1 for v in result.values() if v['avg_volume'])} "
+        f"vol_x_available={sum(1 for v in result.values() if v['vol_x'] is not None)}"
+    )
+    return {"tickers": result, "from_cache": False}
+
+
 @app.get("/api/portfolio/events")
 @traceable(name="main.get_portfolio_events")
 async def get_portfolio_events(request: Request, api_key: str = Header(None, alias="X-API-Key")):
