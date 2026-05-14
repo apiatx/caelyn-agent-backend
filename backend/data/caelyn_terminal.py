@@ -494,6 +494,8 @@ class CaelynTerminalProvider:
                     "change_pct": _sf(q.get("change_percentage")),
                     "w52_high":   _sf(q.get("week_52_high")),
                     "w52_low":    _sf(q.get("week_52_low")),
+                    "volume":     q.get("volume"),
+                    "avg_volume": q.get("average_volume"),
                 }
             if sym in _yf_fb_q:
                 return _yf_fb_q[sym]
@@ -533,6 +535,9 @@ class CaelynTerminalProvider:
             total_cost  += shares * cost
 
             funda = fundamentals_raw.get(sym, {})
+            _vol     = q.get("volume")
+            _avg_vol = q.get("avg_volume")
+            _vol_x   = round(_vol / _avg_vol, 2) if _vol and _avg_vol and _avg_vol > 0 else None
             positions.append({
                 "_sym":       sym,
                 "_shares":    shares,
@@ -547,6 +552,9 @@ class CaelynTerminalProvider:
                 "market_val": mval,
                 "w52_high":   _sr(q.get("w52_high")),
                 "w52_low":    _sr(q.get("w52_low")),
+                "volume":     _vol,
+                "avg_volume": _avg_vol,
+                "vol_x":      _vol_x,
             })
 
         for p in positions:
@@ -1177,6 +1185,9 @@ class CaelynTerminalProvider:
                 "w52_low":            p.get("w52_low"),
                 "total_return_value": unreal_val,
                 "total_return_pct":   unreal_pct,
+                "volume":             p.get("volume"),
+                "avg_volume":         p.get("avg_volume"),
+                "vol_x":              p.get("vol_x"),
             })
         return result
 

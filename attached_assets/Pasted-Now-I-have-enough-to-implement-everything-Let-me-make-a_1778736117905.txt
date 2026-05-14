@@ -1,0 +1,46 @@
+Now I have enough to implement everything. Let me make all the edits in parallel:
+
+
+8 actions
+Now let me replace Top Movers with the Portfolio Options panel, add the query, and add an Express route to filter options screener by portfolio tickers:
+
+
+9 actions
+Route is live and gracefully returning empty ({tickers:[]}) since FastAPI hasn't shipped the new fields yet — exactly the right behavior. Now let me write the FastAPI agent instructions:
+
+All changes are live. Here's a summary of what shipped and what the FastAPI agent needs to do:
+
+Frontend (live now)
+Holdings table — VolX column
+
+Replaced CHG with VOLX (volume / avg volume).
+Sortable like the other columns.
+Cells with ≥ 2.5× average volume render bold amber as the "unusual" highlight.
+Reads vol_x directly if backend provides it, otherwise computes from volume / avg_volume. Renders — if neither field is present.
+Layout adjustments
+
+Top row 62% → 68% — gives Holdings & Earnings noticeably more vertical room.
+Investment Goals 195px → 235px — its right border now lines up with the start of Top Performers, matching the Holdings/Asset-Allocation seam above.
+Top Performers 185px → 145px — its left border now lines up with the Asset Allocation column above it.
+Portfolio Options panel
+
+Replaced "Top Movers" with a "Portfolio Options" panel using the same scoring fields as the existing Options Flow page.
+One row per portfolio ticker showing signal pill (Unusual / Gamma / Asym / Vol), composite score, P/C ratio (color-coded), IV, and expected move.
+Sorted by composite score, top 8.
+Wired to GET /api/portfolio/options (Express). Express tries the new dedicated FastAPI endpoint first, then falls back to filtering the broad /api/options/screener result by portfolio tickers — so the panel will start showing data the moment FastAPI ships either path.
+FastAPI Agent — three changes (full instructions saved to .local/fastapi-portfolio-terminal-instructions.md)
+Holdings response — add volume, avg_volume, and optionally vol_x to each entry in holdings[] returned by the existing /api/caelyn-terminal upstream. Use 30-day average daily volume.
+
+New endpoint — GET /api/portfolio/options?tickers=AEHR,MRVL,... returning:
+
+{ "tickers": [
+    { "ticker": "MRVL",
+      "underlying_price": 60.42, "price_change_pct": 1.91,
+      "pc_ratio": 0.74, "iv_current": 0.42, "expected_move": 0.058,
+      "primary_signal": "Unusual Flow", "confidence": "high",
+      "composite_score": 78, "total_volume": 145320 }
+]}
+
+These are the same fields the existing /api/options/screener already produces — just restrict the universe to the requested tickers and skip those with no chains.
+
+(Carry-over) POST /api/portfolio/review — still pending, covered in the earlier fastapi-portfolio-review-instructions.md
