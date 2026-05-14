@@ -78,19 +78,6 @@ THEME_MAP: dict[str, list[str]] = {
     "Nuclear / Grid": [
         "BE", "CEG", "EQT", "FSLR", "TPL", "CCJ", "NNE", "SMR",
     ],
-    # ── Themes below have no THEME_RS_UNIVERSE entry — THEME_MAP is the
-    # sole source for these buckets.
-    "Datacenter / Compute": [
-        "APLD", "ARM", "EQIX", "IREN", "SMCI", "TSM", "NVDA", "AMD",
-        "INTC", "WULF", "CLSK", "MARA", "HUT",
-    ],
-    "Semi Materials": [
-        "AXTI", "FORM", "ICHR", "KLAC", "KLIC", "MCHP", "ON", "SLAB",
-        "TE", "UCTT", "VECO", "VSH", "ENTG", "AMAT", "LRCX",
-    ],
-    "Data Infra / Storage": [
-        "EQIX", "PSTG", "STX", "WDC", "SNOW", "DDOG", "MDB", "SNDK",
-    ],
 }
 
 # Map from THEME_MAP display names → THEME_RS_UNIVERSE theme_ids.
