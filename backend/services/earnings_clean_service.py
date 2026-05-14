@@ -949,6 +949,167 @@ def _load_portfolio() -> set[str]:
         return set()
 
 
+# ── Shared enrichment for user-scope (portfolio / watchlist) events ────────────
+
+async def _hydrate_user_scope_events(
+    events: list[dict],
+    api_key: str,
+    universe: str = "portfolio",
+) -> tuple[list[dict], str, str]:
+    """
+    Enrich user-scope earnings events with three layers.  Any layer failure
+    leaves the events intact — events are never removed on enrichment error.
+
+    Layer 1 — FMP company profile (companyName, logo, sector, price EOD baseline)
+    Layer 2 — Tradier live quote  (price, change, changePercent, quoteSource,
+               quoteUpdatedAt).  Falls back to FMP profile price when Tradier
+               is unavailable or the symbol is not covered.
+    Layer 3 — FMP last earnings   (lastEarningsDate, lastEpsEstimate/Actual,
+               lastRevenueEstimate/Actual, lastFiscalPeriod, lastSource).
+               Per-symbol 24-h cache — never blocks or fails the response.
+
+    Returns (enriched_events, quote_status, last_earn_status).
+    """
+    if not events:
+        return events, "empty", "empty"
+
+    syms: list[str] = list(dict.fromkeys(
+        (ev.get("symbol") or "").upper()
+        for ev in events if ev.get("symbol")
+    ))
+    if not syms:
+        return events, "no_symbols", "no_symbols"
+
+    call_counter = [0]
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+
+        # ── Layer 1: FMP company profile ──────────────────────────────────────
+        try:
+            events, _ = await _enrich_events(
+                events, api_key, client, call_counter,
+                max_live=min(len(events), 30),
+            )
+        except Exception as _ep:
+            print(f"[{universe}_hydrate] FMP profile error: {_ep}")
+
+        # ── Layer 2: Tradier live quote ───────────────────────────────────────
+        tradier_quotes: dict[str, dict] = {}
+        quote_status = "skipped"
+        try:
+            import os as _os
+            _tradier_key = _os.environ.get("TRADIER_API_KEY")
+            if _tradier_key:
+                from data.tradier_provider import TradierProvider as _TradierProvider  # type: ignore
+                _tradier = _TradierProvider(_tradier_key)
+                _raw_q = await asyncio.wait_for(_tradier.get_quotes(syms), timeout=8.0)
+                for q in (_raw_q or []):
+                    s = (q.get("symbol") or "").upper()
+                    if s:
+                        tradier_quotes[s] = q
+                quote_status = f"ok:{len(tradier_quotes)}/{len(syms)}"
+            else:
+                quote_status = "no_tradier_key"
+        except Exception as _eq:
+            print(f"[{universe}_hydrate] Tradier quote error: {_eq}")
+            quote_status = "error"
+
+        _quote_ts = datetime.utcnow().isoformat() + "Z"
+        for ev in events:
+            sym = (ev.get("symbol") or "").upper()
+            q   = tradier_quotes.get(sym)
+            if q:
+                ev["price"]          = q.get("last")
+                ev["change"]         = q.get("change")
+                ev["changePercent"]  = q.get("change_percentage")
+                ev["percentChange"]  = q.get("change_percentage")
+                ev["quoteSource"]    = "tradier"
+                ev["quoteUpdatedAt"] = _quote_ts
+            else:
+                # Keep FMP profile price if already set by Layer 1
+                if ev.get("price") is not None:
+                    ev.setdefault("quoteSource",    "fmp_profile")
+                    ev.setdefault("quoteUpdatedAt", _quote_ts)
+                ev.setdefault("change",        None)
+                ev.setdefault("changePercent", None)
+                ev.setdefault("percentChange", None)
+                ev.setdefault("quoteSource",    None)
+                ev.setdefault("quoteUpdatedAt", None)
+
+        # ── Layer 3: FMP last (most-recent past) earnings ─────────────────────
+        last_earn_status = "skipped"
+        try:
+            _today_s  = datetime.utcnow().strftime("%Y-%m-%d")
+            _sem      = asyncio.Semaphore(5)
+
+            async def _fetch_last(sym: str) -> tuple[str, dict | None]:
+                ck_result = f"fmp:last_earn:v1:{sym}"
+                hit = cache.get(ck_result)
+                if hit is not None:
+                    return sym, (hit if isinstance(hit, dict) else None)
+                async with _sem:
+                    rows, _ = await _fmp_get(
+                        "historical/earning_calendar",
+                        {"symbol": sym},
+                        f"fmp:last_earn_raw:v1:{sym}", _TTL_PROFILE,
+                        api_key, client, call_counter,
+                    )
+                if not isinstance(rows, list) or not rows:
+                    return sym, None
+                past = [r for r in rows if (r.get("date") or "") < _today_s]
+                if not past:
+                    return sym, None
+                last = max(past, key=lambda r: r.get("date", ""))
+                result: dict = {
+                    "lastEarningsDate":    last.get("date"),
+                    "lastEpsEstimate":     _safe_float(last.get("epsEstimated")),
+                    "lastEpsActual":       _safe_float(last.get("epsActual")),
+                    "lastRevenueEstimate": _safe_float(last.get("revenueEstimated")),
+                    "lastRevenueActual":   _safe_float(last.get("revenueActual")),
+                    "lastFiscalPeriod":    last.get("fiscalDateEnding") or last.get("period"),
+                    "lastReportTime":      last.get("time"),
+                    "lastSource":          "fmp",
+                }
+                cache.set(ck_result, result, _TTL_PROFILE)
+                return sym, result
+
+            _le_results = await asyncio.gather(
+                *[_fetch_last(s) for s in syms],
+                return_exceptions=True,
+            )
+            last_map: dict[str, dict] = {}
+            for _r in _le_results:
+                if isinstance(_r, Exception):
+                    continue
+                _s, _d = _r
+                if _d:
+                    last_map[_s] = _d
+
+            for ev in events:
+                sym = (ev.get("symbol") or "").upper()
+                le  = last_map.get(sym)
+                if le:
+                    ev.update(le)
+                else:
+                    ev.setdefault("lastEarningsDate",    None)
+                    ev.setdefault("lastEpsEstimate",     None)
+                    ev.setdefault("lastEpsActual",       None)
+                    ev.setdefault("lastRevenueEstimate", None)
+                    ev.setdefault("lastRevenueActual",   None)
+                    ev.setdefault("lastSource",          None)
+
+            last_earn_status = f"ok:{len(last_map)}/{len(syms)}"
+        except Exception as _ele:
+            print(f"[{universe}_hydrate] last earnings error: {_ele}")
+            last_earn_status = "error"
+
+    print(
+        f"[{universe}_hydrate] syms={len(syms)} fmp_calls={call_counter[0]} "
+        f"quote={quote_status} last_earn={last_earn_status}"
+    )
+    return events, quote_status, last_earn_status
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 async def get_upcoming_clean(
@@ -2190,6 +2351,17 @@ async def _get_day_portfolio_scope(
         ev.setdefault("importanceScore", 0)
         ev.setdefault("themeTags", [])
 
+    # ── Enrich: FMP profile + Tradier quotes + last earnings ─────────────────
+    if events:
+        try:
+            events, _qs, _les = await _hydrate_user_scope_events(
+                events, api_key, universe="portfolio"
+            )
+            meta["quoteStatus"]    = _qs
+            meta["lastEarnStatus"] = _les
+        except Exception as _he:
+            print(f"[day_portfolio] hydrate error: {_he}")
+
     cache_status = meta.get("cache_status", "unknown")
     print(
         f"[day_portfolio] returning {len(events)} events "
@@ -2470,6 +2642,17 @@ async def _get_week_clean_portfolio_scope(
         ev.setdefault("session", "unknown")
         ev.setdefault("importanceScore", 0)
         ev.setdefault("themeTags", [])
+
+    # ── Enrich: FMP profile + Tradier quotes + last earnings ─────────────────
+    if events:
+        try:
+            events, _qs, _les = await _hydrate_user_scope_events(
+                events, api_key, universe="portfolio"
+            )
+            meta["quoteStatus"]    = _qs
+            meta["lastEarnStatus"] = _les
+        except Exception as _he:
+            print(f"[week_clean_portfolio] hydrate error: {_he}")
 
     print(
         f"[week_clean_portfolio] returning {len(events)} events "
@@ -2877,6 +3060,17 @@ async def _get_month_portfolio_scope(
         ev.setdefault("session", "unknown")
         ev.setdefault("importanceScore", 0)
         ev.setdefault("themeTags", [])
+
+    # ── Enrich: FMP profile + Tradier quotes + last earnings ─────────────────
+    if events:
+        try:
+            events, _qs, _les = await _hydrate_user_scope_events(
+                events, api_key, universe="portfolio"
+            )
+            meta["quoteStatus"]    = _qs
+            meta["lastEarnStatus"] = _les
+        except Exception as _he:
+            print(f"[month_portfolio] hydrate error: {_he}")
 
     cache_status = meta.get("cache_status", "unknown")
     print(
