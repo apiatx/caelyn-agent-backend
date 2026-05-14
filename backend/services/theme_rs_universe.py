@@ -49,6 +49,18 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["commodity prices", "weather", "food inflation", "USD"],
     },
 
+    "ai_networking": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
+        "display_name": "AI Networking",
+        "proxy_type": "custom",
+        "proxy_symbols": ["ANET", "AVGO", "MRVL", "CRDO", "ALAB"],
+        "candidate_symbols": ["ANET", "AVGO", "MRVL", "CRDO", "ALAB"],
+        "sector_tags": ["Technology"],
+        "keywords": ["AI networking", "data center networking", "optical interconnects", "switches", "silicon photonics"],
+        "macro_sensitivities": ["AI capex", "data center buildout", "hyperscaler spending"],
+    },
+
     # ── B ──────────────────────────────────────────────────────────────────────
     "banks": {
         "classification": "sub_theme",
@@ -515,6 +527,31 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["oil price", "rig count", "E&P capex", "OPEC production levels"],
     },
 
+    # ── P ──────────────────────────────────────────────────────────────────────
+    "photonics_lasers": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
+        "display_name": "Photonics / Lasers",
+        "proxy_type": "custom",
+        "proxy_symbols": ["COHR", "LITE", "AAOI", "FN"],
+        "candidate_symbols": ["COHR", "LITE", "AAOI", "FN", "SIVEF"],
+        "sector_tags": ["Technology"],
+        "keywords": ["photonics", "lasers", "optical components", "silicon photonics", "datacom optics", "fiber"],
+        "macro_sensitivities": ["AI data center buildout", "telecom capex", "defense optics spending"],
+    },
+
+    "power_cooling": {
+        "classification": "sub_theme",
+        "parent_sector":  "industrials",
+        "display_name": "Power / Cooling",
+        "proxy_type": "custom",
+        "proxy_symbols": ["VRT", "ETN", "GEV", "TT", "BE"],
+        "candidate_symbols": ["VRT", "ETN", "GEV", "TT", "BE"],
+        "sector_tags": ["Industrials", "Technology"],
+        "keywords": ["power", "cooling", "data center power", "thermal management", "UPS", "generators", "HVAC"],
+        "macro_sensitivities": ["AI data center buildout", "power grid demand", "industrial capex"],
+    },
+
     # ── Q ──────────────────────────────────────────────────────────────────────
     "quantum": {
         "classification": "sub_theme",
@@ -645,6 +682,18 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Technology"],
         "keywords": ["software", "SaaS", "cloud software", "enterprise software", "AI software"],
         "macro_sensitivities": ["enterprise IT budgets", "AI adoption", "interest rates (multiples)"],
+    },
+
+    "substrates_packaging": {
+        "classification": "sub_theme",
+        "parent_sector":  "technology",
+        "display_name": "Substrates / Packaging",
+        "proxy_type": "custom",
+        "proxy_symbols": ["TSM", "AMKR"],
+        "candidate_symbols": ["TSM", "AMKR", "ASX", "IBIDF", "UMICF"],
+        "sector_tags": ["Technology", "Semiconductors"],
+        "keywords": ["advanced packaging", "chiplets", "CoWoS", "HBM substrate", "ABF substrate", "OSAT", "interposers"],
+        "macro_sensitivities": ["AI chip demand", "fab capex cycles", "leading-edge packaging ramp"],
     },
 
     "solar": {

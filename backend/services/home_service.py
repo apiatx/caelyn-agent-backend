@@ -46,22 +46,40 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 # Non-US tickers (symbol contains ":") are filtered before any API call.
 
 THEME_MAP: dict[str, list[str]] = {
+    # ── Tickers for themes WITH a THEME_RS_UNIVERSE entry are authoritative
+    # in the universe (candidate_symbols there). These lists are kept as
+    # fallback only and should mirror the universe entries.
     "AI Networking": [
-        "ALAB", "ANET", "CIEN", "CRDO", "MRVL", "SMCI", "VIAV", "COHR",
-        "APH", "NOK", "INFN",
+        "ANET", "AVGO", "MRVL", "CRDO", "ALAB",
     ],
     "Photonics / Lasers": [
-        "AAOI", "COHR", "IPGP", "LASR", "LITE", "LPTH", "LWLG", "POET",
-        "GLW", "XTIA", "MTSI", "OPTX", "FNSR",
+        "COHR", "LITE", "AAOI", "FN", "SIVEF",
     ],
     "Substrates / Packaging": [
-        "AMKR", "AXTI", "CAMT", "FN", "FORM", "GFS", "ICHR", "INTT",
-        "KLIC", "ONTO", "PLAB", "TER", "TSEM", "UCTT", "VECO", "VSH",
-        "ACMR", "MKSI",
+        "TSM", "AMKR", "ASX", "IBIDF", "UMICF",
     ],
+    "Power / Cooling": [
+        "VRT", "ETN", "GEV", "TT", "BE",
+    ],
+    # ── Themes below also exist in THEME_RS_UNIVERSE; tickers are overridden
+    # by candidate_symbols from the universe at runtime.
     "Memory / Storage": [
         "MU", "WDC", "STX", "SNDK", "PSTG", "SIMO", "NTAP",
     ],
+    "Cybersecurity": [
+        "KEYS", "CRWD", "PANW", "ZS", "NET", "FTNT", "CYBR",
+    ],
+    "Aerospace / Defense": [
+        "AVAV", "DRS", "KTOS", "LUNR", "RKLB", "ASTS", "KRMN",
+    ],
+    "Robotics / Automation": [
+        "AEVA", "IONQ", "JOBY", "OUST", "OSS", "TER", "ISRG", "PATH",
+    ],
+    "Nuclear / Grid": [
+        "BE", "CEG", "EQT", "FSLR", "TPL", "CCJ", "NNE", "SMR",
+    ],
+    # ── Themes below have no THEME_RS_UNIVERSE entry — THEME_MAP is the
+    # sole source for these buckets.
     "Datacenter / Compute": [
         "APLD", "ARM", "EQIX", "IREN", "SMCI", "TSM", "NVDA", "AMD",
         "INTC", "WULF", "CLSK", "MARA", "HUT",
@@ -70,25 +88,24 @@ THEME_MAP: dict[str, list[str]] = {
         "AXTI", "FORM", "ICHR", "KLAC", "KLIC", "MCHP", "ON", "SLAB",
         "TE", "UCTT", "VECO", "VSH", "ENTG", "AMAT", "LRCX",
     ],
-    "Power / Cooling": [
-        "ETN", "POWL", "VRT", "VICR", "SMTC", "HUBB", "AMPX", "NVTS",
-    ],
-    "Nuclear / Grid": [
-        "BE", "CEG", "EQT", "FSLR", "TPL", "CCJ", "NNE", "SMR",
-    ],
-    "Aerospace / Defense": [
-        "AVAV", "DRS", "ESLT", "KTOS", "LUNR", "RKLB", "ASTS", "MDA",
-        "BKSY", "PL", "SPIR", "KRMN", "FJET",
-    ],
-    "Robotics / Automation": [
-        "AEVA", "IONQ", "JOBY", "OUST", "OSS", "TER", "ISRG", "PATH",
-    ],
-    "Cybersecurity": [
-        "KEYS", "CRWD", "PANW", "ZS", "NET", "FTNT", "CYBR",
-    ],
     "Data Infra / Storage": [
         "EQIX", "PSTG", "STX", "WDC", "SNOW", "DDOG", "MDB", "SNDK",
     ],
+}
+
+# Map from THEME_MAP display names → THEME_RS_UNIVERSE theme_ids.
+# When a theme has a universe entry its candidate_symbols are used at
+# runtime, making the universe the single source of truth for those tickers.
+_THEME_RS_ID_MAP: dict[str, str] = {
+    "AI Networking":          "ai_networking",
+    "Photonics / Lasers":     "photonics_lasers",
+    "Substrates / Packaging": "substrates_packaging",
+    "Power / Cooling":        "power_cooling",
+    "Memory / Storage":       "memory_storage",
+    "Cybersecurity":          "cybersecurity",
+    "Aerospace / Defense":    "defense",
+    "Robotics / Automation":  "robotics_automation",
+    "Nuclear / Grid":         "uranium_nuclear",
 }
 
 # Tickers in the THEME_MAP that are US-exchange tradeable (no ":" in symbol)
@@ -1003,23 +1020,43 @@ async def _fetch_sub_theme_performance(
     watchlist_quotes: dict[str, dict] | None = None,
 ) -> list[dict]:
     """
-    Compute sub-theme performance from THEME_MAP tickers.
+    Compute sub-theme performance using THEME_RS_UNIVERSE as the authoritative
+    ticker source (for the 9 themes that have universe entries), falling back
+    to THEME_MAP for the 3 themes that don't yet have universe entries.
 
     Data sources (in priority order):
       1. Watchlist quotes (already fetched — zero extra API calls for those tickers)
-      2. Tradier batch quote for THEME_MAP tickers NOT in the watchlist
+      2. Tradier batch quote for remaining tickers NOT in the watchlist
       3. Options LKG cache fallback (price_change_pct available for ~70 tickers)
 
     Returns a list of sub-theme rows sorted by avg_change_1d descending,
     each with: sub_theme, avg_change_1d, leader_symbols, leader_count,
     breadth_score (% of tickers positive today), momentum_score, pattern_summary.
     """
+    from services.theme_rs_universe import THEME_RS_UNIVERSE
+
     wq = watchlist_quotes or {}
 
-    # Find THEME_MAP tickers not already in watchlist quotes
-    missing = [sym for sym in _THEME_TICKERS_US if sym not in wq]
+    # Build the effective ticker list per theme — universe wins when available
+    effective_tickers: dict[str, list[str]] = {}
+    for theme_name, fallback_tickers in THEME_MAP.items():
+        rs_id = _THEME_RS_ID_MAP.get(theme_name)
+        if rs_id and rs_id in THEME_RS_UNIVERSE:
+            # Use universe candidate_symbols, filtering out exchange-prefixed foreign tickers
+            effective_tickers[theme_name] = [
+                t for t in THEME_RS_UNIVERSE[rs_id]["candidate_symbols"]
+                if ":" not in t
+            ]
+        else:
+            effective_tickers[theme_name] = [t for t in fallback_tickers if ":" not in t]
 
-    # Fetch missing tickers in one Tradier batch call (cached)
+    # All US tickers needed across all themes
+    all_needed = sorted({sym for tickers in effective_tickers.values() for sym in tickers})
+
+    # Find tickers not already in watchlist quotes
+    missing = [sym for sym in all_needed if sym not in wq]
+
+    # Fetch missing tickers in one Tradier batch call (cached via per-ticker cache)
     extra_quotes: dict[str, dict] = {}
     if missing and data_service and getattr(data_service, "tradier", None):
         try:
@@ -1032,8 +1069,7 @@ async def _fetch_sub_theme_performance(
 
     theme_rows: list[dict] = []
 
-    for sub_theme, theme_tickers in THEME_MAP.items():
-        us_only = [t for t in theme_tickers if ":" not in t]
+    for sub_theme, us_only in effective_tickers.items():
         changes: list[float] = []
         leaders: list[tuple[float, str]] = []
 
