@@ -1,0 +1,92 @@
+Good questions. Let me check the Calendar page's Portfolio toggle and whether portfolio mutations refresh it, so I can give you accurate answers on all three points.
+
+
+3 actions
+Good — let me give you the full picture on all three questions and then prepare the FastAPI instructions + Express change together.
+
+
+3 actions
+Here are clear answers to all three questions, then I'll update the Express code and write the FastAPI agent instructions:
+
+1. Most efficient FMP call?
+Not quite. FMP has a bulk earning_calendar?from=&to= endpoint, but it silently drops your OTC/foreign holdings (IQEPF, SLOIF, FPLSF, SIVEF) — we already proved this. The weekly fan-out is required to get full coverage. The inefficiency is the 52 Express→FastAPI HTTP hops. If FastAPI does the fan-out internally and exposes one endpoint, Express makes 1 call instead of 52.
+
+2. Dynamic updates? Yes, already wired:
+
+Portfolio Terminal: mutations call invalidateQueries(['caelyn-terminal']) → Express re-runs the full fetch
+Calendar page Portfolio toggle: mutations call the predicate invalidator matching earnings + portfolio keys → current-week refetches
+3. Where should the logic live? You're right — it belongs in FastAPI. Express should be a thin proxy. I'll update Express to call a new FastAPI endpoint and keep the current fan-out only as a temporary fallback until the FastAPI agent implements it.
+
+Let me make the Express change now:
+
+
+2 actions
+Now I'll update Express to call the new FastAPI endpoint (with the current fan-out as fallback), then give you the exact instructions for your FastAPI agent:
+
+
+2 actions
+Let me quickly verify the fallback still returns results, then give you the FastAPI agent instructions:
+
+
+2 actions
+16 results confirmed — fallback is solid. Here are the exact instructions for your FastAPI backend agent:
+
+Instructions for FastAPI Backend Agent
+Goal: Create one new endpoint GET /api/catalysts/earnings/portfolio-full-year that moves the 52-week earnings fan-out logic from the Express proxy into FastAPI where it belongs.
+
+What this endpoint must do
+The Express proxy currently calls your existing GET /api/catalysts/earnings/week-clean?scope=portfolio 52 times (in quarterly batches of 13) to collect a full year of upcoming earnings for the user's portfolio holdings. This endpoint replaces all of that with a single call.
+
+Endpoint spec
+GET /api/catalysts/earnings/portfolio-full-year
+Auth: same as all other protected routes (X-API-Key header)
+
+Logic:
+
+Determine the user's portfolio tickers — use the same mechanism week-clean?scope=portfolio uses to resolve scope=portfolio to a list of symbols (Neon DB portfolio holdings)
+Build Monday-aligned weekly date ranges from today through today + 365 days (~52 weeks)
+Call FMP's earnings calendar for each week, filtered to only those portfolio tickers. Use the same per-week FMP call pattern that week-clean already uses (FMP's bulk earning_calendar?from=&to= with a 1-week window works fine; the wide-range bulk call silently omits OTC/foreign tickers like IQEPF, SLOIF, FPLSF, SIVEF — weekly windows are required for those)
+Deduplicate by symbol — keep only the earliest upcoming date per ticker (one row per holding)
+Return a flat array sorted by date ascending
+Response shape (exactly this — Express parses these field names):
+
+{
+  "earnings": [
+    {
+      "symbol": "MRVL",
+      "date": "2026-05-27",
+      "eps_estimate": 0.80,
+      "revenue_estimate": 1500000000,
+      "company_name": "Marvell Technology Inc"
+    },
+    {
+      "symbol": "IQEPF",
+      "date": "2026-05-20",
+      "eps_estimate": null,
+      "revenue_estimate": null,
+      "company_name": "IQE PLC"
+    }
+  ]
+}
+
+Field notes:
+
+symbol — uppercase ticker string
+date — ISO date string YYYY-MM-DD
+eps_estimate — float or null
+revenue_estimate — raw dollar value (not millions) or null
+company_name — string or null
+Performance:
+
+Process the 52 weekly FMP calls in batches internally (13 at a time = 4 sequential async batches) to avoid FMP rate limiting — the same pattern that caused failures when all 52 were fired simultaneously
+Cache the result per user/session for 10 minutes (same TTL as other terminal endpoints)
+Why this exists
+The Express proxy already has a working fallback fan-out that returns 16 correct rows. Once this FastAPI endpoint is live and returns HTTP 200, Express will automatically switch to calling it instead of the fallback — no Express changes needed.
+
+Acceptance test
+curl -H "X-API-Key: hippo_ak_7f3x9k2m4p8q1w5t" \
+  https://fast-api-server-trading-agent-aidanpilon.replit.app/api/catalysts/earnings/portfolio-full-year
+
+Should return {"earnings": [...]} with at minimum these tickers (current portfolio): SLNH, IQEPF, MRVL, P, SLOIF, AEHR, PENG, AMKR, SILC, VPG, VECO, AMPX, FPLSF, NBIS, NRGV, OUST — sorted by date ascending, no ticker appearing more than once.
+
+That's everything the FastAPI agent needs. Once deployed, the Express proxy will automatically start using the new single-call path. The fallback fan-out stays in place as a safety net but will never be hit once the endpoint is live.

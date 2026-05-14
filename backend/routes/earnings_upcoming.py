@@ -12,7 +12,10 @@ GET /api/catalysts/earnings/month-curated    — Curated: monthly calendar overv
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import asyncio
+import hashlib
+import json
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -792,3 +795,130 @@ async def admin_rebuild_missing(
         },
         "weeks": results,
     })
+
+
+# ── GET /api/catalysts/earnings/portfolio-full-year ───────────────────────────
+
+def _safe_f(v) -> float | None:
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get("/api/catalysts/earnings/portfolio-full-year")
+@traceable(name="earnings_clean.portfolio_full_year")
+async def portfolio_full_year(
+    request: Request,
+    api_key: str = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    Full-year upcoming earnings for every portfolio holding (today → +365 days).
+
+    Replaces the Express 52-week fan-out: loads portfolio tickers from Neon,
+    builds 52 Monday-aligned weekly FMP calls in batches of 13, deduplicates to
+    one row per ticker (earliest upcoming date), and returns a flat array sorted
+    by date ascending.
+
+    Response: { "earnings": [ { symbol, date, eps_estimate, revenue_estimate,
+                                company_name }, ... ] }
+    Cache: 10 min per portfolio symbol-set hash.
+    """
+    err = _check_key(api_key)
+    if err:
+        return err
+
+    fmp_key = _get_fmp_key()
+    if not fmp_key:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "FMP API key not configured", "earnings": []},
+        )
+
+    # ── Load portfolio symbols from Neon ──────────────────────────────────────
+    try:
+        from data.portfolio_store import load_active_holdings  # type: ignore
+        holdings  = load_active_holdings()
+        port_syms: set[str] = {
+            (h.get("ticker") or h.get("symbol") or "").upper().strip()
+            for h in holdings
+            if (h.get("ticker") or h.get("symbol") or "").strip()
+        }
+    except Exception as _pe:
+        print(f"[pfull_year] portfolio load error: {_pe}")
+        port_syms = set()
+
+    if not port_syms:
+        return {"earnings": [], "portfolioCount": 0, "source": "neon"}
+
+    # ── Endpoint-level cache (10 min, keyed by symbol-set hash) ──────────────
+    from data.cache import cache  # type: ignore
+    sym_hash  = hashlib.md5(json.dumps(sorted(port_syms)).encode()).hexdigest()[:12]
+    cache_key = f"pfull:v1:{sym_hash}"
+    hit = cache.get(cache_key)
+    if hit is not None:
+        return {"earnings": hit, "portfolioCount": len(port_syms),
+                "source": "cache", "cacheKey": cache_key}
+
+    # ── Build 52 weekly date ranges (today → today+364) ───────────────────────
+    today = date.today()
+    weeks: list[tuple[str, str]] = []
+    cur = today
+    for _ in range(52):
+        weeks.append((cur.isoformat(), (cur + timedelta(days=6)).isoformat()))
+        cur += timedelta(days=7)
+
+    # ── Fan-out in 4 sequential batches of 13 (avoids FMP rate-limit bursts) ─
+    from services.catalyst_calendar_service import CatalystFMP  # type: ignore
+    fmp      = CatalystFMP(fmp_key)
+    all_rows: list[dict] = []
+    today_s  = today.isoformat()
+
+    for batch_start in range(0, 52, 13):
+        batch   = weeks[batch_start:batch_start + 13]
+        results = await asyncio.gather(
+            *[fmp.earnings_calendar(f, t) for f, t in batch],
+            return_exceptions=True,
+        )
+        for res in results:
+            if isinstance(res, list):
+                all_rows.extend(res)
+
+    # ── Filter to portfolio symbols with a future/today date ─────────────────
+    filtered = [
+        row for row in all_rows
+        if (row.get("symbol") or "").upper() in port_syms
+        and (row.get("date") or "") >= today_s
+    ]
+
+    # ── Deduplicate: one row per symbol, keep earliest upcoming date ──────────
+    best: dict[str, dict] = {}
+    for row in filtered:
+        sym = (row.get("symbol") or "").upper()
+        if sym not in best or (row.get("date") or "") < (best[sym].get("date") or ""):
+            best[sym] = row
+
+    # ── Build response — sort by date asc ────────────────────────────────────
+    earnings = [
+        {
+            "symbol":           sym,
+            "date":             row.get("date"),
+            "eps_estimate":     _safe_f(row.get("epsEstimated")),
+            "revenue_estimate": _safe_f(row.get("revenueEstimated")),
+            "company_name":     row.get("name") or row.get("companyName") or None,
+        }
+        for sym, row in sorted(best.items(), key=lambda x: x[1].get("date") or "")
+    ]
+
+    cache.set(cache_key, earnings, 600)   # 10 min
+
+    print(
+        f"[pfull_year] portfolio={len(port_syms)} fmp_rows={len(all_rows)} "
+        f"filtered={len(filtered)} deduped={len(earnings)} hash={sym_hash}"
+    )
+    return {
+        "earnings":       earnings,
+        "portfolioCount": len(port_syms),
+        "source":         "fmp",
+        "cacheKey":       cache_key,
+    }
