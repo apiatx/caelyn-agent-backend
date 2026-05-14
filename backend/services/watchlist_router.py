@@ -303,8 +303,14 @@ async def get_endpoint():
 
 @router.delete("")
 async def delete_endpoint():
-    """Clear the most recent watchlist."""
-    return clear_watchlist()
+    """Clear the most recent watchlist and invalidate earnings cache."""
+    result = clear_watchlist()
+    try:
+        from services.user_earnings_service import invalidate_user_earnings  # type: ignore
+        invalidate_user_earnings("watchlist")
+    except Exception as _e:
+        print(f"[watchlist-delete] earnings invalidation skipped: {_e}")
+    return result
 
 
 # ── Stock Deep-Dive ─────────────────────────────────────────────────────────
@@ -992,5 +998,11 @@ async def stock_detail_by_id_endpoint(watchlist_id: str, ticker: str):
 
 @router.delete("/{watchlist_id}")
 async def delete_by_id_endpoint(watchlist_id: str):
-    """Delete a specific watchlist."""
-    return clear_watchlist(watchlist_id)
+    """Delete a specific watchlist and invalidate earnings cache."""
+    result = clear_watchlist(watchlist_id)
+    try:
+        from services.user_earnings_service import invalidate_user_earnings  # type: ignore
+        invalidate_user_earnings("watchlist")
+    except Exception as _e:
+        print(f"[watchlist-delete-id] earnings invalidation skipped: {_e}")
+    return result

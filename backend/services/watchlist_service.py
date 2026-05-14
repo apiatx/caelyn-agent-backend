@@ -107,20 +107,31 @@ def save_watchlist(
     saved_at = datetime.now(timezone.utc).isoformat()
 
     # Try PostgreSQL first (survives redeploys)
+    neon_ok = False
     try:
         from data.pg_storage import watchlist_write, is_available
         if is_available():
-            ok = watchlist_write(watchlist_id, name, csv_data, analysis, tickers)
-            if ok:
-                print(f"[Watchlist] \u2705 Saved '{name}' (id={watchlist_id}, {len(tickers)} tickers) to PostgreSQL")
-                return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers), "watchlist_id": watchlist_id, "name": name}
+            neon_ok = watchlist_write(watchlist_id, name, csv_data, analysis, tickers)
+            if neon_ok:
+                print(f"[Watchlist] ✅ Saved '{name}' (id={watchlist_id}, {len(tickers)} tickers) to PostgreSQL")
     except Exception as e:
         print(f"[Watchlist] PostgreSQL save failed ({e}), falling back to JSON")
 
-    # Fallback: JSON file (single store, overwrites)
-    store = {"id": watchlist_id, "name": name, "tickers": tickers, "csv_data": csv_data, "analysis": analysis, "saved_at": saved_at}
-    _write_store(store)
-    print(f"[Watchlist] Saved '{name}' (id={watchlist_id}) to JSON file")
+    if not neon_ok:
+        # Fallback: JSON file (single store, overwrites)
+        store = {"id": watchlist_id, "name": name, "tickers": tickers, "csv_data": csv_data, "analysis": analysis, "saved_at": saved_at}
+        _write_store(store)
+        print(f"[Watchlist] Saved '{name}' (id={watchlist_id}) to JSON file")
+
+    # Invalidate watchlist earnings cache so the Earnings Calendar resyncs
+    # with the new/updated symbol set on the next request.
+    try:
+        from services.user_earnings_service import invalidate_user_earnings  # type: ignore
+        invalidate_user_earnings("watchlist")
+        print(f"[Watchlist] earnings cache invalidated for universe=watchlist")
+    except Exception as _inv_e:
+        print(f"[Watchlist] earnings cache invalidation skipped: {_inv_e}")
+
     return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers), "watchlist_id": watchlist_id, "name": name}
 
 

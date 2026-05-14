@@ -1,0 +1,173 @@
+Test and verify dynamic Watchlist + Portfolio earnings calendar syncing.
+
+Backend repo:
+apiatx/caelyn-agent-backend
+
+Goal:
+Prove the Calendar → Earnings → Watchlist and Portfolio toggles are dynamically driven by the current saved Watchlist and Portfolio holdings, not hardcoded/static/stale ticker lists.
+
+Important:
+Watchlist and Portfolio earnings toggles should update when the user changes the Watchlist page or Portfolio page.
+
+Do not redesign anything.
+Do not change All toggle.
+Do not change frontend unless this backend test proves the backend is correct and frontend still fails.
+
+Test requirements:
+
+1. Identify source of truth
+Confirm the exact source used by:
+- Watchlist page saved tickers
+- Portfolio page saved holdings/tickers
+- Earnings Calendar scope=watchlist loader
+- Earnings Calendar scope=portfolio loader
+
+Print:
+{
+  sourceName,
+  symbols,
+  count
+}
+
+Assertions:
+watchlist_earnings_loader_symbols == watchlist_page_symbols
+portfolio_earnings_loader_symbols == portfolio_page_symbols
+
+2. Verify cache invalidation triggers
+Find the save/update/delete flows for:
+- Watchlist updates/uploads
+- Portfolio holdings add/edit/delete
+
+Confirm each one invalidates the correct earnings cache:
+- universe/scope = "watchlist"
+- universe/scope = "portfolio"
+
+If missing, add invalidation.
+
+Required behavior:
+- When Watchlist changes, only watchlist earnings cache invalidates.
+- When Portfolio changes, only portfolio earnings cache invalidates.
+- All curated earnings cache should not be affected.
+- Watchlist change should not invalidate Portfolio unless shared code requires harmless global invalidation.
+
+3. Dynamic Watchlist test
+Use a safe test symbol that has an upcoming earnings event in the backend FMP window if possible.
+
+A. Capture current Watchlist symbols:
+- saved watchlist symbols
+- Calendar earnings scope=watchlist returned symbols
+
+B. Add a test ticker to the saved Watchlist source using the same endpoint/flow the Watchlist page uses.
+
+C. Confirm:
+- Watchlist source now includes the test ticker.
+- Watchlist earnings cache was invalidated.
+- Next request to week/month scope=watchlist reloads or resyncs from user_earnings_service.
+- If the test ticker has earnings in the forward window, it appears in Calendar Earnings Watchlist.
+- If it does not have earnings, it is absent from events, but the symbol loader still includes it.
+
+D. Remove the test ticker.
+Confirm:
+- Watchlist source no longer includes it.
+- Watchlist earnings cache invalidates again.
+- Calendar Earnings Watchlist no longer includes that ticker in any returned events.
+
+Strict assertion after every step:
+returned_watchlist_event_symbols - current_saved_watchlist_symbols == empty set
+
+4. Dynamic Portfolio test
+Use a safe test symbol that has an upcoming earnings event if possible.
+
+A. Capture current Portfolio symbols:
+- saved Portfolio page holdings from Neon
+- Calendar earnings scope=portfolio returned symbols
+
+B. Add a test ticker to Portfolio using the same endpoint/flow the Portfolio page uses.
+
+C. Confirm:
+- Portfolio source now includes the test ticker.
+- Portfolio earnings cache was invalidated.
+- Next request to week/month scope=portfolio reloads or resyncs.
+- If the ticker has upcoming earnings in the forward window, it appears in Calendar Earnings Portfolio.
+- If it does not have earnings, it is absent from events, but the symbol loader still includes it.
+
+D. Delete the test ticker.
+Confirm:
+- Portfolio source no longer includes it.
+- Portfolio earnings cache invalidates again.
+- Calendar Earnings Portfolio no longer includes it.
+
+Strict assertion after every step:
+returned_portfolio_event_symbols - current_saved_portfolio_symbols == empty set
+
+5. Validate all date views after mutation
+After adding/removing test symbols, test:
+
+Watchlist:
+- day-clean?scope=watchlist
+- week-clean?scope=watchlist
+- week-clean next week?scope=watchlist
+- month-all?scope=watchlist
+- month-curated?scope=watchlist
+
+Portfolio:
+- day-clean?scope=portfolio
+- week-clean?scope=portfolio
+- week-clean next week?scope=portfolio
+- month-all?scope=portfolio
+- month-curated?scope=portfolio
+
+Each route must:
+- use current saved symbols
+- have zero leakage
+- not use hardcoded/stale symbols
+- not fall back to All
+
+6. Cache proof
+For each universe:
+- before mutation, request twice:
+  - first may refresh or hit cache
+  - second should be cache hit
+- after mutation:
+  - cache should be invalidated or symbol-hash mismatch should force refresh
+- after refresh:
+  - repeat request should be cache hit again
+
+Log:
+{
+  universe,
+  symbolsHashBefore,
+  symbolsHashAfter,
+  cacheStatus,
+  fmpCallsUsed,
+  eventCount
+}
+
+7. Verify no legacy/static data
+Search for hardcoded/static symbol lists used by watchlist/portfolio earnings:
+- demo symbols
+- local JSON fallback
+- portfolio_holdings_default.json
+- portfolio_holdings.json
+- watchlist demo data
+- default portfolios
+- cached terminal portfolio
+- stale file globbing
+
+If any scope=watchlist or scope=portfolio earnings path uses these instead of the current saved source, fix it.
+
+8. Regression checks
+Confirm:
+- All toggle unchanged
+- Watchlist still works after Portfolio mutation
+- Portfolio still works after Watchlist mutation
+- Portfolio page CRUD still works
+- Watchlist page save/upload still works
+
+9. Final report
+Return a table:
+
+Universe | Action | Source Count Before | Source Count After | Cache Invalidated | Events Updated | Leakage | Result
+
+Success definition:
+Changing the saved Watchlist or Portfolio page assets changes the symbol source used by Calendar Earnings Watchlist/Portfolio. The earnings cache invalidates/resyncs correctly, and no stale/hardcoded symbols appear.
