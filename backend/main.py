@@ -5783,6 +5783,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
         return {
             "type": "chat",
             "analysis": "",
+            "message": "No holdings to review. Add some positions to your portfolio first.",
             "structured": {
                 "display_type": "chat",
                 "message": "No holdings to review. Add some positions to your portfolio first.",
@@ -5792,7 +5793,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
     @traceable(name="err_response")
     def _err_response(msg):
         return JSONResponse(status_code=200, content={
-            "type": "chat", "analysis": "",
+            "type": "chat", "analysis": "", "message": msg,
             "structured": {"display_type": "chat", "message": msg},
         })
 
@@ -6162,16 +6163,20 @@ IMPORTANT: Return plain text analysis (not JSON). Be formatted with markdown hea
                     clean = clean.split("\n", 1)[1].rsplit("```", 1)[0].strip()
                 parsed = _json.loads(clean)
                 if "structured" in parsed:
+                    parsed.setdefault("message", parsed["structured"].get("message", response_text))
                     return parsed
+                top_msg = parsed.get("message", response_text)
                 return {
                     "type": "chat",
-                    "analysis": parsed.get("message", response_text),
+                    "analysis": top_msg,
+                    "message": top_msg,
                     "structured": parsed,
                 }
             except Exception:
                 return {
                     "type": "chat",
                     "analysis": response_text,
+                    "message": response_text,
                     "structured": {
                         "display_type": "chat",
                         "message": response_text,
