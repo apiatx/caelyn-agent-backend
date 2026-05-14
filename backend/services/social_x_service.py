@@ -71,7 +71,7 @@ _SA_BUZZ_MOMENTUM: frozenset[str] = frozenset({"Accelerating", "Rising"})  # kep
 _FA_PRIOR_PRESENCE_THRESHOLD: float = 0.30
 
 # FA: hard recency cutoff in days (mentions older than this are not "fresh alpha")
-_FA_RECENCY_CUTOFF: int = 14
+_FA_RECENCY_CUTOFF: int = 10
 
 # SA: single-snapshot accel_ratio fallback (used when history has < 4d of spread)
 _SA_ACCEL_RATIO_MIN: float = 1.20
@@ -113,8 +113,8 @@ _FA_SOURCE_ACCOUNTS: frozenset[str] = frozenset({
 })
 
 # Maximum recency in days for a mention to qualify for Freshest Alpha.
-# Mentions older than this are ignored regardless of account.
-_FA_MAX_RECENCY_DAYS: int = 5
+# 24-hour window: recency_days ≤ 1 (0 = today, 1 = yesterday / within 24 h).
+_FA_MAX_RECENCY_DAYS: int = 1
 
 # Recency decay weights for the 0–5 day window.
 # More recent = higher weight; anything beyond _FA_MAX_RECENCY_DAYS is dropped.
@@ -684,9 +684,9 @@ def _build_fa_from_mention_data(
                 continue
 
             rd_raw       = m.get("recency_days")
-            recency_days = int(rd_raw) if rd_raw is not None else 30
+            recency_days = int(rd_raw) if rd_raw is not None else 10
             recency_days = max(0, min(recency_days, 365))
-            if recency_days > 21:
+            if recency_days > 10:
                 continue
 
             fa_boost  = _fa_recency_boost(recency_days)
@@ -908,9 +908,7 @@ def _build_theme_leadership(raw: dict) -> dict:
 _SA_WINDOWS: list[tuple[str, int]] = [
     ("w3",  3),
     ("w7",  7),
-    ("w14", 14),
-    ("w30", 30),
-    ("w90", 90),
+    ("w10", 10),   # full 10-day lookback window (replaces w14/w30/w90)
 ]
 
 
@@ -924,14 +922,14 @@ def _sa_consensus_strength(account_count: int, accel_score: float) -> str:
     return "Low"
 
 
-def _sa_buzz_trend(slope_7_to_3: float, slope_14_to_7: float, w3_vs_w14: float = 0.0) -> str:
-    if slope_7_to_3 >= 1.5 and slope_14_to_7 >= 1.2:
+def _sa_buzz_trend(slope_7_to_3: float, slope_10_to_7: float, w3_vs_w10: float = 0.0) -> str:
+    if slope_7_to_3 >= 1.5 and slope_10_to_7 >= 1.2:
         return "Accelerating"
-    if w3_vs_w14 >= 0.6 and slope_14_to_7 >= 0.6:
+    if w3_vs_w10 >= 0.6 and slope_10_to_7 >= 0.6:
         return "Accelerating"
-    if slope_7_to_3 >= 1.2 or w3_vs_w14 >= 0.7:
+    if slope_7_to_3 >= 1.2 or w3_vs_w10 >= 0.7:
         return "Rising"
-    if slope_7_to_3 >= 0.8 or w3_vs_w14 >= 0.35:
+    if slope_7_to_3 >= 0.8 or w3_vs_w10 >= 0.35:
         return "Stable"
     return "Fading"
 
@@ -1026,7 +1024,7 @@ def _build_sa_from_mention_data(
             if ticker not in buckets:
                 buckets[ticker] = {
                     "ticker":      ticker,
-                    "w3": 0.0, "w7": 0.0, "w14": 0.0, "w30": 0.0, "w90": 0.0,
+                    "w3": 0.0, "w7": 0.0, "w10": 0.0,
                     "total":       0.0,
                     "accounts":    set(),
                     "min_recency": 9999,
@@ -1047,43 +1045,38 @@ def _build_sa_from_mention_data(
 
     results: list[dict] = []
     for ticker, b in buckets.items():
-        w3, w7, w14, w30, w90 = b["w3"], b["w7"], b["w14"], b["w30"], b["w90"]
+        w3, w7, w10 = b["w3"], b["w7"], b["w10"]
 
-        if w14 <= 0:
+        if w10 <= 0:
             continue
 
-        # SA requires prior base: must have activity outside the freshest window
-        # (w30 > 0 means there were mentions older than 7 days — established presence)
-        if w30 == 0 and len(b["accounts"]) == 1:
+        # SA requires signal beyond the freshest 3-day window — thin single-account
+        # data with nothing in the 4-10 day range is not meaningful acceleration.
+        if w7 == 0 and len(b["accounts"]) == 1:
             continue
 
-        slope_7_to_3   = w3  / (w7  + 0.01)
-        slope_14_to_7  = w7  / (w14 + 0.01)
-        slope_30_to_14 = w14 / (w30 + 0.01)
+        slope_7_to_3  = w3  / (w7  + 0.01)
+        slope_10_to_7 = w7  / (w10 + 0.01)
 
-        base_intensity = w3 * 4.0 + w7 * 2.0 + w14 * 1.0 + w30 * 0.5
+        base_intensity = w3 * 4.0 + w7 * 2.0 + w10 * 1.0
 
         accel_bonus = 0.0
-        if slope_7_to_3   > 0.5:
+        if slope_7_to_3  > 0.5:
             accel_bonus += 0.3 * min(slope_7_to_3, 2.0)
-        if slope_14_to_7  > 0.5:
-            accel_bonus += 0.2 * min(slope_14_to_7, 2.0)
-        if slope_30_to_14 > 0.5:
-            accel_bonus += 0.1 * min(slope_30_to_14, 2.0)
+        if slope_10_to_7 > 0.5:
+            accel_bonus += 0.2 * min(slope_10_to_7, 2.0)
 
         n_accts      = len(b["accounts"])
         breadth_mult = 1.0 + min(0.15 * (n_accts - 1), 0.45)
         final_accel  = base_intensity * (1.0 + accel_bonus) * breadth_mult
 
         parts: list[str] = []
-        if slope_7_to_3 >= 1.5 and slope_14_to_7 >= 1.2:
+        if slope_7_to_3 >= 1.5 and slope_10_to_7 >= 1.2:
             parts.append("Rapidly accelerating — stronger each window")
-        elif slope_14_to_7 >= 1.2:
-            parts.append("Building momentum (last 7d > 14d baseline)")
+        elif slope_10_to_7 >= 1.2:
+            parts.append("Building momentum (last 7d > 10d baseline)")
         elif slope_7_to_3 >= 1.2:
             parts.append("Late surge — 3d hotter than 7d")
-        if w14 > 0 and w30 > 0 and w14 / (w30 + 0.01) > 0.8:
-            parts.append("14d activity dominates 30d baseline")
         if n_accts >= 3:
             parts.append(f"{n_accts} accounts in consensus")
         elif n_accts == 2:
@@ -1093,8 +1086,8 @@ def _build_sa_from_mention_data(
         prior        = prior_br_by_ticker.get(ticker)
         prior_acct   = prior["bullish_account_count"] if prior else 0
         norm_score   = min(round(final_accel * 2.0), 100)
-        w3_vs_w14    = w3 / (w14 + 0.01)
-        buzz_trend   = _sa_buzz_trend(slope_7_to_3, slope_14_to_7, w3_vs_w14)
+        w3_vs_w10    = w3 / (w10 + 0.01)
+        buzz_trend   = _sa_buzz_trend(slope_7_to_3, slope_10_to_7, w3_vs_w10)
         con_strength = _sa_consensus_strength(n_accts, final_accel)
         name, tv_sym = _name_lookup(current_snap).get(ticker, ("", ""))
 
@@ -1115,13 +1108,13 @@ def _build_sa_from_mention_data(
             "why_now": "; ".join(parts) if parts else "Sustained momentum",
             "accel_score":               round(final_accel, 3),
             "window_scores": {
-                "w3":  round(w3,  3), "w7":  round(w7,  3),
-                "w14": round(w14, 3), "w30": round(w30, 3),
-                "w90": round(w90, 3),
+                "w3":  round(w3,  3),
+                "w7":  round(w7,  3),
+                "w10": round(w10, 3),
             },
             "slope_7_to_3":              round(slope_7_to_3,  2),
-            "slope_14_to_7":             round(slope_14_to_7, 2),
-            "w3_vs_w14":                 round(w3_vs_w14, 2),
+            "slope_10_to_7":             round(slope_10_to_7, 2),
+            "w3_vs_w10":                 round(w3_vs_w10, 2),
             "account_count":             n_accts,
             "min_recency_days":          b["min_recency"] if b["min_recency"] < 9999 else None,
             "catalysts":                 list(dict.fromkeys(b["catalysts"]))[:5],
@@ -1215,11 +1208,11 @@ def _build_sa_from_backend_ranked(
             "why_now": ("; ".join(parts) if parts else "Sustained and strengthening momentum"),
             "accel_score":               round(final_score, 3),
             "window_scores": {
-                "w3": 0.0, "w7": 0.0, "w14": 0.0, "w30": 0.0, "w90": 0.0,
+                "w3": 0.0, "w7": 0.0, "w10": 0.0,
             },
             "slope_7_to_3":  0.0,
-            "slope_14_to_7": 0.0,
-            "w3_vs_w14":     0.0,
+            "slope_10_to_7": 0.0,
+            "w3_vs_w10":     0.0,
             "account_count":             accts,
             "min_recency_days":          rec,
             "catalysts":                 (bs.get("catalyst_list") or [])[:5],
