@@ -1,0 +1,168 @@
+So my theme performance section on the home page "Theme Performance
+sub-theme leaders
+View more
+Sub-theme · leaders
+breadth
+1D
+Cybersecurity
+PANW
+NET
+CRWD
++2
+positive breadth, leaders pulling
+breadth
+100%
+1D
++2.87%
+Datacenter / Compute
+IREN
+MARA
+CLSK
++9
+positive breadth, leaders pulling
+breadth
+92%
+1D
++2.72%
+Aerospace / Defense
+ASTS
+KTOS
+RKLB
++9
+positive breadth, leaders pulling
+breadth
+85%
+1D
++2.05%
+Robotics / Automation
+AEVA
+OSS
+PATH
++4
+positive breadth, leaders pulling
+breadth
+50%
+1D
++1.73%
+Photonics / Lasers
+POET
+OPTX
+GLW
++8
+mixed — modest positive bias
+breadth
+50%
+1D
++1.13%
+Power / Cooling
+NVTS
+AMPX
+VRT
++4
+mixed — modest positive bias
+breadth
+50%
+1D
++1.08%
+AI Networking
+ANET
+MRVL
+SMCI
++6
+mixed — modest positive bias
+breadth
+50%
+1D
++0.96%
+Nuclear / Grid
+BE
+EQT
+TPL
++4
+mixed — modest positive bias
+breadth
+75%
+1D
++0.19%
+Substrates / Packaging
+INTT
+TSEM
+PLAB
++14
+consolidating
+breadth
+44%
+1D
+-0.13%
+Semi Materials
+KLAC
+AMAT
+ON
++11
+consolidating
+breadth
+53%
+1D
+-0.13%
+Data Infra / Storage
+MDB
+EQIX
+WDC
++3
+broad weakness
+breadth
+29%
+1D
+-0.73%
+Memory / Storage
+NTAP
+WDC
+STX
++2
+broad weakness" is displaying it's own theme buckets calculated differently than the Themes page. Are these themes pulling from the "Social" page or are they hardcoded with their own hardcoded tickers? I like the themes in the theme performance page and probably does a better job the stocks I actually want to track for each theme rather than the Themes page, however, I don't know how to consolidate this. Before you change anything, can you give me a plan here that I either approve, edit or deny before making any changes? I just need to understand how this section works compared to the Themes page themes, maybe from Watchlist themes on the Watchlist page? Give me the rundown and let me know if I need to consult the backend fastapi server agent instead
+
+
+Show more
+2 minutes ago
+
+Analyzing Theme Performance data sourcing
+Let me trace both the Home page Theme Performance section and the Themes page data sources simultaneously:
+
+
+15 actions
+I have everything I need to give you a clear picture. No changes made — here's the full rundown:
+
+How "Theme Performance" on the Home page works
+Data source: 100% from your FastAPI backend. The Express proxy calls SR_URL/api/home/dashboard, and the backend returns sub_theme_performance — a pre-computed list of sub-theme buckets. The frontend just renders what it receives. Nothing is hardcoded in the React code.
+
+What the backend sends per row:
+
+sub_theme — the bucket name (e.g. "Cybersecurity", "Datacenter / Compute")
+leader_symbols — which tickers are leaders within that bucket (e.g. PANW, NET, CRWD)
+leader_count — total tickers tracked in that bucket
+avg_change_1d — average 1D change across all tickers in the bucket
+breadth_score — % of tickers in the bucket that are positive
+pattern_summary — the text description ("positive breadth, leaders pulling" etc.)
+So who decides which tickers go in "Cybersecurity"? That's entirely in your FastAPI backend — either a hardcoded mapping or ML-derived grouping. The frontend has no say in it.
+
+How the fallback "ThemeRow" works (you likely never see it)
+If the backend returns no sub_theme_performance, the home page falls back to theme_performance.themes — a coarser sector-rotation view (XLK, XLE, etc. ETF-level). The "View more" link on both goes to /app/stocks/sectors. You're always seeing the sub-theme view since your backend is returning it.
+
+Is there a separate "Themes page"?
+There is no dedicated /app/themes page in the frontend codebase. The closest things are:
+
+/app/stocks/sectors — the Sectors page, which uses ETF-level sector rotation from SR_URL/api/sector-rotation/dashboard. Broad macro buckets (XLK, XLE, XLF), not the fine-grained sub-themes
+The Watchlist page has theme-based grouping, but those themes are assigned to your watchlist tickers by the FastAPI backend's ticker-to-theme mapping
+The core mismatch you're noticing
+Home "Theme Performance"	Watchlist themes	Sectors page
+Ticker universe	FastAPI-curated list per sub-theme	Your watchlist tickers, tagged by FastAPI	ETF proxies (SPY, QQQ, XLK…)
+Granularity	Fine-grained (Photonics, Substrates, etc.)	Same fine-grained tags	Coarse (11 GICS sectors)
+Computed by	FastAPI /api/home/dashboard	FastAPI watchlist endpoints	FastAPI /api/sector-rotation/
+My recommendation before you decide anything
+The ticker lists in the sub-theme buckets on the Home page are owned by the FastAPI backend — this is the agent's brain. Before deciding whether to consolidate, you should ask the FastAPI backend agent one specific question:
+
+"What ticker lists power the sub_theme_performance buckets returned by /api/home/dashboard? Are those lists hardcoded, and are they the same lists used when the Watchlist page shows theme groupings for my watchlist tickers?"
+
+If the answer is "yes, same lists" — then the Watchlist themes and Home theme buckets already share the same source, and the Home page is just showing you aggregate stats across those buckets regardless of whether you own those stocks. That's actually a useful feature — it shows you the theme trend even for tickers you don't hold.
+
+If the answer is "different lists" — that's where consolidation would make sense.
