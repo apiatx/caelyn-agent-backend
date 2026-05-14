@@ -5751,6 +5751,10 @@ async def portfolio_relative_volume(
 
     syms = [t.strip().upper() for t in tickers.split(",") if t.strip()][:25]
     if not syms:
+        # Auto-read from the canonical portfolio store (Neon DB)
+        from data.portfolio_store import load_active_holdings as _load_h
+        syms = [h["ticker"].upper() for h in _load_h() if h.get("ticker")][:25]
+    if not syms:
         return {"tickers": {}}
 
     _ck = f"portfolio:relvol:{','.join(sorted(syms))}"
