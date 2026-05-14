@@ -1,0 +1,29 @@
+ still do not see the CUSTOM tickers/those four themes in the Market Performance section of the Themes page. And I only see those 4 custom themes in the Theme Performance section of the Home page when this section should not have it's own data path from the backend, it should simply be displaying the same exact data/tickers/themes from the Market Performance tab of the Themes page.......
+
+5 minutes ago
+
+Planning home page data integration (34 seconds)
+I understand the frustration. The user wants one source of truth: the Home page Theme Performance should read from the SAME endpoint as the Themes page (/api/themes/relative-strength), filtering to proxy_type === "custom". Let me implement that now and also check the current home page Theme Performance render block:
+
+
+3 actions
+Now I have the full picture. The fix is architectural: wire the home page Theme Performance to the same query as the Themes page (/api/themes/relative-strength, filtered to proxy_type === "custom"). That way they share one cache and one data source forever. Let me implement this now:
+
+
+2 actions
+I have everything I need. Two edits to home.tsx: add the shared themes query, then replace the Theme Performance render block to use it:
+
+
+2 actions
+Now replace the Theme Performance render block to use the shared themes query:
+
+
+4 actions
+Hot reloaded clean — no errors in the console. Here's the precise state of both changes:
+
+Home page — architecture fixed:
+The Theme Performance section no longer has its own separate data path. It now fetches directly from /api/themes/relative-strength using the exact same React Query cache key (["themes-unified", "themes"]) as the Themes page. It filters to proxy_type === "custom". Both pages share one live source permanently — adding or removing a custom theme from the backend updates both automatically.
+
+What you'll see right now: "No custom themes available" — because the /api/themes/relative-strength endpoint still returns 55 themes with zero having proxy_type === "custom". The 4 new themes (AI Networking, Photonics/Lasers, Power/Cooling, Substrates/Packaging) are confirmed not in that endpoint yet.
+
+The frontend is fully wired and waiting. The one remaining task is for the backend agent to add those 4 themes to /api/themes/relative-strength with proxy_type: "custom". Once they do, both the Themes page CUSTOM badges and the Home page Theme Performance card will populate simultaneously with no further frontend work.

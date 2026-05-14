@@ -835,7 +835,10 @@ async def _build_theme_row(
             all_perf[frame] = ret
 
     if tf_ret is None and not any(v is not None for v in all_perf.values()):
-        return None
+        if meta.get("proxy_type") != "custom":
+            return None
+        # Custom theme: still include row even when price data is unavailable
+        # (e.g. private-fund proxy like VCX).  Performance fields will be None.
 
     # ── Representative price ───────────────────────────────────────────────────
     lead_sym   = None
