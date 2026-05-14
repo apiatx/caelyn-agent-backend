@@ -97,6 +97,7 @@ _TICKER_HISTORY_MAX_OBS = 10   # keep last N scored observations per ticker
 _CACHE_TTL_SECONDS = 23 * 3600  # 23 hours — refreshed once daily at noon; fresh all day
 _BATCH_SIZE = 8                 # accounts per Phase-1 batch (focused x_search per group)
 _PHASE1_CONCURRENCY = 2         # max concurrent Grok batch calls
+_PHASE1_TIMEOUT = 120.0         # seconds — 8-handle x_search batches routinely take 60-70 s
 
 # ── Section-level validation minimums ────────────────────────────────────────
 # A new snapshot must clear these thresholds per section before the cache is
@@ -469,7 +470,7 @@ async def _fetch_batch(
             prompt=prompt,
             raw_mode=True,
             use_deep_model=False,
-            timeout=60.0,
+            timeout=_PHASE1_TIMEOUT,
             x_search_config={"allowed_x_handles": handles, "from_date": since_date},
         )
     except Exception as e:
@@ -479,6 +480,13 @@ async def _fetch_batch(
     text = ""
     if isinstance(result, dict):
         text = result.get("_raw_analysis", "") or result.get("error", "")
+
+    if text and text.startswith("xAI"):
+        print(
+            f"[X_CONSENSUS] Batch {batch_idx} ({handles[0]}…) API/timeout error: {text[:120]}"
+        )
+        return ""
+
     print(
         f"[X_CONSENSUS] Batch {batch_idx}: {len(handles)} accounts "
         f"({handles[0]}…) → {len(text):,} chars"
@@ -833,7 +841,7 @@ async def _run_refresh(data_service) -> Optional[dict]:
     combined_data: list[str] = []            # raw text for Phase-2 synthesis
 
     for idx, (batch_accounts, text) in enumerate(zip(batches, batch_texts), 1):
-        if not text or text.startswith("xAI"):
+        if not text:
             print(f"[X_CONSENSUS] Batch {idx}: empty/error — skipping")
             continue
         handle_labels = ", ".join(f"@{a['handle']}" for a in batch_accounts)
