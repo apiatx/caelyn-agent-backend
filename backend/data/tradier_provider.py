@@ -306,48 +306,78 @@ class TradierProvider:
 
     @traceable(name="tradier.get_quotes")
     async def get_quotes(self, symbols: list[str]) -> list[dict]:
-        """Get real-time quotes for equities or options (pass OCC symbols for options)."""
+        """
+        Get real-time quotes for equities or options (pass OCC symbols for options).
+
+        Uses per-ticker caching (tradier:quote:sym:{SYM}) so quotes fetched by ANY
+        part of the site — watchlist, screener, portfolio, caelyn-terminal — are
+        shared with every other caller without an extra Tradier API call.
+        Only tickers not already in cache are batched into a single Tradier request.
+        """
         if not symbols:
             return []
 
-        symbols_str = ",".join(s.upper() for s in symbols)
-        cache_key = f"tradier:quotes:{symbols_str[:80]}"
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return cached
+        syms_upper = [s.upper() for s in symbols]
 
-        data = await self._get("/markets/quotes", {"symbols": symbols_str, "greeks": "false"})
+        # ── Check per-ticker cache first ────────────────────────────────────
+        result: list[dict] = []
+        missing: list[str] = []
+        for sym in syms_upper:
+            hit = cache.get(f"tradier:quote:sym:{sym}")
+            if hit is not None:
+                result.append(hit)
+            else:
+                missing.append(sym)
+
+        if not missing:
+            return result   # 100% cache hit — zero Tradier calls
+
+        # ── Batch-fetch only the tickers not in cache ───────────────────────
+        data = await self._get(
+            "/markets/quotes",
+            {"symbols": ",".join(missing), "greeks": "false"},
+        )
         if not data:
-            return []
+            return result   # Return whatever we already had from cache
 
         quotes = data.get("quotes", {})
         quote_list = quotes.get("quote", []) if isinstance(quotes, dict) else []
         if isinstance(quote_list, dict):
-            quote_list = [quote_list]
+            quote_list = [quote_list]  # single-ticker response is a dict, not list
 
-        result = []
         for q in quote_list:
-            result.append({
-                "symbol": q.get("symbol"),
-                "description": q.get("description"),
-                "last": _safe_float(q.get("last")),
-                "bid": _safe_float(q.get("bid")),
-                "ask": _safe_float(q.get("ask")),
-                "change": _safe_float(q.get("change")),
+            sym = q.get("symbol")
+            if not sym:
+                continue
+            entry = {
+                "symbol":            sym,
+                "description":       q.get("description"),
+                "last":              _safe_float(q.get("last")),
+                "bid":               _safe_float(q.get("bid")),
+                "ask":               _safe_float(q.get("ask")),
+                "change":            _safe_float(q.get("change")),
                 "change_percentage": _safe_float(q.get("change_percentage")),
-                "volume": _safe_int(q.get("volume")),
-                "average_volume": _safe_int(q.get("average_volume")),
-                "open": _safe_float(q.get("open")),
-                "high": _safe_float(q.get("high")),
-                "low": _safe_float(q.get("low")),
-                "close": _safe_float(q.get("close")),
-                "prevclose": _safe_float(q.get("prevclose")),
-                "week_52_high": _safe_float(q.get("week_52_high")),
-                "week_52_low": _safe_float(q.get("week_52_low")),
-                "type": q.get("type"),  # "stock", "option", "etf"
-            })
+                "volume":            _safe_int(q.get("volume")),
+                "average_volume":    _safe_int(q.get("average_volume")),
+                "open":              _safe_float(q.get("open")),
+                "high":              _safe_float(q.get("high")),
+                "low":               _safe_float(q.get("low")),
+                "close":             _safe_float(q.get("close")),
+                "prevclose":         _safe_float(q.get("prevclose")),
+                "week_52_high":      _safe_float(q.get("week_52_high")),
+                "week_52_low":       _safe_float(q.get("week_52_low")),
+                "type":              q.get("type"),
+            }
+            cache.set(f"tradier:quote:sym:{sym}", entry, _QUOTE_TTL)
+            result.append(entry)
 
-        cache.set(cache_key, result, _QUOTE_TTL)
+        if missing:
+            print(
+                f"[TRADIER_QUOTES] requested={len(syms_upper)} "
+                f"cache_hits={len(syms_upper)-len(missing)} "
+                f"fetched={len(missing)} tickers={missing}"
+            )
+
         return result
 
     async def get_quote(self, symbol: str) -> dict | None:
