@@ -4751,6 +4751,16 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
     except Exception as _pf_sync_err:
         print(f"[portfolio-source-audit] earnings_sync_trigger_failed: {_pf_sync_err}")
 
+    # ── Patch full-year earnings cache (add new tickers, drop removed ones) ──
+    try:
+        from services.pfull_year_service import patch_pfull_cache as _patch_pfull
+        from config import FMP_API_KEY as _fmp_key_pfull
+        import asyncio as _aio2
+        _aio2.create_task(_patch_pfull(set(new_syms), _fmp_key_pfull or ""))
+        print(f"[portfolio-save] pfull_cache_patch_scheduled  symbols={new_syms[:5]}...")
+    except Exception as _pfull_err:
+        print(f"[portfolio-save] pfull_cache_patch_schedule_failed (non-fatal): {_pfull_err}")
+
     return {"success": True, "holdings_count": len(new_syms), "symbols": new_syms}
 
 
@@ -4825,6 +4835,16 @@ async def portfolio_sync(request: Request):
         _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
     except Exception:
         pass
+
+    # Patch full-year earnings cache (add new tickers, drop removed ones)
+    try:
+        from services.pfull_year_service import patch_pfull_cache as _patch_pfull_sync
+        from config import FMP_API_KEY as _fmp_key_sync
+        import asyncio as _aio_sync
+        _aio_sync.create_task(_patch_pfull_sync(set(symbols), _fmp_key_sync or ""))
+        print(f"[portfolio-sync] pfull_cache_patch_scheduled  count={len(symbols)}")
+    except Exception as _pfull_sync_err:
+        print(f"[portfolio-sync] pfull_cache_patch_schedule_failed (non-fatal): {_pfull_sync_err}")
 
     print(f"[portfolio-sync] saved  count={len(normalized)}  symbols={symbols[:25]}")
 

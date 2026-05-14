@@ -851,10 +851,10 @@ async def portfolio_full_year(
     if not port_syms:
         return {"earnings": [], "portfolioCount": 0, "source": "neon"}
 
-    # ── Endpoint-level cache (10 min, keyed by symbol-set hash) ──────────────
+    # ── Endpoint-level cache (90 days, fixed key — patched incrementally) ───
     from data.cache import cache  # type: ignore
-    sym_hash  = hashlib.md5(json.dumps(sorted(port_syms)).encode()).hexdigest()[:12]
-    cache_key = f"pfull:v1:{sym_hash}"
+    from services.pfull_year_service import PFULL_CACHE_KEY, PFULL_TTL  # type: ignore
+    cache_key = PFULL_CACHE_KEY
     hit = cache.get(cache_key)
     if hit is not None:
         return {"earnings": hit, "portfolioCount": len(port_syms),
@@ -910,11 +910,11 @@ async def portfolio_full_year(
         for sym, row in sorted(best.items(), key=lambda x: x[1].get("date") or "")
     ]
 
-    cache.set(cache_key, earnings, 600)   # 10 min
+    cache.set(cache_key, earnings, PFULL_TTL)   # 90 days
 
     print(
         f"[pfull_year] portfolio={len(port_syms)} fmp_rows={len(all_rows)} "
-        f"filtered={len(filtered)} deduped={len(earnings)} hash={sym_hash}"
+        f"filtered={len(filtered)} deduped={len(earnings)}"
     )
     return {
         "earnings":       earnings,
