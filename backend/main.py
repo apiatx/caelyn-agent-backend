@@ -510,6 +510,17 @@ try:
     print("[THEMES_RS] Router registered at /api/themes")
 except Exception as _themes_err:
     print(f"[THEMES_RS] Router unavailable (non-fatal): {_themes_err}")
+
+# ── Portfolio categorize-themes router (/api/portfolio/categorize-themes) ─────
+# LLM-powered classifier: assigns unclassified portfolio tickers to named
+# investment themes, persists to data/llm_theme_overrides.json, and invalidates
+# the terminal cache so the next load picks up the new theme assignments.
+try:
+    from routes.portfolio_categorize import router as _portfolio_cat_router
+    app.include_router(_portfolio_cat_router)
+    print("[PORTFOLIO_CAT] Router registered at /api/portfolio/categorize-themes")
+except Exception as _pcat_err:
+    print(f"[PORTFOLIO_CAT] Router unavailable (non-fatal): {_pcat_err}")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Screener Hub router (/api/screener-hub, /api/admin/screener-hub/*) ───────

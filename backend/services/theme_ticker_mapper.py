@@ -108,12 +108,98 @@ _THEME_META:       dict[str, dict] = {}  # theme_name → {etfs, reps, parent_se
 
 _built = False
 
+# ── LLM-classified overrides persistence ─────────────────────────────────────
+from pathlib import Path as _Path
+
+_LLM_OVERRIDES_PATH = _Path(__file__).parent.parent / "data" / "llm_theme_overrides.json"
+
+
+def _load_llm_overrides() -> dict[str, dict]:
+    """Load {TICKER: {display_name, theme_id, confidence}} from disk. Never raises."""
+    try:
+        if _LLM_OVERRIDES_PATH.exists():
+            import json as _j
+            return _j.loads(_LLM_OVERRIDES_PATH.read_text()) or {}
+    except Exception as _e:
+        print(f"[THEME_MAPPER] LLM overrides load error: {_e}")
+    return {}
+
+
+def _save_llm_overrides(overrides: dict[str, dict]) -> None:
+    """Persist overrides dict to disk. Never raises."""
+    try:
+        import json as _j
+        _LLM_OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _LLM_OVERRIDES_PATH.write_text(_j.dumps(overrides, indent=2))
+    except Exception as _e:
+        print(f"[THEME_MAPPER] LLM overrides save error: {_e}")
+
+
+def register_llm_classified_tickers(classifications: list[dict]) -> int:
+    """
+    Register LLM-classified {ticker, theme, confidence} entries into the live
+    in-memory index AND persist them to data/llm_theme_overrides.json so they
+    survive server restarts.
+
+    Returns the number of tickers successfully registered.
+    """
+    _build_index()   # ensure index is populated first
+
+    overrides = _load_llm_overrides()
+    registered = 0
+
+    for item in classifications:
+        sym        = (item.get("ticker") or "").upper().strip()
+        display    = (item.get("theme") or "").strip()
+        confidence = item.get("confidence") or "medium"
+        if not sym or not display:
+            continue
+
+        # Derive theme_id from display name or look it up from _THEME_META
+        meta      = _THEME_META.get(display, {})
+        theme_id  = meta.get("theme_id") or display.lower().replace(" ", "_").replace("/", "_")
+
+        # ── Update in-memory index (immediate effect on next terminal load) ──
+        _TICKER_TO_THEMES.setdefault(sym, [])
+        if display not in _TICKER_TO_THEMES[sym]:
+            _TICKER_TO_THEMES[sym].insert(0, display)   # highest priority
+
+        _TICKER_TO_THEME_ID[sym]       = theme_id
+        _TICKER_TO_CLASSIFICATION[sym] = "sub_theme"
+
+        # ── Update disk overrides (survives restarts) ─────────────────────────
+        overrides[sym] = {
+            "display_name": display,
+            "theme_id":     theme_id,
+            "confidence":   confidence,
+        }
+        registered += 1
+        print(f"[THEME_MAPPER] LLM override registered: {sym} → {display} ({confidence})")
+
+    _save_llm_overrides(overrides)
+    print(f"[THEME_MAPPER] {registered} LLM overrides saved to {_LLM_OVERRIDES_PATH}")
+    return registered
+
 
 def _build_index() -> None:
     global _built
     if _built:
         return
     _built = True
+
+    # ── Source -1: LLM-classified overrides (highest priority — user-triggered) ─
+    llm_overrides = _load_llm_overrides()
+    for raw_sym, meta in llm_overrides.items():
+        s          = raw_sym.upper()
+        display    = meta.get("display_name", "")
+        theme_id   = meta.get("theme_id", display.lower().replace(" ", "_").replace("/", "_"))
+        if not display:
+            continue
+        _TICKER_TO_THEMES.setdefault(s, [])
+        if display not in _TICKER_TO_THEMES[s]:
+            _TICKER_TO_THEMES[s].append(display)
+        _TICKER_TO_THEME_ID[s]       = theme_id
+        _TICKER_TO_CLASSIFICATION[s] = "sub_theme"
 
     # ── Source 0: Foreign/OTC alias map (highest priority — explicit overrides) ─
     for raw_sym, (display, theme_id) in _FOREIGN_ALIAS_MAP.items():

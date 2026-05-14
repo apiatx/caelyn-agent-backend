@@ -1,0 +1,86 @@
+Let me look at the current theme allocation structure and what the "Unclassified" bucket looks like in the data:
+
+
+3 actions
+Good data. The "Unclassified" bucket has fallback_used: true with 10 symbols FastAPI couldn't map to its thematic universe. The LLM categorization should:
+
+Run on FastAPI (it has your LLM/Claude access + thematic DB to write to)
+Express adds a thin proxy + clears the terminal cache on success
+Frontend shows the button + handles loading/success states
+Let me check what's already imported in the terminal page and where to insert the Express route:
+
+
+3 actions
+Now I have everything. Let me implement both parts simultaneously:
+
+
+5 actions
+Now implementing both parts in parallel — the Express proxy route and the full frontend integration:
+
+
+3 actions
+Now adding the state, handler, and the button itself in the themes allocation row:
+
+
+2 actions
+Now updating the themes allocData mapping to carry fallback_used + symbols, and the row rendering to show the button:
+
+
+5 actions
+App is running clean. Here are the complete instructions for your FastAPI backend agent:
+
+Instructions for FastAPI Backend Agent
+Goal: Create one new endpoint POST /api/portfolio/categorize-themes that uses an LLM to classify unclassified portfolio tickers into meaningful investment themes, then saves the results so they appear in the terminal's Asset Allocation → Themes tab on the next load.
+
+Context
+Your existing GET /api/caelyn-terminal endpoint returns theme_allocation[]. When a ticker isn't in your thematic universe, it falls into a bucket like {"name": "Unclassified", "fallback_used": true, "symbols": ["SIVEF","PENG","SLOIF","IQEPF",...]}. The user's portfolio currently has 10 such tickers. This endpoint takes that list, classifies each one via LLM, and persists the results so future theme_allocation responses place them in named theme buckets instead of "Unclassified".
+
+Endpoint spec
+POST /api/portfolio/categorize-themes
+Auth: X-API-Key header (existing key)
+Content-Type: application/json
+
+Request body:
+
+{
+  "tickers": ["SIVEF", "PENG", "SLOIF", "IQEPF", "NRGV", "SLNH", "P", "VPG", "SILC", "FPLSF"]
+}
+
+What the endpoint must do:
+
+For each ticker in the tickers array, look up what you know about it — company name, industry, sector, description. Use whatever data source you have (FMP, yFinance, or your existing quote/company info layer).
+
+Pass all tickers together to Claude (or your existing LLM) in a single prompt. The prompt should instruct the model to assign each ticker to the most appropriate investment theme from your existing thematic universe (the same themes already used for classified tickers like "Semiconductor Equipment", "Substrates / Packaging", "AI Networking", "Data Center Infrastructure", "Power / Cooling", "Robotics / Automation", etc.). If a ticker doesn't fit any existing theme, the model may propose a new theme name. Format the response as structured JSON.
+
+Save each {ticker → theme} mapping to your thematic database/store so that future calls to GET /api/caelyn-terminal will return these tickers under their new theme name rather than "Unclassified". This is the same store you use to build the thematic_universe classifications.
+
+Return a response showing what was classified:
+
+{
+  "classified": [
+    {"ticker": "SIVEF", "theme": "Compound Semiconductors", "confidence": "high"},
+    {"ticker": "PENG", "theme": "Power / Cooling", "confidence": "medium"},
+    {"ticker": "SLOIF", "theme": "Compound Semiconductors", "confidence": "high"}
+  ],
+  "unresolved": [],
+  "saved": true
+}
+
+Performance notes:
+
+This is a one-shot LLM call, not real-time — a 30-90 second response time is acceptable (the Express proxy has a 90s timeout)
+After this endpoint returns successfully, Express clears its terminal cache so the next page load pulls fresh theme data
+Acceptance test
+curl -X POST https://fast-api-server-trading-agent-aidanpilon.replit.app/api/portfolio/categorize-themes \
+  -H "X-API-Key: hippo_ak_7f3x9k2m4p8q1w5t" \
+  -H "Content-Type: application/json" \
+  -d '{"tickers": ["SIVEF", "PENG", "SLOIF", "IQEPF"]}'
+
+Should return HTTP 200 with "saved": true and each ticker assigned to a theme. On the next call to GET /api/caelyn-terminal, those tickers should appear under their assigned theme rather than "Unclassified".
+
+Your side is fully wired. The "CATEGORIZE" button appears on the Unclassified row in the Themes tab. When clicked it:
+
+Shows ··· while waiting (up to 90s)
+Shows ✓ DONE in green on success and auto-refreshes the terminal data
+Shows RETRY in red if the request fails
+The Express proxy clears the server-side cache so the refreshed terminal fetch gets the newly classified themes from FastAPI
