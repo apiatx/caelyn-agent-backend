@@ -42,65 +42,10 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 # ── Sub-theme taxonomy ─────────────────────────────────────────────────────
 # Curated ticker sets per niche sub-theme. Cross-referenced against live
 # Tradier quotes and the options LKG cache. Includes tickers from the user's
-# watchlist universe plus key additional names per theme.
-# Non-US tickers (symbol contains ":") are filtered before any API call.
-
-THEME_MAP: dict[str, list[str]] = {
-    # ── Tickers for themes WITH a THEME_RS_UNIVERSE entry are authoritative
-    # in the universe (candidate_symbols there). These lists are kept as
-    # fallback only and should mirror the universe entries.
-    "AI Networking": [
-        "ANET", "AVGO", "MRVL", "CRDO", "ALAB",
-    ],
-    "Photonics / Lasers": [
-        "COHR", "LITE", "AAOI", "FN", "SIVEF",
-    ],
-    "Substrates / Packaging": [
-        "TSM", "AMKR", "ASX", "IBIDF", "UMICF",
-    ],
-    "Power / Cooling": [
-        "VRT", "ETN", "GEV", "TT", "BE",
-    ],
-    # ── Themes below also exist in THEME_RS_UNIVERSE; tickers are overridden
-    # by candidate_symbols from the universe at runtime.
-    "Memory / Storage": [
-        "MU", "WDC", "STX", "SNDK", "PSTG", "SIMO", "NTAP",
-    ],
-    "Cybersecurity": [
-        "KEYS", "CRWD", "PANW", "ZS", "NET", "FTNT", "CYBR",
-    ],
-    "Aerospace / Defense": [
-        "AVAV", "DRS", "KTOS", "LUNR", "RKLB", "ASTS", "KRMN",
-    ],
-    "Robotics / Automation": [
-        "AEVA", "IONQ", "JOBY", "OUST", "OSS", "TER", "ISRG", "PATH",
-    ],
-    "Nuclear / Grid": [
-        "BE", "CEG", "EQT", "FSLR", "TPL", "CCJ", "NNE", "SMR",
-    ],
-}
-
-# Map from THEME_MAP display names → THEME_RS_UNIVERSE theme_ids.
-# When a theme has a universe entry its candidate_symbols are used at
-# runtime, making the universe the single source of truth for those tickers.
-_THEME_RS_ID_MAP: dict[str, str] = {
-    "AI Networking":          "ai_networking",
-    "Photonics / Lasers":     "photonics_lasers",
-    "Substrates / Packaging": "substrates_packaging",
-    "Power / Cooling":        "power_cooling",
-    "Memory / Storage":       "memory_storage",
-    "Cybersecurity":          "cybersecurity",
-    "Aerospace / Defense":    "defense",
-    "Robotics / Automation":  "robotics_automation",
-    "Nuclear / Grid":         "uranium_nuclear",
-}
-
-# Tickers in the THEME_MAP that are US-exchange tradeable (no ":" in symbol)
-_THEME_TICKERS_US: list[str] = sorted({
-    sym for tickers in THEME_MAP.values()
-    for sym in tickers
-    if ":" not in sym
-})
+# Theme Performance on the Home page is driven entirely by THEME_RS_UNIVERSE.
+# Themes with proxy_type == "custom" are displayed in the Theme Performance section.
+# To add/remove a theme from the Home page, add/remove it from THEME_RS_UNIVERSE
+# in backend/services/theme_rs_universe.py — no changes needed here.
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────
@@ -1007,37 +952,31 @@ async def _fetch_sub_theme_performance(
     watchlist_quotes: dict[str, dict] | None = None,
 ) -> list[dict]:
     """
-    Compute sub-theme performance using THEME_RS_UNIVERSE as the authoritative
-    ticker source (for the 9 themes that have universe entries), falling back
-    to THEME_MAP for the 3 themes that don't yet have universe entries.
+    Compute Theme Performance for the Home page directly from THEME_RS_UNIVERSE.
+
+    Only themes with proxy_type == "custom" are included — these are the manually
+    curated ticker-basket themes.  Adding or removing a theme from the Home page
+    is done entirely in theme_rs_universe.py; no changes needed in this file.
 
     Data sources (in priority order):
       1. Watchlist quotes (already fetched — zero extra API calls for those tickers)
-      2. Tradier batch quote for remaining tickers NOT in the watchlist
+      2. Tradier batch quote for any missing tickers
       3. Options LKG cache fallback (price_change_pct available for ~70 tickers)
-
-    Returns a list of sub-theme rows sorted by avg_change_1d descending,
-    each with: sub_theme, avg_change_1d, leader_symbols, leader_count,
-    breadth_score (% of tickers positive today), momentum_score, pattern_summary.
     """
     from services.theme_rs_universe import THEME_RS_UNIVERSE
 
     wq = watchlist_quotes or {}
 
-    # Build the effective ticker list per theme — universe wins when available
-    effective_tickers: dict[str, list[str]] = {}
-    for theme_name, fallback_tickers in THEME_MAP.items():
-        rs_id = _THEME_RS_ID_MAP.get(theme_name)
-        if rs_id and rs_id in THEME_RS_UNIVERSE:
-            # Use universe candidate_symbols, filtering out exchange-prefixed foreign tickers
-            effective_tickers[theme_name] = [
-                t for t in THEME_RS_UNIVERSE[rs_id]["candidate_symbols"]
-                if ":" not in t
-            ]
-        else:
-            effective_tickers[theme_name] = [t for t in fallback_tickers if ":" not in t]
+    # Pull every custom-type theme from the universe
+    effective_tickers: dict[str, list[str]] = {
+        entry["display_name"]: [
+            t for t in entry["candidate_symbols"] if ":" not in t
+        ]
+        for entry in THEME_RS_UNIVERSE.values()
+        if entry.get("proxy_type") == "custom"
+    }
 
-    # All US tickers needed across all themes
+    # All US tickers needed across all custom themes
     all_needed = sorted({sym for tickers in effective_tickers.values() for sym in tickers})
 
     # Find tickers not already in watchlist quotes
