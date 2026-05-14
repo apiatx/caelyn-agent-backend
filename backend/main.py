@@ -5856,7 +5856,7 @@ async def portfolio_options(
 
     # ── 2. Lightweight live scan for tickers not in master cache ────────
     if uncached:
-        uncached = uncached[:8]  # cap Tradier calls
+        uncached = uncached[:20]  # cap Tradier calls
         try:
             raw_quotes = await asyncio.wait_for(
                 data_service.tradier.get_quotes(uncached), timeout=6.0
@@ -5975,11 +5975,11 @@ async def portfolio_options(
         except Exception as e:
             print(f"[PORTFOLIO_OPTIONS] batch scan error: {e}")
 
-    # ── 3. Sort by composite_score desc, cap at 8 ──────────────────────
+    # ── 3. Sort by composite_score desc, return all with valid chains ──
     sorted_rows = sorted(
         results.values(),
         key=lambda r: -(r.get("composite_score") or 0),
-    )[:8]
+    )
 
     live_scanned = [sym for sym in uncached if sym in results]
     print(
@@ -7791,7 +7791,142 @@ async def options_screener_ticker_detail(
 
     row = next((t for t in snap.get("tickers", []) if t.get("ticker") == sym), None)
     if not row:
-        return JSONResponse(status_code=404, content={"error": f"{sym} not in current screener results"})
+        # ── On-demand scan: run live Tradier scoring for tickers not in master cache ──
+        import asyncio as _aio
+
+        # Check if portfolio/options already scored this ticker recently
+        _od_key = f"portfolio_opts:{sym}"
+        _od_cached = cache.get(_od_key)
+        if _od_cached:
+            return {
+                **_od_cached,
+                "on_demand": True,
+                "premium_breakdown": [],
+                "call_put_breakdown": {},
+                "otm_breakdown": {},
+                "recent_snapshot_history": [],
+            }
+
+        if not data_service or not data_service.tradier:
+            return JSONResponse(status_code=503, content={"error": "tradier_unavailable"})
+
+        try:
+            _raw_q = await _aio.wait_for(
+                data_service.tradier.get_quotes([sym]), timeout=5.0
+            )
+            _q = next(
+                (qq for qq in (_raw_q or []) if (qq.get("symbol") or "").upper() == sym),
+                {},
+            )
+            _price = float(_q.get("last") or 0)
+            if _price <= 0:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"{sym} not in current screener results"},
+                )
+
+            _exps = await _aio.wait_for(
+                data_service.tradier.get_option_expirations(sym), timeout=4.0
+            )
+            if not _exps:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"{sym} has no options chain"},
+                )
+
+            _chain_tasks = [
+                _aio.wait_for(
+                    data_service.tradier.get_option_chain(sym, exp), timeout=5.0
+                )
+                for exp in _exps[:2]
+            ]
+            _chains = await _aio.gather(*_chain_tasks, return_exceptions=True)
+
+            _calls_all, _puts_all = [], []
+            for _ch in _chains:
+                if isinstance(_ch, Exception) or not isinstance(_ch, dict):
+                    continue
+                _calls_all.extend(_ch.get("calls", []))
+                _puts_all.extend(_ch.get("puts", []))
+
+            if not _calls_all and not _puts_all:
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"{sym} has no options chain"},
+                )
+
+            _call_vol  = sum(int(c.get("volume") or 0) for c in _calls_all)
+            _put_vol   = sum(int(c.get("volume") or 0) for c in _puts_all)
+            _total_vol = _call_vol + _put_vol
+            _pc_ratio  = round(_put_vol / _call_vol, 3) if _call_vol else None
+
+            _iv_vals = [
+                float(c.get("smv_vol") or c.get("iv"))
+                for c in (_calls_all + _puts_all)[:20]
+                if (c.get("smv_vol") or c.get("iv"))
+            ]
+            _iv_current = round(sum(_iv_vals) / len(_iv_vals), 4) if _iv_vals else None
+
+            _expected_move = None
+            _fc = _chains[0] if _chains and not isinstance(_chains[0], Exception) else {}
+            _fc_calls = _fc.get("calls", []) if isinstance(_fc, dict) else []
+            _fc_puts  = _fc.get("puts",  []) if isinstance(_fc, dict) else []
+            _atm_c = min(_fc_calls, key=lambda c: abs((c.get("strike") or 0) - _price), default=None) if _fc_calls else None
+            _atm_p = min(_fc_puts,  key=lambda c: abs((c.get("strike") or 0) - _price), default=None) if _fc_puts  else None
+            if _atm_c and _atm_p and _price > 0:
+                _c_mid = (((_atm_c.get("bid") or 0) + (_atm_c.get("ask") or 0)) / 2)
+                _p_mid = (((_atm_p.get("bid") or 0) + (_atm_p.get("ask") or 0)) / 2)
+                if _c_mid + _p_mid > 0:
+                    _expected_move = round((_c_mid + _p_mid) / _price, 4)
+
+            if _total_vol > 5000:
+                if _pc_ratio is not None and _pc_ratio < 0.5:
+                    _primary_signal = "unusual_call_flow"
+                elif _pc_ratio is not None and _pc_ratio > 2.0:
+                    _primary_signal = "unusual_put_flow"
+                elif _iv_current and _iv_current > 0.65:
+                    _primary_signal = "high_iv"
+                else:
+                    _primary_signal = "options_activity"
+                _confidence = "medium"
+            else:
+                _primary_signal = "low_activity"
+                _confidence = "low"
+
+            _vol_score = min(35, (_total_vol / 10000) * 20) if _total_vol > 0 else 0
+            _iv_score  = min(20, (_iv_current or 0) * 40)
+            _dir_score = min(20, abs((_pc_ratio or 1.0) - 1.0) * 15) if _pc_ratio else 0
+            _composite = round(_vol_score + _iv_score + _dir_score, 1)
+
+            _od_result = {
+                "ticker":           sym,
+                "underlying_price": round(_price, 4),
+                "price_change_pct": float(_q.get("change_percentage") or 0),
+                "pc_ratio":         _pc_ratio,
+                "iv_current":       _iv_current,
+                "expected_move":    _expected_move,
+                "primary_signal":   _primary_signal,
+                "confidence":       _confidence,
+                "composite_score":  _composite,
+                "total_volume":     _total_vol,
+                "on_demand":        True,
+            }
+            cache.set(_od_key, _od_result, 600)
+            print(f"[OPTIONS_SCREENER_ONDEMAND] scored {sym}: score={_composite} signal={_primary_signal}")
+            return {
+                **_od_result,
+                "premium_breakdown": [],
+                "call_put_breakdown": {},
+                "otm_breakdown": {},
+                "recent_snapshot_history": [],
+            }
+
+        except Exception as _od_err:
+            print(f"[OPTIONS_SCREENER_ONDEMAND] {sym} error: {_od_err}")
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"{sym} not in current screener results"},
+            )
 
     top_contracts = row.get("top_contracts") or []
     underlying = row.get("underlying_price")
