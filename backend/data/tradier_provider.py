@@ -39,6 +39,61 @@ _TIMESALES_TTL = 120      # intraday ticks
 _TIMEOUT = 12  # seconds per request
 
 
+# ── Process-wide Tradier rate limiter ─────────────────────────────────────────
+# Tradier production: 120 req/min. We cap at 100/min to keep headroom for the
+# 8 services that call Tradier directly (bypassing this provider).
+# Uses an async sliding-window — zero latency penalty at normal volumes,
+# automatically queues during burst scans (options screener, etc.).
+
+class _TradierRateLimiter:
+    """Async sliding-window rate limiter. Safe for a single asyncio event loop."""
+
+    def __init__(self, max_calls: int = 100, window_seconds: float = 60.0):
+        self._max = max_calls
+        self._window = window_seconds
+        self._timestamps: list[float] = []
+        self._lock = asyncio.Lock()
+        self.total_calls: int = 0
+        self.total_throttled: int = 0
+
+    async def acquire(self) -> None:
+        while True:
+            async with self._lock:
+                now = asyncio.get_event_loop().time()
+                cutoff = now - self._window
+                self._timestamps = [t for t in self._timestamps if t > cutoff]
+                if len(self._timestamps) < self._max:
+                    self._timestamps.append(now)
+                    self.total_calls += 1
+                    return
+                # Over limit — calculate minimum wait and release lock before sleeping
+                wait_for = (self._timestamps[0] + self._window) - now + 0.05
+            self.total_throttled += 1
+            print(
+                f"[TRADIER_LIMITER] {len(self._timestamps)}/{self._max} calls in window "
+                f"— throttling {wait_for:.2f}s"
+            )
+            await asyncio.sleep(wait_for)
+
+    def status(self) -> dict:
+        try:
+            now = asyncio.get_event_loop().time()
+        except RuntimeError:
+            now = 0.0
+        recent = [t for t in self._timestamps if t > now - 60]
+        return {
+            "calls_last_60s": len(recent),
+            "limit_per_60s": self._max,
+            "headroom": max(0, self._max - len(recent)),
+            "total_calls_lifetime": self.total_calls,
+            "total_throttled_lifetime": self.total_throttled,
+        }
+
+
+# Singleton — imported by other modules that need to report into the same counter
+TRADIER_LIMITER = _TradierRateLimiter(max_calls=100, window_seconds=60.0)
+
+
 def _safe_float(v: Any) -> float | None:
     try:
         if v in (None, "", "-"):
@@ -81,18 +136,37 @@ class TradierProvider:
         }
 
     async def _get(self, path: str, params: dict | None = None) -> dict | list | None:
-        """Generic GET with error handling."""
+        """Generic GET with rate limiting and 429 auto-retry."""
+        await TRADIER_LIMITER.acquire()
         url = f"{self.base_url}{path}"
-        try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                resp = await client.get(url, headers=self._headers(), params=params or {})
-            if resp.status_code == 200:
-                return resp.json()
-            print(f"[TRADIER] {path} error {resp.status_code}: {resp.text[:300]}")
-            return None
-        except Exception as e:
-            print(f"[TRADIER] {path} exception: {e}")
-            return None
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                    resp = await client.get(url, headers=self._headers(), params=params or {})
+                if resp.status_code == 200:
+                    return resp.json()
+                if resp.status_code == 429:
+                    retry_after = int(resp.headers.get("Retry-After", "5"))
+                    print(
+                        f"[TRADIER] 429 rate limited on {path} — "
+                        f"retrying in {retry_after}s (attempt {attempt + 1}/3)"
+                    )
+                    await asyncio.sleep(retry_after)
+                    await TRADIER_LIMITER.acquire()
+                    continue
+                print(f"[TRADIER] {path} error {resp.status_code}: {resp.text[:300]}")
+                return None
+            except Exception as e:
+                print(f"[TRADIER] {path} exception (attempt {attempt + 1}/3): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1.0)
+                    continue
+                return None
+        return None
+
+    def get_rate_status(self) -> dict:
+        """Return current rate limiter status — calls in last 60s, headroom, etc."""
+        return TRADIER_LIMITER.status()
 
     # ── Option Expirations ──────────────────────────────────────────────
 

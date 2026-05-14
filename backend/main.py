@@ -4628,6 +4628,48 @@ async def health_check(request: Request):
 
 
 # ============================================================
+# API Rate Monitor
+# ============================================================
+
+@app.get("/api/rate-status")
+@traceable(name="main.rate_status")
+async def rate_status(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """
+    Real-time view of Tradier API usage vs limits.
+    Shows calls in the last 60s, headroom, lifetime throttle count,
+    and a breakdown of which services bypass the provider.
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    from data.tradier_provider import TRADIER_LIMITER
+    tradier_status = TRADIER_LIMITER.status()
+
+    bypass_services = [
+        "sector_rotation/providers.py",
+        "playbook/discovery_enrichment.py",
+        "congressional_trading_service.py",
+        "insider_activity_service.py",
+        "whale_watch_service.py",
+        "social_screener_service.py",
+        "catalyst_calendar_service.py",
+    ]
+
+    return {
+        "tradier": {
+            **tradier_status,
+            "limit_note": "120/min production hard cap; limiter set to 100/min leaving 20/min for bypass services",
+            "bypass_services": bypass_services,
+            "bypass_note": f"{len(bypass_services)} services call Tradier directly and are not counted here",
+        },
+        "fmp": {
+            "note": "No rate limiter — FMP calls are scattered across services as direct httpx calls with per-endpoint caching",
+            "plan_note": "Add limiter if you see FMP 429s in logs; limit depends on your FMP plan tier",
+        },
+    }
+
+
+# ============================================================
 # Candle Stats Debug Endpoint
 # ============================================================
 
