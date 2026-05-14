@@ -2,12 +2,12 @@
 ETF holdings service — lazy-loaded, aggressively cached.
 
 Caching contract (stale-while-revalidate):
-  0–7 days  → fresh (returned immediately, no refresh)
-  7–30 days → stale (returned immediately, background refresh triggered)
-  >30 days  → force refresh before returning
+  0–30 days  → fresh (returned immediately, no refresh)
+  30–90 days → stale (returned immediately, background refresh triggered)
+  >90 days   → force refresh before returning
 
 Holdings change slowly (rebalances are quarterly/monthly).
-A 7-day TTL respects that while staying current without hammering the API.
+A 30-day TTL is plenty — we only need updated holdings ~monthly.
 
 Storage:
   Memory cache (data.cache)  — fast in-process lookups
@@ -15,7 +15,7 @@ Storage:
 
 Data sources (priority order):
   1. Finnhub  GET /etf/holdings?symbol=...
-  2. FMP      GET /api/v3/etf-holder/{symbol}?apikey=...
+  2. FMP      GET /stable/etf/holdings?symbol=...
   3. Stale disk cache  (if both APIs fail)
 """
 from __future__ import annotations
@@ -32,14 +32,19 @@ import httpx
 
 from data.cache import cache
 
-_FRESH_TTL     = 7 * 24 * 3600    # 7 days  — consider fresh
-_STALE_TTL     = 30 * 24 * 3600   # 30 days — max stale acceptable
-_MEM_CACHE_TTL = _FRESH_TTL       # mirror fresh TTL in memory cache
+_FRESH_TTL        = 30 * 24 * 3600   # 30 days — consider fresh
+_STALE_TTL        = 90 * 24 * 3600   # 90 days — max stale acceptable
+_MEM_CACHE_TTL    = _FRESH_TTL        # mirror fresh TTL in memory cache
+_RETRY_BACKOFF    = 6 * 3600          # 6 hours — min gap between failed refresh attempts
 
 _DISK_DIR = Path(__file__).parent.parent.parent / "data" / "etf_holdings"
 
 # Tracks in-flight refresh tasks so we don't double-fetch the same symbol
 _refreshing: set[str] = set()
+
+# Tracks when a background refresh was last ATTEMPTED (even if it failed)
+# so we don't hammer the API on every call when FMP is returning 429s
+_last_attempt_at: dict[str, float] = {}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -230,12 +235,19 @@ async def _background_refresh(symbol: str) -> None:
     """Silently refresh holdings in the background — called for stale data."""
     if symbol in _refreshing:
         return
+    # Respect backoff — don't retry within 6 hours of a failed attempt
+    last = _last_attempt_at.get(symbol, 0)
+    if time.time() - last < _RETRY_BACKOFF:
+        return
     _refreshing.add(symbol)
+    _last_attempt_at[symbol] = time.time()
     try:
         fresh = await _fetch_holdings(symbol)
         if fresh:
             _stamp_and_cache(symbol, fresh)
             print(f"[ETF_HOLDINGS] Background refresh complete: {symbol}")
+        else:
+            print(f"[ETF_HOLDINGS] Background refresh failed (no data): {symbol}")
     except Exception as e:
         print(f"[ETF_HOLDINGS] Background refresh error for {symbol}: {e}")
     finally:
@@ -249,12 +261,12 @@ async def get_etf_holdings(symbol: str) -> dict:
     Return ETF holdings for `symbol`.
 
     Stale-while-revalidate:
-      0–7 days   → serve from cache, no refresh
-      7–30 days  → serve stale from cache, trigger background refresh
-      >30 days   → force refresh before returning (blocks until done)
+      0–30 days  → serve from cache, no refresh
+      30–90 days → serve stale from cache, trigger background refresh
+      >90 days   → force refresh before returning (blocks until done)
 
-    Raises on complete failure (API + cache miss).
-    Returns a dict matching the documented response shape.
+    Failed fetches are rate-limited to one attempt per 6 hours (_RETRY_BACKOFF)
+    so a persistent API error (402/403/429) never causes rapid-fire retries.
     """
     sym = symbol.upper()
 
@@ -278,13 +290,29 @@ async def get_etf_holdings(symbol: str) -> dict:
         print(f"[ETF_HOLDINGS] Serving stale data for {sym}, background refresh queued")
         return disk
 
-    # 3. No usable cache — fetch now (blocks, but only once per ETF every 30 days)
+    # 3. No usable cache — fetch live, but respect the 6-hour backoff so a
+    #    persistent 402/403/429 doesn't retry on every single call.
+    last = _last_attempt_at.get(sym, 0)
+    if time.time() - last < _RETRY_BACKOFF:
+        # Within backoff window — return empty rather than hammering the API
+        return {
+            "symbol":        sym,
+            "as_of":         None,
+            "source":        "none",
+            "holding_count": 0,
+            "holdings":      [],
+            "top_holdings":  [],
+            "updated_at":    None,
+            "error":         "Holdings unavailable — retry backoff active",
+        }
+
     print(f"[ETF_HOLDINGS] Cache miss for {sym} — fetching live")
+    _last_attempt_at[sym] = time.time()
     fresh = await _fetch_holdings(sym)
     if fresh:
         return _stamp_and_cache(sym, fresh)
 
-    # 4. Last resort: if we have anything on disk, return it even if >30 days
+    # 4. Last resort: if we have anything on disk, return it even if >90 days
     if disk:
         print(f"[ETF_HOLDINGS] API failed for {sym} — serving expired cache")
         return disk
