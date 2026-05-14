@@ -1,0 +1,155 @@
+Fix/verify Portfolio scope on the Earnings Calendar backend.
+
+Backend repo:
+apiatx/caelyn-agent-backend
+
+Goal:
+Calendar → Earnings → Portfolio must show upcoming earnings only for stocks saved in the user’s Portfolio page holdings.
+
+This must work exactly like the now-working Watchlist toggle, except it uses Portfolio holdings instead of Watchlist symbols.
+
+Do not touch:
+- All toggle
+- Watchlist toggle
+- curated/thematic All earnings logic
+- previous earnings
+- EPS actuals
+- revenue actuals
+- beat/miss
+- transcripts
+
+This is forward-looking upcoming earnings only.
+
+Known requirement:
+Portfolio earnings must pull from the exact same source as the Portfolio Dashboard holdings.
+
+Hard rule:
+For scope=portfolio:
+- never use curated All symbols
+- never use Watchlist symbols
+- never use stale/demo/legacy portfolio files
+- every returned symbol must exist in the active Portfolio page holdings
+
+Step 1 — Confirm source of truth
+Find the exact source used by the Portfolio page holdings endpoint.
+
+Likely:
+GET /api/portfolio/holdings
+or
+GET /api/stock-holdings
+
+Print:
+- source file/table/helper
+- active portfolio symbols
+- count
+
+Then confirm the Earnings Portfolio loader uses the exact same source.
+
+Run assertions:
+portfolio_earnings_loaded_symbols - portfolio_page_symbols == empty set
+portfolio_page_symbols - portfolio_earnings_loaded_symbols == empty set
+except intentionally excluded invalid/non-stock rows.
+
+If not equal, fix the Portfolio earnings loader first.
+
+Step 2 — Implement/verify scope=portfolio for all earnings routes
+Mirror the working Watchlist implementation.
+
+Portfolio scope must work for:
+- day-clean?scope=portfolio
+- day-curated?scope=portfolio
+- week-clean?scope=portfolio
+- week-clean next week?scope=portfolio
+- month-all?scope=portfolio
+- month-curated?scope=portfolio
+- month-curated next month?scope=portfolio
+- upcoming-clean?scope=portfolio if used
+
+For scope=portfolio, short-circuit before:
+- curated scoring
+- get_curated_earnings_range
+- All pool filtering
+- _apply_scope on curated All data
+
+Use:
+saved Portfolio holdings → user_earnings_service / user_earnings_cache → filter by requested date window.
+
+Step 3 — Cache behavior
+Use the same durable user_earnings_cache pattern as Watchlist.
+
+Requirements:
+- universe/scope = "portfolio"
+- 120-day forward-looking cache if already used by Watchlist
+- cache hit on repeat requests
+- 0 FMP calls on repeat cache-hit requests
+- invalidate/resync when Portfolio holdings change
+- lazy sync if missing/stale
+
+Do not create a separate in-memory-only cache.
+
+Keep the empty-poison guard:
+If FMP returns 0 raw events for a broad future window, do not overwrite a valid non-empty cache.
+
+Step 4 — Response shape
+Return the same route-specific response shapes as Watchlist.
+
+If Watchlist returns entries in:
+- day.entries
+- days[].entries
+- topEvents
+- topSymbols
+
+Portfolio should use the same compatible fields.
+
+Every Portfolio response should include:
+- scope: "portfolio"
+- symbolsCount
+- cache status if available
+- route-specific event data
+
+Step 5 — Validation matrix
+Do not mark complete until all pass.
+
+A. Portfolio source equality:
+- Print Portfolio Dashboard symbols.
+- Print Portfolio earnings loader symbols.
+- They must match.
+
+B. Portfolio current week:
+- exact current-week endpoint with scope=portfolio
+- returns only Portfolio symbols
+
+C. Portfolio next week:
+- exact next-week endpoint with scope=portfolio
+- returns only Portfolio symbols or proves no events in that window
+
+D. Portfolio Day:
+- exact day endpoint with scope=portfolio
+- returns only Portfolio symbols
+
+E. Portfolio Month current:
+- month-all?scope=portfolio
+- month-curated?scope=portfolio
+- returns only Portfolio symbols
+- includes events beyond current week if they exist
+
+F. Portfolio next month:
+- month endpoint with scope=portfolio
+- returns only Portfolio symbols
+
+G. Strict leakage assertion for every Portfolio route:
+returned_symbols - saved_portfolio_symbols == empty set
+
+H. Regression checks:
+- All unchanged
+- Watchlist unchanged
+
+I. Cache hit:
+Repeat Portfolio Week and Month.
+Expected:
+- cache hit
+- 0 FMP calls
+- same counts
+
+Success definition:
+Backend direct routes for scope=portfolio return only active Portfolio Dashboard holdings across Day, Week, next Week, Month, and next Month. No All leakage, no Watchlist leakage, no stale/demo portfolio source.

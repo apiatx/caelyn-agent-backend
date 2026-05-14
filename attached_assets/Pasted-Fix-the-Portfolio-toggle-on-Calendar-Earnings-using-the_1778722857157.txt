@@ -1,0 +1,302 @@
+Fix the Portfolio toggle on Calendar → Earnings using the now-working Portfolio page source of truth.
+
+Backend repo:
+apiatx/caelyn-agent-backend
+
+Current confirmed architecture:
+- Portfolio page is now working.
+- User manually adds portfolio assets/stocks/tickers on the Portfolio page.
+- Saved Portfolio holdings are stored in Neon.
+- Neon is connected to the backend FastAPI server through the existing Portfolio API.
+- The Portfolio page is now the source of truth for active portfolio holdings.
+
+Goal:
+Calendar → Earnings → Portfolio toggle should display earnings events for the exact same stock tickers currently saved on the Portfolio page.
+
+This must behave like the already-working Watchlist toggle:
+- Watchlist toggle pulls saved Watchlist tickers and renders them in earnings calendar style.
+- Portfolio toggle should pull saved Portfolio holdings/tickers and render them in the same earnings calendar style.
+
+Do not touch:
+- All toggle
+- Watchlist toggle
+- curated/thematic All earnings logic
+- Portfolio page CRUD behavior
+- frontend unless specifically needed after backend validation
+
+Core requirement:
+For scope=portfolio on the Earnings Calendar:
+1. Load active Portfolio tickers from the same Neon-backed Portfolio API/service used by the Portfolio page.
+2. Fetch/cache their next earnings events.
+3. Fetch/cache their most recent/last earnings event details where available.
+4. Attach the same live price / percent change fields using the existing Tradier quote path used for Portfolio/Watchlist quote hydration.
+5. Return the same route-specific response shapes that the Watchlist earnings calendar already returns, so the frontend can render Portfolio exactly like Watchlist.
+
+Important:
+Do not use any legacy local JSON portfolio file.
+Do not use stale demo holdings.
+Do not use portfolio_holdings_default.json unless the Portfolio page itself still uses it, which it should not if Neon is now the source.
+Do not union multiple portfolio files.
+Do not use Watchlist symbols.
+Do not use curated All symbols.
+Do not client-provide ticker lists.
+
+The only valid source is the active Portfolio holdings saved in Neon through the working Portfolio page API.
+
+Implementation steps:
+
+1. Identify the Portfolio source of truth
+Find the exact backend function/service/endpoint used by the Portfolio page to load active holdings from Neon.
+
+Likely candidates:
+- portfolio router
+- holdings service
+- Neon portfolio holdings table
+- GET /api/portfolio/holdings
+- whatever endpoint the Portfolio page now uses
+
+Print/log:
+- function name
+- table/source
+- active symbols
+- count
+
+Create/reuse one helper:
+
+load_active_portfolio_symbols(user_id/default context) -> list[str]
+
+It should:
+- query the same Neon-backed source as the Portfolio page
+- return active stock tickers only
+- uppercase, trim, dedupe
+- exclude blanks/malformed rows
+- preserve symbols exactly as Portfolio page uses them when valid
+
+2. Wire scope=portfolio in Earnings Calendar backend
+Find all Earnings Calendar backend routes/functions used by Day/Week/Month, matching the Watchlist implementation.
+
+Portfolio must work for:
+- day-clean?scope=portfolio
+- day-curated?scope=portfolio
+- week-clean?scope=portfolio
+- week-clean next week?scope=portfolio
+- month-all?scope=portfolio
+- month-curated?scope=portfolio
+- month-curated next month?scope=portfolio
+- upcoming-clean?scope=portfolio if the frontend uses it
+
+For scope=portfolio:
+- short-circuit before curated All logic
+- do not call get_curated_earnings_range
+- do not filter the All curated pool
+- do not use _apply_scope on curated All data as the primary source
+
+Correct path:
+scope=portfolio
+→ load active Portfolio symbols from Neon
+→ user_earnings_service / durable earnings cache
+→ filter events to requested date window
+→ hydrate quote fields from Tradier existing quote service
+→ build route-specific response shape
+
+3. Use same cache pattern as Watchlist
+Use or extend the existing user_earnings_service / user_earnings_cache pattern.
+
+Cache key must include:
+- universe/scope = "portfolio"
+- sorted Portfolio symbol hash
+- forward-looking window
+- fetched_at / expires_at
+- events JSON
+
+Cache window:
+- use same forward window as Watchlist, ideally 120 days
+- minimum: today through today + 2 months
+
+Cache behavior:
+- repeat requests should be cache hits
+- 0 FMP calls on repeat cache-hit requests
+- lazy sync if missing/stale
+- invalidate/resync when Portfolio holdings change in Neon
+
+Keep the empty-poison guard:
+If FMP returns 0 raw earnings events for a broad 60/75/120-day future window, do not overwrite a valid non-empty cache.
+
+4. Earnings data requirements
+For each Portfolio ticker, fetch/cache forward-looking earnings data.
+
+Required fields where available:
+- symbol
+- companyName
+- nextEarningsDate / earningsDate / date
+- reportTime if available
+- epsEstimate if available
+- revenueEstimate if available
+- source: "fmp"
+- scope: "portfolio"
+
+Also fetch/cache most recent/last earnings event details where available:
+- lastEarningsDate
+- lastFiscalQuarter / fiscalPeriod if available
+- lastFiscalYear if available
+- lastEpsEstimate
+- lastEpsActual
+- lastRevenueEstimate
+- lastRevenueActual
+- lastReportTime if available
+- lastSource: "fmp"
+
+Do not block the calendar if last earnings details are missing. Next earnings date is the priority.
+
+5. Tradier live quote hydration
+Use the same existing Tradier quote path/service already used by Portfolio/Watchlist live price hydration.
+
+For each Portfolio earnings event, include live quote fields where available:
+- price
+- change
+- changePercent
+- percentChange
+- quoteSource: "tradier"
+- quoteUpdatedAt
+
+Important:
+- Do not create a new one-off quote implementation if a shared Tradier quote service already exists.
+- Batch Tradier quote requests if the service supports batching.
+- Do not call Tradier once per symbol if an existing batch route/helper exists.
+- Quote failure should not remove the earnings event. If quote fails, return the event with quote fields null/omitted.
+
+6. Response shape compatibility
+Return the same route-specific shape used by Watchlist.
+
+If Watchlist day/week/month entries are in:
+- day.entries
+- days[].entries
+- topEvents
+- topSymbols
+
+Portfolio should use the same structure.
+
+Every Portfolio route should include:
+- scope: "portfolio"
+- symbolsCount
+- eventsCount
+- cacheStatus if available
+- quoteStatus if available
+- same fields frontend uses for Watchlist rendering
+
+Do not invent a new response shape.
+
+7. Portfolio holdings update trigger
+When Portfolio holdings are added/edited/deleted through the Portfolio page API:
+- invalidate portfolio earnings cache
+- trigger background sync for portfolio earnings
+- do not block Portfolio save/update/delete if earnings sync is slow
+- do not let FMP/Tradier failure break Portfolio CRUD
+
+8. Validation matrix
+Do not mark complete until all pass.
+
+A. Portfolio source-of-truth equality
+Call the live Portfolio page holdings endpoint/service.
+Print saved Portfolio symbols from Neon.
+
+Call the Earnings Portfolio symbol loader.
+Print symbols.
+
+Assert:
+earnings_portfolio_symbols - portfolio_page_symbols == empty set
+portfolio_page_symbols - earnings_portfolio_symbols == empty set
+except intentionally excluded invalid/non-stock rows.
+
+B. Portfolio current week
+Call exact endpoint used by frontend:
+week-clean?scope=portfolio with current week params.
+
+Expected:
+- 200
+- scope="portfolio"
+- only symbols from active Portfolio holdings
+- no Watchlist symbols unless they also exist in Portfolio
+- no curated All symbols unless they also exist in Portfolio
+
+C. Portfolio next week
+Call week-clean?scope=portfolio with next week params.
+
+Expected:
+- same rules
+- if empty, prove no cached Portfolio events fall in that date range
+
+D. Portfolio Day
+Call day-clean?scope=portfolio and day-curated?scope=portfolio for a day with Portfolio events.
+
+Expected:
+- only Portfolio symbols
+- compatible response shape
+
+E. Portfolio Month current
+Call:
+month-all?scope=portfolio
+month-curated?scope=portfolio
+
+Expected:
+- only Portfolio symbols
+- includes events beyond current week when they exist
+- compatible response shape
+
+F. Portfolio next month
+Call month-curated?scope=portfolio for next month.
+
+Expected:
+- only Portfolio symbols
+- uses same forward-looking cache
+
+G. Strict leakage assertion
+For every Portfolio earnings route:
+returned_symbols - saved_portfolio_symbols == empty set
+
+Fail the task if any returned symbol is not currently saved in Portfolio holdings.
+
+H. Last earnings details
+For a sample of Portfolio symbols, verify response includes last earnings fields when FMP provides them.
+Missing last earnings details should not fail the whole route.
+
+I. Tradier quote hydration
+For returned Portfolio earnings events:
+- verify live price/change/% fields are present when Tradier returns data
+- quote failure does not remove events
+
+J. Cache hit
+Repeat Portfolio Week and Month requests.
+
+Expected:
+- earnings cache hit
+- 0 FMP calls
+- Tradier quote call may refresh if designed that way, but should use the shared quote cache/service if available
+
+K. Regression checks
+- All toggle unchanged
+- Watchlist toggle unchanged
+- Portfolio page CRUD unchanged
+
+9. Logging
+Add lightweight logs for scope=portfolio:
+
+{
+  route,
+  scope,
+  requested_from,
+  requested_to,
+  portfolio_symbol_count,
+  first_20_portfolio_symbols,
+  selected_branch: "portfolio_user_earnings",
+  earnings_cache_status,
+  raw_cached_events_count,
+  filtered_window_events_count,
+  quote_status,
+  first_20_returned_symbols,
+  fmp_calls_used,
+  tradier_calls_used
+}
+
+Success definition:
+Calendar → Earnings → Portfolio displays upcoming earnings events for the exact active stock tickers saved in the Neon-backed Portfolio page, with next earnings date, last earnings details when available, and live price/% from the shared Tradier quote path. It behaves like Watchlist, uses Portfolio holdings instead of Watchlist symbols, never leaks All/curated symbols, and does not break All, Watchlist, or Portfolio CRUD.

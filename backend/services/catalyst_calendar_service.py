@@ -1727,28 +1727,25 @@ def _load_watchlist_symbols() -> set[str]:
 
 
 def _load_portfolio_symbols() -> set[str]:
-    """Load ticker symbols from the portfolio holdings JSON file."""
-    syms: set[str] = set()
+    """Load ticker symbols from the canonical Neon-backed portfolio store.
+
+    Uses portfolio_store.load_active_holdings() — the exact same source as
+    GET /api/portfolio/holdings — so the catalyst calendar always reflects
+    what the user saved on the Portfolio page.
+    """
     try:
-        import json
-        from pathlib import Path
-        for fname in [
-            "data/portfolio_holdings.json",
-            *[str(p) for p in Path("data").glob("portfolio_holdings_*.json")],
-        ]:
-            p = Path(fname)
-            if p.exists():
-                data = json.loads(p.read_text())
-                holdings = data.get("holdings", data) if isinstance(data, dict) else data
-                if isinstance(holdings, list):
-                    for h in holdings:
-                        if isinstance(h, dict):
-                            sym = h.get("symbol") or h.get("ticker")
-                            if sym:
-                                syms.add(sym.upper())
+        from data.portfolio_store import load_active_holdings  # type: ignore
+        holdings = load_active_holdings()
+        syms: set[str] = set()
+        for h in holdings:
+            ticker = (h.get("ticker") or h.get("symbol") or "").upper().strip()
+            if ticker:
+                syms.add(ticker)
+        print(f"[catalyst] _load_portfolio_symbols() → Neon: count={len(syms)}")
+        return syms
     except Exception as e:
         print(f"[catalyst] portfolio load error: {e}")
-    return syms
+        return set()
 
 
 # ── Main entry points ─────────────────────────────────────────────────────────

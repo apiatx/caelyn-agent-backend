@@ -300,6 +300,10 @@ def save_active_holdings(holdings: list[dict]) -> None:
     """Persist holdings to both Neon DB (primary) and canonical file (fallback).
     Neon DB survives autoscale cold starts; file is a local dev safety net.
     Silently drops entries with no ticker/symbol.
+
+    Also invalidates the portfolio earnings cache so the Earnings Calendar
+    reflects the updated holdings on next request.  Earnings sync failure
+    never blocks the portfolio save.
     """
     valid = [h for h in holdings if isinstance(h, dict) and (h.get("ticker") or h.get("symbol"))]
     normalised = [_normalise(h) for h in valid]
@@ -316,6 +320,18 @@ def save_active_holdings(holdings: list[dict]) -> None:
         f"source_file={_CANONICAL_FILE}  "
         f"count={len(normalised)}  symbols={syms}"
     )
+
+    # 3. Invalidate portfolio earnings cache so Earnings Calendar reflects changes.
+    #    Fire-and-forget — never raises even if Neon is unavailable.
+    try:
+        from services.user_earnings_service import invalidate_user_earnings  # type: ignore
+        invalidate_user_earnings("portfolio")
+        print(
+            f"[portfolio-source-audit] portfolio earnings cache invalidated "
+            f"after save of {len(normalised)} holdings"
+        )
+    except Exception as _inv_e:
+        print(f"[portfolio-source-audit] earnings cache invalidation skipped: {_inv_e}")
 
 
 def get_holdings_signature(holdings: list[dict] | None = None) -> str:

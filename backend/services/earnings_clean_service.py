@@ -922,38 +922,31 @@ def _load_watchlist() -> set[str]:
 
 
 def _load_portfolio() -> set[str]:
-    """Load portfolio symbols — exact same source as GET /api/portfolio/holdings.
+    """Load portfolio symbols from the canonical Neon-backed portfolio store.
 
-    The Portfolio page resolves the file as:
-        data/portfolio_holdings_{user_id}.json
-    where user_id = request.state.user_id (defaults to "default" with auth
-    disabled).  We must read the identical file so that scope=portfolio on the
-    Earnings Calendar always matches what the user sees on the Portfolio page.
+    Uses portfolio_store.load_active_holdings() — the exact same source as
+    GET /api/portfolio/holdings — so scope=portfolio on the Earnings Calendar
+    always reflects what the user saved on the Portfolio page.
 
-    We do NOT glob all portfolio_holdings*.json files — doing so would union
-    holdings from other users (e.g. portfolio_holdings_aidan.json) and legacy
-    demo files (portfolio_holdings.json), producing a superset that has never
-    been saved by the current user and would silently corrupt the scope filter.
+    Never reads legacy JSON files, never globs portfolio_holdings_*.json, and
+    never unions stale demo holdings.
     """
-    syms: set[str] = set()
     try:
-        import json as _json
-        from pathlib import Path as _Path
-        # Mirror _portfolio_file("default") in main.py exactly.
-        # When auth is disabled every request resolves to user_id="default".
-        p = _Path("data/portfolio_holdings_default.json")
-        if p.exists():
-            data = _json.loads(p.read_text())
-            holdings = data.get("holdings", data) if isinstance(data, dict) else data
-            if isinstance(holdings, list):
-                for h in holdings:
-                    if isinstance(h, dict):
-                        sym = h.get("symbol") or h.get("ticker")
-                        if sym:
-                            syms.add(sym.upper())
-    except Exception:
-        pass
-    return syms
+        from data.portfolio_store import load_active_holdings  # type: ignore
+        holdings = load_active_holdings()
+        syms: set[str] = set()
+        for h in holdings:
+            ticker = (h.get("ticker") or h.get("symbol") or "").upper().strip()
+            if ticker:
+                syms.add(ticker)
+        print(
+            f"[earnings_scope] _load_portfolio() → Neon-backed store: "
+            f"count={len(syms)} first_20={sorted(syms)[:20]}"
+        )
+        return syms
+    except Exception as e:
+        print(f"[earnings_scope] _load_portfolio() error: {e}")
+        return set()
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
