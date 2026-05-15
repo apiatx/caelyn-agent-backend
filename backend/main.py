@@ -6030,27 +6030,29 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                 print(f"[PORTFOLIO_REVIEW] macro failed: {_e}", flush=True)
                 return {}
 
-        # Social ranking: serve from cache if warm; otherwise fire background refresh
-        # so it doesn't eat into Claude's time budget.
+        # Social ranking: serve from cache only — never auto-fire XAI calls.
+        # Social enrichment is opt-in; pass include_social=true in the request body to trigger it.
         from services.portfolio_review_service import _SOCIAL_CACHE, _SOCIAL_TTL, _holdings_sig as _hsig
         _social_sig = _hsig(tickers)
         _now_ts = _time.time()
         _cached_social = _SOCIAL_CACHE.get(_social_sig)
+        _include_social = bool(body.get("include_social", False))
+
         if _cached_social and (_now_ts - _cached_social[0]) < _SOCIAL_TTL:
             _social_res = _cached_social[1]
-            print("[PORTFOLIO_REVIEW] XAI social ranking: cache hit — using cached", flush=True)
+            print("[PORTFOLIO_REVIEW] XAI social ranking: cache hit", flush=True)
+        elif _include_social:
+            # Explicit opt-in — call XAI inline (within Claude's remaining budget)
+            try:
+                xai_p = getattr(agent.data, "xai", None)
+                _social_res = await asyncio.wait_for(_get_social_ranking(xai_p, tickers), timeout=18.0)
+                print("[PORTFOLIO_REVIEW] XAI social ranking: fetched on request", flush=True)
+            except Exception as _se:
+                _social_res = {"status": "unavailable", "ranked": []}
+                print(f"[PORTFOLIO_REVIEW] XAI social ranking failed: {_se}", flush=True)
         else:
             _social_res = {"status": "unavailable", "ranked": []}
-            # Kick off background refresh — next call will get the result
-            async def _bg_social():
-                try:
-                    xai_p = getattr(agent.data, "xai", None)
-                    await _get_social_ranking(xai_p, tickers)
-                    print("[PORTFOLIO_REVIEW] XAI social background refresh complete", flush=True)
-                except Exception:
-                    pass
-            asyncio.create_task(_bg_social())
-            print("[PORTFOLIO_REVIEW] XAI social ranking: cache miss — background refresh started", flush=True)
+            print("[PORTFOLIO_REVIEW] XAI social ranking: skipped (not requested)", flush=True)
 
         async def _fetch_watchlist():
             try:
