@@ -202,6 +202,7 @@ class FMPProvider:
                 "sector": item.get("sector", ""),
                 "industry": item.get("industry", ""),
                 "market_cap": item.get("marketCap"),
+                "avg_volume": item.get("volAvg"),
                 "logo": item.get("image", ""),
                 "exchange": item.get("exchange", ""),
                 "ipo_date": item.get("ipoDate", ""),

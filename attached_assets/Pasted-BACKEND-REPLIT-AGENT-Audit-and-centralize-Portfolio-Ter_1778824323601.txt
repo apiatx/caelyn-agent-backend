@@ -1,0 +1,156 @@
+BACKEND REPLIT AGENT — Audit and centralize Portfolio Terminal VolX + Options data
+
+The Portfolio Terminal page is mostly working now, but two sections are inconsistent:
+
+1. Holdings section:
+- Vol/MC is working for many tickers.
+- VolX is blank for many tickers.
+- Example: SLNH has Vol/MC, but VolX is blank.
+
+2. Options section:
+- Options data is only showing for some holdings.
+- It may be because some tickers are not optionable or not covered by Tradier.
+- Or it may be because frontend built its own direct/proxy logic instead of using the FastAPI backend/cached data path.
+
+We need to find the real cause and fix the architecture cleanly.
+
+Do not assume.
+Do not hardcode tickers.
+Do not add duplicate API calls if existing data is already collected.
+Do not move more logic into frontend if it belongs in FastAPI.
+Do not break the now-working Portfolio Terminal analytics.
+Do not exceed Tradier/FMP rate limits.
+
+Goal:
+Portfolio Terminal should get VolX and Options data through the backend/FastAPI canonical data pipeline where possible, with caching and clear unavailable reasons.
+
+Audit first:
+1. Trace the Holdings table data source for:
+   - price
+   - volume
+   - average volume
+   - relative volume / VolX
+   - market cap
+   - Vol/MC
+
+2. For each field, identify:
+   - where it is calculated
+   - which service/provider supplies it
+   - whether it comes from FastAPI, Express, frontend logic, Tradier, FMP, Yahoo, cached DB, or local fallback
+   - whether it is cached in Neon or memory
+   - whether it is recalculated per request
+
+3. Trace the Options section data source:
+   - endpoint called by frontend
+   - whether Express calls FastAPI or computes locally
+   - whether FastAPI has an equivalent endpoint/service
+   - provider used: Tradier/options flow/existing options service
+   - whether results are cached
+   - how unavailable/non-optionable tickers are handled
+
+4. Compare Vol/MC vs VolX for current portfolio:
+   For each current holding, return:
+   - symbol
+   - current volume
+   - average volume
+   - vol_x
+   - price
+   - market_cap
+   - vol_mc_pct
+   - data source for each
+   - unavailable reason if null
+
+5. Compare Options coverage for current portfolio:
+   For each current holding, return:
+   - symbol
+   - optionable yes/no/unknown
+   - options chain available yes/no
+   - options flow available yes/no
+   - score/IV/EM/volume if available
+   - unavailable reason if missing
+   - provider/source
+
+Likely things to check:
+- Is VolX calculated only when avgVolume exists?
+- Is avgVolume missing for OTC/foreign tickers?
+- Is avgVolume available from FMP profile or quote but not being mapped into Terminal holdings?
+- Is VolX using avg_volume, averageVolume, avgVol, or a mismatched field name?
+- Does Vol/MC use Yahoo fallback while VolX only uses Tradier?
+- Is frontend showing “—” because backend field exists under a different name?
+- Is options data limited to optionable/listed symbols only?
+- Is the Options section bypassing FastAPI and calling Tradier from Express/frontend directly?
+- Is Tradier rate limiting causing partial options results?
+- Are options results cached anywhere durable?
+
+Required backend fix if data exists:
+1. Add/normalize average volume into the canonical per-holding enrichment path.
+2. Calculate VolX in FastAPI:
+   vol_x = current_volume / average_volume
+3. Return:
+   - volume
+   - avg_volume
+   - vol_x
+   - vol_x_unavailable_reason
+   - volume_source
+   - avg_volume_source
+4. Ensure this is included in /api/caelyn-terminal holdings.
+
+Required backend fix for Options:
+1. If existing FastAPI options/flow service exists, reuse it.
+2. Make Portfolio Terminal options data come from that backend service, not frontend one-off logic.
+3. Cache results using existing cache/Neon pattern if already used elsewhere.
+4. For each ticker, return structured status:
+   - optionable
+   - data_available
+   - reason if unavailable
+5. Do not fail the whole section because some tickers are OTC/non-optionable.
+6. Respect Tradier rate limits. Batch/cache where possible.
+
+Required debug output:
+Add or log:
+
+[portfolio-vol-options-debug] {
+  holdings_count,
+  symbols,
+  volx: {
+    available_count,
+    missing_count,
+    examples,
+    missing_reasons_by_symbol
+  },
+  vol_mc: {
+    available_count,
+    missing_count
+  },
+  options: {
+    requested_count,
+    available_count,
+    unavailable_count,
+    unavailable_reasons_by_symbol,
+    provider,
+    cache_hit
+  },
+  provider_calls: {
+    tradier_quote_calls,
+    tradier_options_calls,
+    fmp_profile_calls,
+    yahoo_fallback_calls
+  }
+}
+
+Validation:
+Use the current live 19-holding portfolio.
+
+Return:
+1. Which tickers have VolX and which do not.
+2. Exact reason VolX is missing for each blank ticker.
+3. Whether avg volume exists anywhere but is not wired.
+4. Which tickers have options data.
+5. Exact reason options data is missing for each ticker.
+6. Whether the frontend was bypassing FastAPI for options or VolX.
+7. What was changed.
+8. Confirm /api/caelyn-terminal now returns:
+   - vol_x
+   - avg_volume
+   - vol_x_unavailable_reason
+   - options status/data per ticker

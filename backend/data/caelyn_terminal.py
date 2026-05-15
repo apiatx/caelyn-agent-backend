@@ -288,9 +288,13 @@ def _yf_parse_quote(raw: dict, sym: str) -> dict | None:
         chgpct = round((price - prev_close) / prev_close * 100, 3) if chg and prev_close else None
         w52h = _sf(meta.get("fiftyTwoWeekHigh"))
         w52l = _sf(meta.get("fiftyTwoWeekLow"))
+        # Volume fields — YF meta includes both today's volume and 3-month average
+        volume     = _sf(meta.get("regularMarketVolume"))
+        avg_volume = _sf(meta.get("averageDailyVolume3Month") or meta.get("averageDailyVolume10Day"))
         return {
             "symbol": sym, "price": price, "change": chg, "change_pct": chgpct,
             "prev_close": prev_close, "week_52_high": w52h, "week_52_low": w52l,
+            "volume": volume, "avg_volume": avg_volume,
         }
     except Exception:
         return None
@@ -478,8 +482,10 @@ class CaelynTerminalProvider:
                         "change_pct": _v.get("change_pct"),
                         "w52_high":   _v.get("week_52_high"),
                         "w52_low":    _v.get("week_52_low"),
+                        "volume":     _v.get("volume"),
+                        "avg_volume": _v.get("avg_volume"),
                     }
-                    print(f"[CAELYN] YF fallback quote OK  {_t}  price={_v.get('price')}")
+                    print(f"[CAELYN] YF fallback quote OK  {_t}  price={_v.get('price')}  vol={_v.get('volume')}  avg_vol={_v.get('avg_volume')}")
                 elif _kind == "h" and isinstance(_v, list) and len(_v) >= 5:
                     _yf_fb_h[_t] = _v
                     print(f"[CAELYN] YF fallback history OK  {_t}  bars={len(_v)}")
@@ -535,9 +541,38 @@ class CaelynTerminalProvider:
             total_cost  += shares * cost
 
             funda = fundamentals_raw.get(sym, {})
-            _vol     = q.get("volume")
-            _avg_vol = q.get("avg_volume")
-            _vol_x   = round(_vol / _avg_vol, 2) if _vol and _avg_vol and _avg_vol > 0 else None
+            _vol     = q.get("volume") or None   # normalize 0 → None
+            _avg_vol = q.get("avg_volume") or None  # normalize 0 → None
+
+            # ── avg_volume source tracking + FMP volAvg fallback ─────────
+            _vol_src     = ("tradier" if sym in tradier_quotes
+                            else "yf_fallback" if sym in _yf_fb_q
+                            else "crypto"      if sym in crypto_quotes
+                            else "commodity"   if sym in commodity_quotes
+                            else "unavailable")
+            _avg_vol_src: str | None = None
+            if _avg_vol:
+                _avg_vol_src = _vol_src   # same provider gave avg_volume
+            else:
+                # Fallback: FMP profile volAvg (already fetched, zero cost)
+                _fmp_avg = _sf(funda.get("avg_volume"))
+                if _fmp_avg and _fmp_avg > 0:
+                    _avg_vol     = _fmp_avg
+                    _avg_vol_src = "fmp_profile"
+
+            _vol_x: float | None = round(_vol / _avg_vol, 2) if (_vol and _avg_vol and _avg_vol > 0) else None
+
+            # ── VolX unavailable reason ───────────────────────────────────
+            _vol_x_reason: str | None = None
+            if _vol_x is None:
+                if not _vol:
+                    _vol_x_reason = "volume_unavailable"
+                elif not _avg_vol:
+                    _vol_x_reason = ("avg_volume_unavailable_otc"
+                                     if _vol_src in ("yf_fallback", "unavailable")
+                                     else "avg_volume_unavailable")
+                else:
+                    _vol_x_reason = "calculation_error"
 
             # ── Vol/MC computation ────────────────────────────────────────
             _mktcap = _sf(funda.get("market_cap"))
@@ -583,6 +618,10 @@ class CaelynTerminalProvider:
                 "volume":     _vol,
                 "avg_volume": _avg_vol,
                 "vol_x":      _vol_x,
+                # VolX provenance
+                "_vol_src":      _vol_src,
+                "_avg_vol_src":  _avg_vol_src,
+                "_vol_x_reason": _vol_x_reason,
                 # Vol/MC fields (passed through to _format_holdings)
                 "_market_cap":       _mktcap,
                 "_dollar_volume":    _dollar_vol,
@@ -706,6 +745,12 @@ class CaelynTerminalProvider:
         # 18c. Theme allocation — thematic universe as primary grouping ────
         theme_allocation = self._build_theme_allocation(positions, total_value, theme_mapping_raw)
 
+        # 19b. Options status — enrich each position from master cache (zero live calls)
+        _options_by_ticker = self._fetch_options_status(equity_tickers)
+        _opts_cache_hit    = bool(_options_by_ticker)
+        for _p in positions:
+            _p["_options_status"] = _options_by_ticker.get(_p["_sym"])
+
         # 19. Performance chart metadata (per-period transparency) ─────────
         _perf_meta: dict[str, dict] = {}
         for _p in ("1D", "5D", "1M", "6M", "1Y"):
@@ -775,6 +820,45 @@ class CaelynTerminalProvider:
             "schema_mismatches":                  _schema_mismatches,
         }
         print(f"[portfolio-terminal-existing-path-debug] {json.dumps(_existing_path_debug, default=str)}")
+
+        # ── Vol/Options consolidated debug log ────────────────────────────
+        _vx_avail   = [p for p in positions if p.get("vol_x") is not None]
+        _vx_missing = [p for p in positions if p.get("vol_x") is None]
+        _mc_avail   = [p for p in positions if p.get("_vol_mc_pct") is not None]
+        _opts_avail = [p for p in positions if (p.get("_options_status") or {}).get("data_available")]
+        _opts_miss  = [p for p in positions if not (p.get("_options_status") or {}).get("data_available")]
+        _vol_opts_debug = {
+            "holdings_count": len(positions),
+            "symbols":        [p["ticker"] for p in positions],
+            "volx": {
+                "available_count":          len(_vx_avail),
+                "missing_count":            len(_vx_missing),
+                "examples":                 [{"sym": p["ticker"], "vol_x": p.get("vol_x"), "avg_vol_src": p.get("_avg_vol_src")} for p in _vx_avail[:5]],
+                "missing_reasons_by_symbol": {p["ticker"]: p.get("_vol_x_reason") for p in _vx_missing},
+            },
+            "vol_mc": {
+                "available_count": len(_mc_avail),
+                "missing_count":   len(positions) - len(_mc_avail),
+            },
+            "options": {
+                "requested_count":            len(tickers),
+                "available_count":            len(_opts_avail),
+                "unavailable_count":          len(_opts_miss),
+                "unavailable_reasons_by_symbol": {
+                    p["ticker"]: (p.get("_options_status") or {}).get("reason", "no_options_status")
+                    for p in _opts_miss
+                },
+                "provider":  "options_master_screener_cache",
+                "cache_hit": _opts_cache_hit,
+            },
+            "provider_calls": {
+                "tradier_quote_calls":   len(tradier_tickers),
+                "tradier_options_calls": 0,
+                "fmp_profile_calls":     len(equity_tickers),
+                "yahoo_fallback_calls":  len(_yf_miss_all),
+            },
+        }
+        print(f"[portfolio-vol-options-debug] {json.dumps(_vol_opts_debug, default=str)}")
 
         return {
             "portfolio": {
@@ -1197,6 +1281,80 @@ class CaelynTerminalProvider:
             })
         return result
 
+    def _fetch_options_status(self, equity_tickers: list[str]) -> dict[str, dict]:
+        """
+        Cache-only lookup of options signals for portfolio tickers.
+        Uses the same master options screener cache as /api/portfolio/options.
+        Zero live API calls — returns immediately from in-memory cache.
+
+        Returns {TICKER: options_status_dict} for each ticker.
+        Tickers not in the options universe get {optionable: None, data_available: False, reason: ...}.
+        """
+        from data.cache import cache as _cache
+        import os as _os
+        import json as _json
+
+        _MASTER_KEY = "options_master_screener_v1"
+        _LKG_KEY    = "options_master_lkg_v1"
+        # LKG disk path matches main.py: Path(__file__).resolve().parent / "data" / filename
+        # caelyn_terminal.py lives in backend/data/, so __file__.parent IS the data dir
+        _LKG_DISK   = Path(__file__).resolve().parent / "options_master_lkg_v1.json"
+
+        # 1. In-memory cache (fastest)
+        snap = _cache.get(_MASTER_KEY) or _cache.get(_LKG_KEY)
+
+        # 2. Disk LKG fallback (survives restarts without any network calls)
+        if not snap and _LKG_DISK.exists():
+            try:
+                snap = _json.loads(_LKG_DISK.read_text())
+            except Exception:
+                snap = None
+
+        master_by_ticker: dict[str, dict] = {}
+        if snap:
+            for row in snap.get("tickers", []):
+                sym = (row.get("ticker") or "").upper()
+                if sym:
+                    master_by_ticker[sym] = row
+
+        result: dict[str, dict] = {}
+        for sym in equity_tickers:
+            if sym in master_by_ticker:
+                row = master_by_ticker[sym]
+                oc  = row.get("options_context") or {}
+                iv_raw = oc.get("iv_current") or row.get("avg_call_iv") or row.get("avg_put_iv")
+                em_raw = oc.get("expected_move_from_atm_straddle")
+                em = em_raw.get("value") if isinstance(em_raw, dict) else em_raw
+                try:
+                    iv_f = round(float(iv_raw), 4) if iv_raw is not None else None
+                except (TypeError, ValueError):
+                    iv_f = None
+                try:
+                    em_f = round(float(em), 4) if em is not None else None
+                except (TypeError, ValueError):
+                    em_f = None
+                score = row.get("final_composite_score") or row.get("composite_score") or 0
+                result[sym] = {
+                    "optionable":       True,
+                    "data_available":   True,
+                    "source":           "options_master_cache",
+                    "composite_score":  round(float(score), 1),
+                    "primary_signal":   row.get("primary_signal"),
+                    "iv_current":       iv_f,
+                    "expected_move":    em_f,
+                    "pc_ratio":         row.get("pc_ratio"),
+                    "total_volume":     row.get("total_volume"),
+                }
+            else:
+                result[sym] = {
+                    "optionable":     None,
+                    "data_available": False,
+                    "source":         "options_master_cache",
+                    "reason":         "not_in_options_screener_universe",
+                }
+
+        return result
+
     def _format_holdings(self, positions: list[dict]) -> list[dict]:
         result = []
         for p in positions:
@@ -1223,6 +1381,9 @@ class CaelynTerminalProvider:
                 "volume":             p.get("volume"),
                 "avg_volume":         p.get("avg_volume"),
                 "vol_x":              p.get("vol_x"),
+                "vol_x_unavailable_reason": p.get("_vol_x_reason"),
+                "volume_source":      p.get("_vol_src"),
+                "avg_volume_source":  p.get("_avg_vol_src"),
                 # Vol/MC — dollar-volume / market cap
                 "market_cap":             p.get("_market_cap"),
                 "dollar_volume":          p.get("_dollar_volume"),
@@ -1230,6 +1391,8 @@ class CaelynTerminalProvider:
                 "vol_mc_pct":             p.get("_vol_mc_pct"),
                 "vol_mc_label":           p.get("_vol_mc_label"),
                 "vol_mc_unavailable_reason": p.get("_vol_mc_unavail"),
+                # Options status (from master options screener cache)
+                "options_status":     p.get("_options_status"),
             })
         return result
 

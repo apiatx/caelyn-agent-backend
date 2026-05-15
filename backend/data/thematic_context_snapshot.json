@@ -240,7 +240,7 @@
   "dead_zones": [
     {
       "name": "Medical Devices",
-      "score": 10.9,
+      "score": 11.3,
       "source": "theme_rs_service",
       "evidence": [
         "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 80% \u2014 minimal buying pressur"
@@ -256,10 +256,10 @@
     },
     {
       "name": "Homebuilders",
-      "score": 11.2,
+      "score": 12.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -2.0%, QQQ delta -2.0%. Breadth 70% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (13/100) vs 60-theme universe. SPY delta +0.0%, QQQ delta +0.1%. Breadth 70% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "ITB",
@@ -272,28 +272,11 @@
       ]
     },
     {
-      "name": "Consumer Retail",
-      "score": 20.7,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta -1.3%, QQQ delta -1.2%. Breadth 57% \u2014 minimal buying pressur"
-      ],
-      "related_etfs": [
-        "XRT",
-        "RTH"
-      ],
-      "related_tickers": [
-        "CPNG",
-        "VSCO",
-        "DKS"
-      ]
-    },
-    {
       "name": "Regional Banks",
-      "score": 21.2,
+      "score": 21.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +0.3%. Breadth 100% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta +0.2%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
         "KRE",
@@ -307,21 +290,37 @@
       ]
     },
     {
-      "name": "Uranium & Nuclear Energy",
-      "score": 23.3,
+      "name": "Consumer Retail",
+      "score": 22.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (23/100) vs 60-theme universe. SPY delta -2.3%, QQQ delta -2.2%. Breadth 50% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 57% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
-        "URA",
-        "URNM",
-        "NLR"
+        "XRT",
+        "RTH"
       ],
       "related_tickers": [
-        "BWXT",
-        "SMR",
-        "LEU"
+        "CPNG",
+        "VSCO",
+        "DKS"
+      ]
+    },
+    {
+      "name": "Banks",
+      "score": 22.0,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -1.2%, QQQ delta -1.1%. Breadth 93% \u2014 minimal buying pressur"
+      ],
+      "related_etfs": [
+        "KBE",
+        "XLF"
+      ],
+      "related_tickers": [
+        "CRBG",
+        "TBBK",
+        "APO"
       ]
     }
   ],
@@ -348,7 +347,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-15T05:36:35.833683+00:00",
+  "last_updated": "2026-05-15T06:00:23.389931+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -359,5 +358,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1778823395.833744
+  "_saved_at": 1778824823.3899958
 }
