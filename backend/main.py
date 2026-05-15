@@ -5956,7 +5956,7 @@ async def portfolio_options(
 # ============================================================
 
 @app.post("/api/portfolio/review")
-@limiter.limit("5/minute")
+@limiter.limit("20/minute")
 @traceable(name="main.review_portfolio")
 async def review_portfolio(request: Request, api_key: str = Header(None, alias="X-API-Key"), _sub: None = Depends(require_subscription)):
     """Portfolio Review Agent — streaming keepalive response, claude-sonnet-4-5, deterministic fallback."""

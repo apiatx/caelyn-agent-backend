@@ -516,10 +516,13 @@ def build_deterministic_review(context: dict) -> dict:
 # ── LLM Helpers ───────────────────────────────────────────────────────────────
 
 def build_review_prompt(context_str: str, has_watchlist: bool, n_holdings: int = 1) -> str:
-    watchlist_note = (
-        "The context includes watchlist_candidates. Only suggest a watchlist swap when data "
-        "clearly supports it (stronger theme, options flow, or social signal vs a current holding). "
-        "Add swap objects to risk_flags with severity=info if relevant, or omit entirely."
+    watchlist_section = (
+        "\nWATCHLIST SWAP INSTRUCTIONS: context includes watchlist_top tickers. "
+        "Compare each watchlist ticker against the weakest portfolio holdings. "
+        "For each watchlist ticker that is clearly stronger (better options flow, stronger theme momentum, "
+        "or materially less downside risk) than something already held, output one swap object: "
+        "drop the weaker holding, add the watchlist ticker, explain why in one sentence. "
+        "Omit watchlist_swaps entirely (empty array) if no watchlist ticker is clearly superior to any holding."
         if has_watchlist
         else ""
     )
@@ -527,15 +530,17 @@ def build_review_prompt(context_str: str, has_watchlist: bool, n_holdings: int =
     return f"""You are CaelynAI's Portfolio Review Agent.
 
 PORTFOLIO DATA:
-{context_str}
-{watchlist_note}
+{context_str}{watchlist_section}
 
 OUTPUT: Raw JSON only. No markdown fences, no backticks, no explanation. Start your response with {{ and end with }}.
 
 {{
-  "portfolio_summary": {{"headline": "19 holdings | theme | risk", "risk_level": "low|moderate|high|aggressive", "overview": "Two sentences max."}},
+  "portfolio_summary": {{"headline": "{n_holdings} holdings | theme | risk", "risk_level": "low|moderate|high|aggressive", "overview": "Two sentences max."}},
   "holdings": [
     {{"ticker": "X", "company": "Name", "theme": "theme", "action": "keep_core|add_on_confirmation|trim_watch|reduce_risk|monitor", "confidence": "low|medium|high", "view": "Bull: 5 words. Bear: 5 words."}}
+  ],
+  "watchlist_swaps": [
+    {{"drop": "WEAK_TICKER", "add": "WATCHLIST_TICKER", "reason": "One sentence why the swap improves the portfolio."}}
   ],
   "risk_flags": [{{"severity": "info|warning|critical", "title": "title", "details": "one sentence"}}]
 }}
@@ -544,8 +549,9 @@ RULES — violating these breaks the parser:
 1. holdings MUST contain all {n_holdings} tickers. Every ticker gets one object.
 2. view field: "Bull: X. Bear: Y." — X and Y each 5 words or fewer. Hard limit.
 3. overview: two sentences max.
-4. risk_flags: 0 to 3 items only. Skip if no real risk.
-5. Output ONLY the JSON object. First character must be {{."""
+4. watchlist_swaps: 0 to 3 items. Empty array [] if no clear upgrade exists.
+5. risk_flags: 0 to 3 items only. Skip if no real risk.
+6. Output ONLY the JSON object. First character must be {{."""
 
 
 def parse_claude_review(raw_text: str) -> Optional[dict]:

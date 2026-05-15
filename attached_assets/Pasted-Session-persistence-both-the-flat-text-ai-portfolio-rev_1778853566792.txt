@@ -1,0 +1,61 @@
+Session persistence — both the flat text (ai_portfolio_review) and the full structured object (ai_portfolio_review_data) are written to sessionStorage after each successful run, and state is initialized from sessionStorage on mount. Navigate away, come back — your review is still there. It clears naturally when you close the tab.
+
+Compare to Watchlist — this is already consolidated into the AI review. When you run it and open the expanded modal (⤡ icon), there's a "Watchlist Swap Ideas" section that shows drop→add pairs with reasoning, pulled from the watchlist_swaps field the backend returns. There's no separate button anymore — it's baked into the same response.
+
+
+Checkpoint made
+42 minutes ago
+
+Worked for 1 minute
+Now I'm getting "Failed to get portfolio review. Please try again. (Server returned 500: {"error":"Agent returned 500","detail":"Internal Server Error"})" .... fix whatever it is you just broke and give me the backend fastapi server agent prompt to make sure this work properly
+
+40 minutes ago
+
+Diagnosing FastAPI error source (21 seconds)
+The 500 is coming FROM FastAPI — my changes were all UI-only (scroll/sessionStorage/button). The Express proxy is correctly forwarding FastAPI's error. Let me check the logs and the proxy error path simultaneously:
+
+
+2 actions
+The log is definitive: POST /api/portfolio-review 500 in 204ms — FastAPI crashed in 204 milliseconds, before any Claude synthesis even started. Nothing I changed caused this; our proxy is working correctly and immediately forwarding FastAPI's 500. The problem is in the FastAPI server itself.
+
+Two things I'll do: improve our error logging so the FastAPI error body is visible in our server logs, and give you the exact backend agent prompt:
+
+
+2 actions
+Now here's exactly what to send to your backend FastAPI agent:
+
+Backend FastAPI Agent Prompt:
+
+The frontend is calling POST /api/portfolio/review and getting a 500 response in ~200ms — before any Claude synthesis starts. This means the endpoint is crashing at startup/validation, not during the AI call.
+
+What the frontend sends:
+
+{
+  "holdings": [
+    { "ticker": "MRVL", "shares": 100, "avg_cost": 65.40 },
+    { "ticker": "AEHR", "shares": 200, "avg_cost": 18.20 },
+    ...up to 19 holdings
+  ]
+}
+
+What the endpoint must do:
+
+Accept POST /api/portfolio/review with X-API-Key: hippo_ak_7f3x9k2m4p8q1w5t
+Return a StreamingResponse that sends space bytes (" ") every 8 seconds as keepalives while Claude processes, then the final JSON payload
+The final JSON must be one clean JSON object with these top-level keys:
+portfolio_summary — object with: headline, overview, strengths (string[]), risks (string[]), macro_read, social_portfolio_read
+asset_reviews — array of {ticker, company, theme, bull_case, bear_case}
+weighting_suggestions — array of {ticker, current_weight, suggested_action, reason} where suggested_action is one of: keep_core, add_on_confirmation, trim_watch, reduce_risk, monitor
+risk_flags — array of {severity, title, details} where severity is critical, warning, or info
+watchlist_swaps — array of {drop, add, reason}
+analysis — flat string summary (used for the collapsed panel display)
+raw_inputs_used — object with llm_synthesis: true/false
+Diagnosis steps:
+
+Check your FastAPI server logs for the actual Python traceback — the 500 response body just says "Internal Server Error" which tells us nothing
+Common causes for a 200ms crash: Pydantic model validation failure (field name mismatch — frontend sends avg_cost not cost_basis), missing import, an API key env var not set, or a syntax error introduced recently
+Verify the endpoint is actually registered: curl -X POST https://fast-api-server-aidanpilon.replit.app/api/portfolio/review -H "X-API-Key: hippo_ak_7f3x9k2m4p8q1w5t" -H "Content-Type: application/json" -d '{"holdings":[{"ticker":"MRVL","shares":50,"avg_cost":65.0}]}'
+The endpoint was confirmed working ("19/19 holdings, 200 OK, ~33s") earlier today — check what changed since then
+The frontend proxy is working correctly. It now has keepalive writes every 5s to the browser to prevent proxy timeouts. Once FastAPI returns 200 and streams its response, the full structured JSON will render in the expanded modal automatically.
+
+Once the backend agent fixes the FastAPI 500, try Re-run Analysis again — everything on the frontend side is ready to receive and render the structured response.
