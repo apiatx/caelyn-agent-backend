@@ -1,0 +1,169 @@
+BACKEND REPLIT AGENT — Build Portfolio-scoped Options Screener using existing Options Screener logic
+
+Correction on Portfolio Terminal Options:
+
+The Portfolio Options section should use the same options-screening logic as the existing Options Screener page, but scoped only to the user’s current Portfolio Dashboard holdings.
+
+It should NOT only read a stale master options cache and show 1/19.
+It should NOT rely only on whatever tickers already exist in options_master_lkg_v1.
+It should NOT be frontend-built logic.
+
+The frontend previously tried to wire its own logic so every portfolio ticker would get the same options screen as the Options Screener page, but specific to current portfolio holdings. That logic belongs in FastAPI/backend and should be cached.
+
+Goal:
+Create or fix a backend Portfolio Options path that runs/reuses the existing Options Screener logic for the current canonical portfolio holdings.
+
+Current known behavior:
+- Current portfolio has 19 holdings.
+- Options are showing for more than one ticker in the UI, but not consistently.
+- OTC/foreign tickers may legitimately not support options or avg volume.
+- Backend recently only attached options_status from master cache, which returned 1/19. That is insufficient.
+- We need the actual screener logic, not just cache lookup.
+
+Do NOT:
+- hardcode tickers
+- ask user for holdings
+- create a separate portfolio source
+- call options providers from frontend
+- duplicate Options Screener logic if it already exists
+- break existing Options Screener page
+- break Portfolio Terminal analytics
+- exceed Tradier rate limits
+- scan the entire market for Portfolio Options
+
+Audit first:
+1. Locate the existing Options Screener backend logic/page endpoint.
+2. Identify the exact service/function that produces Options Screener rows:
+   - score
+   - call/put
+   - IV
+   - EM
+   - volume
+   - open interest if available
+   - signal
+   - unusual flow / low activity / score buckets
+3. Identify its required inputs:
+   - ticker universe
+   - category/bucket
+   - market cap filters
+   - volume filters
+   - cache keys
+   - provider calls
+4. Identify whether it can accept a custom ticker list/universe.
+5. Identify current Portfolio Terminal options source.
+6. Replace/fix Portfolio Terminal options source so it reuses the Options Screener engine scoped to current portfolio holdings.
+
+Required backend behavior:
+For current canonical portfolio holdings:
+1. Load active holdings from Neon/canonical portfolio store.
+2. Build a portfolio ticker universe from those holdings.
+3. Run the existing Options Screener logic against only those tickers.
+4. Return results through /api/caelyn-terminal and/or a dedicated endpoint like:
+   GET /api/portfolio/options
+5. Cache the portfolio options result using:
+   - portfolio holdings_signature
+   - options screener version
+   - sensible TTL
+6. Do not scan non-portfolio tickers.
+7. Do not make duplicate provider calls if existing options screener cache can be reused safely.
+8. If a ticker is OTC/foreign/non-optionable/unsupported, return structured status.
+
+Required per-ticker output:
+For every current portfolio holding, return an options_status object:
+
+{
+  "symbol": "MRVL",
+  "optionable": true/false/unknown,
+  "data_available": true/false,
+  "score": number|null,
+  "put_call": string|null,
+  "iv": number|null,
+  "expected_move": number|null,
+  "volume": number|null,
+  "open_interest": number|null,
+  "signal": string|null,
+  "source": "portfolio_options_screener",
+  "unavailable_reason": string|null
+}
+
+If no options:
+- non_optionable
+- otc_or_foreign_unsupported
+- no_chain_returned
+- no_flow_detected
+- provider_rate_limited
+- insufficient_liquidity
+- not_in_tradier_coverage
+- unknown_provider_error
+
+Portfolio Terminal response:
+Add/normalize:
+- portfolio_options: array of option rows/statuses
+- options_available_count
+- options_unavailable_count
+- options_unavailable_reasons_by_symbol
+- options_cache_status
+- options_source = "portfolio_scoped_options_screener"
+
+Also attach per holding:
+- holding.options_status
+
+Important:
+If the Options Screener page already has scoring/flow logic, reuse that exact logic so Portfolio Options rows are consistent with the Options Screener page.
+
+Do not build a simplified fake version just for Portfolio.
+
+Caching / rate limits:
+- Use existing options screener caches where possible.
+- For portfolio-specific scans, cache by holdings_signature.
+- Respect Tradier 120/min market data limit.
+- Do not fire a full chain/flow scan on every page render.
+- Prefer stale-while-revalidate if existing app patterns support it.
+- Return cached results quickly when fresh enough.
+
+Diagnostics:
+Add backend log/debug object:
+
+[portfolio-options-screener-debug] {
+  holdings_count,
+  symbols,
+  holdings_signature,
+  screener_engine_used,
+  cache_key,
+  cache_hit,
+  requested_symbols,
+  optionable_symbols,
+  available_symbols,
+  unavailable_reasons_by_symbol,
+  provider_calls,
+  rate_limit_guard_used,
+  rows_returned
+}
+
+Validation:
+Use the current live 19-holding portfolio.
+
+Return:
+1. Which existing Options Screener function/service was reused.
+2. Whether it accepts custom ticker lists already or what small change was needed.
+3. Portfolio options count:
+   - holdings_count
+   - requested_count
+   - options_available_count
+   - options_unavailable_count
+4. Per ticker status table:
+   - symbol
+   - optionable/data_available
+   - score
+   - IV
+   - EM
+   - volume
+   - signal
+   - unavailable_reason
+5. Confirm OTC/foreign tickers have clear reasons.
+6. Confirm /api/caelyn-terminal includes portfolio_options and per-holding options_status.
+7. Confirm no frontend provider calls are needed.
+8. Confirm existing Options Screener page still works.
+9. Confirm no stale/deleted tickers appear.
+
+Do not say done if Portfolio Options is only reading old master cache and not running/reusing the Options Screener logic scoped to current holdings.

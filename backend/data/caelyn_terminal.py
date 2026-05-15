@@ -745,9 +745,11 @@ class CaelynTerminalProvider:
         # 18c. Theme allocation — thematic universe as primary grouping ────
         theme_allocation = self._build_theme_allocation(positions, total_value, theme_mapping_raw)
 
-        # 19b. Options status — enrich each position from master cache (zero live calls)
-        _options_by_ticker = self._fetch_options_status(equity_tickers)
-        _opts_cache_hit    = bool(_options_by_ticker)
+        # 19b. Options status — portfolio-scoped scan reusing Options Screener logic
+        _holdings_sig_early = self._holdings_sig(holdings_raw)
+        _opts_scan          = await self._fetch_options_status(equity_tickers, _holdings_sig_early)
+        _options_by_ticker  = _opts_scan.get("by_symbol", {})
+        _opts_cache_hit     = _opts_scan.get("cache_hit", False)
         for _p in positions:
             _p["_options_status"] = _options_by_ticker.get(_p["_sym"])
 
@@ -788,7 +790,7 @@ class CaelynTerminalProvider:
             "canonical_symbols":                  tickers,
             "analytics_holdings_count":           len(positions),
             "analytics_symbols":                  [p["ticker"] for p in positions],
-            "holdings_signature":                 self._holdings_sig(holdings_raw),
+            "holdings_signature":                 _holdings_sig_early,
             "cache_key":                          self.cache_key_for(portfolio_file),
             "cache_hit":                          False,
             # Volatility
@@ -828,12 +830,17 @@ class CaelynTerminalProvider:
         _opts_avail = [p for p in positions if (p.get("_options_status") or {}).get("data_available")]
         _opts_miss  = [p for p in positions if not (p.get("_options_status") or {}).get("data_available")]
         _vol_opts_debug = {
-            "holdings_count": len(positions),
-            "symbols":        [p["ticker"] for p in positions],
+            "holdings_count":    len(positions),
+            "symbols":           [p["ticker"] for p in positions],
+            "holdings_signature": _holdings_sig_early,
+            "screener_engine_used": "portfolio_options_service.scan_portfolio_options",
+            "cache_key":         f"portfolio_opts_scan_v1:{_holdings_sig_early}",
+            "cache_hit":         _opts_cache_hit,
+            "requested_symbols": equity_tickers,
             "volx": {
-                "available_count":          len(_vx_avail),
-                "missing_count":            len(_vx_missing),
-                "examples":                 [{"sym": p["ticker"], "vol_x": p.get("vol_x"), "avg_vol_src": p.get("_avg_vol_src")} for p in _vx_avail[:5]],
+                "available_count":           len(_vx_avail),
+                "missing_count":             len(_vx_missing),
+                "examples":                  [{"sym": p["ticker"], "vol_x": p.get("vol_x"), "avg_vol_src": p.get("_avg_vol_src")} for p in _vx_avail[:5]],
                 "missing_reasons_by_symbol": {p["ticker"]: p.get("_vol_x_reason") for p in _vx_missing},
             },
             "vol_mc": {
@@ -841,24 +848,28 @@ class CaelynTerminalProvider:
                 "missing_count":   len(positions) - len(_mc_avail),
             },
             "options": {
-                "requested_count":            len(tickers),
-                "available_count":            len(_opts_avail),
-                "unavailable_count":          len(_opts_miss),
-                "unavailable_reasons_by_symbol": {
-                    p["ticker"]: (p.get("_options_status") or {}).get("reason", "no_options_status")
-                    for p in _opts_miss
-                },
-                "provider":  "options_master_screener_cache",
-                "cache_hit": _opts_cache_hit,
+                "holdings_count":             len(tickers),
+                "requested_count":            len(equity_tickers),
+                "optionable_symbols":         [p["ticker"] for p in _opts_avail],
+                "available_symbols":          [p["ticker"] for p in _opts_avail],
+                "available_count":            _opts_scan.get("available_count", len(_opts_avail)),
+                "unavailable_count":          _opts_scan.get("unavailable_count", len(_opts_miss)),
+                "unavailable_reasons_by_symbol": _opts_scan.get("unavailable_reasons_by_symbol", {}),
+                "provider_calls":             _opts_scan.get("provider_calls", 0),
+                "rate_limit_guard_used":      True,
+                "rows_returned":             len(_opts_scan.get("rows", [])),
+                "options_cache_status":       _opts_scan.get("options_cache_status", "unknown"),
+                "source":                     _opts_scan.get("source", "portfolio_scoped_options_screener"),
+                "cache_hit":                  _opts_cache_hit,
             },
             "provider_calls": {
-                "tradier_quote_calls":   len(tradier_tickers),
-                "tradier_options_calls": 0,
-                "fmp_profile_calls":     len(equity_tickers),
-                "yahoo_fallback_calls":  len(_yf_miss_all),
+                "tradier_quote_calls":       len(tradier_tickers),
+                "tradier_options_calls":     _opts_scan.get("provider_calls", 0),
+                "fmp_profile_calls":         len(equity_tickers),
+                "yahoo_fallback_calls":      len(_yf_miss_all),
             },
         }
-        print(f"[portfolio-vol-options-debug] {json.dumps(_vol_opts_debug, default=str)}")
+        print(f"[portfolio-options-screener-debug] {json.dumps(_vol_opts_debug, default=str)}")
 
         return {
             "portfolio": {
@@ -903,8 +914,15 @@ class CaelynTerminalProvider:
             "earnings_calendar":      earnings_cal,
             "ticker_tape":            ticker_tape,
             "news_ticker":            news_ticker,
+            # ── Portfolio-scoped options (reuses Options Screener logic) ──
+            "portfolio_options":                   _opts_scan.get("rows", []),
+            "options_available_count":             _opts_scan.get("available_count", 0),
+            "options_unavailable_count":           _opts_scan.get("unavailable_count", 0),
+            "options_unavailable_reasons_by_symbol": _opts_scan.get("unavailable_reasons_by_symbol", {}),
+            "options_cache_status":                _opts_scan.get("options_cache_status", "unknown"),
+            "options_source":                      "portfolio_scoped_options_screener",
             "as_of":                  datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "_holdings_sig":          self._holdings_sig(holdings_raw),
+            "_holdings_sig":          _holdings_sig_early,
             "_debug":                 _existing_path_debug,
         }
 
@@ -1281,79 +1299,45 @@ class CaelynTerminalProvider:
             })
         return result
 
-    def _fetch_options_status(self, equity_tickers: list[str]) -> dict[str, dict]:
+    async def _fetch_options_status(
+        self,
+        equity_tickers: list[str],
+        holdings_sig: str | None = None,
+    ) -> dict:
         """
-        Cache-only lookup of options signals for portfolio tickers.
-        Uses the same master options screener cache as /api/portfolio/options.
-        Zero live API calls — returns immediately from in-memory cache.
+        Portfolio-scoped options scan — reuses the exact scoring / signal / IV /
+        expected-move logic as the master options screener.
 
-        Returns {TICKER: options_status_dict} for each ticker.
-        Tickers not in the options universe get {optionable: None, data_available: False, reason: ...}.
+        Three-layer strategy:
+          1. Whole-portfolio cache  portfolio_opts_scan_v1:{sig}  (300 s)
+          2. Per-ticker cache       portfolio_opts:{sym}          (300 s)
+          3. Master screener cache  (already scored by TradierFlowEngine)
+          4. Live Tradier scan      for tickers not in any cache
+
+        Returns the full scan dict from portfolio_options_service.scan_portfolio_options().
         """
-        from data.cache import cache as _cache
-        import os as _os
+        from data.portfolio_options_service import scan_portfolio_options
         import json as _json
 
         _MASTER_KEY = "options_master_screener_v1"
         _LKG_KEY    = "options_master_lkg_v1"
-        # LKG disk path matches main.py: Path(__file__).resolve().parent / "data" / filename
-        # caelyn_terminal.py lives in backend/data/, so __file__.parent IS the data dir
         _LKG_DISK   = Path(__file__).resolve().parent / "options_master_lkg_v1.json"
 
-        # 1. In-memory cache (fastest)
-        snap = _cache.get(_MASTER_KEY) or _cache.get(_LKG_KEY)
-
-        # 2. Disk LKG fallback (survives restarts without any network calls)
-        if not snap and _LKG_DISK.exists():
+        # Resolve master snap: memory → LKG key → disk LKG
+        master_snap = cache.get(_MASTER_KEY) or cache.get(_LKG_KEY)
+        if not master_snap and _LKG_DISK.exists():
             try:
-                snap = _json.loads(_LKG_DISK.read_text())
+                master_snap = _json.loads(_LKG_DISK.read_text())
             except Exception:
-                snap = None
+                master_snap = None
 
-        master_by_ticker: dict[str, dict] = {}
-        if snap:
-            for row in snap.get("tickers", []):
-                sym = (row.get("ticker") or "").upper()
-                if sym:
-                    master_by_ticker[sym] = row
-
-        result: dict[str, dict] = {}
-        for sym in equity_tickers:
-            if sym in master_by_ticker:
-                row = master_by_ticker[sym]
-                oc  = row.get("options_context") or {}
-                iv_raw = oc.get("iv_current") or row.get("avg_call_iv") or row.get("avg_put_iv")
-                em_raw = oc.get("expected_move_from_atm_straddle")
-                em = em_raw.get("value") if isinstance(em_raw, dict) else em_raw
-                try:
-                    iv_f = round(float(iv_raw), 4) if iv_raw is not None else None
-                except (TypeError, ValueError):
-                    iv_f = None
-                try:
-                    em_f = round(float(em), 4) if em is not None else None
-                except (TypeError, ValueError):
-                    em_f = None
-                score = row.get("final_composite_score") or row.get("composite_score") or 0
-                result[sym] = {
-                    "optionable":       True,
-                    "data_available":   True,
-                    "source":           "options_master_cache",
-                    "composite_score":  round(float(score), 1),
-                    "primary_signal":   row.get("primary_signal"),
-                    "iv_current":       iv_f,
-                    "expected_move":    em_f,
-                    "pc_ratio":         row.get("pc_ratio"),
-                    "total_volume":     row.get("total_volume"),
-                }
-            else:
-                result[sym] = {
-                    "optionable":     None,
-                    "data_available": False,
-                    "source":         "options_master_cache",
-                    "reason":         "not_in_options_screener_universe",
-                }
-
-        return result
+        return await scan_portfolio_options(
+            symbols      = equity_tickers,
+            tradier      = self.tradier,
+            cache        = cache,
+            master_snap  = master_snap,
+            holdings_sig = holdings_sig,
+        )
 
     def _format_holdings(self, positions: list[dict]) -> list[dict]:
         result = []

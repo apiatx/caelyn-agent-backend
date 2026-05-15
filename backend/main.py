@@ -5910,212 +5910,43 @@ async def portfolio_options(
     if not requested:
         return {"tickers": []}
 
-    _SIGNAL_DISPLAY = {
-        "unusual_flow":          "Unusual Flow",
-        "unusual_call_flow":     "Unusual Call Flow",
-        "unusual_put_flow":      "Unusual Put Flow",
-        "gamma_squeeze":         "Gamma Squeeze",
-        "asymmetric_risk":       "Asymmetric Risk",
-        "volatility_expansion":  "Vol Expansion",
-        "high_iv":               "High IV",
-        "options_activity":      "Options Activity",
-        "low_activity":          "Low Activity",
-    }
+    from data.portfolio_options_service import scan_portfolio_options
 
-    def _normalize(row: dict) -> dict:
-        oc = row.get("options_context") or {}
-        iv = oc.get("iv_current") or row.get("avg_call_iv") or row.get("avg_put_iv")
-        em_raw = oc.get("expected_move_from_atm_straddle")
-        # expected_move can be a float or a dict — extract numeric value safely
-        if isinstance(em_raw, dict):
-            em = em_raw.get("value") or em_raw.get("move_pct") or em_raw.get("expected_move")
-        else:
-            em = em_raw
-        score = row.get("final_composite_score") or row.get("composite_score") or 0
-        try:
-            iv_f = round(float(iv), 4) if iv is not None else None
-        except (TypeError, ValueError):
-            iv_f = None
-        try:
-            em_f = round(float(em), 4) if em is not None else None
-        except (TypeError, ValueError):
-            em_f = None
-        raw_signal = row.get("primary_signal") or ""
-        signal = _SIGNAL_DISPLAY.get(raw_signal.lower().replace(" ", "_"), raw_signal)
-        return {
-            "ticker":           row.get("ticker"),
-            "underlying_price": row.get("underlying_price"),
-            "price_change_pct": row.get("price_change_pct"),
-            "pc_ratio":         row.get("pc_ratio"),
-            "iv_current":       iv_f,
-            "expected_move":    em_f,
-            "primary_signal":   signal,
-            "confidence":       row.get("confidence"),
-            "composite_score":  round(float(score), 1),
-            "total_volume":     row.get("total_volume"),
-        }
-
-    # ── 1. Fill from master screener cache ─────────────────────────────
     master_snap = cache.get(_OPTIONS_MASTER_CACHE_KEY) or cache.get(_OPTIONS_MASTER_LKG_KEY)
-    master_by_ticker: dict = {}
-    if master_snap:
-        for row in master_snap.get("tickers", []):
-            sym = (row.get("ticker") or "").upper()
-            if sym:
-                master_by_ticker[sym] = row
 
-    results: dict = {}
-    uncached: list = []
-
-    for sym in requested:
-        per_key = f"portfolio_opts:{sym}"
-        cached_row = cache.get(per_key)
-        if cached_row:
-            results[sym] = cached_row
-        elif sym in master_by_ticker:
-            norm = _normalize(master_by_ticker[sym])
-            cache.set(per_key, norm, 300)
-            results[sym] = norm
-        else:
-            uncached.append(sym)
-
-    # ── 2. Lightweight live scan for tickers not in master cache ────────
-    if uncached:
-        uncached = uncached[:20]  # cap Tradier calls
-        try:
-            raw_quotes = await asyncio.wait_for(
-                data_service.tradier.get_quotes(uncached), timeout=6.0
-            )
-            quote_map = {
-                (q.get("symbol") or "").upper(): q
-                for q in (raw_quotes or [])
-                if q.get("symbol")
-            }
-
-            async def _scan_one(sym: str):
-                q = quote_map.get(sym, {})
-                price = float(q.get("last") or 0)
-                if price <= 0:
-                    return None
-                try:
-                    expirations = await asyncio.wait_for(
-                        data_service.tradier.get_option_expirations(sym), timeout=4.0
-                    )
-                    if not expirations:
-                        return None
-
-                    chain_tasks = [
-                        asyncio.wait_for(
-                            data_service.tradier.get_option_chain(sym, exp), timeout=5.0
-                        )
-                        for exp in expirations[:2]
-                    ]
-                    chains = await asyncio.gather(*chain_tasks, return_exceptions=True)
-
-                    calls_all, puts_all = [], []
-                    for ch in chains:
-                        if isinstance(ch, Exception) or not isinstance(ch, dict):
-                            continue
-                        calls_all.extend(ch.get("calls", []))
-                        puts_all.extend(ch.get("puts", []))
-
-                    if not calls_all and not puts_all:
-                        return None
-
-                    call_vol  = sum(int(c.get("volume") or 0) for c in calls_all)
-                    put_vol   = sum(int(c.get("volume") or 0) for c in puts_all)
-                    total_vol = call_vol + put_vol
-                    pc_ratio  = round(put_vol / call_vol, 3) if call_vol else None
-
-                    # IV: prefer smv_vol (smoothed from ORATS), fall back to mid_iv
-                    iv_vals = []
-                    for c in (calls_all + puts_all)[:20]:
-                        iv = c.get("smv_vol") or c.get("iv")
-                        if iv:
-                            iv_vals.append(float(iv))
-                    iv_current = round(sum(iv_vals) / len(iv_vals), 4) if iv_vals else None
-
-                    # ATM straddle expected move (front expiration)
-                    expected_move = None
-                    first_chain = chains[0] if chains and not isinstance(chains[0], Exception) else {}
-                    fc_calls = first_chain.get("calls", []) if isinstance(first_chain, dict) else []
-                    fc_puts  = first_chain.get("puts",  []) if isinstance(first_chain, dict) else []
-                    atm_c = min(fc_calls, key=lambda c: abs((c.get("strike") or 0) - price), default=None) if fc_calls else None
-                    atm_p = min(fc_puts,  key=lambda c: abs((c.get("strike") or 0) - price), default=None) if fc_puts  else None
-                    if atm_c and atm_p and price > 0:
-                        c_mid = ((atm_c.get("bid") or 0) + (atm_c.get("ask") or 0)) / 2
-                        p_mid = ((atm_p.get("bid") or 0) + (atm_p.get("ask") or 0)) / 2
-                        if c_mid + p_mid > 0:
-                            expected_move = round((c_mid + p_mid) / price, 4)
-
-                    # Signal classification
-                    if total_vol > 5000:
-                        if pc_ratio is not None and pc_ratio < 0.5:
-                            primary_signal = "Unusual Call Flow"
-                        elif pc_ratio is not None and pc_ratio > 2.0:
-                            primary_signal = "Unusual Put Flow"
-                        elif iv_current and iv_current > 0.65:
-                            primary_signal = "High IV"
-                        else:
-                            primary_signal = "Options Activity"
-                        confidence = "medium"
-                    else:
-                        primary_signal = "Low Activity"
-                        confidence = "low"
-
-                    # Lightweight composite score
-                    vol_score = min(35, (total_vol / 10000) * 20) if total_vol > 0 else 0
-                    iv_score  = min(20, (iv_current or 0) * 40)
-                    dir_score = min(20, abs((pc_ratio or 1.0) - 1.0) * 15) if pc_ratio else 0
-                    composite_score = round(vol_score + iv_score + dir_score, 1)
-
-                    norm = {
-                        "ticker":           sym,
-                        "underlying_price": round(price, 4),
-                        "price_change_pct": float(q.get("change_percentage") or 0),
-                        "pc_ratio":         pc_ratio,
-                        "iv_current":       iv_current,
-                        "expected_move":    expected_move,
-                        "primary_signal":   primary_signal,
-                        "confidence":       confidence,
-                        "composite_score":  composite_score,
-                        "total_volume":     total_vol,
-                    }
-                    cache.set(f"portfolio_opts:{sym}", norm, 300)
-                    return norm
-                except Exception as scan_err:
-                    print(f"[PORTFOLIO_OPTIONS] _scan_one({sym}) error: {scan_err}")
-                    return None
-
-            scan_results = await asyncio.gather(
-                *[_scan_one(sym) for sym in uncached],
-                return_exceptions=True,
-            )
-            for sym, res in zip(uncached, scan_results):
-                if isinstance(res, Exception):
-                    print(f"[PORTFOLIO_OPTIONS] gather error {sym}: {res}")
-                elif res:
-                    results[sym] = res
-
-        except Exception as e:
-            print(f"[PORTFOLIO_OPTIONS] batch scan error: {e}")
-
-    # ── 3. Sort by composite_score desc, return all with valid chains ──
-    sorted_rows = sorted(
-        results.values(),
-        key=lambda r: -(r.get("composite_score") or 0),
+    scan = await scan_portfolio_options(
+        symbols     = requested,
+        tradier     = data_service.tradier,
+        cache       = cache,
+        master_snap = master_snap,
+        holdings_sig = None,   # no per-portfolio cache for direct HTTP calls
     )
 
-    live_scanned = [sym for sym in uncached if sym in results]
+    available_rows = scan.get("rows", [])
+    all_rows       = list(scan.get("by_symbol", {}).values())
+
     print(
         f"[PORTFOLIO_OPTIONS] requested={requested} "
-        f"from_cache={len(results)-len(live_scanned)} live_scanned={live_scanned} "
-        f"returned={len(sorted_rows)}"
+        f"available={scan.get('available_count',0)} "
+        f"unavailable={scan.get('unavailable_count',0)} "
+        f"cache_status={scan.get('options_cache_status','?')} "
+        f"provider_calls={scan.get('provider_calls',0)}"
     )
     return {
-        "tickers": sorted_rows,
-        "from_master_cache": len(results) - len(live_scanned),
-        "live_scanned": live_scanned,
+        "tickers":              available_rows,
+        "all_statuses":         all_rows,
+        "available_count":      scan.get("available_count", 0),
+        "unavailable_count":    scan.get("unavailable_count", 0),
+        "unavailable_reasons":  scan.get("unavailable_reasons_by_symbol", {}),
+        "options_cache_status": scan.get("options_cache_status", "unknown"),
+        "source":               scan.get("source", "portfolio_scoped_options_screener"),
+        "from_master_cache": sum(
+            1 for r in all_rows
+            if r.get("data_available") and not r.get("live_scanned")
+        ),
+        "live_scanned": [
+            r.get("ticker") for r in available_rows if r.get("source") == "portfolio_scoped_options_screener"
+        ],
     }
 
 
