@@ -1,0 +1,55 @@
+Let me check how the frontend proxy handles the portfolio-review endpoint:
+
+
+3 actions
+Now let me read the proxy route in full to understand how it handles the streaming backend response:
+
+
+2 actions
+Found the issues clearly. The proxy needs two fixes: (1) it times out at 75s and clears the signal right after headers — but with a streaming backend, the real problem is it does await response.json() on a streaming body with no fallback for text that starts with whitespace keepalive bytes, and (2) it throws away 90% of the rich structured data the backend now returns, only forwarding message. I'll fix the proxy to pipe the full response properly, and update the frontend to render the structured data nicely in the expanded modal.
+
+
+2 actions
+Now I have the full picture. Two problems to fix:
+
+Proxy (routes.ts): Uses response.json() on a streaming body — this should work since JSON.parse handles leading whitespace, but the 75s timeout is aggressive and the full rich structured data is thrown away (only message forwarded)
+Frontend: Stores only the flat message string, ignoring all the rich structured fields the backend now returns (portfolio_summary, asset_reviews, weighting_suggestions, risk_flags, watchlist_swaps)
+I'll fix the proxy to use text()→trim()→JSON.parse (bulletproof for the streaming keepalive pattern), raise timeout to 120s, and pass the full data through. Then I'll add a rich structured render in the expanded modal.
+
+
+2 actions
+Now I have everything. Making both changes in parallel — proxy fix + rich structured frontend render:
+
+
+2 actions
+Now let me update the frontend — add aiReviewData state, update handleAIReview to store the full response, and render a rich structured view in the expanded modal:
+
+
+2 actions
+Now update handleAIReview to store the full response and use the right fields:
+
+
+2 actions
+Now replace the expanded modal with a rich structured render:
+
+
+4 actions
+Clean — no console errors, HMR applied successfully. Here's a summary of exactly what changed and why:
+
+routes.ts (proxy fix)
+
+Raised timeout from 75s → 120s (plenty of headroom for the ~33s backend)
+Switched from response.json() → response.text() → trim() → JSON.parse() — bulletproof against the streaming keepalive pattern where FastAPI sends space bytes before the JSON payload
+Now passes the full structured response through instead of just extracting message
+caelyn-terminal-page.tsx (frontend)
+
+Added aiReviewData state to hold the full structured backend object alongside the existing flat-text aiReview
+handleAIReview now stores both: flat text (analysis field) for the narrow panel, full object for the expanded modal
+The expanded modal now renders a proper structured report with:
+Portfolio headline + AI/Estimated badge + macro read in the header
+Strengths (green) / Risks (red) side-by-side grid
+Risk Flags with critical/warning/info severity colors
+Position Sizing table — ticker, current weight %, action (color-coded), reason
+Watchlist Swap Ideas — drop → add with reason
+Holding-Level Analysis — per-ticker bull case / bear case in a two-column layout
+Falls back gracefully to flat pre-wrap text if structured data isn't present
