@@ -6122,7 +6122,7 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                     asyncio.to_thread(
                         agent.client.messages.create,
                         model=MODEL_CLAUDE_PREMIUM,
-                        max_tokens=3000,
+                        max_tokens=900,
                         system=_SYSTEM_PROMPT,
                         messages=[{"role": "user", "content": _prompt}],
                     ),
