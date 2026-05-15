@@ -6568,6 +6568,103 @@ async def patch_holding(
     return {"success": True, "ticker": ticker, "holding": h}
 
 
+@app.post("/api/portfolio/holdings/{ticker}/close")
+@traceable(name="main.close_holding")
+async def close_holding(
+    ticker: str,
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Atomically close an active holding.
+
+    Finds the active holding, creates a closed trade record, removes the holding
+    from the active portfolio, saves to Neon, and invalidates the Terminal cache —
+    all in one call so the frontend does not need to make two separate requests.
+
+    Body (all optional):
+      {
+        "exit_date":    "YYYY-MM-DD",  # defaults to today
+        "exit_price":   float,         # defaults to avg_cost if unavailable
+        "close_reason": str            # stored in notes
+      }
+
+    Returns:
+      {
+        "closed_trade":       { ...trade record... },
+        "active_count":       int,
+        "active_symbols":     [...],
+        "holdings_signature": str
+      }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    ticker = ticker.upper().strip()
+
+    from data.portfolio_store import (
+        load_active_holdings as _load,
+        save_active_holdings as _save_h,
+        get_holdings_signature as _sig,
+    )
+    from data.closed_trades_store import save_closed_trade as _save_ct
+    from datetime import date as _date_cls
+
+    holdings = _load()
+    idx = next((i for i, h in enumerate(holdings) if h.get("ticker", "").upper() == ticker), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail=f"Ticker {ticker!r} not in active portfolio")
+
+    h = holdings[idx]
+
+    exit_date  = (body.get("exit_date") or _date_cls.today().isoformat())
+    exit_price = float(body.get("exit_price") or h.get("avg_cost") or 0)
+    notes      = body.get("close_reason") or body.get("notes") or None
+
+    # Build the closed trade record using the holding's own data
+    trade_payload = {
+        "ticker":      ticker,
+        "shares":      float(h.get("shares") or 0),
+        "entry_date":  h.get("entry_date") or h.get("date_added") or None,
+        "exit_date":   exit_date,
+        "entry_price": float(h.get("avg_cost") or 0),
+        "exit_price":  exit_price,
+        "notes":       notes,
+    }
+    closed_trade = _save_ct(trade_payload)
+    if closed_trade.get("_error"):
+        raise HTTPException(status_code=500, detail=f"Failed to save closed trade: {closed_trade['_error']}")
+
+    # Remove from active holdings and persist
+    remaining = [hh for i, hh in enumerate(holdings) if i != idx]
+    _save_h(remaining)
+    sig = _sig(remaining)
+
+    # Invalidate terminal cache
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        from data.portfolio_store import canonical_file as _cf
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    active_syms = [hh.get("ticker") for hh in remaining]
+    print(
+        f"[CLOSE_HOLDING] ticker={ticker}  exit_date={exit_date}  exit_price={exit_price}"
+        f"  active_remaining={len(remaining)}  trade_id={closed_trade.get('id')}"
+    )
+    return {
+        "closed_trade":       closed_trade,
+        "active_count":       len(remaining),
+        "active_symbols":     active_syms,
+        "holdings_signature": sig,
+    }
+
+
 @app.get("/api/test-altfins")
 @traceable(name="main.test_altfins")
 async def test_altfins(symbol: str = "BTC", api_key: str = Header(None, alias="X-API-Key")):

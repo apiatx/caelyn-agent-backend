@@ -112,8 +112,14 @@ def _row_to_dict(row: tuple, description) -> dict:
     return d
 
 
-def _derive_fields(trade: dict) -> dict:
-    """Auto-compute realized_pnl, realized_pnl_pct, holding_period_days if not supplied."""
+def _derive_fields(trade: dict, force_recompute: bool = False) -> dict:
+    """Auto-compute realized_pnl, realized_pnl_pct, holding_period_days.
+
+    When force_recompute=True (used on UPDATE), derived fields are always
+    recalculated from the current prices/dates rather than preserved from the
+    existing record.  On INSERT (force_recompute=False), fields are only
+    computed when absent so that explicit user-supplied values are honoured.
+    """
     out = dict(trade)
     shares = float(out.get("shares") or 0)
     entry_price = float(out.get("entry_price") or 0)
@@ -121,16 +127,16 @@ def _derive_fields(trade: dict) -> dict:
     entry_date = out.get("entry_date")
     exit_date = out.get("exit_date")
 
-    if out.get("realized_pnl") is None and shares and entry_price and exit_price:
+    if (force_recompute or out.get("realized_pnl") is None) and shares and entry_price and exit_price:
         out["realized_pnl"] = round((exit_price - entry_price) * shares, 4)
 
-    if out.get("realized_pnl_pct") is None and entry_price:
+    if (force_recompute or out.get("realized_pnl_pct") is None) and entry_price:
         pnl = float(out.get("realized_pnl") or 0)
         cost = shares * entry_price
         if cost:
             out["realized_pnl_pct"] = round(pnl / cost * 100, 4)
 
-    if out.get("holding_period_days") is None and entry_date and exit_date:
+    if (force_recompute or out.get("holding_period_days") is None) and entry_date and exit_date:
         try:
             d1 = date.fromisoformat(str(entry_date))
             d2 = date.fromisoformat(str(exit_date))
@@ -223,7 +229,7 @@ def update_closed_trade(trade_id: str, updates: dict) -> dict | None:
         return None
 
     merged = {**existing, **updates, "id": trade_id}
-    merged = _derive_fields(merged)
+    merged = _derive_fields(merged, force_recompute=True)
 
     conn = _get_conn()
     if not conn:

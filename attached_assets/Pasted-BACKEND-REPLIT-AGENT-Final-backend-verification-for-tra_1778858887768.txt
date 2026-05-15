@@ -1,0 +1,214 @@
+BACKEND REPLIT AGENT — Final backend verification for trade-ledger Portfolio vs S&P 500
+
+Before frontend starts wiring UI, verify that the backend is fully ready for the Portfolio Dashboard + Terminal trade-history workflow.
+
+Goal:
+Make sure the backend fully supports accurate Portfolio vs S&P 500 tracking based on:
+- active holding entry dates
+- closed trade entry/exit dates
+- shares
+- entry/avg price
+- exit price
+- realized P&L
+- Neon persistence
+- /api/caelyn-terminal trade-ledger performance reconstruction
+
+Do not add speculative new features.
+Do not change frontend.
+Do not hardcode tickers.
+Do not break the currently working portfolio terminal analytics.
+Do not use local-only JSON as the primary source.
+
+Required verification areas:
+
+1. Active holdings entry date support
+
+Verify:
+- Active holdings support entry_date/date_added.
+- entry_date is preserved through:
+  - POST /api/portfolio/sync
+  - POST /api/portfolio/holdings
+  - PATCH /api/portfolio/holdings/{ticker}
+  - portfolio_store._normalise()
+  - Neon DB save/load
+  - /api/caelyn-terminal positions builder
+- If entry_date is missing, backend preserves null/missing safely and does not crash.
+- If entry_date is present, the performance chart includes that holding only from entry_date onward.
+
+Test:
+- Pick a safe existing holding.
+- PATCH its entry_date to a test date.
+- Confirm GET /api/portfolio/holdings returns that entry_date.
+- Confirm Neon persisted it.
+- Confirm /api/caelyn-terminal receives that entry_date in its position/holding data.
+- Revert the test value if needed.
+
+2. Closed trades backend support
+
+Verify:
+- Closed trades table exists in Neon.
+- Endpoints work:
+  - GET /api/portfolio/closed-trades
+  - POST /api/portfolio/closed-trades
+  - PATCH /api/portfolio/closed-trades/{id}
+  - DELETE /api/portfolio/closed-trades/{id}
+- Closed trade records support:
+  - symbol/ticker
+  - shares
+  - entry_date
+  - exit_date
+  - entry_price / avg_cost
+  - exit_price
+  - realized_pnl
+  - realized_pnl_pct
+  - holding_period_days
+- P&L and holding period auto-calculate if not supplied.
+- Edited entry/exit dates recalculate or preserve correct derived values according to the intended logic.
+
+Test:
+- Create a TEST_CLOSED trade.
+- Confirm it appears in GET /api/portfolio/closed-trades.
+- PATCH entry_date and exit_date.
+- Confirm changes persist in Neon.
+- Confirm realized_pnl/holding_period_days are correct or recalculated.
+- Delete TEST_CLOSED.
+- Confirm it is gone.
+
+3. Active holding close/delete workflow
+
+Important:
+Frontend needs to know whether backend already has a clean close-position path.
+
+Verify whether there is an endpoint that can atomically:
+- take an active holding
+- create a closed trade record
+- remove the active holding
+- invalidate/rebuild Terminal cache
+
+If this exists, document it.
+
+If it does not exist, add one backend endpoint now:
+
+POST /api/portfolio/holdings/{ticker}/close
+
+Payload:
+{
+  "exit_date": optional,
+  "exit_price": optional,
+  "close_reason": optional
+}
+
+Behavior:
+- Finds active holding by ticker.
+- Uses active holding shares, avg_cost, entry_date.
+- Uses provided exit_price or current price fallback.
+- Creates closed trade record.
+- Removes holding from active holdings.
+- Saves updated active holdings to Neon.
+- Invalidates Terminal cache/signature.
+- Returns:
+  - closed_trade
+  - active_count
+  - active_symbols
+  - holdings_signature
+
+Do not rely on frontend doing two separate calls if backend can safely do this atomically.
+
+Test:
+- Add TEST_CLOSE active holding.
+- Close it through the close endpoint.
+- Confirm TEST_CLOSE is removed from active holdings.
+- Confirm TEST_CLOSE appears in closed trades.
+- Confirm /api/caelyn-terminal no longer includes TEST_CLOSE as active.
+- Confirm performance meta includes closed trade if within selected period.
+- Clean up TEST_CLOSE.
+
+4. Portfolio vs S&P 500 trade-ledger reconstruction
+
+Verify the actual chart method.
+
+For /api/caelyn-terminal, confirm the response includes metadata like:
+- performance_chart_meta
+- method
+- estimated
+- entry_dates_set
+- active_trades_used
+- closed_trades_included
+- missing_entry_dates
+- missing_exit_dates
+- missing_price_history_symbols
+- periods_available
+- warnings
+
+Required behavior:
+- Active holdings with entry_date are only included after entry_date.
+- Active holdings with no entry_date are handled with explicit warning/backward-compatible assumption.
+- Closed trades are included from entry_date to exit_date.
+- Closed trades do not keep marking to market after exit_date.
+- Benchmark aligns to same date range.
+- The chart response changes if entry_date/exit_date changes.
+
+Test:
+A. Active holding date sensitivity
+- Pick a safe test holding or temporary holding.
+- Set entry_date very recent.
+- Call /api/caelyn-terminal.
+- Record 1Y performance chart/meta.
+- Set entry_date much earlier.
+- Call /api/caelyn-terminal again.
+- Confirm chart/meta changes.
+- Clean up/revert.
+
+B. Closed trade date sensitivity
+- Create a TEST_CLOSED trade with a defined entry_date/exit_date.
+- Call /api/caelyn-terminal.
+- Confirm closed_trades_included increments or the trade appears in meta.
+- Change exit_date.
+- Confirm chart/meta changes.
+- Delete test trade.
+
+5. Existing Terminal analytics regression check
+
+Confirm the following still work after the trade-history changes:
+- holdings count = current canonical active portfolio
+- no stale/deleted symbols
+- allocation tabs data still present
+- correlation matrix still present
+- volatility still present
+- risk metrics still present
+- risk suggestions still present
+- options data still present
+- period returns/header values still present
+
+Return a final backend readiness report:
+
+A. Active holdings
+- count
+- entry_date-supported yes/no
+- PATCH endpoint works yes/no
+- Neon persisted yes/no
+
+B. Closed trades
+- table exists yes/no
+- CRUD endpoints yes/no
+- derived P&L calculation yes/no
+- test create/patch/delete passed yes/no
+
+C. Close-position workflow
+- atomic close endpoint exists yes/no
+- if added, endpoint path
+- test close passed yes/no
+
+D. Performance chart
+- method
+- estimated true/false
+- entry_dates_set
+- closed_trades_included
+- missing_entry_dates
+- periods available
+- proof chart changes when dates change
+
+E. Regression
+- holdings/correlation/volatility/risk/options still working yes/no
+
+Only say backend is ready for frontend if all required tests pass.

@@ -767,12 +767,18 @@ class CaelynTerminalProvider:
         for _p in ("1D", "5D", "1M", "6M", "1Y"):
             _pts = perf_charts.get(_p, [])
             _perf_meta[_p] = {
-                "points":    len(_pts),
-                "source":    "tradier_daily_history",
-                "estimated": True,  # reconstructed from close prices, not live NAV
-                "method":    _chart_build_meta.get("method", "current_holdings_assumed"),
-                "entry_dates_set": _chart_build_meta.get("entry_dates_set", 0),
-                "closed_trades_included": _chart_build_meta.get("closed_trades", 0),
+                "points":                      len(_pts),
+                "source":                      "tradier_daily_history",
+                "estimated":                   _chart_build_meta.get("estimated", True),
+                "method":                      _chart_build_meta.get("method", "current_holdings_assumed"),
+                "entry_dates_set":             _chart_build_meta.get("entry_dates_set", 0),
+                "active_trades_used":          _chart_build_meta.get("active_trades_used", len(positions)),
+                "closed_trades_included":      _chart_build_meta.get("closed_trades_included", 0),
+                "missing_entry_dates":         _chart_build_meta.get("missing_entry_dates", []),
+                "missing_exit_dates":          _chart_build_meta.get("missing_exit_dates", []),
+                "missing_price_history_symbols": _chart_build_meta.get("missing_price_history_symbols", []),
+                "periods_available":           _chart_build_meta.get("periods_available", []),
+                "warnings":                    _chart_build_meta.get("warnings", []),
             }
             if _p == "1D" and len(_pts) < 5:
                 _perf_meta[_p]["note"] = "intraday_sparse — market may be closed or pre-market"
@@ -1583,12 +1589,47 @@ class CaelynTerminalProvider:
 
         charts = {"1D": chart_1d, "5D": chart_5d, "1M": chart_1m, "6M": chart_6m, "1Y": chart_1y}
 
-        # Attach reconstruction metadata to the chart dict for the meta builder
+        # ── Reconstruct metadata for the meta builder ────────────────────
+        _missing_entry_dates  = [p["_sym"] for p in positions if not p.get("_entry_date")]
+        _missing_exit_dates   = [(ct.get("ticker") or "") for ct in closed_trades if not ct.get("exit_date")]
+        _missing_price_hist   = [
+            (ct.get("ticker") or "").upper()
+            for ct in closed_trades
+            if not ct_price_maps.get((ct.get("ticker") or "").upper())
+        ]
+        _periods_available    = [p for p in ("1D", "5D", "1M", "6M", "1Y") if charts.get(p)]
+        _active_trades_used   = sum(
+            1 for p in positions
+            if not p.get("_entry_date") or today_str >= p["_entry_date"]
+        )
+
+        _warnings: list[str] = []
+        if _missing_entry_dates:
+            _warnings.append(
+                f"{len(_missing_entry_dates)} active holding(s) have no entry_date "
+                f"({', '.join(_missing_entry_dates[:5])}); included for full chart period"
+            )
+        if _missing_exit_dates:
+            _warnings.append(
+                f"{len(_missing_exit_dates)} closed trade(s) have no exit_date and were skipped"
+            )
+        if _missing_price_hist:
+            _warnings.append(
+                f"{len(_missing_price_hist)} closed trade symbol(s) have no price history; "
+                f"exit_price used as mark-to-market proxy ({', '.join(_missing_price_hist[:5])})"
+            )
+
         charts["_meta"] = {
-            "method":          "trade_ledger_reconstruction" if _has_any_entry_date else "current_holdings_assumed",
-            "entry_dates_set": sum(1 for p in positions if p.get("_entry_date")),
-            "closed_trades":   len(closed_trades),
-            "estimated":       True,
+            "method":                      "trade_ledger_reconstruction" if _has_any_entry_date else "current_holdings_assumed",
+            "estimated":                   True,
+            "entry_dates_set":             sum(1 for p in positions if p.get("_entry_date")),
+            "active_trades_used":          _active_trades_used,
+            "closed_trades_included":      len(closed_trades),
+            "missing_entry_dates":         _missing_entry_dates,
+            "missing_exit_dates":          _missing_exit_dates,
+            "missing_price_history_symbols": _missing_price_hist,
+            "periods_available":           _periods_available,
+            "warnings":                    _warnings,
         }
 
         return charts
