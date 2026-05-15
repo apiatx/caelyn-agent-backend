@@ -5959,16 +5959,14 @@ async def portfolio_options(
 @limiter.limit("5/minute")
 @traceable(name="main.review_portfolio")
 async def review_portfolio(request: Request, api_key: str = Header(None, alias="X-API-Key"), _sub: None = Depends(require_subscription)):
-    """Portfolio Review Agent — structured analysis using options cache, macro, and XAI social ranking.
-    No Finnhub. No EDGAR. Uses claude-sonnet-4-5 with deterministic fallback."""
+    """Portfolio Review Agent — streaming keepalive response, claude-sonnet-4-5, deterministic fallback."""
     import asyncio
     import time as _time
+    import json as _j
     from datetime import datetime, timezone as _tz
-    from fastapi.responses import JSONResponse
 
     await _wait_for_init()
     body = await request.json()
-    start = _time.time()
 
     holdings = body.get("holdings", [])
     print(f"[PORTFOLIO_REVIEW] === ENDPOINT HIT === tickers={[h.get('ticker') for h in holdings]}", flush=True)
@@ -5982,7 +5980,8 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             "structured": {"display_type": "chat", "message": "No holdings to review. Add some positions to your portfolio first."},
         })
 
-    try:
+    async def _do_review():
+        """All work in one coroutine — launched as a task so the streaming loop can send keepalives."""
         import hashlib as _hashlib
         from data.cache import cache as _cache
         from data.portfolio_options_service import scan_portfolio_options as _scan_portfolio_opts
@@ -5994,15 +5993,16 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             parse_claude_review as _parse_review,
             flatten_review_to_text as _flatten_text,
             raw_inputs_used as _raw_inputs,
+            _SOCIAL_CACHE, _SOCIAL_TTL, _holdings_sig as _hsig,
         )
         from services.watchlist_service import list_watchlists as _list_wl, load_watchlist as _load_wl
         from services.x_consensus_cache import _load_disk_cache as _xc_load
         from agent.prompts import SYSTEM_PROMPT as _SYSTEM_PROMPT
 
+        start = _time.time()
         tickers = [h.get("ticker", "").upper().strip() for h in holdings if h.get("ticker")]
         _sig = _hashlib.md5(",".join(sorted(tickers)).encode()).hexdigest()[:12]
 
-        # ── Parallel data gather — no Finnhub, no EDGAR ───────────────────
         _master_snap = _cache.get(_OPTIONS_MASTER_CACHE_KEY) or _cache.get(_OPTIONS_MASTER_LKG_KEY)
 
         async def _fetch_options():
@@ -6010,13 +6010,8 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
                 return {}
             try:
                 return await asyncio.wait_for(
-                    _scan_portfolio_opts(
-                        symbols=tickers,
-                        tradier=data_service.tradier,
-                        cache=_cache,
-                        master_snap=_master_snap,
-                        holdings_sig=_sig,
-                    ),
+                    _scan_portfolio_opts(symbols=tickers, tradier=data_service.tradier,
+                                        cache=_cache, master_snap=_master_snap, holdings_sig=_sig),
                     timeout=12.0,
                 )
             except Exception as _e:
@@ -6029,30 +6024,6 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             except Exception as _e:
                 print(f"[PORTFOLIO_REVIEW] macro failed: {_e}", flush=True)
                 return {}
-
-        # Social ranking: serve from cache only — never auto-fire XAI calls.
-        # Social enrichment is opt-in; pass include_social=true in the request body to trigger it.
-        from services.portfolio_review_service import _SOCIAL_CACHE, _SOCIAL_TTL, _holdings_sig as _hsig
-        _social_sig = _hsig(tickers)
-        _now_ts = _time.time()
-        _cached_social = _SOCIAL_CACHE.get(_social_sig)
-        _include_social = bool(body.get("include_social", False))
-
-        if _cached_social and (_now_ts - _cached_social[0]) < _SOCIAL_TTL:
-            _social_res = _cached_social[1]
-            print("[PORTFOLIO_REVIEW] XAI social ranking: cache hit", flush=True)
-        elif _include_social:
-            # Explicit opt-in — call XAI inline (within Claude's remaining budget)
-            try:
-                xai_p = getattr(agent.data, "xai", None)
-                _social_res = await asyncio.wait_for(_get_social_ranking(xai_p, tickers), timeout=18.0)
-                print("[PORTFOLIO_REVIEW] XAI social ranking: fetched on request", flush=True)
-            except Exception as _se:
-                _social_res = {"status": "unavailable", "ranked": []}
-                print(f"[PORTFOLIO_REVIEW] XAI social ranking failed: {_se}", flush=True)
-        else:
-            _social_res = {"status": "unavailable", "ranked": []}
-            print("[PORTFOLIO_REVIEW] XAI social ranking: skipped (not requested)", flush=True)
 
         async def _fetch_watchlist():
             try:
@@ -6071,19 +6042,35 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             except Exception:
                 return {}
 
+        # Social: cache-only unless include_social=true
+        _social_sig = _hsig(tickers)
+        _cached_social = _SOCIAL_CACHE.get(_social_sig)
+        _include_social = bool(body.get("include_social", False))
+        if _cached_social and (_time.time() - _cached_social[0]) < _SOCIAL_TTL:
+            _social_res = _cached_social[1]
+            print("[PORTFOLIO_REVIEW] XAI social: cache hit", flush=True)
+        elif _include_social:
+            try:
+                xai_p = getattr(agent.data, "xai", None)
+                _social_res = await asyncio.wait_for(_get_social_ranking(xai_p, tickers), timeout=18.0)
+                print("[PORTFOLIO_REVIEW] XAI social: fetched on request", flush=True)
+            except Exception as _se:
+                _social_res = {"status": "unavailable", "ranked": []}
+                print(f"[PORTFOLIO_REVIEW] XAI social failed: {_se}", flush=True)
+        else:
+            _social_res = {"status": "unavailable", "ranked": []}
+
         _opts_res, _macro_res, _wl_tickers, _xc_data = await asyncio.gather(
             _fetch_options(), _fetch_macro(), _fetch_watchlist(), _fetch_xc(),
             return_exceptions=True,
         )
+        if isinstance(_opts_res, Exception):   _opts_res   = {}
+        if isinstance(_macro_res, Exception):  _macro_res  = {}
+        if isinstance(_wl_tickers, Exception): _wl_tickers = []
+        if isinstance(_xc_data, Exception):    _xc_data    = {}
 
-        if isinstance(_opts_res, Exception):    _opts_res    = {}
-        if isinstance(_macro_res, Exception):   _macro_res   = {}
-        if isinstance(_wl_tickers, Exception):  _wl_tickers  = []
-        if isinstance(_xc_data, Exception):     _xc_data     = {}
-
-        _elapsed = _time.time() - start
         print(
-            f"[PORTFOLIO_REVIEW] data gathered {_elapsed:.1f}s | "
+            f"[PORTFOLIO_REVIEW] data gathered {_time.time()-start:.1f}s | "
             f"opts={bool(_opts_res)} macro={bool(_macro_res)} "
             f"social={(_social_res or {}).get('status','?')} "
             f"wl={len(_wl_tickers or [])} xc={bool(_xc_data)}",
@@ -6091,7 +6078,6 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
         )
 
         _opts_by_sym = (_opts_res or {}).get("by_symbol", {}) if isinstance(_opts_res, dict) else {}
-
         _context = _build_context(
             holdings=holdings,
             options_data=_opts_by_sym,
@@ -6101,102 +6087,114 @@ async def review_portfolio(request: Request, api_key: str = Header(None, alias="
             x_consensus=_xc_data if isinstance(_xc_data, dict) else {},
         )
 
-        # ── Try Claude Sonnet 4.5 ─────────────────────────────────────────
-        import json as _jmod
-        _ctx_str = _jmod.dumps(_context, default=str)
-        _time_left = 70.0 - (_time.time() - start)
-        _claude_timeout = max(30.0, min(65.0, _time_left - 2.0))
-        print(
-            f"[PORTFOLIO_REVIEW] context {len(_ctx_str):,} chars | "
-            f"claude timeout {_claude_timeout:.0f}s | model={MODEL_CLAUDE_PREMIUM}",
-            flush=True,
-        )
+        # Slim context — strips verbose nested objects so Claude writes terse views
+        def _slim_ctx(ctx: dict) -> str:
+            port = ctx.get("portfolio", {})
+            slim = {
+                "portfolio": {
+                    "count": port.get("count"),
+                    "hhi": port.get("hhi"),
+                    "max_weight_pct": port.get("max_weight_pct"),
+                    "total_return_pct": port.get("total_return_pct"),
+                },
+                "macro": {k: v for k, v in ctx.get("macro", {}).items() if v is not None},
+                "holdings": [
+                    {k: v for k, v in {
+                        "ticker":   r.get("ticker"),
+                        "weight":   r.get("weight_pct"),
+                        "cost":     r.get("avg_cost"),
+                        "pnl_pct":  r.get("pnl_pct"),
+                        "price":    r.get("current_price"),
+                        "opts":     (r.get("options") or {}).get("signal"),
+                        "soc":      (r.get("social") or {}).get("sentiment"),
+                        "xc":       (r.get("x_consensus") or {}).get("sentiment"),
+                    }.items() if v is not None}
+                    for r in ctx.get("holdings", [])
+                ],
+            }
+            wl = ctx.get("watchlist_candidates", [])
+            if wl:
+                slim["watchlist_top"] = [(t if isinstance(t, str) else t.get("ticker", "")) for t in wl[:5] if t]
+            return _j.dumps(slim, separators=(",", ":"), default=str)
+
+        _ctx_str = _slim_ctx(_context)
+        print(f"[PORTFOLIO_REVIEW] context {len(_ctx_str):,} chars | model={MODEL_CLAUDE_PREMIUM}", flush=True)
 
         _claude_result = None
-        _agent_error   = None
+        _agent_error = None
+        _prompt = _build_prompt(_ctx_str, bool(_wl_tickers), n_holdings=len(holdings))
+        try:
+            _resp = await asyncio.to_thread(
+                agent.client.messages.create,
+                model=MODEL_CLAUDE_PREMIUM,
+                max_tokens=4096,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": _prompt}],
+            )
+            _raw = _resp.content[0].text.strip()
+            print(f"[PORTFOLIO_REVIEW] Claude {len(_raw)} chars ({_time.time()-start:.1f}s total)", flush=True)
+            _claude_result = _parse_review(_raw)
+            if not _claude_result:
+                _agent_error = "Claude response did not match expected JSON structure"
+                print(f"[PORTFOLIO_REVIEW] parse fail | first300: {_raw[:300]!r}", flush=True)
+        except Exception as _ce:
+            import traceback as _tb; _tb.print_exc()
+            _agent_error = f"LLM error: {type(_ce).__name__}: {str(_ce)[:120]}"
+            print(f"[PORTFOLIO_REVIEW] Claude error: {_ce}", flush=True)
 
-        if _claude_timeout >= 15.0:
-            _prompt = _build_prompt(_ctx_str, bool(_wl_tickers), n_holdings=len(holdings))
-            try:
-                _resp = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        agent.client.messages.create,
-                        model=MODEL_CLAUDE_PREMIUM,
-                        max_tokens=900,
-                        system=_SYSTEM_PROMPT,
-                        messages=[{"role": "user", "content": _prompt}],
-                    ),
-                    timeout=_claude_timeout,
-                )
-                _raw = _resp.content[0].text.strip()
-                print(f"[PORTFOLIO_REVIEW] Claude {len(_raw)} chars ({_time.time()-start:.1f}s total)", flush=True)
-                _claude_result = _parse_review(_raw)
-                if not _claude_result:
-                    _agent_error = "Claude response did not match expected JSON structure"
-                    print(f"[PORTFOLIO_REVIEW] parse fail | first300: {_raw[:300]!r}", flush=True)
-                    print(f"[PORTFOLIO_REVIEW] parse fail | last200: {_raw[-200:]!r}", flush=True)
-            except asyncio.TimeoutError:
-                _agent_error = "LLM synthesis timed out"
-                print(f"[PORTFOLIO_REVIEW] Claude timed out after {_claude_timeout:.0f}s", flush=True)
-            except Exception as _ce:
-                import traceback as _tb; _tb.print_exc()
-                _agent_error = f"LLM synthesis error: {type(_ce).__name__}: {str(_ce)[:120]}"
-                print(f"[PORTFOLIO_REVIEW] Claude error: {_ce}", flush=True)
-        else:
-            _agent_error = "Insufficient time budget for LLM synthesis"
-            print(f"[PORTFOLIO_REVIEW] Skipping Claude — only {_claude_timeout:.0f}s left", flush=True)
-
-        # ── Build response ────────────────────────────────────────────────
         _as_of = datetime.now(_tz.utc).isoformat()
         _raw_in = _raw_inputs(_context, _social_res, _opts_by_sym, bool(_macro_res), bool(_wl_tickers))
 
         if _claude_result and isinstance(_claude_result, dict):
             _txt = _flatten_text(_claude_result)
-            _body = {
-                "ok":                   True,
-                "agent_status":         "ok",
-                "as_of":                _as_of,
-                "portfolio_summary":    _claude_result.get("portfolio_summary", {}),
+            return {
+                "ok": True, "agent_status": "ok", "as_of": _as_of,
+                "portfolio_summary":     _claude_result.get("portfolio_summary", {}),
                 "weighting_suggestions": _claude_result.get("weighting_suggestions", []),
-                "asset_reviews":        _claude_result.get("asset_reviews", []),
-                "watchlist_swaps":      _claude_result.get("watchlist_swaps", []),
-                "risk_flags":           _claude_result.get("risk_flags", []),
-                "raw_inputs_used":      _raw_in,
-                "unavailable_inputs":   [],
-                "agent_error_summary":  None,
-                "type":                 "portfolio_review",
-                "analysis":             _txt,
-                "message":              (_claude_result.get("portfolio_summary") or {}).get("headline", "Portfolio review complete."),
-                "structured":           {"display_type": "portfolio_review", **_claude_result},
+                "asset_reviews":         _claude_result.get("asset_reviews", []),
+                "watchlist_swaps":       _claude_result.get("watchlist_swaps", []),
+                "risk_flags":            _claude_result.get("risk_flags", []),
+                "raw_inputs_used": _raw_in, "unavailable_inputs": [],
+                "agent_error_summary": None, "type": "portfolio_review",
+                "analysis": _txt,
+                "message": (_claude_result.get("portfolio_summary") or {}).get("headline", "Portfolio review complete."),
+                "structured": {"display_type": "portfolio_review", **_claude_result},
             }
         else:
             _fallback = _build_deterministic(_context)
             _fallback["agent_error_summary"] = _agent_error or "LLM synthesis unavailable"
             _fallback["raw_inputs_used"] = _raw_in
             _txt = _flatten_text(_fallback)
-            _body = {
-                **_fallback,
-                "as_of":      _as_of,
-                "type":       "portfolio_review",
-                "analysis":   _txt,
-                "message":    (_fallback.get("portfolio_summary") or {}).get("headline", "Portfolio review (fallback)."),
+            return {
+                **_fallback, "as_of": _as_of, "type": "portfolio_review",
+                "analysis": _txt,
+                "message": (_fallback.get("portfolio_summary") or {}).get("headline", "Portfolio review (fallback)."),
                 "structured": {"display_type": "portfolio_review", **_fallback},
             }
 
-        return JSONResponse(status_code=200, content=_body)
+    async def _stream():
+        """Streaming wrapper: yields keepalive spaces while _do_review() runs, then the JSON result."""
+        task = asyncio.ensure_future(_do_review())
+        try:
+            while True:
+                try:
+                    result = await asyncio.wait_for(asyncio.shield(task), timeout=8.0)
+                    yield _j.dumps(result, default=str).encode()
+                    return
+                except asyncio.TimeoutError:
+                    yield b" "  # keepalive — proxy sees bytes flowing, stays alive
+        except Exception as _exc:
+            import traceback as _tb; _tb.print_exc()
+            print(f"[PORTFOLIO_REVIEW] FATAL: {_exc}", flush=True)
+            task.cancel()
+            yield _j.dumps({
+                "ok": False, "agent_status": "error", "type": "portfolio_review",
+                "message": "Portfolio review encountered an error. Please try again.",
+                "structured": {"display_type": "chat", "message": "Portfolio review encountered an error. Please try again."},
+                "agent_error_summary": str(_exc)[:200],
+            }, default=str).encode()
 
-    except Exception as e:
-        import traceback as _tb; _tb.print_exc()
-        print(f"[PORTFOLIO_REVIEW] FATAL: {e}", flush=True)
-        return JSONResponse(status_code=200, content={
-            "ok":                  False,
-            "agent_status":        "error",
-            "as_of":               datetime.now(_tz.utc).isoformat(),
-            "type":                "portfolio_review",
-            "message":             "Portfolio review encountered an error. Please try again.",
-            "structured":          {"display_type": "chat", "message": "Portfolio review encountered an error. Please try again."},
-            "agent_error_summary": str(e)[:200],
-        })
+    return StreamingResponse(_stream(), media_type="application/json")
 
 
 

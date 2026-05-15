@@ -524,41 +524,28 @@ def build_review_prompt(context_str: str, has_watchlist: bool, n_holdings: int =
         else ""
     )
 
-    return f"""You are CaelynAI's Portfolio Review Agent. Be extremely concise.
+    return f"""You are CaelynAI's Portfolio Review Agent.
 
 PORTFOLIO DATA:
 {context_str}
 {watchlist_note}
 
-Return ONLY valid JSON — no markdown, no backticks, nothing outside the JSON:
+OUTPUT: Raw JSON only. No markdown fences, no backticks, no explanation. Start your response with {{ and end with }}.
 
 {{
-  "portfolio_summary": {{
-    "headline": "N holdings | theme | risk level",
-    "risk_level": "low|moderate|high|aggressive",
-    "overview": "1-2 sentences max. Theme fit + top risk only."
-  }},
+  "portfolio_summary": {{"headline": "19 holdings | theme | risk", "risk_level": "low|moderate|high|aggressive", "overview": "Two sentences max."}},
   "holdings": [
-    {{
-      "ticker": "SYMBOL",
-      "company": "Name",
-      "theme": "theme",
-      "action": "keep_core|add_on_confirmation|trim_watch|reduce_risk|monitor",
-      "confidence": "low|medium|high",
-      "view": "Bull: <6 words>. Bear: <6 words>."
-    }}
+    {{"ticker": "X", "company": "Name", "theme": "theme", "action": "keep_core|add_on_confirmation|trim_watch|reduce_risk|monitor", "confidence": "low|medium|high", "view": "Bull: 5 words. Bear: 5 words."}}
   ],
-  "risk_flags": [
-    {{"severity": "info|warning|critical", "title": "title", "details": "1 sentence"}}
-  ]
+  "risk_flags": [{{"severity": "info|warning|critical", "title": "title", "details": "one sentence"}}]
 }}
 
-STRICT RULES:
-- holdings array MUST have exactly {n_holdings} objects — one per ticker, in any order.
-- view: "Bull:" then "Bear:" — 6 words each MAX. No fluff.
-- overview: 1-2 sentences only.
-- risk_flags: only critical/real risks, 0-3 max.
-- Return ONLY the JSON. No other text whatsoever."""
+RULES — violating these breaks the parser:
+1. holdings MUST contain all {n_holdings} tickers. Every ticker gets one object.
+2. view field: "Bull: X. Bear: Y." — X and Y each 5 words or fewer. Hard limit.
+3. overview: two sentences max.
+4. risk_flags: 0 to 3 items only. Skip if no real risk.
+5. Output ONLY the JSON object. First character must be {{."""
 
 
 def parse_claude_review(raw_text: str) -> Optional[dict]:
@@ -568,6 +555,85 @@ def parse_claude_review(raw_text: str) -> Optional[dict]:
       - Legacy: {portfolio_summary, weighting_suggestions, asset_reviews, ...}
     Always returns legacy shape with weighting_suggestions + asset_reviews.
     """
+    import re as _re
+
+    def _expand_holdings(parsed: dict) -> dict:
+        """Expand merged holdings array → legacy weighting_suggestions + asset_reviews."""
+        holdings_list = parsed.get("holdings") or []
+        ws, ar = [], []
+        for h in holdings_list:
+            ticker = h.get("ticker", "")
+            view   = h.get("view", "")
+            bull, bear = "", ""
+            if "Bear:" in view:
+                parts = view.split("Bear:", 1)
+                bull  = parts[0].replace("Bull:", "").strip().rstrip(".")
+                bear  = parts[1].strip().rstrip(".")
+            elif "Bull:" in view:
+                bull = view.replace("Bull:", "").strip()
+            else:
+                bull = view
+            ws.append({
+                "ticker":           ticker,
+                "current_weight":   h.get("weight", 0.0),
+                "suggested_action": h.get("action", "monitor"),
+                "confidence":       h.get("confidence", "medium"),
+                "reason":           view,
+            })
+            ar.append({
+                "ticker":    ticker,
+                "company":   h.get("company", ticker),
+                "theme":     h.get("theme", ""),
+                "bull_case": bull,
+                "bear_case": bear,
+                "view":      view,
+            })
+        parsed["weighting_suggestions"] = ws
+        parsed["asset_reviews"]         = ar
+        return parsed
+
+    def _try_repair(raw: str) -> Optional[dict]:
+        """
+        Salvage truncated Claude output. Extracts portfolio_summary and any
+        complete holding objects even when the JSON is cut off mid-stream.
+        """
+        try:
+            ps_m = _re.search(r'"portfolio_summary"\s*:\s*(\{[^{}]*\})', raw)
+            if not ps_m:
+                return None
+            ps = json.loads(ps_m.group(1))
+
+            h_pattern = _re.compile(
+                r'\{\s*"ticker"\s*:\s*"([^"]+)"[^{}]*\}', _re.DOTALL
+            )
+            holdings_found = []
+            seen = set()
+            for m in h_pattern.finditer(raw):
+                try:
+                    obj = json.loads(m.group(0))
+                    t = obj.get("ticker", "")
+                    if t and t not in seen:
+                        seen.add(t)
+                        holdings_found.append(obj)
+                except Exception:
+                    pass
+
+            if not holdings_found:
+                return None
+
+            repaired = {
+                "portfolio_summary": ps,
+                "holdings": holdings_found,
+                "risk_flags": [],
+            }
+            print(
+                f"[PORTFOLIO_REVIEW] truncation repair: recovered {len(holdings_found)} holdings",
+                flush=True,
+            )
+            return _expand_holdings(repaired)
+        except Exception:
+            return None
+
     try:
         clean = raw_text.strip()
         if clean.startswith("```"):
@@ -575,51 +641,23 @@ def parse_claude_review(raw_text: str) -> Optional[dict]:
         start = clean.find("{")
         end   = clean.rfind("}") + 1
         if start < 0 or end <= start:
-            return None
-        parsed = json.loads(clean[start:end])
+            return _try_repair(raw_text)
 
-        # Accept new merged-holdings schema (ultra-compact: no reason/bull_case/bear_case)
+        try:
+            parsed = json.loads(clean[start:end])
+        except json.JSONDecodeError:
+            return _try_repair(raw_text)
+
+        # Accept new merged-holdings schema
         if "holdings" in parsed and "portfolio_summary" in parsed:
-            holdings_list = parsed.get("holdings") or []
-            ws = []
-            ar = []
-            for h in holdings_list:
-                ticker  = h.get("ticker", "")
-                view    = h.get("view", "")
-                # Split "Bull: X. Bear: Y." into separate fields for legacy compat
-                bull, bear = "", ""
-                if "Bear:" in view:
-                    parts = view.split("Bear:", 1)
-                    bull  = parts[0].replace("Bull:", "").strip().rstrip(".")
-                    bear  = parts[1].strip().rstrip(".")
-                elif "Bull:" in view:
-                    bull = view.replace("Bull:", "").strip()
-                else:
-                    bull = view
-                ws.append({
-                    "ticker":            ticker,
-                    "current_weight":    h.get("weight", 0.0),
-                    "suggested_action":  h.get("action", "monitor"),
-                    "confidence":        h.get("confidence", "medium"),
-                    "reason":            view,
-                })
-                ar.append({
-                    "ticker":    ticker,
-                    "company":   h.get("company", ticker),
-                    "theme":     h.get("theme", ""),
-                    "bull_case": bull,
-                    "bear_case": bear,
-                    "view":      view,
-                })
-            parsed["weighting_suggestions"] = ws
-            parsed["asset_reviews"]         = ar
+            parsed = _expand_holdings(parsed)
 
         required = {"portfolio_summary", "weighting_suggestions", "asset_reviews"}
         if not required.issubset(parsed.keys()):
-            return None
+            return _try_repair(raw_text)
         return parsed
     except Exception:
-        return None
+        return _try_repair(raw_text)
 
 
 def flatten_review_to_text(review: dict) -> str:

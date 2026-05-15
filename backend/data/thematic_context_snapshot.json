@@ -21,7 +21,7 @@
       "score": 89.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (88/100) vs theme universe with broad participation (75% advancing). Outperforming SPY -0.3%, QQQ -0.2",
+        "Top-percentile RS (88/100) vs theme universe. Outperforming SPY -0.3%, QQQ -0.2%. Breadth N/A.",
         "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
@@ -30,44 +30,34 @@
         "XSD",
         "PSI"
       ],
-      "related_tickers": [
-        "AMD",
-        "AMAT",
-        "ASML"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Memory & Storage",
       "score": 88.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (88/100) vs theme universe with broad participation (100% advancing). Outperforming SPY -0.5%, QQQ -0."
+        "Top-percentile RS (88/100) vs theme universe. Outperforming SPY -0.5%, QQQ -0.4%. Breadth N/A."
       ],
       "related_etfs": [
         "DRAM",
         "SMH",
         "SOXX"
       ],
-      "related_tickers": [
-        "AMD"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Semiconductor Equipment",
       "score": 86.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (87/100) vs theme universe with broad participation (80% advancing). Outperforming SPY -0.1%, QQQ -0.0"
+        "Top-percentile RS (87/100) vs theme universe. Outperforming SPY -0.1%, QQQ -0.0%. Breadth N/A."
       ],
       "related_etfs": [
         "SOXX",
         "SMH"
       ],
-      "related_tickers": [
-        "AEHR",
-        "AMD",
-        "AMAT"
-      ]
+      "related_tickers": []
     },
     {
       "name": "AI Networking",
@@ -104,14 +94,12 @@
       "score": 80.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (80/100) vs theme universe. Outperforming SPY +1.0%, QQQ +1.1%. Breadth 0%."
+        "Top-percentile RS (80/100) vs theme universe. Outperforming SPY +1.0%, QQQ +1.1%. Breadth N/A."
       ],
       "related_etfs": [
         "TAN"
       ],
-      "related_tickers": [
-        "ARRY"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Crypto Equities / Blockchain",
@@ -155,9 +143,7 @@
         "XES",
         "IEZ"
       ],
-      "related_tickers": [
-        "BKR"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Robotics & Automation",
@@ -172,9 +158,7 @@
         "IRBO",
         "ARKQ"
       ],
-      "related_tickers": [
-        "ABBNY"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Data Center Infrastructure",
@@ -189,11 +173,7 @@
         "VPN",
         "DTCR"
       ],
-      "related_tickers": [
-        "DLR",
-        "AMT",
-        "CCI"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Cybersecurity",
@@ -208,9 +188,7 @@
         "BUG",
         "IHAK"
       ],
-      "related_tickers": [
-        "CRWD"
-      ]
+      "related_tickers": []
     }
   ],
   "dead_zones": [
@@ -219,14 +197,12 @@
       "score": 10.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 100% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth N/A \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "IHI"
       ],
-      "related_tickers": [
-        "ABT"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Homebuilders",
@@ -260,31 +236,27 @@
       "score": 22.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth N/A \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XRT",
         "RTH"
       ],
-      "related_tickers": [
-        "AMZN"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Travel & Transportation",
       "score": 23.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (23/100) vs 60-theme universe. SPY delta +0.7%, QQQ delta +0.8%. Breadth 100% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (23/100) vs 60-theme universe. SPY delta +0.7%, QQQ delta +0.8%. Breadth N/A \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "IYT",
         "JETS",
         "XTN"
       ],
-      "related_tickers": [
-        "FDX"
-      ]
+      "related_tickers": []
     }
   ],
   "sector_leaders": [
@@ -310,7 +282,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-15T08:05:55.117374+00:00",
+  "last_updated": "2026-05-15T08:21:53.091660+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -321,5 +293,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1778832355.117436
+  "_saved_at": 1778833313.0917106
 }
