@@ -1,0 +1,387 @@
+You are working in the CaelynAI backend Replit project.
+
+Goal:
+Make the Portfolio Review Agent work on the Portfolio page.
+
+Current issue:
+The Portfolio Review panel/button exists on the frontend, but the backend agent call is failing. The latest error is:
+
+Failed to get portfolio review. Please try again.
+Server returned 500: {"error":"Agent returned 500"}
+
+This means the frontend is reaching the backend route, but the backend Portfolio Review agent/synthesis layer is failing internally.
+
+Do NOT change the frontend first.
+Do NOT create a parallel portfolio system.
+Do NOT invent replacement endpoint paths if the current endpoint already exists.
+Do NOT rebuild the Portfolio page.
+Fix/reuse the backend Portfolio Review route and agent logic.
+
+Core product requirement:
+This needs to become CaelynAI’s specialized Portfolio Agent.
+
+The agent should help the user make portfolio decisions using the combined signal already being collected for the Portfolio page / Portfolio Terminal sections. It should not give overly hard “buy/sell now” instructions unless there is serious risk to the theme, macro setup, news, earnings, liquidity, or portfolio concentration.
+
+The agent should feel like a portfolio co-pilot:
+- direct
+- decision-oriented
+- signal-based
+- aware of portfolio risk
+- not generic
+- not overly prescriptive unless the data justifies it
+
+Step 1 — Audit existing backend logic first:
+Search the backend for any existing Portfolio Review / Portfolio Agent logic before building anything new.
+
+Search for:
+- portfolio review
+- portfolio_review
+- review portfolio
+- portfolio agent
+- ai portfolio review
+- portfolio analysis
+- risk profile
+- portfolio terminal
+- portfolio summary
+- compare to watchlist
+- watchlist swaps
+- terminal portfolio
+- holdings analysis
+
+Find and document:
+1. The exact backend endpoint currently hit by the Portfolio Review button.
+2. Whether a portfolio review service/agent already exists.
+3. Whether it calls the generic /api/query agent, TradingAgent, Claude/Anthropic directly, OpenAI, or another internal agent wrapper.
+4. Why it currently returns 500 / {"error":"Agent returned 500"}.
+5. What response shape the frontend currently expects.
+6. What Portfolio Terminal data/context is already assembled and returned to the Portfolio page.
+
+If existing Portfolio Review logic exists:
+- reuse it
+- fix it
+- expand it to match the requirements below
+- preserve existing endpoint path and response compatibility where possible
+
+If no existing Portfolio Review logic exists:
+- build the smallest backend service needed
+- use the endpoint the frontend already calls
+- do not require frontend changes unless absolutely necessary
+
+Step 2 — Fix the 500 properly:
+The endpoint should not fail just because the LLM/agent call fails.
+
+Implement:
+- server-side logging around the failing agent call
+- real exception type/message in backend logs
+- safe frontend error message only
+- deterministic fallback review if LLM synthesis fails
+
+Rules:
+- If portfolio holdings exist, return HTTP 200 with a useful review.
+- If the LLM succeeds, return agent_status: "ok".
+- If the LLM fails, return agent_status: "fallback" and still return a deterministic portfolio review.
+- Only return 4xx/5xx if holdings cannot be loaded or the route itself is broken.
+- Do not expose stack traces to the frontend.
+
+Common failure causes to check:
+- wrong agent function signature
+- passing dict where string is expected
+- missing user_id/session_id/query/message field
+- malformed context payload
+- prompt too large
+- non-JSON-serializable values like Decimal, datetime, NaN, Infinity
+- model parser expecting JSON but receiving text
+- missing API key/env var
+- Anthropic/OpenAI/XAI/Gemini wrapper exception being swallowed
+- route calling the generic chat agent incorrectly
+
+Step 3 — Reuse existing Portfolio Terminal data first:
+The Portfolio Agent should synthesize the data already being collected for the Portfolio page / Terminal tab/toggle sections.
+
+Do not create a new expensive per-click data waterfall.
+
+Reuse existing backend logic/caches for:
+- current holdings
+- allocation / weights
+- portfolio performance
+- top performers
+- risk metrics
+- volatility
+- beta
+- max drawdown
+- Sharpe / Sortino if already computed
+- concentration risk
+- asset/theme allocation
+- stock-specific price / change %
+- relative volume / average volume X
+- high volume-to-market-cap ratio logic
+- options flow findings for portfolio tickers
+- stock-specific news already collected for the page
+- near-term upcoming earnings
+- analyst expectations / expected beats if already wired
+- thematic universe
+- theme stage analysis: Stage 1 / 2 / 3 / 4
+- macro / regime / thematic context if already cached
+- watchlist data for possible adds/swaps
+
+Important:
+If the Portfolio Terminal/page payload already contains a section, use that exact existing service or cache. Do not duplicate it with new provider calls.
+
+Step 4 — Add lightweight Grok/XAI social sentiment ranking:
+The one new data point needed is a simple Grok/XAI call to rank the user’s current portfolio holdings by social sentiment/momentum on X.
+
+Before adding a new call:
+- first check if backend already has a reusable Grok/XAI social sentiment service
+- check existing Social page / X consensus / Grok provider logic
+- reuse existing XAI client/provider wrapper if present
+- reuse existing cache conventions if present
+
+If there is already stock-specific Grok/XAI sentiment data available for portfolio tickers:
+- reuse it
+- do not add a duplicate call
+
+If not available:
+Create a lightweight portfolio-specific XAI sentiment helper.
+
+Requirements:
+- Input: portfolio tickers only
+- Output: ranked holdings by X/social sentiment and momentum
+- Model: use the cheapest/fastest capable Grok model available in the existing backend config; this does not need deep reasoning
+- Prompt should ask Grok/XAI to rank the portfolio holdings by current X sentiment/momentum and return compact JSON
+- Keep it simple: ranking, sentiment label, momentum label, key reason, risk note
+- Cache result by user/holdings signature for a short TTL, e.g. 30–60 minutes
+- If XAI fails, do not fail the Portfolio Review endpoint
+- Mark social_sentiment unavailable/fallback in raw_inputs_used
+
+Example XAI prompt intent:
+“Rank these portfolio tickers by current X/Twitter social sentiment and momentum. Return compact JSON only. Focus on credible market conversation, acceleration/deceleration, crowding risk, and whether sentiment supports or conflicts with price action.”
+
+Expected helper output shape:
+{
+  "ranked": [
+    {
+      "ticker": "MRVL",
+      "rank": 1,
+      "sentiment": "bullish|neutral|bearish|mixed",
+      "momentum": "accelerating|stable|fading|unknown",
+      "crowding_risk": "low|medium|high|unknown",
+      "reason": "...",
+      "risk_note": "..."
+    }
+  ],
+  "source": "xai",
+  "status": "ok|fallback|unavailable",
+  "as_of": "..."
+}
+
+Step 5 — Build compact Portfolio Agent context:
+Do not dump the entire Portfolio Terminal payload into the LLM.
+
+Create a compact context object:
+- portfolio summary metrics
+- top concentrations
+- top risks
+- holdings table with only useful fields
+- options flow summary by ticker
+- volume/relative volume signals by ticker
+- news summary by ticker
+- theme/stage by ticker
+- earnings/analyst setup by ticker
+- social sentiment ranking by ticker
+- watchlist candidates
+- macro/theme context summary
+
+Normalize all values:
+- convert dates to strings
+- convert Decimals to floats
+- handle NaN/Infinity/null safely
+- cap overly long news/social text
+- prioritize largest weights and highest-risk tickers if context is too large
+
+Step 6 — Agent output requirements:
+The Portfolio Review Agent response should recommend:
+
+1. Portfolio-level read
+- overall risk posture
+- concentration risk
+- volatility/risk regime
+- theme exposure
+- strongest signals
+- weakest signals
+- macro/news/theme risks
+
+2. Suggested weighting changes
+For each relevant holding:
+- current weight if available
+- suggested action:
+  - keep_core
+  - add_on_confirmation
+  - trim_watch
+  - reduce_risk
+  - swap_candidate
+  - monitor
+- confidence: low / medium / high
+- reasoning based on combined signals
+
+Do not use hard “sell/buy immediately” language unless severe risk exists.
+
+3. Bull case / bear case by asset
+For each meaningful holding:
+- bull case
+- bear case
+- current signal read
+- what would change the view
+
+4. Watchlist add/swap ideas
+Compare current holdings against the user’s watchlist.
+
+Suggest possible adds/swaps from watchlist only when supported by data:
+- stronger theme stage
+- stronger relative volume
+- better news/social momentum
+- better upcoming earnings setup
+- better options flow
+- lower risk / better diversification
+- cleaner macro alignment
+
+Do not invent tickers outside the watchlist for swap suggestions unless existing backend logic already returns “recommended candidates.”
+
+5. Risk flags
+Include urgent warnings only for serious risks:
+- broken thesis
+- Stage 4 / deteriorating theme
+- negative macro/news catalyst
+- earnings danger
+- severe concentration
+- liquidity/volume breakdown
+- options flow reversal
+- social sentiment collapse
+- extreme volatility/drawdown risk
+
+Step 7 — Preferred response contract:
+If the frontend already expects a specific response shape, preserve/adapt to it.
+
+If no strict contract exists, return structured JSON like this:
+
+{
+  "ok": true,
+  "agent_status": "ok|fallback",
+  "as_of": "...",
+  "portfolio_summary": {
+    "headline": "...",
+    "risk_level": "low|moderate|high|aggressive",
+    "top_strengths": [],
+    "top_risks": [],
+    "theme_read": "...",
+    "macro_read": "...",
+    "social_read": "..."
+  },
+  "weighting_suggestions": [
+    {
+      "ticker": "MRVL",
+      "current_weight": 7.5,
+      "suggested_action": "keep_core|add_on_confirmation|trim_watch|reduce_risk|swap_candidate|monitor",
+      "confidence": "low|medium|high",
+      "reason": "..."
+    }
+  ],
+  "asset_reviews": [
+    {
+      "ticker": "MRVL",
+      "company": "...",
+      "theme": "...",
+      "stage": "Stage 1|Stage 2|Stage 3|Stage 4|unknown",
+      "bull_case": "...",
+      "bear_case": "...",
+      "signals": {
+        "price_momentum": "...",
+        "relative_volume": "...",
+        "volume_marketcap": "...",
+        "options_flow": "...",
+        "news": "...",
+        "social_sentiment": "...",
+        "earnings": "..."
+      },
+      "view": "..."
+    }
+  ],
+  "watchlist_swaps": [
+    {
+      "current_ticker": "...",
+      "watchlist_ticker": "...",
+      "rationale": "...",
+      "urgency": "low|medium|high"
+    }
+  ],
+  "risk_flags": [
+    {
+      "severity": "info|warning|critical",
+      "title": "...",
+      "details": "..."
+    }
+  ],
+  "raw_inputs_used": {
+    "portfolio": true,
+    "watchlist": true,
+    "options_flow": true,
+    "volume_marketcap": true,
+    "relative_volume": true,
+    "news": true,
+    "theme_stage": true,
+    "social_sentiment": true,
+    "earnings": true,
+    "macro_context": true
+  },
+  "unavailable_inputs": [],
+  "agent_error_summary": null
+}
+
+If fallback triggered:
+- agent_status should be "fallback"
+- agent_error_summary should be short and safe, like "LLM synthesis unavailable"
+- still return portfolio_summary, weighting_suggestions, asset_reviews, risk_flags
+
+Step 8 — Deterministic fallback logic:
+Build a non-LLM fallback review from available metrics.
+
+Fallback should:
+- rank holdings by risk/opportunity using current metrics
+- identify top concentration risks
+- flag extreme volatility/beta/drawdown
+- use theme allocation/stage if available
+- use relative volume / volume-market-cap signal if available
+- include options/news/earnings/social only if available
+- produce useful weighting_suggestions and risk_flags
+
+This fallback is mandatory. The page should not show a useless 500 when holdings exist.
+
+Step 9 — Validation:
+After implementation, validate with the exact endpoint the frontend calls.
+
+Run:
+1. backend restart
+2. curl the Portfolio Review endpoint
+3. test with real portfolio holdings
+4. test with XAI/social unavailable or disabled
+5. test with LLM provider unavailable or forced failure if easy
+6. confirm endpoint returns HTTP 200 when holdings exist
+7. confirm frontend panel renders the response
+
+Required validation output:
+- exact endpoint tested
+- exact curl command
+- HTTP status
+- whether agent_status was ok or fallback
+- files changed
+- root cause of prior 500
+- data sources reused
+- whether new XAI sentiment call was added or existing social logic was reused
+- sample trimmed JSON response
+
+Acceptance criteria:
+- Portfolio Review button no longer returns 500 when holdings exist.
+- Agent returns a useful portfolio review.
+- Response includes portfolio-level read, weighting suggestions, bull/bear cases, watchlist add/swap suggestions, and risk flags.
+- Existing Portfolio Terminal data sources are reused.
+- XAI social sentiment ranking is either reused from existing logic or added as one lightweight cached call.
+- Partial source failures do not break the whole review.
