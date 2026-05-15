@@ -1,0 +1,156 @@
+Audit and implement Stan Weinstein Stage Analysis for the Themes page.
+
+Context:
+The app already has some Stage 2 breakout / stage analysis logic somewhere in the backend, currently used by the Terminal page agent prompt/screener for stocks. I do not know whether it is reusable for theme-level categorization. Do not assume. First find it, audit it, then decide whether to reuse/refactor or build a small shared module.
+
+Goal:
+Add Stage Analysis to the Themes page so every theme/sub-theme/sector can be categorized as Stage 1, Stage 2, Stage 3, or Stage 4, including transition labels like Stage 1 → 2 breakout watch and Stage 3 → 4 danger zone.
+
+Important stage rules:
+- Use weekly charts, not intraday/day-trading logic.
+- Core reference is the 30-week moving average.
+- Stage 1 = basing after a decline, mostly sideways, price oscillating around a flat 30-week MA.
+- Stage 1 → 2 = breakout from base, ideally above resistance, above/rising 30-week MA, with volume expansion.
+- Stage 2 = advancing trend, price mostly above rising 30-week MA.
+- Stage 3 = topping/consolidation, momentum fades, 30-week MA flattens, price oscillates around/near MA after prior uptrend.
+- Stage 3 → 4 = danger zone / breakdown risk.
+- Stage 4 = decline, price below declining 30-week MA.
+- Relative strength vs SPY matters.
+- Broad market stage matters.
+- Volume confirmation matters most on Stage 1 → 2 breakouts.
+
+Audit tasks:
+1. Search the backend for existing stage analysis / Stage 2 breakout logic used by the Terminal page agent.
+   Look for terms:
+   - "stage 2"
+   - "stage2"
+   - "weinstein"
+   - "30-week"
+   - "30 week"
+   - "moving average"
+   - "breakout"
+   - "base"
+   - Terminal prompt logic
+   - agent stage 2 breakout prompt
+2. Report where the current logic lives and what it currently accepts:
+   - stock symbols only?
+   - daily or weekly data?
+   - uses 30-week MA or something else?
+   - uses volume?
+   - uses relative strength?
+   - uses market/index context?
+   - returns structured stage fields or just prose?
+3. Decide whether to:
+   A) refactor reusable pieces into a shared module, or
+   B) create a new shared stage_analysis module from scratch because the existing logic is too prompt-specific.
+
+Implementation:
+Create a reusable backend stage analysis module, ideally something like:
+- services/stage_analysis.py
+or the project’s closest existing services location.
+
+Expose functions similar to:
+- analyze_symbol_stage(symbol, weekly_bars, spy_weekly_bars=None, market_stage=None)
+- analyze_theme_stage(theme_id, theme_name, representative_symbol=None, member_symbols=[], weekly_bars_by_symbol={}, spy_weekly_bars=None, market_stage=None)
+
+For ETFs / single-symbol themes:
+- Compute stage directly from the weekly bars of the representative ETF/proxy symbol.
+
+For custom theme baskets:
+- Build a synthetic equal-weight theme index from available weekly close data where possible.
+- Also compute member breadth:
+  - percent of members above 30-week MA
+  - percent of members with rising 30-week MA
+  - percent of members making 13-week or 52-week relative highs if already available
+  - percent in Stage 2 if individual stage logic can be reused cheaply
+- Do not explode API usage. Use existing cached historical data where available. If FMP historical data is already used for theme returns, reuse that cache. If no weekly cache exists, derive weekly bars from cached daily historical data.
+
+Return structured fields on each theme row:
+{
+  "stage": 1 | 2 | 3 | 4,
+  "stage_label": "Stage 1 Base" | "Stage 1 → 2 Breakout Watch" | "Stage 2 Advance" | "Stage 3 Top/Range" | "Stage 3 → 4 Danger" | "Stage 4 Decline",
+  "stage_score": 0-100,
+  "stage_confidence": "low" | "medium" | "high",
+  "stage_reason": "...short explanation...",
+  "stage_signals": {
+    "price_vs_30w_ma_pct": number,
+    "ma_30w_slope_pct": number,
+    "rs_vs_spy_trend": "rising" | "flat" | "falling",
+    "volume_ratio": number | null,
+    "breadth_above_30w_ma_pct": number | null,
+    "breadth_rising_30w_ma_pct": number | null,
+    "breakout_watch": boolean,
+    "danger_zone": boolean
+  },
+  "stage_updated_at": "...",
+  "stage_source": "etf_proxy" | "synthetic_theme_basket" | "member_breadth_only" | "fallback"
+}
+
+Classification guidance:
+- Stage 1 Base:
+  - prior decline
+  - price near/around 30-week MA
+  - 30-week MA flat or flattening
+  - range compression / sideways behavior
+  - low or drying volume
+- Stage 1 → 2 Breakout Watch:
+  - stage 1 conditions
+  - price near top of base / resistance
+  - price crossing above 30-week MA or already above it
+  - 30-week MA flattening to rising
+  - improving RS vs SPY
+  - volume starting to expand
+- Stage 2 Advance:
+  - price above rising 30-week MA
+  - higher highs / higher lows
+  - RS vs SPY rising or stable positive
+  - healthy breadth across members
+- Stage 3 Top/Range:
+  - prior Stage 2 advance
+  - 30-week MA flattening
+  - price choppy around/above MA
+  - RS weakening
+  - breadth deteriorating
+- Stage 3 → 4 Danger:
+  - Stage 3 characteristics plus price breaking below support/30-week MA
+  - falling RS
+  - breadth deterioration
+- Stage 4 Decline:
+  - price below declining 30-week MA
+  - lower highs/lower lows
+  - weak RS
+  - poor breadth
+
+Integration:
+1. Add stage fields to the existing Themes page backend response without breaking existing consumers.
+2. Reuse the same output for:
+   - /api/sectors/relative-strength?mode=themes
+   - /api/sectors/performance?mode=themes
+   - any theme performance endpoint actually used by the frontend
+3. Cache stage analysis results separately or inside the existing theme performance cache.
+   Suggested TTL:
+   - During market hours: refresh daily or every few hours max, because this is weekly-stage logic.
+   - Off-hours: okay to reuse LKG.
+   - The stage should not require constant intraday refresh.
+
+Do not:
+- Do not create duplicate theme universes.
+- Do not add huge new FMP call volume.
+- Do not use LLM calls to classify stages.
+- Do not make this prompt-only prose.
+- Do not hardcode fake stage values.
+- Do not break existing theme performance / relative strength data.
+
+Validation:
+1. Run a backend test or script against 5 examples:
+   - one obvious strong uptrend theme
+   - one basing/sideways theme
+   - one topping theme
+   - one declining theme
+   - one custom basket theme like Power / Cooling or AI Networking if available
+2. Curl the exact Themes endpoint used by the frontend and show one sample row with the new stage fields.
+3. Confirm:
+   - no duplicate API call explosion
+   - cache key and TTL used
+   - whether existing Terminal Stage 2 logic was reused or replaced
+   - exact files changed

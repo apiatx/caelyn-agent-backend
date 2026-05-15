@@ -908,6 +908,24 @@ async def _build_theme_row(
         up = sum(1 for _, r, _ in sym_perfs if r > 0)
         breadth = round(up / len(sym_perfs) * 100, 1)
 
+    # ── Weinstein Stage Analysis ───────────────────────────────────────────────
+    stage_data: dict = {}
+    try:
+        from services.stage_analysis import analyze_theme_stage
+        spy_daily, _ = histories.get("SPY", ([], ""))
+        proxy_bars_map = {}
+        for sym in proxy_syms:
+            bars, _ = histories.get(sym, ([], ""))
+            if bars:
+                proxy_bars_map[sym] = bars
+        stage_data = analyze_theme_stage(
+            proxy_type=meta["proxy_type"],
+            proxy_daily_bars_map=proxy_bars_map,
+            spy_daily_bars=spy_daily if spy_daily else None,
+        )
+    except Exception as _stage_err:
+        print(f"[THEME_RS][stage] {theme_id}: {_stage_err}")
+
     return {
         "theme_id":              theme_id,
         "display_name":          meta["display_name"],
@@ -944,6 +962,15 @@ async def _build_theme_row(
         "state":                 None,
         "state_reason":          None,
         "momentum_rank":         None,
+        # ── Weinstein Stage Analysis ──────────────────────────────────────────
+        "stage":                 stage_data.get("stage"),
+        "stage_label":           stage_data.get("stage_label", "Unknown"),
+        "stage_score":           stage_data.get("stage_score"),
+        "stage_confidence":      stage_data.get("stage_confidence", "low"),
+        "stage_reason":          stage_data.get("stage_reason"),
+        "stage_signals":         stage_data.get("stage_signals", {}),
+        "stage_updated_at":      stage_data.get("stage_updated_at"),
+        "stage_source":          stage_data.get("stage_source", "fallback"),
     }
 
 
