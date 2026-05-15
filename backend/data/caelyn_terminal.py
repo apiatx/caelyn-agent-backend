@@ -528,11 +528,12 @@ class CaelynTerminalProvider:
         total_cost  = 0.0
 
         for h in holdings_raw:
-            sym    = h["ticker"].upper()
-            shares = float(h.get("shares") or 0)
-            cost   = float(h.get("avg_cost") or 0)
-            q      = _q(sym)
-            price  = q.get("price") or 0.0
+            sym        = h["ticker"].upper()
+            shares     = float(h.get("shares") or 0)
+            cost       = float(h.get("avg_cost") or 0)
+            entry_date = h.get("entry_date") or h.get("date_added") or None
+            q          = _q(sym)
+            price      = q.get("price") or 0.0
             chg    = q.get("change") or 0.0
             chgpct = q.get("change_pct") or 0.0
             mval   = shares * price
@@ -602,10 +603,11 @@ class CaelynTerminalProvider:
                     _vol_mc_unavail = "price_missing"
 
             positions.append({
-                "_sym":       sym,
-                "_shares":    shares,
-                "_cost":      cost,
-                "_atype":     asset_map.get(sym, "stock"),
+                "_sym":        sym,
+                "_shares":     shares,
+                "_cost":       cost,
+                "_entry_date": entry_date,
+                "_atype":      asset_map.get(sym, "stock"),
                 "_sector":    funda.get("sector", ""),
                 "_name":      funda.get("name", sym),
                 "ticker":     sym,
@@ -669,7 +671,13 @@ class CaelynTerminalProvider:
         )
 
         # 5 (deferred). Performance charts (multi-period) ────────────────
-        perf_charts = self._build_perf_charts(positions, all_history, spy_bars)
+        try:
+            from data.closed_trades_store import load_closed_trades as _load_ct
+            _closed_trades_for_chart = _load_ct()
+        except Exception as _ct_err:
+            _closed_trades_for_chart = []
+            print(f"[CAELYN] closed_trades load error (non-fatal): {_ct_err}")
+        perf_charts = self._build_perf_charts(positions, all_history, spy_bars, _closed_trades_for_chart)
         perf_chart  = perf_charts.get("1Y", [])   # backward-compat field
 
         _lookback_days = 420  # calendar days of history requested for every ticker
@@ -754,6 +762,7 @@ class CaelynTerminalProvider:
             _p["_options_status"] = _options_by_ticker.get(_p["_sym"])
 
         # 19. Performance chart metadata (per-period transparency) ─────────
+        _chart_build_meta = perf_charts.pop("_meta", {})
         _perf_meta: dict[str, dict] = {}
         for _p in ("1D", "5D", "1M", "6M", "1Y"):
             _pts = perf_charts.get(_p, [])
@@ -761,6 +770,9 @@ class CaelynTerminalProvider:
                 "points":    len(_pts),
                 "source":    "tradier_daily_history",
                 "estimated": True,  # reconstructed from close prices, not live NAV
+                "method":    _chart_build_meta.get("method", "current_holdings_assumed"),
+                "entry_dates_set": _chart_build_meta.get("entry_dates_set", 0),
+                "closed_trades_included": _chart_build_meta.get("closed_trades", 0),
             }
             if _p == "1D" and len(_pts) < 5:
                 _perf_meta[_p]["note"] = "intraday_sparse — market may be closed or pre-market"
@@ -1385,32 +1397,104 @@ class CaelynTerminalProvider:
         return [b["close"] for b in bars if b.get("close")]
 
     def _build_perf_charts(
-        self, positions: list[dict], all_history: dict, spy_bars: list
+        self,
+        positions: list[dict],
+        all_history: dict,
+        spy_bars: list,
+        closed_trades: list[dict] | None = None,
     ) -> dict[str, list[dict]]:
         """
         Build performance charts for five periods: 1D, 5D, 1M, 6M, 1Y.
         Each array is normalized to 0.0% at the first point.
+
+        Trade-ledger reconstruction:
+          - Active holdings: only counted from their _entry_date onward.
+            Holdings with no entry_date are included for the full period
+            (backward-compatible with pre-ledger portfolios).
+          - Closed trades: counted from entry_date → exit_date using the
+            historical price series when available, or exit_price as a fixed
+            proxy otherwise.  After exit_date the position is frozen at its
+            exit value (representing cash removed from the portfolio).
         """
+        closed_trades = closed_trades or []
+
         spy_daily = {b["date"]: b["close"] for b in spy_bars if b.get("close")}
         all_spy_dates = sorted(spy_daily.keys())
 
-        # Per-holding daily price maps
+        # Per-holding daily price maps (active positions)
         price_maps: dict[str, dict[str, float]] = {}
         for p in positions:
             sym  = p["_sym"]
             bars = all_history.get(sym, [])
             price_maps[sym] = {b["date"]: b["close"] for b in bars if b.get("close")}
 
+        # Price maps for closed trades (reuse existing if same symbol, else empty)
+        ct_price_maps: dict[str, dict[str, float]] = {}
+        for ct in closed_trades:
+            sym = (ct.get("ticker") or "").upper()
+            if not sym:
+                continue
+            if sym in price_maps:
+                ct_price_maps[sym] = price_maps[sym]
+            elif sym in all_history:
+                ct_price_maps[sym] = {
+                    b["date"]: b["close"]
+                    for b in all_history[sym]
+                    if b.get("close")
+                }
+            else:
+                ct_price_maps[sym] = {}
+
+        # Determine whether any entry_date is set (affects meta reporting)
+        _has_any_entry_date = any(p.get("_entry_date") for p in positions) or bool(closed_trades)
+
+        def _price_at(pm: dict, dt_str: str, fallback: float) -> float:
+            px = pm.get(dt_str)
+            if px is not None:
+                return px
+            cands = [d for d in pm if d <= dt_str]
+            return pm[max(cands)] if cands else fallback
+
         def _port_at(dt_str: str) -> float:
-            """Portfolio value at a given date using last-available close."""
+            """
+            Portfolio value at dt_str applying trade-ledger filtering:
+              - Active holding included only if dt_str >= entry_date (or no entry_date).
+              - Closed trade included during [entry_date, exit_date]; frozen at
+                exit_value afterward.
+            """
             total = 0.0
+
+            # Active positions
             for p in positions:
-                pm = price_maps.get(p["_sym"], {})
-                px = pm.get(dt_str)
-                if px is None:
-                    cands = [d for d in pm if d <= dt_str]
-                    px = pm[max(cands)] if cands else (p["price"] or 0)
+                ed = p.get("_entry_date")
+                if ed and dt_str < ed:
+                    continue
+                pm  = price_maps.get(p["_sym"], {})
+                px  = _price_at(pm, dt_str, p.get("price") or 0)
                 total += p["_shares"] * (px or 0)
+
+            # Closed trades
+            for ct in closed_trades:
+                ed  = ct.get("entry_date") or ""
+                xd  = ct.get("exit_date")  or ""
+                sym = (ct.get("ticker") or "").upper()
+                if not ed or not sym:
+                    continue
+                if dt_str < ed:
+                    continue  # not yet entered
+
+                shares      = float(ct.get("shares") or 0)
+                exit_price  = float(ct.get("exit_price") or 0)
+
+                if not xd or dt_str <= xd:
+                    # Inside holding window: mark to market
+                    pm = ct_price_maps.get(sym, {})
+                    px = _price_at(pm, dt_str, exit_price)
+                    total += shares * (px or exit_price)
+                else:
+                    # After exit: frozen at exit value
+                    total += shares * exit_price
+
             return total
 
         def _spy_at(dt_str: str) -> float:
@@ -1468,7 +1552,6 @@ class CaelynTerminalProvider:
         # ── 6M: weekly data points (~26 pts) ───────────────────────────
         days_6m = [d for d in all_spy_dates if d >= (today - timedelta(days=186)).isoformat() and d <= today_str]
         if days_6m:
-            # Sample every 5 trading days ≈ weekly
             step = max(1, len(days_6m) // 26)
             idxs = list(range(0, len(days_6m), step)) + ([len(days_6m) - 1] if (len(days_6m) - 1) % step != 0 else [])
             idxs = sorted(set(idxs))
@@ -1498,7 +1581,17 @@ class CaelynTerminalProvider:
         else:
             chart_1y = []
 
-        return {"1D": chart_1d, "5D": chart_5d, "1M": chart_1m, "6M": chart_6m, "1Y": chart_1y}
+        charts = {"1D": chart_1d, "5D": chart_5d, "1M": chart_1m, "6M": chart_6m, "1Y": chart_1y}
+
+        # Attach reconstruction metadata to the chart dict for the meta builder
+        charts["_meta"] = {
+            "method":          "trade_ledger_reconstruction" if _has_any_entry_date else "current_holdings_assumed",
+            "entry_dates_set": sum(1 for p in positions if p.get("_entry_date")),
+            "closed_trades":   len(closed_trades),
+            "estimated":       True,
+        }
+
+        return charts
 
     def _build_1d_chart(
         self, positions: list[dict], price_maps: dict, spy_daily: dict

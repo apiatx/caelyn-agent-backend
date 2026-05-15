@@ -1,0 +1,201 @@
+BACKEND REPLIT AGENT — Make Portfolio vs S&P 500 track actual trade history, not just current holdings
+
+The Portfolio Terminal is working well now. Do not rebuild the portfolio system. Build on what already exists.
+
+New goal:
+The Portfolio vs S&P 500 chart on Portfolio Terminal should track the user’s actual portfolio gains/losses over time, based on trade open/close dates and trade history, not just the historical price performance of the current holdings basket.
+
+Current problem:
+The chart appears to use current active holdings and historical prices. That makes it look like the current basket existed for the entire chart period. This is not accurate when the user added/removed positions over time.
+
+Desired behavior:
+Portfolio vs S&P 500 should reflect:
+- active holdings with entry/open dates
+- closed trades with entry/open dates and exit/close dates
+- entry prices
+- exit prices
+- shares
+- realized and unrealized P&L
+- portfolio value over time
+- S&P 500 benchmark over the same dates
+
+Important:
+Closed Positions already exists on Portfolio Dashboard and appears to be working. Current holdings also exist and are synced to Neon. Build off this. Do not create a competing portfolio store.
+
+Do NOT:
+- break current Portfolio Dashboard
+- break closed positions
+- break Neon canonical active holdings
+- break Terminal analytics
+- fake portfolio history
+- assume the current holdings existed forever
+- hardcode tickers
+- remove the current chart unless replacing it with the accurate ledger-based chart
+- rebuild all analytics from scratch
+
+Audit first:
+1. Locate current active holdings storage/model.
+2. Locate closed positions / closed trades storage/model.
+3. Locate the current Portfolio vs S&P 500 chart builder in /api/caelyn-terminal.
+4. Identify whether active holdings already have:
+   - date_added
+   - entry_date
+   - avg_price / avg_cost
+   - shares
+5. Identify whether closed trades already have:
+   - entry_date
+   - exit_date
+   - entry_price
+   - exit_price
+   - shares
+   - realized P&L
+6. Identify whether these fields are editable/persisted already.
+7. Identify current chart behavior:
+   - current holdings only?
+   - account snapshots?
+   - reconstructed from prices?
+   - cached series?
+
+Core requirement:
+Create or restore a proper trade-ledger-based portfolio performance series.
+
+Use existing data:
+- active holdings = open trades
+- closed positions = completed trades
+- historical prices from existing FMP/Yahoo/Tradier fallback service
+- SPY/S&P 500 benchmark from existing historical chart logic
+
+Needed data model support:
+For active holdings, ensure each position supports:
+- entry_date or date_added
+- entry_price or avg_cost
+- shares
+- optional notes/source
+
+For closed trades, ensure each record supports:
+- entry_date
+- exit_date
+- entry_price
+- exit_price
+- shares
+- realized_pnl
+- realized_pnl_pct
+- holding_period_days
+- symbol/ticker
+
+If fields are missing:
+- Add them carefully to the existing schemas.
+- Backfill missing entry_date/date_added with a safe default, but mark it as estimated/backfilled.
+- Do not force user re-entry.
+- Do not overwrite existing user-entered values.
+
+Required backend endpoints:
+Add or update endpoints needed by frontend:
+
+1. Active holdings update should support editing:
+- entry_date/date_added
+- entry_price/avg_cost if already editable
+- shares
+
+2. Closed trades update should support editing:
+- entry_date
+- exit_date
+- entry_price
+- exit_price
+- shares
+- notes if already supported
+
+Possible endpoints:
+- PATCH /api/portfolio/holdings/{id_or_symbol}
+- PATCH /api/portfolio/closed-trades/{id}
+or reuse existing update endpoints if they already exist.
+
+3. Portfolio performance endpoint/field:
+Either update /api/caelyn-terminal or add a supporting endpoint that returns:
+
+portfolio_performance_history: {
+  method: "trade_ledger_reconstruction",
+  estimated: boolean,
+  periods: {
+    "1D": [...],
+    "5D": [...],
+    "1M": [...],
+    "6M": [...],
+    "1Y": [...]
+  },
+  benchmark: {
+    symbol: "SPY",
+    periods: {...}
+  },
+  warnings: [...],
+  missing_data: [...]
+}
+
+Algorithm expectation:
+For each date/timestamp in the chart period:
+1. Include only trades active on that date:
+   - active holding if date >= entry_date
+   - closed trade if entry_date <= date <= exit_date
+2. Value each active trade using historical price on that date.
+3. For closed trades after exit_date:
+   - do not keep marking them to market.
+   - realized P&L should contribute to portfolio value/cash if the model supports cash.
+4. Compare portfolio return vs starting portfolio value for that period.
+5. Compare to SPY return over the same period.
+
+Important modeling note:
+If there is no cash ledger/deposit/withdrawal tracking yet, be transparent:
+- Reconstruct trade-level return using deployed capital/trade P&L.
+- Mark output as estimated=true.
+- Include warning: “No cash/deposit ledger; chart is trade-ledger reconstructed.”
+Do not pretend it is a perfect brokerage account equity curve unless account value snapshots/cash flows exist.
+
+Better if already possible:
+If portfolio value snapshots exist, use them as primary.
+If not, use trade-ledger reconstruction as current implementation.
+
+Required debug/validation fields:
+Add:
+
+portfolio_performance_meta: {
+  method,
+  estimated,
+  active_trades_used,
+  closed_trades_used,
+  missing_entry_dates,
+  missing_exit_dates,
+  missing_price_history_symbols,
+  benchmark_symbol,
+  periods_available,
+  warnings
+}
+
+Validation:
+Use current live portfolio.
+
+1. Confirm active holdings load with entry_date/date_added.
+2. Confirm closed trades load with entry_date and exit_date.
+3. Edit one active holding entry_date and confirm it persists.
+4. Edit one closed trade entry_date/exit_date and confirm it persists.
+5. Rebuild /api/caelyn-terminal.
+6. Confirm Portfolio vs S&P 500 chart changes based on the edited dates.
+7. Confirm chart no longer assumes every current holding existed before its entry_date.
+8. Confirm closed trades contribute only during their active holding window and realized result after close if supported.
+9. Confirm SPY benchmark aligns to the same start/end dates.
+10. Confirm existing Terminal analytics still work:
+   - holdings
+   - allocation
+   - correlation
+   - volatility
+   - risk metrics
+   - options
+   - risk suggestions
+
+Return:
+- current chart method before fix
+- data fields already available
+- schema fields added
+- endpoints added/updated
+- performance reconstruction method used
+- limitations/warnings
+- validation output

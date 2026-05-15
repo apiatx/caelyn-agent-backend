@@ -201,7 +201,7 @@ def _normalise(h: dict) -> dict:
         "avg_cost":   float(h.get("avg_cost", h.get("avg_price", h.get("cost", 0))) or 0),
         "asset_type": h.get("asset_type", h.get("type", "stock")),
     }
-    for k in ("date_added", "notes", "id"):
+    for k in ("date_added", "entry_date", "notes", "id"):
         if h.get(k) is not None:
             out[k] = h[k]
     return out

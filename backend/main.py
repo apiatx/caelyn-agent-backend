@@ -4758,12 +4758,16 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
         ticker = (h.get("ticker") or h.get("symbol") or "").strip().upper()
         if not ticker:
             continue
-        normalized.append({
+        _ed = h.get("entry_date") or h.get("date_added") or None
+        _entry: dict = {
             "ticker":     ticker,
             "shares":     float(h.get("shares") or h.get("quantity") or 0),
             "avg_cost":   float(h.get("avg_cost") or h.get("avgCost") or h.get("average_cost") or h.get("cost_basis") or 0),
             "asset_type": (h.get("asset_type") or h.get("assetType") or h.get("type") or "stock").lower(),
-        })
+        }
+        if _ed:
+            _entry["entry_date"] = _ed
+        normalized.append(_entry)
     holdings = normalized
     new_syms = [h["ticker"] for h in holdings if h.get("ticker")]
 
@@ -4863,12 +4867,16 @@ async def portfolio_sync(request: Request):
         ticker = (h.get("ticker") or h.get("symbol") or "").strip().upper()
         if not ticker:
             continue
-        normalized.append({
+        _ed2 = h.get("entry_date") or h.get("date_added") or None
+        _e2: dict = {
             "ticker":     ticker,
             "shares":     float(h.get("shares") or h.get("quantity") or 0),
             "avg_cost":   float(h.get("avg_cost") or h.get("avgCost") or h.get("average_cost") or h.get("cost_basis") or 0),
             "asset_type": (h.get("asset_type") or h.get("assetType") or h.get("type") or "stock").lower(),
-        })
+        }
+        if _ed2:
+            _e2["entry_date"] = _ed2
+        normalized.append(_e2)
 
     prev_count = len(_load())
     symbols = [h["ticker"] for h in normalized]
@@ -6380,6 +6388,184 @@ async def compare_watchlist_run(
 
     result["exists"] = True
     return result
+
+
+# ── Closed Trades (/api/portfolio/closed-trades) ──────────────────────────────
+
+@app.get("/api/portfolio/closed-trades")
+@traceable(name="main.get_closed_trades")
+async def get_closed_trades(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Return all closed trades ordered by exit_date desc."""
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    from data.closed_trades_store import load_closed_trades as _load_ct
+    trades = _load_ct()
+    return {"closed_trades": trades, "count": len(trades)}
+
+
+@app.post("/api/portfolio/closed-trades")
+@traceable(name="main.add_closed_trade")
+async def add_closed_trade(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Add a closed trade.
+
+    Body: {
+      ticker, shares, entry_date, exit_date,
+      entry_price, exit_price,
+      realized_pnl?,        # auto-computed if omitted
+      realized_pnl_pct?,    # auto-computed if omitted
+      holding_period_days?, # auto-computed if omitted
+      notes?
+    }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        body = await request.json()
+    except Exception as _je:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    ticker = (body.get("ticker") or "").strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    if not body.get("exit_date"):
+        raise HTTPException(status_code=400, detail="exit_date is required")
+
+    from data.closed_trades_store import save_closed_trade as _save_ct
+    trade = {
+        "ticker":       ticker,
+        "shares":       float(body.get("shares") or 0),
+        "entry_date":   body.get("entry_date") or None,
+        "exit_date":    body.get("exit_date"),
+        "entry_price":  float(body.get("entry_price") or body.get("avg_cost") or 0),
+        "exit_price":   float(body.get("exit_price") or 0),
+        "realized_pnl": body.get("realized_pnl"),
+        "realized_pnl_pct": body.get("realized_pnl_pct"),
+        "holding_period_days": body.get("holding_period_days"),
+        "notes":        body.get("notes"),
+    }
+    result = _save_ct(trade)
+    if result.get("_error"):
+        raise HTTPException(status_code=500, detail=result["_error"])
+
+    # Invalidate terminal cache so next chart load includes this trade
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        from data.portfolio_store import canonical_file as _cf
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    return {"success": True, "trade": result}
+
+
+@app.patch("/api/portfolio/closed-trades/{trade_id}")
+@traceable(name="main.update_closed_trade")
+async def update_closed_trade(
+    trade_id: str,
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Patch an existing closed trade by id."""
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        updates = await request.json()
+    except Exception as _je:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    from data.closed_trades_store import update_closed_trade as _upd_ct
+    result = _upd_ct(trade_id, updates)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Trade {trade_id!r} not found")
+
+    # Invalidate terminal cache
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        from data.portfolio_store import canonical_file as _cf
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    return {"success": True, "trade": result}
+
+
+@app.delete("/api/portfolio/closed-trades/{trade_id}")
+@traceable(name="main.delete_closed_trade")
+async def delete_closed_trade(
+    trade_id: str,
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Remove a closed trade by id."""
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    from data.closed_trades_store import delete_closed_trade as _del_ct
+    deleted = _del_ct(trade_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Trade {trade_id!r} not found")
+
+    # Invalidate terminal cache
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        from data.portfolio_store import canonical_file as _cf
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    return {"success": True, "deleted_id": trade_id}
+
+
+# ── Patch a single active holding (entry_date, shares, avg_cost) ──────────────
+
+@app.patch("/api/portfolio/holdings/{ticker}")
+@traceable(name="main.patch_holding")
+async def patch_holding(
+    ticker: str,
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Update fields on a single active holding (entry_date, shares, avg_cost, notes).
+
+    Only the supplied fields are changed; all others are preserved.
+    Returns 404 if the ticker is not in the active portfolio.
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        updates = await request.json()
+    except Exception as _je:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    ticker = ticker.upper().strip()
+    from data.portfolio_store import load_active_holdings as _load, save_active_holdings as _save_h
+    holdings = _load()
+    idx = next((i for i, h in enumerate(holdings) if h.get("ticker", "").upper() == ticker), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail=f"Ticker {ticker!r} not in active portfolio")
+
+    h = dict(holdings[idx])
+    allowed = ("entry_date", "date_added", "shares", "avg_cost", "asset_type", "notes")
+    for k in allowed:
+        if k in updates:
+            h[k] = updates[k]
+
+    holdings[idx] = h
+    _save_h(holdings)
+
+    # Invalidate terminal cache
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        from data.portfolio_store import canonical_file as _cf
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    return {"success": True, "ticker": ticker, "holding": h}
 
 
 @app.get("/api/test-altfins")
