@@ -6,7 +6,7 @@
       "score": 90.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (91/100) vs theme universe. Outperforming SPY -2.0%, QQQ -1.9%. Breadth N/A."
+        "Top-percentile RS (91/100) vs theme universe with broad participation (100% advancing). Outperforming SPY -2.0%, QQQ -1."
       ],
       "related_etfs": [
         "COHR",
@@ -14,14 +14,16 @@
         "AAOI",
         "FN"
       ],
-      "related_tickers": []
+      "related_tickers": [
+        "SIVEF"
+      ]
     },
     {
       "name": "Semiconductors",
       "score": 89.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (88/100) vs theme universe. Outperforming SPY -0.3%, QQQ -0.2%. Breadth 50%.",
+        "Top-percentile RS (88/100) vs theme universe. Outperforming SPY -0.3%, QQQ -0.2%. Breadth 58%.",
         "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
@@ -31,8 +33,9 @@
         "PSI"
       ],
       "related_tickers": [
-        "ASML",
-        "AMBA"
+        "NVDA",
+        "KLAC",
+        "LRCX"
       ]
     },
     {
@@ -40,28 +43,34 @@
       "score": 88.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (88/100) vs theme universe. Outperforming SPY -0.5%, QQQ -0.4%. Breadth N/A."
+        "Top-percentile RS (88/100) vs theme universe. Outperforming SPY -0.5%, QQQ -0.4%. Breadth 33%."
       ],
       "related_etfs": [
         "DRAM",
         "SMH",
         "SOXX"
       ],
-      "related_tickers": []
+      "related_tickers": [
+        "NVDA",
+        "KLAC",
+        "AMD"
+      ]
     },
     {
       "name": "Semiconductor Equipment",
       "score": 86.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (87/100) vs theme universe with broad participation (100% advancing). Outperforming SPY -0.1%, QQQ -0."
+        "Top-percentile RS (87/100) vs theme universe with broad participation (64% advancing). Outperforming SPY -0.1%, QQQ -0.0"
       ],
       "related_etfs": [
         "SOXX",
         "SMH"
       ],
       "related_tickers": [
-        "ASML"
+        "NVDA",
+        "AEHR",
+        "KLAC"
       ]
     },
     {
@@ -84,7 +93,7 @@
       "score": 81.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (82/100) vs theme universe. Outperforming SPY +0.1%, QQQ +0.2%. Breadth 0%."
+        "Top-percentile RS (82/100) vs theme universe. Outperforming SPY +0.1%, QQQ +0.2%. Breadth 50%."
       ],
       "related_etfs": [
         "ICLN",
@@ -93,7 +102,9 @@
         "CNRG"
       ],
       "related_tickers": [
-        "CWEN"
+        "ENPH",
+        "NXT",
+        "RUN"
       ]
     },
     {
@@ -101,13 +112,15 @@
       "score": 80.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (80/100) vs theme universe. Outperforming SPY +1.0%, QQQ +1.1%. Breadth 0%."
+        "Top-percentile RS (80/100) vs theme universe with broad participation (71% advancing). Outperforming SPY +1.0%, QQQ +1.1"
       ],
       "related_etfs": [
         "TAN"
       ],
       "related_tickers": [
-        "ARRY"
+        "SEDG",
+        "ENPH",
+        "NXT"
       ]
     },
     {
@@ -115,7 +128,7 @@
       "score": 79.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (79/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +2.4%, QQQ +2."
+        "Top-percentile RS (79/100) vs theme universe with broad participation (77% advancing). Outperforming SPY +2.4%, QQQ +2.5"
       ],
       "related_etfs": [
         "BLOK",
@@ -124,7 +137,9 @@
         "BKCH"
       ],
       "related_tickers": [
-        "CLSK"
+        "CLSK",
+        "COIN",
+        "MSTR"
       ]
     }
   ],
@@ -141,6 +156,8 @@
         "AMKR"
       ],
       "related_tickers": [
+        "IBIDF",
+        "UMICF",
         "ASX"
       ]
     },
@@ -157,7 +174,9 @@
         "IEZ"
       ],
       "related_tickers": [
-        "BKR"
+        "RIG",
+        "VAL",
+        "NE"
       ]
     },
     {
@@ -174,7 +193,9 @@
         "ARKQ"
       ],
       "related_tickers": [
-        "ABBNY"
+        "NVDA",
+        "CGNX",
+        "SYM"
       ]
     },
     {
@@ -191,7 +212,9 @@
         "IHAK"
       ],
       "related_tickers": [
-        "CRWD"
+        "CSCO",
+        "PANW",
+        "CHKP"
       ]
     },
     {
@@ -208,68 +231,79 @@
         "DTCR"
       ],
       "related_tickers": [
-        "CEG",
-        "AMT",
-        "CCI"
+        "NBIS",
+        "IRM",
+        "PWR"
       ]
     }
   ],
   "dead_zones": [
     {
-      "name": "Medical Devices",
-      "score": 11.3,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 100% \u2014 minimal buying pressu"
-      ],
-      "related_etfs": [
-        "IHI"
-      ],
-      "related_tickers": [
-        "BDX"
-      ]
-    },
-    {
       "name": "Homebuilders",
-      "score": 11.7,
+      "score": 11.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (12/100) vs 60-theme universe. SPY delta -1.0%, QQQ delta -0.9%. Breadth N/A \u2014 minimal buying pressur"
+        "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -2.0%, QQQ delta -2.0%. Breadth 70% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "ITB",
         "XHB"
       ],
-      "related_tickers": []
+      "related_tickers": [
+        "LOW",
+        "LII",
+        "BLD"
+      ]
     },
     {
-      "name": "Regional Banks",
-      "score": 21.5,
+      "name": "Medical Devices",
+      "score": 11.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta +0.2%. Breadth N/A \u2014 minimal buying pressur"
+        "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 80% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
-        "KRE",
-        "KBE",
-        "IAT"
+        "IHI"
       ],
-      "related_tickers": []
+      "related_tickers": [
+        "ABT",
+        "GEHC",
+        "SYK"
+      ]
     },
     {
       "name": "Consumer Retail",
-      "score": 22.0,
+      "score": 20.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 50% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta -1.3%, QQQ delta -1.2%. Breadth 57% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XRT",
         "RTH"
       ],
       "related_tickers": [
-        "COST",
-        "AMZN"
+        "CPNG",
+        "VSCO",
+        "DKS"
+      ]
+    },
+    {
+      "name": "Regional Banks",
+      "score": 21.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta +0.2%. Breadth 100% \u2014 minimal buying pressu"
+      ],
+      "related_etfs": [
+        "KRE",
+        "KBE",
+        "IAT"
+      ],
+      "related_tickers": [
+        "WAL",
+        "KEY",
+        "ASB"
       ]
     },
     {
@@ -277,14 +311,16 @@
       "score": 22.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -1.2%, QQQ delta -1.1%. Breadth 100% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -1.2%, QQQ delta -1.1%. Breadth 93% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "KBE",
         "XLF"
       ],
       "related_tickers": [
-        "BAC"
+        "CRBG",
+        "TBBK",
+        "APO"
       ]
     }
   ],
@@ -311,7 +347,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-15T05:16:41.343855+00:00",
+  "last_updated": "2026-05-15T04:56:11.227748+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -322,5 +358,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1778822201.3439314
+  "_saved_at": 1778820971.2278082
 }
