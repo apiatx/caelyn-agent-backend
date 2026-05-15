@@ -538,6 +538,34 @@ class CaelynTerminalProvider:
             _vol     = q.get("volume")
             _avg_vol = q.get("avg_volume")
             _vol_x   = round(_vol / _avg_vol, 2) if _vol and _avg_vol and _avg_vol > 0 else None
+
+            # ── Vol/MC computation ────────────────────────────────────────
+            _mktcap = _sf(funda.get("market_cap"))
+            # Prefer dollar-volume ($ traded today) over raw share count
+            _dollar_vol = round(price * _vol, 2) if (price and _vol) else None
+            _vol_mc_ratio: float | None = None
+            _vol_mc_pct:   float | None = None
+            _vol_mc_label: str   | None = None
+            _vol_mc_unavail: str | None = None
+            if _dollar_vol is not None and _mktcap and _mktcap > 0:
+                _vol_mc_ratio = round(_dollar_vol / _mktcap, 6)
+                _vol_mc_pct   = round(_vol_mc_ratio * 100, 4)
+                if _vol_mc_pct >= 10:
+                    _vol_mc_label = "high"
+                elif _vol_mc_pct >= 5:
+                    _vol_mc_label = "elevated"
+                elif _vol_mc_pct >= 1:
+                    _vol_mc_label = "normal"
+                else:
+                    _vol_mc_label = "low"
+            else:
+                if not _vol:
+                    _vol_mc_unavail = "volume_unavailable"
+                elif not _mktcap:
+                    _vol_mc_unavail = "market_cap_unavailable"
+                else:
+                    _vol_mc_unavail = "price_missing"
+
             positions.append({
                 "_sym":       sym,
                 "_shares":    shares,
@@ -555,6 +583,13 @@ class CaelynTerminalProvider:
                 "volume":     _vol,
                 "avg_volume": _avg_vol,
                 "vol_x":      _vol_x,
+                # Vol/MC fields (passed through to _format_holdings)
+                "_market_cap":       _mktcap,
+                "_dollar_volume":    _dollar_vol,
+                "_vol_mc_ratio":     _vol_mc_ratio,
+                "_vol_mc_pct":       _vol_mc_pct,
+                "_vol_mc_label":     _vol_mc_label,
+                "_vol_mc_unavail":   _vol_mc_unavail,
             })
 
         for p in positions:
@@ -1188,6 +1223,13 @@ class CaelynTerminalProvider:
                 "volume":             p.get("volume"),
                 "avg_volume":         p.get("avg_volume"),
                 "vol_x":              p.get("vol_x"),
+                # Vol/MC — dollar-volume / market cap
+                "market_cap":             p.get("_market_cap"),
+                "dollar_volume":          p.get("_dollar_volume"),
+                "vol_mc_ratio":           p.get("_vol_mc_ratio"),
+                "vol_mc_pct":             p.get("_vol_mc_pct"),
+                "vol_mc_label":           p.get("_vol_mc_label"),
+                "vol_mc_unavailable_reason": p.get("_vol_mc_unavail"),
             })
         return result
 

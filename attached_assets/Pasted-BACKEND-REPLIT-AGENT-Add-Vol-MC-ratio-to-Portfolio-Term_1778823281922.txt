@@ -1,0 +1,104 @@
+BACKEND REPLIT AGENT — Add Vol/MC ratio to Portfolio Terminal holdings
+
+On the Portfolio page → Terminal tab, add custom logic for high volume / market cap ratio for stocks in the user’s saved portfolio.
+
+Goal:
+For each active portfolio holding, calculate a new Vol/MC metric using data we already collect:
+- volume from Tradier / existing live quote service
+- market cap from FMP / existing fundamentals/profile enrichment
+
+Then expose it in /api/caelyn-terminal for the frontend Holdings section.
+
+Do NOT:
+- create a new portfolio source
+- hardcode tickers
+- add expensive duplicate API calls if the data is already available
+- break existing Terminal analytics
+- break Portfolio Dashboard
+- remove allocation calculations from backend; frontend is only replacing the visible column
+- change unrelated routes/pages
+
+Current UI request:
+In the Terminal tab Holdings section, the new "Vol/MC" column should replace the visible "Alloc" column.
+
+Backend task:
+Add fields per holding in /api/caelyn-terminal:
+
+- volume
+- market_cap
+- vol_mc_ratio
+- vol_mc_pct
+- vol_mc_label or signal if useful
+- vol_mc_source / unavailable_reason if missing
+
+Definition:
+vol_mc_ratio = daily_volume / market_cap
+
+Prefer dollar-volume if available and more meaningful:
+dollar_volume = current_price * daily_volume
+vol_mc_ratio = dollar_volume / market_cap
+
+Use whichever convention fits the existing codebase best, but name it clearly:
+- raw share volume / market cap is less ideal
+- dollar volume / market cap is preferred because both numerator and denominator are dollars
+
+Recommended fields:
+{
+  "volume": number | null,
+  "dollar_volume": number | null,
+  "market_cap": number | null,
+  "vol_mc_ratio": number | null,
+  "vol_mc_pct": number | null,
+  "vol_mc_unavailable_reason": string | null
+}
+
+Example:
+If price = 10, volume = 5,000,000, market_cap = 500,000,000:
+dollar_volume = 50,000,000
+vol_mc_ratio = 0.10
+vol_mc_pct = 10.0
+
+Data source rules:
+1. Use existing live quote/Tradier data for volume if already collected.
+2. Use existing FMP profile/fundamentals enrichment for market_cap if already collected.
+3. If Tradier volume is missing, use existing fallback quote source if available.
+4. If FMP market cap is missing, do not fake it. Return null + reason.
+5. OTC/pink-sheet tickers may have missing volume/market cap. Handle gracefully.
+
+Add optional signal buckets:
+- high if vol_mc_pct >= 10
+- elevated if >= 5
+- normal if >= 1
+- low if < 1
+Only add this if it is easy and does not disrupt existing schema.
+
+Audit first:
+1. Locate where /api/caelyn-terminal builds the Holdings list.
+2. Locate existing quote/volume fields already collected for holdings.
+3. Locate existing FMP market_cap/profile enrichment already collected for holdings.
+4. Add the calculation in the same formatter/enrichment path.
+5. Confirm market cap is not being fetched per render unnecessarily if cached data already exists.
+
+Validation:
+Use the current live 19-holding portfolio.
+
+Return:
+- holdings_count
+- for each holding or first 10 examples:
+  - symbol
+  - price
+  - volume
+  - dollar_volume
+  - market_cap
+  - vol_mc_pct
+  - unavailable reason if null
+- confirm /api/caelyn-terminal still returns:
+  - holdings
+  - performance chart
+  - correlation matrix
+  - volatility
+  - risk metrics
+  - risk suggestions
+- confirm no stale/deleted tickers appear
+
+Do not say done unless /api/caelyn-terminal contains Vol/MC fields for every current holding, even if some are null with explicit reasons.

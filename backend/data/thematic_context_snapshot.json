@@ -239,6 +239,22 @@
   ],
   "dead_zones": [
     {
+      "name": "Medical Devices",
+      "score": 10.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 80% \u2014 minimal buying pressur"
+      ],
+      "related_etfs": [
+        "IHI"
+      ],
+      "related_tickers": [
+        "ABT",
+        "GEHC",
+        "SYK"
+      ]
+    },
+    {
       "name": "Homebuilders",
       "score": 11.2,
       "source": "theme_rs_service",
@@ -253,22 +269,6 @@
         "LOW",
         "LII",
         "BLD"
-      ]
-    },
-    {
-      "name": "Medical Devices",
-      "score": 11.3,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (11/100) vs 60-theme universe. SPY delta -0.3%, QQQ delta -0.2%. Breadth 80% \u2014 minimal buying pressur"
-      ],
-      "related_etfs": [
-        "IHI"
-      ],
-      "related_tickers": [
-        "ABT",
-        "GEHC",
-        "SYK"
       ]
     },
     {
@@ -290,10 +290,10 @@
     },
     {
       "name": "Regional Banks",
-      "score": 21.9,
+      "score": 21.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta +0.2%. Breadth 100% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +0.3%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
         "KRE",
@@ -307,20 +307,21 @@
       ]
     },
     {
-      "name": "Banks",
-      "score": 22.0,
+      "name": "Uranium & Nuclear Energy",
+      "score": 23.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -1.2%, QQQ delta -1.1%. Breadth 93% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (23/100) vs 60-theme universe. SPY delta -2.3%, QQQ delta -2.2%. Breadth 50% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
-        "KBE",
-        "XLF"
+        "URA",
+        "URNM",
+        "NLR"
       ],
       "related_tickers": [
-        "CRBG",
-        "TBBK",
-        "APO"
+        "BWXT",
+        "SMR",
+        "LEU"
       ]
     }
   ],
@@ -347,7 +348,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-15T04:56:11.227748+00:00",
+  "last_updated": "2026-05-15T05:36:35.833683+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -358,5 +359,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1778820971.2278082
+  "_saved_at": 1778823395.833744
 }
