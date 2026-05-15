@@ -1,0 +1,179 @@
+BACKEND REPLIT AGENT — Add partial sell / trim support for Portfolio holdings
+
+Current issue:
+The Portfolio Dashboard only supports closing a full position. Users often trim positions by selling a specific number of shares or a specific dollar amount while keeping the remaining shares active.
+
+Goal:
+Add backend support for partial sells/trims that:
+- records the sold portion as a closed trade
+- keeps the remaining shares in active holdings
+- accurately calculates realized P&L on the sold portion
+- updates remaining active position accurately
+- invalidates Portfolio Terminal cache/signature
+- preserves existing full close behavior
+
+Do NOT:
+- break the existing full close endpoint
+- remove active holdings incorrectly
+- hardcode tickers
+- fake sell prices
+- create duplicate portfolio stores
+- break closed trades
+- break Portfolio Terminal analytics
+- make frontend do financial math that belongs in backend
+
+Audit first:
+1. Inspect current active holdings model/store.
+2. Inspect closed trades model/store.
+3. Inspect existing full close endpoint:
+   POST /api/portfolio/holdings/{ticker}/close
+4. Inspect how realized_pnl, realized_pnl_pct, holding_period_days are calculated.
+5. Inspect how Terminal cache/signature is invalidated after close.
+6. Decide whether to extend the existing close endpoint or add a clearer trim endpoint.
+
+Preferred endpoint:
+Add:
+
+POST /api/portfolio/holdings/{ticker}/sell
+
+Payload options:
+{
+  "sell_type": "shares" | "dollars" | "percent" | "full",
+  "shares_sold": optional number,
+  "dollar_amount": optional number,
+  "percent_sold": optional number,
+  "exit_price": number,
+  "exit_date": "YYYY-MM-DD",
+  "close_reason": optional string
+}
+
+Behavior:
+1. Load active holding by ticker.
+2. Validate:
+   - holding exists
+   - exit_price > 0
+   - exit_date valid
+   - sell amount > 0
+   - shares_sold <= current shares
+3. If sell_type = shares:
+   - shares_sold = provided shares_sold
+4. If sell_type = dollars:
+   - shares_sold = dollar_amount / exit_price
+   - cap at current shares if exact full amount
+5. If sell_type = percent:
+   - shares_sold = current_shares * percent_sold / 100
+6. If sell_type = full:
+   - shares_sold = current_shares
+
+Calculations:
+- entry_price = avg_cost
+- cost_basis_sold = shares_sold * avg_cost
+- exit_value = shares_sold * exit_price
+- realized_pnl = exit_value - cost_basis_sold
+- realized_pnl_pct = realized_pnl / cost_basis_sold * 100
+- holding_period_days = exit_date - entry_date/date_added, if available
+
+Active holding update:
+- remaining_shares = current_shares - shares_sold
+- If remaining_shares > tiny threshold:
+   - keep holding active with remaining_shares
+   - avg_cost remains the same under average-cost accounting
+   - invested/cost basis becomes remaining_shares * avg_cost
+   - preserve entry_date
+- If remaining_shares <= threshold:
+   - remove holding from active holdings
+   - this is equivalent to full close
+
+Closed trade record:
+Create a closed trade for the sold portion only:
+- ticker/symbol
+- shares = shares_sold
+- entry_date
+- exit_date
+- entry_price / avg_cost
+- exit_price
+- cost_basis = cost_basis_sold
+- exit_value
+- realized_pnl
+- realized_pnl_pct
+- holding_period_days
+- close_reason = "partial_sell" or "full_close"
+- remaining_shares_after
+- source = "portfolio_dashboard_sell"
+
+Return response:
+{
+  "success": true,
+  "ticker": "...",
+  "sell_type": "...",
+  "shares_before": number,
+  "shares_sold": number,
+  "shares_remaining": number,
+  "exit_price": number,
+  "exit_value": number,
+  "cost_basis_sold": number,
+  "realized_pnl": number,
+  "realized_pnl_pct": number,
+  "closed_trade": {...},
+  "active_holding": {...} or null,
+  "active_count": number,
+  "holdings_signature": "..."
+}
+
+Also:
+- Invalidate /api/caelyn-terminal cache after any sell.
+- Ensure /api/portfolio/holdings returns updated remaining shares.
+- Ensure /api/portfolio/closed-trades includes the closed partial trade.
+- Ensure /api/caelyn-terminal no longer counts sold shares as active.
+- Existing full close endpoint can call this shared sell logic with sell_type="full".
+
+Important accounting assumption:
+Use average-cost accounting for now.
+Do not attempt tax-lot FIFO/LIFO unless already supported.
+Add a clear internal comment or response field:
+"cost_method": "average_cost"
+
+Validation:
+Use a temporary test holding.
+
+Test A — partial sell by shares:
+1. Add TEST_TRIM with 100 shares @ $10 avg_cost, entry_date 2024-01-01.
+2. Sell 25 shares at $20, exit_date 2024-06-01.
+3. Confirm:
+   - active holding remains with 75 shares
+   - closed trade has 25 shares
+   - realized_pnl = 25 * (20 - 10) = 250
+   - realized_pnl_pct = 100%
+   - active cost basis = 75 * 10
+   - Terminal active holdings use 75 shares only
+
+Test B — partial sell by dollars:
+1. Sell $500 of TEST_TRIM at $25.
+2. shares_sold = 20
+3. remaining shares reduce correctly.
+4. closed trade math correct.
+
+Test C — full close via sell endpoint:
+1. Sell remaining shares.
+2. active holding removed.
+3. closed trade created.
+4. Terminal no longer includes TEST_TRIM.
+
+Test D — invalid cases:
+- sell more shares than owned returns 400
+- missing exit_price returns 400
+- non-existent ticker returns 404
+
+Regression:
+Confirm these still work:
+- GET/PATCH /api/portfolio/holdings
+- GET/POST/PATCH/DELETE /api/portfolio/closed-trades
+- POST /api/portfolio/holdings/{ticker}/close
+- /api/caelyn-terminal analytics
+- no stale/deleted tickers reappear
+
+Return:
+- endpoint added/updated
+- exact files changed
+- accounting method used
+- validation results

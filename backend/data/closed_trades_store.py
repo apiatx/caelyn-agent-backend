@@ -90,6 +90,15 @@ def _ensure_table(conn) -> None:
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+    for _col_sql in (
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS sell_type TEXT",
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS remaining_shares_after NUMERIC",
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS cost_method TEXT DEFAULT 'average_cost'",
+    ):
+        try:
+            cur.execute(_col_sql)
+        except Exception:
+            pass
     conn.commit()
     cur.close()
 
@@ -103,7 +112,8 @@ def _row_to_dict(row: tuple, description) -> dict:
     for k in ("created_at", "updated_at"):
         if isinstance(d.get(k), datetime):
             d[k] = d[k].isoformat()
-    for k in ("shares", "entry_price", "exit_price", "realized_pnl", "realized_pnl_pct"):
+    for k in ("shares", "entry_price", "exit_price", "realized_pnl", "realized_pnl_pct",
+              "remaining_shares_after"):
         if d.get(k) is not None:
             try:
                 d[k] = float(d[k])
@@ -184,8 +194,9 @@ def save_closed_trade(trade: dict) -> dict:
         cur.execute("""
             INSERT INTO portfolio_closed_trades
               (id, ticker, shares, entry_date, exit_date, entry_price, exit_price,
-               realized_pnl, realized_pnl_pct, holding_period_days, notes)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               realized_pnl, realized_pnl_pct, holding_period_days, notes,
+               sell_type, remaining_shares_after, cost_method)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING *
         """, (
             trade_id,
@@ -199,6 +210,9 @@ def save_closed_trade(trade: dict) -> dict:
             trade.get("realized_pnl_pct"),
             trade.get("holding_period_days"),
             trade.get("notes"),
+            trade.get("sell_type") or None,
+            trade.get("remaining_shares_after") if trade.get("remaining_shares_after") is not None else None,
+            trade.get("cost_method") or "average_cost",
         ))
         row = cur.fetchone()
         desc = cur.description

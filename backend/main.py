@@ -6665,6 +6665,242 @@ async def close_holding(
     }
 
 
+@app.post("/api/portfolio/holdings/{ticker}/sell")
+@traceable(name="main.sell_holding_partial")
+async def sell_holding_partial(
+    ticker: str,
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Partial or full sell of an active holding using average-cost accounting.
+
+    sell_type: "shares" | "dollars" | "percent" | "full"
+      shares   -> shares_sold = body["shares_sold"]
+      dollars  -> shares_sold = dollar_amount / exit_price
+      percent  -> shares_sold = current_shares * percent_sold / 100
+      full     -> shares_sold = current_shares (same as close endpoint)
+
+    Required: exit_price > 0
+    Optional: exit_date (default today), close_reason
+
+    Returns:
+      {
+        "success", "ticker", "sell_type", "cost_method",
+        "shares_before", "shares_sold", "shares_remaining",
+        "exit_price", "exit_value", "cost_basis_sold",
+        "realized_pnl", "realized_pnl_pct",
+        "closed_trade", "active_holding" (null if full close),
+        "active_count", "active_symbols", "holdings_signature"
+      }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    ticker = ticker.upper().strip()
+
+    from data.portfolio_store import (
+        load_active_holdings as _load,
+        save_active_holdings as _save_h,
+        get_holdings_signature as _sig,
+    )
+    from data.closed_trades_store import save_closed_trade as _save_ct
+    from datetime import date as _date_cls
+
+    # ── Validate sell_type ────────────────────────────────────────────────────
+    sell_type = (body.get("sell_type") or "shares").lower().strip()
+    if sell_type not in ("shares", "dollars", "percent", "full"):
+        raise HTTPException(
+            status_code=400,
+            detail="sell_type must be one of: shares, dollars, percent, full",
+        )
+
+    # ── Validate exit_price ───────────────────────────────────────────────────
+    exit_price_raw = body.get("exit_price")
+    if exit_price_raw is None:
+        raise HTTPException(status_code=400, detail="exit_price is required")
+    try:
+        exit_price = float(exit_price_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="exit_price must be a number")
+    if exit_price <= 0:
+        raise HTTPException(status_code=400, detail="exit_price must be greater than 0")
+
+    exit_date   = body.get("exit_date") or _date_cls.today().isoformat()
+    close_reason = body.get("close_reason") or body.get("notes") or None
+
+    # ── Load holding ──────────────────────────────────────────────────────────
+    holdings = _load()
+    idx = next(
+        (i for i, h in enumerate(holdings) if h.get("ticker", "").upper() == ticker),
+        None,
+    )
+    if idx is None:
+        raise HTTPException(status_code=404, detail=f"Ticker {ticker!r} not in active portfolio")
+
+    h              = holdings[idx]
+    current_shares = float(h.get("shares") or 0)
+    avg_cost       = float(h.get("avg_cost") or 0)
+
+    if current_shares <= 0:
+        raise HTTPException(status_code=400, detail=f"Holding {ticker!r} has 0 shares")
+
+    # ── Resolve shares_sold ───────────────────────────────────────────────────
+    _TINY = 0.0001
+
+    if sell_type == "full":
+        shares_sold = current_shares
+    elif sell_type == "shares":
+        raw = body.get("shares_sold")
+        if raw is None:
+            raise HTTPException(status_code=400, detail="shares_sold is required for sell_type='shares'")
+        try:
+            shares_sold = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="shares_sold must be a number")
+        if shares_sold <= 0:
+            raise HTTPException(status_code=400, detail="shares_sold must be greater than 0")
+    elif sell_type == "dollars":
+        raw = body.get("dollar_amount")
+        if raw is None:
+            raise HTTPException(status_code=400, detail="dollar_amount is required for sell_type='dollars'")
+        try:
+            dollar_amount = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="dollar_amount must be a number")
+        if dollar_amount <= 0:
+            raise HTTPException(status_code=400, detail="dollar_amount must be greater than 0")
+        shares_sold = dollar_amount / exit_price
+        # Cap at current_shares for floating-point safety (e.g. exact dollar full sell)
+        shares_sold = min(round(shares_sold, 8), current_shares)
+    elif sell_type == "percent":
+        raw = body.get("percent_sold")
+        if raw is None:
+            raise HTTPException(status_code=400, detail="percent_sold is required for sell_type='percent'")
+        try:
+            percent_sold = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="percent_sold must be a number")
+        if percent_sold <= 0 or percent_sold > 100:
+            raise HTTPException(status_code=400, detail="percent_sold must be between 0 and 100")
+        shares_sold = current_shares * percent_sold / 100.0
+        # Cap at current_shares for floating-point safety (100% may produce marginal overshoot)
+        shares_sold = min(round(shares_sold, 8), current_shares)
+
+    # For sell_type="shares": no silent cap — explicitly reject if over-selling
+    if shares_sold <= 0:
+        raise HTTPException(status_code=400, detail="Resolved shares_sold must be greater than 0")
+    if shares_sold > current_shares + _TINY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot sell {shares_sold:.4f} shares — holding only has {current_shares:.4f}",
+        )
+
+    # ── P&L (average-cost accounting) ─────────────────────────────────────────
+    cost_basis_sold  = round(shares_sold * avg_cost, 4)
+    exit_value       = round(shares_sold * exit_price, 4)
+    realized_pnl     = round(exit_value - cost_basis_sold, 4)
+    realized_pnl_pct = round(realized_pnl / cost_basis_sold * 100, 4) if cost_basis_sold else None
+
+    entry_date          = h.get("entry_date") or h.get("date_added") or None
+    holding_period_days = None
+    if entry_date:
+        try:
+            _d1 = _date_cls.fromisoformat(str(entry_date))
+            _d2 = _date_cls.fromisoformat(str(exit_date))
+            holding_period_days = (_d2 - _d1).days
+        except Exception:
+            pass
+
+    # ── Remaining shares ──────────────────────────────────────────────────────
+    remaining_shares = round(current_shares - shares_sold, 8)
+    is_full_close    = remaining_shares <= _TINY
+    if is_full_close:
+        remaining_shares = 0.0
+
+    # ── Create closed trade for the sold portion ──────────────────────────────
+    trade_payload = {
+        "ticker":                 ticker,
+        "shares":                 round(shares_sold, 8),
+        "entry_date":             entry_date,
+        "exit_date":              exit_date,
+        "entry_price":            avg_cost,
+        "exit_price":             exit_price,
+        "realized_pnl":           realized_pnl,
+        "realized_pnl_pct":       realized_pnl_pct,
+        "holding_period_days":    holding_period_days,
+        "notes":                  close_reason,
+        "sell_type":              sell_type,
+        "remaining_shares_after": remaining_shares,
+        "cost_method":            "average_cost",
+    }
+    closed_trade = _save_ct(trade_payload)
+    if closed_trade.get("_error"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save closed trade: {closed_trade['_error']}",
+        )
+
+    # ── Update active holdings ────────────────────────────────────────────────
+    if is_full_close:
+        updated_holdings = [hh for i, hh in enumerate(holdings) if i != idx]
+        active_holding   = None
+    else:
+        updated_h        = {**h, "shares": remaining_shares}
+        updated_holdings = [updated_h if i == idx else hh for i, hh in enumerate(holdings)]
+        # Return the normalised shape that will be persisted
+        active_holding = {
+            "ticker":     ticker,
+            "shares":     remaining_shares,
+            "avg_cost":   avg_cost,
+            "asset_type": h.get("asset_type", "stock"),
+        }
+        for _k in ("entry_date", "date_added", "notes", "id"):
+            if h.get(_k) is not None:
+                active_holding[_k] = h[_k]
+
+    _save_h(updated_holdings)
+    sig = _sig(updated_holdings)
+
+    # ── Invalidate terminal cache ─────────────────────────────────────────────
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        from data.portfolio_store import canonical_file as _cf
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    active_syms = [hh.get("ticker") for hh in updated_holdings]
+    print(
+        f"[SELL_HOLDING] ticker={ticker}  sell_type={sell_type}  "
+        f"shares_sold={shares_sold:.4f}  remaining={remaining_shares:.4f}  "
+        f"exit_price={exit_price}  pnl={realized_pnl}  trade_id={closed_trade.get('id')}"
+    )
+    return {
+        "success":            True,
+        "ticker":             ticker,
+        "sell_type":          sell_type,
+        "cost_method":        "average_cost",
+        "shares_before":      current_shares,
+        "shares_sold":        round(shares_sold, 8),
+        "shares_remaining":   remaining_shares,
+        "exit_price":         exit_price,
+        "exit_value":         exit_value,
+        "cost_basis_sold":    cost_basis_sold,
+        "realized_pnl":       realized_pnl,
+        "realized_pnl_pct":   realized_pnl_pct,
+        "closed_trade":       closed_trade,
+        "active_holding":     active_holding,
+        "active_count":       len(updated_holdings),
+        "active_symbols":     active_syms,
+        "holdings_signature": sig,
+    }
+
+
 @app.get("/api/test-altfins")
 @traceable(name="main.test_altfins")
 async def test_altfins(symbol: str = "BTC", api_key: str = Header(None, alias="X-API-Key")):
