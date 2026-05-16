@@ -54,8 +54,8 @@ _MAX_FUND_ENRICH_ROWS:   int = 50
 
 _TTL_PROFILE:            int = 24 * 3600     # 24 h
 _TTL_QUOTE:              int = 30 * 60       # 30 min
-_TTL_PRICE_CHANGE_OPEN:  int = 900           # 15 min market hours — matches theme universe ETF cadence
-_TTL_PRICE_CHANGE_SHUT:  int = 3600          # 60 min off-hours/weekends — matches theme universe ETF cadence
+_TTL_PRICE_CHANGE_WKDAY: int = 3600          # 60 min on weekdays — EOD data, no intraday value in refreshing faster
+# Weekend TTL is computed dynamically (see _fmp_hist_price_change_ttl)
 _TTL_FUNDAMENTALS:       int = 7 * 24 * 3600 # 7 days — FMP fundamental data
 _TTL_FUND_CACHE:         int = 7 * 24 * 3600 # 7 days — fs_payload compiled payload
 
@@ -70,6 +70,34 @@ _fund_bg_running: bool = False
 
 
 # ── Market-hours guard ────────────────────────────────────────────────────────
+
+def _fmp_hist_price_change_ttl() -> int:
+    """Global rule for FMP 7D/30D/YTD/1Y price-change cache TTL.
+
+    Weekend (Sat/Sun): cache until Monday 09:30 ET — zero weekend FMP calls.
+    Weekday:           3600s (60 min flat) — data only changes at EOD.
+
+    1D% is served from Tradier in real time; this function is for FMP 7D+ only.
+    Apply this rule anywhere in the project for automatic FMP price-change fetches.
+    """
+    try:
+        from datetime import timedelta
+        if _ET is not None:
+            now = datetime.now(_ET)
+        else:
+            now = datetime.now(timezone(timedelta(hours=-5)))
+        wd = now.weekday()          # 0=Mon … 6=Sun
+        if wd >= 5:                 # Saturday or Sunday
+            days_to_monday = 7 - wd # Sat→2, Sun→1
+            monday_open = (now + timedelta(days=days_to_monday)).replace(
+                hour=9, minute=30, second=0, microsecond=0,
+            )
+            secs = int((monday_open - now).total_seconds())
+            return max(secs, 3600)  # floor at 1h in case of clock skew
+        return _TTL_PRICE_CHANGE_WKDAY
+    except Exception:
+        return _TTL_PRICE_CHANGE_WKDAY
+
 
 def _is_us_market_open() -> bool:
     """Return True only during core NYSE trading hours.
@@ -364,14 +392,14 @@ async def _fetch_quote(client: httpx.AsyncClient, ticker: str, key: str) -> dict
 async def _fetch_price_change(client: httpx.AsyncClient, ticker: str, key: str) -> dict:
     """FMP stock-price-change endpoint — returns 1D, 5D, 1M, 3M, 6M, YTD, 1Y, etc.
 
-    TTL matches the theme universe ETF cadence exactly:
-      15 min during NYSE core hours, 60 min off-hours/weekends.
+    TTL follows the global FMP 7D+ rule (see _fmp_hist_price_change_ttl):
+      Weekday  → 60 min flat
+      Weekend  → cache until Monday 09:30 ET
     """
-    _ttl = _TTL_PRICE_CHANGE_OPEN if _is_us_market_open() else _TTL_PRICE_CHANGE_SHUT
     data = await _fmp_get(
         client, "stock-price-change",
         {"symbol": ticker, "apikey": key},
-        _ttl, feature="social_price_change",
+        _fmp_hist_price_change_ttl(), feature="social_price_change",
     )
     if isinstance(data, list) and data:
         item = data[0] if isinstance(data[0], dict) else {}

@@ -98,9 +98,10 @@ _ETF_HOLDINGS_TOP_N = 10
 _FMP_HIST_SEM = asyncio.Semaphore(25)
 
 # ── Per-timeframe TTL constants ────────────────────────────────────────────────
-_TTL_1D_MARKET   = 60      # 1 minute  — 1D during market hours
-_TTL_HIST_MARKET = 900     # 15 minutes — 7D/30D/YTD/1Y during market hours
-_TTL_OFF_HOURS   = 3600    # 60 minutes — all timeframes off-hours/weekends
+_TTL_1D_MARKET   = 60      # 1 minute  — 1D during market hours (Tradier, real-time)
+_TTL_OFF_HOURS   = 3600    # 60 minutes — 1D off-hours (Tradier, prices don't move)
+# 7D/30D/YTD/1Y: global rule — weekday 60 min, weekend cached until Monday 09:30 ET
+# (see _fmp_hist_ttl(); _TTL_HIST_MARKET removed — was 15 min, no intraday value)
 
 # ── Per-timeframe refresh locks & schedule trackers ───────────────────────────
 # asyncio.Lock per timeframe: only one concurrent refresh per timeframe allowed.
@@ -128,11 +129,43 @@ def _is_market_hours() -> bool:
     return 570 <= et_min <= 960   # 09:30–16:00 ET
 
 
+def _fmp_hist_ttl() -> int:
+    """Global rule for FMP 7D/30D/YTD/1Y price-change cache TTL.
+
+    Weekend (Sat/Sun): cache until Monday 09:30 ET — zero weekend FMP calls.
+    Weekday:           3600s (60 min flat) — data only changes at EOD.
+
+    1D is served from Tradier in real time and is NOT subject to this rule.
+    Apply this rule anywhere in the project for automatic FMP 7D+ price fetches.
+    """
+    try:
+        now = datetime.now(tz=timezone.utc)
+        wd = now.weekday()              # 0=Mon … 6=Sun
+        if wd >= 5:                     # Saturday or Sunday
+            from datetime import timedelta as _td
+            # Monday 09:30 ET in UTC: offset 4h (summer/EDT) or 5h (winter/EST)
+            utc_off = 4 if 4 <= now.month <= 10 else 5
+            days_to_monday = 7 - wd     # Sat→2, Sun→1
+            monday_open_utc = (now + _td(days=days_to_monday)).replace(
+                hour=9 + utc_off, minute=30, second=0, microsecond=0,
+            )
+            secs = int((monday_open_utc - now).total_seconds())
+            return max(secs, 3600)      # floor at 1h in case of clock skew
+        return 3600                     # weekday — 60 min flat
+    except Exception:
+        return 3600
+
+
 def _ttl_for_timeframe(tf: str) -> int:
-    """Return cache TTL seconds for the given timeframe."""
-    if not _is_market_hours():
-        return _TTL_OFF_HOURS
-    return _TTL_1D_MARKET if tf == "1D" else _TTL_HIST_MARKET
+    """Return cache TTL seconds for the given timeframe.
+
+    1D  (Tradier real-time): 60s market hours, 3600s off-hours.
+    7D+ (FMP EOD data):      global rule via _fmp_hist_ttl() —
+                             60 min weekdays, cached until Monday 09:30 ET on weekends.
+    """
+    if tf == "1D":
+        return _TTL_1D_MARKET if _is_market_hours() else _TTL_OFF_HOURS
+    return _fmp_hist_ttl()
 
 
 # ── LKG helpers ────────────────────────────────────────────────────────────────
@@ -1229,8 +1262,10 @@ async def _locked_refresh(tf: str, force: bool = False) -> None:
 async def _warmup_loop() -> None:
     """
     Background loop that keeps theme RS caches fresh.
-    - Market hours: 1D every ~60s, 7D/30D/YTD/1Y every ~15min.
-    - Off-hours: loop idles (cache TTL of 60min covers off-hours naturally).
+    - Market hours: 1D every ~60s (Tradier real-time).
+                   7D/30D/YTD/1Y once per 24h cadence guard (_HIST_FETCH_CADENCE).
+    - Off-hours / weekends: loop idles; 60-min weekday TTL and weekend TTL
+      (cached until Monday 09:30 ET) cover serving from cache naturally.
     """
     print("[THEME_RS] Warmup loop started")
 
