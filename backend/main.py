@@ -6538,22 +6538,50 @@ async def add_closed_trade(request: Request, api_key: str = Header(None, alias="
     if not body.get("exit_date"):
         raise HTTPException(status_code=400, detail="exit_date is required")
 
+    import uuid as _uuid_mod
     from data.closed_trades_store import save_closed_trade as _save_ct
+
+    # Determine is_full_close: explicit field, or infer from remaining_shares_after==0
+    _remaining = body.get("remaining_shares_after")
+    _is_full_close = body.get("is_full_close")
+    if _is_full_close is None:
+        _is_full_close = (_remaining is not None and float(_remaining) == 0)
+
     trade = {
-        "ticker":       ticker,
-        "shares":       float(body.get("shares") or 0),
-        "entry_date":   body.get("entry_date") or None,
-        "exit_date":    body.get("exit_date"),
-        "entry_price":  float(body.get("entry_price") or body.get("avg_cost") or 0),
-        "exit_price":   float(body.get("exit_price") or 0),
-        "realized_pnl": body.get("realized_pnl"),
-        "realized_pnl_pct": body.get("realized_pnl_pct"),
-        "holding_period_days": body.get("holding_period_days"),
-        "notes":        body.get("notes"),
+        "ticker":                 ticker,
+        "shares":                 float(body.get("shares") or 0),
+        "entry_date":             body.get("entry_date") or None,
+        "exit_date":              body.get("exit_date"),
+        "entry_price":            float(body.get("entry_price") or body.get("avg_cost") or 0),
+        "exit_price":             float(body.get("exit_price") or 0),
+        "realized_pnl":           body.get("realized_pnl"),
+        "realized_pnl_pct":       body.get("realized_pnl_pct"),
+        "holding_period_days":    body.get("holding_period_days"),
+        "notes":                  body.get("notes"),
+        "sell_type":              body.get("sell_type") or ("full" if _is_full_close else "partial"),
+        "remaining_shares_after": float(_remaining) if _remaining is not None else None,
+        "cost_method":            body.get("cost_method") or "average_cost",
+        "trade_group_id":         body.get("trade_group_id") or str(_uuid_mod.uuid4()),
+        "is_full_close":          bool(_is_full_close),
     }
     result = _save_ct(trade)
     if result.get("_error"):
         raise HTTPException(status_code=500, detail=result["_error"])
+
+    # If this is a full close, remove the ticker from active holdings
+    if bool(_is_full_close):
+        try:
+            from data.portfolio_store import (
+                load_active_holdings as _load_h,
+                save_active_holdings as _save_h,
+            )
+            _holdings = _load_h()
+            _remaining_h = [h for h in _holdings if h.get("ticker", "").upper() != ticker]
+            if len(_remaining_h) < len(_holdings):
+                _save_h(_remaining_h)
+                print(f"[CLOSED_TRADES] Removed {ticker} from active holdings via POST (is_full_close=True)")
+        except Exception as _he:
+            print(f"[CLOSED_TRADES] Warning: could not remove {ticker} from active holdings: {_he}")
 
     # Invalidate terminal cache so next chart load includes this trade
     try:
