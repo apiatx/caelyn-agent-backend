@@ -6634,6 +6634,154 @@ async def patch_holding(
     return {"success": True, "ticker": ticker, "holding": h}
 
 
+@app.post("/api/portfolio/holdings/{ticker}/buy")
+@traceable(name="main.add_buy_lot")
+async def add_buy_lot(
+    ticker: str,
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Add a buy lot to an existing (or new) holding.
+
+    Each buy lot records the exact shares, price, and date of one purchase.
+    The holding's top-level shares / avg_cost / entry_date are always
+    recomputed as the weighted average across all lots.
+
+    Body:
+      {
+        "shares":  float,         # required — shares purchased, > 0
+        "price":   float,         # required — cost per share, > 0
+        "date":    "YYYY-MM-DD",  # optional — defaults to today
+        "notes":   str            # optional
+      }
+
+    Behaviour:
+      - Ticker already in active holdings → lot is appended, totals recomputed.
+      - Ticker NOT in active holdings     → new holding is created with this
+                                            as its first lot.
+
+    Returns:
+      {
+        "success":  true,
+        "ticker":   str,
+        "holding":  { ...updated holding with lots array... },
+        "lot_added":{ ...the new lot... },
+        "active_count": int,
+        "holdings_signature": str
+      }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        body = await request.json()
+    except Exception as _je:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    ticker = ticker.upper().strip()
+
+    # ── Validate required fields ──────────────────────────────────────────────
+    try:
+        new_shares = float(body.get("shares", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="shares must be a number")
+    if new_shares <= 0:
+        raise HTTPException(status_code=400, detail="shares must be > 0")
+
+    try:
+        new_price = float(body.get("price", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="price must be a number")
+    if new_price <= 0:
+        raise HTTPException(status_code=400, detail="price must be > 0")
+
+    from datetime import date as _date_cls
+    raw_date = body.get("date") or body.get("entry_date") or _date_cls.today().isoformat()
+    # strip time if full ISO datetime was sent
+    buy_date = str(raw_date).split("T")[0]
+
+    new_lot: dict = {"shares": new_shares, "price": new_price, "date": buy_date}
+    if body.get("notes"):
+        new_lot["notes"] = body["notes"]
+
+    from data.portfolio_store import (
+        load_active_holdings as _load,
+        save_active_holdings as _save_h,
+        get_holdings_signature as _sig,
+        compute_lot_totals as _totals,
+    )
+
+    holdings = _load()
+    idx = next(
+        (i for i, h in enumerate(holdings) if h.get("ticker", "").upper() == ticker),
+        None,
+    )
+
+    if idx is not None:
+        h = dict(holdings[idx])
+        # Build existing lots — if none recorded yet, synthesise one from the
+        # current flat fields so history is preserved.
+        existing_lots: list[dict] = list(h.get("lots") or [])
+        if not existing_lots:
+            synth: dict = {
+                "shares": float(h.get("shares", 0)),
+                "price":  float(h.get("avg_cost", 0)),
+            }
+            ed = h.get("entry_date") or h.get("date_added")
+            if ed:
+                synth["date"] = str(ed).split("T")[0]
+            if synth["shares"] > 0:
+                existing_lots = [synth]
+
+        existing_lots.append(new_lot)
+        totals = _totals(existing_lots)
+        h["lots"]       = existing_lots
+        h["shares"]     = totals["shares"]
+        h["avg_cost"]   = totals["avg_cost"]
+        if totals["entry_date"]:
+            h["entry_date"] = totals["entry_date"]
+        holdings[idx] = h
+    else:
+        # Brand-new holding — create it with this as the first lot
+        h = {
+            "ticker":     ticker,
+            "shares":     new_shares,
+            "avg_cost":   new_price,
+            "entry_date": buy_date,
+            "asset_type": (body.get("asset_type") or "stock").lower(),
+            "lots":       [new_lot],
+        }
+        if body.get("notes"):
+            h["notes"] = body["notes"]
+        holdings.append(h)
+
+    _save_h(holdings)
+    sig = _sig(holdings)
+
+    # Invalidate terminal cache
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        from data.portfolio_store import canonical_file as _cf
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    lot_count = len(h.get("lots", [new_lot]))
+    print(
+        f"[ADD_BUY_LOT] ticker={ticker}  date={buy_date}  shares={new_shares}"
+        f"  price={new_price}  total_lots={lot_count}"
+        f"  new_total_shares={h['shares']}  new_avg_cost={h['avg_cost']}"
+    )
+    return {
+        "success":            True,
+        "ticker":             ticker,
+        "holding":            h,
+        "lot_added":          new_lot,
+        "active_count":       len(holdings),
+        "holdings_signature": sig,
+    }
+
+
 @app.post("/api/portfolio/holdings/{ticker}/close")
 @traceable(name="main.close_holding")
 async def close_holding(

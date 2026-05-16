@@ -1,13 +1,6 @@
 {
   "holdings": [
     {
-      "ticker": "AEHR",
-      "shares": 232.0,
-      "avg_cost": 45.0,
-      "asset_type": "stock",
-      "entry_date": "2026-05-12"
-    },
-    {
       "ticker": "SIVEF",
       "shares": 3996.0,
       "avg_cost": 1.41,
@@ -17,7 +10,7 @@
     {
       "ticker": "MRVL",
       "shares": 111.0,
-      "avg_cost": 110.0,
+      "avg_cost": 90.6999,
       "asset_type": "stock",
       "entry_date": "2026-05-12"
     },
@@ -78,13 +71,6 @@
       "entry_date": "2026-05-12"
     },
     {
-      "ticker": "LWLG",
-      "shares": 473.0,
-      "avg_cost": 9.3963,
-      "asset_type": "stock",
-      "entry_date": "2026-05-12"
-    },
-    {
       "ticker": "OUST",
       "shares": 302.0,
       "avg_cost": 26.0,
@@ -106,13 +92,6 @@
       "entry_date": "2026-05-13"
     },
     {
-      "ticker": "P",
-      "shares": 123.0,
-      "avg_cost": 81.34,
-      "asset_type": "stock",
-      "entry_date": "2026-05-13"
-    },
-    {
       "ticker": "VPG",
       "shares": 104.0,
       "avg_cost": 63.0,
@@ -127,6 +106,6 @@
       "entry_date": "2026-05-13"
     }
   ],
-  "_saved_at": "2026-05-16T19:03:34.600125Z",
+  "_saved_at": "2026-05-16T19:11:01.511203Z",
   "_source": "portfolio_store"
 }

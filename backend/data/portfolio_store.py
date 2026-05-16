@@ -219,21 +219,77 @@ def _to_date_str(val) -> str | None:
     return s
 
 
+def _normalise_lot(lot: dict) -> dict:
+    """Canonical buy-lot shape: shares, price, date, optional notes."""
+    out: dict = {
+        "shares": float(lot.get("shares", 0) or 0),
+        "price":  float(lot.get("price", lot.get("avg_cost", 0)) or 0),
+    }
+    d = _to_date_str(lot.get("date") or lot.get("entry_date"))
+    if d:
+        out["date"] = d
+    if lot.get("notes"):
+        out["notes"] = lot["notes"]
+    return out
+
+
+def compute_lot_totals(lots: list[dict]) -> dict:
+    """Given a list of buy lots, return aggregated shares, weighted avg_cost,
+    and the earliest entry_date.
+
+    Used by the /buy endpoint and any code that rebuilds top-level holding
+    fields from the lots array.
+    """
+    total_shares = sum(float(l.get("shares", 0)) for l in lots)
+    total_cost   = sum(float(l.get("shares", 0)) * float(l.get("price", 0)) for l in lots)
+    avg_cost     = round(total_cost / total_shares, 6) if total_shares else 0.0
+    dates        = [_to_date_str(l.get("date")) for l in lots]
+    valid_dates  = [d for d in dates if d]
+    entry_date   = min(valid_dates) if valid_dates else None
+    return {
+        "shares":     round(total_shares, 8),
+        "avg_cost":   avg_cost,
+        "entry_date": entry_date,
+    }
+
+
 def _normalise(h: dict) -> dict:
-    """Canonical holding shape with well-known field names."""
+    """Canonical holding shape with well-known field names.
+
+    Preserves `lots` (list of buy lots) through save/load cycles so the
+    full purchase history survives persistence. If lots are present, the
+    top-level shares / avg_cost / entry_date are always recomputed from
+    them to keep the two representations consistent.
+    """
+    raw_lots = h.get("lots")
+    if isinstance(raw_lots, list) and raw_lots:
+        lots = [_normalise_lot(lot) for lot in raw_lots if isinstance(lot, dict)]
+    else:
+        lots = []
+
+    if lots:
+        totals = compute_lot_totals(lots)
+        shares    = totals["shares"]
+        avg_cost  = totals["avg_cost"]
+        entry_date = totals["entry_date"]
+    else:
+        shares     = float(h.get("shares", h.get("qty", 0)) or 0)
+        avg_cost   = float(h.get("avg_cost", h.get("avg_price", h.get("cost", 0))) or 0)
+        entry_date = _to_date_str(h.get("entry_date"))
+
     out: dict = {
         "ticker":     (h.get("ticker") or h.get("symbol") or "").upper().strip(),
-        "shares":     float(h.get("shares", h.get("qty", 0)) or 0),
-        "avg_cost":   float(h.get("avg_cost", h.get("avg_price", h.get("cost", 0))) or 0),
+        "shares":     shares,
+        "avg_cost":   avg_cost,
         "asset_type": h.get("asset_type", h.get("type", "stock")),
     }
+    if lots:
+        out["lots"] = lots
+    if entry_date is not None:
+        out["entry_date"] = entry_date
     for k in ("date_added", "notes", "id"):
         if h.get(k) is not None:
             out[k] = h[k]
-    # entry_date: always coerce to plain YYYY-MM-DD (strips time/timezone if present)
-    ed = _to_date_str(h.get("entry_date"))
-    if ed is not None:
-        out["entry_date"] = ed
     return out
 
 
