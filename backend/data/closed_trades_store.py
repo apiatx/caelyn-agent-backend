@@ -246,6 +246,12 @@ def update_closed_trade(trade_id: str, updates: dict) -> dict | None:
     if existing is None:
         return None
 
+    # Normalise date fields — strip time/timezone component if present
+    for _dk in ("entry_date", "exit_date"):
+        if updates.get(_dk):
+            _raw = str(updates[_dk]).strip()
+            updates[_dk] = _raw.split("T")[0] if "T" in _raw else _raw
+
     merged = {**existing, **updates, "id": trade_id}
     merged = _derive_fields(merged, force_recompute=True)
 
