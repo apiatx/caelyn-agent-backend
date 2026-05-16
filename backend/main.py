@@ -4980,6 +4980,17 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         else:
             sell_lots.setdefault(ticker, []).append(lot)
 
+    # Drop sells for tickers that have NO buy orders in this CSV.
+    # A sell-only ticker means the user intentionally excluded that position's
+    # history (e.g. uploaded only a partial date range) — we must not import it.
+    orphan_sell_tickers = [t for t in sell_lots if t not in buy_lots]
+    for t in orphan_sell_tickers:
+        skipped.append({
+            "reason": f"sell-only ticker excluded (no matching buy in CSV — position intentionally omitted)",
+            "ticker": t,
+            "lots":   sell_lots.pop(t),
+        })
+
     return {
         "buy_lots":   buy_lots,
         "sell_lots":  sell_lots,
