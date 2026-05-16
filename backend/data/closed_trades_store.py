@@ -119,6 +119,9 @@ def _row_to_dict(row: tuple, description) -> dict:
                 d[k] = float(d[k])
             except Exception:
                 pass
+    # Frontend aliases — keep both so either naming convention works
+    d["symbol"] = d.get("ticker")
+    d["avg_entry_price"] = d.get("entry_price")
     return d
 
 
