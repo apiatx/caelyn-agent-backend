@@ -4822,6 +4822,392 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
     return {"success": True, "holdings_count": len(new_syms), "symbols": new_syms}
 
 
+# ── Portfolio CSV Upload (/api/portfolio/upload-csv) ──────────────────────────
+
+def _parse_portfolio_csv(csv_text: str) -> dict:
+    """Parse a brokerage CSV export into structured buy/sell lots.
+
+    Normalises column names across brokerages (Schwab, Fidelity, TD, IBKR, etc.).
+    Returns:
+      {
+        "buy_lots":  {TICKER: [{"date", "shares", "price", "notes"}, ...]},
+        "sell_lots": {TICKER: [{"date", "shares", "price", "notes"}, ...]},
+        "skipped":   [{"row", "reason"}, ...],
+        "columns":   [...],
+        "rows_total": int,
+      }
+    """
+    import csv as _csv
+    import io as _io
+    import re as _re
+
+    # Normalise BOM, line endings
+    clean = csv_text.replace(chr(65279), "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    # Some Schwab CSVs have header junk rows before the actual header;
+    # find the first line that contains "Symbol" or "Ticker"
+    lines = clean.splitlines()
+    header_idx = 0
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if "symbol" in low or "ticker" in low or "stock" in low:
+            header_idx = i
+            break
+    clean = "\n".join(lines[header_idx:])
+
+    reader = _csv.DictReader(_io.StringIO(clean))
+    raw_cols = reader.fieldnames or []
+    cols_lower = {c.lower().strip(): c for c in raw_cols}
+
+    # ── Column name resolver ──────────────────────────────────────────────────
+    def _find_col(*candidates) -> str | None:
+        for c in candidates:
+            if c.lower() in cols_lower:
+                return cols_lower[c.lower()]
+        return None
+
+    col_symbol = _find_col("symbol", "ticker", "stock", "security", "instrument")
+    col_date   = _find_col("date", "trade date", "transaction date", "activity date",
+                            "settlement date", "run date")
+    col_type   = _find_col("transaction type", "type", "action", "transaction",
+                            "activity", "description type", "trans type")
+    col_desc   = _find_col("description", "security description", "name")
+    col_qty    = _find_col("quantity", "shares", "qty", "units", "amount (quantity)")
+    col_price  = _find_col("price", "price/share", "unit price", "cost/share",
+                            "exec price", "execution price", "trade price")
+    col_amount = _find_col("amount", "value", "total", "net amount", "principal",
+                            "market value", "cost basis total", "net proceeds")
+
+    BUY_KEYWORDS  = {"buy", "bought", "purchase", "purchased", "reinvestment",
+                     "reinvest", "shares purchased", "exchange in", "transfer in",
+                     "journaled shares", "you bought"}
+    SELL_KEYWORDS = {"sell", "sold", "sale", "shares sold", "exchange out",
+                     "transfer out", "you sold"}
+
+    # ── Money-market / cash symbols to skip ──────────────────────────────────
+    SKIP_SYMBOLS = {"", "cash", "cashbalance", "--", "n/a", "spaxx", "fdrxx",
+                    "swvxx", "vmfxx", "sprxx", "fdlxx", "fzfxx", "mmda1"}
+
+    buy_lots:  dict[str, list] = {}
+    sell_lots: dict[str, list] = {}
+    skipped:   list[dict]      = []
+
+    for row in reader:
+        def _v(col): return (row.get(col, "") or "").strip() if col else ""
+
+        raw_sym = _v(col_symbol)
+        # Strip exchange prefix (e.g. "NASDAQ:AAPL" → "AAPL")
+        if ":" in raw_sym:
+            raw_sym = raw_sym.split(":")[-1]
+        ticker = raw_sym.upper()
+
+        if ticker.lower() in SKIP_SYMBOLS or len(ticker) > 12:
+            skipped.append({"row": dict(row), "reason": f"skipped symbol '{ticker}'"})
+            continue
+
+        if not ticker or not _re.match(r'^[A-Z0-9.\-]{1,12}$', ticker):
+            skipped.append({"row": dict(row), "reason": f"invalid symbol '{ticker}'"})
+            continue
+
+        # Transaction type
+        raw_type = _v(col_type).lower()
+        # If no type column, infer from description
+        if not raw_type and col_desc:
+            raw_type = _v(col_desc).lower()
+
+        is_buy  = any(kw in raw_type for kw in BUY_KEYWORDS)
+        is_sell = any(kw in raw_type for kw in SELL_KEYWORDS)
+
+        # If type column is missing entirely, treat all rows as buy lots
+        if not col_type and not col_desc:
+            is_buy = True
+
+        if not is_buy and not is_sell:
+            skipped.append({"row": dict(row), "reason": f"non-trade type '{_v(col_type)}'"})
+            continue
+
+        # Parse quantity (abs value; sign carried by is_buy/is_sell)
+        try:
+            qty_raw = _v(col_qty).replace(",", "").replace("(", "-").replace(")", "")
+            qty = abs(float(qty_raw))
+        except Exception:
+            # Try to back-calculate from amount ÷ price
+            try:
+                amt   = abs(float(_v(col_amount).replace(",", "").replace("(", "-").replace(")", "").replace("$", "")))
+                price = abs(float(_v(col_price).replace(",", "").replace("$", "")))
+                qty   = amt / price if price else 0
+            except Exception:
+                skipped.append({"row": dict(row), "reason": "could not parse quantity"})
+                continue
+
+        if qty <= 0:
+            skipped.append({"row": dict(row), "reason": "zero quantity"})
+            continue
+
+        # Parse price
+        try:
+            price_raw = _v(col_price).replace(",", "").replace("$", "").replace("(", "-").replace(")", "")
+            price = abs(float(price_raw)) if price_raw else 0.0
+        except Exception:
+            price = 0.0
+
+        # Back-calculate price from amount if missing
+        if price == 0.0 and col_amount:
+            try:
+                amt_raw = _v(col_amount).replace(",", "").replace("$", "").replace("(", "-").replace(")", "")
+                amt = abs(float(amt_raw))
+                price = round(amt / qty, 6) if qty else 0.0
+            except Exception:
+                pass
+
+        # Parse date
+        raw_date = _v(col_date)
+        lot_date: str | None = None
+        for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%d/%m/%Y",
+                    "%B %d, %Y", "%b %d, %Y", "%Y%m%d"):
+            try:
+                from datetime import datetime as _dt
+                lot_date = _dt.strptime(raw_date.split(" ")[0], fmt).date().isoformat()
+                break
+            except Exception:
+                pass
+
+        notes_val = _v(col_desc) or None
+        lot = {"date": lot_date, "shares": qty, "price": price, "notes": notes_val}
+
+        if is_buy:
+            buy_lots.setdefault(ticker, []).append(lot)
+        else:
+            sell_lots.setdefault(ticker, []).append(lot)
+
+    return {
+        "buy_lots":   buy_lots,
+        "sell_lots":  sell_lots,
+        "skipped":    skipped,
+        "columns":    list(raw_cols),
+        "rows_total": sum(len(v) for v in buy_lots.values()) +
+                      sum(len(v) for v in sell_lots.values()) + len(skipped),
+    }
+
+
+@app.post("/api/portfolio/upload-csv")
+@traceable(name="main.portfolio_upload_csv")
+async def portfolio_upload_csv(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Import holdings from a brokerage CSV export.
+
+    Accepts standard brokerage transaction columns (works with Schwab, Fidelity,
+    TD Ameritrade, Interactive Brokers, Robinhood, Webull, E*Trade, etc.):
+      Date, Transaction Type, Symbol, Description, Quantity, Price, Amount
+
+    Body (JSON):
+      {
+        "csv_data":        str,      # raw CSV text (required)
+        "mode":            str,      # "preview" | "import"  (default "import")
+        "merge_strategy":  str,      # "add_lots" | "replace"  (default "add_lots")
+                                     #   add_lots → appends lots, recomputes avg
+                                     #   replace  → overwrites matching tickers
+        "include_sells":   bool      # if true, sell rows are logged as closed trades
+                                     # (default false — sells are reported but skipped)
+      }
+
+    Response:
+      {
+        "success":          bool,
+        "mode":             str,
+        "rows_total":       int,
+        "rows_skipped":     int,
+        "symbols_imported": [...],
+        "symbols_skipped":  [...],
+        "holdings_created": int,
+        "holdings_updated": int,
+        "lots_added":       int,
+        "sells_found":      int,
+        "preview":          [{ticker, lots, total_shares, avg_cost, action}, ...],
+        "skipped_detail":   [{row, reason}, ...]   # first 20 only
+      }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        body = await request.json()
+    except Exception as _je:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    csv_data = (body.get("csv_data") or "").strip()
+    if not csv_data:
+        raise HTTPException(status_code=400, detail="csv_data is required")
+
+    mode           = (body.get("mode") or "import").lower().strip()
+    merge_strategy = (body.get("merge_strategy") or "add_lots").lower().strip()
+    include_sells  = bool(body.get("include_sells", False))
+
+    if mode not in ("preview", "import"):
+        raise HTTPException(status_code=400, detail="mode must be 'preview' or 'import'")
+    if merge_strategy not in ("add_lots", "replace"):
+        raise HTTPException(status_code=400, detail="merge_strategy must be 'add_lots' or 'replace'")
+
+    # ── Parse CSV ─────────────────────────────────────────────────────────────
+    parsed = _parse_portfolio_csv(csv_data)
+    buy_lots  = parsed["buy_lots"]   # {TICKER: [lot, ...]}
+    sell_lots = parsed["sell_lots"]
+    skipped   = parsed["skipped"]
+
+    if not buy_lots and not sell_lots:
+        return {
+            "success":          False,
+            "mode":             mode,
+            "error":            "No tradeable rows found. Check that the CSV contains Buy/Sell transactions with Symbol, Quantity, and Price columns.",
+            "columns_detected": parsed["columns"],
+            "rows_total":       parsed["rows_total"],
+            "rows_skipped":     len(skipped),
+            "skipped_detail":   skipped[:20],
+        }
+
+    # ── Compute weighted-avg per ticker from all buy lots ─────────────────────
+    from data.portfolio_store import (
+        load_active_holdings  as _load_h,
+        save_active_holdings  as _save_h,
+        get_holdings_signature as _sig,
+        compute_lot_totals    as _totals,
+    )
+    from datetime import date as _date_cls
+
+    existing_holdings = _load_h()
+    existing_map      = {h["ticker"].upper(): h for h in existing_holdings}
+
+    preview: list[dict] = []
+    holdings_created = 0
+    holdings_updated = 0
+    lots_added       = 0
+
+    # Build updated holdings map (copy so preview and import share logic)
+    updated_map = {k: dict(v) for k, v in existing_map.items()}  # deep-ish copy
+
+    for ticker, lots in buy_lots.items():
+        lots_valid = [l for l in lots if l["shares"] > 0]
+        if not lots_valid:
+            continue
+
+        existing = updated_map.get(ticker)
+        action   = "updated" if existing else "created"
+
+        if existing and merge_strategy == "add_lots":
+            # Preserve existing lots, append new ones
+            base_lots: list = list(existing.get("lots") or [])
+            if not base_lots:
+                # synthesise from flat fields
+                synth: dict = {"shares": float(existing.get("shares", 0)),
+                               "price":  float(existing.get("avg_cost", 0))}
+                if existing.get("entry_date"):
+                    synth["date"] = str(existing["entry_date"]).split("T")[0]
+                if synth["shares"] > 0:
+                    base_lots = [synth]
+            merged_lots = base_lots + lots_valid
+        else:
+            merged_lots = lots_valid
+
+        totals = _totals(merged_lots)
+        updated_h = {
+            "ticker":     ticker,
+            "shares":     totals["shares"],
+            "avg_cost":   totals["avg_cost"],
+            "entry_date": totals.get("entry_date") or (existing or {}).get("entry_date") or _date_cls.today().isoformat(),
+            "asset_type": (existing or {}).get("asset_type", "stock"),
+            "lots":       merged_lots,
+        }
+        if (existing or {}).get("notes"):
+            updated_h["notes"] = existing["notes"]
+
+        updated_map[ticker] = updated_h
+        lots_added += len(lots_valid)
+
+        if action == "created":
+            holdings_created += 1
+        else:
+            holdings_updated += 1
+
+        preview.append({
+            "ticker":       ticker,
+            "action":       action,
+            "lots_added":   len(lots_valid),
+            "total_shares": totals["shares"],
+            "avg_cost":     totals["avg_cost"],
+            "entry_date":   updated_h["entry_date"],
+        })
+
+    # ── Sells summary (logged to closed trades if include_sells=True) ─────────
+    sells_logged = 0
+    if include_sells and sell_lots and mode == "import":
+        from data.closed_trades_store import save_closed_trade as _save_ct
+        import uuid as _uuid_mod
+        for ticker, lots in sell_lots.items():
+            for lot in lots:
+                if not lot["shares"]:
+                    continue
+                ct = {
+                    "ticker":       ticker,
+                    "shares":       lot["shares"],
+                    "exit_date":    lot["date"] or _date_cls.today().isoformat(),
+                    "exit_price":   lot["price"],
+                    "notes":        lot.get("notes") or "Imported from CSV",
+                    "sell_type":    "full",
+                    "is_full_close": False,     # can't know without full history
+                    "trade_group_id": str(_uuid_mod.uuid4()),
+                    "cost_method":  "average_cost",
+                }
+                result = _save_ct(ct)
+                if not result.get("_error"):
+                    sells_logged += 1
+
+    # ── Write to DB (import mode only) ────────────────────────────────────────
+    if mode == "import" and (holdings_created or holdings_updated):
+        final_holdings = list(updated_map.values())
+        _save_h(final_holdings)
+        sig = _sig(final_holdings)
+        print(f"[PORTFOLIO_CSV] imported {holdings_created} new + {holdings_updated} updated, "
+              f"{lots_added} lots, {sells_logged} sells, sig={sig}")
+
+        # Invalidate terminal cache
+        try:
+            from data.caelyn_terminal import CaelynTerminalProvider
+            from data.cache import cache as _app_cache
+            from data.portfolio_store import canonical_file as _cf
+            _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+        except Exception:
+            pass
+
+        # Trigger earnings sync
+        try:
+            from services.user_earnings_service import (
+                invalidate_user_earnings,
+                sync_universe_background,
+            )
+            from config import FMP_API_KEY as _fmp_key_csv
+            import asyncio as _aio_csv
+            syms_set = set(buy_lots.keys())
+            invalidate_user_earnings("portfolio")
+            _aio_csv.create_task(sync_universe_background("portfolio", syms_set, _fmp_key_csv or ""))
+        except Exception:
+            pass
+
+    return {
+        "success":          True,
+        "mode":             mode,
+        "columns_detected": parsed["columns"],
+        "rows_total":       parsed["rows_total"],
+        "rows_skipped":     len(skipped),
+        "symbols_imported": list(buy_lots.keys()),
+        "symbols_skipped":  list({r["row"].get(parsed["columns"][0] if parsed["columns"] else "Symbol", "") for r in skipped if isinstance(r.get("row"), dict)}),
+        "holdings_created": holdings_created,
+        "holdings_updated": holdings_updated,
+        "lots_added":       lots_added,
+        "sells_found":      sum(len(v) for v in sell_lots.values()),
+        "sells_logged":     sells_logged if include_sells else 0,
+        "preview":          preview,
+        "skipped_detail":   skipped[:20],
+    }
+
+
 @app.post("/api/portfolio/sync")
 async def portfolio_sync(request: Request):
     """Maximally-permissive portfolio sync endpoint.
