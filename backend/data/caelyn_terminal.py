@@ -406,6 +406,24 @@ class CaelynTerminalProvider:
         asset_map = {h["ticker"].upper(): (h.get("asset_type") or "stock").lower()
                      for h in holdings_raw}
 
+        # 1b. Load closed trades early so their tickers can be included in
+        #     the history fetch — this gives accurate mark-to-market during
+        #     the holding window instead of always falling back to exit_price.
+        try:
+            from data.closed_trades_store import load_closed_trades as _load_ct
+            _closed_trades_raw = _load_ct()
+        except Exception as _ct_load_err:
+            _closed_trades_raw = []
+            print(f"[CAELYN] closed_trades early load error (non-fatal): {_ct_load_err}")
+
+        # Unique closed-trade tickers that are NOT already active holdings
+        _ct_extra_tickers = sorted({
+            (ct.get("ticker") or "").upper()
+            for ct in _closed_trades_raw
+            if (ct.get("ticker") or "").upper() and
+               (ct.get("ticker") or "").upper() not in tickers
+        })
+
         # Classify tickers by type
         equity_tickers  = [t for t in tickers if asset_map[t] in ("stock","etf","")]
         crypto_tickers  = [t for t in tickers if asset_map[t] == "crypto"]
@@ -414,7 +432,11 @@ class CaelynTerminalProvider:
         # Commodities without one (unknown) → Tradier as equity fallback
         yf_commodity    = [t for t in all_commodity if t in COMMODITY_YAHOO_MAP]
         tradier_commodity = [t for t in all_commodity if t not in COMMODITY_YAHOO_MAP]
-        tradier_tickers = equity_tickers + tradier_commodity
+        # Include extra closed-trade tickers in the tradier history fetch
+        # (treated as equity; OTC/YF fallback handles anything Tradier misses)
+        tradier_tickers = equity_tickers + tradier_commodity + _ct_extra_tickers
+        if _ct_extra_tickers:
+            print(f"[CAELYN] closed_trade extra tickers added to history fetch: {_ct_extra_tickers}")
 
         # 2. Fetch live quotes (parallel) ─────────────────────────────────
         hist_start = (date.today() - timedelta(days=420)).isoformat()
@@ -671,13 +693,8 @@ class CaelynTerminalProvider:
         )
 
         # 5 (deferred). Performance charts (multi-period) ────────────────
-        try:
-            from data.closed_trades_store import load_closed_trades as _load_ct
-            _closed_trades_for_chart = _load_ct()
-        except Exception as _ct_err:
-            _closed_trades_for_chart = []
-            print(f"[CAELYN] closed_trades load error (non-fatal): {_ct_err}")
-        perf_charts = self._build_perf_charts(positions, all_history, spy_bars, _closed_trades_for_chart)
+        # Reuse the closed trades already loaded in step 1b — no second DB round trip.
+        perf_charts = self._build_perf_charts(positions, all_history, spy_bars, _closed_trades_raw)
         perf_chart  = perf_charts.get("1Y", [])   # backward-compat field
 
         _lookback_days = 420  # calendar days of history requested for every ticker
@@ -1461,48 +1478,6 @@ class CaelynTerminalProvider:
             cands = [d for d in pm if d <= dt_str]
             return pm[max(cands)] if cands else fallback
 
-        def _port_at(dt_str: str) -> float:
-            """
-            Portfolio value at dt_str applying trade-ledger filtering:
-              - Active holding included only if dt_str >= entry_date (or no entry_date).
-              - Closed trade included during [entry_date, exit_date]; frozen at
-                exit_value afterward.
-            """
-            total = 0.0
-
-            # Active positions
-            for p in positions:
-                ed = p.get("_entry_date")
-                if ed and dt_str < ed:
-                    continue
-                pm  = price_maps.get(p["_sym"], {})
-                px  = _price_at(pm, dt_str, p.get("price") or 0)
-                total += p["_shares"] * (px or 0)
-
-            # Closed trades
-            for ct in closed_trades:
-                ed  = ct.get("entry_date") or ""
-                xd  = ct.get("exit_date")  or ""
-                sym = (ct.get("ticker") or "").upper()
-                if not ed or not sym:
-                    continue
-                if dt_str < ed:
-                    continue  # not yet entered
-
-                shares      = float(ct.get("shares") or 0)
-                exit_price  = float(ct.get("exit_price") or 0)
-
-                if not xd or dt_str <= xd:
-                    # Inside holding window: mark to market
-                    pm = ct_price_maps.get(sym, {})
-                    px = _price_at(pm, dt_str, exit_price)
-                    total += shares * (px or exit_price)
-                else:
-                    # After exit: frozen at exit value
-                    total += shares * exit_price
-
-            return total
-
         def _spy_at(dt_str: str) -> float:
             v = spy_daily.get(dt_str)
             if v:
@@ -1510,19 +1485,130 @@ class CaelynTerminalProvider:
             cands = [d for d in all_spy_dates if d <= dt_str]
             return spy_daily[max(cands)] if cands else 0.0
 
-        def _normalize(pairs: list[tuple[str, float, float]]) -> list[dict]:
-            """pairs = [(label, port_val, spy_val), ...]"""
-            if not pairs or pairs[0][1] == 0:
+        def _port_return_at(dt_str: str) -> tuple[float, float]:
+            """
+            Cost-basis normalised return at dt_str.
+
+            Returns (portfolio_return_pct, spy_dollar_weighted_return_pct).
+
+            portfolio_return = (market_value − cost_basis) / cost_basis × 100
+              → opening a new position does NOT spike the chart because mval ≈
+                cost at inception; only actual price appreciation changes the %.
+
+            spy_return = dollar-weighted SPY return:
+              for each position, compute SPY's gain from that position's
+              entry_date to dt_str, weighted by the position's cost basis.
+              This answers "what if every dollar had gone into SPY instead?"
+              at the same time it was actually deployed.
+
+            De-dup rule: if a ticker appears in both active holdings and closed
+            trades on this date, the ACTIVE holding takes priority (closed trade
+            is skipped) to avoid double-counting re-bought positions.
+            """
+            total_mval = 0.0
+            total_cost = 0.0
+            spy_weighted_gain = 0.0   # Σ( cost_i × spy_return_i )
+
+            active_syms_on_date: set[str] = set()
+
+            # Active positions
+            for p in positions:
+                ed = p.get("_entry_date")
+                if ed and dt_str < ed:
+                    continue
+                active_syms_on_date.add(p["_sym"])
+                pm            = price_maps.get(p["_sym"], {})
+                px            = _price_at(pm, dt_str, p.get("price") or 0)
+                shares        = p["_shares"]
+                cost_per_sh   = p.get("_cost") or 0
+                position_cost = shares * cost_per_sh
+                total_mval   += shares * (px or 0)
+                total_cost   += position_cost
+                # Dollar-weighted SPY return for this position's holding period
+                if ed and position_cost > 0:
+                    spy_start = _spy_at(ed)
+                    spy_now   = _spy_at(dt_str)
+                    if spy_start:
+                        spy_weighted_gain += position_cost * (spy_now - spy_start) / spy_start
+
+            # Closed trades (de-dup: skip if ticker already active today)
+            for ct in closed_trades:
+                ed  = ct.get("entry_date") or ""
+                xd  = ct.get("exit_date")  or ""
+                sym = (ct.get("ticker") or "").upper()
+                if not ed or not sym:
+                    continue
+                if dt_str < ed:
+                    continue          # position not yet open
+                if xd and dt_str > xd:
+                    continue          # position already closed — contributes 0
+                if sym in active_syms_on_date:
+                    continue          # same ticker counted via active holding
+
+                shares      = float(ct.get("shares")      or 0)
+                entry_price = float(ct.get("entry_price") or 0)
+                exit_price  = float(ct.get("exit_price")  or 0)
+                pm          = ct_price_maps.get(sym, {})
+                px          = _price_at(pm, dt_str, exit_price)
+                position_cost = shares * entry_price
+                total_mval   += shares * (px or exit_price)
+                total_cost   += position_cost
+                if position_cost > 0:
+                    spy_start = _spy_at(ed)
+                    spy_now   = _spy_at(dt_str)
+                    if spy_start:
+                        spy_weighted_gain += position_cost * (spy_now - spy_start) / spy_start
+
+            if not total_cost:
+                return (0.0, 0.0)
+            port_ret = round((total_mval - total_cost) / total_cost * 100, 2)
+            spy_ret  = round(spy_weighted_gain / total_cost * 100, 2)
+            return (port_ret, spy_ret)
+
+        def _make_chart(date_labels: list[tuple[str, str]]) -> list[dict]:
+            """Build a period-relative performance chart from [(label, date_str), ...].
+
+            Portfolio series:
+              Uses cost-basis normalised returns (market_value − cost_basis) /
+              cost_basis × 100, then anchored to 0 % at the first active date
+              in the window.  This eliminates capital-addition distortion while
+              preserving the conventional "starts at 0 %" period chart UX.
+
+            S&P 500 series:
+              Simple SPY price change from the anchor date to each date,
+              i.e. (SPY_d − SPY_anchor) / SPY_anchor × 100.  This is the
+              conventional benchmark comparison users expect to see — "how much
+              would I have made if I just bought SPY at the start of this period?"
+            """
+            # Build raw portfolio cost-basis returns
+            raw: list[tuple[str, str, float]] = []   # (label, date_str, port_return)
+            for label, d in date_labels:
+                pr, _ = _port_return_at(d)
+                raw.append((label, d, pr))
+
+            # Trim leading dates where nothing was deployed yet
+            first_active = next(
+                (i for i, (_, _, pr) in enumerate(raw) if pr != 0.0),
+                None,
+            )
+            if first_active is None:
                 return []
-            p0, s0 = pairs[0][1], pairs[0][2]
-            result = []
-            for label, pv, sv in pairs:
-                result.append({
+
+            raw = raw[first_active:]
+            base_pr  = raw[0][2]
+            anchor_d = raw[0][1]
+            spy_anchor_px = _spy_at(anchor_d)
+
+            out = []
+            for label, d, pr in raw:
+                spy_now = _spy_at(d)
+                spy_chg = round((spy_now - spy_anchor_px) / spy_anchor_px * 100, 2) if spy_anchor_px else 0.0
+                out.append({
                     "date":      label,
-                    "portfolio": round((pv - p0) / p0 * 100, 2) if p0 else 0.0,
-                    "sp500":     round((sv - s0) / s0 * 100, 2) if s0 else 0.0,
+                    "portfolio": round(pr - base_pr, 2),
+                    "sp500":     spy_chg,
                 })
-            return result
+            return out
 
         today = date.today()
         today_str = today.isoformat()
@@ -1532,58 +1618,56 @@ class CaelynTerminalProvider:
 
         # ── 5D: one point per trading day, past 5 trading days ──────────
         trading_days = [d for d in all_spy_dates if d <= today_str][-6:]
-        pairs_5d = []
-        for d in trading_days:
-            dt_obj = datetime.strptime(d, "%Y-%m-%d").date()
-            label = dt_obj.strftime("%a")
-            pairs_5d.append((label, _port_at(d), _spy_at(d)))
-        chart_5d = _normalize(pairs_5d)
+        chart_5d = _make_chart([
+            (datetime.strptime(d, "%Y-%m-%d").date().strftime("%a"), d)
+            for d in trading_days
+        ])
 
         # ── 1M: daily, sample every 3rd trading day (~10 pts) ───────────
-        days_1m = [d for d in all_spy_dates if d >= (today - timedelta(days=35)).isoformat() and d <= today_str]
+        days_1m = [d for d in all_spy_dates
+                   if d >= (today - timedelta(days=35)).isoformat() and d <= today_str]
         if days_1m:
             step = max(1, len(days_1m) // 10)
-            idxs = list(range(0, len(days_1m), step)) + ([len(days_1m) - 1] if (len(days_1m) - 1) % step != 0 else [])
-            idxs = sorted(set(idxs))
-            pairs_1m = []
-            for i in idxs:
-                d = days_1m[i]
-                dt_obj = datetime.strptime(d, "%Y-%m-%d").date()
-                label = dt_obj.strftime("%b %-d")
-                pairs_1m.append((label, _port_at(d), _spy_at(d)))
-            chart_1m = _normalize(pairs_1m)
+            idxs = sorted(set(
+                list(range(0, len(days_1m), step)) +
+                ([len(days_1m) - 1] if (len(days_1m) - 1) % step != 0 else [])
+            ))
+            chart_1m = _make_chart([
+                (datetime.strptime(days_1m[i], "%Y-%m-%d").date().strftime("%b %-d"), days_1m[i])
+                for i in idxs
+            ])
         else:
             chart_1m = []
 
-        # ── 6M: weekly data points (~26 pts) ───────────────────────────
-        days_6m = [d for d in all_spy_dates if d >= (today - timedelta(days=186)).isoformat() and d <= today_str]
+        # ── 6M: weekly data points (~26 pts) ────────────────────────────
+        days_6m = [d for d in all_spy_dates
+                   if d >= (today - timedelta(days=186)).isoformat() and d <= today_str]
         if days_6m:
             step = max(1, len(days_6m) // 26)
-            idxs = list(range(0, len(days_6m), step)) + ([len(days_6m) - 1] if (len(days_6m) - 1) % step != 0 else [])
-            idxs = sorted(set(idxs))
-            pairs_6m = []
-            for i in idxs:
-                d = days_6m[i]
-                dt_obj = datetime.strptime(d, "%Y-%m-%d").date()
-                label = dt_obj.strftime("%b %-d")
-                pairs_6m.append((label, _port_at(d), _spy_at(d)))
-            chart_6m = _normalize(pairs_6m)
+            idxs = sorted(set(
+                list(range(0, len(days_6m), step)) +
+                ([len(days_6m) - 1] if (len(days_6m) - 1) % step != 0 else [])
+            ))
+            chart_6m = _make_chart([
+                (datetime.strptime(days_6m[i], "%Y-%m-%d").date().strftime("%b %-d"), days_6m[i])
+                for i in idxs
+            ])
         else:
             chart_6m = []
 
-        # ── 1Y: monthly sampled (~13 pts) ──────────────────────────────
-        days_1y = [d for d in all_spy_dates if d >= (today - timedelta(days=375)).isoformat() and d <= today_str]
+        # ── 1Y: monthly sampled (~13 pts) ───────────────────────────────
+        days_1y = [d for d in all_spy_dates
+                   if d >= (today - timedelta(days=375)).isoformat() and d <= today_str]
         if days_1y:
             step = max(1, len(days_1y) // 13)
-            idxs = list(range(0, len(days_1y), step)) + ([len(days_1y) - 1] if (len(days_1y) - 1) % step != 0 else [])
-            idxs = sorted(set(idxs))
-            pairs_1y = []
-            for i in idxs:
-                d = days_1y[i]
-                dt_obj = datetime.strptime(d, "%Y-%m-%d").date()
-                label = _month_label(dt_obj)
-                pairs_1y.append((label, _port_at(d), _spy_at(d)))
-            chart_1y = _normalize(pairs_1y)
+            idxs = sorted(set(
+                list(range(0, len(days_1y), step)) +
+                ([len(days_1y) - 1] if (len(days_1y) - 1) % step != 0 else [])
+            ))
+            chart_1y = _make_chart([
+                (_month_label(datetime.strptime(days_1y[i], "%Y-%m-%d").date()), days_1y[i])
+                for i in idxs
+            ])
         else:
             chart_1y = []
 
