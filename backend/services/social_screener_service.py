@@ -1163,12 +1163,13 @@ async def fetch_enrichment_for_symbols(
     _fund_sem   = asyncio.Semaphore(12)  # caps simultaneous 6-call fund enrichments
 
     # ── Tradier batch quote (primary for price/vol/1D%) ───────────────────
-    # Live Tradier call is skipped outside core market hours (09:30-16:00 ET).
-    # Prices don't change after close, so LKG from the last session is used.
+    # Tradier returns last-trade prices 24/7 (pre/post-market + weekends),
+    # so we always run the batch call regardless of market hours.  This
+    # ensures volume/price are never blank on a cold-cache server restart.
     _tradier_key = os.getenv("TRADIER_API_KEY", "")
     _tradier_sandbox = os.getenv("TRADIER_SANDBOX", "false").lower() == "true"
     _tradier_quotes: dict[str, dict] = {}
-    if _mkt_open and _tradier_key and symbols:
+    if _tradier_key and symbols:
         try:
             _tradier_quotes = await asyncio.wait_for(
                 _tradier_batch_live(list(symbols), _tradier_key, _tradier_sandbox),
@@ -1176,9 +1177,7 @@ async def fetch_enrichment_for_symbols(
             )
         except Exception as _te:
             print(f"[SOCIAL_SCREENER] Tradier batch timeout/error: {_te}")
-    elif not _mkt_open:
-        print("[SOCIAL_SCREENER] Market closed — skipping live Tradier call, using LKG")
-    # For tickers Tradier missed (or when market is closed), use LKG Tradier
+    # For any tickers Tradier missed, fall back to LKG cache
     for _sym in symbols:
         if _sym not in _tradier_quotes:
             _lkg = _tradier_lkg_for_symbol(_sym)
@@ -1198,25 +1197,26 @@ async def fetch_enrichment_for_symbols(
                         tradier_q = _tradier_quotes.get(sym, {})
 
                         if not _mkt_open:
-                            # ── Market closed: use cache/LKG for quote+pchg ──────
-                            # _tradier_quotes is already populated from LKG only.
-                            # For FMP price_change, read cache/LKG via _fmp_cache_lookup.
+                            # ── Market closed ─────────────────────────────────────
+                            # Tradier batch already ran above (returns last-trade
+                            # prices 24/7), so tradier_q is populated with live data.
+                            # FMP stock-price-change is pure EOD data — equally valid
+                            # outside hours — so we fetch it live when cache is cold.
                             cached_enr = _social_enrich_from_cache(sym, fmp_api_key)
                             cached_pchg = cached_enr.get("price_change") or {}
                             cached_quote = cached_enr.get("quote") or {}
 
-                            # Tradier LKG wins for quote if available; else FMP LKG
+                            # Tradier live (batch ran above) wins for quote
                             if tradier_q and tradier_q.get("price"):
-                                quote = {**tradier_q, "quote_is_stale": True,
-                                         "quote_fallback_reason": "market_closed_lkg"}
+                                quote = {**tradier_q,
+                                         "quote_fallback_reason": "market_closed"}
                             elif cached_quote:
                                 quote = {**cached_quote, "quote_is_stale": True,
                                          "quote_fallback_reason": "market_closed_lkg"}
                             else:
                                 quote = {}
 
-                            # Profile: try hot-cache first via _social_enrich_from_cache,
-                            # then fall back to live (24 h TTL so almost always cached).
+                            # Profile: hot-cache first (24 h TTL), then live fallback
                             profile = cached_enr.get("profile") or {}
                             if not profile:
                                 try:
@@ -1229,7 +1229,20 @@ async def fetch_enrichment_for_symbols(
                                 except Exception:
                                     profile = {}
 
-                            pchg = cached_pchg
+                            # price_change: use cache if warm; else fetch live
+                            # (EOD data — valid any time, cached 30 min after fetch)
+                            if cached_pchg:
+                                pchg = cached_pchg
+                            else:
+                                try:
+                                    pchg = await asyncio.wait_for(
+                                        _fetch_price_change(client, sym, fmp_api_key),
+                                        timeout=5.0,
+                                    )
+                                    if not isinstance(pchg, dict):
+                                        pchg = {}
+                                except Exception:
+                                    pchg = {}
                             served_from_lkg = True
 
                         elif tradier_q and tradier_q.get("price"):
