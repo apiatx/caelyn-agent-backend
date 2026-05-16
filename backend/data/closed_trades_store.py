@@ -401,21 +401,35 @@ def load_closed_trades_grouped(trades: list[dict] | None = None) -> list[dict]:
                 pass
 
         result.append({
-            "trade_group_id":      gid,
-            "ticker":              ticker,
-            "entry_date":          entry_date,
-            "final_exit_date":     final_exit if is_fully_closed else None,
-            "total_shares_sold":   round(total_shares, 8),
-            "avg_entry_price":     avg_entry,
-            "avg_exit_price":      avg_exit,
-            "total_cost_basis":    round(total_cost,   4),
-            "total_exit_value":    round(total_exit_v, 4),
-            "total_realized_pnl":  round(total_pnl,    4),
+            # ── Grouped / primary fields ───────────────────────────────────────
+            "trade_group_id":         gid,
+            "ticker":                 ticker,
+            "entry_date":             entry_date,
+            "final_exit_date":        final_exit if is_fully_closed else None,
+            "total_shares_sold":      round(total_shares, 8),
+            "avg_entry_price":        avg_entry,
+            "avg_exit_price":         avg_exit,
+            "total_cost_basis":       round(total_cost,   4),
+            "total_exit_value":       round(total_exit_v, 4),
+            "total_realized_pnl":     round(total_pnl,    4),
             "total_realized_pnl_pct": pnl_pct,
-            "holding_period_days": hpd,
-            "is_fully_closed":     is_fully_closed,
-            "sell_events":         events_sorted,
-            "current_price":       None,        # enriched by the API endpoint
+            "holding_period_days":    hpd,
+            "is_fully_closed":        is_fully_closed,
+            "sell_events":            events_sorted,
+            "current_price":          None,   # enriched by the API endpoint
+            # ── Backward-compat aliases (same names as flat closed_trades list) ─
+            "realized_pnl":           round(total_pnl, 4),
+            "realized_pnl_pct":       pnl_pct,
+            "shares":                 round(total_shares, 8),
+            "entry_price":            avg_entry,
+            "exit_price":             avg_exit,
+            "exit_date":              final_exit if is_fully_closed else (
+                                          events_sorted[-1].get("exit_date")
+                                          if events_sorted else None
+                                      ),
+            "is_full_close":          is_fully_closed,
+            "symbol":                 ticker,          # alias used by some callers
+            "avg_entry_price_compat": avg_entry,       # already present as avg_entry_price
         })
 
     # Sort: open partial trades first, then fully-closed newest-first

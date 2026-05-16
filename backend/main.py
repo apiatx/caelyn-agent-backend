@@ -6890,10 +6890,79 @@ async def get_closed_trades(request: Request, api_key: str = Header(None, alias=
         for ev in g.get("sell_events", []):
             ev["current_price"] = price_map.get((ev.get("ticker") or "").upper())
 
+    # ── Pre-compute portfolio performance summary ─────────────────────────────
+    # Only fully-closed groups count toward win rate / avg return
+    fully_closed = [g for g in trade_groups if g.get("is_fully_closed")]
+    partial_open  = [g for g in trade_groups if not g.get("is_fully_closed")]
+
+    wins   = [g for g in fully_closed if (g.get("total_realized_pnl") or 0) > 0]
+    losses = [g for g in fully_closed if (g.get("total_realized_pnl") or 0) <= 0]
+
+    total_closed_count = len(fully_closed)
+    win_count          = len(wins)
+    loss_count         = len(losses)
+    win_rate           = round(win_count / total_closed_count * 100, 1) if total_closed_count else 0.0
+
+    all_pnl_pcts  = [g["total_realized_pnl_pct"] for g in fully_closed
+                     if g.get("total_realized_pnl_pct") is not None]
+    avg_return_pct = round(sum(all_pnl_pcts) / len(all_pnl_pcts), 2) if all_pnl_pcts else 0.0
+
+    total_realized_pnl = round(sum(g.get("total_realized_pnl") or 0 for g in fully_closed), 2)
+
+    best_trade  = max(fully_closed, key=lambda g: g.get("total_realized_pnl_pct") or 0, default=None)
+    worst_trade = min(fully_closed, key=lambda g: g.get("total_realized_pnl_pct") or 0, default=None)
+
+    all_hold_days = [g["holding_period_days"] for g in fully_closed
+                     if g.get("holding_period_days") is not None]
+    avg_hold_days = round(sum(all_hold_days) / len(all_hold_days), 0) if all_hold_days else None
+
+    portfolio_performance = {
+        # Win rate & counts (per trade lifecycle, not per lot)
+        "total_closed_trades":   total_closed_count,
+        "open_partial_trades":   len(partial_open),
+        "win_count":             win_count,
+        "loss_count":            loss_count,
+        "win_rate":              win_rate,              # 0-100 pct
+        # Return stats
+        "avg_return_pct":        avg_return_pct,        # avg realized pnl_pct across closed trades
+        "total_realized_pnl":    total_realized_pnl,    # sum $
+        # Best / worst single lifecycle
+        "best_trade": {
+            "ticker":        best_trade["ticker"],
+            "pnl_pct":       best_trade["total_realized_pnl_pct"],
+            "pnl":           best_trade["total_realized_pnl"],
+            "exit_date":     best_trade["final_exit_date"],
+        } if best_trade else None,
+        "worst_trade": {
+            "ticker":        worst_trade["ticker"],
+            "pnl_pct":       worst_trade["total_realized_pnl_pct"],
+            "pnl":           worst_trade["total_realized_pnl"],
+            "exit_date":     worst_trade["final_exit_date"],
+        } if worst_trade else None,
+        # Holding period
+        "avg_hold_days":        avg_hold_days,
+        # Streak helpers (sorted newest-first for the UI)
+        "recent_trades": [
+            {
+                "ticker":    g["ticker"],
+                "pnl_pct":   g["total_realized_pnl_pct"],
+                "pnl":       g["total_realized_pnl"],
+                "exit_date": g["final_exit_date"],
+                "won":       (g.get("total_realized_pnl") or 0) > 0,
+            }
+            for g in sorted(
+                fully_closed,
+                key=lambda g: g.get("final_exit_date") or "",
+                reverse=True,
+            )[:10]
+        ],
+    }
+
     return {
-        "trade_groups":  trade_groups,
-        "closed_trades": trades,           # flat list kept for backward compat
-        "count":         len(trades),
+        "trade_groups":          trade_groups,
+        "closed_trades":         trades,           # flat list kept for backward compat
+        "count":                 len(trades),
+        "portfolio_performance": portfolio_performance,
     }
 
 
