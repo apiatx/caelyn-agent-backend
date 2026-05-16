@@ -6395,11 +6395,77 @@ async def compare_watchlist_run(
 @app.get("/api/portfolio/closed-trades")
 @traceable(name="main.get_closed_trades")
 async def get_closed_trades(request: Request, api_key: str = Header(None, alias="X-API-Key")):
-    """Return all closed trades ordered by exit_date desc."""
+    """Return all closed trades ordered by exit_date desc, enriched with current_price.
+
+    current_price is sourced from the shared Tradier per-ticker cache
+    (tradier:quote:sym:{SYM}).  Any ticker already priced by active holdings,
+    the watchlist, or any screener within the last 60 s is served from cache
+    with zero additional Tradier calls.  Only genuinely uncached tickers trigger
+    a Tradier batch fetch — and those results are written back to the shared
+    cache so all other callers benefit too.
+    """
     if not _jwt_or_key(request, api_key):
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
     from data.closed_trades_store import load_closed_trades as _load_ct
     trades = _load_ct()
+
+    # ── Enrich with current_price via shared Tradier per-ticker cache ──────────
+    # Only attempt for stock-like tickers (skip crypto / commodity symbols)
+    _CRYPTO_SYMBOLS = {
+        "BTC","ETH","SOL","DOGE","ADA","XRP","DOT","LINK","AVAX","MATIC","UNI",
+        "AAVE","ATOM","LTC","BCH","SHIB","NEAR","SUI","APT","ARB","OP","INJ",
+        "TIA","SEI","PEPE","WIF","RENDER","FET","TAO","FIL","HYPE",
+    }
+    stock_tickers = list({
+        (t.get("ticker") or "").upper()
+        for t in trades
+        if (t.get("ticker") or "").upper() and
+           (t.get("ticker") or "").upper() not in _CRYPTO_SYMBOLS
+    })
+
+    price_map: dict[str, float | None] = {}
+    if stock_tickers:
+        # ── Step 1: Tradier (reads shared per-ticker cache first, zero extra API
+        #   calls for any ticker already priced by active holdings / watchlist) ──
+        try:
+            from data.tradier_provider import TradierProvider as _TP
+            _tradier = _TP(api_key=os.getenv("TRADIER_API_KEY", ""))
+            quotes = await _tradier.get_quotes(stock_tickers)
+            for q in quotes:
+                sym = (q.get("symbol") or "").upper()
+                price = q.get("last") or q.get("price") or q.get("close")
+                if sym and price is not None:
+                    price_map[sym] = float(price)
+        except Exception as _pe:
+            print(f"[CLOSED_TRADES] Tradier enrichment error: {_pe}")
+
+        # ── Step 2: yfinance fallback for OTC / pink-sheet tickers Tradier misses ──
+        missing_price = [s for s in stock_tickers if price_map.get(s) is None]
+        if missing_price:
+            try:
+                import yfinance as _yf
+                import asyncio as _aio
+                def _yf_fetch():
+                    batch = _yf.Tickers(" ".join(missing_price))
+                    out = {}
+                    for sym, tkr in batch.tickers.items():
+                        try:
+                            p = tkr.fast_info.get("lastPrice") or tkr.fast_info.get("regularMarketPrice")
+                            if p:
+                                out[sym.upper()] = float(p)
+                        except Exception:
+                            pass
+                    return out
+                yf_prices = await _aio.to_thread(_yf_fetch)
+                price_map.update(yf_prices)
+                print(f"[CLOSED_TRADES] yfinance filled {len(yf_prices)} OTC prices: {list(yf_prices.keys())}")
+            except Exception as _yfe:
+                print(f"[CLOSED_TRADES] yfinance enrichment error: {_yfe}")
+
+    for t in trades:
+        sym = (t.get("ticker") or "").upper()
+        t["current_price"] = price_map.get(sym)  # None if unavailable
+
     return {"closed_trades": trades, "count": len(trades)}
 
 
