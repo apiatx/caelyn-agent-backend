@@ -55,10 +55,10 @@
     },
     {
       "name": "Semiconductors",
-      "score": 77.0,
+      "score": 77.8,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (76/100) vs theme universe. Outperforming SPY -2.2%, QQQ -1.9%. Breadth 17%.",
+        "Top-percentile RS (77/100) vs theme universe. Outperforming SPY -2.2%, QQQ -1.9%. Breadth 17%.",
         "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
@@ -86,8 +86,25 @@
       "related_tickers": []
     },
     {
-      "name": "Technology",
+      "name": "Semiconductor Equipment",
       "score": 75.4,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -2.7%, QQQ -2.4%. Breadth 0%."
+      ],
+      "related_etfs": [
+        "SOXX",
+        "SMH"
+      ],
+      "related_tickers": [
+        "AMAT",
+        "TXN",
+        "ONTO"
+      ]
+    },
+    {
+      "name": "Technology",
+      "score": 75.8,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -0.5%, QQQ -0.2%. Breadth 46%.",
@@ -104,45 +121,28 @@
       ]
     },
     {
-      "name": "Oil Services",
-      "score": 74.7,
+      "name": "Memory & Storage",
+      "score": 75.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY +1.1%, QQQ +1.4%. Breadth 42%."
+        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -2.9%, QQQ -2.5%. Breadth 17%."
       ],
       "related_etfs": [
-        "OIH",
-        "XES",
-        "IEZ"
+        "DRAM",
+        "SMH",
+        "SOXX"
       ],
       "related_tickers": [
-        "VAL",
-        "WTTR",
-        "RIG"
-      ]
-    },
-    {
-      "name": "Semiconductor Equipment",
-      "score": 74.6,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -2.7%, QQQ -2.4%. Breadth 0%."
-      ],
-      "related_etfs": [
-        "SOXX",
-        "SMH"
-      ],
-      "related_tickers": [
-        "AMAT",
-        "TXN",
-        "ONTO"
+        "SNDK",
+        "QCOM",
+        "STX"
       ]
     }
   ],
   "emerging_themes": [
     {
       "name": "Cybersecurity",
-      "score": 69.7,
+      "score": 69.6,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -161,10 +161,10 @@
     },
     {
       "name": "Space Economy",
-      "score": 68.3,
+      "score": 68.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "ARKX",
@@ -174,6 +174,23 @@
         "SATL",
         "SPIR",
         "ASTS"
+      ]
+    },
+    {
+      "name": "Tech Equal-Weight",
+      "score": 67.8,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "RYT",
+        "QQEW"
+      ],
+      "related_tickers": [
+        "SNDK",
+        "NXPI",
+        "STX"
       ]
     },
     {
@@ -208,24 +225,6 @@
         "APA",
         "MUR",
         "MTDR"
-      ]
-    },
-    {
-      "name": "Energy",
-      "score": 64.6,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "XLE",
-        "VDE",
-        "XOP"
-      ],
-      "related_tickers": [
-        "XOM",
-        "EOG",
-        "COP"
       ]
     }
   ],
@@ -323,7 +322,7 @@
     {
       "sector": "Technology",
       "ticker": "XLK",
-      "score": 74.9,
+      "score": 75.3,
       "posture": "leading"
     },
     {
@@ -335,18 +334,6 @@
   ],
   "sector_laggards": [
     {
-      "sector": "Materials",
-      "ticker": "XLB",
-      "score": 29.7,
-      "posture": "lagging"
-    },
-    {
-      "sector": "Utilities",
-      "ticker": "XLU",
-      "score": 29.6,
-      "posture": "lagging"
-    },
-    {
       "sector": "Consumer Discretionary",
       "ticker": "XLY",
       "score": 27.9,
@@ -354,7 +341,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-16T04:49:11.503094+00:00",
+  "last_updated": "2026-05-16T19:03:49.304479+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -365,5 +352,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1778906951.503232
+  "_saved_at": 1778958229.304556
 }
