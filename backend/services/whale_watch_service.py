@@ -1420,34 +1420,34 @@ def _detect_and_save_new_buys(
 # ── Price fetching helpers ────────────────────────────────────────────────────
 
 async def _get_current_prices(tickers: list[str]) -> dict[str, float]:
-    """Fetch current prices: Tradier batch → yfinance fallback."""
+    """Fetch current prices via shared TradierProvider (per-ticker cache) → yfinance fallback.
+
+    Routes through data_service.tradier.get_quotes() so every ticker fetched here
+    populates — and benefits from — the shared tradier:quote:sym:{SYM} cache (60s TTL)
+    used by watchlist, screener, portfolio, and all other site sections.
+    """
     if not tickers:
         return {}
     results: dict[str, float] = {}
     remaining = list(set(tickers))
 
-    if _TRADIER_KEY and remaining:
-        try:
-            symbols_str = ",".join(remaining[:50])
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    "https://sandbox.tradier.com/v1/markets/quotes",
-                    params={"symbols": symbols_str},
-                    headers={"Authorization": f"Bearer {_TRADIER_KEY}", "Accept": "application/json"},
-                )
-            if resp.status_code == 200:
-                quotes = resp.json().get("quotes", {}).get("quote", [])
-                if isinstance(quotes, dict):
-                    quotes = [quotes]
-                for q in quotes:
-                    sym = q.get("symbol", "")
-                    price = q.get("last") or q.get("prevclose")
-                    if sym and price:
-                        results[sym] = float(price)
-                        if sym in remaining:
-                            remaining.remove(sym)
-        except Exception as e:
-            logger.warning("[WHALE_PRICE] Tradier batch failed: %s", e)
+    # PRIMARY: shared TradierProvider (uses per-ticker cache; production real-time data)
+    try:
+        import main as _main  # type: ignore
+        _ds = getattr(_main, "data_service", None)
+        if _ds and getattr(_ds, "tradier", None):
+            batch = remaining[:50]
+            quotes_raw = await _ds.tradier.get_quotes(batch)
+            for q in (quotes_raw or []):
+                sym = (q.get("symbol") or "").upper()
+                price = q.get("last") or q.get("close") or q.get("prevclose")
+                if sym and price:
+                    results[sym] = float(price)
+                    if sym in remaining:
+                        remaining.remove(sym)
+            logger.debug("[WHALE_PRICE] Tradier shared cache: %d hits, %d remaining", len(results), len(remaining))
+    except Exception as e:
+        logger.warning("[WHALE_PRICE] Shared Tradier path failed: %s", e)
 
     if remaining:
         def _yf_prices(syms):

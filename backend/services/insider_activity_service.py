@@ -683,46 +683,36 @@ async def _get_price_context_batch(tickers: list[str]) -> dict[str, dict]:
     results: dict[str, dict] = {}
     remaining = list(set(tickers))
 
-    # PRIMARY: Tradier batch
-    if _TRADIER_KEY and remaining:
-        try:
-            symbols_str = ",".join(remaining[:50])
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    "https://sandbox.tradier.com/v1/markets/quotes",
-                    params={"symbols": symbols_str},
-                    headers={
-                        "Authorization": f"Bearer {_TRADIER_KEY}",
-                        "Accept": "application/json",
-                    },
-                )
-            if resp.status_code == 200:
-                data = resp.json()
-                quotes = data.get("quotes", {}).get("quote", [])
-                if isinstance(quotes, dict):
-                    quotes = [quotes]
-                for q in quotes:
-                    sym = q.get("symbol", "")
-                    price = q.get("last") or q.get("prevclose")
-                    high = q.get("week_52_high")
-                    low = q.get("week_52_low")
-                    if price and high and low:
-                        pct_from_high = (price - high) / high * 100 if high else None
-                        results[sym] = {
-                            "current_price": price,
-                            "high_52w": high,
-                            "low_52w": low,
-                            "pct_from_52w_high": round(pct_from_high, 2) if pct_from_high else None,
-                            "vs_52w_high": f"{pct_from_high:.1f}%" if pct_from_high else None,
-                            "price_at_filing": price,
-                            "change_since_filing_pct": None,
-                            "return_30d": None,
-                            "return_90d": None,
-                        }
-                        if sym in remaining:
-                            remaining.remove(sym)
-        except Exception as e:
-            logger.warning("[INSIDER_PRICE] Tradier batch failed: %s", e)
+    # PRIMARY: shared TradierProvider (per-ticker cache; production real-time data)
+    # Routes through data_service.tradier.get_quotes() so insider-activity tickers
+    # share the tradier:quote:sym:{SYM} cache with watchlist, portfolio, screener, etc.
+    try:
+        import main as _main  # type: ignore
+        _ds = getattr(_main, "data_service", None)
+        if _ds and getattr(_ds, "tradier", None):
+            quotes_raw = await _ds.tradier.get_quotes(remaining[:50])
+            for q in (quotes_raw or []):
+                sym = (q.get("symbol") or "").upper()
+                price = q.get("last") or q.get("close") or q.get("prevclose")
+                high = q.get("week_52_high")
+                low = q.get("week_52_low")
+                if price and high and low:
+                    pct_from_high = (price - high) / high * 100 if high else None
+                    results[sym] = {
+                        "current_price": float(price),
+                        "high_52w": float(high),
+                        "low_52w": float(low),
+                        "pct_from_52w_high": round(pct_from_high, 2) if pct_from_high else None,
+                        "vs_52w_high": f"{pct_from_high:.1f}%" if pct_from_high else None,
+                        "price_at_filing": float(price),
+                        "change_since_filing_pct": None,
+                        "return_30d": None,
+                        "return_90d": None,
+                    }
+                    if sym in remaining:
+                        remaining.remove(sym)
+    except Exception as e:
+        logger.warning("[INSIDER_PRICE] Shared Tradier path failed: %s", e)
 
     # FALLBACK 1: Finnhub per-ticker
     if _FINNHUB_KEY and remaining:
