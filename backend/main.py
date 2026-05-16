@@ -6625,10 +6625,13 @@ async def close_holding(
     notes      = body.get("close_reason") or body.get("notes") or None
 
     # Build the closed trade record using the holding's own data
+    # Strip time/timezone from entry_date if the frontend sent a full ISO datetime
+    _raw_ed = h.get("entry_date") or h.get("date_added") or None
+    _clean_ed = str(_raw_ed).split("T")[0] if _raw_ed else None
     trade_payload = {
         "ticker":      ticker,
         "shares":      float(h.get("shares") or 0),
-        "entry_date":  h.get("entry_date") or h.get("date_added") or None,
+        "entry_date":  _clean_ed,
         "exit_date":   exit_date,
         "entry_price": float(h.get("avg_cost") or 0),
         "exit_price":  exit_price,
@@ -6806,11 +6809,14 @@ async def sell_holding_partial(
     realized_pnl_pct = round(realized_pnl / cost_basis_sold * 100, 4) if cost_basis_sold else None
 
     entry_date          = h.get("entry_date") or h.get("date_added") or None
+    # Strip time/timezone component if the frontend stored a full ISO datetime
+    if entry_date:
+        entry_date = str(entry_date).split("T")[0]
     holding_period_days = None
     if entry_date:
         try:
-            _d1 = _date_cls.fromisoformat(str(entry_date))
-            _d2 = _date_cls.fromisoformat(str(exit_date))
+            _d1 = _date_cls.fromisoformat(entry_date)
+            _d2 = _date_cls.fromisoformat(str(exit_date).split("T")[0])
             holding_period_days = (_d2 - _d1).days
         except Exception:
             pass

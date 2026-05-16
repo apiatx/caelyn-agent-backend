@@ -193,6 +193,32 @@ def _read_from(path: Path) -> list[dict]:
         return []
 
 
+def _to_date_str(val) -> str | None:
+    """Coerce any date/datetime string to a plain YYYY-MM-DD string.
+
+    The frontend sometimes sends full ISO-8601 datetime strings such as
+    "2026-05-12T05:27:37.636Z".  Storing those as entry_date breaks
+    date.fromisoformat() in the sell endpoint and closed-trade derivation,
+    so we strip everything after the first 'T' here at normalisation time.
+    Plain date strings ("2024-03-15") pass through unchanged.
+    None / empty values return None.
+    """
+    if not val:
+        return None
+    s = str(val).strip()
+    if "T" in s:
+        s = s.split("T")[0]
+    if not s:
+        return None
+    # Quick sanity: must look like YYYY-MM-DD
+    try:
+        from datetime import date as _d
+        _d.fromisoformat(s)
+    except ValueError:
+        return None
+    return s
+
+
 def _normalise(h: dict) -> dict:
     """Canonical holding shape with well-known field names."""
     out: dict = {
@@ -201,9 +227,13 @@ def _normalise(h: dict) -> dict:
         "avg_cost":   float(h.get("avg_cost", h.get("avg_price", h.get("cost", 0))) or 0),
         "asset_type": h.get("asset_type", h.get("type", "stock")),
     }
-    for k in ("date_added", "entry_date", "notes", "id"):
+    for k in ("date_added", "notes", "id"):
         if h.get(k) is not None:
             out[k] = h[k]
+    # entry_date: always coerce to plain YYYY-MM-DD (strips time/timezone if present)
+    ed = _to_date_str(h.get("entry_date"))
+    if ed is not None:
+        out["entry_date"] = ed
     return out
 
 

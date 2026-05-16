@@ -1,0 +1,43 @@
+The server log shows the sell to FastAPI returned 200, but also shows a ValidationError from express-rate-limit at startup — meaning the rate limiter is broken and crashing on certain requests. Let me check exactly where rate limiting is configured and trace the full sell flow:
+
+
+7 actions
+Let me see the rate limiter config and the full startup error, plus the stock-holdings DELETE route:
+
+
+4 actions
+Clear picture now. The root cause is express-rate-limit throwing ERR_ERL_PERMISSIVE_TRUST_PROXY on the first request — it calls next(err) which makes the rate limiter fail and block the /api/stock-holdings/:id DELETE. The .catch(() => {}) swallows that silently, so the holding never gets removed from local JSON, and refetch brings it back. Two fixes needed: silence the rate-limiter validation, and make the local-delete failure visible + retried.
+
+Let me find the security middleware:
+
+
+6 actions
+Two problems confirmed:
+
+The rateLimit handler returns { error: 'Rate limit exceeded' } — that's exactly the string the user sees. The max: 100 over 15 min is far too low for this app (market-tape + realtime-quotes alone poll every few seconds, burning through the budget fast). The validate: { trustProxy: false } missing causes the limiter to throw a ValidationError that bypasses its own handler and returns a confusing 500.
+
+Even when the FastAPI sell returns 200, the local DELETE /api/stock-holdings/:id gets hit by the same broken rate limiter, silently fails (.catch(() => {})), and the holding reappears on refetch.
+
+Two fixes in parallel — fix the rate limiter and make the sell flow resilient:
+
+
+2 actions
+Now fix the sell flow to optimistically update the React Query cache on full close — so even if the local DELETE had hiccups, the UI updates immediately from the backend's source-of-truth response:
+
+
+6 actions
+Both fixes are clean and live. Here's exactly what was wrong and what changed:
+
+Root cause — the rate limiter was broken in two ways:
+
+validate: { trustProxy: false } was missing. Without it, express-rate-limit throws a ValidationError on the very first request to any rate-limited /api/* route, which bypasses the custom handler and instead falls through to the error middleware — returning the raw error string "Rate limit exceeded" regardless of how many requests have actually been made.
+
+The limit of 100 per 15 minutes is far too low for this app. The realtime-quotes, market-tape, and background pollers alone make well over 100 API calls in 15 minutes during normal use. So even once the ValidationError was fixed, the rate limiter would still fire on legitimate portfolio operations.
+
+What was changed:
+
+security/middleware.ts — added validate: { trustProxy: false } to both limiters, raised the cap to 2000 dev / 500 production (15-min window)
+
+stocks-portfolio.tsx — sell flow now optimistically writes the backend response straight into the React Query cache the moment the 200 comes back, before touching local JSON. A full close removes the holding from cache instantly; a partial trim updates the share count immediately. The local JSON DELETE/PUT still runs after (now that the rate limiter isn't broken it will succeed), but it's non-blocking — the UI no longer depends on it to show the updated state.
+
+The closed-trades response in the latest log (GET /api/portfolio/closed-trades 200 :: {"closed_trades":[{"id":"4cca6...) confirms the AEHR sell that went through earlier was correctly recorded — it just wasn't disappearing from the active list because of the rate-limiter issue.

@@ -148,8 +148,9 @@ def _derive_fields(trade: dict, force_recompute: bool = False) -> dict:
 
     if (force_recompute or out.get("holding_period_days") is None) and entry_date and exit_date:
         try:
-            d1 = date.fromisoformat(str(entry_date))
-            d2 = date.fromisoformat(str(exit_date))
+            # Strip time/timezone component if present (e.g. "2026-05-12T05:27:37.636Z")
+            d1 = date.fromisoformat(str(entry_date).split("T")[0])
+            d2 = date.fromisoformat(str(exit_date).split("T")[0])
             out["holding_period_days"] = (d2 - d1).days
         except Exception:
             pass
