@@ -4884,13 +4884,33 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
     SELL_KEYWORDS = {"sell", "sold", "sale", "shares sold", "exchange out",
                      "transfer out", "you sold"}
 
+    # Options action keywords — must be checked BEFORE buy/sell because
+    # "buy to open" contains "buy" and would otherwise be mis-classified.
+    # Phrase-level match: check full raw_type string contains the phrase.
+    OPTIONS_ACTION_PHRASES = (
+        "buy to open", "sell to close", "buy to close", "sell to open",
+        "to open", "to close",              # catch abbreviated brokerage variants
+        "option expired", "expired",
+        "assigned", "assignment",
+        "exercised", "exercise",
+        "opening purchase", "closing sale",
+        "opening sale", "closing purchase",
+    )
+
+    # Instrument-type column (some brokerages have a dedicated column)
+    col_instr_type = _find_col(
+        "instrument type", "security type", "asset type",
+        "product type", "type of security",
+    )
+
     # ── Money-market / cash symbols to skip ──────────────────────────────────
     SKIP_SYMBOLS = {"", "cash", "cashbalance", "--", "n/a", "spaxx", "fdrxx",
                     "swvxx", "vmfxx", "sprxx", "fdlxx", "fzfxx", "mmda1"}
 
-    buy_lots:  dict[str, list] = {}
-    sell_lots: dict[str, list] = {}
-    skipped:   list[dict]      = []
+    buy_lots:     dict[str, list] = {}
+    sell_lots:    dict[str, list] = {}
+    skipped:      list[dict]      = []
+    options_rows: list[dict]      = []   # collected separately for summary
 
     for row in reader:
         def _v(col): return (row.get(col, "") or "").strip() if col else ""
@@ -4899,7 +4919,36 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         # Strip exchange prefix (e.g. "NASDAQ:AAPL" → "AAPL")
         if ":" in raw_sym:
             raw_sym = raw_sym.split(":")[-1]
-        ticker = raw_sym.upper()
+        ticker = raw_sym.upper().strip()
+
+        # ── Options detection: symbol shape ───────────────────────────────────
+        # Detect before the normal symbol-validity gate so we can give a
+        # specific "options skipped" reason instead of a generic invalid-symbol.
+        def _is_option_symbol(raw: str, sym: str) -> bool:
+            if raw.startswith("-"):                              # Fidelity dash prefix
+                return True
+            if " " in raw:                                       # embedded spaces → date
+                return True
+            if _re.search(r'\d{6}[CP]\d+', sym):               # OCC: AAPL240119C00180000
+                return True
+            if _re.search(r'_\d{6}[CP]', sym):                 # TD/ToS: AAPL_240119C180
+                return True
+            if _re.search(r'\d{2}/\d{2}/\d{2,4}', raw):       # date in symbol field
+                return True
+            # Explicit instrument-type column
+            if col_instr_type:
+                instr = _v(col_instr_type).lower()
+                if "option" in instr or "opt" == instr:
+                    return True
+            return False
+
+        if _is_option_symbol(raw_sym, ticker):
+            options_rows.append({
+                "ticker": ticker or raw_sym,
+                "action": _v(col_type) or _v(col_desc),
+                "reason": "options contract — skipped (equity positions only)",
+            })
+            continue
 
         if ticker.lower() in SKIP_SYMBOLS or len(ticker) > 12:
             skipped.append({"row": dict(row), "reason": f"skipped symbol '{ticker}'"})
@@ -4914,6 +4963,26 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         # If no type column, infer from description
         if not raw_type and col_desc:
             raw_type = _v(col_desc).lower()
+
+        # ── Options detection: action phrase ──────────────────────────────────
+        # Must happen BEFORE buy/sell keyword check — "buy to open" contains
+        # "buy" and would otherwise be added as a stock position.
+        if any(phrase in raw_type for phrase in OPTIONS_ACTION_PHRASES):
+            options_rows.append({
+                "ticker": ticker,
+                "action": _v(col_type) or _v(col_desc),
+                "reason": "options action — skipped (equity positions only)",
+            })
+            continue
+
+        # Explicit instrument-type column check (catch stragglers)
+        if col_instr_type and "option" in _v(col_instr_type).lower():
+            options_rows.append({
+                "ticker": ticker,
+                "action": _v(col_type) or _v(col_desc),
+                "reason": "options instrument type — skipped (equity positions only)",
+            })
+            continue
 
         is_buy  = any(kw in raw_type for kw in BUY_KEYWORDS)
         is_sell = any(kw in raw_type for kw in SELL_KEYWORDS)
@@ -4992,12 +5061,14 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         })
 
     return {
-        "buy_lots":   buy_lots,
-        "sell_lots":  sell_lots,
-        "skipped":    skipped,
-        "columns":    list(raw_cols),
-        "rows_total": sum(len(v) for v in buy_lots.values()) +
-                      sum(len(v) for v in sell_lots.values()) + len(skipped),
+        "buy_lots":    buy_lots,
+        "sell_lots":   sell_lots,
+        "options_rows": options_rows,
+        "skipped":     skipped,
+        "columns":     list(raw_cols),
+        "rows_total":  sum(len(v) for v in buy_lots.values()) +
+                       sum(len(v) for v in sell_lots.values()) +
+                       len(options_rows) + len(skipped),
     }
 
 
@@ -5212,10 +5283,12 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         "holdings_created": holdings_created,
         "holdings_updated": holdings_updated,
         "lots_added":       lots_added,
-        "sells_found":      sum(len(v) for v in sell_lots.values()),
-        "sells_logged":     sells_logged if include_sells else 0,
-        "preview":          preview,
-        "skipped_detail":   skipped[:20],
+        "sells_found":         sum(len(v) for v in sell_lots.values()),
+        "sells_logged":        sells_logged if include_sells else 0,
+        "options_skipped":     len(parsed.get("options_rows", [])),
+        "options_detail":      parsed.get("options_rows", [])[:20],
+        "preview":             preview,
+        "skipped_detail":      skipped[:20],
     }
 
 
