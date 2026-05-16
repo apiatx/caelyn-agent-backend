@@ -6395,28 +6395,61 @@ async def compare_watchlist_run(
 @app.get("/api/portfolio/closed-trades")
 @traceable(name="main.get_closed_trades")
 async def get_closed_trades(request: Request, api_key: str = Header(None, alias="X-API-Key")):
-    """Return all closed trades ordered by exit_date desc, enriched with current_price.
+    """Return closed trades grouped by trade lifecycle, enriched with current_price.
 
-    current_price is sourced from the shared Tradier per-ticker cache
-    (tradier:quote:sym:{SYM}).  Any ticker already priced by active holdings,
-    the watchlist, or any screener within the last 60 s is served from cache
-    with zero additional Tradier calls.  Only genuinely uncached tickers trigger
-    a Tradier batch fetch — and those results are written back to the shared
-    cache so all other callers benefit too.
+    Response shape
+    --------------
+    {
+      "trade_groups": [                  # ← primary payload for the frontend
+        {
+          "trade_group_id": str,
+          "ticker": str,
+          "entry_date": "YYYY-MM-DD",
+          "final_exit_date": "YYYY-MM-DD" | null,
+          "total_shares_sold": float,
+          "avg_entry_price": float,
+          "avg_exit_price": float,
+          "total_cost_basis": float,
+          "total_exit_value": float,
+          "total_realized_pnl": float,
+          "total_realized_pnl_pct": float,
+          "holding_period_days": int | null,
+          "is_fully_closed": bool,       # true when final sell has is_full_close=True
+          "current_price": float | null,
+          "sell_events": [               # individual sell rows, asc by exit_date
+            { id, ticker, shares, entry_date, exit_date, entry_price, exit_price,
+              realized_pnl, realized_pnl_pct, sell_type, remaining_shares_after,
+              is_full_close, trade_group_id, ... }
+          ]
+        },
+        ...
+      ],
+      "closed_trades": [...],            # ← flat list (backward compat)
+      "count": int
+    }
+
+    Partial sells of the same holding (same trade lifecycle) share a
+    trade_group_id and appear as one group with multiple sell_events.
+    Legacy records without a trade_group_id each form their own single-event group.
+
+    current_price is sourced from the shared Tradier per-ticker cache.
     """
     if not _jwt_or_key(request, api_key):
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
-    from data.closed_trades_store import load_closed_trades as _load_ct
+    from data.closed_trades_store import (
+        load_closed_trades as _load_ct,
+        load_closed_trades_grouped as _load_grouped,
+    )
     trades = _load_ct()
+    trade_groups = _load_grouped(trades)
 
     # ── Enrich with current_price via shared Tradier per-ticker cache ──────────
-    # Only attempt for stock-like tickers (skip crypto / commodity symbols)
     _CRYPTO_SYMBOLS = {
         "BTC","ETH","SOL","DOGE","ADA","XRP","DOT","LINK","AVAX","MATIC","UNI",
         "AAVE","ATOM","LTC","BCH","SHIB","NEAR","SUI","APT","ARB","OP","INJ",
         "TIA","SEI","PEPE","WIF","RENDER","FET","TAO","FIL","HYPE",
     }
-    stock_tickers = list({
+    unique_tickers = list({
         (t.get("ticker") or "").upper()
         for t in trades
         if (t.get("ticker") or "").upper() and
@@ -6424,13 +6457,11 @@ async def get_closed_trades(request: Request, api_key: str = Header(None, alias=
     })
 
     price_map: dict[str, float | None] = {}
-    if stock_tickers:
-        # ── Step 1: Tradier (reads shared per-ticker cache first, zero extra API
-        #   calls for any ticker already priced by active holdings / watchlist) ──
+    if unique_tickers:
         try:
             from data.tradier_provider import TradierProvider as _TP
             _tradier = _TP(api_key=os.getenv("TRADIER_API_KEY", ""))
-            quotes = await _tradier.get_quotes(stock_tickers)
+            quotes = await _tradier.get_quotes(unique_tickers)
             for q in quotes:
                 sym = (q.get("symbol") or "").upper()
                 price = q.get("last") or q.get("price") or q.get("close")
@@ -6439,8 +6470,7 @@ async def get_closed_trades(request: Request, api_key: str = Header(None, alias=
         except Exception as _pe:
             print(f"[CLOSED_TRADES] Tradier enrichment error: {_pe}")
 
-        # ── Step 2: yfinance fallback for OTC / pink-sheet tickers Tradier misses ──
-        missing_price = [s for s in stock_tickers if price_map.get(s) is None]
+        missing_price = [s for s in unique_tickers if price_map.get(s) is None]
         if missing_price:
             try:
                 import yfinance as _yf
@@ -6462,11 +6492,23 @@ async def get_closed_trades(request: Request, api_key: str = Header(None, alias=
             except Exception as _yfe:
                 print(f"[CLOSED_TRADES] yfinance enrichment error: {_yfe}")
 
+    # Enrich flat list (backward compat)
     for t in trades:
         sym = (t.get("ticker") or "").upper()
-        t["current_price"] = price_map.get(sym)  # None if unavailable
+        t["current_price"] = price_map.get(sym)
 
-    return {"closed_trades": trades, "count": len(trades)}
+    # Enrich grouped list (current_price on the group + each sell_event)
+    for g in trade_groups:
+        sym = (g.get("ticker") or "").upper()
+        g["current_price"] = price_map.get(sym)
+        for ev in g.get("sell_events", []):
+            ev["current_price"] = price_map.get((ev.get("ticker") or "").upper())
+
+    return {
+        "trade_groups":  trade_groups,
+        "closed_trades": trades,           # flat list kept for backward compat
+        "count":         len(trades),
+    }
 
 
 @app.post("/api/portfolio/closed-trades")
@@ -6842,14 +6884,24 @@ async def close_holding(
     # Strip time/timezone from entry_date if the frontend sent a full ISO datetime
     _raw_ed = h.get("entry_date") or h.get("date_added") or None
     _clean_ed = str(_raw_ed).split("T")[0] if _raw_ed else None
+
+    # Trade-group ID: reuse from holding (if it was partially sold before) or new
+    import uuid as _uuid_mod
+    trade_group_id = h.get("trade_group_id") or str(_uuid_mod.uuid4())
+
     trade_payload = {
-        "ticker":      ticker,
-        "shares":      float(h.get("shares") or 0),
-        "entry_date":  _clean_ed,
-        "exit_date":   exit_date,
-        "entry_price": float(h.get("avg_cost") or 0),
-        "exit_price":  exit_price,
-        "notes":       notes,
+        "ticker":        ticker,
+        "shares":        float(h.get("shares") or 0),
+        "entry_date":    _clean_ed,
+        "exit_date":     exit_date,
+        "entry_price":   float(h.get("avg_cost") or 0),
+        "exit_price":    exit_price,
+        "notes":         notes,
+        "sell_type":     "full",
+        "remaining_shares_after": 0,
+        "cost_method":   "average_cost",
+        "trade_group_id": trade_group_id,
+        "is_full_close": True,
     }
     closed_trade = _save_ct(trade_payload)
     if closed_trade.get("_error"):
@@ -7041,6 +7093,12 @@ async def sell_holding_partial(
     if is_full_close:
         remaining_shares = 0.0
 
+    # ── Trade-group ID: links all partial sells of the same trade lifecycle ─────
+    # Reuse the group ID stored on the holding (set on first sell); generate a
+    # new one if the holding has never been partially sold before.
+    import uuid as _uuid_mod
+    trade_group_id = h.get("trade_group_id") or str(_uuid_mod.uuid4())
+
     # ── Create closed trade for the sold portion ──────────────────────────────
     trade_payload = {
         "ticker":                 ticker,
@@ -7056,6 +7114,8 @@ async def sell_holding_partial(
         "sell_type":              sell_type,
         "remaining_shares_after": remaining_shares,
         "cost_method":            "average_cost",
+        "trade_group_id":         trade_group_id,
+        "is_full_close":          is_full_close,
     }
     closed_trade = _save_ct(trade_payload)
     if closed_trade.get("_error"):
@@ -7069,14 +7129,17 @@ async def sell_holding_partial(
         updated_holdings = [hh for i, hh in enumerate(holdings) if i != idx]
         active_holding   = None
     else:
-        updated_h        = {**h, "shares": remaining_shares}
+        # Persist the trade_group_id on the holding so subsequent partial sells
+        # can reuse it to stay in the same group.
+        updated_h        = {**h, "shares": remaining_shares, "trade_group_id": trade_group_id}
         updated_holdings = [updated_h if i == idx else hh for i, hh in enumerate(holdings)]
         # Return the normalised shape that will be persisted
         active_holding = {
-            "ticker":     ticker,
-            "shares":     remaining_shares,
-            "avg_cost":   avg_cost,
-            "asset_type": h.get("asset_type", "stock"),
+            "ticker":         ticker,
+            "shares":         remaining_shares,
+            "avg_cost":       avg_cost,
+            "asset_type":     h.get("asset_type", "stock"),
+            "trade_group_id": trade_group_id,
         }
         for _k in ("entry_date", "date_added", "notes", "id"):
             if h.get(_k) is not None:

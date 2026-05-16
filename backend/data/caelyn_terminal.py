@@ -1540,17 +1540,29 @@ class CaelynTerminalProvider:
                     continue
                 if dt_str < ed:
                     continue          # position not yet open
-                if xd and dt_str > xd:
-                    continue          # position already closed — contributes 0
                 if sym in active_syms_on_date:
                     continue          # same ticker counted via active holding
 
                 shares      = float(ct.get("shares")      or 0)
                 entry_price = float(ct.get("entry_price") or 0)
                 exit_price  = float(ct.get("exit_price")  or 0)
+                position_cost = shares * entry_price
+
+                if xd and dt_str > xd:
+                    # Position is fully closed — lock P&L at exit_price so that
+                    # subsequent stock price movements do NOT affect the chart.
+                    # SPY contribution is also frozen at the exit date.
+                    total_mval += shares * exit_price
+                    total_cost += position_cost
+                    if position_cost > 0:
+                        spy_start = _spy_at(ed)
+                        spy_exit  = _spy_at(xd)
+                        if spy_start and spy_exit:
+                            spy_weighted_gain += position_cost * (spy_exit - spy_start) / spy_start
+                    continue
+
                 pm          = ct_price_maps.get(sym, {})
                 px          = _price_at(pm, dt_str, exit_price)
-                position_cost = shares * entry_price
                 total_mval   += shares * (px or exit_price)
                 total_cost   += position_cost
                 if position_cost > 0:

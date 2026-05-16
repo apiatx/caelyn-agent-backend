@@ -94,6 +94,9 @@ def _ensure_table(conn) -> None:
         "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS sell_type TEXT",
         "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS remaining_shares_after NUMERIC",
         "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS cost_method TEXT DEFAULT 'average_cost'",
+        # Trade-group columns (allow grouping partial sells of the same trade lifecycle)
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS trade_group_id TEXT",
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS is_full_close BOOLEAN NOT NULL DEFAULT FALSE",
     ):
         try:
             cur.execute(_col_sql)
@@ -119,6 +122,11 @@ def _row_to_dict(row: tuple, description) -> dict:
                 d[k] = float(d[k])
             except Exception:
                 pass
+    # Booleans
+    if "is_full_close" in d and d["is_full_close"] is not None:
+        d["is_full_close"] = bool(d["is_full_close"])
+    else:
+        d.setdefault("is_full_close", False)
     # Frontend aliases — keep both so either naming convention works
     d["symbol"] = d.get("ticker")
     d["avg_entry_price"] = d.get("entry_price")
@@ -199,8 +207,9 @@ def save_closed_trade(trade: dict) -> dict:
             INSERT INTO portfolio_closed_trades
               (id, ticker, shares, entry_date, exit_date, entry_price, exit_price,
                realized_pnl, realized_pnl_pct, holding_period_days, notes,
-               sell_type, remaining_shares_after, cost_method)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               sell_type, remaining_shares_after, cost_method,
+               trade_group_id, is_full_close)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING *
         """, (
             trade_id,
@@ -217,12 +226,15 @@ def save_closed_trade(trade: dict) -> dict:
             trade.get("sell_type") or None,
             trade.get("remaining_shares_after") if trade.get("remaining_shares_after") is not None else None,
             trade.get("cost_method") or "average_cost",
+            trade.get("trade_group_id") or None,
+            bool(trade.get("is_full_close", False)),
         ))
         row = cur.fetchone()
         desc = cur.description
         conn.commit()
         cur.close()
-        print(f"[CLOSED_TRADES_STORE] saved id={trade_id} ticker={ticker}")
+        print(f"[CLOSED_TRADES_STORE] saved id={trade_id} ticker={ticker} "
+              f"group={trade.get('trade_group_id')} full={trade.get('is_full_close')}")
         return _row_to_dict(row, desc)
     except Exception as e:
         print(f"[CLOSED_TRADES_STORE] save error: {e}")
@@ -306,6 +318,119 @@ def update_closed_trade(trade_id: str, updates: dict) -> dict | None:
         return None
     finally:
         _put_conn(conn)
+
+
+def load_closed_trades_grouped(trades: list[dict] | None = None) -> list[dict]:
+    """Return closed trades grouped by trade_group_id for the frontend card view.
+
+    Groups all partial-sell events for the same trade lifecycle into a single
+    object so the frontend can render one glasscard per trade (not one per sell).
+
+    Shape of each group:
+      {
+        "trade_group_id": str | None,   # None for legacy ungrouped records
+        "ticker": str,
+        "entry_date": str,              # earliest across all sell events
+        "final_exit_date": str | None,  # latest exit_date; null if not yet fully closed
+        "total_shares_sold": float,
+        "avg_entry_price": float,
+        "avg_exit_price": float,
+        "total_cost_basis": float,
+        "total_exit_value": float,
+        "total_realized_pnl": float,
+        "total_realized_pnl_pct": float,
+        "holding_period_days": int | None,
+        "is_fully_closed": bool,        # True when a sell event has is_full_close=True
+        "sell_events": [ ...individual sell rows... ],  # sorted by exit_date asc
+        "current_price": float | None,  # enriched externally (not set here)
+      }
+
+    Trades without a trade_group_id are treated as their own single-event group
+    (backward-compatible with existing records created before this feature).
+    """
+    if trades is None:
+        trades = load_closed_trades()
+
+    # ── Bucket by trade_group_id ───────────────────────────────────────────────
+    from collections import defaultdict
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for t in trades:
+        gid = t.get("trade_group_id") or t.get("id")   # ungrouped → own bucket
+        groups[gid].append(t)
+
+    # ── Build summary per group, sorted newest-first by final_exit_date ────────
+    result: list[dict] = []
+    for gid, events in groups.items():
+        # Sort events by exit_date ascending (earliest sell first)
+        events_sorted = sorted(
+            events,
+            key=lambda x: x.get("exit_date") or "",
+        )
+        ticker = (events_sorted[0].get("ticker") or "").upper()
+
+        total_shares = sum(e.get("shares") or 0 for e in events_sorted)
+        total_cost   = sum((e.get("shares") or 0) * (e.get("entry_price") or 0)
+                           for e in events_sorted)
+        total_exit_v = sum((e.get("shares") or 0) * (e.get("exit_price") or 0)
+                           for e in events_sorted)
+        total_pnl    = sum(e.get("realized_pnl") or 0 for e in events_sorted)
+
+        entry_dates  = [e.get("entry_date") for e in events_sorted if e.get("entry_date")]
+        exit_dates   = [e.get("exit_date")  for e in events_sorted if e.get("exit_date")]
+        entry_date   = min(entry_dates) if entry_dates else None
+        final_exit   = max(exit_dates)  if exit_dates  else None
+
+        is_fully_closed = any(bool(e.get("is_full_close")) for e in events_sorted)
+        # Fallback: last event has remaining_shares_after == 0
+        if not is_fully_closed and events_sorted:
+            last = events_sorted[-1]
+            rsaf = last.get("remaining_shares_after")
+            if rsaf is not None and float(rsaf) <= 0:
+                is_fully_closed = True
+
+        avg_entry = round(total_cost / total_shares, 6) if total_shares else 0
+        avg_exit  = round(total_exit_v / total_shares, 6) if total_shares else 0
+        pnl_pct   = round(total_pnl / total_cost * 100, 4) if total_cost else None
+
+        hpd: int | None = None
+        if entry_date and final_exit:
+            try:
+                from datetime import date as _d
+                hpd = (_d.fromisoformat(final_exit) - _d.fromisoformat(entry_date)).days
+            except Exception:
+                pass
+
+        result.append({
+            "trade_group_id":      gid,
+            "ticker":              ticker,
+            "entry_date":          entry_date,
+            "final_exit_date":     final_exit if is_fully_closed else None,
+            "total_shares_sold":   round(total_shares, 8),
+            "avg_entry_price":     avg_entry,
+            "avg_exit_price":      avg_exit,
+            "total_cost_basis":    round(total_cost,   4),
+            "total_exit_value":    round(total_exit_v, 4),
+            "total_realized_pnl":  round(total_pnl,    4),
+            "total_realized_pnl_pct": pnl_pct,
+            "holding_period_days": hpd,
+            "is_fully_closed":     is_fully_closed,
+            "sell_events":         events_sorted,
+            "current_price":       None,        # enriched by the API endpoint
+        })
+
+    # Sort: open partial trades first, then fully-closed newest-first
+    def _last_exit(g: dict) -> str:
+        return (
+            g.get("final_exit_date")
+            or (g["sell_events"][-1].get("exit_date") if g["sell_events"] else "")
+            or ""
+        )
+
+    result.sort(key=lambda g: (1 if g["is_fully_closed"] else 0, _last_exit(g)))
+    result.reverse()    # newest exit at the top within each bucket
+    # Re-stable-sort so open partials always come before closed
+    result.sort(key=lambda g: 1 if g["is_fully_closed"] else 0)
+    return result
 
 
 def delete_closed_trade(trade_id: str) -> bool:
