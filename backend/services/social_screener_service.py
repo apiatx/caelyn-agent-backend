@@ -54,7 +54,8 @@ _MAX_FUND_ENRICH_ROWS:   int = 50
 
 _TTL_PROFILE:            int = 24 * 3600     # 24 h
 _TTL_QUOTE:              int = 30 * 60       # 30 min
-_TTL_PRICE_CHANGE:       int = 30 * 60       # 30 min
+_TTL_PRICE_CHANGE_OPEN:  int = 900           # 15 min market hours — matches theme universe ETF cadence
+_TTL_PRICE_CHANGE_SHUT:  int = 3600          # 60 min off-hours/weekends — matches theme universe ETF cadence
 _TTL_FUNDAMENTALS:       int = 7 * 24 * 3600 # 7 days — FMP fundamental data
 _TTL_FUND_CACHE:         int = 7 * 24 * 3600 # 7 days — fs_payload compiled payload
 
@@ -361,11 +362,16 @@ async def _fetch_quote(client: httpx.AsyncClient, ticker: str, key: str) -> dict
 
 
 async def _fetch_price_change(client: httpx.AsyncClient, ticker: str, key: str) -> dict:
-    """FMP stock-price-change endpoint — returns 1D, 5D, 1M, 3M, 6M, YTD, 1Y, etc."""
+    """FMP stock-price-change endpoint — returns 1D, 5D, 1M, 3M, 6M, YTD, 1Y, etc.
+
+    TTL matches the theme universe ETF cadence exactly:
+      15 min during NYSE core hours, 60 min off-hours/weekends.
+    """
+    _ttl = _TTL_PRICE_CHANGE_OPEN if _is_us_market_open() else _TTL_PRICE_CHANGE_SHUT
     data = await _fmp_get(
         client, "stock-price-change",
         {"symbol": ticker, "apikey": key},
-        _TTL_PRICE_CHANGE, feature="social_price_change",
+        _ttl, feature="social_price_change",
     )
     if isinstance(data, list) and data:
         item = data[0] if isinstance(data[0], dict) else {}
