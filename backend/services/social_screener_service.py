@@ -41,6 +41,7 @@ except Exception:
     _ET = None  # type: ignore[assignment]
 
 from data.cache import cache
+from data.fmp_utils import fmp_hist_ttl, fmp_cache_key, fmp_lkg_key
 from services.api_audit import (
     fmp_force_429, record_call, record_request,
     get_total_calls, get_cache_counts,
@@ -54,15 +55,16 @@ _MAX_FUND_ENRICH_ROWS:   int = 50
 
 _TTL_PROFILE:            int = 24 * 3600     # 24 h
 _TTL_QUOTE:              int = 30 * 60       # 30 min
-_TTL_PRICE_CHANGE_WKDAY: int = 3600          # 60 min on weekdays — EOD data, no intraday value in refreshing faster
-# Weekend TTL is computed dynamically (see _fmp_hist_price_change_ttl)
+# 7D/30D/YTD/1Y price-change TTL: weekday 60 min, weekend until Mon 09:30 ET
+# → use fmp_hist_ttl() from data.fmp_utils (single source of truth)
 _TTL_FUNDAMENTALS:       int = 7 * 24 * 3600 # 7 days — FMP fundamental data
 _TTL_FUND_CACHE:         int = 7 * 24 * 3600 # 7 days — fs_payload compiled payload
 
 _FMP_BASE = "https://financialmodelingprep.com/stable"
 
-# Cache key prefixes (so we can also serve last-known-good after expiry)
-_LKG_PREFIX = "social_screener:lkg:"
+# FMP cache keys — cross-service (shared, same as Tradier's flat key pattern):
+#   hot cache : fmp:{endpoint}:{SYMBOL}       (via fmp_cache_key from data.fmp_utils)
+#   last-known-good: fmp:lkg:{endpoint}:{SYMBOL}  (via fmp_lkg_key)
 
 
 # Guard against concurrent background fundamental warmup tasks
@@ -70,34 +72,6 @@ _fund_bg_running: bool = False
 
 
 # ── Market-hours guard ────────────────────────────────────────────────────────
-
-def _fmp_hist_price_change_ttl() -> int:
-    """Global rule for FMP 7D/30D/YTD/1Y price-change cache TTL.
-
-    Weekend (Sat/Sun): cache until Monday 09:30 ET — zero weekend FMP calls.
-    Weekday:           3600s (60 min flat) — data only changes at EOD.
-
-    1D% is served from Tradier in real time; this function is for FMP 7D+ only.
-    Apply this rule anywhere in the project for automatic FMP price-change fetches.
-    """
-    try:
-        from datetime import timedelta
-        if _ET is not None:
-            now = datetime.now(_ET)
-        else:
-            now = datetime.now(timezone(timedelta(hours=-5)))
-        wd = now.weekday()          # 0=Mon … 6=Sun
-        if wd >= 5:                 # Saturday or Sunday
-            days_to_monday = 7 - wd # Sat→2, Sun→1
-            monday_open = (now + timedelta(days=days_to_monday)).replace(
-                hour=9, minute=30, second=0, microsecond=0,
-            )
-            secs = int((monday_open - now).total_seconds())
-            return max(secs, 3600)  # floor at 1h in case of clock skew
-        return _TTL_PRICE_CHANGE_WKDAY
-    except Exception:
-        return _TTL_PRICE_CHANGE_WKDAY
-
 
 def _is_us_market_open() -> bool:
     """Return True only during core NYSE trading hours.
@@ -161,23 +135,28 @@ def _fmt_volume(v: Optional[float]) -> Optional[str]:
 
 
 # ── Last-known-good helpers ──────────────────────────────────────────────────
+# Keys are cross-service (fmp_cache_key / fmp_lkg_key from data.fmp_utils)
+# so any service requesting the same endpoint+symbol shares one cache entry.
 
-def _set_lkg(key: str, value: Any) -> None:
-    """Set both fresh and LKG entries.  LKG is held for 7 days."""
-    cache.set(_LKG_PREFIX + key, value, 7 * 24 * 3600)
+def _set_lkg(hot_key: str, value: Any) -> None:
+    """Write LKG entry.  hot_key must be the fmp_cache_key() result."""
+    lkg_key = hot_key.replace("fmp:", "fmp:lkg:", 1)
+    cache.set(lkg_key, value, 7 * 24 * 3600)
 
 
-def _get_lkg(key: str) -> Any:
-    return cache.get(_LKG_PREFIX + key)
+def _get_lkg(hot_key: str) -> Any:
+    lkg_key = hot_key.replace("fmp:", "fmp:lkg:", 1)
+    return cache.get(lkg_key)
 
 
 def _fmp_cache_lookup(endpoint: str, params: dict) -> Any:
     """Read hot-cache → LKG without any HTTP call. Returns None on total miss."""
-    cache_key = f"social_screener:fmp:{endpoint}:{sorted(params.items())}"
-    val = cache.get(cache_key)
+    sym = params.get("symbol") or params.get("ticker") or ""
+    key = fmp_cache_key(endpoint, sym)
+    val = cache.get(key)
     if val is not None:
         return val
-    return _get_lkg(cache_key)
+    return cache.get(fmp_lkg_key(endpoint, sym))
 
 
 def _social_enrich_from_cache(ticker: str, fmp_api_key: str) -> dict:
@@ -273,9 +252,14 @@ async def _fmp_get(
     ttl: int,
     feature: str = "enrichment",
 ) -> Any:
-    """Cached GET wrapper.  Returns [] on any error; never raises."""
+    """Cached GET wrapper.  Returns [] on any error; never raises.
+
+    Cache key is cross-service: fmp:{endpoint}:{SYMBOL} — identical to the
+    Tradier flat-key pattern so any page requesting the same endpoint+ticker
+    reuses one cache entry without a second FMP call.
+    """
     ticker: Optional[str] = params.get("symbol") or params.get("ticker")
-    cache_key = f"social_screener:fmp:{endpoint}:{sorted(params.items())}"
+    cache_key = fmp_cache_key(endpoint, ticker or "")
 
     cached = cache.get(cache_key)
     if cached is not None:
@@ -392,14 +376,14 @@ async def _fetch_quote(client: httpx.AsyncClient, ticker: str, key: str) -> dict
 async def _fetch_price_change(client: httpx.AsyncClient, ticker: str, key: str) -> dict:
     """FMP stock-price-change endpoint — returns 1D, 5D, 1M, 3M, 6M, YTD, 1Y, etc.
 
-    TTL follows the global FMP 7D+ rule (see _fmp_hist_price_change_ttl):
+    TTL follows the global FMP 7D+ rule (fmp_hist_ttl from data.fmp_utils):
       Weekday  → 60 min flat
       Weekend  → cache until Monday 09:30 ET
     """
     data = await _fmp_get(
         client, "stock-price-change",
         {"symbol": ticker, "apikey": key},
-        _fmp_hist_price_change_ttl(), feature="social_price_change",
+        fmp_hist_ttl(), feature="social_price_change",
     )
     if isinstance(data, list) and data:
         item = data[0] if isinstance(data[0], dict) else {}

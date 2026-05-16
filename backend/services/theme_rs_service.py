@@ -49,6 +49,7 @@ from typing import Optional
 import httpx
 
 from data.cache import cache
+from data.fmp_utils import fmp_hist_ttl
 from services.theme_rs_universe import (
     THEME_RS_UNIVERSE,
     ALL_PROXY_SYMBOLS,
@@ -129,43 +130,16 @@ def _is_market_hours() -> bool:
     return 570 <= et_min <= 960   # 09:30–16:00 ET
 
 
-def _fmp_hist_ttl() -> int:
-    """Global rule for FMP 7D/30D/YTD/1Y price-change cache TTL.
-
-    Weekend (Sat/Sun): cache until Monday 09:30 ET — zero weekend FMP calls.
-    Weekday:           3600s (60 min flat) — data only changes at EOD.
-
-    1D is served from Tradier in real time and is NOT subject to this rule.
-    Apply this rule anywhere in the project for automatic FMP 7D+ price fetches.
-    """
-    try:
-        now = datetime.now(tz=timezone.utc)
-        wd = now.weekday()              # 0=Mon … 6=Sun
-        if wd >= 5:                     # Saturday or Sunday
-            from datetime import timedelta as _td
-            # Monday 09:30 ET in UTC: offset 4h (summer/EDT) or 5h (winter/EST)
-            utc_off = 4 if 4 <= now.month <= 10 else 5
-            days_to_monday = 7 - wd     # Sat→2, Sun→1
-            monday_open_utc = (now + _td(days=days_to_monday)).replace(
-                hour=9 + utc_off, minute=30, second=0, microsecond=0,
-            )
-            secs = int((monday_open_utc - now).total_seconds())
-            return max(secs, 3600)      # floor at 1h in case of clock skew
-        return 3600                     # weekday — 60 min flat
-    except Exception:
-        return 3600
-
-
 def _ttl_for_timeframe(tf: str) -> int:
     """Return cache TTL seconds for the given timeframe.
 
     1D  (Tradier real-time): 60s market hours, 3600s off-hours.
-    7D+ (FMP EOD data):      global rule via _fmp_hist_ttl() —
+    7D+ (FMP EOD data):      global rule via fmp_hist_ttl() from data.fmp_utils —
                              60 min weekdays, cached until Monday 09:30 ET on weekends.
     """
     if tf == "1D":
         return _TTL_1D_MARKET if _is_market_hours() else _TTL_OFF_HOURS
-    return _fmp_hist_ttl()
+    return fmp_hist_ttl()
 
 
 # ── LKG helpers ────────────────────────────────────────────────────────────────
