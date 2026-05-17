@@ -5129,8 +5129,12 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         "csv_data":        str,      # raw CSV text (required)
         "mode":            str,      # "preview" | "import"  (default "import")
         "merge_strategy":  str,      # "add_lots" | "replace"  (default "add_lots")
-                                     #   add_lots → appends lots, recomputes avg
-                                     #   replace  → overwrites matching tickers
+                                     #   add_lots → appends new lots, deduplicates by
+                                     #              date+shares+price so re-importing
+                                     #              the same CSV is safe; use this
+                                     #              when uploading multiple CSVs
+                                     #   replace  → overwrites ALL lots for matching
+                                     #              tickers with the new CSV lots
         "include_sells":   bool      # if true, sell rows are logged as closed trades
                                      # (default false — sells are reported but skipped)
       }
@@ -5163,9 +5167,12 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         raise HTTPException(status_code=400, detail="csv_data is required")
 
     mode           = (body.get("mode") or "import").lower().strip()
-    # Default is "replace" so re-importing the same full-history CSV never
-    # accumulates duplicate lots on top of a previous import.
-    merge_strategy = (body.get("merge_strategy") or "replace").lower().strip()
+    # Default is "add_lots" so multiple CSV files (e.g. Roth IRA + Individual
+    # Brokerage) can be uploaded sequentially and their holdings accumulate.
+    # Duplicate protection is handled by _dedup_lots (exact date+shares+price
+    # match), so re-importing the same CSV file is also safe.
+    # Pass merge_strategy="replace" explicitly to overwrite lots for a ticker.
+    merge_strategy = (body.get("merge_strategy") or "add_lots").lower().strip()
     include_sells  = bool(body.get("include_sells", False))
     # account_id: optional string that scopes this CSV to a specific brokerage
     # account (e.g. "roth_ira", "individual", "401k").  When set:
@@ -5185,6 +5192,12 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         raise HTTPException(status_code=400, detail="mode must be 'preview' or 'import'")
     if merge_strategy not in ("add_lots", "replace"):
         raise HTTPException(status_code=400, detail="merge_strategy must be 'add_lots' or 'replace'")
+
+    print(
+        f"[upload-csv] mode={mode}  merge_strategy={merge_strategy}  "
+        f"full_replace={full_replace}  account_id={account_id!r}  "
+        f"include_sells={include_sells}  csv_bytes={len(csv_data)}"
+    )
 
     # ── Parse CSV ─────────────────────────────────────────────────────────────
     try:
