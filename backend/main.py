@@ -11785,3 +11785,98 @@ async def trading_dashboard_refresh(
     for k in cleared:
         del _trading_dashboard_cache[k]
     return JSONResponse(content={"status": "ok", "cleared": cleared, "message": "Cache cleared — next request fetches fresh data"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  STRATEGY PAGE — Tab #2: Smart Options
+#  Completely isolated from Bottleneck / Chain-Reaction / Serenity logic.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/strategy/smart-options")
+@limiter.limit("30/minute")
+async def strategy_smart_options(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Smart Options strategy tab.
+
+    Compares Hyperliquid 24/7 perpetual prices against real market prices
+    (Tradier) for all equity perps tracked on HL.  The gap between the two
+    prices indicates where the real stock is likely to open — useful for
+    placing options before market open on Monday mornings or after major
+    after-hours moves.
+
+    Response shape
+    --------------
+    {
+      "market": {
+        "status": "weekend|pre_market|open|after_hours|overnight",
+        "context": "<human-readable explanation>",
+        "gap_meaningful": true|false,
+        "et_time": "2026-05-18 19:42 ET"
+      },
+      "data_source": "...",
+      "total_hl_equities": 44,
+      "with_gap": 7,
+      "rows": [
+        {
+          "ticker": "MU",
+          "signal": "call|put|neutral|no_data",
+          "signal_strength": "strong|moderate|weak|neutral|null",
+          "hl": {
+            "price": 734.0,
+            "oracle_px": 733.5,
+            "chg_24h_pct": 2.95,
+            "funding_rate_hourly": 0.003,
+            "funding_rate_ann": 26.28,
+            "oi_usd": 12500000,
+            "oi_contracts": 17040.5,
+            "volume_24h_usd": 5200000
+          },
+          "actual": {
+            "price": 713.0,
+            "close": 713.0,
+            "prevclose": 710.5,
+            "bid": null,
+            "ask": null,
+            "volume": 18500000,
+            "change_pct": -0.42,
+            "options_oi": 125000
+          },
+          "gap": {
+            "abs": 21.0,
+            "pct": 2.946,
+            "direction": "hl_premium|hl_discount|aligned"
+          }
+        }
+      ]
+    }
+
+    Rows are sorted by absolute gap % descending (biggest opportunities first).
+    Rows without an actual price (markets closed and no cached close) appear last.
+    """
+    from services.smart_options_service import build_smart_options_data
+
+    if not _hl_state:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Hyperliquid state not initialised — try again in ~30 seconds."},
+        )
+
+    tradier = getattr(data_service, "tradier", None) if data_service else None
+
+    # Pull actual options OI from the master screener LKG (in-memory or disk)
+    from data.cache import cache as _cache
+    options_lkg = _cache.get(_OPTIONS_MASTER_LKG_KEY) or _cache.get(_OPTIONS_MASTER_CACHE_KEY)
+    if not options_lkg:
+        try:
+            import json as _json
+            _disk = _master_lkg_disk_path()
+            if _disk.exists():
+                options_lkg = _json.loads(_disk.read_text())
+        except Exception:
+            pass
+
+    result = await build_smart_options_data(_hl_state, tradier, options_lkg)
+    return JSONResponse(content=result)
