@@ -583,6 +583,34 @@ async def json_decode_exception_handler(request: Request, exc: _json.JSONDecodeE
         },
     )
 
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all for any unhandled exception.
+
+    Logs the full traceback so it appears in production logs even when buried
+    in LangSmith noise, and returns the error detail as JSON so the frontend
+    can surface the real message instead of 'Internal Server Error'.
+    """
+    import traceback as _tb
+    tb_str = _tb.format_exc()
+    req_id = str(_uuid.uuid4())
+    print(
+        f"[UNHANDLED_500] req_id={req_id}  path={request.url.path}  "
+        f"method={request.method}  exc={exc!r}\n{tb_str}",
+        flush=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail":     str(exc),
+            "traceback":  tb_str,
+            "request_id": req_id,
+            "path":       request.url.path,
+        },
+    )
+
+
 # CORSMiddleware must be outermost — handles OPTIONS preflights and adds
 # CORS headers to ALL responses (including 401s from JWT middleware).
 # JWTAuthMiddleware is pure ASGI now, so add_middleware ordering works correctly.
@@ -5259,7 +5287,14 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         raise HTTPException(status_code=400, detail="merge_strategy must be 'add_lots' or 'replace'")
 
     # ── Parse CSV ─────────────────────────────────────────────────────────────
-    parsed = _parse_portfolio_csv(csv_data)
+    try:
+        parsed = _parse_portfolio_csv(csv_data)
+    except Exception as _parse_err:
+        import traceback as _tb
+        _detail = f"CSV parse error: {_parse_err}\n{_tb.format_exc()}"
+        print(f"[upload-csv][ERROR] {_detail}", flush=True)
+        raise HTTPException(status_code=500, detail=_detail)
+
     buy_lots  = parsed["buy_lots"]   # {TICKER: [lot, ...]}
     sell_lots = parsed["sell_lots"]
     skipped   = parsed["skipped"]
