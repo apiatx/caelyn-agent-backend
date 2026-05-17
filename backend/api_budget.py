@@ -5,15 +5,6 @@ Logs warnings at 70% and hard-stops at 90% to preserve headroom.
 """
 from datetime import datetime
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 
@@ -35,8 +26,6 @@ class DailyBudgetTracker:
         self._counts: dict[str, int] = {}
         self._day: str = ""
         self._reset_if_new_day()
-
-    @traceable(name="reset_if_new_day")
     def _reset_if_new_day(self):
         today = datetime.now().strftime("%Y-%m-%d")
         if today != self._day:

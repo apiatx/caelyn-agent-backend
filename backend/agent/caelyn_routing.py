@@ -18,15 +18,6 @@ ARCHITECTURAL CONTRACT:
 
 from __future__ import annotations
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 from agent import preset_registry  # Phase 1: alias resolution delegated here
 
@@ -95,15 +86,9 @@ DEFAULT_ROUTE: dict = {
 # TODO [Phase 1 wrapper]: _ALIAS_MAP body moved to agent/preset_registry._CAELYN_ALIAS_MAP.
 # Transitional reference — any direct _ALIAS_MAP lookups continue to work.
 _ALIAS_MAP: dict[str, str] = preset_registry._CAELYN_ALIAS_MAP
-
-
-@traceable(name="caelyn_routing.normalize")
 def _normalize(raw: str) -> str:
     """Lowercase, strip, collapse spaces/dashes/slashes to underscores."""
     return raw.lower().strip().replace("-", "_").replace(" ", "_").replace("/", "_")
-
-
-@traceable(name="caelyn_routing.normalize_route_key")
 def normalize_route_key(preset_intent: str | None, category: str | None) -> str | None:
     """
     Try to resolve a canonical route key from preset_intent first,
@@ -133,9 +118,6 @@ def normalize_route_key(preset_intent: str | None, category: str | None) -> str 
                 if stripped in CAELYN_ROUTES:
                     return stripped
     return None
-
-
-@traceable(name="routing")
 def get_caelyn_route(preset_intent: str | None, category: str | None) -> dict:
     """
     Return the routing config for a given preset/category in Caelyn mode.

@@ -1,15 +1,6 @@
 import httpx
 from data.cache import cache, STOCKTWITS_TTL
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 
@@ -17,8 +8,6 @@ class StockTwitsProvider:
     """Fetches sentiment and trending data from StockTwits."""
 
     BASE_URL = "https://api.stocktwits.com/api/2"
-
-    @traceable(name="get_sentiment")
     async def get_sentiment(self, ticker: str) -> dict:
         """Get sentiment and recent messages for a specific ticker."""
         ticker = ticker.upper()
@@ -85,8 +74,6 @@ class StockTwitsProvider:
         except Exception as e:
             print(f"StockTwits error for {ticker}: {e}")
             return {"ticker": ticker, "error": str(e)}
-
-    @traceable(name="get_trending")
     async def get_trending(self) -> list:
         """Get currently trending tickers on StockTwits."""
         cache_key = "stocktwits:trending"

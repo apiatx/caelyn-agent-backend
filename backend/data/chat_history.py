@@ -10,15 +10,6 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 HISTORY_DIR = Path("data/chat_history_store")
@@ -53,9 +44,6 @@ except Exception as e:
 
 if _pg_required and not _use_postgres:
     print("[CHAT_HISTORY] WARNING: DATABASE_URL is set but PostgreSQL init failed; legacy fallback disabled for production")
-
-
-@traceable(name="chat_history.ensure_postgres_backend")
 def _ensure_postgres_backend() -> bool:
     """Retry PostgreSQL activation if DATABASE_URL is configured."""
     global _use_postgres
@@ -87,9 +75,6 @@ def _fallback_create(first_query: str) -> dict:
         title += "..."
     conv = {"id": conv_id, "title": title, "created_at": now, "updated_at": now, "messages": []}
     return conv
-
-
-@traceable(name="chat_history.create_conversation")
 def create_conversation(first_query: str, session_id: str | None = None) -> dict:
     conv_id = str(uuid.uuid4())[:13]
     now = datetime.now().isoformat()
@@ -113,9 +98,6 @@ def create_conversation(first_query: str, session_id: str | None = None) -> dict
         raise RuntimeError("PostgreSQL required for chat persistence but is unavailable")
 
     return _fallback_create(first_query)
-
-
-@traceable(name="chat_history.append_message")
 def append_message(
     conv_id: str,
     role: str,
@@ -140,9 +122,6 @@ def append_message(
         preset_key=preset_key,
         model_used=model_used,
     )
-
-
-@traceable(name="chat_history.save_messages")
 def save_messages(conv_id: str, messages: list):
     if not _validate_id(conv_id):
         return False
@@ -155,34 +134,22 @@ def save_messages(conv_id: str, messages: list):
         return _pg_chat_replace(conv_id, messages=messages or [], title=title)
 
     return False
-
-
-@traceable(name="chat_history.get_conversation")
 def get_conversation(conv_id: str) -> dict | None:
     if not _validate_id(conv_id):
         return None
     if _ensure_postgres_backend():
         return _pg_chat_read(conv_id)
     return None
-
-
-@traceable(name="chat_history.list_conversations")
 def list_conversations() -> list:
     if _ensure_postgres_backend():
         return _pg_chat_list()
     return []
-
-
-@traceable(name="chat_history.delete_conversation")
 def delete_conversation(conv_id: str) -> bool:
     if not _validate_id(conv_id):
         return False
     if _ensure_postgres_backend():
         return _pg_chat_delete(conv_id)
     return False
-
-
-@traceable(name="chat_history.migrate_file_history_to_db")
 def migrate_file_history_to_db():
     """Legacy migration no-op for PostgreSQL-only production mode."""
     return

@@ -9,15 +9,6 @@ import json
 import os
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 def _sanitize_database_url(url: str | None) -> str | None:
@@ -46,9 +37,6 @@ _pool = None
 _available = False
 # Track last connection error for diagnostics
 _last_conn_error: str | None = None
-
-
-@traceable(name="pg_storage.to_jsonb")
 def _to_jsonb(value):
     if not isinstance(value, dict):
         return None
@@ -69,9 +57,6 @@ def _destroy_pool():
             pass
     _pool = None
     _available = False
-
-
-@traceable(name="pg_storage.get_conn")
 def _get_conn():
     """Get a healthy connection from the pool (lazy-initialized).
 
@@ -129,9 +114,6 @@ def _get_conn():
             continue
 
     return None
-
-
-@traceable(name="pg_storage.put_conn")
 def _put_conn(conn):
     """Return a connection to the pool."""
     if _pool and conn:
@@ -139,9 +121,6 @@ def _put_conn(conn):
             _pool.putconn(conn)
         except Exception:
             pass
-
-
-@traceable(name="pg_storage.is_available")
 def is_available() -> bool:
     """Check if PostgreSQL is available."""
     if not _DATABASE_URL:
@@ -156,11 +135,6 @@ def is_available() -> bool:
 def get_last_conn_error() -> str | None:
     """Return the last connection error message (for diagnostics)."""
     return _last_conn_error
-
-
-
-
-@traceable(name="pg_storage.startup_probe")
 def startup_probe() -> dict:
     """Startup diagnostic for PostgreSQL connectivity/schema visibility."""
     info = {"database_url_detected": bool(_DATABASE_URL), "connected": False, "database": None, "schema": None, "tables": []}
@@ -190,8 +164,6 @@ def startup_probe() -> dict:
     finally:
         _put_conn(conn)
     return info
-
-@traceable(name="pg_storage.init_tables")
 def init_tables():
     """Create tables if they don't exist. Safe to call multiple times."""
     print("[PG_STORAGE] init_tables starting (target schema=public)")
@@ -511,8 +483,6 @@ def watchlist_rename(watchlist_id: str, new_name: str) -> bool:
 
 
 # ── Prompt History ───────────────────────────────────────────
-
-@traceable(name="pg_storage.ph_read")
 def ph_read(user_id: str) -> dict:
     """Read all prompt history for a user."""
     conn = _get_conn()
@@ -537,9 +507,6 @@ def ph_read(user_id: str) -> dict:
         return {}
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.ph_write")
 def ph_write(user_id: str, data: dict):
     """Write all prompt history for a user (full replace by bucket)."""
     conn = _get_conn()
@@ -573,9 +540,6 @@ def ph_write(user_id: str, data: dict):
         conn.rollback()
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.ph_read_bucket")
 def ph_read_bucket(user_id: str, bucket_key: str) -> dict:
     """Read a single bucket for a user."""
     conn = _get_conn()
@@ -600,9 +564,6 @@ def ph_read_bucket(user_id: str, bucket_key: str) -> dict:
         return {}
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.ph_write_bucket")
 def ph_write_bucket(user_id: str, bucket_key: str, bucket_data: dict):
     """Write a single bucket (more efficient for single-intent updates)."""
     conn = _get_conn()
@@ -627,23 +588,15 @@ def ph_write_bucket(user_id: str, bucket_key: str, bucket_data: dict):
 
 
 # ── Chat History ─────────────────────────────────────────────
-
-@traceable(name="pg_storage.chat_read")
 def chat_read(conv_id: str) -> dict | None:
     """Read a single conversation."""
     return chat_get_conversation(conv_id)
-
-
-@traceable(name="pg_storage.chat_write")
 def chat_write(conv_id: str, data: dict):
     """Write/update a conversation."""
     # Keep compatibility with existing callers while storing in normalized schema.
     title = data.get("title") if isinstance(data, dict) else None
     messages = data.get("messages", []) if isinstance(data, dict) else []
     chat_replace_messages(conv_id, messages=messages, title=title)
-
-
-@traceable(name="pg_storage.chat_delete")
 def chat_delete(conv_id: str) -> bool:
     """Delete a conversation."""
     conn = _get_conn()
@@ -666,9 +619,6 @@ def chat_delete(conv_id: str) -> bool:
         return False
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.chat_list")
 def chat_list() -> list:
     """List all conversations (summary only), sorted by updated_at desc."""
     conn = _get_conn()
@@ -705,9 +655,6 @@ def chat_list() -> list:
         return []
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.chat_create_conversation")
 def chat_create_conversation(conv_id: str, title: str | None = None, session_id: str | None = None) -> bool:
     conn = _get_conn()
     if conn is None:
@@ -732,9 +679,6 @@ def chat_create_conversation(conv_id: str, title: str | None = None, session_id:
         return False
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.chat_append_message")
 def chat_append_message(
     conv_id: str,
     role: str,
@@ -913,9 +857,6 @@ def chat_list_recent(limit: int = 5) -> list:
         return []
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.chat_replace_messages")
 def chat_replace_messages(conv_id: str, messages: list, title: str | None = None) -> bool:
     conn = _get_conn()
     if conn is None:
@@ -957,9 +898,6 @@ def chat_replace_messages(conv_id: str, messages: list, title: str | None = None
         return False
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.chat_get_conversation")
 def chat_get_conversation(conv_id: str) -> dict | None:
     conn = _get_conn()
     if conn is None:
@@ -1033,9 +971,6 @@ def chat_get_conversation(conv_id: str) -> dict | None:
         return None
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.storage_info")
 def storage_info() -> dict:
     """Return diagnostic info about PostgreSQL storage."""
     conn = _get_conn()
@@ -1197,9 +1132,6 @@ def _ensure_calendar_snapshots_table(cur) -> None:
             updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
-
-
-@traceable(name="pg_storage.calendar_snapshot_read")
 def calendar_snapshot_read(tab: str) -> dict | None:
     """Read a single tab's snapshot row. Returns None if Neon unavailable or row missing."""
     conn = _get_conn()
@@ -1259,9 +1191,6 @@ def calendar_snapshot_read(tab: str) -> dict | None:
         return None
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.calendar_snapshot_write")
 def calendar_snapshot_write(
     tab: str,
     current_week: list,
@@ -1331,9 +1260,6 @@ def calendar_snapshot_write(
         return False
     finally:
         _put_conn(conn)
-
-
-@traceable(name="pg_storage.calendar_snapshot_get_meta_field")
 def calendar_snapshot_get_meta_field(tab: str, field: str) -> str | None:
     """Read a single field from the meta JSON (e.g. 'last_run_week'). None if missing."""
     snap = calendar_snapshot_read(tab)
@@ -1342,9 +1268,6 @@ def calendar_snapshot_get_meta_field(tab: str, field: str) -> str | None:
     meta = snap.get("meta") or {}
     val = meta.get(field)
     return val if isinstance(val, str) or val is None else str(val)
-
-
-@traceable(name="pg_storage.calendar_snapshot_set_meta_field")
 def calendar_snapshot_set_meta_field(tab: str, field: str, value) -> bool:
     """Merge a single field into meta without rewriting current/previous_week."""
     conn = _get_conn()

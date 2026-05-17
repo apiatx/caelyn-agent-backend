@@ -18,15 +18,6 @@ import httpx
 
 from data.cache import cache
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 # Cache TTLs (seconds)
@@ -169,8 +160,6 @@ class TradierProvider:
         return TRADIER_LIMITER.status()
 
     # ── Option Expirations ──────────────────────────────────────────────
-
-    @traceable(name="tradier.get_option_expirations")
     async def get_option_expirations(self, symbol: str) -> list[str]:
         """Return list of expiration date strings (YYYY-MM-DD)."""
         symbol = symbol.upper()
@@ -195,8 +184,6 @@ class TradierProvider:
         return dates
 
     # ── Option Strikes ──────────────────────────────────────────────────
-
-    @traceable(name="tradier.get_option_strikes")
     async def get_option_strikes(self, symbol: str, expiration: str) -> list[float]:
         """Return sorted list of available strike prices."""
         symbol = symbol.upper()
@@ -222,8 +209,6 @@ class TradierProvider:
         return result
 
     # ── Option Chain (with greeks) ──────────────────────────────────────
-
-    @traceable(name="tradier.get_option_chain")
     async def get_option_chain(self, symbol: str, expiration: str) -> dict:
         """
         Fetch full chain with greeks/IV for one expiration.
@@ -303,8 +288,6 @@ class TradierProvider:
         return await self.get_option_chain(symbol, expiration)
 
     # ── Equity / Option Quotes ──────────────────────────────────────────
-
-    @traceable(name="tradier.get_quotes")
     async def get_quotes(self, symbols: list[str]) -> list[dict]:
         """
         Get real-time quotes for equities or options (pass OCC symbols for options).
@@ -386,8 +369,6 @@ class TradierProvider:
         return quotes[0] if quotes else None
 
     # ── Historical Data (equity + option contracts) ─────────────────────
-
-    @traceable(name="tradier.get_history")
     async def get_history(
         self,
         symbol: str,
@@ -442,8 +423,6 @@ class TradierProvider:
         return bars
 
     # ── Time and Sales (intraday ticks / intervals) ─────────────────────
-
-    @traceable(name="tradier.get_timesales")
     async def get_timesales(
         self,
         symbol: str,
@@ -495,8 +474,6 @@ class TradierProvider:
         return ticks
 
     # ── Option Lookup ───────────────────────────────────────────────────
-
-    @traceable(name="tradier.lookup_options")
     async def lookup_options(self, underlying: str) -> list[str]:
         """Lookup all OCC option symbols for an underlying."""
         data = await self._get("/markets/options/lookup", {"underlying": underlying.upper()})

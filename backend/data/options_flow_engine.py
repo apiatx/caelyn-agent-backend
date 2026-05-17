@@ -7,15 +7,6 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 from data.options_history_store import (
     get_contract_flow_history_summary,
@@ -263,8 +254,6 @@ class OptionsFlowEngine:
         # concurrently so they all share the same Tradier rate-limit budget.
         # When None, _inspect_shortlist creates a local Sem(inspect_concurrency).
         self._shared_sem: asyncio.Semaphore | None = None
-
-    @traceable(name="options_flow_engine.build_prefilter_snapshot")
     async def build_prefilter_snapshot(
         self,
         seed_tickers: list[str] | None = None,
@@ -278,8 +267,6 @@ class OptionsFlowEngine:
             "tab": tab,
             **prefilter_data,
         }
-
-    @traceable(name="options_flow_engine.run_live_scan")
     async def run_live_scan(
         self,
         seed_tickers: list[str] | None = None,
@@ -376,8 +363,6 @@ class OptionsFlowEngine:
             "all_contracts": all_contracts[:500],
             "market_summary": market_summary,
         }
-
-    @traceable(name="options_flow_engine.run_scan")
     async def run_scan(
         self,
         seed_tickers: list[str] | None = None,

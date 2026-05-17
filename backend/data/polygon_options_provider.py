@@ -18,15 +18,6 @@ import threading
 import requests
 from datetime import datetime, timedelta
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 class PolygonOptionsProvider:
@@ -83,8 +74,6 @@ class PolygonOptionsProvider:
             return {"error": str(e)}
 
     # ── Options Contracts Reference ──────────────────────────────────
-
-    @traceable(name="polygon_options.get_contracts")
     def get_contracts(
         self,
         underlying_ticker: str,
@@ -165,8 +154,6 @@ class PolygonOptionsProvider:
                 break
 
         return all_contracts
-
-    @traceable(name="polygon_options.get_key_contracts")
     def get_key_contracts(self, underlying_ticker: str, current_price: float = None) -> list[dict]:
         """
         Get the most relevant options contracts for analysis:
@@ -206,8 +193,6 @@ class PolygonOptionsProvider:
         return contracts
 
     # ── Options Daily Bars (OHLCV) ───────────────────────────────────
-
-    @traceable(name="polygon_options.get_daily_bars")
     def get_daily_bars(
         self,
         option_ticker: str,
@@ -240,8 +225,6 @@ class PolygonOptionsProvider:
         return data.get("results", []) or []
 
     # ── Technical Indicators (for underlying stocks) ─────────────────
-
-    @traceable(name="polygon_options.get_sma")
     def get_sma(self, ticker: str, window: int = 50, timespan: str = "day", limit: int = 500) -> list[dict]:
         """Get Simple Moving Average for a stock ticker."""
         data = self._request(
@@ -258,8 +241,6 @@ class PolygonOptionsProvider:
             return []
         results = data.get("results", {})
         return results.get("values", []) if isinstance(results, dict) else []
-
-    @traceable(name="polygon_options.get_ema")
     def get_ema(self, ticker: str, window: int = 12, timespan: str = "day", limit: int = 500) -> list[dict]:
         """Get Exponential Moving Average for a stock ticker."""
         data = self._request(
@@ -276,8 +257,6 @@ class PolygonOptionsProvider:
             return []
         results = data.get("results", {})
         return results.get("values", []) if isinstance(results, dict) else []
-
-    @traceable(name="polygon_options.get_rsi")
     def get_rsi(self, ticker: str, window: int = 14, timespan: str = "day", limit: int = 500) -> list[dict]:
         """Get Relative Strength Index for a stock ticker."""
         data = self._request(
@@ -294,8 +273,6 @@ class PolygonOptionsProvider:
             return []
         results = data.get("results", {})
         return results.get("values", []) if isinstance(results, dict) else []
-
-    @traceable(name="polygon_options.get_macd")
     def get_macd(
         self,
         ticker: str,
@@ -322,8 +299,6 @@ class PolygonOptionsProvider:
             return []
         results = data.get("results", {})
         return results.get("values", []) if isinstance(results, dict) else []
-
-    @traceable(name="polygon_options.get_all_technicals")
     def get_all_technicals(self, ticker: str) -> dict:
         """
         Fetch all 4 technical indicators for a ticker in sequence (4 API calls).
@@ -351,8 +326,6 @@ class PolygonOptionsProvider:
         return result
 
     # ── Snapshot / Last Quote ────────────────────────────────────────
-
-    @traceable(name="polygon_options.get_options_snapshot")
     def get_options_snapshot(self, underlying_ticker: str) -> list[dict]:
         """
         Get current snapshot for all options of an underlying (paid tier).

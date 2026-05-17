@@ -2,15 +2,6 @@ import asyncio
 import httpx
 from data.cache import cache
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 REDDIT_CACHE_TTL = 300
@@ -18,8 +9,6 @@ REDDIT_CACHE_TTL = 300
 
 class RedditSentimentProvider:
     BASE_URL = "https://apewisdom.io/api/v1.0"
-
-    @traceable(name="get")
     async def _get(self, endpoint: str) -> dict:
         cache_key = f"reddit:{endpoint}"
         cached = cache.get(cache_key)
@@ -40,8 +29,6 @@ class RedditSentimentProvider:
         except Exception as e:
             print(f"[REDDIT] Request failed ({endpoint}): {e}")
             return {}
-
-    @traceable(name="get_wsb_trending")
     async def get_wsb_trending(self) -> list:
         data = await self._get("filter/wallstreetbets")
         results = data.get("results", [])
@@ -55,8 +42,6 @@ class RedditSentimentProvider:
                 r["mention_change_pct"] = None
 
         return results[:30]
-
-    @traceable(name="get_all_stocks_trending")
     async def get_all_stocks_trending(self) -> list:
         data = await self._get("filter/all-stocks")
         results = data.get("results", [])
@@ -70,13 +55,9 @@ class RedditSentimentProvider:
                 r["mention_change_pct"] = None
 
         return results[:30]
-
-    @traceable(name="get_crypto_trending")
     async def get_crypto_trending(self) -> list:
         data = await self._get("filter/all-crypto")
         return data.get("results", [])[:20]
-
-    @traceable(name="get_ticker_rank")
     async def get_ticker_rank(self, ticker: str) -> dict:
         all_stocks = await self.get_all_stocks_trending()
         for stock in all_stocks:
@@ -89,8 +70,6 @@ class RedditSentimentProvider:
                     "on_reddit": True,
                 }
         return {"on_reddit": False}
-
-    @traceable(name="get_full_reddit_dashboard")
     async def get_full_reddit_dashboard(self) -> dict:
         wsb, all_stocks, crypto = await asyncio.gather(
             self.get_wsb_trending(),

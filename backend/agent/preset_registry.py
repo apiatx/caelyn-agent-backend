@@ -20,15 +20,6 @@ resolve_to_route_key(raw)   → CAELYN_ROUTES key or None
 
 from __future__ import annotations
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 # ---------------------------------------------------------------------------
@@ -1233,8 +1224,6 @@ _CAELYN_ALIAS_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Public resolution functions
 # ---------------------------------------------------------------------------
-
-@traceable(name="resolve_preset")
 def resolve_preset(preset_intent: str) -> str | None:
     """
     Resolve a raw preset_intent string to a canonical INTENT_PROFILES key.
@@ -1260,9 +1249,6 @@ def resolve_preset(preset_intent: str) -> str | None:
         return resolved
     print(f"[ROUTING] Unknown preset_intent: '{preset_intent}' (normalized: '{normalized}') — no alias or profile found")
     return None
-
-
-@traceable(name="build_plan_from_preset")
 def build_plan_from_preset(preset_intent: str) -> dict | None:
     """
     Build a complete plan dict from a raw preset_intent string.
@@ -1289,9 +1275,6 @@ def build_plan_from_preset(preset_intent: str) -> dict | None:
     if "_screener_preset" in profile:
         plan["_screener_preset"] = profile["_screener_preset"]
     return plan
-
-
-@traceable(name="plan_to_query_info")
 def plan_to_query_info(plan: dict) -> dict:
     """
     Convert a resolved plan dict into a query_info dict for _gather_data.

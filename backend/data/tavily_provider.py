@@ -10,15 +10,6 @@ import asyncio
 import httpx
 from data.cache import cache
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 TAVILY_TTL = 300  # 5 minutes — same as FMP/Finviz
@@ -32,8 +23,6 @@ class TavilyProvider:
 
     def __init__(self, api_key: str):
         self.api_key = api_key
-
-    @traceable(name="search")
     async def _search(self, query: str, max_results: int = 8,
                       search_depth: str = "basic", topic: str = "news") -> dict:
         """Execute a single Tavily search."""
@@ -58,8 +47,6 @@ class TavilyProvider:
         except Exception as e:
             print(f"[Tavily] Error: {e}")
             return {"error": str(e), "results": []}
-
-    @traceable(name="search_ticker_batch")
     async def search_ticker_batch(self, tickers: list,
                                   focus: str = "analyst_ratings_news") -> dict:
         """
@@ -97,8 +84,6 @@ class TavilyProvider:
         result = self._parse_batch_results(tickers, data)
         cache.set(cache_key, result, TAVILY_TTL)
         return result
-
-    @traceable(name="parse_batch_results")
     def _parse_batch_results(self, tickers: list, raw: dict) -> dict:
         """Parse Tavily results and attribute them to tickers."""
         parsed = {t.upper(): {"ticker": t.upper(), "headlines": [], "snippets": []}
@@ -133,8 +118,6 @@ class TavilyProvider:
                 })
 
         return parsed
-
-    @traceable(name="enrich_tickers_batched")
     async def enrich_tickers_batched(self, tickers: list) -> dict:
         """
         Full enrichment replacing StockTwits + StockAnalysis + AlphaVantage.
@@ -180,8 +163,6 @@ class TavilyProvider:
         print(f"[Tavily] enriched {len([k for k in combined if not k.startswith('_')])} tickers with {len(batches)} API calls")
         cache.set(cache_key, combined, TAVILY_TTL)
         return combined
-
-    @traceable(name="get_market_news")
     async def get_market_news(self, topic: str = "stock market today") -> dict:
         """
         Get broad market news — replaces AlphaVantage get_market_news_sentiment().
@@ -216,8 +197,6 @@ class TavilyProvider:
 
         cache.set(cache_key, result, TAVILY_NEWS_TTL)
         return result
-
-    @traceable(name="get_ticker_news_sentiment")
     async def get_ticker_news_sentiment(self, ticker: str, company_name: str = "") -> dict:
         """
         Get news + sentiment for a single ticker.

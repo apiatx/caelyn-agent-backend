@@ -2,15 +2,6 @@ import httpx
 import asyncio
 from data.cache import cache
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 OPTIONS_CACHE_TTL = 120  # 2 min — options data is time-sensitive
 _ACCESS_TOKEN_VALIDITY_MINUTES = 55  # request 55-min tokens, cache for 54 min
@@ -122,8 +113,6 @@ class PublicComProvider:
             except Exception as e:
                 print(f"[PUBLIC.COM] Account ID error: {e}")
                 return None
-
-    @traceable(name="public_com.get_option_expirations")
     async def get_option_expirations(self, symbol: str) -> list:
         """Get available expiration dates for a ticker."""
         symbol = symbol.upper()
@@ -153,8 +142,6 @@ class PublicComProvider:
         except Exception as e:
             print(f"[PUBLIC.COM] Expirations error for {symbol}: {e}")
             return []
-
-    @traceable(name="public_com.get_option_chain")
     async def get_option_chain(self, symbol: str, expiration: str) -> dict:
         """
         Get full option chain (calls + puts) for a symbol and expiration date.
@@ -189,8 +176,6 @@ class PublicComProvider:
         except Exception as e:
             print(f"[PUBLIC.COM] Chain error for {symbol}/{expiration}: {e}")
             return {}
-
-    @traceable(name="public_com.get_quotes")
     async def get_quotes(self, symbols: list, instrument_type: str = "OPTION") -> list:
         """
         Get real-time quotes (bid, ask, last, volume, openInterest) for option or stock symbols.
@@ -227,8 +212,6 @@ class PublicComProvider:
         except Exception as e:
             print(f"[PUBLIC.COM] Quotes error: {e}")
             return []
-
-    @traceable(name="public_com.get_option_greeks")
     async def get_option_greeks(self, osi_symbols: list) -> list:
         """
         Get greeks (delta, gamma, theta, vega, rho, IV) for up to 250 option contracts.
@@ -271,8 +254,6 @@ class PublicComProvider:
         except Exception as e:
             print(f"[PUBLIC.COM] Greeks error: {e}")
             return []
-
-    @traceable(name="public_com.get_full_chain_with_greeks")
     async def get_full_chain_with_greeks(self, symbol: str, expiration: str) -> dict:
         """
         Get a complete option chain with greeks merged in.
@@ -356,8 +337,6 @@ class PublicComProvider:
         "SPY", "QQQ", "IWM", "GLD", "TLT", "XLF", "XLK", "XLE", "XLV",
         "HYG", "DIA", "EEM", "ARKK", "SMH", "SOXX", "VXX", "UVXY",
     }
-
-    @traceable(name="public_com.scan_full_screener")
     async def scan_full_screener(self, symbols: list) -> dict:
         """
         Comprehensive screener: fetch full option chains (nearest expiry) for all
@@ -525,8 +504,6 @@ class PublicComProvider:
             "all_contracts":  all_contracts[:500],  # cap at 500 for payload size
             "market_summary": market_summary,
         }
-
-    @traceable(name="public_com.scan_high_volume_options")
     async def scan_high_volume_options(self, symbols: list) -> tuple:
         """
         For a list of tickers, get the nearest expiration chain and find

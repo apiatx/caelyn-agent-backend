@@ -12,15 +12,6 @@ import time
 import asyncio
 from datetime import datetime, timedelta
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 # ── Full watchlist (US-listed only) ──────────────────────────────────
 # Non-US tickers excluded: GLXY, TSX:GMIN, TSXV:AAG, AMS:BESI,
@@ -96,9 +87,6 @@ def _parse_option_ticker(polygon_ticker: str) -> dict:
         }
     except (ValueError, IndexError):
         return {}
-
-
-@traceable(name="options_ingestion.ingest_ticker_options")
 def ingest_ticker_options(polygon_opts, ticker: str) -> dict:
     """
     Fetch and store historic options data for a single ticker.
@@ -192,9 +180,6 @@ def ingest_ticker_options(polygon_opts, ticker: str) -> dict:
         print(f"[INGEST] Fatal error for {ticker}: {e}")
         update_fetch_progress(ticker, status="error", error_message=str(e)[:500])
         return {"contracts_fetched": 0, "bars_stored": 0, "errors": 1}
-
-
-@traceable(name="options_ingestion.ingest_technicals")
 def ingest_technicals(polygon_opts, ticker: str) -> int:
     """
     Fetch and store all 4 technical indicators for a ticker.

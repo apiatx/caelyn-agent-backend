@@ -1,15 +1,6 @@
 import httpx
 from data.cache import cache, FEAR_GREED_TTL
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 
@@ -45,8 +36,6 @@ class FearGreedProvider:
         "Accept": "application/json",
         "Referer": "https://www.cnn.com/markets/fear-and-greed",
     }
-
-    @traceable(name="get_fear_greed_index")
     async def get_fear_greed_index(self) -> dict:
         """
         Get the current Fear & Greed Index value and its components.
@@ -148,8 +137,6 @@ class FearGreedProvider:
         except Exception as e:
             print(f"Fear & Greed Index error: {e}")
             return await self._fallback_fetch()
-
-    @traceable(name="fallback_fetch")
     async def _fallback_fetch(self) -> dict:
         """
         Fallback method if the primary API endpoint doesn't work.
@@ -187,8 +174,6 @@ class FearGreedProvider:
                 "current_score": None,
                 "error": str(e),
             }
-
-    @traceable(name="interpret_score")
     def _interpret_score(self, score) -> str:
         """Interpret the Fear & Greed score for trading context."""
         if score is None:
@@ -238,8 +223,6 @@ class FearGreedProvider:
             "Historically this level precedes significant corrections. "
             "Strongly consider taking profits and raising cash positions."
         )
-
-    @traceable(name="detect_momentum_shift")
     def _detect_momentum_shift(self, current, previous_close, one_week_ago) -> str:
         """Detect if sentiment is shifting direction."""
         if current is None:

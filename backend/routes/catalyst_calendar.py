@@ -53,15 +53,6 @@ from services.top_catalysts_service import (
     get_top_catalysts as _get_top_catalysts,
 )
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 router = APIRouter(tags=["catalyst_calendar"])
 
@@ -79,7 +70,6 @@ def _check_key(api_key: Optional[str]) -> Optional[JSONResponse]:
 # ── GET /api/catalysts/overview ───────────────────────────────────────────────
 
 @router.get("/api/catalysts/overview")
-@traceable(name="catalyst_calendar.overview")
 async def catalyst_overview(
     request: Request,
     api_key: str = Header(None, alias=_AUTH_HEADER),
@@ -112,7 +102,6 @@ async def catalyst_overview(
 # ── GET /api/catalysts/events ─────────────────────────────────────────────────
 
 @router.get("/api/catalysts/events")
-@traceable(name="catalyst_calendar.events")
 async def catalyst_events(
     request: Request,
     api_key: str = Header(None, alias=_AUTH_HEADER),
@@ -272,7 +261,6 @@ async def catalyst_events(
 # ── GET /api/catalysts/filters ────────────────────────────────────────────────
 
 @router.get("/api/catalysts/filters")
-@traceable(name="catalyst_calendar.filters")
 async def catalyst_filters(
     request: Request,
     api_key: str = Header(None, alias=_AUTH_HEADER),
@@ -299,7 +287,6 @@ async def catalyst_filters(
 # ── GET /api/catalysts/ask-context ────────────────────────────────────────────
 
 @router.get("/api/catalysts/ask-context")
-@traceable(name="catalyst_calendar.ask_context")
 async def catalyst_ask_context(
     request: Request,
     api_key: str = Header(None, alias=_AUTH_HEADER),
@@ -390,7 +377,6 @@ async def catalyst_ask_context(
 # ── GET /api/catalysts/by-symbol/{symbol} ─────────────────────────────────────
 
 @router.get("/api/catalysts/by-symbol/{symbol}")
-@traceable(name="catalyst_calendar.by_symbol")
 async def catalyst_by_symbol(
     request: Request,
     symbol: str,
@@ -564,7 +550,6 @@ async def debug_calendar_snapshots(
 # ── GET /api/catalysts/top ────────────────────────────────────────────────────
 
 @router.get("/api/catalysts/top")
-@traceable(name="catalyst_calendar.top")
 async def catalyst_top(
     request: Request,
     api_key: str = Header(None, alias=_AUTH_HEADER),

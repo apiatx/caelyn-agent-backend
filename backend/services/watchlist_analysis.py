@@ -31,15 +31,6 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 # ── Helper: parse AI JSON ──────────────────────────────────────────────────
@@ -74,8 +65,6 @@ def _parse_ai_json(raw_text: str) -> Dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════
 # SOURCE A: Grok/xAI — Social Sentiment & Investing Themes on X
 # ═══════════════════════════════════════════════════════════════════════════
-
-@traceable(name="watchlist_analysis.grok_social_sentiment")
 async def _collect_grok_sentiment(tickers: List[str]) -> Dict[str, Any]:
     """
     Call Grok for major investing themes on X and per-ticker social sentiment.
@@ -189,8 +178,6 @@ Return ONLY valid JSON:
 # ═══════════════════════════════════════════════════════════════════════════
 # SOURCE B: Gemini — Web Search for Real-Time News
 # ═══════════════════════════════════════════════════════════════════════════
-
-@traceable(name="watchlist_analysis.gemini_news")
 async def _collect_gemini_news(tickers: List[str]) -> Dict[str, Any]:
     """
     Call Gemini with grounding/web search for real-time news per ticker.
@@ -285,8 +272,6 @@ Return ONLY valid JSON:
 # ═══════════════════════════════════════════════════════════════════════════
 # SOURCE C: Claude — CSV Fundamental Analysis
 # ═══════════════════════════════════════════════════════════════════════════
-
-@traceable(name="watchlist_analysis.claude_csv_analysis")
 async def _collect_claude_csv_analysis(csv_data: List[Dict[str, str]], agent: Any) -> Dict[str, Any]:
     """
     Use existing Claude integration to parse CSV fundamental data.
@@ -379,8 +364,6 @@ Return ONLY valid JSON:
 # ═══════════════════════════════════════════════════════════════════════════
 # SOURCE D: SEC Edgar — Recent Filings & Insider Activity
 # ═══════════════════════════════════════════════════════════════════════════
-
-@traceable(name="watchlist_analysis.sec_edgar_filings")
 async def _collect_sec_edgar(tickers: List[str]) -> Dict[str, Any]:
     """
     Hit SEC EDGAR for recent filings and insider transactions.
@@ -432,8 +415,6 @@ async def _collect_sec_edgar(tickers: List[str]) -> Dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════
 # SOURCE E: Technical Analysis — Reuse Existing TA Signal Engine
 # ═══════════════════════════════════════════════════════════════════════════
-
-@traceable(name="watchlist_analysis.technical_analysis")
 async def _collect_technical_analysis(tickers: List[str], data_service: Any) -> Dict[str, Any]:
     """
     Use the existing TA signal engine and MarketDataService to get
@@ -761,9 +742,6 @@ Return ONLY valid JSON matching this exact structure:
 Be bold, opinionated, and specific. Generic analysis is worthless. Every key_insight should tell the trader something they couldn't figure out from a basic stock screener."""
 
     return synthesis_prompt
-
-
-@traceable(name="watchlist_analysis.synthesize")
 async def _synthesize_all_sources(
     tickers: List[str],
     grok_data: Dict[str, Any],
@@ -814,8 +792,6 @@ async def _synthesize_all_sources(
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN PIPELINE — Orchestrates all sources in parallel
 # ═══════════════════════════════════════════════════════════════════════════
-
-@traceable(name="watchlist_analysis.run_pipeline")
 async def run_analysis_pipeline(
     tickers: List[str],
     csv_data: List[Dict[str, str]],

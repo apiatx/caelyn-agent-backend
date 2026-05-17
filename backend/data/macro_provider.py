@@ -14,15 +14,6 @@ from typing import Any
 
 from data.cache import cache
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 # ── Cache TTLs ────────────────────────────────────────────────────────
@@ -161,8 +152,6 @@ class MacroProvider:
         return None
 
     # ── Dashboard ────────────────────────────────────────────────────
-
-    @traceable(name="macro.get_dashboard")
     async def get_dashboard(self) -> dict:
         """
         Hybrid dashboard: FMP real-time for market prices + FRED for economic releases.
@@ -478,8 +467,6 @@ class MacroProvider:
         }
 
     # ── Indicators ───────────────────────────────────────────────────
-
-    @traceable(name="macro.get_indicators")
     def get_indicators(self) -> dict:
         cache_key = "macro:indicators:v1"
         cached = cache.get(cache_key)
@@ -571,8 +558,6 @@ class MacroProvider:
         return result
 
     # ── Calendar ─────────────────────────────────────────────────────
-
-    @traceable(name="macro.get_calendar")
     async def get_calendar(self, days_ahead: int = 14) -> dict:
         """Upcoming economic events from Nasdaq free calendar API."""
         cache_key = f"macro:calendar:v1:{days_ahead}"
@@ -604,8 +589,6 @@ class MacroProvider:
         return result
 
     # ── History ──────────────────────────────────────────────────────
-
-    @traceable(name="macro.get_history")
     def get_history(self, indicator_slug: str, months: int = 12) -> dict:
         """Time-series data for charting."""
         cache_key = f"macro:history:{indicator_slug}:{months}"
@@ -642,8 +625,6 @@ class MacroProvider:
     # ══════════════════════════════════════════════════════════════════
 
     # ── RATES tab ─────────────────────────────────────────────────────
-
-    @traceable(name="macro.get_rates")
     async def get_rates(self) -> dict:
         """Full yield curve, Fed policy, and credit conditions."""
         cache_key = "macro:tab:rates:v3"
@@ -931,8 +912,6 @@ class MacroProvider:
         }
 
     # ── INFLATION tab ─────────────────────────────────────────────────
-
-    @traceable(name="macro.get_inflation")
     async def get_inflation(self) -> dict:
         """CPI, Core CPI, PCE, PPI, breakevens, sticky/trimmed measures — with components and oil."""
         cache_key = "macro:tab:inflation:v2"
@@ -1112,8 +1091,6 @@ class MacroProvider:
         }
 
     # ── GROWTH tab ────────────────────────────────────────────────────
-
-    @traceable(name="macro.get_growth")
     async def get_growth(self) -> dict:
         """GDP, ISM, retail sales, industrial production, consumer sentiment."""
         cache_key = "macro:tab:growth:v2"
@@ -1327,8 +1304,6 @@ class MacroProvider:
         }
 
     # ── LABOR tab ─────────────────────────────────────────────────────
-
-    @traceable(name="macro.get_labor")
     async def get_labor(self) -> dict:
         """NFP, unemployment, claims, wages, JOLTS, participation."""
         cache_key = "macro:tab:labor:v2"
@@ -1494,8 +1469,6 @@ class MacroProvider:
         }
 
     # ── RISK tab ──────────────────────────────────────────────────────
-
-    @traceable(name="macro.get_risk")
     async def get_risk(self) -> dict:
         """VIX, credit spreads, fear & greed, DXY, market breadth signals."""
         cache_key = "macro:tab:risk:v2"

@@ -6,15 +6,6 @@ technical indicators to Neon PostgreSQL for the agent's TA reference.
 import json
 from datetime import datetime, date
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 def _get_conn():
@@ -28,8 +19,6 @@ def _put_conn(conn):
 
 
 # ── Options History (EOD bars) ──────────────────────────────────────
-
-@traceable(name="options_store.upsert_bars")
 def upsert_options_bars(bars: list[dict]) -> int:
     """
     Upsert a batch of options daily bars.
@@ -86,9 +75,6 @@ def upsert_options_bars(bars: list[dict]) -> int:
         return 0
     finally:
         _put_conn(conn)
-
-
-@traceable(name="options_store.get_history")
 def get_options_history(
     underlying: str,
     option_type: str = None,
@@ -153,9 +139,6 @@ def get_options_history(
         return []
     finally:
         _put_conn(conn)
-
-
-@traceable(name="options_store.get_volume_summary")
 def get_options_volume_summary(
     underlying: str,
     days: int = 30,
@@ -204,8 +187,6 @@ def get_options_volume_summary(
 
 
 # ── Technical Indicators ─────────────────────────────────────────────
-
-@traceable(name="options_store.upsert_technicals")
 def upsert_technicals(rows: list[dict]) -> int:
     """
     Upsert technical indicator data points.
@@ -248,9 +229,6 @@ def upsert_technicals(rows: list[dict]) -> int:
         return 0
     finally:
         _put_conn(conn)
-
-
-@traceable(name="options_store.get_technicals")
 def get_technicals(
     ticker: str,
     indicator: str = None,
@@ -300,9 +278,6 @@ def get_technicals(
         return []
     finally:
         _put_conn(conn)
-
-
-@traceable(name="options_store.get_latest_technicals")
 def get_latest_technicals(ticker: str) -> dict:
     """
     Get the latest value for each indicator for a ticker.
@@ -343,8 +318,6 @@ def get_latest_technicals(ticker: str) -> dict:
 
 
 # ── Live Options Flow Snapshots ─────────────────────────────────────
-
-@traceable(name="options_store.store_flow_snapshots")
 def store_options_flow_snapshots(rows: list[dict]) -> int:
     """Persist lightweight live options flow snapshots for future history-based scoring."""
     if not rows:
@@ -398,9 +371,6 @@ def store_options_flow_snapshots(rows: list[dict]) -> int:
         return 0
     finally:
         _put_conn(conn)
-
-
-@traceable(name="options_store.get_contract_flow_summary")
 def get_contract_flow_history_summary(contract_symbol: str, days: int = 30) -> dict:
     """Return recent snapshot summary for a contract to support repeated flow and IV history."""
     if not contract_symbol:
@@ -463,8 +433,6 @@ def get_contract_flow_history_summary(contract_symbol: str, days: int = 30) -> d
 
 
 # ── Fetch Progress Tracking ──────────────────────────────────────────
-
-@traceable(name="options_store.get_fetch_progress")
 def get_fetch_progress(ticker: str = None) -> list[dict] | dict | None:
     """Get fetch progress for one or all tickers."""
     conn = _get_conn()
@@ -511,9 +479,6 @@ def get_fetch_progress(ticker: str = None) -> list[dict] | dict | None:
         return [] if ticker is None else None
     finally:
         _put_conn(conn)
-
-
-@traceable(name="options_store.update_fetch_progress")
 def update_fetch_progress(
     ticker: str,
     status: str,
@@ -551,8 +516,6 @@ def update_fetch_progress(
 
 
 # ── Aggregate Queries for Agent ──────────────────────────────────────
-
-@traceable(name="options_store.get_iv_history")
 def get_iv_history(underlying: str, days: int = 90) -> list[dict]:
     """
     Get implied volatility history by aggregating option close prices over time.
@@ -595,9 +558,6 @@ def get_iv_history(underlying: str, days: int = 90) -> list[dict]:
         return []
     finally:
         _put_conn(conn)
-
-
-@traceable(name="options_store.get_data_coverage")
 def get_data_coverage() -> dict:
     """Get summary of data coverage across all stored options data."""
     conn = _get_conn()

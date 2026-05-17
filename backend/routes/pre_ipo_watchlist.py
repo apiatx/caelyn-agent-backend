@@ -19,15 +19,6 @@ from typing import Any, Optional
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import JSONResponse
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 router = APIRouter(tags=["pre_ipo_watchlist"])
 
@@ -388,7 +379,6 @@ def _normalize_response(payload: Any) -> dict[str, Any]:
 
 
 @router.get("/api/calendar/pre-ipo-watchlist")
-@traceable(name="pre_ipo_watchlist.endpoint")
 async def pre_ipo_watchlist(
     request: Request,
     api_key: str = Header(None, alias=_AUTH_HEADER),

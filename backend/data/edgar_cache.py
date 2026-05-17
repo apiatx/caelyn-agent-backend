@@ -15,15 +15,6 @@ import time
 import asyncio
 from datetime import datetime, timezone, timedelta
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "edgar_disk_cache")
@@ -41,23 +32,14 @@ INSIDER_MAX_AGE = 300           # 5 minutes — real-time critical
 
 # CST = UTC-6
 CST = timezone(timedelta(hours=-6))
-
-
-@traceable(name="edgar_cache.ensure_dir")
 def _ensure_dir():
     os.makedirs(CACHE_DIR, exist_ok=True)
-
-
-@traceable(name="edgar_cache.load_json")
 def _load_json(path: str) -> dict:
     try:
         with open(path, "r") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
-
-
-@traceable(name="edgar_cache.save_json")
 def _save_json(path: str, data: dict):
     _ensure_dir()
     tmp = path + ".tmp"
@@ -67,15 +49,10 @@ def _save_json(path: str, data: dict):
 
 
 # ── Ticker Universe ──────────────────────────────────────────
-
-@traceable(name="edgar_cache.get_universe")
 def get_universe() -> list[str]:
     """Get the list of tickers to refresh nightly."""
     data = _load_json(UNIVERSE_FILE)
     return list(data.get("tickers", {}).keys())
-
-
-@traceable(name="edgar_cache.add_to_universe")
 def add_to_universe(tickers: list[str]):
     """Add tickers to the universe (called on every user query)."""
     if not tickers:
@@ -94,8 +71,6 @@ def add_to_universe(tickers: list[str]):
 
 
 # ── Disk Cache Read/Write ────────────────────────────────────
-
-@traceable(name="edgar_cache.get_cached")
 def get_cached(cache_file: str, ticker: str, max_age: float) -> dict | None:
     """Read a ticker's cached data if it exists and isn't stale."""
     data = _load_json(cache_file)
@@ -106,18 +81,12 @@ def get_cached(cache_file: str, ticker: str, max_age: float) -> dict | None:
     if time.time() - cached_at > max_age:
         return None
     return entry
-
-
-@traceable(name="edgar_cache.set_cached")
 def set_cached(cache_file: str, ticker: str, value: dict):
     """Write a ticker's data to the disk cache."""
     data = _load_json(cache_file)
     value["_cached_at"] = time.time()
     data[ticker.upper()] = value
     _save_json(cache_file, data)
-
-
-@traceable(name="edgar_cache.bulk_set_cached")
 def bulk_set_cached(cache_file: str, entries: dict[str, dict]):
     """Write multiple tickers at once (used by background jobs)."""
     data = _load_json(cache_file)
@@ -129,36 +98,23 @@ def bulk_set_cached(cache_file: str, entries: dict[str, dict]):
 
 
 # ── Public Cache Accessors ───────────────────────────────────
-
-@traceable(name="edgar_cache.get_financials")
 def get_financials(ticker: str) -> dict | None:
     return get_cached(FINANCIALS_FILE, ticker, FINANCIALS_MAX_AGE)
-
-
-@traceable(name="edgar_cache.get_filings")
 def get_filings(ticker: str) -> list | None:
     entry = get_cached(FILINGS_FILE, ticker, FILINGS_MAX_AGE)
     if entry is None:
         return None
     return entry.get("filings", [])
-
-
-@traceable(name="edgar_cache.get_catalysts")
 def get_catalysts(ticker: str) -> list | None:
     entry = get_cached(CATALYSTS_FILE, ticker, CATALYSTS_MAX_AGE)
     if entry is None:
         return None
     return entry.get("catalysts", [])
-
-
-@traceable(name="edgar_cache.get_insider")
 def get_insider(ticker: str) -> dict | None:
     return get_cached(INSIDER_FILE, ticker, INSIDER_MAX_AGE)
 
 
 # ── Background Refresh Job ───────────────────────────────────
-
-@traceable(name="edgar_cache.refresh_universe")
 async def refresh_universe(sec_edgar, mode: str = "full"):
     """
     Refresh EDGAR data for all tickers in the universe.
@@ -242,16 +198,10 @@ async def refresh_universe(sec_edgar, mode: str = "full"):
         f"{len(catalysts_batch)} catalysts, {len(insider_batch)} insider | "
         f"{errors} errors | {elapsed}s | {len(tickers)} tickers"
     )
-
-
-@traceable(name="edgar_cache.is_midnight_cst")
 def is_midnight_cst() -> bool:
     """Check if current time is within the midnight CST refresh window (00:00-00:05)."""
     now_cst = datetime.now(CST)
     return now_cst.hour == 0 and now_cst.minute < 5
-
-
-@traceable(name="edgar_cache.is_market_hours")
 def is_market_hours() -> bool:
     """Check if within extended market hours (7am-8pm EST, weekdays)."""
     est = timezone(timedelta(hours=-5))

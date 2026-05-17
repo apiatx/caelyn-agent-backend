@@ -47,7 +47,6 @@ except Exception:  # pragma: no cover — defensive
     MODEL_SONAR = "sonar"
 
 try:
-    from langsmith import traceable
 except ImportError:  # pragma: no cover
     def traceable(*args, **kwargs):
         def _noop(fn):
@@ -1656,8 +1655,6 @@ def _payload_has_companies(p: Any) -> bool:
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
-
-@traceable(name="pre_ipo_watchlist.get")
 async def get_pre_ipo_watchlist(refresh: bool = False) -> dict[str, Any]:
     """
     Return the cached pre-IPO watchlist payload, refreshing if stale.

@@ -1,15 +1,6 @@
 import httpx
 from bs4 import BeautifulSoup
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 
@@ -29,8 +20,6 @@ class OptionsScraper:
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-
-    @traceable(name="get_unusual_options_activity")
     async def get_unusual_options_activity(self) -> list:
         """
         Get stocks with unusual options activity from Barchart.
@@ -72,8 +61,6 @@ class OptionsScraper:
         except Exception as e:
             print(f"Options unusual activity scraper error: {e}")
             return []
-
-    @traceable(name="get_options_volume_leaders")
     async def get_options_volume_leaders(self) -> list:
         """Get stocks with the highest options volume today."""
         try:
@@ -108,8 +95,6 @@ class OptionsScraper:
         except Exception as e:
             print(f"Options volume leaders scraper error: {e}")
             return []
-
-    @traceable(name="get_put_call_ratio")
     async def get_put_call_ratio(self, ticker: str) -> dict:
         """
         Get put/call ratio data for a specific ticker from Barchart.
@@ -165,8 +150,6 @@ class OptionsScraper:
         except Exception as e:
             print(f"Put/call ratio error for {ticker}: {e}")
             return {"ticker": ticker, "error": str(e)}
-
-    @traceable(name="interpret_flow")
     def interpret_flow(self, unusual_activity: list) -> dict:
         """
         Analyze unusual options activity to identify directional signals.

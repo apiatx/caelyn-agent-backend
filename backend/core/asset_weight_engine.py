@@ -1,13 +1,4 @@
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 """
 Cross-Asset Weight Engine.
@@ -94,9 +85,6 @@ REGIME_WEIGHTS = {
         "sector_boosts": {},
     },
 }
-
-
-@traceable(name="asset_weight_engine.compute_avg_dollar_volume")
 def compute_avg_dollar_volume(asset_data: dict) -> float:
     snapshot = asset_data.get("snapshot", {})
     details = asset_data.get("details", {})
@@ -108,18 +96,12 @@ def compute_avg_dollar_volume(asset_data: dict) -> float:
         except (TypeError, ValueError):
             pass
     return 0.0
-
-
-@traceable(name="asset_weight_engine.get_liquidity_tier")
 def get_liquidity_tier(avg_dollar_volume: float) -> str:
     if avg_dollar_volume >= 20_000_000:
         return "high"
     elif avg_dollar_volume >= 2_000_000:
         return "medium"
     return "low"
-
-
-@traceable(name="asset_weight_engine.get_mcap_tier")
 def get_mcap_tier(market_cap) -> str:
     if market_cap is None:
         return "micro"
@@ -134,9 +116,6 @@ def get_mcap_tier(market_cap) -> str:
     elif mc < 2_000_000_000:
         return "small"
     return "large"
-
-
-@traceable(name="asset_weight_engine.apply_asset_weights")
 def apply_asset_weights(raw_score: float, asset_metadata: dict, regime: str) -> dict:
     regime_config = REGIME_WEIGHTS.get(regime, REGIME_WEIGHTS["neutral"])
     asset_class = asset_metadata.get("asset_class", "equity").lower()

@@ -3,15 +3,6 @@ import threading
 import requests
 from datetime import datetime, timedelta
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 
@@ -22,8 +13,6 @@ class TwelveDataProvider:
         self._rate_lock = threading.Lock()
         self._call_times = []
         self._max_per_minute = 8
-
-    @traceable(name="check_rate_limit")
     def _check_rate_limit(self) -> bool:
         with self._rate_lock:
             now = time.time()
@@ -32,8 +21,6 @@ class TwelveDataProvider:
                 return False
             self._call_times.append(now)
             return True
-
-    @traceable(name="get_daily_bars")
     def get_daily_bars(self, symbol: str, days: int = 120) -> list:
         symbol = symbol.upper()
 

@@ -2,15 +2,6 @@ import asyncio
 import httpx
 from data.cache import cache, FMP_TTL
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 class FMPProvider:
@@ -28,8 +19,6 @@ class FMPProvider:
 
     def __init__(self, api_key: str):
         self.api_key = api_key
-
-    @traceable(name="fmp_get_stable")
     async def _get_stable(self, endpoint: str, params: dict = None) -> dict | list:
         """Make a GET request to FMP stable API."""
         cache_key = f"fmp:stable:{endpoint}:{str(params)[:80]}"
@@ -59,8 +48,6 @@ class FMPProvider:
         except Exception as e:
             print(f"[FMP] stable/{endpoint} failed: {e}")
             return []
-
-    @traceable(name="get_quote")
     async def get_quote(self, symbol: str) -> dict:
         """Single symbol quote. Returns backward-compat keys matching v3 shape."""
         data = await self._get_stable("quote", {"symbol": symbol.upper()})
@@ -87,8 +74,6 @@ class FMPProvider:
                 "marketCap": item.get("marketCap"),
             }
         return {}
-
-    @traceable(name="get_gainers_losers")
     async def get_gainers_losers(self) -> dict:
         """Get top gaining and losing stocks today (combined)."""
         gainers, losers = await asyncio.gather(
@@ -100,8 +85,6 @@ class FMPProvider:
             "gainers": gainers if not isinstance(gainers, Exception) else [],
             "losers": losers if not isinstance(losers, Exception) else [],
         }
-
-    @traceable(name="get_stock_market_gainers")
     async def get_stock_market_gainers(self) -> list:
         """Get top gaining stocks today."""
         data = await self._get_stable("biggest-gainers")
@@ -116,8 +99,6 @@ class FMPProvider:
                     "source": "fmp_gainers",
                 })
         return results
-
-    @traceable(name="get_stock_market_losers")
     async def get_stock_market_losers(self) -> list:
         """Get top losing stocks today."""
         data = await self._get_stable("biggest-losers")
@@ -132,8 +113,6 @@ class FMPProvider:
                     "source": "fmp_losers",
                 })
         return results
-
-    @traceable(name="get_stock_market_actives")
     async def get_stock_market_actives(self) -> list:
         """Get most active stocks by volume today."""
         data = await self._get_stable("most-actives")
@@ -149,8 +128,6 @@ class FMPProvider:
                     "source": "fmp_actives",
                 })
         return results
-
-    @traceable(name="get_market_news")
     async def get_market_news(self, limit: int = 20) -> list:
         """Get general market news."""
         data = await self._get_stable("news/general-latest", {"limit": limit})
@@ -168,8 +145,6 @@ class FMPProvider:
                     "url": item.get("url", ""),
                 })
         return results
-
-    @traceable(name="get_stock_news")
     async def get_stock_news(self, ticker: str, limit: int = 5) -> list:
         """Get news for a specific stock."""
         data = await self._get_stable("news/stock", {"symbols": ticker.upper(), "limit": limit})
@@ -187,8 +162,6 @@ class FMPProvider:
                     "url": item.get("url", ""),
                 })
         return results
-
-    @traceable(name="get_company_profile")
     async def get_company_profile(self, ticker: str) -> dict:
         """
         Get company profile from FMP stable API.
@@ -211,8 +184,6 @@ class FMPProvider:
                 "description": item.get("description", ""),
             }
         return {}
-
-    @traceable(name="get_stock_peers")
     async def get_stock_peers(self, ticker: str) -> list:
         """
         Get peer companies for a stock.
@@ -228,8 +199,6 @@ class FMPProvider:
                 if sym:
                     symbols.append(sym)
         return symbols
-
-    @traceable(name="get_earnings_history")
     async def get_earnings_history(self, ticker: str, limit: int = 8) -> list:
         """
         Per-ticker earnings history + upcoming via stable/earnings.
@@ -267,8 +236,6 @@ class FMPProvider:
                 "source": "fmp",
             })
         return results
-
-    @traceable(name="get_income_statement")
     async def get_income_statement(self, ticker: str, limit: int = 4, period: str = "quarter") -> list:
         """
         Per-ticker income statement (quarterly or annual) via stable/income-statement.
@@ -300,8 +267,6 @@ class FMPProvider:
                 "source": "fmp",
             })
         return results
-
-    @traceable(name="get_earnings_enrichment")
     async def get_earnings_enrichment(self, ticker: str) -> dict:
         """
         Hybrid earnings enrichment object: combines stable/earnings (event-level EPS+revenue)
@@ -320,21 +285,15 @@ class FMPProvider:
             "income_statements": income_data if isinstance(income_data, list) else [],
             "source": "fmp_stable",
         }
-
-    @traceable(name="get_forex_quotes")
     async def get_forex_quotes(self) -> list:
         """Get forex quotes. Returns empty list — DXY requires premium plan."""
         return []
-
-    @traceable(name="get_dxy")
     async def get_dxy(self) -> dict:
         """
         Get US Dollar Index approximation.
         DX-Y.NYB requires FMP premium. Returns empty dict — FRED covers this.
         """
         return {"symbol": "DXY", "error": "Premium symbol — use FRED"}
-
-    @traceable(name="get_commodity_quotes")
     async def get_commodity_quotes(self) -> list:
         """
         Get commodity quotes via ETF proxies (futures not available on Starter).
@@ -359,8 +318,6 @@ class FMPProvider:
                     "changesPercentage": res.get("changesPercentage"),
                 })
         return out
-
-    @traceable(name="get_key_commodities")
     async def get_key_commodities(self) -> dict:
         """
         Key commodity prices via ETF proxies (futures not on Starter plan).
@@ -386,18 +343,12 @@ class FMPProvider:
                     "day_low": res.get("dayLow"),
                 }
         return result
-
-    @traceable(name="get_sector_performance")
     async def get_sector_performance(self) -> list:
         """Sector performance — not available on FMP Starter stable API. Returns []."""
         return []
-
-    @traceable(name="get_sector_performance_historical")
     async def get_sector_performance_historical(self) -> list:
         """Historical sector performance — not available on Starter. Returns []."""
         return []
-
-    @traceable(name="get_etf_quotes")
     async def get_etf_quotes(self, symbols: list) -> dict:
         """
         Get quotes for a list of ETF/stock symbols.
@@ -420,8 +371,6 @@ class FMPProvider:
                     "market_cap": res.get("marketCap"),
                 }
         return result
-
-    @traceable(name="get_sector_etf_snapshot")
     async def get_sector_etf_snapshot(self) -> dict:
         """
         Sector rotation snapshot using sector ETFs via stable quote.
@@ -438,8 +387,6 @@ class FMPProvider:
             "etf_quotes": quotes,
             "sector_performance": [],
         }
-
-    @traceable(name="get_economic_calendar")
     async def get_economic_calendar(self, from_date: str = None, to_date: str = None) -> list:
         """
         Get upcoming economic events (CPI, PPI, FOMC, NFP, etc.).
@@ -451,8 +398,6 @@ class FMPProvider:
         if to_date:
             params["to"] = to_date
         return await self._get_stable("economic-calendar", params)
-
-    @traceable(name="get_upcoming_economic_events")
     async def get_upcoming_economic_events(self) -> list:
         """Get economic events for the next 7 days."""
         from datetime import datetime, timedelta
@@ -496,8 +441,6 @@ class FMPProvider:
             "high_impact_events": important_events[:15],
             "other_us_events": other_events[:10],
         }
-
-    @traceable(name="get_market_indices")
     async def get_market_indices(self) -> dict:
         """Get major market index quotes via stable/quote."""
         symbol_map = {
@@ -520,8 +463,6 @@ class FMPProvider:
                     "change_pct": res.get("changesPercentage"),
                 }
         return result
-
-    @traceable(name="get_treasury_rates")
     async def get_treasury_rates(self) -> dict:
         """Get current Treasury yields from stable/treasury-rates."""
         data = await self._get_stable("treasury-rates")
@@ -542,8 +483,6 @@ class FMPProvider:
                 "year_30": latest.get("year30"),
             }
         return {}
-
-    @traceable(name="get_macro_market_data")
     async def get_macro_market_data(self) -> dict:
         """
         Full macro market data snapshot.
@@ -569,8 +508,6 @@ class FMPProvider:
             "sector_performance": sector_perf if not isinstance(sector_perf, Exception) else [],
             "economic_calendar": econ_events if not isinstance(econ_events, Exception) else {},
         }
-
-    @traceable(name="get_full_commodity_dashboard")
     async def get_full_commodity_dashboard(self) -> dict:
         """
         Commodity market snapshot using ETF proxies (futures not on Starter).
@@ -593,8 +530,6 @@ class FMPProvider:
             "metals_etfs": metal_etfs if not isinstance(metal_etfs, Exception) else {},
             "agriculture_etfs": agri_etfs if not isinstance(agri_etfs, Exception) else {},
         }
-
-    @traceable(name="get_economic_calendar_nasdaq")
     async def get_economic_calendar_nasdaq(self, days_ahead: int = 7) -> list:
         """
         Get upcoming US economic events for the next N days.
@@ -614,8 +549,6 @@ class FMPProvider:
             "ism", "manufacturing", "housing", "home sales",
             "trade balance", "treasury", "powell",
         ]
-
-        @traceable(name="clean")
         def clean(v):
             if not v:
                 return None
@@ -659,8 +592,6 @@ class FMPProvider:
         if result:
             cache.set(cache_key, result, FMP_TTL)
         return result
-
-    @traceable(name="get_commodity_historical")
     async def get_commodity_historical(self, symbol: str, days: int = 30) -> list:
         """
         Historical commodity prices — not available on FMP Starter stable API.

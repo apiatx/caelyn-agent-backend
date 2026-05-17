@@ -25,12 +25,6 @@ import httpx
 
 from data.cache import cache
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*a, **kw):
-        def _d(fn): return fn
-        return _d if not (a and callable(a[0])) else a[0]
 
 # ─── Asset-class taxonomy ─────────────────────────────────────────────────────
 
@@ -358,8 +352,6 @@ class CaelynTerminalProvider:
             if h.get("ticker")
         )
         return hashlib.md5(json.dumps(parts).encode()).hexdigest()[:16]
-
-    @traceable(name="caelyn_terminal.get")
     async def get(self, portfolio_file: Path) -> dict:
         cache_key = self.cache_key_for(portfolio_file)
         cached = cache.get(cache_key)

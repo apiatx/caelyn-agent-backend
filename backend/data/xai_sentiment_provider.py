@@ -13,15 +13,6 @@ import httpx
 import asyncio
 import re
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 
@@ -39,8 +30,6 @@ class XAISentimentProvider:
             "Authorization": f"Bearer {api_key}",
             "User-Agent": "CaelynAgent/1.0",
         }
-
-    @traceable(name="get_ticker_sentiment")
     async def get_ticker_sentiment(self, ticker: str, asset_type: str = "stock") -> dict:
         """
         Get X/Twitter sentiment for a single ticker.
@@ -89,8 +78,6 @@ HIGH-VALUE SIGNAL PRIORITIES (look for these specifically):
 - Stage transition: Is there technical analysis discussion about the stock breaking out of a long base (months of consolidation followed by volume surge)?"""
 
         return await self._call_grok_with_x_search(prompt)
-
-    @traceable(name="get_batch_sentiment")
     async def get_batch_sentiment(self, tickers: list, asset_type: str = "stock") -> dict:
         """
         Get X sentiment for multiple tickers. Runs concurrently in batches.
@@ -114,8 +101,6 @@ HIGH-VALUE SIGNAL PRIORITIES (look for these specifically):
                 await asyncio.sleep(1.0)
 
         return results
-
-    @traceable(name="get_trending_tickers")
     async def get_trending_tickers(
         self,
         asset_type: str = "stock",
@@ -276,8 +261,6 @@ ALPHA SIGNAL PRIORITIES (weight these higher when found):
 - SERIAL ACQUIRERS: Companies buying assets at 5x EBITDA and revalued by market at 15x — the M&A arbitrage play. If X is discussing an active acquisition strategy, flag it."""
 
         return await self._call_grok_with_x_search(prompt, use_deep_model=True)
-
-    @traceable(name="compare_sentiment")
     async def compare_sentiment(self, tickers: list) -> dict:
         """Compare X sentiment head-to-head across multiple tickers."""
         tickers_str = ", ".join([f"${t}" for t in tickers])
@@ -305,8 +288,6 @@ Compare the sentiment and buzz level for each. Return ONLY a JSON object:
 Be direct. Which of these does X like best right now and why?"""
 
         return await self._call_grok_with_x_search(prompt)
-
-    @traceable(name="get_watchlist_social_momentum")
     async def get_watchlist_social_momentum(self, tickers: list, watchlist_context: str = "") -> dict:
         """
         Deep social momentum scan on X for a specific watchlist of tickers.
@@ -365,8 +346,6 @@ Be direct. Which of these does X like best right now and why?"""
             "grok_analysis": combined,
             "errors": errors if errors else None,
         }
-
-    @traceable(name="scan_watchlist_batch")
     async def _scan_watchlist_batch(self, tickers: list, batch_num: int, total_batches: int, context_block: str) -> dict:
         """
         Scan a single batch of tickers on X. Uses a natural, less constrained prompt
@@ -416,8 +395,6 @@ Return your analysis as a clear report. Start with the highest social momentum t
             use_deep_model=True,
             x_search_config={"from_date": from_date},
         )
-
-    @traceable(name="run_x_social_scan")
     async def run_x_social_scan(self, mode: str, query: str = "", constraints: dict = None) -> dict:
         """
         Unified entry point for x_social_scan module.
@@ -604,8 +581,6 @@ Return ONLY a JSON object matching this exact schema:
             return result
 
         return {"error": f"Unknown x_social_scan mode: {mode}", "_scan_mode": mode}
-
-    @traceable(name="validate_cross_asset_schema")
     def _validate_cross_asset_schema(self, data: dict) -> tuple[bool, list]:
         errors = []
         required_keys = ["as_of_utc", "market_direction_call", "sector_focus",
@@ -638,8 +613,6 @@ Return ONLY a JSON object matching this exact schema:
             errors.append(f"data_quality_flag must be high/medium/low, got: {dqf}")
 
         return (len(errors) == 0, errors)
-
-    @traceable(name="get_market_mood_snapshot")
     async def get_market_mood_snapshot(self) -> dict:
         from data.cache import cache
 
@@ -669,8 +642,6 @@ Keep it tight. This is a mood check, not a full scan."""
             cache.set(cache_key, result, 180)
 
         return result
-
-    @traceable(name="get_thematic_conviction_ideas")
     async def get_thematic_conviction_ideas(self) -> dict:
         """
         Ask Grok to identify the highest-conviction long-term investment ideas
@@ -745,8 +716,6 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
                 except Exception:
                     pass
         return {"thematic_leaders": [], "summary": "Grok thematic scan unavailable", "error": True}
-
-    @traceable(name="call_grok_with_x_search")
     async def _call_grok_with_x_search(
         self,
         prompt: str,
@@ -821,8 +790,6 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
         except Exception as e:
             print(f"[XAI] Error: {e}")
             return {"error": str(e)}
-
-    @traceable(name="extract_text")
     def _extract_text(self, data: dict) -> str:
         """Extract text content from xAI Responses API output."""
         output = data.get("output", [])
@@ -835,8 +802,6 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
                     elif content_block.get("type") == "text":
                         texts.append(content_block.get("text", ""))
         return "\n".join(texts).strip()
-
-    @traceable(name="parse_json_response")
     def _parse_json_response(self, text: str) -> dict:
         """Parse JSON from Grok's response, handling various formats."""
         try:

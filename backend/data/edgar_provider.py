@@ -1,15 +1,6 @@
 import httpx
 from datetime import datetime, timedelta
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 
@@ -33,8 +24,6 @@ class EdgarProvider:
         "User-Agent": "TradingAgent/1.0 (apixbt@gmail.com)",
         "Accept": "application/json",
     }
-
-    @traceable(name="get_cik")
     def _get_cik(self, ticker: str) -> str:
         """Convert a ticker symbol to a CIK number (SEC's company ID)."""
         ticker = ticker.upper()
@@ -51,8 +40,6 @@ class EdgarProvider:
         except Exception as e:
             print(f"EDGAR CIK lookup error for {ticker}: {e}")
         return None
-
-    @traceable(name="get_recent_filings")
     async def get_recent_filings(self, ticker: str, filing_type: str = None) -> list:
         """
         Get recent SEC filings for a company.
@@ -116,8 +103,6 @@ class EdgarProvider:
         except Exception as e:
             print(f"EDGAR filings error for {ticker}: {e}")
             return [{"error": str(e)}]
-
-    @traceable(name="get_8k_filings")
     async def get_8k_filings(self, ticker: str) -> list:
         """
         Get recent 8-K filings — these are MATERIAL EVENTS.
@@ -127,16 +112,12 @@ class EdgarProvider:
         This is often the fastest way to find out WHY a stock moved.
         """
         return await self.get_recent_filings(ticker, filing_type="8-K")
-
-    @traceable(name="get_insider_filings")
     async def get_insider_filings(self, ticker: str) -> list:
         """
         Get Form 4 filings — insider buy/sell transactions.
         Supplements Finnhub's insider data with direct SEC source.
         """
         return await self.get_recent_filings(ticker, filing_type="4")
-
-    @traceable(name="get_institutional_holders")
     async def get_institutional_holders(self, ticker: str) -> dict:
         """
         Get institutional ownership data from company facts.
@@ -227,8 +208,6 @@ class EdgarProvider:
         except Exception as e:
             print(f"EDGAR institutional data error for {ticker}: {e}")
             return {"ticker": ticker, "error": str(e)}
-
-    @traceable(name="get_company_summary")
     async def get_company_summary(self, ticker: str) -> dict:
         """
         Get a combined summary: recent material filings + key financials.
@@ -253,8 +232,6 @@ class EdgarProvider:
             "recent_filing_types": recent_filing_types,
             "most_recent_filing": recent_all[0] if recent_all else None,
         }
-
-    @traceable(name="search_filings")
     async def search_filings(self, query: str, date_range: str = None) -> list:
         """
         Full-text search across all SEC filings.

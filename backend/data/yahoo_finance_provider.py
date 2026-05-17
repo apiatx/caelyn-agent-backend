@@ -21,13 +21,6 @@ import urllib.request
 from datetime import datetime
 from typing import Optional
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn): return fn
-        if args and callable(args[0]): return args[0]
-        return _noop
 
 _YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -125,8 +118,6 @@ class YahooFinanceProvider:
     DXY_SYMBOL = "DX-Y.NYB"
 
     # ── DXY ──────────────────────────────────────────────────────────────
-
-    @traceable(name="yahoo.get_dxy")
     async def get_dxy(self) -> dict:
         """Fetch the live DXY quote (backward-compatible return shape)."""
         raw = await asyncio.to_thread(
@@ -136,8 +127,6 @@ class YahooFinanceProvider:
         # Re-expose under the old key names expected by downstream callers
         q["change_pct"] = q.get("change_pct")   # already set
         return q
-
-    @traceable(name="yahoo.get_dxy_history")
     async def get_dxy_history(self, days: int = 252) -> list:
         """Fetch DXY daily close history. Returns [{date, value}, …]."""
         range_map = {252: "1y", 504: "2y", 756: "3y", 1260: "5y"}
@@ -156,8 +145,6 @@ class YahooFinanceProvider:
         return [{"date": b["date"], "value": round(b["close"], 3)} for b in bars]
 
     # ── Generic quote ─────────────────────────────────────────────────────
-
-    @traceable(name="yahoo.get_quote")
     async def get_quote(self, yahoo_symbol: str, display_symbol: str | None = None) -> dict:
         """
         Fetch a quote for any Yahoo Finance ticker.
@@ -174,8 +161,6 @@ class YahooFinanceProvider:
         return _parse_quote(raw, label)
 
     # ── Generic history ───────────────────────────────────────────────────
-
-    @traceable(name="yahoo.get_history")
     async def get_history(
         self,
         yahoo_symbol: str,

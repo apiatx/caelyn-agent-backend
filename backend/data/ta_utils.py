@@ -1,13 +1,4 @@
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 """
 Local Technical Analysis Computation Utility.
@@ -16,9 +7,6 @@ Computes RSI, MACD, SMA, EMA from raw OHLC bar data.
 No external API calls — pure math on price arrays.
 Used by Finnhub candles (primary) and Polygon bars (fallback).
 """
-
-
-@traceable(name="ta_utils.compute_ema")
 def compute_ema(data: list[float], period: int) -> float | None:
     if not data or len(data) < period:
         return None
@@ -27,9 +15,6 @@ def compute_ema(data: list[float], period: int) -> float | None:
     for price in data[period:]:
         ema_val = (price - ema_val) * multiplier + ema_val
     return ema_val
-
-
-@traceable(name="ta_utils.compute_ema_series")
 def compute_ema_series(data: list[float], period: int) -> list[float]:
     if not data or len(data) < period:
         return []
@@ -40,16 +25,10 @@ def compute_ema_series(data: list[float], period: int) -> list[float]:
         ema_val = (price - ema_val) * multiplier + ema_val
         result.append(ema_val)
     return result
-
-
-@traceable(name="ta_utils.compute_sma")
 def compute_sma(data: list[float], period: int) -> float | None:
     if not data or len(data) < period:
         return None
     return sum(data[-period:]) / period
-
-
-@traceable(name="ta_utils.compute_rsi")
 def compute_rsi(closes: list[float], period: int = 14) -> float | None:
     if not closes or len(closes) < period + 1:
         return None
@@ -63,9 +42,6 @@ def compute_rsi(closes: list[float], period: int = 14) -> float | None:
         return 100.0
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
-
-
-@traceable(name="ta_utils.compute_macd")
 def compute_macd(closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict:
     result = {"macd": None, "macd_signal": None, "macd_histogram": None}
     if not closes or len(closes) < slow + signal:
@@ -96,9 +72,6 @@ def compute_macd(closes: list[float], fast: int = 12, slow: int = 26, signal: in
         "macd_signal": macd_signal_val,
         "macd_histogram": macd_hist,
     }
-
-
-@traceable(name="ta_utils.compute_technicals_from_bars")
 def compute_technicals_from_bars(bars: list[dict]) -> dict:
     """
     Compute full technical indicator set from OHLCV bar data.

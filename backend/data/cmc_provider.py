@@ -13,15 +13,6 @@ CMC complements CoinGecko by providing:
 import httpx
 from data.cache import cache
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 CMC_CACHE_TTL = 120
@@ -36,8 +27,6 @@ class CMCProvider:
             "X-CMC_PRO_API_KEY": api_key,
             "Accept": "application/json",
         }
-
-    @traceable(name="get")
     async def _get(self, endpoint: str, params: dict = None) -> dict:
         if params is None:
             params = {}
@@ -67,8 +56,6 @@ class CMCProvider:
         except Exception as e:
             print(f"CMC request failed ({endpoint}): {e}")
             return {}
-
-    @traceable(name="get_listings_latest")
     async def get_listings_latest(self, limit: int = 30) -> list:
         """
         Top coins by market cap with latest market data.
@@ -85,8 +72,6 @@ class CMCProvider:
             "sort_dir": "desc",
         })
         return resp.get("data", [])
-
-    @traceable(name="get_quotes")
     async def get_quotes(self, symbols: list) -> dict:
         """
         Get latest quotes for specific coins by symbol.
@@ -99,8 +84,6 @@ class CMCProvider:
             "convert": "USD",
         })
         return resp.get("data", {})
-
-    @traceable(name="get_coin_info")
     async def get_coin_info(self, symbols: list) -> dict:
         """
         Metadata for specific coins: description, logo, tags, platform,
@@ -114,8 +97,6 @@ class CMCProvider:
             "symbol": ",".join(symbols[:20]),
         })
         return resp.get("data", {})
-
-    @traceable(name="get_trending_latest")
     async def get_trending_latest(self) -> list:
         """
         Most searched/trending coins on CMC right now.
@@ -128,8 +109,6 @@ class CMCProvider:
             "convert": "USD",
         })
         return resp.get("data", [])
-
-    @traceable(name="get_trending_gainers_losers")
     async def get_trending_gainers_losers(self, time_period: str = "24h") -> dict:
         """
         Top gainers and losers by % change.
@@ -145,8 +124,6 @@ class CMCProvider:
         gainers = [d for d in data if isinstance(d, dict) and d.get("quote", {}).get("USD", {}).get("percent_change_24h", 0) > 0]
         losers = [d for d in data if isinstance(d, dict) and d.get("quote", {}).get("USD", {}).get("percent_change_24h", 0) < 0]
         return {"gainers": gainers, "losers": losers}
-
-    @traceable(name="get_most_visited")
     async def get_most_visited(self) -> list:
         """
         Most visited coin pages on CMC.
@@ -160,8 +137,6 @@ class CMCProvider:
             "convert": "USD",
         })
         return resp.get("data", [])
-
-    @traceable(name="get_new_listings")
     async def get_new_listings(self) -> list:
         """
         Recently listed coins on CMC.
@@ -176,8 +151,6 @@ class CMCProvider:
             "sort_dir": "desc",
         })
         return resp.get("data", [])
-
-    @traceable(name="get_categories")
     async def get_categories(self) -> list:
         """
         All crypto categories with market cap data.
@@ -188,8 +161,6 @@ class CMCProvider:
             "limit": 30,
         })
         return resp.get("data", [])
-
-    @traceable(name="get_global_metrics")
     async def get_global_metrics(self) -> dict:
         """
         Global market overview: total market cap, BTC dominance,
@@ -200,8 +171,6 @@ class CMCProvider:
             "convert": "USD",
         })
         return resp.get("data", {})
-
-    @traceable(name="get_full_dashboard")
     async def get_full_dashboard(self) -> dict:
         """
         Pull all free-tier CMC data in parallel.

@@ -31,15 +31,6 @@ from data.options_history_store import (
     get_options_volume_summary,
 )
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 class _TradierCountingProxy:
@@ -130,8 +121,6 @@ class TradierFlowEngine(OptionsFlowEngine):
         self.last_tradier_req_per_min: float = 0.0
 
     # ── Live scan ──────────────────────────────────────────────────────
-
-    @traceable(name="tradier_flow_engine.run_live_scan")
     async def run_live_scan(
         self,
         seed_tickers: list[str] | None = None,
@@ -184,8 +173,6 @@ class TradierFlowEngine(OptionsFlowEngine):
             )
 
     # ── Prefilter (unchanged — uses Finviz/FMP/Finnhub/FRED) ─────────
-
-    @traceable(name="tradier_flow_engine.build_prefilter_snapshot")
     async def build_prefilter_snapshot(
         self,
         seed_tickers: list[str] | None = None,

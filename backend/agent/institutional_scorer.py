@@ -22,15 +22,6 @@ from core.asset_weight_engine import (
     get_liquidity_tier, get_mcap_tier,
 )
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 MCAP_SMALL_CEILING = 2_000_000_000
@@ -119,9 +110,6 @@ REGIME_MAX_PCT = {
     "inflationary": 5.0,
     "neutral": 5.0,
 }
-
-
-@traceable(name="institutional_scorer.compute_technical_score")
 def _compute_technical_score(data: dict, has_ohlc: bool) -> float:
     if not has_ohlc:
         return 50.0
@@ -185,9 +173,6 @@ def _compute_technical_score(data: dict, has_ohlc: bool) -> float:
                 score -= 5
 
     return max(0, min(100, score))
-
-
-@traceable(name="institutional_scorer.compute_fundamental_score")
 def _compute_fundamental_score(data: dict, has_fundamentals: bool) -> float:
     if not has_fundamentals:
         return 50.0
@@ -234,9 +219,6 @@ def _compute_fundamental_score(data: dict, has_fundamentals: bool) -> float:
                 pass
 
     return max(0, min(100, score))
-
-
-@traceable(name="institutional_scorer.compute_sector_score")
 def _compute_sector_score(data: dict) -> float:
     score = 50.0
 
@@ -259,9 +241,6 @@ def _compute_sector_score(data: dict) -> float:
                 score += 10
 
     return max(0, min(100, score))
-
-
-@traceable(name="institutional_scorer.compute_social_score")
 def _compute_social_score(data: dict, has_social: bool) -> float:
     if not has_social:
         return 50.0
@@ -312,9 +291,6 @@ def _compute_social_score(data: dict, has_social: bool) -> float:
             score -= 15
 
     return max(0, min(100, score))
-
-
-@traceable(name="institutional_scorer.compute_liquidity_score")
 def _compute_liquidity_score(data: dict) -> float:
     score = 50.0
 
@@ -346,9 +322,6 @@ def _compute_liquidity_score(data: dict) -> float:
             pass
 
     return max(0, min(100, score))
-
-
-@traceable(name="institutional_scorer.build_data_flags")
 def _build_data_flags(asset: dict) -> dict:
     snapshot = asset.get("snapshot", {})
     technicals = asset.get("technicals", {})
@@ -375,18 +348,12 @@ def _build_data_flags(asset: dict) -> dict:
     }
     flags["missing"] = [k.replace("has_", "") for k, v in flags.items() if k.startswith("has_") and not v]
     return flags
-
-
-@traceable(name="institutional_scorer.completeness_penalty")
 def _completeness_penalty(data_flags: dict) -> float:
     penalty = 0.0
     for flag_key, weight in COMPLETENESS_PENALTIES.items():
         if not data_flags.get(flag_key, True):
             penalty += weight
     return min(penalty, 0.25)
-
-
-@traceable(name="institutional_scorer.blend_weights")
 def _blend_weights(regime: str, confidence: float) -> dict:
     regime_weights = REGIME_WEIGHT_MATRIX.get(regime, BASE_WEIGHTS)
     if regime == "neutral" or confidence <= 0:
@@ -399,9 +366,6 @@ def _blend_weights(regime: str, confidence: float) -> dict:
             4,
         )
     return blended
-
-
-@traceable(name="institutional_scorer.detect_asset_class")
 def _detect_asset_class(data: dict) -> str:
     for source in [data.get("overview", {}), data.get("details", {}), data.get("profile", {})]:
         if isinstance(source, dict):
@@ -414,9 +378,6 @@ def _detect_asset_class(data: dict) -> str:
     }:
         return "crypto"
     return "equity"
-
-
-@traceable(name="institutional_scorer.extract_sector")
 def _extract_sector(data: dict) -> str:
     for source in [data.get("overview", {}), data.get("details", {}), data.get("profile", {})]:
         if isinstance(source, dict):
@@ -424,9 +385,6 @@ def _extract_sector(data: dict) -> str:
             if sector:
                 return sector
     return ""
-
-
-@traceable(name="institutional_scorer.compute_position_sizing")
 def _compute_position_sizing(mcap_tier: str, liq_tier: str, regime: str, labels: list, **kwargs) -> dict:
     tier_key = f"{mcap_tier}_{liq_tier}"
     base = POSITION_SIZING_BY_TIER.get(tier_key, {"max_pct": 3.0, "tier": tier_key})
@@ -446,9 +404,6 @@ def _compute_position_sizing(mcap_tier: str, liq_tier: str, regime: str, labels:
             max_pct = min(max_pct, 2.0)
 
     return {"max_pct": max_pct, "tier": base["tier"]}
-
-
-@traceable(name="institutional_scorer.apply_conviction_validation")
 def _apply_conviction_validation(
     technical: float, catalyst_result: dict,
     liq_tier: str, mcap_tier: str, avg_dollar_vol: float
@@ -490,9 +445,6 @@ def _apply_conviction_validation(
             else f"Only {confirmations}/3 confirmations — downgraded to WATCH"
         ),
     }
-
-
-@traceable(name="institutional_scorer.score_candidate")
 def score_candidate(ticker: str, asset: dict, regime_data: dict = None) -> dict:
     """
     Institutional-grade deterministic scoring for a single candidate.
@@ -657,9 +609,6 @@ def score_candidate(ticker: str, asset: dict, regime_data: dict = None) -> dict:
 
     asset["institutional_scoring"] = scorecard
     return asset
-
-
-@traceable(name="institutional_scorer.apply_institutional_scoring")
 def apply_institutional_scoring(market_data: dict, regime_data: dict = None) -> dict:
     """
     Apply regime-aware institutional scoring to all candidates in market_data.

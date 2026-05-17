@@ -31,15 +31,6 @@ from typing import Any
 
 import httpx
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 try:
     from data.cache import cache  # shared TTL cache
@@ -277,8 +268,6 @@ class RealtimeQuotesService:
         )
 
     # ── Public API ───────────────────────────────────────────────────────────
-
-    @traceable(name="realtime_quotes.get_realtime_quotes")
     async def get_realtime_quotes(
         self,
         symbols: list[str],

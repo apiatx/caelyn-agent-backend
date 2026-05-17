@@ -4,15 +4,6 @@ import requests
 from datetime import datetime, timedelta
 from data.cache import cache, POLYGON_SNAPSHOT_TTL, POLYGON_TECHNICALS_TTL, POLYGON_DETAILS_TTL, POLYGON_NEWS_TTL
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 
@@ -23,8 +14,6 @@ class PolygonProvider:
         self._rate_lock = threading.Lock()
         self._call_times = []
         self._max_per_minute = 4
-
-    @traceable(name="request")
     def _request(self, path: str, params: dict = None, timeout: int = 8) -> dict:
         if params is None:
             params = {}
@@ -56,8 +45,6 @@ class PolygonProvider:
         except Exception as e:
             print(f"[Polygon] Request error: {e}")
             return {"error": str(e)}
-
-    @traceable(name="get_daily_bars")
     def get_daily_bars(self, ticker: str, days: int = 120) -> list:
         """Fetch daily OHLCV bars. Cached separately since multiple methods use it."""
         ticker = ticker.upper()
@@ -80,8 +67,6 @@ class PolygonProvider:
         bars = data.get("results") or []
         cache.set(cache_key, bars, POLYGON_TECHNICALS_TTL)
         return bars
-
-    @traceable(name="get_snapshot")
     def get_snapshot(self, ticker: str) -> dict:
         """Get latest price data from daily bars (works on free tier)."""
         ticker = ticker.upper()
@@ -120,8 +105,6 @@ class PolygonProvider:
         except Exception as e:
             print(f"Polygon snapshot error for {ticker}: {e}")
             return {"ticker": ticker, "error": str(e)}
-
-    @traceable(name="get_market_movers")
     def get_market_movers(self) -> dict:
         """
         Get top gainers and losers.
@@ -205,8 +188,6 @@ class PolygonProvider:
         except Exception as e2:
             print(f"[Polygon movers] FMP fallback also failed: {e2}")
             return {"gainers": [], "losers": []}
-
-    @traceable(name="get_news")
     def get_news(self, ticker: str = None, limit: int = 15) -> list:
         """Get recent news articles, optionally filtered by ticker."""
         cache_key = f"polygon:news:{ticker}:{limit}"
@@ -237,8 +218,6 @@ class PolygonProvider:
         except Exception as e:
             print(f"Error getting news: {e}")
             return []
-
-    @traceable(name="get_technicals")
     def get_technicals(self, ticker: str) -> dict:
         """Calculate technicals from daily bars using shared ta_utils (works on free Polygon tier)."""
         from data.ta_utils import compute_technicals_from_bars
@@ -271,8 +250,6 @@ class PolygonProvider:
         except Exception as e:
             print(f"Polygon technicals error for {ticker}: {e}")
             return {}
-
-    @traceable(name="get_ticker_details")
     def get_ticker_details(self, ticker: str) -> dict:
         """Get company info: name, sector, market cap, etc."""
         ticker = ticker.upper()
@@ -298,8 +275,6 @@ class PolygonProvider:
         except Exception as e:
             print(f"Error getting details for {ticker}: {e}")
             return {"name": ticker, "error": str(e)}
-
-    @traceable(name="get_ticker_events")
     def get_ticker_events(self, ticker: str) -> dict:
         """Get upcoming earnings, dividends, and recent news catalysts."""
         ticker = ticker.upper()

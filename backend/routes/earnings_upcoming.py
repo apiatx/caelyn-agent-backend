@@ -21,15 +21,6 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 router = APIRouter(tags=["earnings_clean"])
 
@@ -68,7 +59,6 @@ def _validate_date(val: str, param: str) -> None:
 # ── GET /api/catalysts/earnings/upcoming-clean ────────────────────────────────
 
 @router.get("/api/catalysts/earnings/upcoming-clean")
-@traceable(name="earnings_clean.upcoming")
 async def upcoming_clean(
     request:    Request,
     api_key:    str          = Header(None, alias=_AUTH_HEADER),
@@ -149,7 +139,6 @@ async def upcoming_clean(
 # ── GET /api/catalysts/earnings/day-clean ─────────────────────────────────────
 
 @router.get("/api/catalysts/earnings/day-clean")
-@traceable(name="earnings_clean.day")
 async def day_clean(
     request:  Request,
     api_key:  str          = Header(None, alias=_AUTH_HEADER),
@@ -213,7 +202,6 @@ async def day_clean(
 # ── GET /api/catalysts/earnings/week-clean ────────────────────────────────────
 
 @router.get("/api/catalysts/earnings/week-clean")
-@traceable(name="earnings_clean.week")
 async def week_clean(
     request:           Request,
     api_key:           str          = Header(None, alias=_AUTH_HEADER),
@@ -280,7 +268,6 @@ async def week_clean(
 # ── GET /api/catalysts/earnings/day-curated ───────────────────────────────────
 
 @router.get("/api/catalysts/earnings/day-curated")
-@traceable(name="earnings_clean.day_curated")
 async def day_curated(
     request: Request,
     api_key: str           = Header(None, alias=_AUTH_HEADER),
@@ -333,7 +320,6 @@ async def day_curated(
 # ── GET /api/catalysts/earnings/week-all ─────────────────────────────────────
 
 @router.get("/api/catalysts/earnings/week-all")
-@traceable(name="earnings_clean.week_all")
 async def week_all(
     request:    Request,
     api_key:    str           = Header(None, alias=_AUTH_HEADER),
@@ -393,7 +379,6 @@ async def week_all(
 # ── GET /api/catalysts/earnings/month-all ─────────────────────────────────────
 
 @router.get("/api/catalysts/earnings/month-all")
-@traceable(name="earnings_clean.month_all")
 async def month_all(
     request: Request,
     api_key: str           = Header(None, alias=_AUTH_HEADER),
@@ -452,7 +437,6 @@ async def month_all(
 # ── GET /api/catalysts/earnings/month-curated ─────────────────────────────────
 
 @router.get("/api/catalysts/earnings/month-curated")
-@traceable(name="earnings_clean.month_curated")
 async def month_curated(
     request:     Request,
     api_key:     str           = Header(None, alias=_AUTH_HEADER),
@@ -514,7 +498,6 @@ async def month_curated(
 # Normal page loads NEVER call this — it triggers the full enrichment pipeline.
 
 @router.post("/api/catalysts/earnings/admin/rebuild-week")
-@traceable(name="earnings_clean.admin_rebuild_week")
 async def admin_rebuild_week(
     request:    Request,
     api_key:    str           = Header(None, alias=_AUTH_HEADER),
@@ -595,7 +578,6 @@ async def admin_rebuild_week(
 # ── GET /api/catalysts/earnings/admin/snapshot-status ─────────────────────────
 
 @router.get("/api/catalysts/earnings/admin/snapshot-status")
-@traceable(name="earnings_clean.admin_snapshot_status")
 async def admin_snapshot_status(
     request:     Request,
     api_key:     str = Header(None, alias=_AUTH_HEADER),
@@ -699,7 +681,6 @@ async def admin_snapshot_status(
 # Skips weeks that already have valid fresh snapshots (unless force=true).
 
 @router.post("/api/catalysts/earnings/admin/rebuild-missing")
-@traceable(name="earnings_clean.admin_rebuild_missing")
 async def admin_rebuild_missing(
     request:     Request,
     api_key:     str  = Header(None, alias=_AUTH_HEADER),
@@ -807,7 +788,6 @@ def _safe_f(v) -> float | None:
 
 
 @router.get("/api/catalysts/earnings/portfolio-full-year")
-@traceable(name="earnings_clean.portfolio_full_year")
 async def portfolio_full_year(
     request: Request,
     api_key: str = Header(None, alias=_AUTH_HEADER),

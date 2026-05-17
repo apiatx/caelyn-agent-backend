@@ -24,15 +24,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -333,8 +324,6 @@ def _build_replacements(scored_universe: list[dict]) -> list[dict]:
 
 
 # ── Main comparison pipeline ─────────────────────────────────────────────────
-
-@traceable(name="portfolio_compare.run_comparison")
 async def run_comparison(
     user_id: str,
     watchlist_id: str,

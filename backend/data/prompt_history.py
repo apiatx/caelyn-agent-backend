@@ -14,15 +14,6 @@ import time
 from pathlib import Path
 from threading import Lock
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 MAX_PER_INTENT = 100
@@ -223,8 +214,6 @@ def _write(user_id: str, data: dict):
 
 
 # ── Ticker extraction from structured responses ─────────────
-
-@traceable(name="prompt_history.parse_price")
 def _parse_price(val) -> float | None:
     """Parse price from string like '$123.45' or float."""
     if val is None:
@@ -239,9 +228,6 @@ def _parse_price(val) -> float | None:
         except (ValueError, TypeError):
             return None
     return None
-
-
-@traceable(name="prompt_history.extract_tickers_from_structured")
 def extract_tickers_from_structured(structured: dict) -> list[dict]:
     """
     Extract {ticker, rec_price} from a structured agent response.
@@ -253,8 +239,6 @@ def extract_tickers_from_structured(structured: dict) -> list[dict]:
 
     found = []
     seen = set()
-
-    @traceable(name="prompt_history.add")
     def _add(ticker: str, price_val):
         if not ticker or ticker in seen:
             return
@@ -345,8 +329,6 @@ def extract_tickers_from_structured(structured: dict) -> list[dict]:
 
 
 # ── Public API ───────────────────────────────────────────────
-
-@traceable(name="prompt_history.save_response")
 def save_response(category: str, intent: str, content: str, display_type: str | None = None, user_id: str = "default", model_used: str | None = None, query: str | None = None, tickers: list | None = None, conversation: list | None = None, structured_response: dict | None = None) -> dict:
     """Save a prompt response. Returns the created entry."""
     entry = {
@@ -393,24 +375,15 @@ def save_response(category: str, intent: str, content: str, display_type: str | 
             data[key]["entries"] = entries[:MAX_PER_INTENT]
         _write(user_id, data)
     return entry
-
-
-@traceable(name="prompt_history.get_all")
 def get_all(user_id: str = "default") -> dict:
     """Return all history grouped by category::intent."""
     return _read(user_id)
-
-
-@traceable(name="prompt_history.get_by_intent")
 def get_by_intent(category: str, intent: str, user_id: str = "default") -> list:
     """Return entries for a specific intent."""
     data = _read(user_id)
     key = f"{category}::{intent}"
     bucket = data.get(key, {})
     return bucket.get("entries", [])
-
-
-@traceable(name="prompt_history.delete_entry")
 def delete_entry(category: str, intent: str, entry_id: str, user_id: str = "default") -> bool:
     """Delete a single history entry."""
     with _get_lock(user_id):
@@ -424,9 +397,6 @@ def delete_entry(category: str, intent: str, entry_id: str, user_id: str = "defa
             return False
         _write(user_id, data)
     return True
-
-
-@traceable(name="prompt_history.clear_intent")
 def clear_intent(category: str, intent: str, user_id: str = "default") -> bool:
     """Clear all entries for an intent."""
     with _get_lock(user_id):
@@ -437,9 +407,6 @@ def clear_intent(category: str, intent: str, user_id: str = "default") -> bool:
         data[key]["entries"] = []
         _write(user_id, data)
     return True
-
-
-@traceable(name="prompt_history.migrate_legacy_history")
 def migrate_legacy_history(user_id: str):
     """
     Migrate legacy data into the active storage backend.

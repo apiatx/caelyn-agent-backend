@@ -19,15 +19,6 @@ from __future__ import annotations
 
 import asyncio
 
-try:
-    from langsmith import traceable
-except ImportError:
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 class DataRouter:
@@ -44,8 +35,6 @@ class DataRouter:
         # call back into methods that remain on the agent (see module docstring).
         self.agent = agent
         self.data = agent.data  # convenience alias — same object
-
-    @traceable(name="data_router_gather")
     async def gather(self, query_info: dict) -> dict:
         """
         Thin entry/exit wrapper around _gather_impl().
