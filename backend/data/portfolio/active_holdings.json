@@ -1,126 +1,6 @@
 {
   "holdings": [
     {
-      "ticker": "BWEN",
-      "shares": 1512.0,
-      "avg_cost": 2.12,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 1512.0,
-          "price": 2.12,
-          "date": "2026-05-14",
-          "notes": "Bradford White",
-          "account_id": "roth_ira"
-        }
-      ],
-      "entry_date": "2026-05-14"
-    },
-    {
-      "ticker": "FLNC",
-      "shares": 499.0,
-      "avg_cost": 7.72,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 499.0,
-          "price": 7.72,
-          "date": "2026-05-14",
-          "notes": "Fluence Energy",
-          "account_id": "roth_ira"
-        }
-      ],
-      "entry_date": "2026-05-14"
-    },
-    {
-      "ticker": "SLNH",
-      "shares": 24361.0,
-      "avg_cost": 1.925803,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 5404.0,
-          "price": 1.28,
-          "date": "2026-05-14",
-          "notes": "Soluna Holdings",
-          "account_id": "roth_ira"
-        },
-        {
-          "shares": 18957.0,
-          "price": 2.1099,
-          "date": "2026-05-15",
-          "notes": "SOLUNA HOLDINGS INC"
-        }
-      ],
-      "entry_date": "2026-05-14"
-    },
-    {
-      "ticker": "TRT",
-      "shares": 1160.0,
-      "avg_cost": 4.83,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 1160.0,
-          "price": 4.83,
-          "date": "2026-05-14",
-          "notes": "Terran Orbital",
-          "account_id": "roth_ira"
-        }
-      ],
-      "entry_date": "2026-05-14"
-    },
-    {
-      "ticker": "SIVEF",
-      "shares": 9992.0,
-      "avg_cost": 1.269206,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 6996.0,
-          "price": 1.28,
-          "date": "2026-05-13",
-          "notes": "Sivers Semi",
-          "account_id": "individual"
-        },
-        {
-          "shares": 2996.0,
-          "price": 1.244,
-          "date": "2026-03-23",
-          "notes": "SIVERS SEMICONDUCT ORDF"
-        }
-      ],
-      "entry_date": "2026-03-23"
-    },
-    {
-      "ticker": "IQEPF",
-      "shares": 39750.0,
-      "avg_cost": 0.374926,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 19875.0,
-          "price": 0.35,
-          "date": "2026-05-12",
-          "notes": "IQ-EQ Pacific",
-          "account_id": "individual"
-        },
-        {
-          "shares": 7371.0,
-          "price": 0.4035,
-          "date": "2026-03-25",
-          "notes": "IQE PLC ORDF"
-        },
-        {
-          "shares": 12504.0,
-          "price": 0.3977,
-          "date": "2026-03-25",
-          "notes": "IQE PLC ORDF"
-        }
-      ],
-      "entry_date": "2026-03-25"
-    },
-    {
       "ticker": "LPKFF",
       "shares": 387.0,
       "avg_cost": 25.62,
@@ -146,6 +26,21 @@
           "price": 38.555,
           "date": "2026-05-15",
           "notes": "ALPHA & OMEGA SEMICOND F"
+        }
+      ],
+      "entry_date": "2026-05-15"
+    },
+    {
+      "ticker": "SLNH",
+      "shares": 18957.0,
+      "avg_cost": 2.1099,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 18957.0,
+          "price": 2.1099,
+          "date": "2026-05-15",
+          "notes": "SOLUNA HOLDINGS INC"
         }
       ],
       "entry_date": "2026-05-15"
@@ -232,6 +127,27 @@
       "entry_date": "2026-03-25"
     },
     {
+      "ticker": "IQEPF",
+      "shares": 19875.0,
+      "avg_cost": 0.399851,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 7371.0,
+          "price": 0.4035,
+          "date": "2026-03-25",
+          "notes": "IQE PLC ORDF"
+        },
+        {
+          "shares": 12504.0,
+          "price": 0.3977,
+          "date": "2026-03-25",
+          "notes": "IQE PLC ORDF"
+        }
+      ],
+      "entry_date": "2026-03-25"
+    },
+    {
       "ticker": "SLOIF",
       "shares": 79.0,
       "avg_cost": 63.55,
@@ -245,6 +161,21 @@
         }
       ],
       "entry_date": "2026-03-25"
+    },
+    {
+      "ticker": "SIVEF",
+      "shares": 2996.0,
+      "avg_cost": 1.244,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 2996.0,
+          "price": 1.244,
+          "date": "2026-03-23",
+          "notes": "SIVERS SEMICONDUCT ORDF"
+        }
+      ],
+      "entry_date": "2026-03-23"
     },
     {
       "ticker": "NBIS",
@@ -262,6 +193,6 @@
       "entry_date": "2026-01-05"
     }
   ],
-  "_saved_at": "2026-05-17T18:06:26.703474Z",
+  "_saved_at": "2026-05-17T18:27:56.431408Z",
   "_source": "portfolio_store"
 }

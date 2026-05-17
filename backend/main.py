@@ -5063,16 +5063,9 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         else:
             sell_lots.setdefault(ticker, []).append(lot)
 
-    # Drop sells for tickers that have NO buy orders in this CSV.
-    # A sell-only ticker means the user intentionally excluded that position's
-    # history (e.g. uploaded only a partial date range) — we must not import it.
-    orphan_sell_tickers = [t for t in sell_lots if t not in buy_lots]
-    for t in orphan_sell_tickers:
-        skipped.append({
-            "reason": f"sell-only ticker excluded (no matching buy in CSV — position intentionally omitted)",
-            "ticker": t,
-            "lots":   sell_lots.pop(t),
-        })
+    # Orphan sells (tickers with ONLY sells in this CSV, no buy) are kept in
+    # sell_lots.  The endpoint will try to apply them against existing DB
+    # holdings — if there are no DB holdings they are skipped with a reason.
 
     return {
         "buy_lots":          buy_lots,
@@ -5134,7 +5127,9 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         raise HTTPException(status_code=400, detail="csv_data is required")
 
     mode           = (body.get("mode") or "import").lower().strip()
-    merge_strategy = (body.get("merge_strategy") or "add_lots").lower().strip()
+    # Default is "replace" so re-importing the same full-history CSV never
+    # accumulates duplicate lots on top of a previous import.
+    merge_strategy = (body.get("merge_strategy") or "replace").lower().strip()
     include_sells  = bool(body.get("include_sells", False))
     # account_id: optional string that scopes this CSV to a specific brokerage
     # account (e.g. "roth_ira", "individual", "401k").  When set:
@@ -5144,6 +5139,11 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
     #   • A ticker "fully closed" in this account still shows in holdings if
     #     another account holds open lots for the same ticker
     account_id = (body.get("account_id") or "").strip() or None
+
+    # full_replace=True wipes ALL holdings + closed-trade records before
+    # importing.  Use this for a complete-history CSV so stale data from prior
+    # test imports or partial imports never contaminates the result.
+    full_replace = bool(body.get("full_replace", False))
 
     if mode not in ("preview", "import"):
         raise HTTPException(status_code=400, detail="mode must be 'preview' or 'import'")
@@ -5182,8 +5182,9 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         compute_lot_totals    as _totals,
     )
     from data.closed_trades_store import (
-        save_closed_trade  as _save_ct,
-        load_closed_trades as _load_ct,
+        save_closed_trade   as _save_ct,
+        load_closed_trades  as _load_ct,
+        delete_closed_trade as _del_ct_one,
     )
     from datetime import date as _date_cls
     import uuid as _uuid_mod
@@ -5230,6 +5231,23 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         return result
 
     existing_holdings = _load_h()
+
+    # ── full_replace: wipe all existing data so this is a clean-slate import ────
+    # Triggered by  {"full_replace": true}  in the request body.
+    # Recommended for full-history CSVs to avoid stale data from prior imports.
+    _fr_prev_holdings  = 0
+    _fr_prev_ct        = 0
+    if full_replace and mode == "import":
+        _fr_prev_holdings = len(existing_holdings)
+        _ct_to_wipe = _load_ct()
+        _fr_prev_ct = len(_ct_to_wipe)
+        _save_h([])
+        for _ct_item in _ct_to_wipe:
+            _del_ct_one(_ct_item["id"])
+        existing_holdings = []
+        print(f"[PORTFOLIO_CSV] full_replace=True: wiped {_fr_prev_holdings} holdings "
+              f"+ {_fr_prev_ct} closed trades before import")
+
     existing_map      = {h["ticker"].upper(): h for h in existing_holdings}
 
     # ── Pre-load closed trades for duplicate detection ─────────────────────────
@@ -5446,6 +5464,88 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
             "closed":       False,
         })
 
+    # ── Process orphan sells: sell-only tickers matched against existing holdings ─
+    # These are positions opened before the CSV date range that were sold during
+    # it.  We create closed-trade records using the existing holding's avg_cost as
+    # the entry price so the Trading Journal captures their P&L.
+    _orphan_sell_tickers = [t for t in sell_lots if t not in buy_lots]
+    for _ot in _orphan_sell_tickers:
+        _s_lots_v = [l for l in sell_lots[_ot] if float(l.get("shares") or 0) > 0]
+        if not _s_lots_v:
+            continue
+        _existing_oh = updated_map.get(_ot)
+        if not _existing_oh:
+            skipped.append({
+                "ticker": _ot,
+                "reason": "sell-only (no buy in CSV, no existing holding — "
+                          "position was opened before the CSV date range; "
+                          "entry price unknown so P&L cannot be computed)",
+                "lots": _s_lots_v,
+            })
+            continue
+        _oh_lots = list(_existing_oh.get("lots") or [])
+        if account_id:
+            _oh_same  = [l for l in _oh_lots if not l.get("account_id") or l["account_id"] == account_id]
+            _oh_other = [l for l in _oh_lots if l.get("account_id") and l["account_id"] != account_id]
+        else:
+            _oh_same  = _oh_lots
+            _oh_other = []
+        if not _oh_same:
+            continue
+        _oh_total_sell = round(sum(float(l.get("shares") or 0) for l in _s_lots_v), 8)
+        _oh_remaining  = _fifo_reduce(_oh_same, _oh_total_sell)
+        if mode == "import":
+            _oh_base_cost = float(_existing_oh.get("avg_cost") or 0)
+            for _sl in sorted(_s_lots_v, key=lambda l: l.get("date") or ""):
+                _sl_sh   = float(_sl.get("shares") or 0)
+                _sl_ep   = float(_sl.get("price")  or 0)
+                _sl_date = _sl.get("date") or _date_cls.today().isoformat()
+                _oh_key  = (_ot, str(_existing_oh.get("entry_date") or "")[:10],
+                            str(_sl_date)[:10], round(_sl_sh, 2))
+                if _oh_key in _existing_ct_keys:
+                    continue
+                _existing_ct_keys.add(_oh_key)
+                _oh_cb   = _oh_base_cost * _sl_sh
+                _oh_pnl  = round((_sl_ep - _oh_base_cost) * _sl_sh, 4)
+                _oh_pct  = round(_oh_pnl / _oh_cb * 100, 4) if _oh_cb else None
+                _oh_full = (len(_oh_remaining) == 0)
+                _save_ct({
+                    "ticker":                 _ot,
+                    "shares":                 _sl_sh,
+                    "entry_price":            _oh_base_cost,
+                    "exit_price":             _sl_ep,
+                    "entry_date":             _existing_oh.get("entry_date"),
+                    "exit_date":              _sl_date,
+                    "realized_pnl":           _oh_pnl,
+                    "realized_pnl_pct":       _oh_pct,
+                    "notes":                  "Imported from CSV (sell matched to existing holding)",
+                    "sell_type":              "full" if _oh_full else "partial",
+                    "is_full_close":          _oh_full,
+                    "remaining_shares_after": round(sum(float(l.get("shares", 0)) for l in _oh_remaining), 8),
+                    "trade_group_id":         str(_uuid_mod.uuid4()),
+                    "cost_method":            "average_cost",
+                })
+                sells_logged += 1
+                if _oh_full:
+                    closed_full_count += 1
+                else:
+                    closed_part_count += 1
+        _oh_all_remaining = _oh_other + _oh_remaining
+        if _oh_all_remaining:
+            _oh_totals = _totals(_oh_all_remaining)
+            updated_map[_ot] = {**_existing_oh, "shares": _oh_totals["shares"],
+                                "avg_cost": _oh_totals["avg_cost"], "lots": _oh_all_remaining}
+            preview.append({"ticker": _ot, "action": "updated", "lots_added": 0,
+                            "total_shares": _oh_totals["shares"], "avg_cost": _oh_totals["avg_cost"],
+                            "entry_date": _existing_oh.get("entry_date"),
+                            "sold_shares": round(_oh_total_sell, 8), "closed": False})
+            holdings_updated += 1
+        else:
+            updated_map.pop(_ot, None)
+            preview.append({"ticker": _ot, "action": "closed", "lots_added": 0,
+                            "total_shares": 0, "avg_cost": float(_existing_oh.get("avg_cost") or 0),
+                            "entry_date": _existing_oh.get("entry_date"), "closed": True})
+
     # ── Write to DB (import mode only) ────────────────────────────────────────
     any_change = holdings_created or holdings_updated or closed_full_count or closed_part_count
     if mode == "import" and any_change:
@@ -5543,6 +5643,10 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         "closed_full_count":     closed_full_count,
         "closed_partial_count":  closed_part_count,
         "sells_logged":          sells_logged,   # legacy alias
+        # full_replace metadata
+        "full_replace":          full_replace,
+        "full_replace_cleared":  ({"holdings": _fr_prev_holdings, "closed_trades": _fr_prev_ct}
+                                  if full_replace and mode == "import" else None),
         # Options
         "options_skipped":       len(parsed.get("options_rows", [])),
         "options_detail":        parsed.get("options_rows", [])[:10],
