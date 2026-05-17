@@ -1,5 +1,36 @@
 {
-  "holdings": [],
-  "_saved_at": "2026-05-17T04:27:11.073096Z",
+  "holdings": [
+    {
+      "ticker": "ARM",
+      "shares": 84.0,
+      "avg_cost": 214.16,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 84.0,
+          "price": 214.16,
+          "date": "2026-03-28",
+          "notes": "ARM HOLDINGS"
+        }
+      ],
+      "entry_date": "2026-03-28"
+    },
+    {
+      "ticker": "SIVEF",
+      "shares": 10996.0,
+      "avg_cost": 1.28,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 10996.0,
+          "price": 1.28,
+          "date": "2026-04-01",
+          "notes": "SILVER ELEPHANT MINING"
+        }
+      ],
+      "entry_date": "2026-04-01"
+    }
+  ],
+  "_saved_at": "2026-05-17T04:51:23.307366Z",
   "_source": "portfolio_store"
 }

@@ -55,7 +55,7 @@
     },
     {
       "name": "Semiconductors",
-      "score": 77.8,
+      "score": 77.4,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (77/100) vs theme universe. Outperforming SPY -2.2%, QQQ -1.9%. Breadth 17%.",
@@ -86,23 +86,6 @@
       "related_tickers": []
     },
     {
-      "name": "Semiconductor Equipment",
-      "score": 75.4,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -2.7%, QQQ -2.4%. Breadth 0%."
-      ],
-      "related_etfs": [
-        "SOXX",
-        "SMH"
-      ],
-      "related_tickers": [
-        "AMAT",
-        "TXN",
-        "ONTO"
-      ]
-    },
-    {
       "name": "Technology",
       "score": 75.8,
       "source": "theme_rs_service",
@@ -121,8 +104,25 @@
       ]
     },
     {
+      "name": "Semiconductor Equipment",
+      "score": 75.0,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -2.7%, QQQ -2.4%. Breadth 0%."
+      ],
+      "related_etfs": [
+        "SOXX",
+        "SMH"
+      ],
+      "related_tickers": [
+        "AMAT",
+        "TXN",
+        "ONTO"
+      ]
+    },
+    {
       "name": "Memory & Storage",
-      "score": 75.2,
+      "score": 74.8,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -2.9%, QQQ -2.5%. Breadth 17%."
@@ -142,7 +142,7 @@
   "emerging_themes": [
     {
       "name": "Cybersecurity",
-      "score": 69.6,
+      "score": 69.7,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -177,28 +177,11 @@
       ]
     },
     {
-      "name": "Tech Equal-Weight",
-      "score": 67.8,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "RYT",
-        "QQEW"
-      ],
-      "related_tickers": [
-        "SNDK",
-        "NXPI",
-        "STX"
-      ]
-    },
-    {
       "name": "IBD 50",
-      "score": 66.0,
+      "score": 67.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (67/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "FFTY"
@@ -225,6 +208,23 @@
         "APA",
         "MUR",
         "MTDR"
+      ]
+    },
+    {
+      "name": "Tech Equal-Weight",
+      "score": 64.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "RYT",
+        "QQEW"
+      ],
+      "related_tickers": [
+        "SNDK",
+        "NXPI",
+        "STX"
       ]
     }
   ],
@@ -334,6 +334,12 @@
   ],
   "sector_laggards": [
     {
+      "sector": "Materials",
+      "ticker": "XLB",
+      "score": 29.7,
+      "posture": "lagging"
+    },
+    {
       "sector": "Consumer Discretionary",
       "ticker": "XLY",
       "score": 27.9,
@@ -341,7 +347,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-17T04:26:53.065541+00:00",
+  "last_updated": "2026-05-17T04:50:37.538722+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -352,5 +358,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1778992013.065592
+  "_saved_at": 1778993437.5387871
 }

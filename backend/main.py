@@ -4780,7 +4780,20 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
     else:
         raise HTTPException(status_code=400, detail="Body must be {holdings:[...]} or [...]")
 
-    # Normalize: accept both ticker and symbol keys
+    # Normalize: accept both ticker and symbol keys.
+    # IMPORTANT: preserve existing lots so that a flat frontend sync never
+    # strips lot arrays that were written by the CSV import.
+    from data.portfolio_store import load_active_holdings as _load_existing
+    existing_lots_map: dict = {}
+    try:
+        for _eh in _load_existing():
+            _t = (_eh.get("ticker") or "").upper()
+            _lots = _eh.get("lots")
+            if _t and isinstance(_lots, list) and _lots:
+                existing_lots_map[_t] = _lots
+    except Exception:
+        pass
+
     normalized = []
     for h in holdings:
         if not isinstance(h, dict):
@@ -4797,6 +4810,13 @@ async def save_holdings(request: Request, api_key: str = Header(None, alias="X-A
         }
         if _ed:
             _entry["entry_date"] = _ed
+        # Preserve lots from incoming data if present, otherwise carry over
+        # existing lots so a flat frontend sync never wipes import data.
+        incoming_lots = h.get("lots")
+        if isinstance(incoming_lots, list) and incoming_lots:
+            _entry["lots"] = incoming_lots
+        elif ticker in existing_lots_map:
+            _entry["lots"] = existing_lots_map[ticker]
         normalized.append(_entry)
     holdings = normalized
     new_syms = [h["ticker"] for h in holdings if h.get("ticker")]
@@ -4912,7 +4932,9 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
                      "reinvest", "shares purchased", "exchange in", "transfer in",
                      "journaled shares", "you bought"}
     SELL_KEYWORDS = {"sell", "sold", "sale", "shares sold", "exchange out",
-                     "transfer out", "you sold"}
+                     "transfer out", "you sold",
+                     "sell short", "short sale", "sold short",
+                     "market sell", "limit sell"}
 
     # Options action keywords — must be checked BEFORE buy/sell because
     # "buy to open" contains "buy" and would otherwise be mis-classified.
@@ -4937,10 +4959,11 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
     SKIP_SYMBOLS = {"", "cash", "cashbalance", "--", "n/a", "spaxx", "fdrxx",
                     "swvxx", "vmfxx", "sprxx", "fdlxx", "fzfxx", "mmda1"}
 
-    buy_lots:     dict[str, list] = {}
-    sell_lots:    dict[str, list] = {}
-    skipped:      list[dict]      = []
-    options_rows: list[dict]      = []   # collected separately for summary
+    buy_lots:       dict[str, list] = {}
+    sell_lots:      dict[str, list] = {}
+    skipped:        list[dict]      = []
+    options_rows:   list[dict]      = []   # collected separately for summary
+    action_values:  set             = set()  # every raw action string seen
 
     for row in reader:
         def _v(col): return (row.get(col, "") or "").strip() if col else ""
@@ -4993,6 +5016,10 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         # If no type column, infer from description
         if not raw_type and col_desc:
             raw_type = _v(col_desc).lower()
+
+        # Track every unique action value for diagnostics
+        if raw_type:
+            action_values.add(_v(col_type) or raw_type)   # preserve original casing
 
         # ── Options detection: action phrase ──────────────────────────────────
         # Must happen BEFORE buy/sell keyword check — "buy to open" contains
@@ -5091,14 +5118,15 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         })
 
     return {
-        "buy_lots":    buy_lots,
-        "sell_lots":   sell_lots,
-        "options_rows": options_rows,
-        "skipped":     skipped,
-        "columns":     list(raw_cols),
-        "rows_total":  sum(len(v) for v in buy_lots.values()) +
-                       sum(len(v) for v in sell_lots.values()) +
-                       len(options_rows) + len(skipped),
+        "buy_lots":          buy_lots,
+        "sell_lots":         sell_lots,
+        "options_rows":      options_rows,
+        "skipped":           skipped,
+        "columns":           list(raw_cols),
+        "action_distribution": sorted(action_values),   # every unique action seen in CSV
+        "rows_total":        sum(len(v) for v in buy_lots.values()) +
+                             sum(len(v) for v in sell_lots.values()) +
+                             len(options_rows) + len(skipped),
     }
 
 
@@ -5409,9 +5437,33 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         except Exception:
             pass
 
+    # ── Build netting summary (per-ticker diagnostic) ─────────────────────────
+    netting_summary = []
+    for ticker, b_lots in buy_lots.items():
+        b_valid = [l for l in b_lots if float(l.get("shares") or 0) > 0]
+        s_valid = [l for l in sell_lots.get(ticker, []) if float(l.get("shares") or 0) > 0]
+        tb = round(sum(float(l["shares"]) for l in b_valid), 4)
+        ts = round(sum(float(l["shares"]) for l in s_valid), 4)
+        ns = round(tb - ts, 4)
+        action_label = "closed" if ns <= 0 else ("partial_sell" if ts > 0 else "open")
+        netting_summary.append({
+            "ticker":        ticker,
+            "buy_lots":      len(b_valid),
+            "sell_lots":     len(s_valid),
+            "total_bought":  tb,
+            "total_sold":    ts,
+            "net_shares":    max(ns, 0.0),
+            "action":        action_label,
+        })
+    netting_summary.sort(key=lambda x: x["ticker"])
+
     # Summarise closed positions for the preview card
     closed_preview = [p for p in preview if p.get("closed")]
     open_preview   = [p for p in preview if not p.get("closed")]
+
+    # The canonical open holdings after this import (use directly — avoids
+    # the race where frontend POST /holdings overwrites the import result)
+    final_holdings_out = list(updated_map.values()) if mode == "import" else []
 
     return {
         "success":              True,
@@ -5435,6 +5487,21 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         # Options
         "options_skipped":      len(parsed.get("options_rows", [])),
         "options_detail":       parsed.get("options_rows", [])[:20],
+        # ── Diagnostics ────────────────────────────────────────────────────────
+        # action_distribution: every unique action/transaction-type value the
+        # parser saw in the CSV.  If sells aren't being detected, the sell
+        # keyword will appear here but NOT map to SELL_KEYWORDS — compare to
+        # spot the mismatch.
+        "action_distribution":  parsed.get("action_distribution", []),
+        # netting_summary: per-ticker buy/sell counts + net shares + action.
+        # action = "open" | "partial_sell" | "closed"
+        # If sell_lots=0 for a ticker you know was sold, the CSV may use
+        # an action keyword not in SELL_KEYWORDS.
+        "netting_summary":      netting_summary,
+        # updated_holdings: the exact open-holdings list saved to the DB.
+        # Frontend SHOULD write this directly to stock-holdings.json instead
+        # of calling GET /api/portfolio/holdings again (avoids timing issues).
+        "updated_holdings":     final_holdings_out,
         # Review details
         "preview":              preview,
         "skipped_detail":       skipped[:20],
