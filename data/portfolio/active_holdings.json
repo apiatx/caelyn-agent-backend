@@ -10,7 +10,8 @@
           "shares": 1512.0,
           "price": 2.12,
           "date": "2026-05-14",
-          "notes": "Bradford White"
+          "notes": "Bradford White",
+          "account_id": "roth_ira"
         }
       ],
       "entry_date": "2026-05-14"
@@ -25,7 +26,8 @@
           "shares": 499.0,
           "price": 7.72,
           "date": "2026-05-14",
-          "notes": "Fluence Energy"
+          "notes": "Fluence Energy",
+          "account_id": "roth_ira"
         }
       ],
       "entry_date": "2026-05-14"
@@ -40,22 +42,8 @@
           "shares": 5404.0,
           "price": 1.28,
           "date": "2026-05-14",
-          "notes": "Soluna Holdings"
-        }
-      ],
-      "entry_date": "2026-05-14"
-    },
-    {
-      "ticker": "PENG",
-      "shares": 422.0,
-      "avg_cost": 17.51,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 422.0,
-          "price": 17.51,
-          "date": "2026-05-14",
-          "notes": "Penguin Solutions"
+          "notes": "Soluna Holdings",
+          "account_id": "roth_ira"
         }
       ],
       "entry_date": "2026-05-14"
@@ -70,7 +58,24 @@
           "shares": 1160.0,
           "price": 4.83,
           "date": "2026-05-14",
-          "notes": "Terran Orbital"
+          "notes": "Terran Orbital",
+          "account_id": "roth_ira"
+        }
+      ],
+      "entry_date": "2026-05-14"
+    },
+    {
+      "ticker": "MU",
+      "shares": 50.0,
+      "avg_cost": 90.0,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 50.0,
+          "price": 90.0,
+          "date": "2026-05-14",
+          "notes": "Micron Technology",
+          "account_id": "roth_ira"
         }
       ],
       "entry_date": "2026-05-14"
@@ -85,7 +90,8 @@
           "shares": 6996.0,
           "price": 1.28,
           "date": "2026-05-13",
-          "notes": "Sivers Semi"
+          "notes": "Sivers Semi",
+          "account_id": "individual"
         }
       ],
       "entry_date": "2026-05-13"
@@ -100,72 +106,13 @@
           "shares": 19875.0,
           "price": 0.35,
           "date": "2026-05-12",
-          "notes": "IQ-EQ Pacific"
+          "notes": "IQ-EQ Pacific",
+          "account_id": "individual"
         }
       ],
       "entry_date": "2026-05-12"
-    },
-    {
-      "ticker": "SLOIF",
-      "shares": 79.0,
-      "avg_cost": 61.0,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 79.0,
-          "price": 61.0,
-          "date": "2026-05-10",
-          "notes": "SLO Inc"
-        }
-      ],
-      "entry_date": "2026-05-10"
-    },
-    {
-      "ticker": "NRGV",
-      "shares": 1969.0,
-      "avg_cost": 5.17,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 1969.0,
-          "price": 5.17,
-          "date": "2026-05-08",
-          "notes": "Energy Vault"
-        }
-      ],
-      "entry_date": "2026-05-08"
-    },
-    {
-      "ticker": "SILC",
-      "shares": 176.0,
-      "avg_cost": 28.07,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 176.0,
-          "price": 28.07,
-          "date": "2026-05-06",
-          "notes": "Silico Inc"
-        }
-      ],
-      "entry_date": "2026-05-06"
-    },
-    {
-      "ticker": "OUST",
-      "shares": 302.0,
-      "avg_cost": 26.0,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 302.0,
-          "price": 26.0,
-          "date": "2026-04-28",
-          "notes": "Ouster Inc"
-        }
-      ],
-      "entry_date": "2026-04-28"
     }
   ],
-  "_saved_at": "2026-05-17T16:16:54.055641Z",
+  "_saved_at": "2026-05-17T17:20:38.650176Z",
   "_source": "portfolio_store"
 }

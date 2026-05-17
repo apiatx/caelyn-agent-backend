@@ -5244,6 +5244,14 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
     mode           = (body.get("mode") or "import").lower().strip()
     merge_strategy = (body.get("merge_strategy") or "add_lots").lower().strip()
     include_sells  = bool(body.get("include_sells", False))
+    # account_id: optional string that scopes this CSV to a specific brokerage
+    # account (e.g. "roth_ira", "individual", "401k").  When set:
+    #   • Every new lot is tagged with {"account_id": account_id}
+    #   • Sells in this CSV only net against buys in THIS CSV — they never
+    #     close positions that belong to a different account already in the DB
+    #   • A ticker "fully closed" in this account still shows in holdings if
+    #     another account holds open lots for the same ticker
+    account_id = (body.get("account_id") or "").strip() or None
 
     if mode not in ("preview", "import"):
         raise HTTPException(status_code=400, detail="mode must be 'preview' or 'import'")
@@ -5430,8 +5438,34 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
 
         # ── Determine what stays in holdings ──────────────────────────────────
         if net_shares <= 0:
-            # Fully closed — remove from holdings entirely
-            updated_map.pop(ticker, None)
+            # This account fully closed its position in this ticker.
+            # ── Account isolation ────────────────────────────────────────────
+            # If an account_id is set, only remove THIS account's lots from
+            # updated_map.  Lots belonging to a DIFFERENT account (e.g. Roth
+            # lots when importing Individual Brokerage) must NOT be removed.
+            existing_for_close = updated_map.get(ticker)
+            if account_id and existing_for_close:
+                other_acct_lots = [
+                    l for l in (existing_for_close.get("lots") or [])
+                    if l.get("account_id") and l["account_id"] != account_id
+                ]
+                if other_acct_lots:
+                    # Other accounts still hold this ticker — update the holding
+                    # to show only their lots, not the now-closed account's lots.
+                    other_totals = _totals(other_acct_lots)
+                    updated_map[ticker] = {
+                        **existing_for_close,
+                        "shares":     other_totals["shares"],
+                        "avg_cost":   other_totals["avg_cost"],
+                        "lots":       other_acct_lots,
+                    }
+                else:
+                    # No other-account lots — remove the holding entirely.
+                    updated_map.pop(ticker, None)
+            else:
+                # No account isolation — remove outright (original behaviour).
+                updated_map.pop(ticker, None)
+
             preview.append({
                 "ticker":       ticker,
                 "action":       "closed",
@@ -5449,20 +5483,34 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         else:
             open_lots = b_lots_valid
 
+        # Tag each new lot with the account_id so future imports can isolate
+        # per-account sells correctly.
+        if account_id:
+            for lot in open_lots:
+                lot["account_id"] = account_id
+
         # Merge with any lots already in the holding (dedup to prevent doubles)
         existing = updated_map.get(ticker)
         if existing and merge_strategy == "add_lots":
             base_lots: list = list(existing.get("lots") or [])
-            # ── KEY FIX: do NOT synthesise a fake lot from flat fields. ──────
-            # If existing has no lots array (flat holding synced from frontend),
-            # the CSV is the source of truth — use its lots directly.
-            # Previously a synthetic lot was created with date="" which never
-            # matched real CSV lots (which have real dates), causing shares to
-            # double on every re-import.
             if base_lots:
-                merged_lots = _dedup_lots(base_lots, open_lots)
+                if account_id:
+                    # ── Account-scoped dedup ─────────────────────────────────
+                    # Only dedup THIS account's existing lots against the new
+                    # CSV lots.  Other accounts' lots are kept verbatim.
+                    same_acct = [l for l in base_lots
+                                 if not l.get("account_id")
+                                 or l["account_id"] == account_id]
+                    other_acct = [l for l in base_lots
+                                  if l.get("account_id")
+                                  and l["account_id"] != account_id]
+                    merged_lots = other_acct + _dedup_lots(same_acct, open_lots)
+                else:
+                    merged_lots = _dedup_lots(base_lots, open_lots)
             else:
-                merged_lots = open_lots   # replace flat holding with CSV lots
+                # No existing lots — replace with CSV lots (prevents
+                # accumulation on flat holdings from the frontend sync).
+                merged_lots = open_lots
         else:
             merged_lots = open_lots
 

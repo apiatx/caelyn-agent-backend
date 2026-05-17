@@ -220,7 +220,7 @@ def _to_date_str(val) -> str | None:
 
 
 def _normalise_lot(lot: dict) -> dict:
-    """Canonical buy-lot shape: shares, price, date, optional notes."""
+    """Canonical buy-lot shape: shares, price, date, optional notes, optional account_id."""
     out: dict = {
         "shares": float(lot.get("shares", 0) or 0),
         "price":  float(lot.get("price", lot.get("avg_cost", 0)) or 0),
@@ -230,6 +230,10 @@ def _normalise_lot(lot: dict) -> dict:
         out["date"] = d
     if lot.get("notes"):
         out["notes"] = lot["notes"]
+    # Preserve account_id so multi-account CSV imports can isolate per-account
+    # netting — a sell in one account must not close a position in another.
+    if lot.get("account_id"):
+        out["account_id"] = str(lot["account_id"])
     return out
 
 
