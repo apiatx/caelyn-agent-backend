@@ -195,7 +195,7 @@
     },
     {
       "name": "IBD 50",
-      "score": 66.4,
+      "score": 66.0,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -336,12 +336,12 @@
     {
       "sector": "Consumer Discretionary",
       "ticker": "XLY",
-      "score": 28.4,
+      "score": 27.9,
       "posture": "lagging"
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-17T04:02:38.273766+00:00",
+  "last_updated": "2026-05-17T04:26:53.065541+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -352,5 +352,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1778990558.273814
+  "_saved_at": 1778992013.065592
 }

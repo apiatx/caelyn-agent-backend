@@ -1,0 +1,104 @@
+Now I have the full picture. The logs confirm two separate root causes:
+
+What's on our side (Terminal blank): The caelynTerminalCache is null after restarts — the Terminal will load correctly now that stock-holdings.json has 32 entries. It just needs the ~15s cold-start fetch to complete on first visit. No code change needed.
+
+What needs FastAPI (the big issue): FastAPI's upload-csv endpoint imported ALL buy transactions as open holdings without netting the sell transactions. That's why all 32 show as open — the closed ones (where you sold all shares) were never moved to closed trade records. This is entirely a FastAPI behavior fix.
+
+Let me check the exact FastAPI closed-trades schema before writing the instructions:
+
+
+3 actions
+Good, I have everything I need. Here's the full situation and the FastAPI fix instructions:
+
+On our side — Terminal tab: This will work now. The cache is clear and stock-holdings.json has all 32 holdings. When you visit the Terminal tab it'll do a 15-second cold-start fetch from FastAPI and render. No code change needed.
+
+The real problem — entirely on FastAPI: The upload-csv import is storing ALL buy transactions as open holdings without netting against your sell transactions. A position you fully exited should have: (a) zero shares remaining → removed from holdings, and (b) a closed trade record created with entry/exit prices and realized P&L. Neither is happening.
+
+Here are the exact instructions to give your FastAPI Replit agent:
+
+FastAPI Agent Instructions
+Problem: The POST /api/portfolio/upload-csv endpoint (with mode="import") is not correctly processing sell transactions. It imports all buy lots as open holdings but ignores sells, so fully-closed positions remain in the open holdings list and no closed trade records are created.
+
+Also observed: Some holdings have duplicate lots (same ticker, same date, same shares appearing twice — e.g. SIVEF has a 4000-share lot on 2026-04-09 duplicated). The import appears to be adding lots multiple times.
+
+Fix 1 — CSV Import: Net buys vs sells per ticker
+When processing a CSV import, for each ticker:
+
+Collect all transactions — separate into BUY rows and SELL rows (check Transaction Type / Action column, normalize to uppercase, accept: Buy, Sell, Sell Short, Reinvest Shares, etc.)
+
+Calculate net open shares:
+
+total_bought = sum of all Buy shares for this ticker
+total_sold   = sum of all Sell shares for this ticker
+net_shares   = total_bought - total_sold
+
+Weighted avg buy cost:
+
+avg_entry_price = sum(buy_shares[i] × buy_price[i]) / total_bought
+
+Weighted avg sell price:
+
+avg_exit_price = sum(sell_shares[i] × sell_price[i]) / total_sold  (if total_sold > 0)
+
+Apply the results:
+
+If net_shares > 0 (position still open): upsert holding with ticker, net_shares, avg_cost = avg_entry_price, entry_date = earliest buy date. Do not add the same lots twice — use a dedup check (date + shares + price) before appending.
+
+If net_shares == 0 (fully closed): delete the holding for this ticker (if it exists), create a closed trade record (see schema below).
+
+If 0 < net_shares < total_bought (partially closed): update holding shares to net_shares, update avg_cost to reflect remaining lots (FIFO), create a partial closed trade record for the sold portion.
+
+Fix 2 — Create closed trade records
+For each fully or partially closed position, create a record via your internal closed trades store. The record shape the frontend expects from GET /api/portfolio/closed-trades:
+
+{
+  "trade_groups": [...],
+  "closed_trades": [
+    {
+      "id": "<unique string>",
+      "symbol": "BWEN",
+      "shares": 1200,
+      "avg_entry_price": 4.85,
+      "exit_price": 6.10,
+      "entry_date": "2026-03-14",
+      "exit_date": "2026-05-08",
+      "realized_pnl": 1500.00,
+      "realized_pnl_pct": 25.77,
+      "holding_period_days": 55,
+      "is_full_close": true,
+      "source": "csv_import"
+    }
+  ],
+  "count": <int>,
+  "portfolio_performance": {
+    "total_closed_trades": <int>,
+    "win_count": <int>,
+    "loss_count": <int>,
+    "win_rate": <float 0–100>,
+    "avg_return_pct": <float>,
+    "total_realized_pnl": <float>,
+    "best_trade": { "symbol": "...", "realized_pnl_pct": ..., "realized_pnl": ... },
+    "worst_trade": { "symbol": "...", "realized_pnl_pct": ..., "realized_pnl": ... },
+    "avg_hold_days": <float or null>,
+    "recent_trades": [ ...last 5 closed trades sorted by exit_date desc... ]
+  }
+}
+
+Calculations:
+
+realized_pnl = (avg_exit_price - avg_entry_price) × shares_closed
+realized_pnl_pct = ((avg_exit_price / avg_entry_price) - 1) × 100
+holding_period_days = (exit_date - entry_date).days
+is_full_close = true when net_shares == 0
+Fix 3 — Deduplicate lots on import
+Before appending a new lot to a holding, check if a lot with the same (date, shares, price) already exists for that ticker. If it does, skip it. This prevents the duplicate lots currently visible in the data (e.g. SIVEF has two identical 4000-share lots on 2026-04-09).
+
+Fix 4 — Re-process the already-uploaded CSV
+After the fix is deployed, the frontend will re-upload the CSV. However, first wipe the current stale state:
+
+Delete all 32 holdings from the canonical holdings store (or provide a DELETE /api/portfolio/holdings bulk-clear endpoint)
+The frontend will then re-upload the CSV through the normal flow
+Alternatively, expose a POST /api/portfolio/reprocess-last-csv endpoint that re-runs the fixed import logic against the CSV data that was already stored during the last upload.
+
+API key / auth
+All requests from this frontend use header: X-API-Key: hippo_ak_7f3x9k2m4p8q1w5t

@@ -4721,6 +4721,36 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
     return {"holdings": holdings}
 
 
+@app.delete("/api/portfolio/holdings/clear-all")
+@traceable(name="main.clear_all_holdings")
+async def clear_all_holdings(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Wipe all active holdings — use before a clean CSV re-import.
+
+    Clears the canonical holdings store and invalidates the terminal cache.
+    Does NOT touch closed trade records.
+    Returns: { cleared: true, previous_count: N }
+    """
+    from data.portfolio_store import (
+        load_active_holdings  as _load,
+        save_active_holdings  as _save,
+        canonical_file        as _cf,
+    )
+    previous = _load()
+    prev_count = len(previous)
+    _save([])
+    print(f"[PORTFOLIO_CLEAR_ALL] wiped {prev_count} holdings")
+
+    # Invalidate terminal cache so the next visit starts fresh
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    return {"cleared": True, "previous_count": prev_count}
+
+
 @app.post("/api/portfolio/holdings")
 @traceable(name="main.save_holdings")
 async def save_holdings(request: Request, api_key: str = Header(None, alias="X-API-Key")):
