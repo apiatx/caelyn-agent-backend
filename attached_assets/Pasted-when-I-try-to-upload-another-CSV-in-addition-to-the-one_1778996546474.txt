@@ -1,0 +1,42 @@
+when I try to upload another CSV in addition to the one that's already there (roth is already uploaded, now im trying to upload individual brokerage acct CSV) it's saying "Failed to execute 'json' on 'Response': Unexpected end of JSON input"... The CSV is the same format as the other one. WHy is this not working? Is it because we need to fix it so two can be uploaded and combine portfolios or what?
+
+6 minutes ago
+
+Planning response size handling (49 seconds)
+The error "Unexpected end of JSON input" means FastAPI returned an empty or cut-off response body, and Express is passing it through raw. This can happen when the second import sends a larger payload and hits either Express's body size limit or FastAPI crashes/returns empty on merge. Let me check the logs and the body parser config in parallel:
+
+
+2 actions
+The logs don't show the upload-csv request at all — which means Express's body parser is rejecting the payload before the route even runs. The default Express JSON limit is 100kb; a large brokerage CSV encoded as a JSON string easily exceeds that, and Express sends a 413 response with an empty or malformed body. Let me find the body parser config and fix it:
+
+
+3 actions
+The body parser limit is already 10mb — that's not the issue. Since there's no [express] POST /api/portfolio/upload-csv log entry at all, Express received the response from FastAPI as a status code with no body (likely a 204 or similar) and then res.status(204).json({}) silently sends an empty body (HTTP spec forbids 204 bodies). Let me harden the route to handle this:
+
+
+2 actions
+Found it. Line 561: res.status(upRes.status).json(data) — FastAPI returns updated_holdings (a potentially massive array of all positions with full lot data from both accounts). For the second import, this is 2× the data. When this gets proxied back through Vite's dev proxy at full size, the stream gets cut mid-JSON. The browser sees a truncated body → "Unexpected end of JSON input".
+
+The fix: strip updated_holdings before sending back to the browser. The Express server already wrote it to stock-holdings.json — the browser refetches from there. It never needed the raw array in the HTTP response:
+
+
+2 actions
+Good — also need to verify the done screen's open position count still works since we stripped updated_holdings from the browser response. It already has a fallback:
+
+{(csvImportResult.updated_holdings ?? csvImportResult.symbols_imported ?? []).length}
+
+updated_holdings will be undefined now → falls back to symbols_imported (array of open tickers) → count is still correct. No change needed there.
+
+
+2 actions
+Server is running cleanly. Here's what was fixed:
+
+Root cause: FastAPI's import response includes updated_holdings — the full lot-detail array for every position across both accounts. For a single-account import this is manageable, but for a second import (Roth + Individual Brokerage combined) the payload balloons to potentially hundreds of KB of nested JSON. Vite's dev proxy cuts the stream mid-response, so the browser receives a truncated JSON string → "Unexpected end of JSON input".
+
+What changed in the Express route:
+
+Response is now read as raw text first — if FastAPI sends a partial or empty body, we catch it and return a proper { success: false, error: "..." } instead of crashing the stream
+updated_holdings is stripped before sending back to the browser — the server already wrote it to stock-holdings.json and the browser refetches from there. The browser never needed the raw array
+204 status normalised to 200 — HTTP forbids a body on 204 responses, which silently drops it
+preview array preserved for preview-mode responses (it's small — just a few rows)
+The response the browser now gets is a lean summary object (success, symbols_imported, symbols_closed, sells_found, options_skipped, closed_trades_created, etc.) regardless of how many combined holdings exist in FastAPI. You should be able to upload both CSVs cleanly now.

