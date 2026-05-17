@@ -5145,55 +5145,181 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
             "skipped_detail":   skipped[:20],
         }
 
-    # ── Compute weighted-avg per ticker from all buy lots ─────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
     from data.portfolio_store import (
         load_active_holdings  as _load_h,
         save_active_holdings  as _save_h,
         get_holdings_signature as _sig,
         compute_lot_totals    as _totals,
     )
+    from data.closed_trades_store import save_closed_trade as _save_ct
     from datetime import date as _date_cls
+    import uuid as _uuid_mod
+
+    def _fifo_reduce(b_lots: list, shares_to_remove: float) -> list:
+        """Remove shares from oldest lots first (FIFO). Returns remaining lots."""
+        sorted_lots = sorted(b_lots, key=lambda l: l.get("date") or "")
+        remaining: list = []
+        left = round(float(shares_to_remove), 8)
+        for lot in sorted_lots:
+            lot_shares = round(float(lot.get("shares") or 0), 8)
+            if left <= 0:
+                remaining.append(dict(lot))
+            elif lot_shares <= left + 1e-9:
+                left = round(left - lot_shares, 8)   # lot fully consumed
+            else:
+                partial = dict(lot)
+                partial["shares"] = round(lot_shares - left, 8)
+                left = 0
+                remaining.append(partial)
+        return remaining
+
+    def _dedup_lots(existing: list, new_lots: list) -> list:
+        """Append new_lots, skipping exact duplicates (date + shares + price)."""
+        seen = set()
+        result: list = []
+        for lot in existing:
+            key = (
+                str(lot.get("date") or "")[:10],
+                round(float(lot.get("shares") or 0), 4),
+                round(float(lot.get("price") or 0), 4),
+            )
+            seen.add(key)
+            result.append(lot)
+        for lot in new_lots:
+            key = (
+                str(lot.get("date") or "")[:10],
+                round(float(lot.get("shares") or 0), 4),
+                round(float(lot.get("price") or 0), 4),
+            )
+            if key not in seen:
+                result.append(lot)
+                seen.add(key)
+        return result
 
     existing_holdings = _load_h()
     existing_map      = {h["ticker"].upper(): h for h in existing_holdings}
 
-    preview: list[dict] = []
-    holdings_created = 0
-    holdings_updated = 0
-    lots_added       = 0
+    preview:          list[dict] = []
+    holdings_created  = 0
+    holdings_updated  = 0
+    lots_added        = 0
+    sells_logged      = 0          # closed trade records written to DB
+    closed_full_count = 0          # tickers fully closed in this CSV
+    closed_part_count = 0          # tickers partially closed in this CSV
 
-    # Build updated holdings map (copy so preview and import share logic)
-    updated_map = {k: dict(v) for k, v in existing_map.items()}  # deep-ish copy
+    # Build updated holdings map — start from all existing holdings so
+    # tickers not in this CSV remain untouched.
+    updated_map = {k: dict(v) for k, v in existing_map.items()}
 
-    for ticker, lots in buy_lots.items():
-        lots_valid = [l for l in lots if l["shares"] > 0]
-        if not lots_valid:
+    # ── Process each ticker in buy_lots ───────────────────────────────────────
+    for ticker, b_lots in buy_lots.items():
+        b_lots_valid = [l for l in b_lots if float(l.get("shares") or 0) > 0]
+        if not b_lots_valid:
             continue
 
-        existing = updated_map.get(ticker)
-        action   = "updated" if existing else "created"
+        s_lots_valid = [l for l in sell_lots.get(ticker, [])
+                        if float(l.get("shares") or 0) > 0]
 
+        total_bought = round(sum(float(l["shares"]) for l in b_lots_valid), 8)
+        total_sold   = round(sum(float(l["shares"]) for l in s_lots_valid),  8)
+        net_shares   = round(total_bought - total_sold, 8)
+
+        # Weighted avg buy price across all buy lots in this CSV
+        total_buy_cost  = sum(float(l["shares"]) * float(l.get("price") or 0)
+                              for l in b_lots_valid)
+        avg_entry_price = round(total_buy_cost / total_bought, 6) if total_bought else 0.0
+
+        buy_dates  = sorted(l["date"] for l in b_lots_valid if l.get("date"))
+        entry_date = buy_dates[0] if buy_dates else _date_cls.today().isoformat()
+
+        # ── If any sells exist for this ticker, create a closed trade record ──
+        if total_sold > 0 and mode == "import":
+            total_sell_value = sum(float(l["shares"]) * float(l.get("price") or 0)
+                                   for l in s_lots_valid)
+            avg_exit_price   = round(total_sell_value / total_sold, 6)
+
+            sell_dates = sorted(l["date"] for l in s_lots_valid if l.get("date"))
+            exit_date  = sell_dates[-1] if sell_dates else _date_cls.today().isoformat()
+
+            # Shares covered by the sell (capped at total bought in this CSV)
+            shares_for_ct = min(total_sold, total_bought)
+            is_full_close = net_shares <= 0
+
+            cost_basis    = avg_entry_price * shares_for_ct
+            realized_pnl  = round((avg_exit_price - avg_entry_price) * shares_for_ct, 4)
+            realized_pct  = round(realized_pnl / cost_basis * 100, 4) if cost_basis else None
+
+            group_id = str(_uuid_mod.uuid4())
+            ct_result = _save_ct({
+                "ticker":                 ticker,
+                "shares":                 shares_for_ct,
+                "entry_price":            avg_entry_price,
+                "exit_price":             avg_exit_price,
+                "entry_date":             entry_date,
+                "exit_date":              exit_date,
+                "realized_pnl":           realized_pnl,
+                "realized_pnl_pct":       realized_pct,
+                "notes":                  "Imported from CSV",
+                "sell_type":              "full" if is_full_close else "partial",
+                "is_full_close":          is_full_close,
+                "remaining_shares_after": max(net_shares, 0.0),
+                "trade_group_id":         group_id,
+                "cost_method":            "average_cost",
+            })
+            if not ct_result.get("_error"):
+                sells_logged += 1
+                if is_full_close:
+                    closed_full_count += 1
+                else:
+                    closed_part_count += 1
+
+        # ── Determine what stays in holdings ──────────────────────────────────
+        if net_shares <= 0:
+            # Fully closed — remove from holdings entirely
+            updated_map.pop(ticker, None)
+            preview.append({
+                "ticker":       ticker,
+                "action":       "closed",
+                "lots_added":   len(b_lots_valid),
+                "total_shares": 0,
+                "avg_cost":     avg_entry_price,
+                "entry_date":   entry_date,
+                "closed":       True,
+            })
+            continue
+
+        # Position still (partially or fully) open — apply FIFO reduction
+        if total_sold > 0:
+            open_lots = _fifo_reduce(b_lots_valid, total_sold)
+        else:
+            open_lots = b_lots_valid
+
+        # Merge with any lots already in the holding (dedup to prevent doubles)
+        existing = updated_map.get(ticker)
         if existing and merge_strategy == "add_lots":
-            # Preserve existing lots, append new ones
             base_lots: list = list(existing.get("lots") or [])
-            if not base_lots:
-                # synthesise from flat fields
-                synth: dict = {"shares": float(existing.get("shares", 0)),
-                               "price":  float(existing.get("avg_cost", 0))}
+            if not base_lots and float(existing.get("shares") or 0) > 0:
+                # Synthesise a lot from flat fields for pre-lots holdings
+                synth: dict = {
+                    "shares": float(existing.get("shares", 0)),
+                    "price":  float(existing.get("avg_cost", 0)),
+                }
                 if existing.get("entry_date"):
                     synth["date"] = str(existing["entry_date"]).split("T")[0]
-                if synth["shares"] > 0:
-                    base_lots = [synth]
-            merged_lots = base_lots + lots_valid
+                base_lots = [synth]
+            merged_lots = _dedup_lots(base_lots, open_lots)
         else:
-            merged_lots = lots_valid
+            merged_lots = open_lots
 
-        totals = _totals(merged_lots)
+        totals   = _totals(merged_lots)
+        action   = "updated" if existing else "created"
         updated_h = {
             "ticker":     ticker,
             "shares":     totals["shares"],
             "avg_cost":   totals["avg_cost"],
-            "entry_date": totals.get("entry_date") or (existing or {}).get("entry_date") or _date_cls.today().isoformat(),
+            "entry_date": totals.get("entry_date") or (existing or {}).get("entry_date")
+                          or _date_cls.today().isoformat(),
             "asset_type": (existing or {}).get("asset_type", "stock"),
             "lots":       merged_lots,
         }
@@ -5201,7 +5327,7 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
             updated_h["notes"] = existing["notes"]
 
         updated_map[ticker] = updated_h
-        lots_added += len(lots_valid)
+        lots_added += len(open_lots)
 
         if action == "created":
             holdings_created += 1
@@ -5211,43 +5337,23 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         preview.append({
             "ticker":       ticker,
             "action":       action,
-            "lots_added":   len(lots_valid),
+            "lots_added":   len(open_lots),
             "total_shares": totals["shares"],
             "avg_cost":     totals["avg_cost"],
             "entry_date":   updated_h["entry_date"],
+            "sold_shares":  round(total_sold, 8) if total_sold > 0 else None,
+            "closed":       False,
         })
 
-    # ── Sells summary (logged to closed trades if include_sells=True) ─────────
-    sells_logged = 0
-    if include_sells and sell_lots and mode == "import":
-        from data.closed_trades_store import save_closed_trade as _save_ct
-        import uuid as _uuid_mod
-        for ticker, lots in sell_lots.items():
-            for lot in lots:
-                if not lot["shares"]:
-                    continue
-                ct = {
-                    "ticker":       ticker,
-                    "shares":       lot["shares"],
-                    "exit_date":    lot["date"] or _date_cls.today().isoformat(),
-                    "exit_price":   lot["price"],
-                    "notes":        lot.get("notes") or "Imported from CSV",
-                    "sell_type":    "full",
-                    "is_full_close": False,     # can't know without full history
-                    "trade_group_id": str(_uuid_mod.uuid4()),
-                    "cost_method":  "average_cost",
-                }
-                result = _save_ct(ct)
-                if not result.get("_error"):
-                    sells_logged += 1
-
     # ── Write to DB (import mode only) ────────────────────────────────────────
-    if mode == "import" and (holdings_created or holdings_updated):
+    any_change = holdings_created or holdings_updated or closed_full_count or closed_part_count
+    if mode == "import" and any_change:
         final_holdings = list(updated_map.values())
         _save_h(final_holdings)
         sig = _sig(final_holdings)
-        print(f"[PORTFOLIO_CSV] imported {holdings_created} new + {holdings_updated} updated, "
-              f"{lots_added} lots, {sells_logged} sells, sig={sig}")
+        print(f"[PORTFOLIO_CSV] imported {holdings_created} new + {holdings_updated} updated + "
+              f"{closed_full_count} fully-closed + {closed_part_count} partial-close, "
+              f"{lots_added} lots, {sells_logged} closed-trade records, sig={sig}")
 
         # Invalidate terminal cache
         try:
@@ -5258,7 +5364,7 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         except Exception:
             pass
 
-        # Trigger earnings sync
+        # Trigger earnings sync for still-open tickers only
         try:
             from services.user_earnings_service import (
                 invalidate_user_earnings,
@@ -5266,29 +5372,42 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
             )
             from config import FMP_API_KEY as _fmp_key_csv
             import asyncio as _aio_csv
-            syms_set = set(buy_lots.keys())
+            open_syms = {t for t in buy_lots if updated_map.get(t)}
             invalidate_user_earnings("portfolio")
-            _aio_csv.create_task(sync_universe_background("portfolio", syms_set, _fmp_key_csv or ""))
+            if open_syms:
+                _aio_csv.create_task(sync_universe_background("portfolio", open_syms, _fmp_key_csv or ""))
         except Exception:
             pass
 
+    # Summarise closed positions for the preview card
+    closed_preview = [p for p in preview if p.get("closed")]
+    open_preview   = [p for p in preview if not p.get("closed")]
+
     return {
-        "success":          True,
-        "mode":             mode,
-        "columns_detected": parsed["columns"],
-        "rows_total":       parsed["rows_total"],
-        "rows_skipped":     len(skipped),
-        "symbols_imported": list(buy_lots.keys()),
-        "symbols_skipped":  list({r["row"].get(parsed["columns"][0] if parsed["columns"] else "Symbol", "") for r in skipped if isinstance(r.get("row"), dict)}),
-        "holdings_created": holdings_created,
-        "holdings_updated": holdings_updated,
-        "lots_added":       lots_added,
-        "sells_found":         sum(len(v) for v in sell_lots.values()),
-        "sells_logged":        sells_logged if include_sells else 0,
-        "options_skipped":     len(parsed.get("options_rows", [])),
-        "options_detail":      parsed.get("options_rows", [])[:20],
-        "preview":             preview,
-        "skipped_detail":      skipped[:20],
+        "success":              True,
+        "mode":                 mode,
+        "columns_detected":     parsed["columns"],
+        "rows_total":           parsed["rows_total"],
+        "rows_skipped":         len(skipped),
+        # Open positions
+        "symbols_imported":     [p["ticker"] for p in open_preview],
+        "symbols_closed":       [p["ticker"] for p in closed_preview],
+        "holdings_created":     holdings_created,
+        "holdings_updated":     holdings_updated,
+        "lots_added":           lots_added,
+        # Closed trade records
+        "sells_found":          sum(len(v) for v in sell_lots.values()),
+        "closed_trades_created": sells_logged,
+        "closed_full_count":    closed_full_count,
+        "closed_partial_count": closed_part_count,
+        # Legacy alias kept for backward compat with older frontend calls
+        "sells_logged":         sells_logged,
+        # Options
+        "options_skipped":      len(parsed.get("options_rows", [])),
+        "options_detail":       parsed.get("options_rows", [])[:20],
+        # Review details
+        "preview":              preview,
+        "skipped_detail":       skipped[:20],
     }
 
 
