@@ -224,6 +224,37 @@ async def _x_consensus_loop():
         await _asyncio.sleep(90)
 
 
+async def _terminal_prewarm():
+    """Build the Caelyn Terminal cache in the background at startup.
+
+    Waits for the data_service (Tradier / yfinance) to be ready, then kicks
+    off a full terminal build so the first user request hits the cache instead
+    of blocking a worker for 60-120 s.  Failures are logged and silently
+    swallowed — they never affect the startup sequence.
+    """
+    import asyncio as _asyncio_pw
+    await _asyncio_pw.sleep(15)          # let _do_init thread finish first
+    try:
+        await _wait_for_init()           # data_service ready
+        from data.portfolio_store import canonical_file as _cf, load_active_holdings as _lh
+        holdings = _lh()
+        if not holdings:
+            print("[TERMINAL_PREWARM] no holdings — skipping pre-warm")
+            return
+        from data.caelyn_terminal import CaelynTerminalProvider
+        provider = CaelynTerminalProvider(
+            tradier=data_service.tradier   if data_service else None,
+            finnhub=data_service.finnhub   if data_service else None,
+            fmp=data_service.fmp           if data_service else None,
+            yahoo=data_service.yahoo       if data_service else None,
+            coingecko=data_service.coingecko if data_service else None,
+        )
+        await provider.get(_cf())
+        print(f"[TERMINAL_PREWARM] cache built for {len(holdings)} holdings")
+    except Exception as _pw_err:
+        print(f"[TERMINAL_PREWARM] error (non-fatal): {_pw_err}")
+
+
 @asynccontextmanager
 async def lifespan(app):
     _init_postgres_chat_storage_on_startup("lifespan")
@@ -339,6 +370,11 @@ async def lifespan(app):
         print("[SCREENER_HUB] Scheduler task registered")
     except Exception as _e:
         print(f"[STARTUP] Screener Hub scheduler init error: {_e}")
+
+    # Pre-warm the Caelyn Terminal cache in the background so the portfolio
+    # dashboard is ready before the first user request arrives.
+    asyncio.create_task(_terminal_prewarm())
+
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)

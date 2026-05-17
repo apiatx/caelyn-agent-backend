@@ -411,7 +411,21 @@ def save_active_holdings(holdings: list[dict]) -> None:
         f"count={len(normalised)}  symbols={syms}"
     )
 
-    # 3. Invalidate portfolio earnings cache so Earnings Calendar reflects changes.
+    # 3. Invalidate Caelyn Terminal cache so the next /api/caelyn-terminal request
+    #    rebuilds with the new holdings instead of serving stale data.
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        _term_key = CaelynTerminalProvider.cache_key_for(_CANONICAL_FILE)
+        _app_cache.delete(_term_key)
+        print(
+            f"[portfolio-source-audit] terminal cache invalidated "
+            f"after save of {len(normalised)} holdings"
+        )
+    except Exception as _term_e:
+        print(f"[portfolio-source-audit] terminal cache invalidation skipped: {_term_e}")
+
+    # 4. Invalidate portfolio earnings cache so Earnings Calendar reflects changes.
     #    Fire-and-forget — never raises even if Neon is unavailable.
     try:
         from services.user_earnings_service import invalidate_user_earnings  # type: ignore
