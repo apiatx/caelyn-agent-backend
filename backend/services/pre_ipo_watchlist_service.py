@@ -46,14 +46,6 @@ try:
 except Exception:  # pragma: no cover — defensive
     MODEL_SONAR = "sonar"
 
-try:
-except ImportError:  # pragma: no cover
-    def traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
 
 
 # ── Tracked companies ────────────────────────────────────────────────────────

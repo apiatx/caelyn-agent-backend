@@ -26,16 +26,6 @@ from agent.mode_normalizer import (
 
 import config as _cfg  # noqa: F401  — triggers os.environ.setdefault calls
 
-try:
-except ImportError:
-    def _ls_traceable(*args, **kwargs):
-        def _noop(fn):
-            return fn
-        if args and callable(args[0]):
-            return args[0]
-        return _noop
-
-traceable = _ls_traceable
 
 from pathlib import Path
 from urllib.parse import urlparse, unquote
@@ -1300,35 +1290,6 @@ async def debug_db(request: Request):
         "init_attempts": _pg_startup_attempts,
         "suggested_debug_url": suggested_debug_url,
     }
-
-
-    request: Request,
-    hours: int = 24,
-    limit: int = 20,
-    errors_only: bool = False,
-    run_id: Optional[str] = None,
-):
-    """Pull recent LangSmith traces, errors, and diagnostics.
-
-    Query params:
-      - hours: lookback window (default 24)
-      - limit: max runs to return (default 20)
-      - errors_only: only return error runs
-      - run_id: get full detail for a specific run
-    """
-    try:
-    except ImportError as e:
-        return JSONResponse(status_code=500, content={"error": f"Import failed: {e}"})
-
-    try:
-        if run_id:
-            return get_run_detail(run_id)
-        if errors_only:
-            runs = get_recent_runs(hours=hours, error_only=True, limit=limit)
-            return {"errors": runs}
-        return diagnose(hours=hours, limit=limit)
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/api/debug/provider-call-audit")
