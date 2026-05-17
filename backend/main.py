@@ -2988,7 +2988,34 @@ async def social_grok_query(
 
     if is_select_consensus:
         from agent.prompts import X_SELECT_TRADER_CONSENSUS_CONTRACT
-        from services.x_consensus_cache import X_SELECT_HANDLES as _X_SELECT_HANDLES
+        from services.x_consensus_cache import (
+            X_SELECT_HANDLES as _X_SELECT_HANDLES,
+            _load_disk_cache as _xc_load_cache,
+            _is_fresh as _xc_is_fresh,
+        )
+        import time as _time_mod
+
+        # ── Serve from cache whenever possible ──────────────────────────
+        # The scheduled daily refresh (noon Chicago) already runs the full
+        # 3-call pipeline and persists to disk.  Re-running it on every
+        # button press was the single biggest cost driver (~$3/day alone).
+        # Only fall through to live calls if the cache is genuinely stale
+        # OR if the caller explicitly passes force_refresh=true.
+        _force_refresh = bool(body.get("force_refresh", False))
+        _cached_snap = _xc_load_cache()
+        if not _force_refresh and _xc_is_fresh(_cached_snap) and _cached_snap.get("raw"):
+            _age_min = round((_time_mod.time() - (_cached_snap.get("_saved_at") or 0)) / 60, 1)
+            print(f"[SOCIAL_GROK] Returning cached consensus (age={_age_min}min) — no Grok calls fired")
+            return JSONResponse(content={
+                "response":      _cached_snap["raw"],
+                "query":         query or "Consensus tickers among select X traders",
+                "structured":    True,
+                "preset":        "x_select_trader_consensus",
+                "from_cache":    True,
+                "cache_age_min": _age_min,
+            })
+
+        print(f"[SOCIAL_GROK] Cache stale or force_refresh — firing live Grok calls")
 
         # ── Phase 1: Parallel batched x_search (max ~8 handles per call) ──
         # Grok's allowed_x_handles supports ~10 per call; we batch into groups
@@ -3060,6 +3087,7 @@ async def social_grok_query(
                 use_deep_model=True,
                 timeout=90.0,
                 system_text=X_SELECT_TRADER_CONSENSUS_CONTRACT,
+                max_output_tokens=4000,
             )
             if isinstance(result, dict) and not result.get("error"):
                 return JSONResponse(content={

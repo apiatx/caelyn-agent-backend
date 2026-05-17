@@ -472,6 +472,7 @@ async def _fetch_batch(
             use_deep_model=False,
             timeout=_PHASE1_TIMEOUT,
             x_search_config={"allowed_x_handles": handles, "from_date": since_date},
+            max_output_tokens=2000,
         )
     except Exception as e:
         print(f"[X_CONSENSUS] Batch {batch_idx} exception ({handles[0]}…): {e}")
@@ -949,6 +950,7 @@ async def _run_refresh(data_service) -> Optional[dict]:
             use_deep_model=True,
             timeout=90.0,
             system_text=X_SELECT_TRADER_CONSENSUS_CONTRACT,
+            max_output_tokens=4000,
         )
     except Exception as e:
         print(f"[X_CONSENSUS] Synthesis exception: {e}")

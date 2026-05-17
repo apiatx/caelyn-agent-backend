@@ -394,6 +394,7 @@ Return your analysis as a clear report. Start with the highest social momentum t
             raw_mode=True,
             use_deep_model=True,
             x_search_config={"from_date": from_date},
+            max_output_tokens=3000,
         )
     async def run_x_social_scan(self, mode: str, query: str = "", constraints: dict = None) -> dict:
         """
@@ -724,6 +725,7 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
         use_deep_model: bool = False,
         x_search_config: dict = None,
         system_text: str = None,
+        max_output_tokens: int = 3000,
     ) -> dict:
         """
         Call the xAI Responses API with x_search enabled.
@@ -733,9 +735,15 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
         system_text, when provided, is prepended as a system message before the user prompt
         so that full trading context (system prompt + market data) is preserved when Grok
         acts as a final or solo reasoning model.
+        max_output_tokens caps output (and reasoning) token generation — critical for cost
+        control with reasoning models.  Default 3000; synthesis calls pass 4000.
         """
         model = self.deep_model if use_deep_model else self.model
-        x_search_opts = x_search_config or {}
+
+        # Cost control: limit x_search results to keep input tokens reasonable.
+        # Default 15 results per search (xAI default is much higher).
+        x_search_opts = dict(x_search_config or {})
+        x_search_opts.setdefault("num_x_results", 15)
 
         input_messages = []
         if system_text:
@@ -744,6 +752,7 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
 
         payload = {
             "model": model,
+            "max_output_tokens": max_output_tokens,
             "tools": [
                 {
                     "type": "x_search",
@@ -754,7 +763,7 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
         }
 
         ctx_tag = f", system={len(system_text):,}chars" if system_text else ""
-        print(f"[XAI] Calling {model} (raw_mode={raw_mode}, x_search_config={x_search_opts}{ctx_tag})")
+        print(f"[XAI] Calling {model} max_out={max_output_tokens} (raw_mode={raw_mode}, x_search_config={x_search_opts}{ctx_tag})")
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:

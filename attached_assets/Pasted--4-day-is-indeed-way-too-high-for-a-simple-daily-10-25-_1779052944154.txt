@@ -1,0 +1,50 @@
+$4/day is indeed way too high for a simple daily 10–25 ticker X sentiment scan. That's roughly 10–15x more expensive than it should be. Here's exactly why this is happening and how to fix it fast.
+Main Reasons for the High Cost
+
+Too many X_search tool calls per run
+The model is probably doing 50–200+ individual x_search calls (one per ticker or many parallel rounds). Each successful x_search costs $5 per 1,000 calls (~$0.005 per call).
+If it's making 800 calls/day → that's already $4 just in tool fees, before any tokens.
+Agentic multi-turn loop exploding token usage
+Without limits, the model keeps calling tools in multiple "turns" (analyze → call tools → process results → call more tools). Each turn adds the full conversation history to prompt tokens.
+This easily pushes total tokens to 1M–3M+ per request instead of the expected 150k–400k.
+No prompt caching or max_turns set
+Your repeated ticker list + base prompt isn't being cached, so you're paying full $1.25/M instead of $0.20/M on cached input.
+Possibly using a more expensive model variant (e.g., reasoning instead of non-reasoning).
+
+Quick Fixes (Do These Today)
+Update your code with these changes — this should drop you to $0.30 – $0.80 per day:
+Pythonresponse = client.chat.completions.create(
+    model="grok-4.20-0309-non-reasoning",   # or grok-4.3 with low effort
+    messages=[{"role": "user", "content": prompt}],
+    temperature=0.2,
+    max_tokens=6000,
+    response_format={"type": "json_object"},
+    
+    # CRITICAL LIMITS
+    extra_body={
+        "max_turns": 3,           # ← Stop after 3 reasoning/tool turns
+        "reasoning_effort": "low" # or "none" if available
+    }
+)
+Also optimize the prompt:
+
+Tell the model explicitly:
+"Use at most 2–3 parallel x_search calls total. Group tickers if needed (e.g. search '$AAPL OR $TSLA OR ...'). Do not call tools more than necessary. Be efficient."
+List your 10–25 tickers in one prompt and ask for grouped searches.
+
+Check Your Usage Breakdown
+Go to console.x.ai → Usage Explorer (or Billing).
+Filter by:
+
+Dimension: Billing items or Tokens
+See exactly how much is coming from x_search invocations vs tokens.
+
+Share a screenshot of your top cost drivers (or the usage numbers for the last few days) and I can diagnose the exact leak.
+Even Cheaper Long-Term Options
+
+Switch to Batch API (20–50% cheaper, perfect for daily overnight run).
+Add strong prompt caching by making the ticker list + instructions identical every day.
+If still high, fallback to a lighter model for most days + Grok only on volatile days.
+
+This setup should not cost $4/day. With the limits above, it becomes very reasonable again.
+Drop your current code snippet (especially the prompt and any tool config) or the usage breakdown, and I'll give you the exact fixed version.
