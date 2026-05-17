@@ -3,79 +3,169 @@
     {
       "ticker": "BWEN",
       "shares": 1512.0,
-      "avg_cost": 3.9,
+      "avg_cost": 2.12,
       "asset_type": "stock",
       "lots": [
         {
           "shares": 1512.0,
-          "price": 3.9,
-          "date": "2026-05-15",
-          "notes": "BROADWIND INC"
+          "price": 2.12,
+          "date": "2026-05-14",
+          "notes": "Bradford White"
         }
       ],
-      "entry_date": "2026-05-15"
+      "entry_date": "2026-05-14"
     },
     {
       "ticker": "FLNC",
       "shares": 499.0,
-      "avg_cost": 20.07,
+      "avg_cost": 7.72,
       "asset_type": "stock",
       "lots": [
         {
           "shares": 499.0,
-          "price": 20.07,
-          "date": "2026-05-15",
-          "notes": "FLUENCE ENERGY INC CLASS CLASS A"
+          "price": 7.72,
+          "date": "2026-05-14",
+          "notes": "Fluence Energy"
         }
       ],
-      "entry_date": "2026-05-15"
+      "entry_date": "2026-05-14"
     },
     {
       "ticker": "SLNH",
       "shares": 5404.0,
-      "avg_cost": 1.61,
+      "avg_cost": 1.28,
       "asset_type": "stock",
       "lots": [
         {
           "shares": 5404.0,
-          "price": 1.61,
+          "price": 1.28,
+          "date": "2026-05-14",
+          "notes": "Soluna Holdings"
+        }
+      ],
+      "entry_date": "2026-05-14"
+    },
+    {
+      "ticker": "PENG",
+      "shares": 422.0,
+      "avg_cost": 17.51,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 422.0,
+          "price": 17.51,
+          "date": "2026-05-14",
+          "notes": "Penguin Solutions"
+        }
+      ],
+      "entry_date": "2026-05-14"
+    },
+    {
+      "ticker": "TRT",
+      "shares": 1160.0,
+      "avg_cost": 4.83,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 1160.0,
+          "price": 4.83,
+          "date": "2026-05-14",
+          "notes": "Terran Orbital"
+        }
+      ],
+      "entry_date": "2026-05-14"
+    },
+    {
+      "ticker": "SIVEF",
+      "shares": 6996.0,
+      "avg_cost": 1.28,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 6996.0,
+          "price": 1.28,
+          "date": "2026-05-13",
+          "notes": "Sivers Semi"
+        }
+      ],
+      "entry_date": "2026-05-13"
+    },
+    {
+      "ticker": "IQEPF",
+      "shares": 19875.0,
+      "avg_cost": 0.35,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 19875.0,
+          "price": 0.35,
           "date": "2026-05-12",
-          "notes": "SOLUNA HOLDINGS INC"
+          "notes": "IQ-EQ Pacific"
         }
       ],
       "entry_date": "2026-05-12"
     },
     {
-      "ticker": "PENG",
-      "shares": 422.0,
-      "avg_cost": 35.47,
+      "ticker": "SLOIF",
+      "shares": 79.0,
+      "avg_cost": 61.0,
       "asset_type": "stock",
       "lots": [
         {
-          "shares": 422.0,
-          "price": 35.47,
-          "date": "2026-05-05",
-          "notes": "PENGUIN SOLUTIONS INC DE"
+          "shares": 79.0,
+          "price": 61.0,
+          "date": "2026-05-10",
+          "notes": "SLO Inc"
         }
       ],
-      "entry_date": "2026-05-05"
+      "entry_date": "2026-05-10"
     },
     {
-      "ticker": "TRT",
-      "shares": 1160.0,
-      "avg_cost": 6.44,
+      "ticker": "NRGV",
+      "shares": 1969.0,
+      "avg_cost": 5.17,
       "asset_type": "stock",
       "lots": [
         {
-          "shares": 1160.0,
-          "price": 6.44,
-          "date": "2026-04-07",
-          "notes": "TRIO TECH INTL"
+          "shares": 1969.0,
+          "price": 5.17,
+          "date": "2026-05-08",
+          "notes": "Energy Vault"
         }
       ],
-      "entry_date": "2026-04-07"
+      "entry_date": "2026-05-08"
+    },
+    {
+      "ticker": "SILC",
+      "shares": 176.0,
+      "avg_cost": 28.07,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 176.0,
+          "price": 28.07,
+          "date": "2026-05-06",
+          "notes": "Silico Inc"
+        }
+      ],
+      "entry_date": "2026-05-06"
+    },
+    {
+      "ticker": "OUST",
+      "shares": 302.0,
+      "avg_cost": 26.0,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 302.0,
+          "price": 26.0,
+          "date": "2026-04-28",
+          "notes": "Ouster Inc"
+        }
+      ],
+      "entry_date": "2026-04-28"
     }
   ],
-  "_saved_at": "2026-05-17T05:09:51.576432Z",
+  "_saved_at": "2026-05-17T16:16:54.055641Z",
   "_source": "portfolio_store"
 }

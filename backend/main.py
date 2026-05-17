@@ -4722,7 +4722,6 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
 
 
 @app.delete("/api/portfolio/holdings/clear-all")
-@traceable(name="main.clear_all_holdings")
 async def clear_all_holdings(request: Request, api_key: str = Header(None, alias="X-API-Key")):
     """Wipe all active holdings — use before a clean CSV re-import.
 
@@ -4749,6 +4748,58 @@ async def clear_all_holdings(request: Request, api_key: str = Header(None, alias
         pass
 
     return {"cleared": True, "previous_count": prev_count}
+
+
+@app.delete("/api/portfolio/reset-all")
+async def reset_all_portfolio(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Nuclear reset: wipe ALL holdings AND ALL closed trade records.
+
+    Use this to start completely fresh before re-importing your CSVs.
+    This is irreversible.
+
+    Returns: { cleared: true, holdings_removed: N, closed_trades_removed: N }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    from data.portfolio_store import (
+        load_active_holdings  as _load_h,
+        save_active_holdings  as _save_h,
+        canonical_file        as _cf,
+    )
+    from data.closed_trades_store import (
+        load_closed_trades as _load_ct,
+        delete_closed_trade as _del_ct,
+    )
+
+    # 1. Clear holdings
+    prev_holdings = _load_h()
+    holdings_count = len(prev_holdings)
+    _save_h([])
+    print(f"[PORTFOLIO_RESET_ALL] wiped {holdings_count} holdings")
+
+    # 2. Clear closed trades (delete each record)
+    all_trades = _load_ct()
+    ct_count = len(all_trades)
+    ct_deleted = 0
+    for t in all_trades:
+        if _del_ct(t["id"]):
+            ct_deleted += 1
+    print(f"[PORTFOLIO_RESET_ALL] deleted {ct_deleted}/{ct_count} closed trades")
+
+    # 3. Invalidate terminal cache
+    try:
+        from data.caelyn_terminal import CaelynTerminalProvider
+        from data.cache import cache as _app_cache
+        _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+    except Exception:
+        pass
+
+    return {
+        "cleared":               True,
+        "holdings_removed":      holdings_count,
+        "closed_trades_removed": ct_deleted,
+    }
 
 
 @app.post("/api/portfolio/holdings")
@@ -5145,7 +5196,6 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
 
 
 @app.post("/api/portfolio/upload-csv")
-@traceable(name="main.portfolio_upload_csv")
 async def portfolio_upload_csv(request: Request, api_key: str = Header(None, alias="X-API-Key")):
     """Import holdings from a brokerage CSV export.
 
@@ -5224,7 +5274,10 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         get_holdings_signature as _sig,
         compute_lot_totals    as _totals,
     )
-    from data.closed_trades_store import save_closed_trade as _save_ct
+    from data.closed_trades_store import (
+        save_closed_trade  as _save_ct,
+        load_closed_trades as _load_ct,
+    )
     from datetime import date as _date_cls
     import uuid as _uuid_mod
 
@@ -5272,6 +5325,20 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
     existing_holdings = _load_h()
     existing_map      = {h["ticker"].upper(): h for h in existing_holdings}
 
+    # ── Pre-load closed trades for duplicate detection ─────────────────────────
+    # Build a set of (ticker, entry_date, exit_date, shares_rounded) keys so we
+    # can skip writing a closed-trade record that already exists in the DB.
+    # This prevents duplicate records when the same CSV is imported multiple times.
+    _existing_ct_rows = _load_ct() if mode == "import" else []
+    _existing_ct_keys: set[tuple] = set()
+    for _ct in _existing_ct_rows:
+        _existing_ct_keys.add((
+            (_ct.get("ticker") or "").upper(),
+            str(_ct.get("entry_date") or "")[:10],
+            str(_ct.get("exit_date")  or "")[:10],
+            round(float(_ct.get("shares") or 0), 2),
+        ))
+
     preview:          list[dict] = []
     holdings_created  = 0
     holdings_updated  = 0
@@ -5318,33 +5385,48 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
             shares_for_ct = min(total_sold, total_bought)
             is_full_close = net_shares <= 0
 
-            cost_basis    = avg_entry_price * shares_for_ct
-            realized_pnl  = round((avg_exit_price - avg_entry_price) * shares_for_ct, 4)
-            realized_pct  = round(realized_pnl / cost_basis * 100, 4) if cost_basis else None
-
-            group_id = str(_uuid_mod.uuid4())
-            ct_result = _save_ct({
-                "ticker":                 ticker,
-                "shares":                 shares_for_ct,
-                "entry_price":            avg_entry_price,
-                "exit_price":             avg_exit_price,
-                "entry_date":             entry_date,
-                "exit_date":              exit_date,
-                "realized_pnl":           realized_pnl,
-                "realized_pnl_pct":       realized_pct,
-                "notes":                  "Imported from CSV",
-                "sell_type":              "full" if is_full_close else "partial",
-                "is_full_close":          is_full_close,
-                "remaining_shares_after": max(net_shares, 0.0),
-                "trade_group_id":         group_id,
-                "cost_method":            "average_cost",
-            })
-            if not ct_result.get("_error"):
-                sells_logged += 1
+            # ── Dedup: skip if this exact closed trade record already exists ──
+            _ct_key = (
+                ticker,
+                str(entry_date)[:10],
+                str(exit_date)[:10],
+                round(float(shares_for_ct), 2),
+            )
+            if _ct_key in _existing_ct_keys:
+                # Same trade already in DB — don't create a duplicate
+                sells_logged += 0   # noqa: keep counter at same value
                 if is_full_close:
-                    closed_full_count += 1
-                else:
-                    closed_part_count += 1
+                    closed_full_count += 0
+            else:
+                _existing_ct_keys.add(_ct_key)   # prevent intra-import doubles
+
+                cost_basis    = avg_entry_price * shares_for_ct
+                realized_pnl  = round((avg_exit_price - avg_entry_price) * shares_for_ct, 4)
+                realized_pct  = round(realized_pnl / cost_basis * 100, 4) if cost_basis else None
+
+                group_id = str(_uuid_mod.uuid4())
+                ct_result = _save_ct({
+                    "ticker":                 ticker,
+                    "shares":                 shares_for_ct,
+                    "entry_price":            avg_entry_price,
+                    "exit_price":             avg_exit_price,
+                    "entry_date":             entry_date,
+                    "exit_date":              exit_date,
+                    "realized_pnl":           realized_pnl,
+                    "realized_pnl_pct":       realized_pct,
+                    "notes":                  "Imported from CSV",
+                    "sell_type":              "full" if is_full_close else "partial",
+                    "is_full_close":          is_full_close,
+                    "remaining_shares_after": max(net_shares, 0.0),
+                    "trade_group_id":         group_id,
+                    "cost_method":            "average_cost",
+                })
+                if not ct_result.get("_error"):
+                    sells_logged += 1
+                    if is_full_close:
+                        closed_full_count += 1
+                    else:
+                        closed_part_count += 1
 
         # ── Determine what stays in holdings ──────────────────────────────────
         if net_shares <= 0:
@@ -5371,16 +5453,16 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         existing = updated_map.get(ticker)
         if existing and merge_strategy == "add_lots":
             base_lots: list = list(existing.get("lots") or [])
-            if not base_lots and float(existing.get("shares") or 0) > 0:
-                # Synthesise a lot from flat fields for pre-lots holdings
-                synth: dict = {
-                    "shares": float(existing.get("shares", 0)),
-                    "price":  float(existing.get("avg_cost", 0)),
-                }
-                if existing.get("entry_date"):
-                    synth["date"] = str(existing["entry_date"]).split("T")[0]
-                base_lots = [synth]
-            merged_lots = _dedup_lots(base_lots, open_lots)
+            # ── KEY FIX: do NOT synthesise a fake lot from flat fields. ──────
+            # If existing has no lots array (flat holding synced from frontend),
+            # the CSV is the source of truth — use its lots directly.
+            # Previously a synthetic lot was created with date="" which never
+            # matched real CSV lots (which have real dates), causing shares to
+            # double on every re-import.
+            if base_lots:
+                merged_lots = _dedup_lots(base_lots, open_lots)
+            else:
+                merged_lots = open_lots   # replace flat holding with CSV lots
         else:
             merged_lots = open_lots
 
