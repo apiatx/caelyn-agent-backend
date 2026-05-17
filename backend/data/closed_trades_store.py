@@ -470,3 +470,103 @@ def delete_closed_trade(trade_id: str) -> bool:
         return False
     finally:
         _put_conn(conn)
+
+
+def delete_all_closed_trades() -> int:
+    """Delete ALL closed trades in a single query. Returns count deleted.
+    Used by full_replace CSV import to avoid N individual round-trips."""
+    conn = _get_conn()
+    if not conn:
+        return 0
+    try:
+        _ensure_table(conn)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM portfolio_closed_trades")
+        count = cur.rowcount
+        conn.commit()
+        cur.close()
+        print(f"[CLOSED_TRADES_STORE] delete_all: removed {count} records")
+        return count
+    except Exception as e:
+        print(f"[CLOSED_TRADES_STORE] delete_all error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        _put_conn(conn)
+
+
+def save_closed_trades_batch(trades: list[dict]) -> int:
+    """Insert multiple closed trades in a single DB round-trip.
+    Returns the number of records successfully inserted.
+    Used by CSV import to avoid N individual inserts (which cause Gunicorn
+    worker timeouts on large CSVs)."""
+    if not trades:
+        return 0
+    conn = _get_conn()
+    if not conn:
+        # Fallback: individual saves
+        count = 0
+        for t in trades:
+            r = save_closed_trade(t)
+            if "_error" not in r:
+                count += 1
+        return count
+    try:
+        _ensure_table(conn)
+        cur = conn.cursor()
+        rows = []
+        for trade in trades:
+            t = _derive_fields(trade)
+            trade_id = t.get("id") or str(uuid.uuid4())
+            ticker = (t.get("ticker") or "").upper().strip()
+            rows.append((
+                trade_id,
+                ticker,
+                t.get("shares") or 0,
+                t.get("entry_date") or None,
+                t.get("exit_date") or None,
+                t.get("entry_price") or 0,
+                t.get("exit_price") or 0,
+                t.get("realized_pnl"),
+                t.get("realized_pnl_pct"),
+                t.get("holding_period_days"),
+                t.get("notes"),
+                t.get("sell_type") or None,
+                t.get("remaining_shares_after") if t.get("remaining_shares_after") is not None else None,
+                t.get("cost_method") or "average_cost",
+                t.get("trade_group_id") or None,
+                bool(t.get("is_full_close", False)),
+            ))
+        from psycopg2.extras import execute_values as _ev
+        _ev(cur, """
+            INSERT INTO portfolio_closed_trades
+              (id, ticker, shares, entry_date, exit_date, entry_price, exit_price,
+               realized_pnl, realized_pnl_pct, holding_period_days, notes,
+               sell_type, remaining_shares_after, cost_method,
+               trade_group_id, is_full_close)
+            VALUES %s
+            ON CONFLICT (id) DO NOTHING
+        """, rows)
+        count = cur.rowcount if cur.rowcount >= 0 else len(rows)
+        conn.commit()
+        cur.close()
+        print(f"[CLOSED_TRADES_STORE] batch insert: {count}/{len(rows)} records saved")
+        return count
+    except Exception as e:
+        print(f"[CLOSED_TRADES_STORE] batch insert error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # Fallback to individual saves
+        count = 0
+        for t in trades:
+            r = save_closed_trade(t)
+            if "_error" not in r:
+                count += 1
+        return count
+    finally:
+        _put_conn(conn)

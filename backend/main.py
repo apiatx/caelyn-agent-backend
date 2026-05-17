@@ -5182,9 +5182,11 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         compute_lot_totals    as _totals,
     )
     from data.closed_trades_store import (
-        save_closed_trade   as _save_ct,
-        load_closed_trades  as _load_ct,
-        delete_closed_trade as _del_ct_one,
+        save_closed_trade          as _save_ct,
+        save_closed_trades_batch   as _save_ct_batch,
+        load_closed_trades         as _load_ct,
+        delete_closed_trade        as _del_ct_one,
+        delete_all_closed_trades   as _del_ct_all,
     )
     from datetime import date as _date_cls
     import uuid as _uuid_mod
@@ -5239,14 +5241,13 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
     _fr_prev_ct        = 0
     if full_replace and mode == "import":
         _fr_prev_holdings = len(existing_holdings)
-        _ct_to_wipe = _load_ct()
-        _fr_prev_ct = len(_ct_to_wipe)
+        # Single DELETE query — replaces N individual round-trips that caused
+        # Gunicorn worker timeouts on large portfolios.
+        _fr_prev_ct = _del_ct_all()
         _save_h([])
-        for _ct_item in _ct_to_wipe:
-            _del_ct_one(_ct_item["id"])
         existing_holdings = []
         print(f"[PORTFOLIO_CSV] full_replace=True: wiped {_fr_prev_holdings} holdings "
-              f"+ {_fr_prev_ct} closed trades before import")
+              f"+ {_fr_prev_ct} closed trades before import (single-query wipe)")
 
     existing_map      = {h["ticker"].upper(): h for h in existing_holdings}
 
@@ -5265,6 +5266,7 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
         ))
 
     preview:          list[dict] = []
+    _ct_batch:        list[dict] = []   # collected; flushed in one batch INSERT
     holdings_created  = 0
     holdings_updated  = 0
     lots_added        = 0
@@ -5330,7 +5332,7 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
                 realized_pct  = round(realized_pnl / cost_basis * 100, 4) if cost_basis else None
 
                 group_id = str(_uuid_mod.uuid4())
-                ct_result = _save_ct({
+                _ct_batch.append({
                     "ticker":                 ticker,
                     "shares":                 shares_for_ct,
                     "entry_price":            avg_entry_price,
@@ -5346,12 +5348,11 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
                     "trade_group_id":         group_id,
                     "cost_method":            "average_cost",
                 })
-                if not ct_result.get("_error"):
-                    sells_logged += 1
-                    if is_full_close:
-                        closed_full_count += 1
-                    else:
-                        closed_part_count += 1
+                sells_logged += 1
+                if is_full_close:
+                    closed_full_count += 1
+                else:
+                    closed_part_count += 1
 
         # ── Determine what stays in holdings ──────────────────────────────────
         if net_shares <= 0:
@@ -5509,7 +5510,7 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
                 _oh_pnl  = round((_sl_ep - _oh_base_cost) * _sl_sh, 4)
                 _oh_pct  = round(_oh_pnl / _oh_cb * 100, 4) if _oh_cb else None
                 _oh_full = (len(_oh_remaining) == 0)
-                _save_ct({
+                _ct_batch.append({
                     "ticker":                 _ot,
                     "shares":                 _sl_sh,
                     "entry_price":            _oh_base_cost,
@@ -5551,10 +5552,16 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
     if mode == "import" and any_change:
         final_holdings = list(updated_map.values())
         _save_h(final_holdings)
+        # Flush all collected closed trades in ONE batch INSERT instead of N
+        # individual round-trips. This is critical for Gunicorn deployments:
+        # 71 individual DB calls took ~43s and caused a worker timeout/SIGKILL
+        # which sent an empty response body to the browser.
+        if _ct_batch:
+            _save_ct_batch(_ct_batch)
         sig = _sig(final_holdings)
         print(f"[PORTFOLIO_CSV] imported {holdings_created} new + {holdings_updated} updated + "
               f"{closed_full_count} fully-closed + {closed_part_count} partial-close, "
-              f"{lots_added} lots, {sells_logged} closed-trade records, sig={sig}")
+              f"{lots_added} lots, {sells_logged} closed-trade records (batch), sig={sig}")
 
         # Invalidate terminal cache
         try:
