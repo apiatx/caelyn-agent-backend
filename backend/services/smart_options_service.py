@@ -5,9 +5,12 @@ Finds arbitrage opportunities between Hyperliquid 24/7 perpetual prices
 and actual market prices (Tradier).
 
 Logic:
-  - Fetch all equity perps from live HyperliquidState (HIP-3 DEX assets)
-  - HIP-3 perps use coin format "dex_prefix:TICKER" — display_name is the clean ticker
-  - Multiple DEXes may list the same equity; we pick the most liquid instance
+  - HL stock data is sourced from the market-matrix cache (stocks_etfs tab)
+    so the Hyperliquid page and the Smart Options tab share ONE data fetch path.
+    Falls back to all_assets() + disk cache only on a cold start before the
+    first market-matrix call.
+  - Multiple DEXes may list the same equity; we keep the most liquid instance
+    and aggregate OI across all DEX rows.
   - Fetch matching equity quotes from Tradier (last/close/prevclose)
   - Compute the price gap (HL vs actual)
   - Signal: large HL premium → CALL opportunity; large HL discount → PUT opportunity
@@ -47,6 +50,9 @@ _NON_US_EQUITY_BLOCKLIST: set[str] = {
     "GLDMINE", "BIOTECH", "ENERGY", "DEFENSE",
     # Unknown/index synthetic tokens
     "XYZ100", "SKHX",
+    # Crypto assets that share tickers with US stocks on Tradier
+    # DASH = Dash (crypto) on HL,  but DoorDash (DASH) on Tradier
+    "DASH",
 }
 
 
@@ -123,53 +129,105 @@ async def build_smart_options_data(
     """
     market = _market_status()
 
-    # ── 1. Extract equity perps from live HL state ────────────────────────────
-    # HIP-3 equity perps live in state.assets (keyed by "dex:TICKER") but may
-    # not appear in scored_assets() / lkg_assets if the feature pass only scored
-    # crypto perps.  Use all_assets() which returns the full state.assets dict.
-    all_assets = []
-    try:
-        all_assets = hl_state.all_assets()
-    except Exception:
-        pass
+    # ── 1. Get HL equity stock data ───────────────────────────────────────────
+    # PRIMARY source: the market-matrix stocks_etfs cache (same data the
+    # Hyperliquid page already fetched). Both pages share one HL data path.
+    # FALLBACK: all_assets() + disk cache on cold start (matrix not yet built).
+    #
+    # Uniform dict stored per ticker:
+    #   price           — mark price
+    #   oracle_px       — oracle price
+    #   chg_24h_pct     — 24h change %
+    #   funding_hourly  — raw hourly funding rate (decimal, e.g. 0.0001)
+    #   volume_24h_usd  — 24h notional volume USD
+    # OI aggregated separately in oi_usd_by_ticker / oi_contracts_by_ticker.
 
-    # HIP-3 equity perps:
-    #   asset.coin         = "dex_prefix:TICKER"  (e.g. "xyz:TSLA", "flx:NVDA")
-    #   asset.display_name = "TICKER"             (e.g. "TSLA", "NVDA")
-    #   asset.tags         = [..., "equity", ...]
-    # We use the "equity" tag as the primary selector.
-
-    equity_assets = [
-        a for a in all_assets
-        if a.market_type == "perp"
-        and "equity" in (getattr(a, "tags", None) or [])
-        and a.mark_px is not None
-        and a.mark_px > 0
-        and (a.day_ntl_vlm or 0) >= _MIN_VOL_USD
-    ]
-
-    # Fallback: if the live state hasn't loaded HIP-3 yet, read the disk cache
-    if not equity_assets:
-        equity_assets = _load_equity_assets_from_disk_cache()
-
-    # Deduplicate: multiple DEXes may list the same equity ticker.
-    # Keep the instance with the highest 24h volume per display_name.
-    best_by_ticker: dict[str, object] = {}
-    for a in equity_assets:
-        ticker = (getattr(a, "display_name", None) or a.coin).upper()
-        if not ticker:
-            continue
-        existing = best_by_ticker.get(ticker)
-        if existing is None or (a.day_ntl_vlm or 0) > (existing.day_ntl_vlm or 0):
-            best_by_ticker[ticker] = a
-
-    # Also aggregate OI across all DEX instances of the same ticker
-    oi_usd_by_ticker: dict[str, float] = {}
+    best_by_ticker:        dict[str, dict]  = {}
+    oi_usd_by_ticker:      dict[str, float] = {}
     oi_contracts_by_ticker: dict[str, float] = {}
-    for a in equity_assets:
-        ticker = (getattr(a, "display_name", None) or a.coin).upper()
-        oi_usd_by_ticker[ticker]       = oi_usd_by_ticker.get(ticker, 0) + (a.open_interest_usd or 0)
-        oi_contracts_by_ticker[ticker] = oi_contracts_by_ticker.get(ticker, 0) + (a.open_interest or 0)
+
+    # Try matrix cache first (avoids a redundant all_assets() read)
+    try:
+        from services.hyperliquid.router import get_matrix_stocks_snapshot
+        matrix_rows = get_matrix_stocks_snapshot()
+    except Exception:
+        matrix_rows = []
+
+    if matrix_rows:
+        # Matrix rows: coin=display_name, mark, oracle, change_24h_pct,
+        # funding (hourly raw), open_interest_usd, volume_24h_usd.
+        # Multiple DEX rows may share the same display_name ticker.
+        for row in matrix_rows:
+            ticker = (row.get("coin") or row.get("display_name") or "").upper().strip()
+            if not ticker:
+                continue
+            price = row.get("mark")
+            try:
+                price = float(price)
+            except (TypeError, ValueError):
+                continue
+            if price <= 0:
+                continue
+            vol = float(row.get("volume_24h_usd") or 0)
+            if vol < _MIN_VOL_USD:
+                continue
+            oi = float(row.get("open_interest_usd") or 0)
+
+            # Keep the highest-volume DEX row per ticker
+            if ticker not in best_by_ticker or vol > float(best_by_ticker[ticker]["volume_24h_usd"] or 0):
+                best_by_ticker[ticker] = {
+                    "price":          price,
+                    "oracle_px":      row.get("oracle"),
+                    "chg_24h_pct":    row.get("change_24h_pct"),
+                    "funding_hourly": float(row.get("funding") or 0.0),
+                    "volume_24h_usd": vol,
+                }
+
+            # Aggregate OI across all DEX rows for the same ticker
+            oi_usd_by_ticker[ticker] = oi_usd_by_ticker.get(ticker, 0.0) + oi
+            # oi_contracts not available in matrix rows
+        print(f"[SmartOptions] HL data from market-matrix cache: {len(best_by_ticker)} stocks")
+
+    else:
+        # Cold-start fallback: matrix not yet populated
+        print("[SmartOptions] Market-matrix cache empty — falling back to all_assets()")
+        raw_assets = []
+        try:
+            raw_assets = hl_state.all_assets()
+        except Exception:
+            pass
+
+        equity_assets = [
+            a for a in raw_assets
+            if a.market_type == "perp"
+            and "equity" in (getattr(a, "tags", None) or [])
+            and a.mark_px is not None
+            and a.mark_px > 0
+            and (a.day_ntl_vlm or 0) >= _MIN_VOL_USD
+        ]
+        if not equity_assets:
+            equity_assets = _load_equity_assets_from_disk_cache()
+
+        lkg_best: dict[str, object] = {}
+        for a in equity_assets:
+            ticker = (getattr(a, "display_name", None) or a.coin).upper()
+            if not ticker:
+                continue
+            existing = lkg_best.get(ticker)
+            if existing is None or (a.day_ntl_vlm or 0) > (existing.day_ntl_vlm or 0):
+                lkg_best[ticker] = a
+            oi_usd_by_ticker[ticker]       = oi_usd_by_ticker.get(ticker, 0.0) + (a.open_interest_usd or 0)
+            oi_contracts_by_ticker[ticker] = oi_contracts_by_ticker.get(ticker, 0.0) + (a.open_interest or 0)
+
+        for ticker, a in lkg_best.items():
+            best_by_ticker[ticker] = {
+                "price":          a.mark_px,
+                "oracle_px":      getattr(a, "oracle_px", None),
+                "chg_24h_pct":    getattr(a, "pct_change_24h", None),
+                "funding_hourly": float(getattr(a, "funding", None) or 0.0),
+                "volume_24h_usd": getattr(a, "day_ntl_vlm", None),
+            }
+        print(f"[SmartOptions] HL data from all_assets() fallback: {len(best_by_ticker)} stocks")
 
     if not best_by_ticker:
         return {
@@ -220,7 +278,7 @@ async def build_smart_options_data(
     # ── 4. Build comparison rows ──────────────────────────────────────────────
     rows = []
     for ticker, asset in best_by_ticker.items():
-        hl_price = float(asset.mark_px)
+        hl_price = float(asset["price"])
         q = quote_map.get(ticker)
         actual_price = _best_price(q)
 
@@ -325,17 +383,18 @@ def _best_price(q: Optional[dict]) -> Optional[float]:
     return None
 
 
-def _hl_fields(asset, total_oi_usd: Optional[float], total_oi_contracts: Optional[float]) -> dict:
-    funding_hr = getattr(asset, "funding", None) or 0.0
+def _hl_fields(asset: dict, total_oi_usd: Optional[float], total_oi_contracts: Optional[float]) -> dict:
+    """asset is the uniform dict from best_by_ticker (works for both matrix and fallback sources)."""
+    funding_hr = float(asset.get("funding_hourly") or 0.0)
     return {
-        "price":               _r(asset.mark_px, 4),
-        "oracle_px":           _r(getattr(asset, "oracle_px", None), 4),
-        "chg_24h_pct":         _r(getattr(asset, "pct_change_24h", None), 3),
+        "price":               _r(asset.get("price"), 4),
+        "oracle_px":           _r(asset.get("oracle_px"), 4),
+        "chg_24h_pct":         _r(asset.get("chg_24h_pct"), 3),
         "funding_rate_hourly": _r(funding_hr * 100, 6),
         "funding_rate_ann":    _r(funding_hr * 8760 * 100, 2),
         "oi_usd":              _r(total_oi_usd, 0),
         "oi_contracts":        _r(total_oi_contracts, 2),
-        "volume_24h_usd":      _r(getattr(asset, "day_ntl_vlm", None), 0),
+        "volume_24h_usd":      _r(asset.get("volume_24h_usd"), 0),
     }
 
 

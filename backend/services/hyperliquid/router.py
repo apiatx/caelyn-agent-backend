@@ -945,6 +945,24 @@ _MATRIX_CACHE_TTL_S = 20.0
 _matrix_cache: dict[str, Any] = {"payload": None, "ts": 0.0, "last_good": None}
 
 
+def get_matrix_stocks_snapshot() -> list[dict]:
+    """
+    Return the stocks_etfs assets from the latest market-matrix cache.
+
+    Called by the Smart Options service so both the Hyperliquid page and the
+    Strategy/Smart-Options tab share a single HL data fetch path rather than
+    each pulling from all_assets() independently.
+
+    Returns an empty list only when the matrix has never been computed yet
+    (cold start before the first market-matrix request).
+    """
+    for key in ("payload", "last_good"):
+        cached = _matrix_cache.get(key)
+        if cached:
+            return cached.get("tabs", {}).get("stocks_etfs", {}).get("assets", [])
+    return []
+
+
 @router.get("/market-matrix")
 async def get_market_matrix():
     """
