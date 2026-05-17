@@ -1,0 +1,40 @@
+The backend agent fixed the root causes. I need to wire in full_replace: true on the frontend immediately — that's the one change required to make it work correctly. Let me do it:
+
+
+2 actions
+Now update the import call — swap out merge_strategy: 'add_lots' for full_replace: true:
+
+
+4 actions
+I can see the root cause in the logs. FastAPI has the 12 open positions in its DB (fastapiCanonicalCount: 12) but stock-holdings.json is still empty [] — the import response no longer includes updated_holdings when full_replace: true is used (note closed_trades_created: 0 returned but 71 trades exist in the Trade Journal). The local file never got written.
+
+Let me find what endpoint the fastapiCanonicalCount debug comes from and what FastAPI endpoint returns the current holdings:
+
+
+3 actions
+The FastAPI endpoint is ${FA_URL}/api/portfolio/holdings. The fix: after a successful import, if updated_holdings is absent from the response (which is what happens with full_replace: true), do a follow-up fetch to pull the current holdings directly from FastAPI and write them to the local file.
+
+
+2 actions
+Now I can make the targeted fix. When updated_holdings is absent from the import response (which happens with full_replace: true), fall back to a direct GET from FastAPI:
+
+
+4 actions
+Let me check the current state of the local file and verify the fix compiled cleanly:
+
+
+3 actions
+The fix is live. The server compiled cleanly. Here's exactly what was wrong and what just changed:
+
+The actual bug: After a full_replace: true import, FastAPI no longer returns updated_holdings in the response body (the backend agent's new code omits it). So Express never got the 12 open positions to write to the local file — stock-holdings.json stayed empty, the dashboard showed nothing.
+
+The fix: Express now does a direct follow-up GET /api/portfolio/holdings call to FastAPI immediately after a successful import, gets the current canonical positions, and writes them to stock-holdings.json. This fires regardless of whether updated_holdings is in the import response or not.
+
+To see your positions now — you need to re-upload your CSV one more time. FastAPI already has your 12 open positions in its database from the last import, but the local file is still empty. Uploading the CSV again (with full_replace: true now wired) will:
+
+FastAPI wipes + re-imports cleanly
+Express immediately fetches the resulting 12 open positions from FastAPI
+Writes them to stock-holdings.json
+Dashboard shows your active holdings
+Trade Journal shows your 71 closed positions
+The server log will show: [csv-import] Fetched 12 holdings from FastAPI after full_replace import confirming it worked.
