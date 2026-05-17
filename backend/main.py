@@ -4905,7 +4905,21 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
             break
     clean = "\n".join(lines[header_idx:])
 
-    reader = _csv.DictReader(_io.StringIO(clean))
+    # ── Auto-detect delimiter (comma vs tab vs pipe vs semicolon) ────────────
+    # Schwab and some other brokerages export TSV (tab-separated), not CSV.
+    # We sniff a sample of the cleaned text; fall back to comma on failure.
+    _sample = clean[:4096]
+    _delimiter = ","
+    try:
+        _dialect = _csv.Sniffer().sniff(_sample, delimiters=",\t|;")
+        _delimiter = _dialect.delimiter
+    except Exception:
+        # Manual fallback: pick whichever of comma/tab appears more on line 1
+        _first_line = clean.split("\n")[0]
+        if _first_line.count("\t") > _first_line.count(","):
+            _delimiter = "\t"
+
+    reader = _csv.DictReader(_io.StringIO(clean), delimiter=_delimiter)
     raw_cols = reader.fieldnames or []
     cols_lower = {c.lower().strip(): c for c in raw_cols}
 

@@ -1,36 +1,81 @@
 {
   "holdings": [
     {
-      "ticker": "ARM",
-      "shares": 84.0,
-      "avg_cost": 214.16,
+      "ticker": "BWEN",
+      "shares": 1512.0,
+      "avg_cost": 3.9,
       "asset_type": "stock",
       "lots": [
         {
-          "shares": 84.0,
-          "price": 214.16,
-          "date": "2026-03-28",
-          "notes": "ARM HOLDINGS"
+          "shares": 1512.0,
+          "price": 3.9,
+          "date": "2026-05-15",
+          "notes": "BROADWIND INC"
         }
       ],
-      "entry_date": "2026-03-28"
+      "entry_date": "2026-05-15"
     },
     {
-      "ticker": "SIVEF",
-      "shares": 10996.0,
-      "avg_cost": 1.28,
+      "ticker": "FLNC",
+      "shares": 499.0,
+      "avg_cost": 20.07,
       "asset_type": "stock",
       "lots": [
         {
-          "shares": 10996.0,
-          "price": 1.28,
-          "date": "2026-04-01",
-          "notes": "SILVER ELEPHANT MINING"
+          "shares": 499.0,
+          "price": 20.07,
+          "date": "2026-05-15",
+          "notes": "FLUENCE ENERGY INC CLASS CLASS A"
         }
       ],
-      "entry_date": "2026-04-01"
+      "entry_date": "2026-05-15"
+    },
+    {
+      "ticker": "SLNH",
+      "shares": 5404.0,
+      "avg_cost": 1.61,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 5404.0,
+          "price": 1.61,
+          "date": "2026-05-12",
+          "notes": "SOLUNA HOLDINGS INC"
+        }
+      ],
+      "entry_date": "2026-05-12"
+    },
+    {
+      "ticker": "PENG",
+      "shares": 422.0,
+      "avg_cost": 35.47,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 422.0,
+          "price": 35.47,
+          "date": "2026-05-05",
+          "notes": "PENGUIN SOLUTIONS INC DE"
+        }
+      ],
+      "entry_date": "2026-05-05"
+    },
+    {
+      "ticker": "TRT",
+      "shares": 1160.0,
+      "avg_cost": 6.44,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 1160.0,
+          "price": 6.44,
+          "date": "2026-04-07",
+          "notes": "TRIO TECH INTL"
+        }
+      ],
+      "entry_date": "2026-04-07"
     }
   ],
-  "_saved_at": "2026-05-17T04:51:23.307366Z",
+  "_saved_at": "2026-05-17T05:09:03.309749Z",
   "_source": "portfolio_store"
 }
