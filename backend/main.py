@@ -4618,8 +4618,32 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
         f"count={len(holdings)}  symbols={syms[:20]}"
     )
 
-    # ── Derive open_positions + partially_closed_positions from holdings ───────
-    # Classification written at import time; values: "open" | "partially_closed_open"
+    # ── Load closed trades FIRST so we can re-derive classification ───────────
+    # Classification is written at import time via the full ledger pipeline.
+    # Holdings saved through the simple POST /api/portfolio/holdings endpoint
+    # (frontend sync) do NOT carry a classification field — for those records
+    # we derive it here from the closed-trade ledger:
+    #
+    #   partially_closed_open  — the holding has ≥1 sell event that reduced
+    #                            the CURRENT open lot (exit_date ≥ entry_date)
+    #                            AND shares remained after that sell
+    #                            (remaining_shares_after > SHARE_TOL,
+    #                             is_full_close == False)
+    #
+    #   open                   — no such qualifying sell event exists
+    #
+    # Buy-close-reopen correctness: a prior full-close sell has exit_date
+    # BEFORE entry_date of the new lot and is therefore ignored.
+    # Dust/rounding correctness: sell events must have remaining_shares_after
+    # above SHARE_TOL and is_full_close=False to count as a partial trim.
+    _trades       = _load_ct()
+    _trades_by_sym: dict[str, list[dict]] = _dd(list)
+    for _t in _trades:
+        _s = (_t.get("ticker") or "").upper()
+        if _s:
+            _trades_by_sym[_s].append(_t)
+
+    # ── Holdings loop: bucket into open_positions + partially_closed ─────────
     open_positions:     list[dict] = []
     partially_closed:   list[dict] = []
     active_syms:        set[str]   = set()
@@ -4633,7 +4657,43 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
             continue                    # dust holding — skip
         active_syms.add(_sym)
 
-        _cls = _h.get("classification") or "open"
+        # ── Classification: use persisted field when present; otherwise
+        # re-derive from the closed-trade ledger so that holdings saved via
+        # the simple POST /api/portfolio/holdings endpoint (which carries no
+        # classification field) are still correctly bucketed.
+        #
+        # Re-derivation rule (universal — no ticker-specific logic):
+        #   partially_closed_open  ←  ≥1 closed-trade for this symbol satisfies:
+        #     • exit_date ≥ entry_date  (sell reduced the CURRENT open lot, not
+        #                                a prior lot that was fully closed first)
+        #     • remaining_shares_after > SHARE_TOL  (shares still remained)
+        #     • is_full_close is not True  (it was a partial trim, not a full exit)
+        #   open                   ←  no such qualifying sell event
+        #
+        # Buy-close-reopen: a prior full close has exit_date < entry_date → ignored.
+        # Dust/fees: remaining_shares_after ≤ SHARE_TOL → ignored.
+        _stored_cls = _h.get("classification")
+        if _stored_cls:
+            _cls = _stored_cls
+        else:
+            _entry_dt = str(_h.get("entry_date") or "")
+            _sym_trades = _trades_by_sym.get(_sym, [])
+            _has_partial_sell = any(
+                (str(_t.get("exit_date") or "") >= _entry_dt or not _entry_dt)
+                and float(_t.get("remaining_shares_after") or 0) > _SHARE_TOL
+                and not _t.get("is_full_close", False)
+                # Guard against stale/corrupt closed-trade artifacts:
+                # a real partial trim ALWAYS changes the position — the qty sold
+                # must differ from the qty remaining (beyond FP noise).
+                # If sold == remaining it means the sell "doubled" the position
+                # (e.g. 152 → sell 76 → 76 remaining) — for a single event this
+                # is indistinguishable from a corrupt orphan record, so we require
+                # the delta to be non-trivial before calling it a partial trim.
+                and abs(float(_t.get("shares") or 0) - float(_t.get("remaining_shares_after") or 0)) > _SHARE_TOL
+                for _t in _sym_trades
+            )
+            _cls = "partially_closed_open" if _has_partial_sell else "open"
+
         _avg = float(_h.get("avg_cost") or 0)
         _rec = {
             "symbol":              _sym,
@@ -4654,15 +4714,7 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
             partially_closed.append(_rec)
 
     # ── Enrich partially_closed cards with closed-trade aggregates ─────────────
-    # Load all closed trades and bucket by symbol so we can add realized P&L,
-    # shares_sold, last_exit_price, sell_events_count without re-running the ledger.
-    _trades       = _load_ct()
-    _trades_by_sym: dict[str, list[dict]] = _dd(list)
-    for _t in _trades:
-        _s = (_t.get("ticker") or "").upper()
-        if _s:
-            _trades_by_sym[_s].append(_t)
-
+    # Add realized P&L, shares_sold, last_exit_price, sell_events_count.
     for _pc in partially_closed:
         _sym    = _pc["symbol"]
         _st     = _trades_by_sym.get(_sym, [])
@@ -6460,8 +6512,9 @@ async def portfolio_transactions_import_csv(
                 # Classification written at import time so GET /api/portfolio/holdings
                 # can serve the correct dashboard category without re-running the ledger.
                 # Values: "partially_closed_open" | "open"
-                "classification": _final_status(sym),
-                "basis_source":   _basis_source.get(sym, "csv_lot"),
+                "classification":      _final_status(sym),
+                "final_symbol_status": _final_status(sym),
+                "basis_source":        _basis_source.get(sym, "csv_lot"),
                 "import_batch_id": _import_batch_id,
                 "source_file":    source_file,
             }

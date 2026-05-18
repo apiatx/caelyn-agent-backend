@@ -1,0 +1,219 @@
+CRITICAL: no ticker-specific hardcoding
+
+Do not hardcode behavior for SIVEF, NBIS, OPTX, AEHR, SNDK, CRDO, CCCX, OUST, ALMU, or any other ticker.
+
+These are validation examples only.
+
+The fix must be universal and driven only by ledger math:
+- normalized buy/sell transactions
+- chronological replay
+- shares bought
+- shares sold
+- shares remaining
+- cost basis remaining
+- sell event count
+- same continuous lot/current-position logic
+- tolerance rules for dust/fees/rounding
+- final_symbol_status
+- classification
+
+No code like:
+if ticker == "SIVEF"
+if symbol in ["NBIS", "OPTX", ...]
+
+No manual symbol overrides.
+No exception maps.
+No ticker-specific category routing.
+
+This should work organically for any uploaded brokerage CSV, any future ticker, and any user portfolio.
+
+BACKEND REPLIT AGENT — Stop: classification regressed after speed/cache fix
+
+The speed fix is good, but the classification output regressed.
+
+Your latest report says:
+
+SIVEF Open ✓ Partial — Result open
+
+That is wrong.
+
+Known correct SIVEF ledger from the actual CSV:
+- bought 3,996 shares
+- sold 1,000 shares
+- remaining 2,996 shares
+- therefore SIVEF is still open AND partially closed
+
+Correct category state:
+- open_positions: YES
+- partially_closed_positions: YES
+- fully_closed_positions: NO
+- classification: partially_closed_open
+- final_symbol_status: partially_closed_open
+
+Important:
+Open and Partially Closed are not mutually exclusive.
+Partially closed means the ticker still has open shares AND has had a real sell/trim from the same continuous position/lot family.
+
+Do not touch frontend.
+Do not hide this as a frontend stale-data issue.
+Do not say backend is correct if /api/portfolio/holdings returns a trimmed still-open position as classification=open.
+
+Task:
+Audit exactly why a still-open but trimmed position is being classified as open only instead of partially_closed_open.
+
+Required checks:
+
+1. Actual CSV ledger replay for the validation ticker
+Use SIVEF as the validation example, but do not hardcode it.
+
+Print:
+- normalized transactions
+- buy rows
+- sell rows
+- total_bought_shares
+- total_sold_shares
+- shares_remaining
+- cost_basis_remaining
+- sell_events_count
+- realized_pnl
+- classification from ledger
+- final_symbol_status from ledger
+
+Expected for the validation example:
+- total_bought_shares = 3996
+- total_sold_shares = 1000
+- shares_remaining = 2996
+- sell_events_count >= 1
+- classification = partially_closed_open
+- final_symbol_status = partially_closed_open
+
+2. Persisted active holding
+Check Neon/store record returned by GET /api/portfolio/holdings.
+
+Print:
+- ticker
+- shares
+- avg_cost
+- classification
+- final_symbol_status
+- basis_source
+- import_batch_id
+- source_file
+
+Expected for any still-open trimmed ticker:
+- shares_remaining > tolerance
+- total_sold_shares > tolerance
+- classification = partially_closed_open
+- final_symbol_status = partially_closed_open
+
+If classification/final_symbol_status is open, find where it was overwritten.
+
+3. Persisted closed trades
+Check closed_trades rows for the same symbol.
+
+Print:
+- shares_sold
+- remaining_shares_after
+- is_full_close
+- final_symbol_status
+- classification
+- basis_source
+- import_batch_id
+
+Expected for a partial trim:
+- sell event exists
+- remaining_shares_after > tolerance
+- is_full_close = false
+- final_symbol_status = partially_closed_open
+
+4. GET /api/portfolio/holdings response
+Return presence in each aggregate list:
+
+{
+  "in_holdings": true/false,
+  "in_open_positions": true/false,
+  "in_partially_closed_positions": true/false,
+  "in_fully_closed_positions": true/false,
+  "holding_record": {...},
+  "partial_record": {...}
+}
+
+Expected for any still-open trimmed ticker:
+- holdings: true
+- open_positions: true
+- partially_closed_positions: true
+- fully_closed_positions: false
+
+5. Cache invalidation audit
+You added TTL caches. Confirm caches are not preserving stale classification.
+
+Check:
+- load_active_holdings cache
+- load_closed_trades cache
+- GET /api/portfolio/holdings aggregate construction
+- CSV import invalidation
+- closed trade write invalidation
+- active holding write invalidation
+
+After CSV import or any write, cached aggregate lists must be invalidated.
+
+6. Fix the universal logic
+Universal rule:
+If shares_remaining > tolerance AND total_sold_shares > tolerance from the current continuous position/lot family, then:
+- classification = partially_closed_open
+- final_symbol_status = partially_closed_open
+- include in open_positions
+- include in partially_closed_positions
+- exclude from fully_closed_positions
+
+Only classification=open if:
+- shares_remaining > tolerance
+- AND no meaningful sells/trims belong to the currently open position/lot family
+
+Buy-close-reopen nuance:
+If a prior lot was fully closed and a later fresh lot opened, that new current position should be open, not partially_closed_open, unless the fresh/current lot itself was meaningfully trimmed.
+
+Dust/fee/rounding nuance:
+Tiny residuals from fees, precision, or rounding should not create partially_closed_open.
+
+7. Validate known examples as examples only
+Run actual CSV import with full_replace=true, then call GET /api/portfolio/holdings.
+
+Return table:
+symbol | shares_bought | shares_sold | shares_remaining | classification | final_symbol_status | open? | partial? | fully_closed?
+
+Must include these validation examples:
+- SIVEF
+- NBIS
+- OPTX
+- AEHR
+- SNDK
+- CRDO
+- CCCX
+- OUST
+- ALMU
+
+Expected:
+- SIVEF: open yes, partial yes, fully_closed no, classification=partially_closed_open
+- NBIS: open yes, partial no, fully_closed no
+- OPTX: open no, partial no, fully_closed yes
+- AEHR/SNDK/CRDO/CCCX: fully_closed yes if shares_remaining <= tolerance
+- OUST/ALMU: open yes, partial no, fully_closed no if buy-close-reopen
+
+Again: these symbols are validation examples only. The code must be generic.
+
+8. Speed regression
+Keep the performance improvement:
+- GET /api/portfolio/holdings warm response should remain fast
+- provider_calls_made=0
+- recomputed_ledger=False on read
+
+But correctness beats cache speed. Do not return fast stale/wrong classifications.
+
+Return:
+- root cause of the regression
+- proof no ticker-specific hardcoding was added
+- exact files changed
+- cache invalidation proof
+- final GET /api/portfolio/holdings response for the validation example
+- final validation table
