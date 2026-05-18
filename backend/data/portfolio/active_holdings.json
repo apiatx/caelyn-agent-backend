@@ -1,80 +1,18 @@
 {
   "holdings": [
     {
-      "ticker": "LPKFF",
-      "shares": 387.0,
-      "avg_cost": 25.62,
-      "asset_type": "stock",
-      "entry_date": "2026-05-15"
-    },
-    {
-      "ticker": "AOSL",
-      "shares": 259.0,
-      "avg_cost": 38.555,
-      "asset_type": "stock",
-      "entry_date": "2026-05-15"
-    },
-    {
-      "ticker": "SLNH",
-      "shares": 24361.0,
-      "avg_cost": 1.998941,
-      "asset_type": "stock",
-      "entry_date": "2026-05-12"
-    },
-    {
-      "ticker": "OUST",
-      "shares": 302.0,
-      "avg_cost": 26.5092,
-      "asset_type": "stock",
-      "entry_date": "2026-05-12"
-    },
-    {
-      "ticker": "NRGV",
-      "shares": 1969.0,
-      "avg_cost": 5.0799,
-      "asset_type": "stock",
-      "entry_date": "2026-05-12"
-    },
-    {
-      "ticker": "ALMU",
-      "shares": 439.0,
-      "avg_cost": 18.1284,
-      "asset_type": "stock",
-      "entry_date": "2026-04-22"
-    },
-    {
-      "ticker": "SILC",
-      "shares": 176.0,
-      "avg_cost": 28.3702,
-      "asset_type": "stock",
-      "entry_date": "2026-04-17"
-    },
-    {
-      "ticker": "LPTH",
-      "shares": 503.0,
-      "avg_cost": 11.923549,
-      "asset_type": "stock",
-      "entry_date": "2026-03-25"
-    },
-    {
-      "ticker": "IQEPF",
-      "shares": 19875.0,
-      "avg_cost": 0.399851,
-      "asset_type": "stock",
-      "entry_date": "2026-03-25"
-    },
-    {
-      "ticker": "SLOIF",
-      "shares": 79.0,
-      "avg_cost": 63.55,
-      "asset_type": "stock",
-      "entry_date": "2026-03-25"
-    },
-    {
       "ticker": "BWEN",
       "shares": 1512.0,
       "avg_cost": 3.9,
       "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 1512.0,
+          "price": 3.9,
+          "date": "2026-05-15",
+          "notes": "CSV import (uploaded_csv)"
+        }
+      ],
       "entry_date": "2026-05-15"
     },
     {
@@ -82,13 +20,44 @@
       "shares": 499.0,
       "avg_cost": 20.07,
       "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 499.0,
+          "price": 20.07,
+          "date": "2026-05-15",
+          "notes": "CSV import (uploaded_csv)"
+        }
+      ],
       "entry_date": "2026-05-15"
+    },
+    {
+      "ticker": "SLNH",
+      "shares": 5404.0,
+      "avg_cost": 1.6097,
+      "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 5404.0,
+          "price": 1.6097,
+          "date": "2026-05-12",
+          "notes": "CSV import (uploaded_csv)"
+        }
+      ],
+      "entry_date": "2026-05-12"
     },
     {
       "ticker": "PENG",
       "shares": 422.0,
       "avg_cost": 35.47,
       "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 422.0,
+          "price": 35.47,
+          "date": "2026-05-05",
+          "notes": "CSV import (uploaded_csv)"
+        }
+      ],
       "entry_date": "2026-05-05"
     },
     {
@@ -96,9 +65,17 @@
       "shares": 1160.0,
       "avg_cost": 6.435,
       "asset_type": "stock",
+      "lots": [
+        {
+          "shares": 1160.0,
+          "price": 6.435,
+          "date": "2026-04-07",
+          "notes": "CSV import (uploaded_csv)"
+        }
+      ],
       "entry_date": "2026-04-07"
     }
   ],
-  "_saved_at": "2026-05-18T02:17:38.791222Z",
+  "_saved_at": "2026-05-18T02:38:39.567646Z",
   "_source": "portfolio_store"
 }

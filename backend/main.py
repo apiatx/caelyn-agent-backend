@@ -5810,8 +5810,70 @@ async def portfolio_transactions_import_csv(
     # moot; still run it to catch intra-CSV duplicates.
     unique_txns, dupe_txns = deduplicate_transactions(buy_sell_txns)
 
+    # ── Orphan-sell resolution ────────────────────────────────────────────────
+    # "Orphan sell" = ticker that has SELL rows in the CSV but no BUY rows.
+    # This happens when the original buy predates the CSV export window (e.g.
+    # you bought SIVEF in 2023, but the exported CSV only covers 2025-2026).
+    #
+    # Without resolution the ledger engine sees 0 open shares → flags an
+    # "oversell" accounting error and caps the sell to zero, losing all P&L.
+    #
+    # Fix: load existing DB holdings BEFORE any full_replace wipe, then inject
+    # a synthetic BUY for each orphan-sell ticker that has a live DB holding.
+    # The synthetic lot is tagged so the persistence block can derive the
+    # remaining open lots from the DB holding's own lot history rather than
+    # from the synthetic transaction itself.
+    _pre_import_holdings: list[dict] = _load_h()
+    _pre_import_map: dict[str, dict] = {
+        h["ticker"].upper(): h for h in _pre_import_holdings
+    }
+
+    csv_buy_syms  = {t["symbol"] for t in unique_txns if t["side"] == "BUY"}
+    csv_sell_syms = {t["symbol"] for t in unique_txns if t["side"] == "SELL"}
+    orphan_syms   = csv_sell_syms - csv_buy_syms
+
+    _synthetic_buys: list[dict]  = []
+    synthetic_buy_syms: set[str] = set()
+
+    for _sym in orphan_syms:
+        _h = _pre_import_map.get(_sym)
+        if _h and float(_h.get("shares") or 0) > 0:
+            _synth_shares = float(_h["shares"])
+            _synth_price  = float(_h.get("avg_cost") or 0)
+            _synth_date   = str(_h.get("entry_date") or "2000-01-01")[:10]
+            _synthetic_buys.append({
+                "transaction_id":  str(_uuid_mod.uuid4()),
+                "fingerprint":     f"synth_db_{_sym}_{_synth_shares:.4f}_{_synth_price:.4f}",
+                "source_file":     "db_holding_synthetic",
+                "raw_row_index":   -1,
+                "account":         _h.get("account", ""),
+                "symbol":          _sym,
+                "trade_date":      _synth_date,
+                "settlement_date": None,
+                "action":          "BUY",
+                "side":            "BUY",
+                "quantity":        _synth_shares,
+                "price":           _synth_price,
+                "gross_amount":    _synth_shares * _synth_price,
+                "fees":            0.0,
+                "net_amount":      _synth_shares * _synth_price,
+                "currency":        "USD",
+                "raw_description": "Synthetic lot from prior DB holding",
+                "normalized_type": "BUY",
+                "synthetic":       True,
+            })
+            synthetic_buy_syms.add(_sym)
+            print(
+                f"[portfolio-ledger-import] orphan-sell resolved: {_sym} → "
+                f"injected synthetic BUY {_synth_shares} @ {_synth_price} "
+                f"(DB entry={_synth_date})"
+            )
+
+    # Pass CSV transactions + synthetic opening lots to the ledger engine
+    txns_for_ledger = unique_txns + _synthetic_buys
+
     # ── Step 3 & 4: Ledger + classify ─────────────────────────────────────────
-    ledgers = build_symbol_ledgers(unique_txns)
+    ledgers = build_symbol_ledgers(txns_for_ledger)
     result  = classify_positions(ledgers)
 
     open_positions    = result["open_positions"]
@@ -5835,6 +5897,8 @@ async def portfolio_transactions_import_csv(
         "ignored_rows":            len(ignored_rows),
         "unknown_type_rows":       len(unknown_rows),
         "accounting_errors":       len(acct_errors),
+        "orphan_sells_resolved":   len(synthetic_buy_syms),
+        "orphan_sells_unresolved": len(orphan_syms - synthetic_buy_syms),
         "open_count":              len(open_positions),
         "partially_closed_count":  len(partially_closed),
         "fully_closed_count":      len(fully_closed),
@@ -5862,7 +5926,10 @@ async def portfolio_transactions_import_csv(
 
     # ── Step 5: Persist (import mode only) ────────────────────────────────────
     if mode == "import":
-        existing_holdings = _load_h()
+        # Re-use the pre-import snapshot loaded earlier for orphan-sell
+        # resolution — avoids a redundant DB round-trip and guarantees we
+        # wipe *after* we have the data we need.
+        existing_holdings = _pre_import_holdings
 
         if full_replace:
             prev_ct = _del_ct_all()
@@ -5902,10 +5969,27 @@ async def portfolio_transactions_import_csv(
                     left = 0
             return remaining
 
-        # Build symbol → buy transactions lookup
+        def _fifo_reduce_db_lots(db_lots: list[dict], shares_sold: float) -> list[dict]:
+            """FIFO-reduce DB holding's own lot records (not CSV txn dicts)."""
+            sorted_lots = sorted(db_lots, key=lambda l: str(l.get("date") or ""))
+            remaining: list[dict] = []
+            left = round(float(shares_sold), 8)
+            for lot in sorted_lots:
+                lot_shares = round(float(lot.get("shares") or 0), 8)
+                if left <= 0:
+                    remaining.append(lot)
+                elif lot_shares <= left + 1e-9:
+                    left = round(left - lot_shares, 8)
+                else:
+                    remaining.append({**lot, "shares": round(lot_shares - left, 8)})
+                    left = 0
+            return remaining
+
+        # Build symbol → buy transactions lookup (exclude synthetic lots —
+        # their lot derivation is handled via the DB holding's own records).
         buy_by_sym: dict[str, list[dict]] = {}
-        for txn in unique_txns:
-            if txn["side"] == "BUY":
+        for txn in txns_for_ledger:
+            if txn["side"] == "BUY" and not txn.get("synthetic"):
                 buy_by_sym.setdefault(txn["symbol"], []).append(txn)
 
         updated_map = {k: dict(v) for k, v in existing_map.items()}
@@ -5918,8 +6002,26 @@ async def portfolio_transactions_import_csv(
             shares_remaining = pos["shares"]
             shares_sold      = ledger.get("shares_sold", 0.0)
 
-            b_txns = buy_by_sym.get(sym, [])
-            open_lots = _fifo_reduce_lots(b_txns, shares_sold) if b_txns else [{
+            # ── Lot derivation ─────────────────────────────────────────────
+            if sym in synthetic_buy_syms:
+                # Orphan-sell ticker: opening position came from the DB.
+                # FIFO-reduce the DB holding's existing lots by CSV sells so
+                # the surviving lot list exactly matches shares_remaining.
+                db_h    = _pre_import_map.get(sym, {})
+                db_lots = list(db_h.get("lots") or [])
+                if db_lots:
+                    open_lots = _fifo_reduce_db_lots(db_lots, shares_sold)
+                else:
+                    # DB has no granular lots — synthesise one lot at avg_cost
+                    open_lots = [{
+                        "date":   db_h.get("entry_date") or _date_cls.today().isoformat(),
+                        "shares": shares_remaining,
+                        "price":  float(db_h.get("avg_cost") or 0),
+                        "notes":  "Orphan-sell: DB holding basis",
+                    }]
+            else:
+                b_txns = buy_by_sym.get(sym, [])
+                open_lots = _fifo_reduce_lots(b_txns, shares_sold) if b_txns else [{
                 "date":   pos.get("entry_date") or _date_cls.today().isoformat(),
                 "shares": shares_remaining,
                 "price":  pos.get("avg_cost") or 0.0,
