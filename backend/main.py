@@ -4866,7 +4866,17 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
 
     BUY_KEYWORDS  = {"buy", "bought", "purchase", "purchased", "reinvestment",
                      "reinvest", "shares purchased", "exchange in", "transfer in",
-                     "journaled shares", "you bought"}
+                     "journaled shares", "you bought",
+                     # Brokerage transfer / receive terminology:
+                     # Covers ACAT transfers, DTC deliveries, and positions
+                     # moved between brokerages (common for OTC/foreign stocks).
+                     "received", "receive", "securities received",
+                     "shares received", "stock received", "received shares",
+                     "securities transfer", "acat",
+                     "deliver in", "delivered in",
+                     # Platform-specific buy keywords (Robinhood, Public, etc.)
+                     "market buy", "limit buy", "stop buy", "buy open",
+                     }
     SELL_KEYWORDS = {"sell", "sold", "sale", "shares sold", "exchange out",
                      "transfer out", "you sold",
                      "sell short", "short sale", "sold short",
@@ -4916,7 +4926,11 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         def _is_option_symbol(raw: str, sym: str) -> bool:
             if raw.startswith("-"):                              # Fidelity dash prefix
                 return True
-            if " " in raw:                                       # embedded spaces → date
+            # Space followed by a digit = OCC-style date embedded in symbol
+            # (e.g. "AAPL 240119C00180000").  A bare suffix like "SIVEF E" or
+            # "SIVEF GREY" (exchange/market annotation) must NOT be treated as
+            # an option — only flag when the space precedes a numeric date.
+            if _re.search(r'\s+\d', raw):                       # space + digit → date
                 return True
             if _re.search(r'\d{6}[CP]\d+', sym):               # OCC: AAPL240119C00180000
                 return True
@@ -4949,8 +4963,12 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
 
         # Transaction type
         raw_type = _v(col_type).lower()
-        # If no type column, infer from description
-        if not raw_type and col_desc:
+        # Only fall back to description when a type column EXISTS but this
+        # particular row is empty.  When there is no type column at all,
+        # description typically holds a company name ("Sivers Semiconductors"),
+        # NOT a transaction verb — using it as a type would drop every row that
+        # doesn't happen to mention "buy" or "sell" in the company name.
+        if col_type and not raw_type and col_desc:
             raw_type = _v(col_desc).lower()
 
         # Track every unique action value for diagnostics
@@ -4980,8 +4998,11 @@ def _parse_portfolio_csv(csv_text: str) -> dict:
         is_buy  = any(kw in raw_type for kw in BUY_KEYWORDS)
         is_sell = any(kw in raw_type for kw in SELL_KEYWORDS)
 
-        # If type column is missing entirely, treat all rows as buy lots
-        if not col_type and not col_desc:
+        # If no dedicated type/action column exists, treat all rows as buys.
+        # Previously this only fired when BOTH type and description were absent,
+        # but description columns contain company names, not transaction verbs —
+        # so the absence of a type column alone is enough to default to buy.
+        if not col_type:
             is_buy = True
 
         if not is_buy and not is_sell:
