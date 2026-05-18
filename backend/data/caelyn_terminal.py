@@ -861,7 +861,7 @@ class CaelynTerminalProvider:
             "symbols":           [p["ticker"] for p in positions],
             "holdings_signature": _holdings_sig_early,
             "screener_engine_used": "portfolio_options_service.scan_portfolio_options",
-            "cache_key":         f"portfolio_opts_scan_v1:{_holdings_sig_early}",
+            "cache_key":         f"portfolio_opts_scan_v2:{_holdings_sig_early}",
             "cache_hit":         _opts_cache_hit,
             "requested_symbols": equity_tickers,
             "volx": {
