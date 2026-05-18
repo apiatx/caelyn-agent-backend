@@ -1,246 +1,118 @@
 {
   "holdings": [
     {
+      "ticker": "BWEN",
+      "shares": 1512.0,
+      "avg_cost": 3.9,
+      "asset_type": "stock",
+      "entry_date": "2026-05-15"
+    },
+    {
+      "ticker": "FLNC",
+      "shares": 499.0,
+      "avg_cost": 20.07,
+      "asset_type": "stock",
+      "entry_date": "2026-05-15"
+    },
+    {
+      "ticker": "SLNH",
+      "shares": 24361.0,
+      "avg_cost": 1.998941,
+      "asset_type": "stock",
+      "entry_date": "2026-05-12"
+    },
+    {
+      "ticker": "PENG",
+      "shares": 422.0,
+      "avg_cost": 35.47,
+      "asset_type": "stock",
+      "entry_date": "2026-05-05"
+    },
+    {
+      "ticker": "SIVEF",
+      "shares": 2996.0,
+      "avg_cost": 1.236996,
+      "asset_type": "stock",
+      "entry_date": "2026-03-23"
+    },
+    {
+      "ticker": "TRT",
+      "shares": 1160.0,
+      "avg_cost": 6.435,
+      "asset_type": "stock",
+      "entry_date": "2026-04-07"
+    },
+    {
+      "ticker": "NBIS",
+      "shares": 76.0,
+      "avg_cost": 91.49125,
+      "asset_type": "stock",
+      "entry_date": "2026-01-05"
+    },
+    {
       "ticker": "LPKFF",
       "shares": 387.0,
       "avg_cost": 25.62,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 387.0,
-          "price": 25.62,
-          "date": "2026-05-15",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-05-15",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-05-15"
     },
     {
       "ticker": "AOSL",
       "shares": 259.0,
       "avg_cost": 38.555,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 259.0,
-          "price": 38.555,
-          "date": "2026-05-15",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-05-15",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
-    },
-    {
-      "ticker": "SLNH",
-      "shares": 18957.0,
-      "avg_cost": 2.1099,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 18957.0,
-          "price": 2.1099,
-          "date": "2026-05-15",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-05-15",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
-    },
-    {
-      "ticker": "SIVEF",
-      "shares": 2996.0,
-      "avg_cost": 1.244,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 2996.0,
-          "price": 1.244,
-          "date": "2026-03-23",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-03-23",
-      "classification": "partially_closed_open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-05-15"
     },
     {
       "ticker": "OUST",
       "shares": 302.0,
       "avg_cost": 26.5092,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 302.0,
-          "price": 26.5092,
-          "date": "2026-05-12",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-05-12",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-03-16"
     },
     {
       "ticker": "NRGV",
       "shares": 1969.0,
       "avg_cost": 5.0799,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 1969.0,
-          "price": 5.0799,
-          "date": "2026-05-12",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-05-12",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-05-12"
     },
     {
       "ticker": "ALMU",
       "shares": 439.0,
       "avg_cost": 18.1284,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 439.0,
-          "price": 18.1284,
-          "date": "2026-04-22",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-04-22",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-01-02"
     },
     {
       "ticker": "SILC",
       "shares": 176.0,
       "avg_cost": 28.3702,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 176.0,
-          "price": 28.3702,
-          "date": "2026-04-17",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-04-17",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-04-17"
     },
     {
       "ticker": "LPTH",
       "shares": 503.0,
       "avg_cost": 11.923549,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 413.0,
-          "price": 12.115,
-          "date": "2026-03-25",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        },
-        {
-          "shares": 90.0,
-          "price": 11.045,
-          "date": "2026-04-06",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-03-25",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-03-25"
     },
     {
       "ticker": "IQEPF",
       "shares": 19875.0,
       "avg_cost": 0.399851,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 7371.0,
-          "price": 0.4035,
-          "date": "2026-03-25",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        },
-        {
-          "shares": 12504.0,
-          "price": 0.3977,
-          "date": "2026-03-25",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-03-25",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-03-25"
     },
     {
       "ticker": "SLOIF",
       "shares": 79.0,
       "avg_cost": 63.55,
       "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 79.0,
-          "price": 63.55,
-          "date": "2026-03-25",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-03-25",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
-    },
-    {
-      "ticker": "NBIS",
-      "shares": 76.0,
-      "avg_cost": 91.6425,
-      "asset_type": "stock",
-      "lots": [
-        {
-          "shares": 76.0,
-          "price": 91.6425,
-          "date": "2026-01-05",
-          "notes": "CSV import (Designated_Bene_XXX549_20260517.csv)"
-        }
-      ],
-      "entry_date": "2026-01-05",
-      "classification": "open",
-      "basis_source": "csv_lot",
-      "import_batch_id": "1aa31eb5-1ab1-49f5-b4c5-c2dc58fe15ac",
-      "source_file": "Designated_Bene_XXX549_20260517.csv"
+      "entry_date": "2026-03-25"
     }
   ],
-  "_saved_at": "2026-05-18T04:19:53.106730Z",
+  "_saved_at": "2026-05-18T05:09:19.252163Z",
   "_source": "portfolio_store"
 }

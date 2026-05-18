@@ -4735,11 +4735,36 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
             "basis_source":        _st_asc[-1].get("basis_source", "csv_lot"),
         })
 
+    # ── Load option positions and closed trades from DB ───────────────────────
+    from data.option_trades_store import (
+        load_option_positions    as _load_opt_pos,
+        load_option_closed_trades as _load_opt_ct,
+    )
+    _raw_opt_pos = _load_opt_pos()
+    _raw_opt_ct  = _load_opt_ct()
+
+    # Split option positions into open / partially-closed / fully-closed
+    _opt_open_pos:    list[dict] = []
+    _opt_partial_pos: list[dict] = []
+    _opt_fc_pos:      list[dict] = []
+    for _op in _raw_opt_pos:
+        _st = _op.get("final_status", "open")
+        if _st in ("open", "partially_closed_open", "short_option_tracked_basic"):
+            _opt_open_pos.append(_op)
+            if _st == "partially_closed_open":
+                _opt_partial_pos.append(_op)
+        elif _st in ("fully_closed", "expired", "orphan_expired"):
+            _opt_fc_pos.append(_op)
+
     return {
-        "holdings":                   holdings,
-        "open_positions":             open_positions,
-        "partially_closed_positions": partially_closed,
-        "fully_closed_positions":     fully_closed,
+        "holdings":                          holdings,
+        "open_positions":                    open_positions,
+        "partially_closed_positions":        partially_closed,
+        "fully_closed_positions":            fully_closed,
+        "option_open_positions":             _opt_open_pos,
+        "option_partially_closed_positions": _opt_partial_pos,
+        "option_fully_closed_positions":     _opt_fc_pos,
+        "option_closed_trades":              _raw_opt_ct,
     }
 
 
@@ -5922,6 +5947,18 @@ async def portfolio_transactions_import_csv(
     )
     from datetime import date as _date_cls
     import uuid as _uuid_mod
+    from services.option_ledger import (
+        normalize_option_rows             as _norm_opt,
+        deduplicate_option_transactions   as _dedup_opt,
+        build_option_ledgers              as _build_opt,
+        classify_option_positions         as _classify_opt,
+    )
+    from data.option_trades_store import (
+        save_option_positions_batch            as _save_opt_pos,
+        delete_csv_import_option_positions     as _del_opt_pos,
+        save_option_closed_trades_batch        as _save_opt_ct,
+        delete_csv_import_option_closed_trades as _del_opt_ct,
+    )
 
     # ── Step 1: Normalize ─────────────────────────────────────────────────────
     try:
@@ -5937,6 +5974,16 @@ async def portfolio_transactions_import_csv(
     rows_total    = normalized["rows_total"]
 
     buy_sell_txns = [t for t in all_txns if t["side"] in ("BUY", "SELL")]
+
+    # ── Step 1b: Option rows (parsed independently — never mixed with stocks) ──
+    try:
+        _opt_norm = _norm_opt(csv_data, source_file=source_file)
+    except Exception as _oe:
+        _opt_norm = {
+            "transactions": [], "ignored": [], "errors": [{"reason": str(_oe)}],
+            "rows_total": 0, "rows_parsed": 0, "option_rows_detected": 0,
+        }
+    _opt_unique, _opt_dupes = _dedup_opt(_opt_norm["transactions"])
 
     # ── Run built-in test suite early so validate=true always returns results ─────
     test_results_early: dict = {}
@@ -6084,6 +6131,20 @@ async def portfolio_transactions_import_csv(
     closed_events     = result["closed_trade_records"]
     monthly           = result["monthly_closed_positions"]
     symbol_audit      = result["symbol_audit"]
+
+    # ── Step 3b: Option ledger + classify ─────────────────────────────────────
+    _opt_ledgers    = _build_opt(_opt_unique)
+    _opt_classified = _classify_opt(_opt_ledgers)
+    _opt_open       = _opt_classified["open_positions"]
+    _opt_partial    = _opt_classified["partially_closed_positions"]
+    _opt_fc         = _opt_classified["fully_closed_positions"]
+    _opt_ct         = _opt_classified["closed_trade_records"]
+    print(
+        f"[portfolio-csv-options] detected={_opt_norm['option_rows_detected']} "
+        f"parsed={_opt_norm['rows_parsed']} "
+        f"open={len(_opt_open)} partial={len(_opt_partial)} "
+        f"fully_closed={len(_opt_fc)} closed_trades={len(_opt_ct)}"
+    )
 
     # ── Final symbol status map — used for closed trade tagging ───────────────
     # Determines the ticker's definitive state AFTER the full import is processed.
@@ -6445,6 +6506,29 @@ async def portfolio_transactions_import_csv(
             f"closed_trades_saved={saved_ct}  sig={sig}"
         )
 
+        # ── Persist option positions and closed trades ─────────────────────
+        if full_replace:
+            _del_opt_pos()
+            _del_opt_ct()
+
+        # Annotate option positions with batch metadata before saving
+        def _annotate_opt(rec: dict) -> dict:
+            return {
+                **rec,
+                "source":          "csv_import",
+                "import_batch_id": _import_batch_id,
+                "source_file":     source_file,
+            }
+
+        _opt_pos_to_save = [_annotate_opt(p) for p in _opt_open]
+        _opt_ct_to_save  = [_annotate_opt(t) for t in _opt_ct]
+        _saved_opt_pos   = _save_opt_pos(_opt_pos_to_save)
+        _saved_opt_ct    = _save_opt_ct(_opt_ct_to_save)
+        print(
+            f"[portfolio-csv-options] persisted: "
+            f"positions={_saved_opt_pos} closed_trades={_saved_opt_ct}"
+        )
+
         # Invalidate downstream caches
         try:
             from data.caelyn_terminal import CaelynTerminalProvider
@@ -6471,9 +6555,11 @@ async def portfolio_transactions_import_csv(
             pass
 
         diag.update({
-            "holdings_created":   holdings_created,
-            "holdings_updated":   holdings_updated,
+            "holdings_created":    holdings_created,
+            "holdings_updated":    holdings_updated,
             "closed_trades_saved": saved_ct,
+            "option_positions_saved":     _saved_opt_pos,
+            "option_closed_trades_saved": _saved_opt_ct,
         })
 
     # ── Optional: run built-in test suite ─────────────────────────────────────
@@ -6513,6 +6599,18 @@ async def portfolio_transactions_import_csv(
             ),
         }
 
+    _opt_diag = {
+        "option_rows_detected":      _opt_norm["option_rows_detected"],
+        "option_transactions_normalized": _opt_norm["rows_parsed"],
+        "option_duplicate_rows":     len(_opt_dupes),
+        "option_parse_errors":       len(_opt_norm["errors"]),
+        "option_open_count":         len(_opt_open),
+        "option_partially_closed_count": len(_opt_partial),
+        "option_fully_closed_count": len(_opt_fc),
+        "option_closed_trades_count": len(_opt_ct),
+        "option_errors":             _opt_norm["errors"][:10],
+    }
+
     return {
         "success":                    True,
         "mode":                       mode,
@@ -6537,7 +6635,70 @@ async def portfolio_transactions_import_csv(
         },
         "unknown_type_rows":          unknown_rows[:20],
         "ignored_detail":             ignored_rows[:10],
+        # ── Option outputs ─────────────────────────────────────────────────
+        "option_open_positions":             _opt_open,
+        "option_partially_closed_positions": _opt_partial,
+        "option_fully_closed_positions":     _opt_fc,
+        "option_closed_trades":              _opt_ct,
+        "option_import_diagnostics":         _opt_diag,
         **({"test_results": test_results} if run_validate else {}),
+    }
+
+
+@app.get("/api/portfolio/options-positions")
+async def get_option_positions(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Return all option positions from the DB, split by status.
+
+    Response::
+
+        {
+          "open_positions":             [...],  # open + partially-closed
+          "partially_closed_positions": [...],  # subset with some sells
+          "fully_closed_positions":     [...],  # fully closed / expired
+          "all_positions":              [...],  # every row unfiltered
+        }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    from data.option_trades_store import load_option_positions as _lop
+    rows = _lop()
+    open_pos:    list[dict] = []
+    partial_pos: list[dict] = []
+    fc_pos:      list[dict] = []
+    for r in rows:
+        st = r.get("final_status", "open")
+        if st in ("open", "partially_closed_open", "short_option_tracked_basic"):
+            open_pos.append(r)
+            if st == "partially_closed_open":
+                partial_pos.append(r)
+        elif st in ("fully_closed", "expired", "orphan_expired"):
+            fc_pos.append(r)
+    return {
+        "open_positions":             open_pos,
+        "partially_closed_positions": partial_pos,
+        "fully_closed_positions":     fc_pos,
+        "all_positions":              rows,
+    }
+
+
+@app.get("/api/portfolio/options-trades")
+async def get_option_trades(request: Request, api_key: str = Header(None, alias="X-API-Key")):
+    """Return all option closed-trade events from the DB.
+
+    Response::
+
+        {
+          "option_closed_trades": [...],
+          "count": int,
+        }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    from data.option_trades_store import load_option_closed_trades as _loct
+    trades = _loct()
+    return {
+        "option_closed_trades": trades,
+        "count":                len(trades),
     }
 
 

@@ -1,0 +1,257 @@
+BACKEND REPLIT AGENT — Add options transaction ledger to Portfolio CSV import
+
+The stock CSV import/classification is now working. Next we need to support options trades from brokerage transaction CSVs.
+
+Important:
+Do not break the working stock/equity ledger.
+Do not force options into the stock holdings model.
+Do not treat option symbols like stock tickers.
+Do not hardcode option tickers.
+Do not rebuild the whole import engine.
+
+Current CSV contains option rows like:
+- Action: Buy to Open
+- Symbol: BWEN 07/17/2026 2.50 C
+- Description: CALL BROADWIND INC $2.5 EXP 07/17/26
+- Quantity: 18
+- Price: $1.65
+- Fees & Comm: $11.91
+- Amount: -$2981.91
+
+Goal:
+Extend the portfolio transaction importer so it correctly parses, stores, classifies, and returns options transactions separately from stock trades.
+
+Desired frontend UX:
+Portfolio Dashboard should support a toggle:
+- All
+- Trades
+- Options
+
+Backend should provide clean outputs so frontend can render:
+- stock/equity open and closed positions as it does now
+- options open positions
+- options closed positions
+- options partially closed positions if contracts remain
+- options trade history
+
+Audit first:
+1. Inspect current CSV import endpoint:
+   POST /api/portfolio/transactions/import-csv
+2. Inspect transaction normalizer in portfolio_ledger.py.
+3. Inspect active holdings and closed trades persistence.
+4. Identify how current code treats actions:
+   - Buy
+   - Sell
+   - Buy to Open
+   - Sell to Close
+   - Sell to Open
+   - Buy to Close
+5. Identify whether option rows are currently ignored, misclassified, or counted as unknown.
+6. Use the uploaded CSV structure as reference:
+   columns: Date, Action, Symbol, Description, Quantity, Price, Fees & Comm, Amount
+
+Option action mapping:
+- Buy to Open = option BUY_OPEN
+- Sell to Close = option SELL_CLOSE
+- Sell to Open = option SELL_OPEN
+- Buy to Close = option BUY_CLOSE
+
+For first version, support long calls/puts fully:
+- Buy to Open opens/increases long option position
+- Sell to Close closes/reduces long option position
+
+Also detect short options:
+- Sell to Open / Buy to Close
+If full short-option accounting is not implemented yet, parse/store them with status "short_option_unsupported" or "short_option_tracked_basic" and return a clear reason. Do not mix them into stock positions.
+
+Option parser requirements:
+Parse option contract metadata from symbol and/or description:
+- underlying symbol
+- expiration date
+- strike price
+- option_type: CALL or PUT
+- contract_side/action: buy_to_open, sell_to_close, sell_to_open, buy_to_close
+- contracts quantity
+- premium price
+- fees
+- amount/proceeds
+- contract_multiplier = 100
+- OCC-style synthetic key:
+  underlying + expiration + strike + option_type
+
+Examples:
+Symbol: "BWEN 07/17/2026 2.50 C"
+Description: "CALL BROADWIND INC $2.5 EXP 07/17/26"
+
+Should parse:
+- underlying = BWEN
+- expiration = 2026-07-17
+- strike = 2.50
+- option_type = CALL
+- contracts = 18
+- premium = 1.65
+- contract_multiplier = 100
+- total_cost = 18 * 1.65 * 100 + fees
+
+Accounting rules for long options:
+Buy to Open:
+- contracts_open += contracts
+- cost_basis += contracts * premium * 100 + fees
+- avg_premium = cost_basis / (contracts_open * 100)
+
+Sell to Close:
+- contracts_sold = quantity
+- proceeds = contracts_sold * premium * 100 - fees
+- cost_basis_sold = avg_premium_before_sale * contracts_sold * 100
+- realized_pnl = proceeds - cost_basis_sold
+- realized_pnl_pct = realized_pnl / cost_basis_sold * 100
+- contracts_open -= contracts_sold
+- remaining_cost_basis -= cost_basis_sold
+- avg_premium remains same under average-cost accounting
+- if contracts_open > tolerance, status = partially_closed_open
+- if contracts_open <= tolerance, status = fully_closed
+
+Important:
+Options quantity is contracts, not shares.
+Always multiply premium by 100 unless contract_multiplier says otherwise.
+
+Data model:
+Add a separate options ledger/store. Preferred Neon tables:
+- portfolio_option_positions
+- portfolio_option_closed_trades
+or a single portfolio_option_trades plus derived positions if that better matches current backend patterns.
+
+Minimum open option position fields:
+- id
+- underlying
+- option_symbol / display_symbol
+- expiration_date
+- strike
+- option_type
+- contracts_open
+- avg_premium
+- cost_basis
+- entry_date
+- last_trade_date
+- current_price/mark if available
+- unrealized_pnl if quote available
+- final_status = open or partially_closed_open
+- source = csv_import
+- import_batch_id
+- source_file
+
+Minimum closed option trade fields:
+- id
+- underlying
+- option_symbol / display_symbol
+- expiration_date
+- strike
+- option_type
+- contracts_closed
+- entry_date
+- exit_date
+- avg_entry_premium
+- exit_premium
+- cost_basis_sold
+- proceeds
+- fees
+- realized_pnl
+- realized_pnl_pct
+- contracts_remaining_after
+- is_full_close
+- final_option_status
+- source = csv_import
+- import_batch_id
+- source_file
+
+Import response additions:
+Return:
+- option_open_positions
+- option_partially_closed_positions
+- option_fully_closed_positions
+- option_closed_trades
+- option_import_diagnostics
+
+Also include counts:
+- option_rows_detected
+- option_transactions_normalized
+- option_open_count
+- option_partially_closed_count
+- option_fully_closed_count
+- option_closed_trades_count
+- option_errors
+
+Do not let option rows pollute stock outputs:
+- stock open_positions should not include "BWEN 07/17/2026 2.50 C"
+- stock partially_closed_positions should not include option contracts
+- stock fully_closed_positions should not include option contracts
+- options should live in option_* outputs
+
+Multiple CSV behavior:
+- Dedupe option rows with transaction fingerprint.
+- full_replace=true should replace prior csv_import option records, same as stock csv_import records.
+- Preserve manual option trades if source="manual" exists, same strategy as manual closed stock trades.
+
+Endpoints:
+Add or update:
+GET /api/portfolio/options-trades
+GET /api/portfolio/options-positions
+
+Or return these through:
+GET /api/portfolio/holdings
+
+Preferred response structure:
+GET /api/portfolio/holdings returns:
+{
+  holdings,
+  open_positions,
+  partially_closed_positions,
+  fully_closed_positions,
+  option_open_positions,
+  option_partially_closed_positions,
+  option_fully_closed_positions,
+  option_closed_trades
+}
+
+Terminal:
+Do not force options into /api/caelyn-terminal active stock holdings yet unless there is already a clean portfolio total model.
+For now, Portfolio Dashboard display is the priority.
+
+Validation:
+Use the uploaded CSV.
+
+Required checks:
+1. BWEN 07/17/2026 2.50 C Buy to Open is parsed as an open option position.
+2. VIVO 07/17/2026 2.50 C Buy to Open is parsed as an open option position.
+3. Option rows are not counted as stock tickers.
+4. Option open positions show:
+   - underlying
+   - expiration
+   - strike
+   - call/put
+   - contracts
+   - avg premium
+   - cost basis
+5. If any Sell to Close rows exist in the CSV:
+   - create option closed trade
+   - compute realized P&L with multiplier 100
+   - reduce contracts_open
+   - classify partial/full correctly
+6. If no Sell to Close rows exist for a contract:
+   - it stays open
+   - no partial/closed option row is created
+7. Fees are included in cost/proceeds.
+8. Import diagnostics report option row counts.
+9. Existing stock import validation still passes:
+   - SIVEF partial/open
+   - NBIS open only
+   - OPTX fully closed
+   - no regression to stock categories
+
+Return:
+- files changed
+- option parser details
+- storage tables added
+- endpoints added/updated
+- validation table for BWEN and VIVO option rows
+- stock regression validation
