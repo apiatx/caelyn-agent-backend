@@ -5680,6 +5680,421 @@ async def portfolio_upload_csv(request: Request, api_key: str = Header(None, ali
     }
 
 
+@app.post("/api/portfolio/transactions/import-csv")
+async def portfolio_transactions_import_csv(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Ledger-based portfolio CSV import — correct accounting engine.
+
+    Replaces the legacy /api/portfolio/upload-csv for full-history imports.
+    Uses average-cost accounting, one closed-trade record per sell event, and
+    classifies positions only from final ledger state (not per-row or per-month).
+
+    Body (JSON)::
+
+        {
+          "csv_data":     str,       # raw CSV text (required)
+          "mode":         str,       # "preview" | "import"  (default "import")
+          "full_replace": bool,      # wipe all existing holdings+trades first
+                                     # (default true for clean-slate import)
+          "source_file":  str,       # optional label for diagnostics
+          "validate":     bool,      # if true, also run built-in test suite
+        }
+
+    Response::
+
+        {
+          "success":                   bool,
+          "mode":                      str,
+          "import_diagnostics":        {...},
+          "open_positions":            [...],
+          "partially_closed_positions":[...],
+          "fully_closed_positions":    [...],
+          "closed_trade_records":      [...],
+          "monthly_closed_positions":  {"2026-05": [...]},
+          "symbol_audit":              {...},
+          "test_results":              {...},    # only when validate=true
+        }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        body = await request.json()
+    except Exception as _je:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    csv_data    = (body.get("csv_data") or "").strip()
+    if not csv_data:
+        raise HTTPException(status_code=400, detail="csv_data is required")
+
+    mode         = (body.get("mode") or "import").lower().strip()
+    # Default full_replace=True so a fresh import never inherits stale state
+    # from prior bad imports (e.g. wrong is_full_close flags on SIVEF/OUST).
+    # Pass full_replace=false explicitly for incremental/append imports.
+    full_replace = bool(body.get("full_replace", True))
+    source_file  = (body.get("source_file") or "uploaded_csv").strip()
+    run_validate = bool(body.get("validate", False))
+
+    if mode not in ("preview", "import"):
+        raise HTTPException(status_code=400, detail="mode must be 'preview' or 'import'")
+
+    print(
+        f"[portfolio-ledger-import] mode={mode}  full_replace={full_replace}  "
+        f"source={source_file!r}  csv_bytes={len(csv_data)}"
+    )
+
+    # ── Imports ───────────────────────────────────────────────────────────────
+    from services.portfolio_ledger import (
+        normalize_csv_rows,
+        deduplicate_transactions,
+        build_symbol_ledgers,
+        classify_positions,
+        run_ledger_tests,
+    )
+    from data.portfolio_store import (
+        load_active_holdings  as _load_h,
+        save_active_holdings  as _save_h,
+        get_holdings_signature as _sig,
+        compute_lot_totals    as _totals,
+    )
+    from data.closed_trades_store import (
+        save_closed_trades_batch as _save_ct_batch,
+        delete_all_closed_trades as _del_ct_all,
+        load_closed_trades       as _load_ct,
+    )
+    from datetime import date as _date_cls
+    import uuid as _uuid_mod
+
+    # ── Step 1: Normalize ─────────────────────────────────────────────────────
+    try:
+        normalized = normalize_csv_rows(csv_data, source_file=source_file)
+    except Exception as _e:
+        import traceback as _tb
+        raise HTTPException(status_code=500,
+                            detail=f"CSV parse error: {_e}\n{_tb.format_exc()}")
+
+    all_txns      = normalized["transactions"]
+    ignored_rows  = normalized["ignored"]
+    unknown_rows  = normalized["unknown_type"]
+    rows_total    = normalized["rows_total"]
+
+    buy_sell_txns = [t for t in all_txns if t["side"] in ("BUY", "SELL")]
+
+    # ── Run built-in test suite early so validate=true always returns results ─────
+    test_results_early: dict = {}
+    if run_validate:
+        from services.portfolio_ledger import run_ledger_tests as _rlt
+        try:
+            test_results_early = _rlt()
+        except Exception as _te:
+            test_results_early = {"error": str(_te)}
+
+    if not buy_sell_txns:
+        return {
+            "success":           False,
+            "mode":              mode,
+            "error":             "No BUY or SELL transactions found. Check that the "
+                                 "CSV contains transaction rows with Symbol, Quantity, "
+                                 "and a recognisable Action/Type column.",
+            "columns_detected":  normalized["columns"],
+            "rows_total":        rows_total,
+            "ignored_count":     len(ignored_rows),
+            "ignored_detail":    ignored_rows[:20],
+            "unknown_type_rows": unknown_rows[:10],
+            **({"test_results": test_results_early} if run_validate else {}),
+        }
+
+    # ── Step 2: Deduplicate ───────────────────────────────────────────────────
+    # When full_replace=True we wipe everything first so dedup against DB is
+    # moot; still run it to catch intra-CSV duplicates.
+    unique_txns, dupe_txns = deduplicate_transactions(buy_sell_txns)
+
+    # ── Step 3 & 4: Ledger + classify ─────────────────────────────────────────
+    ledgers = build_symbol_ledgers(unique_txns)
+    result  = classify_positions(ledgers)
+
+    open_positions    = result["open_positions"]
+    partially_closed  = result["partially_closed_positions"]
+    fully_closed      = result["fully_closed_positions"]
+    closed_events     = result["closed_trade_records"]
+    monthly           = result["monthly_closed_positions"]
+    symbol_audit      = result["symbol_audit"]
+
+    # ── Diagnostics log ───────────────────────────────────────────────────────
+    acct_errors = [
+        e for ledger in ledgers.values()
+        for e in ledger.get("accounting_errors", [])
+    ]
+    diag = {
+        "source_file":             source_file,
+        "rows_total":              rows_total,
+        "normalized_transactions": len(all_txns),
+        "buy_sell_transactions":   len(buy_sell_txns),
+        "duplicate_transactions":  len(dupe_txns),
+        "ignored_rows":            len(ignored_rows),
+        "unknown_type_rows":       len(unknown_rows),
+        "accounting_errors":       len(acct_errors),
+        "open_count":              len(open_positions),
+        "partially_closed_count":  len(partially_closed),
+        "fully_closed_count":      len(fully_closed),
+        "closed_trades_count":     len(closed_events),
+    }
+    print(f"[portfolio-csv-import] {diag}")
+
+    # Per-symbol audit log
+    for sym, audit in symbol_audit.items():
+        print(
+            f"[portfolio-csv-symbol-audit] {{"
+            f"\"symbol\":\"{sym}\", "
+            f"\"buys\":{audit['buys']}, "
+            f"\"sells\":{audit['sells']}, "
+            f"\"shares_bought\":{audit['shares_bought']}, "
+            f"\"shares_sold\":{audit['shares_sold']}, "
+            f"\"shares_remaining\":{audit['shares_remaining']}, "
+            f"\"realized_pnl\":{audit['realized_pnl']}, "
+            f"\"classification\":\"{audit['classification']}\", "
+            f"\"appears_in_open\":{audit['appears_in_open']}, "
+            f"\"appears_in_partial\":{audit['appears_in_partial']}, "
+            f"\"appears_in_fully_closed\":{audit['appears_in_fully_closed']}"
+            f"}}"
+        )
+
+    # ── Step 5: Persist (import mode only) ────────────────────────────────────
+    if mode == "import":
+        existing_holdings = _load_h()
+
+        if full_replace:
+            prev_ct = _del_ct_all()
+            _save_h([])
+            existing_holdings = []
+            print(f"[portfolio-ledger-import] full_replace: wiped existing "
+                  f"holdings + {prev_ct} closed trades")
+
+        existing_map = {h["ticker"].upper(): h for h in existing_holdings}
+
+        # ── Build holdings from open positions ────────────────────────────
+        # Derive lots from the buy transactions for each open symbol,
+        # then FIFO-reduce by shares_sold so the lot list matches net shares.
+        def _fifo_reduce_lots(b_txns: list[dict], shares_sold: float) -> list[dict]:
+            """Remove sold shares from oldest buy lots first. Returns open lots."""
+            sorted_b = sorted(b_txns, key=lambda t: t.get("trade_date") or "")
+            remaining: list[dict] = []
+            left = round(float(shares_sold), 8)
+            for txn in sorted_b:
+                lot_shares = round(float(txn.get("quantity") or 0), 8)
+                if left <= 0:
+                    remaining.append({
+                        "date":   txn.get("trade_date") or _date_cls.today().isoformat(),
+                        "shares": lot_shares,
+                        "price":  float(txn.get("price") or 0),
+                        "notes":  f"CSV import ({source_file})",
+                    })
+                elif lot_shares <= left + 1e-9:
+                    left = round(left - lot_shares, 8)   # lot fully consumed
+                else:
+                    remaining.append({
+                        "date":   txn.get("trade_date") or _date_cls.today().isoformat(),
+                        "shares": round(lot_shares - left, 8),
+                        "price":  float(txn.get("price") or 0),
+                        "notes":  f"CSV import ({source_file})",
+                    })
+                    left = 0
+            return remaining
+
+        # Build symbol → buy transactions lookup
+        buy_by_sym: dict[str, list[dict]] = {}
+        for txn in unique_txns:
+            if txn["side"] == "BUY":
+                buy_by_sym.setdefault(txn["symbol"], []).append(txn)
+
+        updated_map = {k: dict(v) for k, v in existing_map.items()}
+        holdings_created = 0
+        holdings_updated = 0
+
+        for pos in open_positions:
+            sym = pos["symbol"]
+            ledger = ledgers.get(sym, {})
+            shares_remaining = pos["shares"]
+            shares_sold      = ledger.get("shares_sold", 0.0)
+
+            b_txns = buy_by_sym.get(sym, [])
+            open_lots = _fifo_reduce_lots(b_txns, shares_sold) if b_txns else [{
+                "date":   pos.get("entry_date") or _date_cls.today().isoformat(),
+                "shares": shares_remaining,
+                "price":  pos.get("avg_cost") or 0.0,
+                "notes":  f"CSV import ({source_file})",
+            }]
+
+            existing = updated_map.get(sym)
+            if existing and not full_replace:
+                # Merge: keep other-source lots, add new CSV lots (deduped)
+                base_lots = list(existing.get("lots") or [])
+                seen_keys: set[tuple] = set()
+                merged: list[dict] = []
+                for lot in base_lots:
+                    k = (
+                        str(lot.get("date") or "")[:10],
+                        round(float(lot.get("shares") or 0), 4),
+                        round(float(lot.get("price") or 0), 4),
+                    )
+                    seen_keys.add(k)
+                    merged.append(lot)
+                for lot in open_lots:
+                    k = (
+                        str(lot.get("date") or "")[:10],
+                        round(float(lot.get("shares") or 0), 4),
+                        round(float(lot.get("price") or 0), 4),
+                    )
+                    if k not in seen_keys:
+                        merged.append(lot)
+                        seen_keys.add(k)
+                final_lots = merged
+            else:
+                final_lots = open_lots
+
+            totals = _totals(final_lots)
+            updated_map[sym] = {
+                "ticker":     sym,
+                "shares":     totals["shares"],
+                "avg_cost":   totals["avg_cost"],
+                "entry_date": (
+                    totals.get("entry_date")
+                    or (existing or {}).get("entry_date")
+                    or pos.get("entry_date")
+                    or _date_cls.today().isoformat()
+                ),
+                "asset_type": (existing or {}).get("asset_type", "stock"),
+                "lots":       final_lots,
+            }
+            if (existing or {}).get("notes"):
+                updated_map[sym]["notes"] = existing["notes"]
+
+            if existing:
+                holdings_updated += 1
+            else:
+                holdings_created += 1
+
+        # Remove fully-closed positions from holdings (if full_replace=False,
+        # only remove those that appeared in this CSV).
+        for pos in fully_closed:
+            sym = pos["symbol"]
+            if sym in updated_map and full_replace:
+                updated_map.pop(sym, None)
+            elif sym in updated_map and sym in {l["symbol"] for l in ledgers.values()}:
+                updated_map.pop(sym, None)
+
+        final_holdings = list(updated_map.values())
+        _save_h(final_holdings)
+
+        # ── Save closed trade records (one per sell event) ────────────────
+        ct_batch: list[dict] = []
+        for ev in closed_events:
+            trade_group_id = str(_uuid_mod.uuid4())
+            ct_batch.append({
+                "ticker":                 ev.get("symbol") or ev.get("ticker"),
+                "shares":                 ev.get("shares_sold") or ev.get("shares"),
+                "entry_price":            ev.get("avg_cost_at_sale") or ev.get("entry_price"),
+                "exit_price":             ev.get("exit_price"),
+                "entry_date":             ev.get("entry_date"),
+                "exit_date":              ev.get("exit_date"),
+                "realized_pnl":           ev.get("realized_pnl"),
+                "realized_pnl_pct":       ev.get("realized_pnl_pct"),
+                "notes":                  ev.get("notes", f"Imported from CSV ({source_file})"),
+                "sell_type":              ev.get("sell_type") or ev.get("close_type"),
+                "is_full_close":          bool(ev.get("is_full_close")),
+                "remaining_shares_after": ev.get("remaining_shares_after"),
+                "trade_group_id":         trade_group_id,
+                "cost_method":            "average_cost",
+            })
+        if ct_batch:
+            saved_ct = _save_ct_batch(ct_batch)
+        else:
+            saved_ct = 0
+
+        sig = _sig(final_holdings)
+        print(
+            f"[portfolio-ledger-import] persisted: "
+            f"holdings_created={holdings_created} "
+            f"holdings_updated={holdings_updated} "
+            f"closed_trades_saved={saved_ct}  sig={sig}"
+        )
+
+        # Invalidate downstream caches
+        try:
+            from data.caelyn_terminal import CaelynTerminalProvider
+            from data.cache import cache as _app_cache
+            from data.portfolio_store import canonical_file as _cf
+            _app_cache.delete(CaelynTerminalProvider.cache_key_for(_cf()))
+        except Exception:
+            pass
+
+        # Trigger earnings sync for open tickers
+        try:
+            from services.user_earnings_service import (
+                invalidate_user_earnings,
+                sync_universe_background,
+            )
+            from config import FMP_API_KEY as _fmp_key
+            import asyncio as _aio
+            open_syms = {p["symbol"] for p in open_positions}
+            invalidate_user_earnings("portfolio")
+            if open_syms:
+                _aio.create_task(sync_universe_background(
+                    "portfolio", open_syms, _fmp_key or ""))
+        except Exception:
+            pass
+
+        diag.update({
+            "holdings_created":   holdings_created,
+            "holdings_updated":   holdings_updated,
+            "closed_trades_saved": saved_ct,
+        })
+
+    # ── Optional: run built-in test suite ─────────────────────────────────────
+    test_results: dict = {}
+    if run_validate:
+        try:
+            test_results = run_ledger_tests()
+        except Exception as _te:
+            test_results = {"error": str(_te)}
+
+    # ── Specific symbol classification report (for the 3 named tickers) ───────
+    named_report = {}
+    for sym in ("SIVEF", "OUST", "ALMU"):
+        audit = symbol_audit.get(sym)
+        if audit:
+            named_report[sym] = {
+                "found_in_csv":        True,
+                "buys":                audit["buys"],
+                "sells":               audit["sells"],
+                "shares_remaining":    audit["shares_remaining"],
+                "classification":      audit["classification"],
+                "appears_in_open":     audit["appears_in_open"],
+                "appears_in_partial":  audit["appears_in_partial"],
+                "appears_in_fully_closed": audit["appears_in_fully_closed"],
+            }
+        else:
+            named_report[sym] = {"found_in_csv": False}
+
+    return {
+        "success":                    True,
+        "mode":                       mode,
+        "import_diagnostics":         diag,
+        "named_symbol_report":        named_report,
+        "open_positions":             open_positions,
+        "partially_closed_positions": partially_closed,
+        "fully_closed_positions":     fully_closed,
+        "closed_trade_records":       closed_events,
+        "monthly_closed_positions":   monthly,
+        "symbol_audit":               symbol_audit,
+        "accounting_errors":          acct_errors,
+        "unknown_type_rows":          unknown_rows[:20],
+        "ignored_detail":             ignored_rows[:10],
+        **({"test_results": test_results} if run_validate else {}),
+    }
+
+
 @app.post("/api/portfolio/sync")
 async def portfolio_sync(request: Request):
     """Maximally-permissive portfolio sync endpoint.

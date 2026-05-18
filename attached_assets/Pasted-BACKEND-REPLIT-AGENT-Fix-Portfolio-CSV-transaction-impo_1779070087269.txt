@@ -1,0 +1,401 @@
+BACKEND REPLIT AGENT — Fix Portfolio CSV transaction import accounting/classification
+
+The Portfolio Dashboard CSV upload is still parsing/classifying brokerage transactions incorrectly.
+
+Do not model this like the Watchlist CSV upload. Watchlist upload is just a list of symbols. Portfolio transaction CSV upload is an accounting ledger problem.
+
+Current bad examples:
+- SIVEF is showing in partially closed, which is true.
+- SIVEF is also showing as fully closed in May, which is false.
+- SIVEF is missing from open positions, which is false. It should still be open because shares remain.
+- OUST and ALMU are showing in partially closed, but they have not been partially closed. They should be fully open only.
+- This suggests the importer is classifying rows/months incorrectly instead of netting the full transaction ledger.
+
+Goal:
+Support uploading multiple brokerage transaction CSVs to Portfolio Dashboard and produce accurate:
+1. Open positions
+2. Partially closed positions
+3. Fully closed positions
+4. Monthly closed-position history
+5. Accurate shares, cost basis, realized P&L, remaining shares, average cost, entry/exit dates
+
+Do NOT:
+- classify based on one row at a time
+- classify based only on a month bucket
+- treat any sell as fully closed
+- put a ticker in fully closed if shares_remaining > 0
+- put a ticker in partially closed unless at least one real sell reduced shares
+- overwrite accurate active holdings with bad parse output
+- hardcode ticker fixes for SIVEF, OUST, ALMU
+- ask user to manually fix the CSV
+- change frontend until backend accounting is proven
+- break the existing manual add/edit/partial sell logic
+
+Audit first:
+1. Locate the current Portfolio CSV upload/import endpoint.
+2. Locate the current CSV parser/normalizer.
+3. Locate where uploaded transactions are converted into:
+   - active holdings
+   - partially closed positions
+   - fully closed positions
+   - closed trades
+4. Locate whether multiple uploaded CSVs are deduped.
+5. Locate whether transactions are sorted by trade date before accounting.
+6. Locate whether the parser supports brokerage variations in column names.
+7. Locate the current logic that misclassifies:
+   - SIVEF
+   - OUST
+   - ALMU
+
+Important accounting model:
+The importer must build a normalized transaction ledger first, then derive positions from that ledger.
+
+Required pipeline:
+
+Step 1 — Normalize all CSV rows into transactions
+
+Every row should become a normalized transaction object:
+
+{
+  transaction_id,
+  source_file,
+  raw_row_index,
+  account,
+  symbol,
+  trade_date,
+  settlement_date,
+  action,
+  side,
+  quantity,
+  price,
+  gross_amount,
+  fees,
+  net_amount,
+  currency,
+  raw_description,
+  normalized_type
+}
+
+Normalize action/side into:
+- BUY
+- SELL
+- DIVIDEND
+- FEE
+- TRANSFER
+- SPLIT
+- IGNORE/UNKNOWN
+
+For now, position accounting only needs BUY and SELL. Other rows should be preserved/audited but not used as buys/sells unless intentionally supported.
+
+Column mapping:
+Support common brokerage headers and aliases:
+- Symbol / Ticker / Security Symbol
+- Date / Trade Date / Activity Date / Transaction Date
+- Action / Type / Transaction Type / Activity Type
+- Quantity / Shares
+- Price / Execution Price
+- Amount / Net Amount / Principal Amount
+- Fees / Commission
+- Description / Security Description
+
+Step 2 — Deduplicate across multiple CSV uploads
+
+Multiple CSVs may overlap. Do not double-count.
+
+Create a stable transaction fingerprint using fields like:
+- symbol
+- trade_date
+- action
+- quantity
+- price
+- net_amount
+- raw_description
+
+If brokerage provides a transaction ID, use it. If not, use fingerprint.
+
+Return/import diagnostics:
+- total rows
+- normalized transactions
+- ignored rows
+- duplicate rows skipped
+- unknown rows requiring review
+
+Step 3 — Sort and build per-symbol ledger
+
+For every symbol:
+- sort transactions by trade_date ascending
+- if same date, buys before sells unless brokerage order is available
+- apply buys/sells sequentially
+
+Accounting method:
+Use average-cost accounting for now unless existing code supports tax lots.
+
+Buy transaction:
+- increase shares_open
+- increase cost_basis
+- recompute avg_cost = cost_basis / shares_open
+
+Sell transaction:
+- validate shares_open > 0
+- shares_sold = quantity sold
+- realized_cost_basis = avg_cost_before_sell * shares_sold
+- proceeds = shares_sold * sell_price - fees if available
+- realized_pnl = proceeds - realized_cost_basis
+- realized_pnl_pct = realized_pnl / realized_cost_basis * 100
+- reduce shares_open
+- reduce cost_basis by realized_cost_basis
+- avg_cost remains unchanged for remaining shares under average-cost accounting
+- create a closed trade record for sold shares
+
+If sell quantity exceeds shares_open:
+- do not silently classify as closed
+- flag the transaction as accounting_error / oversell
+- preserve diagnostic
+- do not corrupt the position
+
+Step 4 — Classify each symbol after processing the full ledger
+
+Classification rules must be based on final per-symbol state:
+
+Open position:
+- shares_remaining > tolerance
+
+Partially closed:
+- total_sold_shares > 0 AND shares_remaining > tolerance
+
+Fully closed:
+- shares_remaining <= tolerance AND total_sold_shares > 0
+
+Never classify a ticker as fully closed if shares_remaining > tolerance.
+
+Never classify a ticker as partially closed if total_sold_shares == 0.
+
+A ticker can appear in both:
+- Open Positions
+- Partially Closed Positions
+
+A ticker cannot appear in both:
+- Open Positions
+- Fully Closed Positions
+
+SIVEF expected behavior:
+- If CSV ledger has buys and sells but net shares_remaining > 0:
+  - Open Positions: YES
+  - Partially Closed Positions: YES
+  - Fully Closed Positions: NO
+
+OUST expected behavior:
+- If CSV ledger has buys and no sells:
+  - Open Positions: YES
+  - Partially Closed Positions: NO
+  - Fully Closed Positions: NO
+
+ALMU expected behavior:
+- If CSV ledger has buys and no sells:
+  - Open Positions: YES
+  - Partially Closed Positions: NO
+  - Fully Closed Positions: NO
+
+Step 5 — Monthly closed positions
+
+Monthly closed positions should be based on actual sell/close transactions only.
+
+For each closed trade record:
+- month = exit_date month
+- include sold shares/proceeds/realized P&L
+- fully_closed_month only applies if that sell reduced shares_remaining to zero after processing the ledger
+
+Do not mark a symbol fully closed in a month if a later or remaining open position exists.
+
+Important:
+Partial sells belong in monthly realized activity, but that does not mean the entire ticker is fully closed.
+
+Data outputs needed:
+After import, return:
+
+{
+  open_positions: [...],
+  partially_closed_positions: [...],
+  fully_closed_positions: [...],
+  closed_trades: [...],
+  monthly_closed_positions: {
+    "2026-05": [...]
+  },
+  import_diagnostics: {...}
+}
+
+Open position fields:
+- symbol
+- shares
+- avg_cost
+- cost_basis
+- entry_date / first_buy_date
+- last_buy_date
+- total_bought_shares
+- total_sold_shares
+- realized_pnl_to_date
+- unrealized_pnl if current price available
+- status = "open" or "partially_closed_open"
+
+Partially closed fields:
+- symbol
+- shares_remaining
+- shares_sold
+- avg_cost
+- realized_pnl
+- realized_pnl_pct
+- first_entry_date
+- last_sell_date
+- status = "partially_closed_open"
+
+Fully closed fields:
+- symbol
+- total_shares_bought
+- total_shares_sold
+- avg_entry_price or average cost basis
+- realized_pnl
+- realized_pnl_pct
+- first_entry_date
+- final_exit_date
+- holding_period_days
+- status = "fully_closed"
+
+Closed trade records:
+- one record per sell event or aggregated if existing UI expects aggregation
+- symbol
+- shares_sold
+- entry_date basis
+- exit_date
+- avg_cost_at_sale
+- exit_price
+- proceeds
+- realized_pnl
+- realized_pnl_pct
+- remaining_shares_after
+- close_type = "partial" or "full"
+
+Persistence:
+After successful import:
+- Save open positions to canonical active holdings in Neon.
+- Save closed trades to closed_trades Neon table.
+- Save/import transaction ledger if a table/store exists. If not, add one or at least persist import audit records so reprocessing is possible.
+- Do not rely on local JSON only.
+- Invalidate Portfolio Terminal cache/signature.
+- /api/caelyn-terminal must reflect imported open positions and closed trades.
+
+Recommended new/updated endpoint:
+POST /api/portfolio/transactions/import-csv
+
+Support multiple files if existing upload system allows it, or one file per request with append/dedupe behavior.
+
+Return:
+- normalized count
+- duplicate count
+- ignored count
+- accounting errors
+- open count
+- partially closed count
+- fully closed count
+- closed trades count
+- examples for SIVEF, OUST, ALMU classification
+
+Validation requirements:
+Use uploaded sample CSVs or existing test fixtures. If none exist, create a small in-memory test fixture.
+
+Required test cases:
+
+Test 1 — SIVEF partial but still open
+Transactions:
+- BUY SIVEF 100 @ 10 on Jan 1
+- SELL SIVEF 40 @ 15 on May 1
+Expected:
+- Open Positions includes SIVEF with 60 shares
+- Partially Closed includes SIVEF
+- Fully Closed does NOT include SIVEF
+- Closed trade realized P&L = 40 * (15 - 10) = 200
+- remaining_shares_after = 60
+
+Test 2 — OUST fully open only
+Transactions:
+- BUY OUST 100 @ 5
+Expected:
+- Open Positions includes OUST
+- Partially Closed does NOT include OUST
+- Fully Closed does NOT include OUST
+
+Test 3 — ALMU fully open only
+Transactions:
+- BUY ALMU 200 @ 8
+Expected:
+- Open Positions includes ALMU
+- Partially Closed does NOT include ALMU
+- Fully Closed does NOT include ALMU
+
+Test 4 — fully closed
+Transactions:
+- BUY TEST_FULL 100 @ 10
+- SELL TEST_FULL 100 @ 12
+Expected:
+- Open Positions does NOT include TEST_FULL
+- Partially Closed does NOT include TEST_FULL after final state
+- Fully Closed includes TEST_FULL
+- Monthly closed includes TEST_FULL in sell month
+
+Test 5 — multiple CSV duplicate protection
+Import same file twice.
+Expected:
+- share counts do not double
+- closed trades do not double
+- duplicates skipped count > 0
+
+Test 6 — partial then full
+Transactions:
+- BUY TEST_MIX 100 @ 10
+- SELL TEST_MIX 25 @ 20
+- SELL TEST_MIX 75 @ 30
+Expected:
+- final open: no
+- fully closed: yes
+- partially closed history exists through closed trades
+- realized P&L = 25*(20-10)+75*(30-10)=1750
+- final exit month shows fully closed
+
+Critical debug output:
+Add logs:
+
+[portfolio-csv-import] {
+  files,
+  total_rows,
+  normalized_transactions,
+  duplicate_transactions,
+  ignored_rows,
+  accounting_errors,
+  open_count,
+  partially_closed_count,
+  fully_closed_count,
+  closed_trades_count
+}
+
+[portfolio-csv-symbol-audit] {
+  symbol,
+  buys,
+  sells,
+  shares_bought,
+  shares_sold,
+  shares_remaining,
+  realized_pnl,
+  classification,
+  appears_in_open,
+  appears_in_partial,
+  appears_in_fully_closed,
+  monthly_closed_entries
+}
+
+Return final report:
+- root cause of current misclassification
+- exact files changed
+- accounting method
+- import endpoint
+- persistence path
+- classification results for SIVEF, OUST, ALMU
+- test validation output

@@ -1,0 +1,896 @@
+"""Portfolio transaction ledger accounting engine.
+
+Converts brokerage CSV exports into a normalized transaction ledger,
+then applies average-cost accounting to produce correct position state.
+
+Pipeline
+--------
+1. normalize_csv_rows(csv_text)           -> NormalizeResult
+2. deduplicate_transactions(txns, seen)   -> (unique, dupes)
+3. build_symbol_ledgers(txns)             -> dict[symbol, ledger]
+4. classify_positions(ledgers)            -> PositionResult
+
+Rules
+-----
+- Only BUY and SELL rows affect position state.
+- One closed-trade record is created PER SELL EVENT, not per ticker.
+- is_full_close is set after each sell based on remaining shares at that point.
+- A ticker is "partially closed" only if shares_remaining > 0 AND shares_sold > 0.
+- A ticker is "fully closed" only if shares_remaining <= 0 AND shares_sold > 0.
+- These two states are mutually exclusive for open positions.
+"""
+from __future__ import annotations
+
+import csv as _csv
+import hashlib
+import io as _io
+import re as _re
+import uuid
+from collections import defaultdict
+from datetime import date, datetime
+from typing import Any
+
+# ── Tolerance ─────────────────────────────────────────────────────────────────
+SHARE_TOLERANCE: float = 1e-6
+
+# ── Side classification keyword sets ─────────────────────────────────────────
+_BUY_KW: frozenset[str] = frozenset({
+    "buy", "bought", "purchase", "purchased",
+    "reinvestment", "reinvest",
+    "shares purchased", "exchange in", "transfer in",
+    "journaled shares", "you bought",
+    # ACAT / DTC / brokerage-transfer terminology
+    "received", "receive", "securities received",
+    "shares received", "stock received", "received shares",
+    "securities transfer", "acat",
+    "deliver in", "delivered in",
+    # Platform-specific (Robinhood, Public, etc.)
+    "market buy", "limit buy", "stop buy", "buy open",
+})
+
+_SELL_KW: frozenset[str] = frozenset({
+    "sell", "sold", "sale", "shares sold",
+    "exchange out", "transfer out", "you sold",
+    "sell short", "short sale", "sold short",
+    "market sell", "limit sell",
+})
+
+_DIVIDEND_KW: frozenset[str] = frozenset({
+    "dividend", "div", "ordinary dividend", "qualified dividend",
+    "return of capital", "distribution",
+})
+
+_FEE_KW: frozenset[str] = frozenset({
+    "fee", "commission", "charge", "interest", "margin interest",
+    "advisory fee", "annual fee",
+})
+
+_SPLIT_KW: frozenset[str] = frozenset({
+    "split", "stock split", "reverse split",
+})
+
+# Options phrases — must be checked BEFORE buy/sell because
+# "buy to open" contains "buy" and would otherwise be mis-classified.
+_OPTIONS_PHRASES: frozenset[str] = frozenset({
+    "buy to open", "sell to close", "buy to close", "sell to open",
+    "to open", "to close",
+    "option expired", "expired",
+    "assigned", "assignment",
+    "exercised", "exercise",
+    "opening purchase", "closing sale",
+    "opening sale", "closing purchase",
+})
+
+# Cash / money-market symbols to skip entirely
+_CASH_SYMBOLS: frozenset[str] = frozenset({
+    "", "cash", "cashbalance", "--", "n/a",
+    "spaxx", "fdrxx", "swvxx", "vmfxx", "sprxx",
+    "fdlxx", "fzfxx", "mmda1",
+})
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _classify_side(raw_type: str, raw_desc: str = "") -> str:
+    """Return one of: BUY / SELL / DIVIDEND / FEE / SPLIT / IGNORE / UNKNOWN."""
+    t = raw_type.lower().strip()
+    d = raw_desc.lower().strip()
+    # Options must be checked first — "buy to open" contains "buy"
+    for phrase in _OPTIONS_PHRASES:
+        if phrase in t or phrase in d:
+            return "IGNORE"
+    if any(kw in t for kw in _SPLIT_KW):
+        return "SPLIT"
+    if any(kw in t for kw in _DIVIDEND_KW):
+        return "DIVIDEND"
+    if any(kw in t for kw in _FEE_KW):
+        return "FEE"
+    if any(kw in t for kw in _BUY_KW):
+        return "BUY"
+    if any(kw in t for kw in _SELL_KW):
+        return "SELL"
+    return "UNKNOWN"
+
+
+def _parse_date(raw: str) -> str | None:
+    """Try common date formats; return ISO yyyy-mm-dd or None."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    for fmt in (
+        "%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y",
+        "%d/%m/%Y", "%Y/%m/%d",
+        "%b %d, %Y", "%B %d, %Y",
+        "%m-%d-%Y", "%d-%m-%Y",
+        "%Y%m%d",
+    ):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            pass
+    # Try truncating to just the date part (e.g. "2026-05-12T05:27:37.636Z")
+    if "T" in raw:
+        return _parse_date(raw.split("T")[0])
+    return None
+
+
+def _parse_float(raw: str) -> float:
+    """Parse numeric strings including $(1,234.56) → -1234.56."""
+    if not raw:
+        return 0.0
+    s = raw.strip().lstrip("$").replace(",", "").replace(" ", "")
+    if s.startswith("(") and s.endswith(")"):
+        s = "-" + s[1:-1]
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _fingerprint(
+    symbol: str,
+    trade_date: str | None,
+    side: str,
+    qty: float,
+    price: float,
+    description: str,
+) -> str:
+    """Stable content-hash for deduplication across multiple CSV uploads."""
+    key = "|".join([
+        symbol.upper(),
+        (trade_date or "")[:10],
+        side,
+        f"{round(qty, 4):.4f}",
+        f"{round(price, 4):.4f}",
+        description[:80],
+    ])
+    return hashlib.md5(key.encode()).hexdigest()
+
+
+# ── Step 1: Normalize CSV rows ────────────────────────────────────────────────
+
+def normalize_csv_rows(csv_text: str, source_file: str = "") -> dict:
+    """Parse one brokerage CSV export into normalized transaction objects.
+
+    Returns::
+
+        {
+          "transactions": list[dict],   # normalized, one per valid row
+          "ignored":      list[dict],   # options / cash / invalid rows
+          "unknown_type": list[dict],   # side=UNKNOWN — needs review
+          "columns":      list[str],
+          "rows_total":   int,
+          "rows_parsed":  int,
+        }
+
+    Each transaction dict::
+
+        {
+          transaction_id, fingerprint, source_file, raw_row_index,
+          account, symbol, trade_date, settlement_date,
+          action, side, quantity, price,
+          gross_amount, fees, net_amount, currency,
+          raw_description, normalized_type,
+        }
+    """
+    # BOM + line-endings
+    clean = (
+        csv_text
+        .replace("\ufeff", "")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+    )
+
+    # Some Schwab exports have header junk before the real header;
+    # find the first line containing "Symbol" or "Ticker".
+    lines = clean.splitlines()
+    header_idx = 0
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if "symbol" in low or "ticker" in low or "stock" in low:
+            header_idx = i
+            break
+    clean = "\n".join(lines[header_idx:])
+
+    # Auto-detect delimiter (comma / tab / pipe / semicolon)
+    _sample = clean[:4096]
+    _delim = ","
+    try:
+        _dialect = _csv.Sniffer().sniff(_sample, delimiters=",\t|;")
+        _delim = _dialect.delimiter
+    except Exception:
+        _first = clean.split("\n")[0]
+        if _first.count("\t") > _first.count(","):
+            _delim = "\t"
+
+    reader = _csv.DictReader(_io.StringIO(clean), delimiter=_delim)
+    raw_cols: list[str] = reader.fieldnames or []
+    cols_lower: dict[str, str] = {c.lower().strip(): c for c in raw_cols}
+
+    def _find_col(*candidates: str) -> str | None:
+        for c in candidates:
+            if c.lower() in cols_lower:
+                return cols_lower[c.lower()]
+        return None
+
+    col_symbol = _find_col("symbol", "ticker", "stock", "security", "instrument")
+    col_date   = _find_col(
+        "date", "trade date", "transaction date", "activity date",
+        "settlement date", "run date",
+    )
+    col_settle = _find_col("settlement date", "settle date")
+    col_type   = _find_col(
+        "transaction type", "type", "action", "transaction",
+        "activity", "description type", "trans type",
+    )
+    col_desc   = _find_col("description", "security description", "name")
+    col_qty    = _find_col("quantity", "shares", "qty", "units", "amount (quantity)")
+    col_price  = _find_col(
+        "price", "price/share", "unit price", "cost/share",
+        "exec price", "execution price", "trade price",
+    )
+    col_amount = _find_col(
+        "amount", "value", "total", "net amount", "principal",
+        "market value", "cost basis total", "net proceeds",
+    )
+    col_fees   = _find_col("fees", "commission", "fee", "charges")
+    col_acct   = _find_col("account", "account number", "account id", "acct")
+    col_instr  = _find_col("instrument type", "asset type", "security type")
+
+    transactions: list[dict] = []
+    ignored: list[dict]      = []
+    unknown_type: list[dict] = []
+    row_index = 0
+
+    for row in reader:
+        def _v(col: str | None) -> str:
+            return (row.get(col, "") or "").strip() if col else ""
+
+        row_index += 1
+
+        # ── Symbol ────────────────────────────────────────────────────────
+        raw_sym = _v(col_symbol)
+        if ":" in raw_sym:
+            raw_sym = raw_sym.split(":")[-1]
+        symbol = raw_sym.upper().strip()
+
+        if symbol.lower() in _CASH_SYMBOLS or len(symbol) > 12:
+            ignored.append({"row_index": row_index, "symbol": symbol,
+                            "reason": "cash/mm symbol or too long"})
+            continue
+
+        # Options: space followed by digit (OCC date), Fidelity dash prefix,
+        # OCC option pattern, date in symbol, underscore+date pattern
+        if _re.search(r'\s+\d', raw_sym):
+            ignored.append({"row_index": row_index, "symbol": symbol,
+                            "reason": "options (space+digit in symbol)"})
+            continue
+        if raw_sym.startswith("-"):
+            ignored.append({"row_index": row_index, "symbol": symbol,
+                            "reason": "options (Fidelity dash prefix)"})
+            continue
+        if (_re.search(r'\d{6}[CP]\d+', symbol)
+                or _re.search(r'_\d{6}[CP]', symbol)
+                or _re.search(r'\d{2}/\d{2}/\d{2,4}', raw_sym)):
+            ignored.append({"row_index": row_index, "symbol": symbol,
+                            "reason": "options (OCC symbol pattern)"})
+            continue
+
+        if not symbol or not _re.match(r'^[A-Z0-9.\-]{1,12}$', symbol):
+            ignored.append({"row_index": row_index, "symbol": symbol,
+                            "reason": f"invalid symbol '{symbol}'"})
+            continue
+
+        # Explicit instrument-type column
+        if col_instr:
+            instr_val = _v(col_instr).lower()
+            if "option" in instr_val or instr_val == "opt":
+                ignored.append({"row_index": row_index, "symbol": symbol,
+                                "reason": "options (instrument type column)"})
+                continue
+
+        # ── Side classification ───────────────────────────────────────────
+        raw_type_val = _v(col_type)
+        raw_desc_val = _v(col_desc)
+
+        if col_type:
+            # Type column present: use it; fall back to description only when
+            # the type cell is empty for THIS specific row.
+            type_for_class = raw_type_val or raw_desc_val
+        else:
+            # No type column at all → default to BUY (description holds
+            # company names, not transaction verbs).
+            type_for_class = ""
+
+        side = _classify_side(type_for_class, raw_desc_val)
+
+        if not col_type:
+            side = "BUY"
+
+        # Skip options action phrases
+        if side == "IGNORE":
+            ignored.append({"row_index": row_index, "symbol": symbol,
+                            "reason": f"options action: '{raw_type_val}'"})
+            continue
+
+        # ── Dates ─────────────────────────────────────────────────────────
+        trade_date      = _parse_date(_v(col_date))
+        settlement_date = _parse_date(_v(col_settle)) if col_settle else None
+
+        # ── Quantity ──────────────────────────────────────────────────────
+        qty_raw = _v(col_qty).replace(",", "").replace("(", "-").replace(")", "")
+        try:
+            qty = abs(float(qty_raw)) if qty_raw else 0.0
+        except (ValueError, TypeError):
+            qty = 0.0
+
+        # ── Price ─────────────────────────────────────────────────────────
+        price = abs(_parse_float(_v(col_price)))
+        gross_amount = abs(_parse_float(_v(col_amount)))
+
+        # Back-calculate price from amount/qty if price missing
+        if price == 0 and qty > 0 and gross_amount > 0:
+            price = round(gross_amount / qty, 6)
+
+        fees = abs(_parse_float(_v(col_fees))) if col_fees else 0.0
+
+        # ── Skip zero-quantity BUY/SELL rows ──────────────────────────────
+        if side in ("BUY", "SELL") and qty == 0:
+            ignored.append({"row_index": row_index, "symbol": symbol,
+                            "reason": "zero quantity"})
+            continue
+
+        # ── Skip UNKNOWN type for BUY/SELL-only accounting ────────────────
+        if side == "UNKNOWN":
+            unknown_type.append({
+                "row_index":   row_index,
+                "symbol":      symbol,
+                "raw_type":    raw_type_val,
+                "raw_desc":    raw_desc_val,
+                "quantity":    qty,
+                "price":       price,
+                "trade_date":  trade_date,
+            })
+            # Still include in transactions list tagged as UNKNOWN so
+            # callers can inspect/audit them, but skip position accounting.
+
+        fp = _fingerprint(symbol, trade_date, side, qty, price, raw_desc_val)
+
+        txn: dict = {
+            "transaction_id":  str(uuid.uuid4()),
+            "fingerprint":     fp,
+            "source_file":     source_file,
+            "raw_row_index":   row_index,
+            "account":         _v(col_acct),
+            "symbol":          symbol,
+            "trade_date":      trade_date,
+            "settlement_date": settlement_date,
+            "action":          raw_type_val,
+            "side":            side,
+            "quantity":        qty,
+            "price":           price,
+            "gross_amount":    gross_amount,
+            "fees":            fees,
+            "net_amount":      gross_amount,
+            "currency":        "USD",
+            "raw_description": raw_desc_val,
+            "normalized_type": side,
+        }
+        transactions.append(txn)
+
+    return {
+        "transactions": transactions,
+        "ignored":      ignored,
+        "unknown_type": unknown_type,
+        "columns":      raw_cols,
+        "rows_total":   row_index,
+        "rows_parsed":  len(transactions),
+    }
+
+
+# ── Step 2: Deduplicate ───────────────────────────────────────────────────────
+
+def deduplicate_transactions(
+    transactions: list[dict],
+    existing_fingerprints: set[str] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Return (unique, duplicates).
+
+    Deduplicates within the current list AND against an optional set of
+    fingerprints already stored in the database (from prior imports).
+    """
+    seen: set[str] = set(existing_fingerprints or set())
+    unique: list[dict] = []
+    dupes: list[dict]  = []
+    for txn in transactions:
+        fp = txn.get("fingerprint") or ""
+        if fp and fp in seen:
+            dupes.append(txn)
+        else:
+            unique.append(txn)
+            if fp:
+                seen.add(fp)
+    return unique, dupes
+
+
+# ── Step 3: Build per-symbol ledgers (average-cost) ───────────────────────────
+
+def build_symbol_ledgers(transactions: list[dict]) -> dict[str, dict]:
+    """Apply average-cost accounting to sorted transactions per symbol.
+
+    Returns dict[symbol → ledger]. Each ledger::
+
+        {
+          symbol, transactions, buy_count, sell_count,
+          shares_bought, shares_sold, shares_remaining,
+          avg_cost,          # current avg cost of remaining shares
+          cost_basis,        # remaining cost basis
+          total_buy_cost,    # total cost of all buys (for avg_entry_price)
+          realized_pnl,
+          first_buy_date, last_buy_date,
+          first_sell_date, last_sell_date,
+          closed_events,     # list — one dict per sell event
+          accounting_errors, # oversell warnings etc.
+        }
+    """
+    by_symbol: dict[str, list[dict]] = defaultdict(list)
+    for txn in transactions:
+        # Only BUY and SELL affect positions
+        if txn["side"] in ("BUY", "SELL"):
+            by_symbol[txn["symbol"]].append(txn)
+
+    ledgers: dict[str, dict] = {}
+
+    for sym, txns in by_symbol.items():
+        # Sort: trade_date ascending; BUY before SELL on the same date
+        def _sort_key(t: dict) -> tuple:
+            d = t.get("trade_date") or "9999-12-31"
+            side_order = 0 if t["side"] == "BUY" else 1
+            return (d, side_order)
+
+        txns_sorted = sorted(txns, key=_sort_key)
+
+        shares_open: float   = 0.0
+        cost_basis: float    = 0.0
+        avg_cost: float      = 0.0
+        total_buy_cost: float = 0.0
+        realized_pnl: float  = 0.0
+        shares_bought: float = 0.0
+        shares_sold: float   = 0.0
+        closed_events: list[dict] = []
+        errors: list[dict]        = []
+        buy_dates: list[str]      = []
+        sell_dates: list[str]     = []
+
+        for txn in txns_sorted:
+            side  = txn["side"]
+            qty   = float(txn.get("quantity") or 0)
+            price = float(txn.get("price")    or 0)
+            tdate = txn.get("trade_date") or ""
+            fees  = float(txn.get("fees")     or 0)
+
+            if side == "BUY":
+                shares_open   = round(shares_open + qty, 8)
+                cost_basis    = round(cost_basis + qty * price, 6)
+                total_buy_cost = round(total_buy_cost + qty * price, 6)
+                avg_cost      = (
+                    round(cost_basis / shares_open, 6)
+                    if shares_open > SHARE_TOLERANCE else 0.0
+                )
+                shares_bought = round(shares_bought + qty, 8)
+                if tdate:
+                    buy_dates.append(tdate)
+
+            elif side == "SELL":
+                # Oversell guard — cap at available shares
+                effective_qty = qty
+                if qty > shares_open + SHARE_TOLERANCE:
+                    errors.append({
+                        "type":    "oversell",
+                        "symbol":  sym,
+                        "txn_id":  txn.get("transaction_id"),
+                        "date":    tdate,
+                        "message": (
+                            f"Sell qty {qty} exceeds open shares "
+                            f"{shares_open:.6f}; capped to available."
+                        ),
+                    })
+                    effective_qty = max(shares_open, 0.0)
+
+                avg_cost_at_sale   = avg_cost          # snapshot before this sell
+                realized_cost      = round(avg_cost_at_sale * effective_qty, 6)
+                proceeds           = round(price * effective_qty - fees, 6)
+                event_pnl          = round(proceeds - realized_cost, 6)
+                event_pnl_pct      = (
+                    round(event_pnl / realized_cost * 100, 4)
+                    if realized_cost else None
+                )
+
+                shares_open  = round(shares_open - effective_qty, 8)
+                if shares_open < SHARE_TOLERANCE:
+                    shares_open = 0.0
+                # Under average-cost: avg_cost of remaining shares is unchanged
+                cost_basis   = round(avg_cost * shares_open, 6)
+                realized_pnl = round(realized_pnl + event_pnl, 6)
+                shares_sold  = round(shares_sold + effective_qty, 8)
+
+                is_full_close = shares_open <= SHARE_TOLERANCE
+
+                if tdate:
+                    sell_dates.append(tdate)
+
+                closed_events.append({
+                    "symbol":                sym,
+                    "ticker":                sym,
+                    "shares_sold":           effective_qty,
+                    "exit_price":            price,
+                    "avg_cost_at_sale":      avg_cost_at_sale,
+                    "entry_price":           avg_cost_at_sale,   # alias expected by store
+                    "exit_date":             tdate,
+                    "entry_date":            buy_dates[0] if buy_dates else None,
+                    "proceeds":              proceeds,
+                    "realized_cost_basis":   realized_cost,
+                    "realized_pnl":          event_pnl,
+                    "realized_pnl_pct":      event_pnl_pct,
+                    "remaining_shares_after": shares_open,
+                    "close_type":            "full" if is_full_close else "partial",
+                    "sell_type":             "full" if is_full_close else "partial",
+                    "is_full_close":         is_full_close,
+                    "fees":                  fees,
+                    # Aliases for closed_trades_store compatibility
+                    "shares":                effective_qty,
+                    "exit_price":            price,
+                    "notes":                 "Imported from CSV (ledger engine)",
+                    "cost_method":           "average_cost",
+                })
+
+        ledgers[sym] = {
+            "symbol":            sym,
+            "transactions":      txns_sorted,
+            "buy_count":         sum(1 for t in txns_sorted if t["side"] == "BUY"),
+            "sell_count":        sum(1 for t in txns_sorted if t["side"] == "SELL"),
+            "shares_bought":     round(shares_bought, 8),
+            "shares_sold":       round(shares_sold, 8),
+            "shares_remaining":  round(shares_open, 8),
+            "avg_cost":          round(avg_cost, 6),
+            "cost_basis":        round(cost_basis, 6),
+            "total_buy_cost":    round(total_buy_cost, 6),
+            "realized_pnl":      round(realized_pnl, 6),
+            "first_buy_date":    min(buy_dates)  if buy_dates  else None,
+            "last_buy_date":     max(buy_dates)  if buy_dates  else None,
+            "first_sell_date":   min(sell_dates) if sell_dates else None,
+            "last_sell_date":    max(sell_dates) if sell_dates else None,
+            "closed_events":     closed_events,
+            "accounting_errors": errors,
+        }
+
+    return ledgers
+
+
+# ── Step 4: Classify positions ────────────────────────────────────────────────
+
+def classify_positions(ledgers: dict[str, dict]) -> dict:
+    """Derive open / partially-closed / fully-closed from per-symbol ledgers.
+
+    Returns::
+
+        {
+          "open_positions":             list[dict],
+          "partially_closed_positions": list[dict],
+          "fully_closed_positions":     list[dict],
+          "closed_trade_records":       list[dict],   # one per sell event
+          "monthly_closed_positions":   dict[str, list[dict]],
+          "symbol_audit":               dict[str, dict],
+        }
+
+    Classification rules (mutually exclusive for the open/closed axis):
+
+    =========== ===================== ========= =================
+    Category    shares_remaining      sold > 0  appears_in_open
+    =========== ===================== ========= =================
+    open        > tolerance           no        yes
+    partial     > tolerance           yes       yes
+    fully closed <= tolerance         yes       no
+    =========== ===================== ========= =================
+    """
+    open_positions: list[dict]    = []
+    partially_closed: list[dict]  = []
+    fully_closed: list[dict]      = []
+    all_closed_events: list[dict] = []
+    symbol_audit: dict[str, dict] = {}
+
+    for sym, ledger in ledgers.items():
+        sr = ledger["shares_remaining"]
+        ss = ledger["shares_sold"]
+        sb = ledger["shares_bought"]
+
+        is_open         = sr > SHARE_TOLERANCE
+        has_sells       = ss > SHARE_TOLERANCE
+        is_partial      = is_open and has_sells
+        is_fully_closed = (not is_open) and has_sells
+
+        avg_entry_price = (
+            round(ledger["total_buy_cost"] / sb, 6) if sb else 0.0
+        )
+
+        if is_open:
+            open_positions.append({
+                "symbol":               sym,
+                "shares":               sr,
+                "avg_cost":             ledger["avg_cost"],
+                "cost_basis":           ledger["cost_basis"],
+                "entry_date":           ledger["first_buy_date"],
+                "last_buy_date":        ledger["last_buy_date"],
+                "total_bought_shares":  sb,
+                "total_sold_shares":    ss,
+                "realized_pnl_to_date": ledger["realized_pnl"],
+                "status": "partially_closed_open" if is_partial else "open",
+            })
+
+        if is_partial:
+            realized_cost = ledger["avg_cost"] * ss if ss else 0
+            partially_closed.append({
+                "symbol":           sym,
+                "shares_remaining": sr,
+                "shares_sold":      ss,
+                "avg_cost":         ledger["avg_cost"],
+                "realized_pnl":     ledger["realized_pnl"],
+                "realized_pnl_pct": (
+                    round(ledger["realized_pnl"] / realized_cost * 100, 4)
+                    if realized_cost else None
+                ),
+                "first_entry_date": ledger["first_buy_date"],
+                "last_sell_date":   ledger["last_sell_date"],
+                "status":           "partially_closed_open",
+            })
+
+        if is_fully_closed:
+            total_cost = avg_entry_price * sb
+            pnl_pct = (
+                round(ledger["realized_pnl"] / total_cost * 100, 4)
+                if total_cost else None
+            )
+            holding_days: int | None = None
+            if ledger["last_sell_date"] and ledger["first_buy_date"]:
+                try:
+                    holding_days = (
+                        date.fromisoformat(ledger["last_sell_date"])
+                        - date.fromisoformat(ledger["first_buy_date"])
+                    ).days
+                except Exception:
+                    pass
+            fully_closed.append({
+                "symbol":              sym,
+                "total_shares_bought": sb,
+                "total_shares_sold":   ss,
+                "avg_entry_price":     avg_entry_price,
+                "realized_pnl":        ledger["realized_pnl"],
+                "realized_pnl_pct":    pnl_pct,
+                "first_entry_date":    ledger["first_buy_date"],
+                "final_exit_date":     ledger["last_sell_date"],
+                "holding_period_days": holding_days,
+                "status":              "fully_closed",
+            })
+
+        for ev in ledger["closed_events"]:
+            all_closed_events.append(ev)
+
+        # Per-symbol audit log
+        if is_open and not is_partial:
+            classification = "open"
+        elif is_partial:
+            classification = "partially_closed_open"
+        elif is_fully_closed:
+            classification = "fully_closed"
+        else:
+            classification = "no_activity"
+
+        symbol_audit[sym] = {
+            "symbol":                 sym,
+            "buys":                   ledger["buy_count"],
+            "sells":                  ledger["sell_count"],
+            "shares_bought":          sb,
+            "shares_sold":            ss,
+            "shares_remaining":       sr,
+            "realized_pnl":           ledger["realized_pnl"],
+            "classification":         classification,
+            "appears_in_open":        is_open,
+            "appears_in_partial":     is_partial,
+            "appears_in_fully_closed":is_fully_closed,
+            "accounting_errors":      ledger["accounting_errors"],
+            "monthly_closed_entries": [],
+        }
+
+    # ── Monthly closed positions ───────────────────────────────────────────
+    monthly: dict[str, list[dict]] = {}
+    for ev in all_closed_events:
+        d = ev.get("exit_date") or ""
+        month_key = d[:7] if len(d) >= 7 else "unknown"
+        monthly.setdefault(month_key, []).append(ev)
+        sym = ev.get("symbol") or ev.get("ticker") or ""
+        if sym in symbol_audit:
+            if month_key not in symbol_audit[sym]["monthly_closed_entries"]:
+                symbol_audit[sym]["monthly_closed_entries"].append(month_key)
+
+    return {
+        "open_positions":             open_positions,
+        "partially_closed_positions": partially_closed,
+        "fully_closed_positions":     fully_closed,
+        "closed_trade_records":       all_closed_events,
+        "monthly_closed_positions":   monthly,
+        "symbol_audit":               symbol_audit,
+    }
+
+
+# ── Built-in test suite ───────────────────────────────────────────────────────
+
+def run_ledger_tests() -> dict:
+    """Run the 6 required test cases in-memory. Returns pass/fail per test."""
+
+    def _make_txn(sym, side, qty, price, d) -> dict:
+        fp = _fingerprint(sym, d, side, qty, price, "test")
+        return {
+            "transaction_id": str(uuid.uuid4()),
+            "fingerprint":    fp,
+            "source_file":    "test",
+            "raw_row_index":  0,
+            "account":        "",
+            "symbol":         sym,
+            "trade_date":     d,
+            "settlement_date": None,
+            "action":         side,
+            "side":           side,
+            "quantity":       float(qty),
+            "price":          float(price),
+            "gross_amount":   float(qty) * float(price),
+            "fees":           0.0,
+            "net_amount":     float(qty) * float(price),
+            "currency":       "USD",
+            "raw_description": "test",
+            "normalized_type": side,
+        }
+
+    results = {}
+
+    # ── Test 1: SIVEF partial sell, still open ─────────────────────────────
+    t1_txns = [
+        _make_txn("SIVEF", "BUY",  100, 10, "2026-01-01"),
+        _make_txn("SIVEF", "SELL",  40, 15, "2026-05-01"),
+    ]
+    t1_ledgers = build_symbol_ledgers(t1_txns)
+    t1_pos     = classify_positions(t1_ledgers)
+    t1_audit   = t1_pos["symbol_audit"]["SIVEF"]
+    t1_open    = any(p["symbol"] == "SIVEF" for p in t1_pos["open_positions"])
+    t1_partial = any(p["symbol"] == "SIVEF" for p in t1_pos["partially_closed_positions"])
+    t1_closed  = any(p["symbol"] == "SIVEF" for p in t1_pos["fully_closed_positions"])
+    t1_event   = t1_pos["closed_trade_records"][0] if t1_pos["closed_trade_records"] else {}
+    t1_pnl_ok  = abs((t1_event.get("realized_pnl") or 0) - 200.0) < 0.01
+    t1_rem_ok  = abs((t1_event.get("remaining_shares_after") or 0) - 60.0) < 0.01
+    results["test1_sivef_partial"] = {
+        "pass": (t1_open and t1_partial and not t1_closed and t1_pnl_ok and t1_rem_ok),
+        "open":               t1_open,
+        "partially_closed":   t1_partial,
+        "fully_closed":       t1_closed,
+        "realized_pnl":       t1_event.get("realized_pnl"),
+        "remaining_after":    t1_event.get("remaining_shares_after"),
+        "shares_remaining":   t1_audit["shares_remaining"],
+        "expected_pnl":       200.0,
+        "expected_remaining": 60.0,
+    }
+
+    # ── Test 2: OUST fully open, no sells ─────────────────────────────────
+    t2_txns = [_make_txn("OUST", "BUY", 100, 5, "2026-01-01")]
+    t2_ledgers = build_symbol_ledgers(t2_txns)
+    t2_pos     = classify_positions(t2_ledgers)
+    t2_open    = any(p["symbol"] == "OUST" for p in t2_pos["open_positions"])
+    t2_partial = any(p["symbol"] == "OUST" for p in t2_pos["partially_closed_positions"])
+    t2_closed  = any(p["symbol"] == "OUST" for p in t2_pos["fully_closed_positions"])
+    results["test2_oust_open_only"] = {
+        "pass": (t2_open and not t2_partial and not t2_closed),
+        "open": t2_open, "partially_closed": t2_partial, "fully_closed": t2_closed,
+    }
+
+    # ── Test 3: ALMU fully open, no sells ─────────────────────────────────
+    t3_txns = [_make_txn("ALMU", "BUY", 200, 8, "2026-01-01")]
+    t3_ledgers = build_symbol_ledgers(t3_txns)
+    t3_pos     = classify_positions(t3_ledgers)
+    t3_open    = any(p["symbol"] == "ALMU" for p in t3_pos["open_positions"])
+    t3_partial = any(p["symbol"] == "ALMU" for p in t3_pos["partially_closed_positions"])
+    t3_closed  = any(p["symbol"] == "ALMU" for p in t3_pos["fully_closed_positions"])
+    results["test3_almu_open_only"] = {
+        "pass": (t3_open and not t3_partial and not t3_closed),
+        "open": t3_open, "partially_closed": t3_partial, "fully_closed": t3_closed,
+    }
+
+    # ── Test 4: Fully closed ──────────────────────────────────────────────
+    t4_txns = [
+        _make_txn("TEST_FULL", "BUY",  100, 10, "2026-01-01"),
+        _make_txn("TEST_FULL", "SELL", 100, 12, "2026-03-01"),
+    ]
+    t4_ledgers = build_symbol_ledgers(t4_txns)
+    t4_pos     = classify_positions(t4_ledgers)
+    t4_open    = any(p["symbol"] == "TEST_FULL" for p in t4_pos["open_positions"])
+    t4_partial = any(p["symbol"] == "TEST_FULL" for p in t4_pos["partially_closed_positions"])
+    t4_closed  = any(p["symbol"] == "TEST_FULL" for p in t4_pos["fully_closed_positions"])
+    t4_monthly = "2026-03" in t4_pos["monthly_closed_positions"]
+    t4_event   = t4_pos["closed_trade_records"][0] if t4_pos["closed_trade_records"] else {}
+    results["test4_fully_closed"] = {
+        "pass": (not t4_open and not t4_partial and t4_closed and t4_monthly),
+        "open": t4_open, "partially_closed": t4_partial, "fully_closed": t4_closed,
+        "in_monthly_2026_03": t4_monthly,
+        "is_full_close": t4_event.get("is_full_close"),
+    }
+
+    # ── Test 5: Duplicate protection (import same transactions twice) ──────
+    t5_txns_a = [_make_txn("DUPTEST", "BUY", 100, 10, "2026-01-01")]
+    t5_txns_b = [_make_txn("DUPTEST", "BUY", 100, 10, "2026-01-01")]
+    t5_unique_a, t5_dupes_a = deduplicate_transactions(t5_txns_a)
+    # Second import: pass fingerprints from first import as existing
+    existing_fps = {t["fingerprint"] for t in t5_unique_a}
+    t5_unique_b, t5_dupes_b = deduplicate_transactions(t5_txns_b, existing_fps)
+    t5_ledgers = build_symbol_ledgers(t5_unique_a + t5_unique_b)
+    t5_shares  = t5_ledgers["DUPTEST"]["shares_remaining"]
+    results["test5_dedup"] = {
+        "pass": (len(t5_dupes_b) == 1 and abs(t5_shares - 100.0) < 0.01),
+        "dupes_detected": len(t5_dupes_b),
+        "shares_after_double_import": t5_shares,
+        "expected_shares": 100.0,
+    }
+
+    # ── Test 6: Partial then full close (two sells) ────────────────────────
+    # BUY 100 @ 10 → SELL 25 @ 20 → SELL 75 @ 30
+    # Expected realized P&L = 25*(20-10) + 75*(30-10) = 250 + 1500 = 1750
+    t6_txns = [
+        _make_txn("TEST_MIX", "BUY",  100, 10, "2026-01-01"),
+        _make_txn("TEST_MIX", "SELL",  25, 20, "2026-02-01"),
+        _make_txn("TEST_MIX", "SELL",  75, 30, "2026-03-01"),
+    ]
+    t6_ledgers = build_symbol_ledgers(t6_txns)
+    t6_pos     = classify_positions(t6_ledgers)
+    t6_ledger  = t6_ledgers["TEST_MIX"]
+    t6_open    = any(p["symbol"] == "TEST_MIX" for p in t6_pos["open_positions"])
+    t6_closed  = any(p["symbol"] == "TEST_MIX" for p in t6_pos["fully_closed_positions"])
+    t6_events  = t6_pos["closed_trade_records"]
+    t6_total_pnl = sum(e.get("realized_pnl") or 0 for e in t6_events)
+    t6_pnl_ok  = abs(t6_total_pnl - 1750.0) < 0.01
+    t6_two_events = len(t6_events) == 2
+    # First sell should be partial, second should be full
+    t6_e1_partial = not t6_events[0].get("is_full_close") if t6_events else False
+    t6_e2_full    = t6_events[1].get("is_full_close") if len(t6_events) > 1 else False
+    results["test6_partial_then_full"] = {
+        "pass": (
+            not t6_open and t6_closed and t6_pnl_ok
+            and t6_two_events and t6_e1_partial and t6_e2_full
+        ),
+        "open":              t6_open,
+        "fully_closed":      t6_closed,
+        "total_realized_pnl": t6_total_pnl,
+        "expected_pnl":      1750.0,
+        "sell_event_count":  len(t6_events),
+        "event1_is_partial": t6_e1_partial,
+        "event2_is_full":    t6_e2_full,
+    }
+
+    all_pass = all(v.get("pass") for v in results.values())
+    return {"all_pass": all_pass, "tests": results}
