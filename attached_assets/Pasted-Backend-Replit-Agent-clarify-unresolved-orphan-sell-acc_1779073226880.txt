@@ -1,0 +1,73 @@
+Backend Replit Agent — clarify unresolved orphan-sell accounting behavior
+
+The SIVEF / OUST / ALMU fixes look correct.
+
+But this statement needs correction:
+"The synthetic injection fix will resolve orphan sells automatically on the next import because the first import persists those tickers' positions into the DB."
+
+That is only true if those orphan-sell tickers exist in pre-import DB holdings or are recreated as open positions after import.
+
+For sell-only tickers that are fully closed in the CSV and have no matching buy in CSV or DB, the engine cannot compute accurate cost basis or realized P&L. Re-importing the same CSV will not solve that.
+
+Please update the import logic/diagnostics so it distinguishes:
+
+1. Resolved orphan sells
+- sell has no buy in CSV
+- but existing DB holding provides opening shares/avg_cost/entry_date
+- synthetic lot injected successfully
+- P&L computed
+
+2. Unresolved orphan sells
+- sell has no buy in CSV
+- no matching existing DB holding/basis
+- cannot compute accurate realized P&L
+- must remain accounting_error or needs_basis_review
+
+3. Buy-close-reopen pattern
+- old lot closed
+- fresh later lot opened
+- final status open only, not partially closed
+
+Required output fields:
+- orphan_sells_resolved
+- orphan_sells_unresolved
+- orphan_sells_unresolved_symbols
+- needs_basis_review_symbols
+- basis_source_by_symbol:
+   - csv_lot
+   - existing_db_holding
+   - manual_required
+- import_accuracy_status:
+   - complete
+   - partial_missing_basis
+   - failed
+
+For unresolved orphan sells, do not claim they will resolve on next import unless the missing opening buy or pre-import DB holding exists.
+
+Add user-facing diagnostic:
+"Some sell transactions have no matching buy in the uploaded CSV or existing portfolio. Upload an earlier transaction CSV or enter starting cost basis to calculate realized P&L."
+
+Validation:
+Using the actual CSV:
+1. Confirm SIVEF:
+   - open yes
+   - partially closed yes
+   - fully closed no
+
+2. Confirm OUST:
+   - open yes
+   - partially closed no
+   - fully closed no
+
+3. Confirm ALMU:
+   - open yes
+   - partially closed no
+   - fully closed no
+
+4. For ETH, LMND, IBIT, ETHU, SOLT, CLSK, GRAB, LYFT, COIN, ASST, XPEV, ZETA, MARA and similar sell-only tickers:
+   - mark resolved only if matching DB basis exists
+   - otherwise mark needs_basis_review
+   - do not zero out P&L silently
+   - do not claim next import fixes them automatically
+
+Return updated diagnostics from the actual CSV import.

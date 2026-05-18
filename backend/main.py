@@ -5933,21 +5933,82 @@ async def portfolio_transactions_import_csv(
         e for ledger in ledgers.values()
         for e in ledger.get("accounting_errors", [])
     ]
+
+    # ── Basis-source classification ────────────────────────────────────────
+    # For every symbol that appears in the CSV (buy or sell), determine where
+    # the cost basis came from so callers know which P&L figures are reliable.
+    #
+    #   csv_lot            — all buys in this CSV; P&L is fully computable
+    #   existing_db_holding — orphan/oversell resolved via a pre-import holding
+    #   manual_required    — sell has no matching buy in CSV or DB; P&L unknown
+
+    # Tickers where synthetic injection succeeded (orphan OR oversell)
+    _resolved_syms: set[str] = synthetic_buy_syms
+
+    # Tickers that are UNRESOLVED:
+    #   pure orphans with no DB match
+    _unresolved_orphan_syms: set[str] = orphan_syms - _resolved_syms
+    #   oversell tickers where DB had no holding to cover the gap
+    _unresolved_oversell_syms: set[str] = oversell_syms - _resolved_syms
+    _needs_basis_review: set[str] = _unresolved_orphan_syms | _unresolved_oversell_syms
+
+    # Build per-symbol basis source map
+    _all_csv_syms: set[str] = csv_buy_syms | csv_sell_syms
+    _basis_source: dict[str, str] = {}
+    for _s in _all_csv_syms:
+        if _s in _resolved_syms:
+            _basis_source[_s] = "existing_db_holding"
+        elif _s in _needs_basis_review:
+            _basis_source[_s] = "manual_required"
+        else:
+            _basis_source[_s] = "csv_lot"
+
+    # Overall accuracy status
+    if not _needs_basis_review:
+        _accuracy_status = "complete"
+    elif len(_needs_basis_review) < len(_all_csv_syms):
+        _accuracy_status = "partial_missing_basis"
+    else:
+        _accuracy_status = "failed"
+
+    # User-facing diagnostic message (only when there are unresolved orphans)
+    _basis_warning: str | None = None
+    if _needs_basis_review:
+        _basis_warning = (
+            f"Some sell transactions ({', '.join(sorted(_needs_basis_review))}) "
+            "have no matching buy in the uploaded CSV or existing portfolio. "
+            "Upload an earlier transaction CSV or enter starting cost basis "
+            "to calculate realized P&L."
+        )
+
     diag = {
-        "source_file":             source_file,
-        "rows_total":              rows_total,
-        "normalized_transactions": len(all_txns),
-        "buy_sell_transactions":   len(buy_sell_txns),
-        "duplicate_transactions":  len(dupe_txns),
-        "ignored_rows":            len(ignored_rows),
-        "unknown_type_rows":       len(unknown_rows),
-        "accounting_errors":       len(acct_errors),
-        "orphan_sells_resolved":   len(synthetic_buy_syms),
-        "orphan_sells_unresolved": len(orphan_syms - synthetic_buy_syms),
-        "open_count":              len(open_positions),
-        "partially_closed_count":  len(partially_closed),
-        "fully_closed_count":      len(fully_closed),
-        "closed_trades_count":     len(closed_events),
+        "source_file":                    source_file,
+        "rows_total":                     rows_total,
+        "normalized_transactions":        len(all_txns),
+        "buy_sell_transactions":          len(buy_sell_txns),
+        "duplicate_transactions":         len(dupe_txns),
+        "ignored_rows":                   len(ignored_rows),
+        "unknown_type_rows":              len(unknown_rows),
+        "accounting_errors":              len(acct_errors),
+        # Orphan-sell resolution (sell in CSV, NO buy in CSV)
+        "orphan_sells_detected":          len(orphan_syms),
+        "orphan_sells_resolved":          len(orphan_syms & _resolved_syms),
+        "orphan_sells_unresolved":        len(_unresolved_orphan_syms),
+        "orphan_sells_unresolved_symbols": sorted(_unresolved_orphan_syms),
+        # Oversell resolution (buy in CSV but sell > buy)
+        "oversell_detected":              len(oversell_syms),
+        "oversell_resolved":              len(oversell_syms & _resolved_syms),
+        "oversell_unresolved":            len(_unresolved_oversell_syms),
+        "oversell_unresolved_symbols":    sorted(_unresolved_oversell_syms),
+        # Combined needs-review set
+        "needs_basis_review_symbols":     sorted(_needs_basis_review),
+        # Accuracy status
+        "import_accuracy_status":         _accuracy_status,
+        # Position counts
+        "open_count":                     len(open_positions),
+        "partially_closed_count":         len(partially_closed),
+        "fully_closed_count":             len(fully_closed),
+        "closed_trades_count":            len(closed_events),
     }
     print(f"[portfolio-csv-import] {diag}")
 
@@ -6228,6 +6289,9 @@ async def portfolio_transactions_import_csv(
         "success":                    True,
         "mode":                       mode,
         "import_diagnostics":         diag,
+        "basis_source_by_symbol":     _basis_source,
+        "import_accuracy_status":     _accuracy_status,
+        **({"basis_warning": _basis_warning} if _basis_warning else {}),
         "named_symbol_report":        named_report,
         "open_positions":             open_positions,
         "partially_closed_positions": partially_closed,
