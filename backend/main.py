@@ -5830,44 +5830,89 @@ async def portfolio_transactions_import_csv(
 
     csv_buy_syms  = {t["symbol"] for t in unique_txns if t["side"] == "BUY"}
     csv_sell_syms = {t["symbol"] for t in unique_txns if t["side"] == "SELL"}
+
+    # Pure orphan sells: ticker has SELL rows but zero BUY rows in the CSV
     orphan_syms   = csv_sell_syms - csv_buy_syms
+
+    # Oversell tickers: ticker has CSV buys but CSV sells exceed CSV buys
+    # (e.g. IREN: bought 23, sold 186 — original lot predates the CSV window)
+    _csv_qty_bought: dict[str, float] = {}
+    _csv_qty_sold:   dict[str, float] = {}
+    for _t in unique_txns:
+        _s = _t["symbol"]
+        if _t["side"] == "BUY":
+            _csv_qty_bought[_s] = round(_csv_qty_bought.get(_s, 0) + float(_t.get("quantity") or 0), 8)
+        elif _t["side"] == "SELL":
+            _csv_qty_sold[_s]   = round(_csv_qty_sold.get(_s, 0)   + float(_t.get("quantity") or 0), 8)
+    oversell_syms = {
+        _s for _s in (csv_buy_syms & csv_sell_syms)
+        if _csv_qty_sold.get(_s, 0) > _csv_qty_bought.get(_s, 0) + 1e-6
+    }
 
     _synthetic_buys: list[dict]  = []
     synthetic_buy_syms: set[str] = set()
 
+    def _make_synthetic_buy(_sym: str, _synth_shares: float, _synth_price: float,
+                            _synth_date: str, _reason: str) -> dict:
+        return {
+            "transaction_id":  str(_uuid_mod.uuid4()),
+            "fingerprint":     f"synth_db_{_sym}_{_synth_shares:.4f}_{_synth_price:.4f}",
+            "source_file":     "db_holding_synthetic",
+            "raw_row_index":   -1,
+            "account":         _pre_import_map.get(_sym, {}).get("account", ""),
+            "symbol":          _sym,
+            "trade_date":      _synth_date,
+            "settlement_date": None,
+            "action":          "BUY",
+            "side":            "BUY",
+            "quantity":        _synth_shares,
+            "price":           _synth_price,
+            "gross_amount":    _synth_shares * _synth_price,
+            "fees":            0.0,
+            "net_amount":      _synth_shares * _synth_price,
+            "currency":        "USD",
+            "raw_description": f"Synthetic lot from prior DB holding ({_reason})",
+            "normalized_type": "BUY",
+            "synthetic":       True,
+        }
+
+    # ── Case 1: pure orphan sells — inject full DB holding ─────────────────
     for _sym in orphan_syms:
         _h = _pre_import_map.get(_sym)
         if _h and float(_h.get("shares") or 0) > 0:
             _synth_shares = float(_h["shares"])
             _synth_price  = float(_h.get("avg_cost") or 0)
             _synth_date   = str(_h.get("entry_date") or "2000-01-01")[:10]
-            _synthetic_buys.append({
-                "transaction_id":  str(_uuid_mod.uuid4()),
-                "fingerprint":     f"synth_db_{_sym}_{_synth_shares:.4f}_{_synth_price:.4f}",
-                "source_file":     "db_holding_synthetic",
-                "raw_row_index":   -1,
-                "account":         _h.get("account", ""),
-                "symbol":          _sym,
-                "trade_date":      _synth_date,
-                "settlement_date": None,
-                "action":          "BUY",
-                "side":            "BUY",
-                "quantity":        _synth_shares,
-                "price":           _synth_price,
-                "gross_amount":    _synth_shares * _synth_price,
-                "fees":            0.0,
-                "net_amount":      _synth_shares * _synth_price,
-                "currency":        "USD",
-                "raw_description": "Synthetic lot from prior DB holding",
-                "normalized_type": "BUY",
-                "synthetic":       True,
-            })
+            _synthetic_buys.append(
+                _make_synthetic_buy(_sym, _synth_shares, _synth_price, _synth_date, "orphan_sell")
+            )
             synthetic_buy_syms.add(_sym)
             print(
                 f"[portfolio-ledger-import] orphan-sell resolved: {_sym} → "
                 f"injected synthetic BUY {_synth_shares} @ {_synth_price} "
                 f"(DB entry={_synth_date})"
             )
+
+    # ── Case 2: oversell tickers — inject gap shares from DB ───────────────
+    # The CSV has some buys for the ticker but sells exceed them. The gap
+    # shares represent a pre-CSV lot. We inject only the gap amount (not the
+    # full DB holding) so we don't double-count the CSV buys.
+    for _sym in oversell_syms:
+        _h = _pre_import_map.get(_sym)
+        if _h and float(_h.get("shares") or 0) > 0:
+            _gap = round(_csv_qty_sold.get(_sym, 0) - _csv_qty_bought.get(_sym, 0), 8)
+            if _gap > 1e-6:
+                _synth_price = float(_h.get("avg_cost") or 0)
+                _synth_date  = str(_h.get("entry_date") or "2000-01-01")[:10]
+                _synthetic_buys.append(
+                    _make_synthetic_buy(_sym, _gap, _synth_price, _synth_date, "oversell_gap")
+                )
+                synthetic_buy_syms.add(_sym)
+                print(
+                    f"[portfolio-ledger-import] oversell resolved: {_sym} → "
+                    f"injected synthetic BUY {_gap} @ {_synth_price} "
+                    f"(gap={_gap}, DB entry={_synth_date})"
+                )
 
     # Pass CSV transactions + synthetic opening lots to the ledger engine
     txns_for_ledger = unique_txns + _synthetic_buys

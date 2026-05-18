@@ -565,24 +565,48 @@ def build_symbol_ledgers(transactions: list[dict]) -> dict[str, dict]:
                     "cost_method":           "average_cost",
                 })
 
+        # ── Buy-close-reopen detection ─────────────────────────────────────
+        # If the last sell date exists AND every remaining open share came
+        # from a buy that occurred STRICTLY AFTER that sell date, the prior
+        # position was fully closed and the new lot is a fresh open — it
+        # should NOT be classified as "partially closed".
+        # Example: OUST buy 227 → sell 227 (full close) → buy 302 (reopen).
+        #          ALMU buy 204 → sell 204 (full close) → buy 439 (reopen).
+        _last_sell = max(sell_dates) if sell_dates else None
+        _shares_bought_post_sell = 0.0
+        if _last_sell:
+            for _t in txns_sorted:
+                if _t["side"] == "BUY" and (_t.get("trade_date") or "") > _last_sell:
+                    _shares_bought_post_sell = round(
+                        _shares_bought_post_sell + float(_t.get("quantity") or 0), 8
+                    )
+        # True only when all current open shares postdate the last sell
+        all_open_lots_post_sell: bool = (
+            _last_sell is not None
+            and shares_open > SHARE_TOLERANCE
+            and _shares_bought_post_sell >= shares_open - SHARE_TOLERANCE
+        )
+
         ledgers[sym] = {
-            "symbol":            sym,
-            "transactions":      txns_sorted,
-            "buy_count":         sum(1 for t in txns_sorted if t["side"] == "BUY"),
-            "sell_count":        sum(1 for t in txns_sorted if t["side"] == "SELL"),
-            "shares_bought":     round(shares_bought, 8),
-            "shares_sold":       round(shares_sold, 8),
-            "shares_remaining":  round(shares_open, 8),
-            "avg_cost":          round(avg_cost, 6),
-            "cost_basis":        round(cost_basis, 6),
-            "total_buy_cost":    round(total_buy_cost, 6),
-            "realized_pnl":      round(realized_pnl, 6),
-            "first_buy_date":    min(buy_dates)  if buy_dates  else None,
-            "last_buy_date":     max(buy_dates)  if buy_dates  else None,
-            "first_sell_date":   min(sell_dates) if sell_dates else None,
-            "last_sell_date":    max(sell_dates) if sell_dates else None,
-            "closed_events":     closed_events,
-            "accounting_errors": errors,
+            "symbol":                 sym,
+            "transactions":           txns_sorted,
+            "buy_count":              sum(1 for t in txns_sorted if t["side"] == "BUY"),
+            "sell_count":             sum(1 for t in txns_sorted if t["side"] == "SELL"),
+            "shares_bought":          round(shares_bought, 8),
+            "shares_sold":            round(shares_sold, 8),
+            "shares_remaining":       round(shares_open, 8),
+            "avg_cost":               round(avg_cost, 6),
+            "cost_basis":             round(cost_basis, 6),
+            "total_buy_cost":         round(total_buy_cost, 6),
+            "realized_pnl":           round(realized_pnl, 6),
+            "first_buy_date":         min(buy_dates)  if buy_dates  else None,
+            "last_buy_date":          max(buy_dates)  if buy_dates  else None,
+            "first_sell_date":        min(sell_dates) if sell_dates else None,
+            "last_sell_date":         max(sell_dates) if sell_dates else None,
+            "all_open_lots_post_sell": all_open_lots_post_sell,
+            "shares_bought_post_sell": round(_shares_bought_post_sell, 8),
+            "closed_events":          closed_events,
+            "accounting_errors":      errors,
         }
 
     return ledgers
@@ -627,7 +651,12 @@ def classify_positions(ledgers: dict[str, dict]) -> dict:
 
         is_open         = sr > SHARE_TOLERANCE
         has_sells       = ss > SHARE_TOLERANCE
-        is_partial      = is_open and has_sells
+        # Partially closed = shares remain AND there were sells AND those sells
+        # reduced the CURRENT open lot (not a prior lot that was fully closed).
+        # If all remaining shares came from buys AFTER the last sell date, the
+        # prior position was fully closed and the current one is fresh → NOT partial.
+        all_open_post_sell = ledger.get("all_open_lots_post_sell", False)
+        is_partial      = is_open and has_sells and not all_open_post_sell
         is_fully_closed = (not is_open) and has_sells
 
         avg_entry_price = (
@@ -746,7 +775,7 @@ def classify_positions(ledgers: dict[str, dict]) -> dict:
 # ── Built-in test suite ───────────────────────────────────────────────────────
 
 def run_ledger_tests() -> dict:
-    """Run the 6 required test cases in-memory. Returns pass/fail per test."""
+    """Run the 8 required test cases in-memory. Returns pass/fail per test."""
 
     def _make_txn(sym, side, qty, price, d) -> dict:
         fp = _fingerprint(sym, d, side, qty, price, "test")
@@ -890,6 +919,60 @@ def run_ledger_tests() -> dict:
         "sell_event_count":  len(t6_events),
         "event1_is_partial": t6_e1_partial,
         "event2_is_full":    t6_e2_full,
+    }
+
+    # ── Test 7: OUST buy-close-reopen (matches real CSV pattern) ──────────
+    # Buy 227 → Sell 227 (fully closes) → Buy 302 (fresh reopen)
+    # Expected: open=True, partially_closed=FALSE, fully_closed=False
+    t7_txns = [
+        _make_txn("OUST", "BUY",  227, 21.99, "2026-03-16"),
+        _make_txn("OUST", "SELL", 227, 20.31, "2026-03-25"),
+        _make_txn("OUST", "BUY",  302, 26.51, "2026-05-12"),
+    ]
+    t7_ledgers = build_symbol_ledgers(t7_txns)
+    t7_pos     = classify_positions(t7_ledgers)
+    t7_open    = any(p["symbol"] == "OUST" for p in t7_pos["open_positions"])
+    t7_partial = any(p["symbol"] == "OUST" for p in t7_pos["partially_closed_positions"])
+    t7_closed  = any(p["symbol"] == "OUST" for p in t7_pos["fully_closed_positions"])
+    t7_ledger  = t7_ledgers["OUST"]
+    results["test7_oust_reopen"] = {
+        "pass": (t7_open and not t7_partial and not t7_closed),
+        "open":               t7_open,
+        "partially_closed":   t7_partial,
+        "fully_closed":       t7_closed,
+        "shares_remaining":   t7_ledger["shares_remaining"],
+        "all_open_lots_post_sell": t7_ledger["all_open_lots_post_sell"],
+        "expected_remaining": 302.0,
+        "expected_open":      True,
+        "expected_partial":   False,
+    }
+
+    # ── Test 8: ALMU buy-close-reopen (matches real CSV pattern) ──────────
+    # Buy 169 (01/02) + Buy 35 (01/23) → Sell 204 (01/27, full close)
+    # → Buy 439 (04/22, fresh reopen)
+    # Expected: open=True, partially_closed=FALSE, fully_closed=False
+    t8_txns = [
+        _make_txn("ALMU", "BUY",  169, 17.84, "2026-01-02"),
+        _make_txn("ALMU", "BUY",   35, 17.00, "2026-01-23"),
+        _make_txn("ALMU", "SELL", 204, 16.74, "2026-01-27"),
+        _make_txn("ALMU", "BUY",  439, 18.13, "2026-04-22"),
+    ]
+    t8_ledgers = build_symbol_ledgers(t8_txns)
+    t8_pos     = classify_positions(t8_ledgers)
+    t8_open    = any(p["symbol"] == "ALMU" for p in t8_pos["open_positions"])
+    t8_partial = any(p["symbol"] == "ALMU" for p in t8_pos["partially_closed_positions"])
+    t8_closed  = any(p["symbol"] == "ALMU" for p in t8_pos["fully_closed_positions"])
+    t8_ledger  = t8_ledgers["ALMU"]
+    results["test8_almu_reopen"] = {
+        "pass": (t8_open and not t8_partial and not t8_closed),
+        "open":               t8_open,
+        "partially_closed":   t8_partial,
+        "fully_closed":       t8_closed,
+        "shares_remaining":   t8_ledger["shares_remaining"],
+        "all_open_lots_post_sell": t8_ledger["all_open_lots_post_sell"],
+        "expected_remaining": 439.0,
+        "expected_open":      True,
+        "expected_partial":   False,
     }
 
     all_pass = all(v.get("pass") for v in results.values())
