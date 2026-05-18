@@ -291,7 +291,8 @@ def _normalise(h: dict) -> dict:
         out["lots"] = lots
     if entry_date is not None:
         out["entry_date"] = entry_date
-    for k in ("date_added", "notes", "id", "trade_group_id"):
+    for k in ("date_added", "notes", "id", "trade_group_id",
+              "classification", "basis_source", "import_batch_id", "source_file"):
         if h.get(k) is not None:
             out[k] = h[k]
     return out

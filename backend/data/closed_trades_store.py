@@ -97,6 +97,19 @@ def _ensure_table(conn) -> None:
         # Trade-group columns (allow grouping partial sells of the same trade lifecycle)
         "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS trade_group_id TEXT",
         "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS is_full_close BOOLEAN NOT NULL DEFAULT FALSE",
+        # Source-tracking columns — added to allow full_replace to delete only
+        # CSV-imported records without touching manually-entered trades.
+        # source:               'csv_import' | 'manual'  (NULL = pre-schema legacy)
+        # import_batch_id:      UUID shared by all records from one CSV upload
+        # source_file:          original filename label
+        # final_symbol_status:  ticker's state after the full import run
+        #                       'open' | 'partially_closed_open' | 'fully_closed'
+        # basis_source:         'csv_lot' | 'existing_db_holding' | 'manual_required'
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS source TEXT",
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS import_batch_id TEXT",
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS source_file TEXT",
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS final_symbol_status TEXT",
+        "ALTER TABLE portfolio_closed_trades ADD COLUMN IF NOT EXISTS basis_source TEXT",
     ):
         try:
             cur.execute(_col_sql)
@@ -208,8 +221,10 @@ def save_closed_trade(trade: dict) -> dict:
               (id, ticker, shares, entry_date, exit_date, entry_price, exit_price,
                realized_pnl, realized_pnl_pct, holding_period_days, notes,
                sell_type, remaining_shares_after, cost_method,
-               trade_group_id, is_full_close)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               trade_group_id, is_full_close,
+               source, import_batch_id, source_file,
+               final_symbol_status, basis_source)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING *
         """, (
             trade_id,
@@ -228,6 +243,11 @@ def save_closed_trade(trade: dict) -> dict:
             trade.get("cost_method") or "average_cost",
             trade.get("trade_group_id") or None,
             bool(trade.get("is_full_close", False)),
+            trade.get("source") or "manual",
+            trade.get("import_batch_id") or None,
+            trade.get("source_file") or None,
+            trade.get("final_symbol_status") or None,
+            trade.get("basis_source") or None,
         ))
         row = cur.fetchone()
         desc = cur.description
@@ -447,6 +467,44 @@ def load_closed_trades_grouped(trades: list[dict] | None = None) -> list[dict]:
     return result
 
 
+def delete_csv_import_closed_trades() -> int:
+    """Delete closed trades created by CSV import, preserving manually-entered ones.
+
+    Deletes records where:
+      source = 'csv_import'  — explicitly tagged by the new import engine
+      source IS NULL         — legacy records that predate the source column
+                               (likely from prior CSV imports; cannot distinguish)
+
+    Records with source = 'manual' are always preserved.
+    Returns count deleted.
+    """
+    conn = _get_conn()
+    if not conn:
+        return 0
+    try:
+        _ensure_table(conn)
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM portfolio_closed_trades
+            WHERE source = 'csv_import' OR source IS NULL
+        """)
+        count = cur.rowcount
+        conn.commit()
+        cur.close()
+        print(f"[CLOSED_TRADES_STORE] delete_csv_import: removed {count} records "
+              f"(source=csv_import or legacy NULL)")
+        return count
+    except Exception as e:
+        print(f"[CLOSED_TRADES_STORE] delete_csv_import error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        _put_conn(conn)
+
+
 def delete_closed_trade(trade_id: str) -> bool:
     """Delete a closed trade by id. Returns True if deleted."""
     conn = _get_conn()
@@ -539,6 +597,11 @@ def save_closed_trades_batch(trades: list[dict]) -> int:
                 t.get("cost_method") or "average_cost",
                 t.get("trade_group_id") or None,
                 bool(t.get("is_full_close", False)),
+                t.get("source") or "manual",
+                t.get("import_batch_id") or None,
+                t.get("source_file") or None,
+                t.get("final_symbol_status") or None,
+                t.get("basis_source") or None,
             ))
         from psycopg2.extras import execute_values as _ev
         _ev(cur, """
@@ -546,7 +609,9 @@ def save_closed_trades_batch(trades: list[dict]) -> int:
               (id, ticker, shares, entry_date, exit_date, entry_price, exit_price,
                realized_pnl, realized_pnl_pct, holding_period_days, notes,
                sell_type, remaining_shares_after, cost_method,
-               trade_group_id, is_full_close)
+               trade_group_id, is_full_close,
+               source, import_batch_id, source_file,
+               final_symbol_status, basis_source)
             VALUES %s
             ON CONFLICT (id) DO NOTHING
         """, rows)

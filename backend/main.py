@@ -5732,9 +5732,11 @@ async def portfolio_transactions_import_csv(
     # Default full_replace=True so a fresh import never inherits stale state
     # from prior bad imports (e.g. wrong is_full_close flags on SIVEF/OUST).
     # Pass full_replace=false explicitly for incremental/append imports.
-    full_replace = bool(body.get("full_replace", True))
-    source_file  = (body.get("source_file") or "uploaded_csv").strip()
-    run_validate = bool(body.get("validate", False))
+    full_replace     = bool(body.get("full_replace", True))
+    source_file      = (body.get("source_file") or "uploaded_csv").strip()
+    run_validate     = bool(body.get("validate", False))
+    import uuid as _uuid_mod_early
+    _import_batch_id = str(_uuid_mod_early.uuid4())
 
     if mode not in ("preview", "import"):
         raise HTTPException(status_code=400, detail="mode must be 'preview' or 'import'")
@@ -5759,9 +5761,10 @@ async def portfolio_transactions_import_csv(
         compute_lot_totals    as _totals,
     )
     from data.closed_trades_store import (
-        save_closed_trades_batch as _save_ct_batch,
-        delete_all_closed_trades as _del_ct_all,
-        load_closed_trades       as _load_ct,
+        save_closed_trades_batch        as _save_ct_batch,
+        delete_all_closed_trades        as _del_ct_all,
+        delete_csv_import_closed_trades as _del_csv_ct,
+        load_closed_trades              as _load_ct,
     )
     from datetime import date as _date_cls
     import uuid as _uuid_mod
@@ -5928,6 +5931,23 @@ async def portfolio_transactions_import_csv(
     monthly           = result["monthly_closed_positions"]
     symbol_audit      = result["symbol_audit"]
 
+    # ── Final symbol status map — used for closed trade tagging ───────────────
+    # Determines the ticker's definitive state AFTER the full import is processed.
+    # This is written onto every closed trade record for that ticker so the
+    # frontend knows whether a sell event belongs to an open, partially-closed,
+    # or fully-closed ticker — without needing to re-run the ledger.
+    _open_syms    = {p["symbol"] for p in open_positions}
+    _partial_syms = {p["symbol"] for p in partially_closed}
+    _closed_syms  = {p["symbol"] for p in fully_closed}
+    def _final_status(sym: str) -> str:
+        if sym in _partial_syms:
+            return "partially_closed_open"
+        if sym in _open_syms:
+            return "open"
+        if sym in _closed_syms:
+            return "fully_closed"
+        return "fully_closed"   # sell-only ticker with no surviving open lot
+
     # ── Diagnostics log ───────────────────────────────────────────────────────
     acct_errors = [
         e for ledger in ledgers.values()
@@ -6038,11 +6058,13 @@ async def portfolio_transactions_import_csv(
         existing_holdings = _pre_import_holdings
 
         if full_replace:
-            prev_ct = _del_ct_all()
+            # Wipe only CSV-imported closed trades (source='csv_import' or legacy NULL).
+            # Manually-entered trades (source='manual') are preserved.
+            prev_ct = _del_csv_ct()
             _save_h([])
             existing_holdings = []
-            print(f"[portfolio-ledger-import] full_replace: wiped existing "
-                  f"holdings + {prev_ct} closed trades")
+            print(f"[portfolio-ledger-import] full_replace: wiped holdings + "
+                  f"{prev_ct} csv-import closed trades (manual records preserved)")
 
         existing_map = {h["ticker"].upper(): h for h in existing_holdings}
 
@@ -6163,17 +6185,24 @@ async def portfolio_transactions_import_csv(
 
             totals = _totals(final_lots)
             updated_map[sym] = {
-                "ticker":     sym,
-                "shares":     totals["shares"],
-                "avg_cost":   totals["avg_cost"],
-                "entry_date": (
+                "ticker":         sym,
+                "shares":         totals["shares"],
+                "avg_cost":       totals["avg_cost"],
+                "entry_date":     (
                     totals.get("entry_date")
                     or (existing or {}).get("entry_date")
                     or pos.get("entry_date")
                     or _date_cls.today().isoformat()
                 ),
-                "asset_type": (existing or {}).get("asset_type", "stock"),
-                "lots":       final_lots,
+                "asset_type":     (existing or {}).get("asset_type", "stock"),
+                "lots":           final_lots,
+                # Classification written at import time so GET /api/portfolio/holdings
+                # can serve the correct dashboard category without re-running the ledger.
+                # Values: "partially_closed_open" | "open"
+                "classification": _final_status(sym),
+                "basis_source":   _basis_source.get(sym, "csv_lot"),
+                "import_batch_id": _import_batch_id,
+                "source_file":    source_file,
             }
             if (existing or {}).get("notes"):
                 updated_map[sym]["notes"] = existing["notes"]
@@ -6198,9 +6227,10 @@ async def portfolio_transactions_import_csv(
         # ── Save closed trade records (one per sell event) ────────────────
         ct_batch: list[dict] = []
         for ev in closed_events:
+            _sym = (ev.get("symbol") or ev.get("ticker") or "").upper()
             trade_group_id = str(_uuid_mod.uuid4())
             ct_batch.append({
-                "ticker":                 ev.get("symbol") or ev.get("ticker"),
+                "ticker":                 _sym,
                 "shares":                 ev.get("shares_sold") or ev.get("shares"),
                 "entry_price":            ev.get("avg_cost_at_sale") or ev.get("entry_price"),
                 "exit_price":             ev.get("exit_price"),
@@ -6214,6 +6244,12 @@ async def portfolio_transactions_import_csv(
                 "remaining_shares_after": ev.get("remaining_shares_after"),
                 "trade_group_id":         trade_group_id,
                 "cost_method":            "average_cost",
+                # ── Source-tracking fields ─────────────────────────────────
+                "source":                 "csv_import",
+                "import_batch_id":        _import_batch_id,
+                "source_file":            source_file,
+                "final_symbol_status":    _final_status(_sym),
+                "basis_source":           _basis_source.get(_sym, "csv_lot"),
             })
         if ct_batch:
             saved_ct = _save_ct_batch(ct_batch)
@@ -6288,6 +6324,7 @@ async def portfolio_transactions_import_csv(
     return {
         "success":                    True,
         "mode":                       mode,
+        "import_batch_id":            _import_batch_id,
         "import_diagnostics":         diag,
         "basis_source_by_symbol":     _basis_source,
         "import_accuracy_status":     _accuracy_status,
