@@ -30,6 +30,19 @@ from typing import Any
 _DB_URL  = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
 _db_pool = None
 
+import time as _time_opt
+_opt_pos_cache: dict = {"data": None, "ts": 0.0}
+_opt_ct_cache:  dict = {"data": None, "ts": 0.0}
+_OPT_CACHE_TTL = 45.0   # seconds — invalidated immediately on any write
+
+
+def _invalidate_opt_pos_cache() -> None:
+    _opt_pos_cache["data"] = None
+
+
+def _invalidate_opt_ct_cache() -> None:
+    _opt_ct_cache["data"] = None
+
 
 # ── Connection pool ───────────────────────────────────────────────────────────
 
@@ -197,7 +210,14 @@ def _ct_row_to_dict(row: tuple, description) -> dict:
 # ── Option positions ──────────────────────────────────────────────────────────
 
 def load_option_positions() -> list[dict]:
-    """Return all option positions ordered by underlying, expiration."""
+    """Return all option positions ordered by underlying, expiration.
+
+    Cached in memory for 45 s; invalidated on any write.
+    """
+    _now = _time_opt.time()
+    if _opt_pos_cache["data"] is not None and _now - _opt_pos_cache["ts"] < _OPT_CACHE_TTL:
+        return list(_opt_pos_cache["data"])
+
     conn = _get_conn()
     if not conn:
         return []
@@ -211,7 +231,10 @@ def load_option_positions() -> list[dict]:
         rows = cur.fetchall()
         desc = cur.description
         cur.close()
-        return [_pos_row_to_dict(r, desc) for r in rows]
+        result = [_pos_row_to_dict(r, desc) for r in rows]
+        _opt_pos_cache["data"] = result
+        _opt_pos_cache["ts"]   = _now
+        return result
     except Exception as e:
         print(f"[OPT_STORE] load_option_positions error: {e}")
         return []
@@ -221,6 +244,7 @@ def load_option_positions() -> list[dict]:
 
 def save_option_positions_batch(positions: list[dict]) -> int:
     """Upsert option positions. Returns count of rows upserted."""
+    _invalidate_opt_pos_cache()
     if not positions:
         return 0
     conn = _get_conn()
@@ -295,6 +319,7 @@ def save_option_positions_batch(positions: list[dict]) -> int:
 
 def delete_csv_import_option_positions() -> int:
     """Delete option positions with source='csv_import'. Preserves manual records."""
+    _invalidate_opt_pos_cache()
     conn = _get_conn()
     if not conn:
         return 0
@@ -325,7 +350,14 @@ def delete_csv_import_option_positions() -> int:
 # ── Option closed trades ──────────────────────────────────────────────────────
 
 def load_option_closed_trades() -> list[dict]:
-    """Return all option closed trades ordered by exit_date desc."""
+    """Return all option closed trades ordered by exit_date desc.
+
+    Cached in memory for 45 s; invalidated on any write.
+    """
+    _now = _time_opt.time()
+    if _opt_ct_cache["data"] is not None and _now - _opt_ct_cache["ts"] < _OPT_CACHE_TTL:
+        return list(_opt_ct_cache["data"])
+
     conn = _get_conn()
     if not conn:
         return []
@@ -339,7 +371,10 @@ def load_option_closed_trades() -> list[dict]:
         rows = cur.fetchall()
         desc = cur.description
         cur.close()
-        return [_ct_row_to_dict(r, desc) for r in rows]
+        result = [_ct_row_to_dict(r, desc) for r in rows]
+        _opt_ct_cache["data"] = result
+        _opt_ct_cache["ts"]   = _now
+        return result
     except Exception as e:
         print(f"[OPT_STORE] load_option_closed_trades error: {e}")
         return []
@@ -349,6 +384,7 @@ def load_option_closed_trades() -> list[dict]:
 
 def save_option_closed_trades_batch(trades: list[dict]) -> int:
     """Insert option closed trade records. Returns count inserted."""
+    _invalidate_opt_ct_cache()
     if not trades:
         return 0
     conn = _get_conn()
@@ -414,6 +450,7 @@ def save_option_closed_trades_batch(trades: list[dict]) -> int:
 
 def delete_csv_import_option_closed_trades() -> int:
     """Delete option closed trades with source='csv_import'. Preserves manual records."""
+    _invalidate_opt_ct_cache()
     conn = _get_conn()
     if not conn:
         return 0

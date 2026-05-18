@@ -4600,6 +4600,9 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
                                  with final_symbol_status=="fully_closed" AND
                                  are NOT present in active holdings
     """
+    import time as _time_h
+    _t0_h = _time_h.perf_counter()
+
     from data.portfolio_store import load_active_holdings as _load
     from data.closed_trades_store import load_closed_trades as _load_ct
     from collections import defaultdict as _dd
@@ -4755,6 +4758,22 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
                 _opt_partial_pos.append(_op)
         elif _st in ("fully_closed", "expired", "orphan_expired"):
             _opt_fc_pos.append(_op)
+
+    _resp_ms = round((_time_h.perf_counter() - _t0_h) * 1000, 1)
+    _fast_debug = {
+        "response_ms":        _resp_ms,
+        "active_count":       len(holdings),
+        "open_count":         len(open_positions),
+        "partial_count":      len(partially_closed),
+        "fully_closed_count": len(fully_closed),
+        "option_open_count":  len(_opt_open_pos),
+        "option_closed_count":len(_opt_fc_pos),
+        "closed_trades_count":len(_trades),
+        "provider_calls_made":0,
+        "recomputed_ledger":  False,
+        "source":             "neon_db_with_mem_cache",
+    }
+    print(f"[portfolio-holdings-fast-path] {_fast_debug}")
 
     return {
         "holdings":                          holdings,

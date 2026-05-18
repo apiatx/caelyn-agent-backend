@@ -1,55 +1,6 @@
 {
   "holdings": [
     {
-      "ticker": "BWEN",
-      "shares": 1512.0,
-      "avg_cost": 3.9,
-      "asset_type": "stock",
-      "entry_date": "2026-05-15"
-    },
-    {
-      "ticker": "FLNC",
-      "shares": 499.0,
-      "avg_cost": 20.07,
-      "asset_type": "stock",
-      "entry_date": "2026-05-15"
-    },
-    {
-      "ticker": "SLNH",
-      "shares": 24361.0,
-      "avg_cost": 1.998941,
-      "asset_type": "stock",
-      "entry_date": "2026-05-12"
-    },
-    {
-      "ticker": "PENG",
-      "shares": 422.0,
-      "avg_cost": 35.47,
-      "asset_type": "stock",
-      "entry_date": "2026-05-05"
-    },
-    {
-      "ticker": "SIVEF",
-      "shares": 2996.0,
-      "avg_cost": 1.236996,
-      "asset_type": "stock",
-      "entry_date": "2026-03-23"
-    },
-    {
-      "ticker": "TRT",
-      "shares": 1160.0,
-      "avg_cost": 6.435,
-      "asset_type": "stock",
-      "entry_date": "2026-04-07"
-    },
-    {
-      "ticker": "NBIS",
-      "shares": 76.0,
-      "avg_cost": 91.49125,
-      "asset_type": "stock",
-      "entry_date": "2026-01-05"
-    },
-    {
       "ticker": "LPKFF",
       "shares": 387.0,
       "avg_cost": 25.62,
@@ -62,6 +13,20 @@
       "avg_cost": 38.555,
       "asset_type": "stock",
       "entry_date": "2026-05-15"
+    },
+    {
+      "ticker": "SLNH",
+      "shares": 24361.0,
+      "avg_cost": 1.998941,
+      "asset_type": "stock",
+      "entry_date": "2026-05-12"
+    },
+    {
+      "ticker": "SIVEF",
+      "shares": 2996.0,
+      "avg_cost": 1.236996,
+      "asset_type": "stock",
+      "entry_date": "2026-03-23"
     },
     {
       "ticker": "OUST",
@@ -111,8 +76,43 @@
       "avg_cost": 63.55,
       "asset_type": "stock",
       "entry_date": "2026-03-25"
+    },
+    {
+      "ticker": "NBIS",
+      "shares": 76.0,
+      "avg_cost": 91.49125,
+      "asset_type": "stock",
+      "entry_date": "2026-01-05"
+    },
+    {
+      "ticker": "BWEN",
+      "shares": 1512.0,
+      "avg_cost": 3.9,
+      "asset_type": "stock",
+      "entry_date": "2026-05-15"
+    },
+    {
+      "ticker": "FLNC",
+      "shares": 499.0,
+      "avg_cost": 20.07,
+      "asset_type": "stock",
+      "entry_date": "2026-05-15"
+    },
+    {
+      "ticker": "PENG",
+      "shares": 422.0,
+      "avg_cost": 35.47,
+      "asset_type": "stock",
+      "entry_date": "2026-05-05"
+    },
+    {
+      "ticker": "TRT",
+      "shares": 1160.0,
+      "avg_cost": 6.435,
+      "asset_type": "stock",
+      "entry_date": "2026-04-07"
     }
   ],
-  "_saved_at": "2026-05-18T13:54:43.918448Z",
+  "_saved_at": "2026-05-18T18:12:45.625953Z",
   "_source": "portfolio_store"
 }

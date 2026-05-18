@@ -35,6 +35,14 @@ from pathlib import Path
 _DB_URL = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
 _db_pool = None
 
+import time as _time_pf
+_holdings_mem_cache: dict = {"data": None, "ts": 0.0}
+_HOLDINGS_CACHE_TTL = 45.0   # seconds — invalidated immediately on save
+
+
+def _invalidate_holdings_cache() -> None:
+    _holdings_mem_cache["data"] = None
+
 
 def _get_db_conn():
     """Lazy pool init with one retry. Returns None when DB unavailable."""
@@ -357,23 +365,31 @@ def load_active_holdings() -> list[dict]:
     """Load and return the canonical normalised holdings list.
 
     Priority:
-      1. Neon DB (slot_id=1) — survives autoscale cold starts
-      2. Canonical file       — local dev fallback
-    Returns [] if both sources are empty or unavailable.
+      1. In-memory TTL cache  (45 s) — zero-latency on repeated requests
+      2. Neon DB (slot_id=1)  — survives autoscale cold starts
+      3. Canonical file       — local dev / cold-start fallback
+    Returns [] if all sources are empty or unavailable.
     """
+    _now = _time_pf.time()
+    if _holdings_mem_cache["data"] is not None and _now - _holdings_mem_cache["ts"] < _HOLDINGS_CACHE_TTL:
+        return list(_holdings_mem_cache["data"])   # shallow copy — safe for reads
+
     _ensure_dirs()
     _migrate_legacy_if_needed()
 
     # 1. Try Neon DB first (persists across autoscale restarts)
     db_holdings = _db_load_holdings()
     if db_holdings:
-        # Keep the file in sync so local dev always matches
-        _write_canonical(db_holdings)
+        # Write canonical file only on the first DB load (not on every read)
+        if not _CANONICAL_FILE.exists():
+            _write_canonical(db_holdings)
         syms = [h.get("ticker", "?") for h in db_holdings[:25]]
         print(
             f"[portfolio-source-audit] endpoint=load  source=neon_db  "
             f"count={len(db_holdings)}  symbols={syms}"
         )
+        _holdings_mem_cache["data"] = db_holdings
+        _holdings_mem_cache["ts"]   = _now
         return db_holdings
 
     # 2. Fall back to file
@@ -384,6 +400,8 @@ def load_active_holdings() -> list[dict]:
         f"source_file={_CANONICAL_FILE}  "
         f"count={len(holdings)}  symbols={syms}"
     )
+    _holdings_mem_cache["data"] = holdings
+    _holdings_mem_cache["ts"]   = _now
     return holdings
 
 
@@ -396,6 +414,7 @@ def save_active_holdings(holdings: list[dict]) -> None:
     reflects the updated holdings on next request.  Earnings sync failure
     never blocks the portfolio save.
     """
+    _invalidate_holdings_cache()   # force next read to hit DB
     valid = [h for h in holdings if isinstance(h, dict) and (h.get("ticker") or h.get("symbol"))]
     normalised = [_normalise(h) for h in valid]
 

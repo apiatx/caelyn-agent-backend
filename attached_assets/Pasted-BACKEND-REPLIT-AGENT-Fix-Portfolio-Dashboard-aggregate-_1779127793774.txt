@@ -1,0 +1,106 @@
+BACKEND REPLIT AGENT — Fix Portfolio Dashboard aggregate endpoint speed + NBIS partial classification
+
+Frontend fixed the UI empty-state race, but two issues remain:
+
+1. GET /api/portfolio/holdings is taking ~17.5 seconds in the browser.
+That endpoint must be instant/fast because the Dashboard now depends on it for first paint:
+- open_positions
+- partially_closed_positions
+- fully_closed_positions
+- option_* lists
+
+2. Frontend log shows partialSymbols: ["SIVEF", "NBIS"].
+NBIS should not be in Partially Closed unless the current active/core position was actually trimmed. The user says NBIS is fully open.
+
+Do not change frontend yet.
+Do not hardcode NBIS.
+Do not rebuild the ledger.
+Do not add provider calls.
+
+Task A — Make /api/portfolio/holdings a fast aggregate endpoint
+
+Audit GET /api/portfolio/holdings.
+
+It should:
+- read active holdings from Neon/store
+- read precomputed/import-persisted aggregate lists
+- read options positions/trades if already stored
+- return quickly
+
+It should NOT:
+- run CSV ledger recomputation
+- call /api/caelyn-terminal
+- fetch Tradier
+- fetch FMP
+- run options scan
+- calculate performance charts
+- wait on external providers
+
+Add timing/debug:
+
+[portfolio-holdings-fast-path] {
+  response_ms,
+  active_count,
+  open_count,
+  partial_count,
+  fully_closed_count,
+  option_open_count,
+  option_closed_count,
+  closed_trades_count,
+  provider_calls_made,
+  recomputed_ledger,
+  source
+}
+
+Target:
+- ideally <500ms
+- absolutely not 17 seconds
+
+If slow because option_closed_trades or closed_trades grouping is heavy, split it:
+- /api/portfolio/holdings returns fast aggregate dashboard lists only
+- slower raw trade history can load separately
+
+Task B — Verify NBIS classification source
+
+Run GET /api/portfolio/holdings and return:
+
+{
+  open_positions_symbols,
+  partially_closed_positions_symbols,
+  fully_closed_positions_symbols,
+  nbis_record_from_holdings,
+  nbis_record_from_partially_closed_positions,
+  nbis_closed_trade_groups,
+  nbis_final_symbol_status,
+  nbis_classification,
+  nbis_total_bought,
+  nbis_total_sold,
+  nbis_shares_remaining,
+  nbis_reason
+}
+
+Correct expected behavior:
+- NBIS in open_positions: yes
+- NBIS in partially_closed_positions: no, unless the same active/core position was actually trimmed
+- NBIS in fully_closed_positions: no
+
+If NBIS is in partially_closed_positions:
+- fix the universal classification logic causing it
+- likely account/source-file or buy-close-reopen logic is still treating a separate closed NBIS lot as a trim of the active NBIS position
+- do not hardcode NBIS
+
+If NBIS is NOT in backend partially_closed_positions:
+- report that frontend is still using fallback/raw tradeGroups incorrectly
+
+Task C — Regression validation
+
+After fixes, return:
+- response time for GET /api/portfolio/holdings
+- open count/symbols
+- partial count/symbols
+- fully closed count/symbols
+- SIVEF classification
+- NBIS classification
+- OPTX classification
+- AEHR/SNDK/CRDO/CCCX classification
+- no provider calls made by holdings endpoint

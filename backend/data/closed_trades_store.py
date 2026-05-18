@@ -21,6 +21,14 @@ from typing import Any
 _DB_URL = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
 _db_pool = None
 
+import time as _time_ct
+_ct_mem_cache: dict = {"data": None, "ts": 0.0}
+_CT_CACHE_TTL = 45.0   # seconds — invalidated immediately on any write
+
+
+def _invalidate_ct_cache() -> None:
+    _ct_mem_cache["data"] = None
+
 
 def _get_conn():
     global _db_pool
@@ -183,7 +191,15 @@ def _derive_fields(trade: dict, force_recompute: bool = False) -> dict:
 
 
 def load_closed_trades() -> list[dict]:
-    """Return all closed trades ordered by exit_date desc."""
+    """Return all closed trades ordered by exit_date desc.
+
+    Results are cached in memory for up to 45 s and invalidated immediately
+    on any write (save / update / delete) so callers always see current data.
+    """
+    _now = _time_ct.time()
+    if _ct_mem_cache["data"] is not None and _now - _ct_mem_cache["ts"] < _CT_CACHE_TTL:
+        return list(_ct_mem_cache["data"])   # shallow copy
+
     conn = _get_conn()
     if not conn:
         return []
@@ -197,7 +213,10 @@ def load_closed_trades() -> list[dict]:
         rows = cur.fetchall()
         desc = cur.description
         cur.close()
-        return [_row_to_dict(r, desc) for r in rows]
+        result = [_row_to_dict(r, desc) for r in rows]
+        _ct_mem_cache["data"] = result
+        _ct_mem_cache["ts"]   = _now
+        return result
     except Exception as e:
         print(f"[CLOSED_TRADES_STORE] load error: {e}")
         return []
@@ -207,6 +226,7 @@ def load_closed_trades() -> list[dict]:
 
 def save_closed_trade(trade: dict) -> dict:
     """Insert a new closed trade. Auto-generates id and derived fields."""
+    _invalidate_ct_cache()
     trade = _derive_fields(trade)
     trade_id = trade.get("id") or str(uuid.uuid4())
     ticker = (trade.get("ticker") or "").upper().strip()
@@ -269,6 +289,7 @@ def save_closed_trade(trade: dict) -> dict:
 
 def update_closed_trade(trade_id: str, updates: dict) -> dict | None:
     """Patch a closed trade. Auto-recomputes derived fields if price/shares change."""
+    _invalidate_ct_cache()
     existing = None
     all_trades = load_closed_trades()
     for t in all_trades:
@@ -495,6 +516,7 @@ def load_closed_trades_grouped(trades: list[dict] | None = None) -> list[dict]:
 
 def delete_csv_import_closed_trades() -> int:
     """Delete closed trades created by CSV import, preserving manually-entered ones.
+    Cache is invalidated so next load reflects the deletion.
 
     Deletes records where:
       source = 'csv_import'  — explicitly tagged by the new import engine
@@ -504,6 +526,7 @@ def delete_csv_import_closed_trades() -> int:
     Records with source = 'manual' are always preserved.
     Returns count deleted.
     """
+    _invalidate_ct_cache()
     conn = _get_conn()
     if not conn:
         return 0
@@ -533,6 +556,7 @@ def delete_csv_import_closed_trades() -> int:
 
 def delete_closed_trade(trade_id: str) -> bool:
     """Delete a closed trade by id. Returns True if deleted."""
+    _invalidate_ct_cache()
     conn = _get_conn()
     if not conn:
         return False
@@ -559,6 +583,7 @@ def delete_closed_trade(trade_id: str) -> bool:
 def delete_all_closed_trades() -> int:
     """Delete ALL closed trades in a single query. Returns count deleted.
     Used by full_replace CSV import to avoid N individual round-trips."""
+    _invalidate_ct_cache()
     conn = _get_conn()
     if not conn:
         return 0
@@ -587,6 +612,7 @@ def save_closed_trades_batch(trades: list[dict]) -> int:
     Returns the number of records successfully inserted.
     Used by CSV import to avoid N individual inserts (which cause Gunicorn
     worker timeouts on large CSVs)."""
+    _invalidate_ct_cache()
     if not trades:
         return 0
     conn = _get_conn()
