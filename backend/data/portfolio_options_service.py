@@ -40,7 +40,7 @@ _SCAN_TIMEOUT_CHAIN    = 5.0
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _portfolio_scan_cache_key(holdings_sig: str | None) -> str:
-    return f"portfolio_opts_scan_v1:{holdings_sig or 'unknown'}"
+    return f"portfolio_opts_scan_v2:{holdings_sig or 'unknown'}"  # v2: risk fields
 
 
 def _per_ticker_cache_key(sym: str) -> str:
@@ -165,6 +165,120 @@ def _unavail_row(sym: str, reason: str, optionable: bool | None = None) -> dict:
         "signal":             None,
         "source":             "portfolio_scoped_options_screener",
         "unavailable_reason": reason,
+    }
+
+
+def _compute_pullback_risk(row: dict) -> dict:
+    """
+    Portfolio-only pullback-risk signal — deterministic composite 0-100.
+    Pure function: only adds new keys (risk_score, risk_level, risk_signal,
+    risk_reasons, risk_confidence, risk_source). Never modifies existing fields.
+
+    Scoring:
+      Put/call pressure : max 35 pts
+      IV stress         : max 25 pts
+      Expected move     : max 20 pts
+      Signal text       : max 15 pts / -5 offset for call-dominant low score
+    Levels: HIGH >=75 | ELEVATED >=50 | WATCH >=25 | LOW <25 | UNKNOWN no data
+    """
+    _SOURCE = "portfolio_options_risk_v1"
+
+    if not row.get("data_available"):
+        reason = row.get("unavailable_reason") or "no options data"
+        return {
+            **row,
+            "risk_score":      None,
+            "risk_level":      "UNKNOWN",
+            "risk_signal":     "UNKNOWN",
+            "risk_reasons":    [f"No options data: {reason}"],
+            "risk_confidence": "LOW",
+            "risk_source":     _SOURCE,
+        }
+
+    pc  = _sf(row.get("p_c") or row.get("put_call"))
+    iv  = _sf(row.get("iv"))                            # decimal: 0.65 = 65%
+    em  = _sf(row.get("em") or row.get("expected_move")) # already pct: 10.5 = 10.5%
+    vol = _si(row.get("vol") or row.get("volume") or 0)
+    sig = (row.get("signal") or "").upper()
+
+    score   = 0.0
+    reasons: list[str] = []
+
+    # 1. Put/call pressure (max 35 pts)
+    if pc is not None:
+        if pc >= 2.0:
+            score += 35; reasons.append("Put/call ratio above 2.0")
+        elif pc >= 1.5:
+            score += 28; reasons.append("Put/call ratio above 1.5")
+        elif pc >= 1.0:
+            score += 20; reasons.append("Put/call ratio above 1.0")
+        elif pc >= 0.7:
+            score += 10; reasons.append("Put/call ratio above 0.7")
+
+    # 2. IV stress (max 25 pts) — iv stored as decimal, threshold as pct
+    if iv is not None:
+        iv_pct = iv * 100
+        if iv_pct >= 175:
+            score += 25; reasons.append(f"IV above 175% ({iv_pct:.0f}%)")
+        elif iv_pct >= 125:
+            score += 18; reasons.append(f"IV above 125% ({iv_pct:.0f}%)")
+        elif iv_pct >= 90:
+            score += 10; reasons.append(f"IV above 90% ({iv_pct:.0f}%)")
+
+    # 3. Expected move (max 20 pts) — em already in display-pct
+    if em is not None:
+        if em >= 20:
+            score += 20; reasons.append(f"Expected move above 20% ({em:.1f}%)")
+        elif em >= 15:
+            score += 15; reasons.append(f"Expected move above 15% ({em:.1f}%)")
+        elif em >= 10:
+            score += 10; reasons.append(f"Expected move above 10% ({em:.1f}%)")
+        elif em >= 7:
+            score += 5;  reasons.append(f"Expected move above 7% ({em:.1f}%)")
+
+    # 4. Signal text adjustment (max +15, min -5 on low-score rows)
+    low_activity = False
+    if "PUT" in sig or "BEARISH" in sig:
+        score += 15; reasons.append("Unusual put flow detected")
+    elif "HIGH IV" in sig:
+        score += 8;  reasons.append("High IV signal detected")
+    elif "LOW ACTIVITY" in sig:
+        low_activity = True
+        reasons.append("Low options volume; lower confidence signal")
+
+    if "UNUSUAL CALL FLOW" in sig and score < 50:
+        score = max(0.0, score - 5)
+        reasons.append("Call flow dominant; bearish risk offset applied")
+
+    # 5. Confidence — driven by volume and activity flag
+    if vol < 500 or low_activity:
+        confidence = "LOW"
+        if vol < 500:
+            reasons.append(f"Thin options volume ({vol:,}); signal lower confidence")
+    elif vol < 2000:
+        confidence = "MEDIUM"
+    else:
+        confidence = "HIGH"
+
+    score = round(min(100.0, max(0.0, score)), 1)
+
+    if score >= 75:
+        level = "HIGH"
+    elif score >= 50:
+        level = "ELEVATED"
+    elif score >= 25:
+        level = "WATCH"
+    else:
+        level = "LOW"
+
+    return {
+        **row,
+        "risk_score":      score,
+        "risk_level":      level,
+        "risk_signal":     level,
+        "risk_reasons":    reasons,
+        "risk_confidence": confidence,
+        "risk_source":     _SOURCE,
     }
 
 
@@ -417,6 +531,11 @@ async def scan_portfolio_options(
     for sym in syms:
         if sym not in results:
             results[sym] = _unavail_row(sym, "scan_not_reached")
+
+    # 4.5. Portfolio-only pullback-risk enrichment ─────────────────────────
+    # Pure post-processing: adds risk_score/level/signal/reasons/confidence
+    # to every row. Does NOT touch Options Screener or any global flow.
+    results = {sym: _compute_pullback_risk(row) for sym, row in results.items()}
 
     # 5. Build final output structure ──────────────────────────────────────
     available   = [r for r in results.values() if r.get("data_available")]

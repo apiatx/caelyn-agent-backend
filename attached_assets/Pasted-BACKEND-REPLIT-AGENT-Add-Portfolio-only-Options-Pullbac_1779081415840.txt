@@ -1,0 +1,147 @@
+BACKEND REPLIT AGENT — Add Portfolio-only Options Pullback Risk signal
+
+On Portfolio page → Terminal tab → Options section, add a new Portfolio-only risk signal that helps identify holdings with potential sharp pullback risk.
+
+Important:
+This is NOT for the market-wide Options Flow page.
+Do not change the Options Flow page.
+Do not change the global options screener scoring.
+This should only affect Portfolio Terminal /api/caelyn-terminal portfolio_options rows.
+
+Current Portfolio Terminal Options table has:
+TICKER | SCORE | P/C | IV | EM | VOL | SIGNAL
+
+Add backend fields so frontend can render a new Risk column:
+TICKER | SCORE | P/C | IV | EM | VOL | SIGNAL | RISK
+
+Goal:
+For each portfolio holding with options data, compute pullback-risk fields:
+
+Required fields per portfolio_options row:
+- risk_score: number 0–100
+- risk_level: "LOW" | "WATCH" | "ELEVATED" | "HIGH" | "UNKNOWN"
+- risk_signal: short display string, e.g. "LOW", "WATCH", "ELEVATED", "HIGH"
+- risk_reasons: string[]
+- risk_confidence: "LOW" | "MEDIUM" | "HIGH"
+- risk_source: "portfolio_options_risk_v1"
+
+Do NOT:
+- hardcode tickers
+- add separate provider calls if existing portfolio options scan already has the data
+- break existing portfolio_options rows
+- break existing Options Screener page
+- alter global options flow/screener logic
+- make the signal purely bearish because puts exist
+- fake data if fields are missing
+
+Use existing fields already returned/calculated by portfolio scoped options screener:
+- p_c / put_call
+- iv
+- em / expected_move
+- vol / volume
+- signal
+- score
+- optionable / data_available
+- unavailable_reason
+- any available call/put volume, OI, IV/skew fields if already present
+
+Risk scoring guidance:
+Create a deterministic composite score. Keep it simple, explainable, and portfolio-risk oriented.
+
+Suggested scoring:
+1. Put/call pressure, max 35 points:
+   - p_c >= 2.0: +35
+   - p_c >= 1.5: +28
+   - p_c >= 1.0: +20
+   - p_c >= 0.7: +10
+   - p_c < 0.7: +0
+
+2. IV stress, max 25 points:
+   - iv >= 1.75 or 175%: +25
+   - iv >= 1.25 or 125%: +18
+   - iv >= 0.90 or 90%: +10
+   - else +0
+Be careful with whether iv is stored as decimal or percent. Existing UI shows IV as percentages like 156%, so normalize internally.
+
+3. Expected move, max 20 points:
+   - em >= 20%: +20
+   - em >= 15%: +15
+   - em >= 10%: +10
+   - em >= 7%: +5
+   - else +0
+Normalize if em is decimal vs percent.
+
+4. Bearish/put signal text, max 15 points:
+   - signal contains "PUT" or "BEARISH": +15
+   - signal contains "HIGH IV": +8
+   - signal contains "LOW ACTIVITY": +0 but reduce confidence
+   - signal contains "UNUSUAL CALL FLOW": -5 risk offset, unless IV/EM/put-call are high
+
+5. Low liquidity / confidence adjustment:
+   - if vol is low, do not increase risk score just because data is sparse.
+   - set risk_confidence = LOW if options volume is below a sensible threshold.
+   - still return risk_level, but include reason "thin options volume; signal lower confidence."
+
+Risk level:
+- risk_score >= 75: HIGH
+- risk_score >= 50: ELEVATED
+- risk_score >= 25: WATCH
+- risk_score < 25: LOW
+- if no data: UNKNOWN
+
+Reason examples:
+- "Put/call ratio above 1.5"
+- "IV above 125%"
+- "Expected move above 10%"
+- "Unusual put flow detected"
+- "Call flow dominant; bearish risk offset"
+- "Low options volume; lower confidence"
+
+Important interpretation:
+This is a pullback-risk signal, not a prediction.
+Return wording suitable for portfolio risk management.
+
+Update:
+- backend/data/portfolio_options_service.py or wherever portfolio_options rows are built
+- /api/caelyn-terminal portfolio_options output
+- any debug object if relevant
+
+Do not update the market-wide Options Flow page.
+
+Validation:
+Use current live portfolio.
+
+Return:
+1. portfolio_options count
+2. For each available row or first 10 rows:
+   - ticker
+   - p_c
+   - iv
+   - em
+   - vol
+   - signal
+   - risk_score
+   - risk_level
+   - risk_reasons
+   - risk_confidence
+3. Confirm /api/caelyn-terminal includes risk fields.
+4. Confirm Options Screener / Options Flow page response is unchanged.
+5. Confirm no extra Tradier calls were introduced.
+6. Confirm unavailable/non-optionable tickers return risk_level="UNKNOWN" with reason.
+
+Add log/debug:
+[portfolio-options-risk-debug] {
+  rows_scored,
+  high_count,
+  elevated_count,
+  watch_count,
+  low_count,
+  unknown_count,
+  examples
+}
+
+Return:
+- files changed
+- scoring logic
+- sample output
+- confirmation Portfolio Terminal only

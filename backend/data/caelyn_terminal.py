@@ -898,6 +898,37 @@ class CaelynTerminalProvider:
         }
         print(f"[portfolio-options-screener-debug] {json.dumps(_vol_opts_debug, default=str)}")
 
+        # ── Portfolio-only options pullback-risk debug ─────────────────────
+        _risk_rows  = _opts_scan.get("rows", [])
+        _risk_all   = _risk_rows + [
+            r for r in (_opts_scan.get("by_symbol") or {}).values()
+            if not r.get("data_available")
+        ]
+        _risk_debug = {
+            "rows_scored":     len(_risk_all),
+            "high_count":      sum(1 for r in _risk_all if r.get("risk_level") == "HIGH"),
+            "elevated_count":  sum(1 for r in _risk_all if r.get("risk_level") == "ELEVATED"),
+            "watch_count":     sum(1 for r in _risk_all if r.get("risk_level") == "WATCH"),
+            "low_count":       sum(1 for r in _risk_all if r.get("risk_level") == "LOW"),
+            "unknown_count":   sum(1 for r in _risk_all if r.get("risk_level") == "UNKNOWN"),
+            "examples": [
+                {
+                    "ticker":          r.get("ticker"),
+                    "risk_score":      r.get("risk_score"),
+                    "risk_level":      r.get("risk_level"),
+                    "risk_confidence": r.get("risk_confidence"),
+                    "risk_reasons":    r.get("risk_reasons"),
+                    "p_c":             r.get("p_c"),
+                    "iv":              r.get("iv"),
+                    "em":              r.get("em"),
+                    "vol":             r.get("vol"),
+                    "signal":          r.get("signal"),
+                }
+                for r in _risk_rows[:5]
+            ],
+        }
+        print(f"[portfolio-options-risk-debug] {json.dumps(_risk_debug, default=str)}")
+
         return {
             "portfolio": {
                 "value":              round(total_value, 2),
