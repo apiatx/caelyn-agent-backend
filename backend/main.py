@@ -4580,17 +4580,167 @@ def _portfolio_file(user_id: str = "default") -> Path:
 
 @app.get("/api/portfolio/holdings")
 async def get_holdings(request: Request, api_key: str = Header(None, alias="X-API-Key")):
-    """Return saved portfolio holdings from the canonical source."""
+    """Return saved portfolio holdings and derived aggregate category lists.
+
+    Response shape
+    --------------
+    {
+      "holdings": [...],                    # flat active holdings (backward compat)
+      "open_positions": [...],              # all active holdings (open + partial)
+      "partially_closed_positions": [...],  # active holdings trimmed from current lot
+      "fully_closed_positions": [...],      # closed symbols (from closed-trade records)
+    }
+
+    Category derivation rules (universal — no ticker-specific logic):
+      open_positions           : all holdings where classification in ("open",
+                                 "partially_closed_open") and shares > tolerance
+      partially_closed_positions: subset of open_positions where classification
+                                  == "partially_closed_open"
+      fully_closed_positions   : symbols that appear in closed-trade records
+                                 with final_symbol_status=="fully_closed" AND
+                                 are NOT present in active holdings
+    """
     from data.portfolio_store import load_active_holdings as _load
-    user_id = getattr(request.state, "user_id", "default")
+    from data.closed_trades_store import load_closed_trades as _load_ct
+    from collections import defaultdict as _dd
+
+    _SHARE_TOL = 1e-6
+
+    user_id  = getattr(request.state, "user_id", "default")
     holdings = _load()
-    syms = [h.get("ticker", "?") for h in holdings]
+    syms     = [h.get("ticker", "?") for h in holdings]
     print(
         f"[portfolio-source-audit] endpoint=dashboard-get  user_id={user_id}  "
         f"source_file=data/portfolio/active_holdings.json  "
         f"count={len(holdings)}  symbols={syms[:20]}"
     )
-    return {"holdings": holdings}
+
+    # ── Derive open_positions + partially_closed_positions from holdings ───────
+    # Classification written at import time; values: "open" | "partially_closed_open"
+    open_positions:     list[dict] = []
+    partially_closed:   list[dict] = []
+    active_syms:        set[str]   = set()
+
+    for _h in holdings:
+        _sym = (_h.get("ticker") or "").upper()
+        if not _sym:
+            continue
+        _shares = float(_h.get("shares") or 0)
+        if _shares <= _SHARE_TOL:
+            continue                    # dust holding — skip
+        active_syms.add(_sym)
+
+        _cls = _h.get("classification") or "open"
+        _avg = float(_h.get("avg_cost") or 0)
+        _rec = {
+            "symbol":              _sym,
+            "shares":              _shares,
+            "avg_cost":            _avg,
+            "cost_basis":          round(_shares * _avg, 2),
+            "entry_date":          _h.get("entry_date"),
+            "last_buy_date":       _h.get("entry_date"),
+            "classification":      _cls,
+            "final_symbol_status": _cls,
+            "status":              _cls,
+            "basis_source":        _h.get("basis_source", "csv_lot"),
+            "import_batch_id":     _h.get("import_batch_id"),
+            "source_file":         _h.get("source_file"),
+        }
+        open_positions.append(_rec)
+        if _cls == "partially_closed_open":
+            partially_closed.append(_rec)
+
+    # ── Enrich partially_closed cards with closed-trade aggregates ─────────────
+    # Load all closed trades and bucket by symbol so we can add realized P&L,
+    # shares_sold, last_exit_price, sell_events_count without re-running the ledger.
+    _trades       = _load_ct()
+    _trades_by_sym: dict[str, list[dict]] = _dd(list)
+    for _t in _trades:
+        _s = (_t.get("ticker") or "").upper()
+        if _s:
+            _trades_by_sym[_s].append(_t)
+
+    for _pc in partially_closed:
+        _sym    = _pc["symbol"]
+        _st     = _trades_by_sym.get(_sym, [])
+        _st_asc = sorted(_st, key=lambda x: x.get("exit_date") or "")
+        _shares_sold = round(sum(float(_t.get("shares") or 0) for _t in _st_asc), 8)
+        _total_pnl   = round(sum(float(_t.get("realized_pnl") or 0) for _t in _st_asc), 4)
+        _sb = _pc["shares"] + _shares_sold          # approx total bought
+        _pc.update({
+            "shares_bought":        _sb,
+            "shares_sold":          _shares_sold,
+            "shares_remaining":     _pc["shares"],
+            "percent_closed":       round(_shares_sold / _sb * 100, 2) if _sb else None,
+            "percent_remaining":    round(_pc["shares"] / _sb * 100, 2) if _sb else None,
+            "realized_pnl":         _total_pnl,
+            "last_exit_price":      _st_asc[-1].get("exit_price") if _st_asc else None,
+            "last_exit_date":       _st_asc[-1].get("exit_date")  if _st_asc else None,
+            "sell_events_count":    len(_st_asc),
+        })
+
+    # ── Derive fully_closed_positions from closed-trade records ───────────────
+    # A symbol is fully closed if:
+    #   1. It appears in closed trades with final_symbol_status == "fully_closed"
+    #   2. It is NOT currently in active holdings (active_syms)
+    # This correctly handles buy-close-reopen: if a new lot is open the symbol
+    # is already in active_syms and won't appear here.
+    _fc_by_sym: dict[str, list[dict]] = _dd(list)
+    for _t in _trades:
+        _s = (_t.get("ticker") or "").upper()
+        if not _s or _s in active_syms:
+            continue
+        # Use stored final_symbol_status; fall back to inferring from remaining_shares_after
+        _fss = _t.get("final_symbol_status") or ""
+        if not _fss:
+            _rsaf = _t.get("remaining_shares_after")
+            _fss  = "fully_closed" if (_rsaf is not None and float(_rsaf) <= _SHARE_TOL) else ""
+        if _fss == "fully_closed":
+            _fc_by_sym[_s].append(_t)
+
+    fully_closed: list[dict] = []
+    for _sym, _st in _fc_by_sym.items():
+        _st_asc    = sorted(_st, key=lambda x: x.get("exit_date") or "")
+        _tot_sh    = round(sum(float(_t.get("shares") or 0) for _t in _st_asc), 8)
+        _tot_cost  = sum(float(_t.get("shares") or 0) * float(_t.get("entry_price") or 0)
+                         for _t in _st_asc)
+        _tot_pnl   = round(sum(float(_t.get("realized_pnl") or 0) for _t in _st_asc), 4)
+        _exits     = [_t.get("exit_date")  for _t in _st_asc if _t.get("exit_date")]
+        _entries   = [_t.get("entry_date") for _t in _st_asc if _t.get("entry_date")]
+        _final_ex  = max(_exits)   if _exits   else None
+        _first_en  = min(_entries) if _entries else None
+        _avg_entry = round(_tot_cost / _tot_sh, 6) if _tot_sh else 0.0
+        _pnl_pct   = round(_tot_pnl / _tot_cost * 100, 4) if _tot_cost else None
+        _hpd: int | None = None
+        if _first_en and _final_ex:
+            try:
+                from datetime import date as _dc
+                _hpd = (_dc.fromisoformat(_final_ex) - _dc.fromisoformat(_first_en)).days
+            except Exception:
+                pass
+        fully_closed.append({
+            "symbol":              _sym,
+            "total_shares_bought": _tot_sh,   # approx from sell records
+            "total_shares_sold":   _tot_sh,
+            "avg_entry_price":     _avg_entry,
+            "last_exit_price":     _st_asc[-1].get("exit_price"),
+            "realized_pnl":        _tot_pnl,
+            "realized_pnl_pct":    _pnl_pct,
+            "first_entry_date":    _first_en,
+            "final_exit_date":     _final_ex,
+            "holding_period_days": _hpd,
+            "final_symbol_status": "fully_closed",
+            "classification":      "fully_closed",
+            "status":              "fully_closed",
+            "basis_source":        _st_asc[-1].get("basis_source", "csv_lot"),
+        })
+
+    return {
+        "holdings":                   holdings,
+        "open_positions":             open_positions,
+        "partially_closed_positions": partially_closed,
+        "fully_closed_positions":     fully_closed,
+    }
 
 
 @app.delete("/api/portfolio/holdings/clear-all")
@@ -5987,6 +6137,17 @@ async def portfolio_transactions_import_csv(
         else:
             _basis_source[_s] = "csv_lot"
 
+    # ── Enrich category lists with basis_source (computed above) ──────────────
+    # This is done here rather than inside classify_positions() because
+    # basis_source requires knowledge of orphan/oversell resolution context
+    # that is only available at the import-endpoint level.
+    for _pos in open_positions:
+        _pos["basis_source"] = _basis_source.get(_pos["symbol"], "csv_lot")
+    for _pos in partially_closed:
+        _pos["basis_source"] = _basis_source.get(_pos["symbol"], "csv_lot")
+    for _pos in fully_closed:
+        _pos["basis_source"] = _basis_source.get(_pos["symbol"], "csv_lot")
+
     # Overall accuracy status
     if not _needs_basis_review:
         _accuracy_status = "complete"
@@ -6323,23 +6484,34 @@ async def portfolio_transactions_import_csv(
         except Exception as _te:
             test_results = {"error": str(_te)}
 
-    # ── Specific symbol classification report (for the 3 named tickers) ───────
+    # ── Universal symbol classification report (all symbols in CSV) ───────────
+    # No ticker-specific hardcoding: covers every symbol seen in this import.
+    # Derived entirely from ledger math + computed fields.
     named_report = {}
-    for sym in ("SIVEF", "OUST", "ALMU"):
-        audit = symbol_audit.get(sym)
-        if audit:
-            named_report[sym] = {
-                "found_in_csv":        True,
-                "buys":                audit["buys"],
-                "sells":               audit["sells"],
-                "shares_remaining":    audit["shares_remaining"],
-                "classification":      audit["classification"],
-                "appears_in_open":     audit["appears_in_open"],
-                "appears_in_partial":  audit["appears_in_partial"],
-                "appears_in_fully_closed": audit["appears_in_fully_closed"],
-            }
-        else:
-            named_report[sym] = {"found_in_csv": False}
+    for _sym, _audit in symbol_audit.items():
+        named_report[_sym] = {
+            "found_in_csv":              True,
+            "buys":                      _audit["buys"],
+            "sells":                     _audit["sells"],
+            "shares_bought":             _audit["shares_bought"],
+            "shares_sold":               _audit["shares_sold"],
+            "shares_remaining":          _audit["shares_remaining"],
+            "cost_basis_remaining":      _audit["cost_basis_remaining"],
+            "sell_events_count":         len(ledgers.get(_sym, {}).get("closed_events", [])),
+            "final_symbol_status":       _final_status(_sym),
+            "classification":            _audit["classification"],
+            "basis_source":              _basis_source.get(_sym, "csv_lot"),
+            "appears_in_open_positions":          _audit["appears_in_open"],
+            "appears_in_partially_closed_positions": _audit["appears_in_partial"],
+            "appears_in_fully_closed_positions":   _audit["appears_in_fully_closed"],
+            "appears_in_closed_trades":  _audit["has_real_sell"],
+            "is_dust":                   _audit["is_dust"],
+            "reason": (
+                ledgers.get(_sym, {}).get("closed_events", [{}])[-1].get("notes", "")
+                if ledgers.get(_sym, {}).get("closed_events") else
+                _audit["classification"]
+            ),
+        }
 
     return {
         "success":                    True,

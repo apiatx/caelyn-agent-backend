@@ -718,7 +718,12 @@ def classify_positions(ledgers: dict[str, dict]) -> dict:
             round(ledger["total_buy_cost"] / sb, 6) if sb else 0.0
         )
 
+        # ── Last sell event (used by multiple sections below) ──────────────────
+        _sym_events = ledger.get("closed_events", [])
+        _last_ev    = _sym_events[-1] if _sym_events else {}
+
         if is_open:
+            _open_cls = "partially_closed_open" if is_partial else "open"
             open_positions.append({
                 "symbol":               sym,
                 "shares":               sr,
@@ -729,24 +734,50 @@ def classify_positions(ledgers: dict[str, dict]) -> dict:
                 "total_bought_shares":  sb,
                 "total_sold_shares":    ss,
                 "realized_pnl_to_date": ledger["realized_pnl"],
-                "status": "partially_closed_open" if is_partial else "open",
+                # ── Unambiguous category fields ─────────────────────────────
+                "status":              _open_cls,
+                "final_symbol_status": _open_cls,
+                "classification":      _open_cls,
             })
 
         if is_partial:
-            realized_cost = ledger["avg_cost"] * ss if ss else 0
+            # Cost basis consumed by sells (total buy cost − remaining basis)
+            _cost_basis_sold      = round(tbc - cb, 2)
+            _cost_basis_remaining = round(cb, 2)
+            _pct_closed    = round(ss / sb * 100, 2) if sb else None
+            _pct_remaining = round(sr / sb * 100, 2) if sb else None
+            _pnl_pct_v = (
+                round(ledger["realized_pnl"] / _cost_basis_sold * 100, 4)
+                if _cost_basis_sold else None
+            )
             partially_closed.append({
-                "symbol":           sym,
-                "shares_remaining": sr,
-                "shares_sold":      ss,
-                "avg_cost":         ledger["avg_cost"],
-                "realized_pnl":     ledger["realized_pnl"],
-                "realized_pnl_pct": (
-                    round(ledger["realized_pnl"] / realized_cost * 100, 4)
-                    if realized_cost else None
-                ),
-                "first_entry_date": ledger["first_buy_date"],
-                "last_sell_date":   ledger["last_sell_date"],
-                "status":           "partially_closed_open",
+                "symbol":               sym,
+                # ── Share accounting ────────────────────────────────────────
+                "shares_bought":        sb,
+                "shares_sold":          ss,
+                "shares_remaining":     sr,
+                "percent_closed":       _pct_closed,
+                "percent_remaining":    _pct_remaining,
+                # ── Cost / price ─────────────────────────────────────────
+                "avg_entry_price":      avg_entry_price,
+                "avg_cost":             ledger["avg_cost"],
+                "cost_basis_sold":      _cost_basis_sold,
+                "cost_basis_remaining": _cost_basis_remaining,
+                # ── Realised P&L ─────────────────────────────────────────
+                "realized_pnl":         ledger["realized_pnl"],
+                "realized_pnl_pct":     _pnl_pct_v,
+                # ── Exit price ───────────────────────────────────────────
+                "last_exit_price":      _last_ev.get("exit_price"),
+                # ── Dates ────────────────────────────────────────────────
+                "first_entry_date":     ledger["first_buy_date"],
+                "last_sell_date":       ledger["last_sell_date"],
+                "last_exit_date":       ledger["last_sell_date"],  # canonical alias
+                # ── Event count ──────────────────────────────────────────
+                "sell_events_count":    len(_sym_events),
+                # ── Unambiguous category fields ──────────────────────────
+                "status":              "partially_closed_open",
+                "final_symbol_status": "partially_closed_open",
+                "classification":      "partially_closed_open",
             })
 
         if is_fully_closed:
@@ -769,12 +800,17 @@ def classify_positions(ledgers: dict[str, dict]) -> dict:
                 "total_shares_bought": sb,
                 "total_shares_sold":   ss,
                 "avg_entry_price":     avg_entry_price,
+                # ── Exit price from the last recorded sell event ──────────
+                "last_exit_price":     _last_ev.get("exit_price"),
                 "realized_pnl":        ledger["realized_pnl"],
                 "realized_pnl_pct":    pnl_pct,
                 "first_entry_date":    ledger["first_buy_date"],
                 "final_exit_date":     ledger["last_sell_date"],
                 "holding_period_days": holding_days,
+                # ── Unambiguous category fields ──────────────────────────
                 "status":              "fully_closed",
+                "final_symbol_status": "fully_closed",
+                "classification":      "fully_closed",
             })
 
         for ev in ledger["closed_events"]:

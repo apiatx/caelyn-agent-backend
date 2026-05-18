@@ -420,6 +420,26 @@ def load_closed_trades_grouped(trades: list[dict] | None = None) -> list[dict]:
             except Exception:
                 pass
 
+        # ── final_symbol_status for dashboard category membership ─────────────
+        # Derived from the stored value on individual events (written at import time
+        # by the ledger engine after full CSV replay). This is the correct signal
+        # for determining dashboard category — NOT is_fully_closed, which only
+        # reflects whether a specific sell event was the last lot, and is WRONG
+        # for buy-close-reopen patterns where the ticker is open again.
+        #
+        # Priority: last event → any event with a stored value → infer from flags.
+        _stored_fss = next(
+            (e.get("final_symbol_status") for e in reversed(events_sorted)
+             if e.get("final_symbol_status")),
+            None,
+        )
+        if _stored_fss:
+            final_symbol_status = _stored_fss
+        elif is_fully_closed:
+            final_symbol_status = "fully_closed"
+        else:
+            final_symbol_status = "open"
+
         result.append({
             # ── Grouped / primary fields ───────────────────────────────────────
             "trade_group_id":         gid,
@@ -435,6 +455,12 @@ def load_closed_trades_grouped(trades: list[dict] | None = None) -> list[dict]:
             "total_realized_pnl_pct": pnl_pct,
             "holding_period_days":    hpd,
             "is_fully_closed":        is_fully_closed,
+            # ── Unambiguous category field (use this for dashboard sections) ────
+            # is_fully_closed reflects event-level close type; final_symbol_status
+            # reflects the ticker's TRUE state after the full ledger replay.
+            # For buy-close-reopen: is_fully_closed=True, final_symbol_status="open".
+            "final_symbol_status":    final_symbol_status,
+            "classification":         final_symbol_status,
             "sell_events":            events_sorted,
             "current_price":          None,   # enriched by the API endpoint
             # ── Backward-compat aliases (same names as flat closed_trades list) ─

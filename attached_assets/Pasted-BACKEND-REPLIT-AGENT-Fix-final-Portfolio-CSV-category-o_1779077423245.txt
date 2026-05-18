@@ -1,0 +1,201 @@
+BACKEND REPLIT AGENT — Fix final Portfolio CSV category outputs, no rebuild
+
+The Portfolio CSV ledger engine is close, but the actual dashboard categories are still wrong.
+
+Current UI problems:
+- SIVEF is no longer showing in Partially Closed even though it should.
+- SIVEF appears to be treated like fully closed even though 2,996 shares remain.
+- AEHR, SNDK, CRDO, CCCX, OPTX are showing as “Historical,” but the user says these are fully closed positions.
+- “Historical” is confusing and should not be used as the category for these dashboard sections.
+- Partially Closed should show one aggregate card per partially closed active position with % closed / % still open, not raw sell event cards.
+
+Do not rebuild the import engine.
+Do not hardcode ticker fixes.
+Do not change frontend yet.
+Do not classify from raw sell events alone.
+Do not use is_full_close as final dashboard status.
+Do not break existing ledger tests.
+
+Goal:
+Make the backend return unambiguous aggregate category outputs that frontend can render directly:
+
+1. open_positions
+2. partially_closed_positions
+3. fully_closed_positions
+4. closed_trades / monthly_activity as raw event history
+
+Definitions:
+
+Open Positions:
+- final shares remaining > tolerance
+- includes active holdings with classification = "open"
+- includes active holdings with classification = "partially_closed_open"
+
+Partially Closed Positions:
+- ticker currently has remaining shares
+- ticker had a real trim/sell against the same currently open position or continuous lot family
+- final status = "partially_closed_open"
+- one aggregate row per ticker
+- SIVEF should be here
+
+Fully Closed Positions:
+- ticker has no remaining open shares after full ledger replay
+- final status = "fully_closed"
+- AEHR, SNDK, CRDO, CCCX, OPTX should be here if the ledger confirms no remaining shares
+- SIVEF should NOT be here if 2,996 shares remain
+
+Closed Trades / Monthly Activity:
+- raw sell-event history
+- may include Partial Sell, Lot Closed, Ticker Closed event labels
+- but raw event status must not control dashboard category membership
+
+Required backend audit:
+Run the actual CSV import and return category membership for these symbols:
+
+- SIVEF
+- AEHR
+- SNDK
+- CRDO
+- CCCX
+- OPTX
+- NBIS
+- OUST
+- ALMU
+
+For each symbol, print:
+
+{
+  symbol,
+  total_bought_shares,
+  total_sold_shares,
+  shares_remaining,
+  cost_basis_remaining,
+  sell_events_count,
+  final_symbol_status,
+  active_holding_classification,
+  appears_in_open_positions,
+  appears_in_partially_closed_positions,
+  appears_in_fully_closed_positions,
+  appears_in_closed_trades,
+  reason
+}
+
+Expected outcomes:
+- SIVEF:
+  - open_positions: true
+  - partially_closed_positions: true
+  - fully_closed_positions: false
+  - shares_remaining: 2996 or current correct remaining shares
+  - one aggregate partial row only
+
+- AEHR:
+  - If shares_remaining <= tolerance:
+    - fully_closed_positions: true
+    - partially_closed_positions: false
+
+- SNDK:
+  - If shares_remaining <= tolerance:
+    - fully_closed_positions: true
+    - partially_closed_positions: false
+
+- CRDO:
+  - If shares_remaining <= tolerance:
+    - fully_closed_positions: true
+    - partially_closed_positions: false
+
+- CCCX:
+  - If shares_remaining <= tolerance:
+    - fully_closed_positions: true
+    - partially_closed_positions: false
+
+- OPTX:
+  - fully_closed_positions: true
+  - partially_closed_positions: false
+
+- NBIS:
+  - If only current active buy and no real trim of the active/core position:
+    - open_positions: true
+    - partially_closed_positions: false
+
+- OUST:
+  - If buy-close-reopen pattern:
+    - open_positions: true
+    - partially_closed_positions: false
+    - fully_closed_positions: false
+
+- ALMU:
+  - If buy-close-reopen pattern:
+    - open_positions: true
+    - partially_closed_positions: false
+    - fully_closed_positions: false
+
+Required output shape:
+Make sure the import response and/or GET portfolio category endpoints return:
+
+partially_closed_positions: [
+  {
+    symbol,
+    shares_bought,
+    shares_sold,
+    shares_remaining,
+    percent_closed,
+    percent_remaining,
+    cost_basis_sold,
+    cost_basis_remaining,
+    realized_pnl,
+    realized_pnl_pct,
+    avg_entry_price,
+    last_exit_price,
+    first_entry_date,
+    last_exit_date,
+    sell_events_count,
+    final_symbol_status: "partially_closed_open",
+    classification: "partially_closed_open",
+    basis_source
+  }
+]
+
+fully_closed_positions: [
+  {
+    symbol,
+    total_shares_bought,
+    total_shares_sold,
+    realized_pnl,
+    realized_pnl_pct,
+    avg_entry_price,
+    last_exit_price,
+    first_entry_date,
+    final_exit_date,
+    holding_period_days,
+    final_symbol_status: "fully_closed",
+    classification: "fully_closed",
+    basis_source
+  }
+]
+
+open_positions:
+- active holdings with classification = open or partially_closed_open
+
+closed_trades:
+- raw sell events with event labels, not category labels
+
+Important:
+If the frontend currently has to infer Partially Closed from closed_trades, that is not enough. Backend should provide aggregate partially_closed_positions directly.
+
+Validation:
+1. Run actual CSV import with full_replace=true.
+2. Confirm stale CSV-import closed-trade records are wiped/replaced.
+3. Confirm active holdings persist to Neon.
+4. Confirm closed trades persist to Neon.
+5. Confirm aggregate categories are correct.
+6. Confirm SIVEF appears once in partially_closed_positions.
+7. Confirm AEHR/SNDK/CRDO/CCCX/OPTX are in fully_closed_positions if ledger shares_remaining <= tolerance.
+8. Confirm NBIS is not partial unless the active position was truly trimmed.
+9. Confirm OUST/ALMU buy-close-reopen remain open only.
+10. Confirm /api/caelyn-terminal still works after import.
+
+Return:
+- root cause of remaining category mismatch
+- exact fields frontend should use
+- exact files changed
+- validation table for SIVEF, AEHR, SNDK, CRDO, CCCX, OPTX, NBIS, OUST, ALMU
