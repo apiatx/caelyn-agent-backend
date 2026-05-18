@@ -1,0 +1,166 @@
+BACKEND REPLIT AGENT — Fix CSV import false partial closes from rounding/fees/dust
+
+The Portfolio CSV transaction importer is still misclassifying some tickers as partially closed when they should not be.
+
+Known examples:
+- OPTX is being counted as a partial close incorrectly.
+- NBIS is showing as a partial sell even though the user never sold NBIS.
+- One suspicious example is a tiny difference like $91.3301 vs $91.34, which suggests the ledger is treating fees/rounding/dust as a real remaining position or real partial sell.
+
+Goal:
+Fix false partial-close classifications caused by tiny residual shares, tiny residual dollars, fees, rounding, or brokerage precision.
+
+Do NOT:
+- hardcode OPTX or NBIS
+- hide real partial sells
+- remove legitimate closed trades
+- break SIVEF, which is a real partial close
+- break OUST/ALMU buy-close-reopen handling
+- change frontend
+- fake accounting results
+
+Audit first:
+1. Inspect the actual normalized transactions for OPTX and NBIS from the uploaded CSV.
+2. Print the ledger replay for each:
+   - buys
+   - sells
+   - fees
+   - quantity
+   - price
+   - gross amount
+   - net amount
+   - shares_remaining after each transaction
+   - cost_basis_remaining after each transaction
+   - realized P&L
+   - final classification
+3. Identify why each is marked partially_closed.
+4. Determine whether the issue is:
+   - tiny residual shares
+   - tiny residual cost basis
+   - fee row being interpreted as a sell
+   - cash-in-lieu / adjustment row being interpreted as a sell
+   - net amount mismatch
+   - price precision mismatch
+   - fractional share rounding
+   - duplicate or split-adjustment issue
+
+Core fix:
+Add explicit ledger tolerances and transaction-type guards.
+
+Use tolerances when deciding whether a position remains open or is fully closed:
+
+Suggested constants:
+- SHARE_EPSILON = 0.0001 shares, or choose a project-appropriate value
+- VALUE_EPSILON = $1.00, or choose a conservative threshold
+- PCT_EPSILON = 0.001, meaning residual less than 0.1% of bought shares/value
+
+A position should be treated as fully closed if either:
+- abs(shares_remaining) <= SHARE_EPSILON
+or
+- abs(cost_basis_remaining) <= VALUE_EPSILON
+or
+- residual market/cost value is less than a tiny percentage of original cost basis
+
+Do not classify as partially_closed_open unless:
+- total_sold_shares > 0
+AND shares_remaining > SHARE_EPSILON
+AND remaining cost basis/value > VALUE_EPSILON
+AND remaining shares/value are meaningful, not dust.
+
+Important:
+Fees/commissions should affect realized P&L, but should NOT create a sell event or partial-close classification by themselves.
+
+Normalize transaction actions carefully:
+Rows that are fees, commissions, regulatory fees, ADR fees, transaction fees, cash adjustments, or minor cash-in-lieu should not be treated as SELL unless they truly include a share quantity sale.
+
+Transaction classification rules:
+- SELL requires quantity/shares sold > SHARE_EPSILON and a real security symbol.
+- FEE rows with no share quantity should be normalized as FEE/IGNORE, not SELL.
+- Cash-in-lieu / fractional adjustment rows should be handled separately or ignored for position classification unless they actually sell shares.
+
+Classification rules after tolerance:
+Open position:
+- shares_remaining > SHARE_EPSILON
+AND remaining value/cost basis > VALUE_EPSILON
+
+Partially closed:
+- has real sell event
+AND position is still meaningfully open after tolerance
+
+Fully closed:
+- has real sell event
+AND shares_remaining <= SHARE_EPSILON OR remaining value/cost basis <= VALUE_EPSILON
+
+Buy-close-reopen:
+- if an old lot fully closes and a new lot opens later, final_symbol_status=open
+- do not mark partially_closed unless the currently open lot itself had a partial sell with meaningful remaining shares
+
+Required diagnostics:
+Add symbol-level debug for OPTX and NBIS:
+
+[portfolio-csv-symbol-audit] {
+  symbol,
+  transactions,
+  total_bought_shares,
+  total_sold_shares,
+  shares_remaining_raw,
+  shares_remaining_after_tolerance,
+  cost_basis_remaining_raw,
+  cost_basis_remaining_after_tolerance,
+  fees_total,
+  residual_value,
+  residual_pct,
+  has_real_sell,
+  has_fee_only_sell_like_rows,
+  classification_before_tolerance,
+  classification_after_tolerance,
+  final_symbol_status,
+  reason
+}
+
+Validation:
+Run the actual CSV import.
+
+Required outcomes:
+1. NBIS
+- If there is no real sell transaction with shares sold:
+  - has_real_sell = false
+  - partially_closed = false
+  - final_symbol_status = open
+  - NBIS should not appear in partially closed
+- If there is a fee/adjustment row, it should not create a partial sell.
+
+2. OPTX
+- If residual is only rounding/fee/dust:
+  - classify as fully closed or open according to meaningful remaining shares/value
+  - do not classify as partial solely from a tiny residual like $91.3301 vs $91.34
+- Return exact reason.
+
+3. SIVEF
+- Still classified correctly:
+  - open = true
+  - partially_closed = true
+  - fully_closed = false
+  - 2,996 shares remaining
+  - 1,000 shares sold
+
+4. OUST
+- open only
+- not partially closed
+- not fully closed as current ticker status
+
+5. ALMU
+- open only
+- not partially closed
+- not fully closed as current ticker status
+
+6. No legitimate partial sells are lost:
+- Any ticker with meaningful shares_remaining after a real sell remains partially_closed_open.
+
+Return:
+- exact root cause for NBIS
+- exact root cause for OPTX
+- tolerance values chosen
+- files changed
+- before/after classifications for NBIS, OPTX, SIVEF, OUST, ALMU
+- final counts for open / partially closed / fully closed

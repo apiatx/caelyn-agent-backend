@@ -5752,7 +5752,11 @@ async def portfolio_transactions_import_csv(
         deduplicate_transactions,
         build_symbol_ledgers,
         classify_positions,
+        build_symbol_diagnostics,
         run_ledger_tests,
+        SHARE_EPSILON,
+        VALUE_EPSILON,
+        PCT_EPSILON,
     )
     from data.portfolio_store import (
         load_active_holdings  as _load_h,
@@ -6032,23 +6036,39 @@ async def portfolio_transactions_import_csv(
     }
     print(f"[portfolio-csv-import] {diag}")
 
-    # Per-symbol audit log
+    # ── Per-symbol detailed diagnostics (OPTX/NBIS always logged; all others logged) ──
+    _DEBUG_SYMBOLS = {"OPTX", "NBIS", "SIVEF", "OUST", "ALMU"}
+    _symbol_diagnostics: dict[str, dict] = {}
     for sym, audit in symbol_audit.items():
-        print(
-            f"[portfolio-csv-symbol-audit] {{"
+        ledger = ledgers.get(sym, {})
+        _diag = build_symbol_diagnostics(
+            symbol=sym,
+            ledger=ledger,
+            audit=audit,
+            final_symbol_status=_final_status(sym),
+        )
+        _symbol_diagnostics[sym] = _diag
+        # Always log to stdout; verbose for watch symbols
+        _log_body = (
             f"\"symbol\":\"{sym}\", "
             f"\"buys\":{audit['buys']}, "
             f"\"sells\":{audit['sells']}, "
-            f"\"shares_bought\":{audit['shares_bought']}, "
-            f"\"shares_sold\":{audit['shares_sold']}, "
-            f"\"shares_remaining\":{audit['shares_remaining']}, "
-            f"\"realized_pnl\":{audit['realized_pnl']}, "
-            f"\"classification\":\"{audit['classification']}\", "
-            f"\"appears_in_open\":{audit['appears_in_open']}, "
-            f"\"appears_in_partial\":{audit['appears_in_partial']}, "
-            f"\"appears_in_fully_closed\":{audit['appears_in_fully_closed']}"
-            f"}}"
+            f"\"total_bought_shares\":{_diag['total_bought_shares']}, "
+            f"\"total_sold_shares\":{_diag['total_sold_shares']}, "
+            f"\"shares_remaining_raw\":{_diag['shares_remaining_raw']}, "
+            f"\"shares_remaining_after_tolerance\":{_diag['shares_remaining_after_tolerance']}, "
+            f"\"cost_basis_remaining_raw\":{_diag['cost_basis_remaining_raw']}, "
+            f"\"cost_basis_remaining_after_tolerance\":{_diag['cost_basis_remaining_after_tolerance']}, "
+            f"\"fees_total\":{_diag['fees_total']}, "
+            f"\"residual_pct\":{_diag['residual_pct']}, "
+            f"\"has_real_sell\":{_diag['has_real_sell']}, "
+            f"\"is_dust\":{_diag['is_dust']}, "
+            f"\"classification_before_tolerance\":\"{_diag['classification_before_tolerance']}\", "
+            f"\"classification_after_tolerance\":\"{_diag['classification_after_tolerance']}\", "
+            f"\"final_symbol_status\":\"{_diag['final_symbol_status']}\", "
+            f"\"reason\":\"{_diag['reason']}\""
         )
+        print(f"[portfolio-csv-symbol-audit] {{{_log_body}}}")
 
     # ── Step 5: Persist (import mode only) ────────────────────────────────────
     if mode == "import":
@@ -6336,7 +6356,13 @@ async def portfolio_transactions_import_csv(
         "closed_trade_records":       closed_events,
         "monthly_closed_positions":   monthly,
         "symbol_audit":               symbol_audit,
+        "symbol_diagnostics":         _symbol_diagnostics,
         "accounting_errors":          acct_errors,
+        "tolerance_config":           {
+            "SHARE_EPSILON": SHARE_EPSILON,
+            "VALUE_EPSILON": VALUE_EPSILON,
+            "PCT_EPSILON":   PCT_EPSILON,
+        },
         "unknown_type_rows":          unknown_rows[:20],
         "ignored_detail":             ignored_rows[:10],
         **({"test_results": test_results} if run_validate else {}),

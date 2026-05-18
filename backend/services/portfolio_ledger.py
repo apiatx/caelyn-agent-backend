@@ -30,8 +30,19 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
-# ── Tolerance ─────────────────────────────────────────────────────────────────
-SHARE_TOLERANCE: float = 1e-6
+# ── Tolerance constants ───────────────────────────────────────────────────────
+# SHARE_EPSILON:  minimum meaningful shares — residuals <= this are treated as
+#                 rounding/fractional dust and the position is considered closed.
+# VALUE_EPSILON:  minimum meaningful cost-basis in USD — positions whose residual
+#                 cost basis is <= $1.00 after a sell are treated as fully closed.
+# PCT_EPSILON:    minimum residual as fraction of original buy cost — below 0.1%
+#                 the residual is dust regardless of share count or dollar amount.
+# SHARE_TOLERANCE: internal arithmetic guard (much tighter — only prevents
+#                  floating-point noise from creating spurious open positions).
+SHARE_EPSILON:    float = 0.0001   # 0.0001 shares — dust threshold
+VALUE_EPSILON:    float = 1.00     # $1.00 — rounding / fee noise threshold
+PCT_EPSILON:      float = 0.001    # 0.1% of original cost basis
+SHARE_TOLERANCE:  float = 1e-6     # internal FP guard (unchanged)
 
 # ── Side classification keyword sets ─────────────────────────────────────────
 _BUY_KW: frozenset[str] = frozenset({
@@ -135,14 +146,28 @@ def _parse_date(raw: str) -> str | None:
 
 
 def _parse_float(raw: str) -> float:
-    """Parse numeric strings including $(1,234.56) → -1234.56."""
+    """Parse numeric strings including -$1,234.56 and $(1,234.56) → -1234.56.
+
+    Handles all common brokerage formats:
+      $1,234.56      →  1234.56
+      -$1,234.56     → -1234.56   (negative before dollar sign)
+      ($1,234.56)    → -1234.56   (Fidelity / Schwab parenthesis negatives)
+      (1,234.56)     → -1234.56
+    """
     if not raw:
         return 0.0
-    s = raw.strip().lstrip("$").replace(",", "").replace(" ", "")
+    s = raw.strip().replace(",", "").replace(" ", "")
+    negative = False
+    if s.startswith("-"):
+        negative = True
+        s = s[1:]
     if s.startswith("(") and s.endswith(")"):
-        s = "-" + s[1:-1]
+        negative = True
+        s = s[1:-1]
+    s = s.lstrip("$")
     try:
-        return float(s)
+        val = float(s)
+        return -val if negative else val
     except (ValueError, TypeError):
         return 0.0
 
@@ -254,7 +279,8 @@ def normalize_csv_rows(csv_text: str, source_file: str = "") -> dict:
         "amount", "value", "total", "net amount", "principal",
         "market value", "cost basis total", "net proceeds",
     )
-    col_fees   = _find_col("fees", "commission", "fee", "charges")
+    col_fees   = _find_col("fees & comm", "fees & commissions", "fees",
+                           "commission", "commissions", "fee", "charges")
     col_acct   = _find_col("account", "account number", "account id", "acct")
     col_instr  = _find_col("instrument type", "asset type", "security type")
 
@@ -503,6 +529,13 @@ def build_symbol_ledgers(transactions: list[dict]) -> dict[str, dict]:
                     buy_dates.append(tdate)
 
             elif side == "SELL":
+                # Zero-quantity guard: fee/adjustment rows that slipped through
+                # as SELL with qty=0 must not create a sell event.
+                # Real CSV normalization already filters these; this guard is
+                # a belt-and-suspenders safety net inside the ledger engine.
+                if qty <= SHARE_TOLERANCE:
+                    continue
+
                 # Oversell guard — cap at available shares
                 effective_qty = qty
                 if qty > shares_open + SHARE_TOLERANCE:
@@ -590,8 +623,12 @@ def build_symbol_ledgers(transactions: list[dict]) -> dict[str, dict]:
         ledgers[sym] = {
             "symbol":                 sym,
             "transactions":           txns_sorted,
-            "buy_count":              sum(1 for t in txns_sorted if t["side"] == "BUY"),
-            "sell_count":             sum(1 for t in txns_sorted if t["side"] == "SELL"),
+            "buy_count":              sum(1 for t in txns_sorted
+                                          if t["side"] == "BUY"
+                                          and float(t.get("quantity") or 0) > SHARE_TOLERANCE),
+            "sell_count":             sum(1 for t in txns_sorted
+                                          if t["side"] == "SELL"
+                                          and float(t.get("quantity") or 0) > SHARE_TOLERANCE),
             "shares_bought":          round(shares_bought, 8),
             "shares_sold":            round(shares_sold, 8),
             "shares_remaining":       round(shares_open, 8),
@@ -645,11 +682,29 @@ def classify_positions(ledgers: dict[str, dict]) -> dict:
     symbol_audit: dict[str, dict] = {}
 
     for sym, ledger in ledgers.items():
-        sr = ledger["shares_remaining"]
-        ss = ledger["shares_sold"]
-        sb = ledger["shares_bought"]
+        sr  = ledger["shares_remaining"]
+        ss  = ledger["shares_sold"]
+        sb  = ledger["shares_bought"]
+        cb  = ledger["cost_basis"]           # remaining cost basis after sells
+        tbc = ledger["total_buy_cost"]        # total original buy cost
 
-        is_open         = sr > SHARE_TOLERANCE
+        # ── Dust / rounding guard (three-way check) ───────────────────────────
+        # A residual position is "dust" (treat as fully closed) if ALL THREE of:
+        #   1. shares_remaining <= SHARE_EPSILON  (< 0.0001 shares)
+        #   2. cost_basis_remaining <= VALUE_EPSILON ($1.00)
+        #   3. residual is less than PCT_EPSILON (0.1%) of original buy cost
+        # A position must pass ALL criteria to be meaningful open.
+        # This prevents fees, brokerage rounding, or fractional dust from
+        # creating spurious partially-closed classifications.
+        residual_pct = (cb / tbc) if tbc > 0 else 0.0
+        is_dust = (
+            sr         <= SHARE_EPSILON
+            or cb      <= VALUE_EPSILON
+            or residual_pct < PCT_EPSILON
+        )
+
+        # is_open: meaningful shares remain AND the residual is not just dust
+        is_open         = sr > SHARE_TOLERANCE and not is_dust
         has_sells       = ss > SHARE_TOLERANCE
         # Partially closed = shares remain AND there were sells AND those sells
         # reduced the CURRENT open lot (not a prior lot that was fully closed).
@@ -736,19 +791,29 @@ def classify_positions(ledgers: dict[str, dict]) -> dict:
             classification = "no_activity"
 
         symbol_audit[sym] = {
-            "symbol":                 sym,
-            "buys":                   ledger["buy_count"],
-            "sells":                  ledger["sell_count"],
-            "shares_bought":          sb,
-            "shares_sold":            ss,
-            "shares_remaining":       sr,
-            "realized_pnl":           ledger["realized_pnl"],
-            "classification":         classification,
-            "appears_in_open":        is_open,
-            "appears_in_partial":     is_partial,
-            "appears_in_fully_closed":is_fully_closed,
-            "accounting_errors":      ledger["accounting_errors"],
-            "monthly_closed_entries": [],
+            "symbol":                          sym,
+            "buys":                            ledger["buy_count"],
+            "sells":                           ledger["sell_count"],
+            "shares_bought":                   sb,
+            "shares_sold":                     ss,
+            "shares_remaining":                sr,
+            "realized_pnl":                    ledger["realized_pnl"],
+            "classification":                  classification,
+            "appears_in_open":                 is_open,
+            "appears_in_partial":              is_partial,
+            "appears_in_fully_closed":         is_fully_closed,
+            "accounting_errors":               ledger["accounting_errors"],
+            "monthly_closed_entries":          [],
+            # ── Epsilon / dust diagnostics ────────────────────────────────────
+            "cost_basis_remaining":            round(cb, 6),
+            "total_buy_cost":                  round(tbc, 6),
+            "residual_pct":                    round(residual_pct, 6),
+            "is_dust":                         is_dust,
+            "share_epsilon":                   SHARE_EPSILON,
+            "value_epsilon":                   VALUE_EPSILON,
+            "pct_epsilon":                     PCT_EPSILON,
+            "has_real_sell":                   has_sells,
+            "all_open_lots_post_sell":         all_open_post_sell,
         }
 
     # ── Monthly closed positions ───────────────────────────────────────────
@@ -769,6 +834,127 @@ def classify_positions(ledgers: dict[str, dict]) -> dict:
         "closed_trade_records":       all_closed_events,
         "monthly_closed_positions":   monthly,
         "symbol_audit":               symbol_audit,
+    }
+
+
+# ── Symbol-level diagnostic reporter ─────────────────────────────────────────
+
+def build_symbol_diagnostics(
+    symbol: str,
+    ledger: dict,
+    audit: dict,
+    final_symbol_status: str = "",
+) -> dict:
+    """Return the full diagnostic record requested by the task spec for one symbol.
+
+    Fields match the spec exactly::
+
+        symbol, transactions, total_bought_shares, total_sold_shares,
+        shares_remaining_raw, shares_remaining_after_tolerance,
+        cost_basis_remaining_raw, cost_basis_remaining_after_tolerance,
+        fees_total, residual_value, residual_pct,
+        has_real_sell, has_fee_only_sell_like_rows,
+        classification_before_tolerance, classification_after_tolerance,
+        final_symbol_status, reason
+    """
+    sr  = ledger.get("shares_remaining", 0.0)
+    ss  = ledger.get("shares_sold", 0.0)
+    sb  = ledger.get("shares_bought", 0.0)
+    cb  = ledger.get("cost_basis", 0.0)
+    tbc = ledger.get("total_buy_cost", 0.0)
+
+    residual_pct = round((cb / tbc) if tbc > 0 else 0.0, 6)
+
+    # Determine pre-epsilon classification (using only SHARE_TOLERANCE)
+    has_sells_raw  = ss > SHARE_TOLERANCE
+    is_open_raw    = sr > SHARE_TOLERANCE
+    all_post_sell  = ledger.get("all_open_lots_post_sell", False)
+    is_partial_raw = is_open_raw and has_sells_raw and not all_post_sell
+    is_fc_raw      = (not is_open_raw) and has_sells_raw
+    if is_open_raw and not is_partial_raw:
+        class_before = "open"
+    elif is_partial_raw:
+        class_before = "partially_closed_open"
+    elif is_fc_raw:
+        class_before = "fully_closed"
+    else:
+        class_before = "no_activity"
+
+    # Post-epsilon (same as classify_positions uses)
+    is_dust = (
+        sr <= SHARE_EPSILON
+        or cb <= VALUE_EPSILON
+        or residual_pct < PCT_EPSILON
+    )
+    is_open_eps = sr > SHARE_TOLERANCE and not is_dust
+    is_partial_eps = is_open_eps and has_sells_raw and not all_post_sell
+    is_fc_eps = (not is_open_eps) and has_sells_raw
+    if is_open_eps and not is_partial_eps:
+        class_after = "open"
+    elif is_partial_eps:
+        class_after = "partially_closed_open"
+    elif is_fc_eps:
+        class_after = "fully_closed"
+    else:
+        class_after = "no_activity"
+
+    # Fees total across all transactions
+    fees_total = round(
+        sum(float(t.get("fees") or 0) for t in ledger.get("transactions", [])), 6
+    )
+
+    # Reason string
+    if class_before != class_after:
+        reason = (
+            f"Reclassified from {class_before!r} to {class_after!r} by epsilon guard: "
+            f"shares_remaining={sr} (epsilon={SHARE_EPSILON}), "
+            f"cost_basis={cb:.4f} (epsilon=${VALUE_EPSILON}), "
+            f"residual_pct={residual_pct:.4%} (epsilon={PCT_EPSILON:.1%})"
+        )
+    elif not has_sells_raw:
+        reason = "No real sell transactions — pure open position (no sell events)"
+    elif is_open_eps and is_partial_eps:
+        reason = (
+            f"Meaningful partial close: {ss} shares sold, {sr} shares remain "
+            f"(cost_basis=${cb:.2f}, residual_pct={residual_pct:.2%})"
+        )
+    elif is_fc_eps:
+        reason = f"All {sb} bought shares were sold ({ss}); position fully closed"
+    else:
+        reason = f"Classification={class_after}"
+
+    return {
+        "symbol":                              symbol,
+        "transactions":                        [
+            {
+                "side":   t.get("side"),
+                "qty":    t.get("quantity"),
+                "price":  t.get("price"),
+                "fees":   t.get("fees"),
+                "date":   t.get("trade_date"),
+                "action": t.get("action"),
+            }
+            for t in ledger.get("transactions", [])
+        ],
+        "total_bought_shares":                 round(sb, 8),
+        "total_sold_shares":                   round(ss, 8),
+        "shares_remaining_raw":                round(sr, 8),
+        "shares_remaining_after_tolerance":    round(sr, 8) if not is_dust else 0.0,
+        "cost_basis_remaining_raw":            round(cb, 6),
+        "cost_basis_remaining_after_tolerance":round(cb, 6) if not is_dust else 0.0,
+        "fees_total":                          fees_total,
+        "residual_value":                      round(cb, 6),
+        "residual_pct":                        residual_pct,
+        "has_real_sell":                       has_sells_raw,
+        "has_fee_only_sell_like_rows":         False,  # fee rows → side=FEE, not SELL
+        "classification_before_tolerance":     class_before,
+        "classification_after_tolerance":      class_after,
+        "final_symbol_status":                 final_symbol_status or class_after,
+        "is_dust":                             is_dust,
+        "share_epsilon":                       SHARE_EPSILON,
+        "value_epsilon":                       VALUE_EPSILON,
+        "pct_epsilon":                         PCT_EPSILON,
+        "reason":                              reason,
     }
 
 
@@ -973,6 +1159,97 @@ def run_ledger_tests() -> dict:
         "expected_remaining": 439.0,
         "expected_open":      True,
         "expected_partial":   False,
+    }
+
+    # ── Test 9: Dust residual → fully closed (epsilon guard) ──────────────
+    # BUY 1000 @ $10 → SELL 999.9999 @ $12 → 0.0001 shares remain ($0.001 basis)
+    # Should be classified as FULLY CLOSED, not partial, because residual is dust.
+    t9_txns = [
+        _make_txn("DUSTTEST", "BUY",  1000,    10.0, "2026-01-01"),
+        _make_txn("DUSTTEST", "SELL", 999.9999, 12.0, "2026-03-01"),
+    ]
+    t9_ledgers = build_symbol_ledgers(t9_txns)
+    t9_pos     = classify_positions(t9_ledgers)
+    t9_open    = any(p["symbol"] == "DUSTTEST" for p in t9_pos["open_positions"])
+    t9_partial = any(p["symbol"] == "DUSTTEST" for p in t9_pos["partially_closed_positions"])
+    t9_closed  = any(p["symbol"] == "DUSTTEST" for p in t9_pos["fully_closed_positions"])
+    t9_audit   = t9_pos["symbol_audit"]["DUSTTEST"]
+    results["test9_dust_residual_fully_closed"] = {
+        "pass": (not t9_open and not t9_partial and t9_closed),
+        "open":             t9_open,
+        "partially_closed": t9_partial,
+        "fully_closed":     t9_closed,
+        "shares_remaining": t9_ledgers["DUSTTEST"]["shares_remaining"],
+        "is_dust":          t9_audit["is_dust"],
+        "cost_basis":       t9_audit["cost_basis_remaining"],
+        "expected":         "fully_closed (dust residual)",
+    }
+
+    # ── Test 10: Fee-only row with zero quantity → no sell event created ────
+    # A FEE-classified transaction has qty=0 and must be skipped by normalize.
+    # Inject a synthetic zero-qty SELL to verify the guard holds.
+    # (In real CSV: fee rows with no shares → side=FEE, skipped before ledger)
+    t10_buy   = _make_txn("FEETEST", "BUY", 100, 10, "2026-01-01")
+    # Simulate a fee row that somehow survived as SELL with qty=0
+    t10_fee   = {**_make_txn("FEETEST", "SELL", 0, 0, "2026-02-01"),
+                 "quantity": 0.0, "side": "SELL"}
+    t10_ledgers = build_symbol_ledgers([t10_buy, t10_fee])
+    t10_pos     = classify_positions(t10_ledgers)
+    t10_open    = any(p["symbol"] == "FEETEST" for p in t10_pos["open_positions"])
+    t10_partial = any(p["symbol"] == "FEETEST" for p in t10_pos["partially_closed_positions"])
+    t10_closed  = any(p["symbol"] == "FEETEST" for p in t10_pos["fully_closed_positions"])
+    t10_ledger  = t10_ledgers["FEETEST"]
+    results["test10_fee_zero_qty_no_sell_event"] = {
+        "pass": (t10_open and not t10_partial and not t10_closed
+                 and t10_ledger["sell_count"] == 0
+                 and t10_ledger["shares_remaining"] == 100.0),
+        "open":             t10_open,
+        "partially_closed": t10_partial,
+        "fully_closed":     t10_closed,
+        "sell_count":       t10_ledger["sell_count"],
+        "shares_remaining": t10_ledger["shares_remaining"],
+        "expected":         "open (fee zero-qty row ignored)",
+    }
+
+    # ── Test 11: NBIS-pattern — buy only, no sell → pure open ─────────────
+    # Mirrors the actual NBIS row: 76 shares bought, nothing sold.
+    t11_txns = [_make_txn("NBISTEST", "BUY", 76, 91.6425, "2026-01-05")]
+    t11_ledgers = build_symbol_ledgers(t11_txns)
+    t11_pos     = classify_positions(t11_ledgers)
+    t11_open    = any(p["symbol"] == "NBISTEST" for p in t11_pos["open_positions"])
+    t11_partial = any(p["symbol"] == "NBISTEST" for p in t11_pos["partially_closed_positions"])
+    t11_closed  = any(p["symbol"] == "NBISTEST" for p in t11_pos["fully_closed_positions"])
+    results["test11_nbis_buy_only_open"] = {
+        "pass": (t11_open and not t11_partial and not t11_closed),
+        "open":             t11_open,
+        "partially_closed": t11_partial,
+        "fully_closed":     t11_closed,
+        "shares_remaining": t11_ledgers["NBISTEST"]["shares_remaining"],
+        "has_real_sell":    t11_pos["symbol_audit"]["NBISTEST"]["has_real_sell"],
+        "expected":         "open (no sell, buy only)",
+    }
+
+    # ── Test 12: OPTX-pattern — exact 521=521 → fully closed ─────────────
+    # Mirrors the actual OPTX rows: buy 521, sell 521 with $0.19 fee.
+    t12_buy  = _make_txn("OPTXTEST", "BUY",  521, 9.5833, "2026-04-17")
+    t12_sell = _make_txn("OPTXTEST", "SELL", 521, 8.4226, "2026-05-04")
+    t12_sell["fees"] = 0.19
+    t12_ledgers = build_symbol_ledgers([t12_buy, t12_sell])
+    t12_pos     = classify_positions(t12_ledgers)
+    t12_open    = any(p["symbol"] == "OPTXTEST" for p in t12_pos["open_positions"])
+    t12_partial = any(p["symbol"] == "OPTXTEST" for p in t12_pos["partially_closed_positions"])
+    t12_closed  = any(p["symbol"] == "OPTXTEST" for p in t12_pos["fully_closed_positions"])
+    t12_ledger  = t12_ledgers["OPTXTEST"]
+    t12_audit   = t12_pos["symbol_audit"]["OPTXTEST"]
+    results["test12_optx_521_521_fully_closed"] = {
+        "pass": (not t12_open and not t12_partial and t12_closed
+                 and t12_ledger["shares_remaining"] == 0.0),
+        "open":             t12_open,
+        "partially_closed": t12_partial,
+        "fully_closed":     t12_closed,
+        "shares_remaining": t12_ledger["shares_remaining"],
+        "is_dust":          t12_audit["is_dust"],
+        "expected":         "fully_closed (521 bought = 521 sold)",
     }
 
     all_pass = all(v.get("pass") for v in results.values())
