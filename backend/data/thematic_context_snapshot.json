@@ -20,22 +20,6 @@
       ]
     },
     {
-      "name": "Solar",
-      "score": 75.8,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (76/100) vs theme universe. Outperforming SPY -3.5%, QQQ -3.2%. Breadth 14%."
-      ],
-      "related_etfs": [
-        "TAN"
-      ],
-      "related_tickers": [
-        "FSLR",
-        "HASI",
-        "RUN"
-      ]
-    },
-    {
       "name": "Cybersecurity",
       "score": 75.5,
       "source": "theme_rs_service",
@@ -55,8 +39,24 @@
       ]
     },
     {
+      "name": "Solar",
+      "score": 75.4,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -3.5%, QQQ -3.2%. Breadth 14%."
+      ],
+      "related_etfs": [
+        "TAN"
+      ],
+      "related_tickers": [
+        "FSLR",
+        "HASI",
+        "RUN"
+      ]
+    },
+    {
       "name": "Technology",
-      "score": 72.8,
+      "score": 72.4,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (72/100) vs theme universe. Outperforming SPY -1.0%, QQQ -0.6%. Breadth 36%.",
@@ -95,23 +95,6 @@
   ],
   "emerging_themes": [
     {
-      "name": "Tech Equal-Weight",
-      "score": 69.6,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "RYT",
-        "QQEW"
-      ],
-      "related_tickers": [
-        "NXPI",
-        "INTC",
-        "AMD"
-      ]
-    },
-    {
       "name": "Memory & Storage",
       "score": 69.4,
       "source": "theme_rs_service",
@@ -143,6 +126,23 @@
       "related_tickers": [
         "INTC",
         "TXN",
+        "AMD"
+      ]
+    },
+    {
+      "name": "Tech Equal-Weight",
+      "score": 69.1,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "RYT",
+        "QQEW"
+      ],
+      "related_tickers": [
+        "NXPI",
+        "INTC",
         "AMD"
       ]
     },
@@ -221,10 +221,10 @@
     },
     {
       "name": "Fintech",
-      "score": 24.2,
+      "score": 23.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta +0.3%, QQQ delta +0.7%. Breadth 67% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (23/100) vs 60-theme universe. SPY delta +0.3%, QQQ delta +0.7%. Breadth 67% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "FINX",
@@ -278,7 +278,7 @@
     {
       "sector": "Technology",
       "ticker": "XLK",
-      "score": 72.3,
+      "score": 71.9,
       "posture": "leading"
     },
     {
@@ -303,7 +303,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-18T21:22:47.203869+00:00",
+  "last_updated": "2026-05-19T00:43:03.316572+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -314,5 +314,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1779139367.2040024
+  "_saved_at": 1779151383.3166394
 }

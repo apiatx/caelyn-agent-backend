@@ -4811,6 +4811,141 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
         elif _st in ("fully_closed", "expired", "orphan_expired"):
             _opt_fc_pos.append(_op)
 
+    # ── Enrich open option positions with Tradier mark quotes ─────────────────
+    def _occ_key_to_tradier_sym(occ_key: str) -> str | None:
+        """Convert internal occ_key → Tradier OCC compact symbol for quote lookups."""
+        try:
+            parts = occ_key.split("_")
+            if len(parts) < 4:
+                return None
+            _und  = parts[0]
+            _exp  = parts[1]   # YYYY-MM-DD
+            _strk = float(parts[2])
+            _otyp = parts[3].upper()  # CALL or PUT
+            from datetime import datetime as _dtm2
+            _yymmdd = _dtm2.strptime(_exp, "%Y-%m-%d").strftime("%y%m%d")
+            _cp     = "C" if _otyp == "CALL" else "P"
+            _si     = round(_strk * 1000)
+            return f"{_und}{_yymmdd}{_cp}{_si:08d}"
+        except Exception:
+            return None
+
+    # Build occ_key → Tradier compact symbol map for all open positions
+    _opt_sym_map: dict[str, str] = {}
+    for _op in _opt_open_pos:
+        _ok   = _op.get("occ_key", "")
+        _tsym = _occ_key_to_tradier_sym(_ok)
+        if _ok and _tsym:
+            _opt_sym_map[_ok] = _tsym
+
+    # Batch-fetch Tradier option quotes (single call per unique symbol, cached 60 s)
+    _opt_quote_map: dict[str, dict] = {}  # upper(tradier_sym) → quote dict
+    if _opt_sym_map:
+        try:
+            from data.tradier_provider import TradierProvider as _TPOV
+            _tpov = _TPOV(api_key=os.getenv("TRADIER_API_KEY", ""))
+            _tradier_syms = list(_opt_sym_map.values())
+            _opt_quotes_raw = await _tpov.get_quotes(_tradier_syms)
+            for _q in _opt_quotes_raw:
+                _qsym = (_q.get("symbol") or "").upper()
+                if _qsym:
+                    _opt_quote_map[_qsym] = _q
+        except Exception as _eq:
+            print(f"[portfolio-holdings] option quote fetch error: {_eq}")
+
+    # Enrich each open option position with mark/market_value/unrealized_pnl
+    _opt_total_cost   = 0.0
+    _opt_total_mktval = 0.0
+    _opt_val_hit      = 0
+    _opt_val_miss     = 0
+    _OPT_MULT         = 100
+
+    for _op in _opt_open_pos:
+        _ok        = _op.get("occ_key", "")
+        _tsym_u    = (_opt_sym_map.get(_ok) or "").upper()
+        _q         = _opt_quote_map.get(_tsym_u) if _tsym_u else None
+        _contracts = float(_op.get("contracts_open") or 0)
+        _cb        = float(_op.get("cost_basis") or 0)
+        _opt_total_cost += _cb
+
+        _op["tradier_symbol"] = _tsym_u or None
+
+        if _q:
+            _bid  = _q.get("bid")
+            _ask  = _q.get("ask")
+            _last = _q.get("last")
+            # Mark = midpoint when both bid & ask available and sum > 0; else last; else None
+            if _bid is not None and _ask is not None and (_bid + _ask) > 0:
+                _mark = round((_bid + _ask) / 2, 4)
+            elif _last is not None and _last > 0:
+                _mark = round(float(_last), 4)
+            else:
+                _mark = None
+
+            if _mark is not None:
+                _mktval   = round(_contracts * _mark * _OPT_MULT, 2)
+                _upnl     = round(_mktval - _cb, 2)
+                _upnl_pct = round(_upnl / _cb * 100, 4) if _cb else None
+                _op["mark_price"]         = _mark
+                _op["mark_bid"]           = _bid
+                _op["mark_ask"]           = _ask
+                _op["mark_last"]          = _last
+                _op["mark_source"]        = "tradier"
+                _op["market_value"]       = _mktval
+                _op["unrealized_pnl"]     = _upnl
+                _op["unrealized_pnl_pct"] = _upnl_pct
+                _opt_total_mktval        += _mktval
+                _opt_val_hit             += 1
+            else:
+                _op["mark_price"]         = None
+                _op["mark_bid"]           = _bid
+                _op["mark_ask"]           = _ask
+                _op["mark_last"]          = _last
+                _op["mark_source"]        = "tradier_no_mark"
+                _op["market_value"]       = None
+                _op["unrealized_pnl"]     = None
+                _op["unrealized_pnl_pct"] = None
+                _opt_val_miss            += 1
+        else:
+            _op["mark_price"]         = None
+            _op["mark_bid"]           = None
+            _op["mark_ask"]           = None
+            _op["mark_last"]          = None
+            _op["mark_source"]        = "unavailable"
+            _op["market_value"]       = None
+            _op["unrealized_pnl"]     = None
+            _op["unrealized_pnl_pct"] = None
+            _opt_val_miss            += 1
+
+    # Stock cost basis from active open_positions (avg_cost × shares already computed)
+    _stock_cost = round(sum(float(_rec.get("cost_basis") or 0) for _rec in open_positions), 2)
+
+    # Build portfolio_summary block
+    _opt_upnl_total = round(_opt_total_mktval - _opt_total_cost, 2) if _opt_val_hit else None
+    _opt_upnl_pct_total = (
+        round(_opt_upnl_total / _opt_total_cost * 100, 4)
+        if (_opt_val_hit and _opt_total_cost and _opt_upnl_total is not None)
+        else None
+    )
+    _portfolio_summary = {
+        "stock_cost_basis":                  _stock_cost,
+        "option_cost_basis":                 round(_opt_total_cost, 2),
+        "option_market_value":               round(_opt_total_mktval, 2) if _opt_val_hit else None,
+        "option_unrealized_pnl":             _opt_upnl_total,
+        "option_unrealized_pnl_pct":         _opt_upnl_pct_total,
+        "option_positions_count":            len(_opt_open_pos),
+        "options_valuation_available_count": _opt_val_hit,
+        "options_valuation_missing_count":   _opt_val_miss,
+        "options_value_method":              "tradier_mark" if _opt_val_hit else "cost_basis_fallback",
+    }
+
+    print(
+        f"[portfolio-options-active-debug] "
+        f"open={len(_opt_open_pos)} val_hit={_opt_val_hit} val_miss={_opt_val_miss} "
+        f"opt_market_value={round(_opt_total_mktval, 2)} "
+        f"opt_cost_basis={round(_opt_total_cost, 2)}"
+    )
+
     _resp_ms = round((_time_h.perf_counter() - _t0_h) * 1000, 1)
     _fast_debug = {
         "response_ms":        _resp_ms,
@@ -4836,6 +4971,7 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
         "option_partially_closed_positions": _opt_partial_pos,
         "option_fully_closed_positions":     _opt_fc_pos,
         "option_closed_trades":              _raw_opt_ct,
+        "portfolio_summary":                 _portfolio_summary,
     }
 
 

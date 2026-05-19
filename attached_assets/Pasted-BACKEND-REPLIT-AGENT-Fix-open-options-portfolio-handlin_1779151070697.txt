@@ -1,0 +1,193 @@
+BACKEND REPLIT AGENT — Fix open options portfolio handling and valuation
+
+The Portfolio Dashboard now imports options transactions, but the UI/data model is mixing open options into the Trade Journal / Options tab. That is wrong.
+
+Open options positions are active portfolio positions. They should be treated like active exposure, shown above the Performance Scorecard, and included in portfolio total value.
+
+Closed or partially closed options belong in the Trade Journal / closed positions sections.
+
+Goal:
+Make backend return clean option position data so frontend can render:
+
+1. Open stock positions
+2. Open options positions
+3. Performance Scorecard
+4. Trade Journal / Closed + Partial history
+
+Do not rebuild the whole portfolio system.
+Do not break stock/equity CSV import.
+Do not hardcode tickers.
+Do not assume specific option contracts.
+Do not put open options in closed-trade history.
+Do not double-count options in portfolio total.
+Do not change the market-wide Options Flow page.
+
+Audit first:
+1. Inspect current option ledger/store:
+   - option_open_positions
+   - option_partially_closed_positions
+   - option_fully_closed_positions
+   - option_closed_trades
+2. Confirm which endpoint frontend uses:
+   - GET /api/portfolio/holdings
+   - GET /api/portfolio/options-positions
+   - GET /api/portfolio/options-trades
+3. Confirm whether open options are currently being returned as closed trades / trade journal rows.
+4. Confirm current Portfolio total calculation:
+   - Does it include option_open_positions?
+   - Does it ignore them?
+   - Does it accidentally count them as closed trades?
+
+Required backend behavior:
+
+A. Open options positions
+
+Open options should be returned separately as active positions:
+
+option_open_positions: [
+  {
+    "underlying": "BWEN",
+    "option_symbol": "BWEN 07/17/2026 2.50 C",
+    "display_symbol": "BWEN 07/17/2026 $2.50 CALL",
+    "occ_key": "...",
+    "expiration_date": "2026-07-17",
+    "strike": 2.50,
+    "option_type": "CALL",
+    "contracts_open": 18,
+    "avg_premium": 1.6566,
+    "cost_basis": 2981.91,
+    "entry_date": "2026-05-15",
+    "last_trade_date": "2026-05-15",
+    "current_mark": number|null,
+    "market_value": number|null,
+    "unrealized_pnl": number|null,
+    "unrealized_pnl_pct": number|null,
+    "quote_source": "tradier" | "cache" | "unavailable",
+    "quote_unavailable_reason": string|null,
+    "final_option_status": "open"
+  }
+]
+
+Open options should NOT appear in option_closed_trades.
+
+B. Closed / partially closed options
+
+Closed or partially closed option sells/expirations should remain in history outputs:
+- option_partially_closed_positions
+- option_fully_closed_positions
+- option_closed_trades
+
+Only these should appear in Trade Journal / Closed Positions views.
+
+C. Tradier option valuation
+
+Can we use Tradier? Audit existing Tradier option quote/chain helpers.
+
+Preferred:
+- Use existing Tradier option chain/quote helper if already present.
+- Use existing cache pattern.
+- Do not call Tradier repeatedly on every render.
+- Cache by option occ_key/display symbol with a sensible TTL.
+- Respect Tradier rate limits.
+
+For each open option:
+- fetch or resolve current option mark/mid/last if available
+- current_mark = best available mark:
+  - mid bid/ask if both exist
+  - last if mid unavailable
+  - null if unavailable
+- market_value = contracts_open * current_mark * 100
+- unrealized_pnl = market_value - cost_basis
+- unrealized_pnl_pct = unrealized_pnl / cost_basis * 100
+
+If quote unavailable:
+- keep market_value null or optionally fallback to cost_basis only if explicitly labeled
+- return quote_unavailable_reason
+- do not fake unrealized P&L
+
+D. Portfolio total
+
+Portfolio Dashboard total should include active option market value if available.
+
+Return fields in GET /api/portfolio/holdings or a portfolio summary field:
+- stock_market_value
+- option_market_value
+- total_portfolio_value
+- option_cost_basis
+- option_unrealized_pnl
+- option_unrealized_pnl_pct
+- options_valuation_available_count
+- options_valuation_missing_count
+
+Rules:
+- If option market_value is available, include it in total portfolio value.
+- If option quote is unavailable, either:
+  - exclude from market value and return warning, or
+  - include cost_basis as conservative placeholder ONLY if clearly labeled.
+- Be explicit with:
+  options_value_method = "tradier_mark" | "cost_basis_fallback" | "partial"
+
+E. Response structure
+
+GET /api/portfolio/holdings should return:
+- holdings
+- open_positions
+- partially_closed_positions
+- fully_closed_positions
+- option_open_positions
+- option_partially_closed_positions
+- option_fully_closed_positions
+- option_closed_trades
+- portfolio_summary including options totals
+
+Do not require frontend to infer active options from trade history.
+
+F. Diagnostics
+
+Add backend log:
+
+[portfolio-options-active-debug] {
+  option_open_count,
+  option_partial_count,
+  option_fully_closed_count,
+  option_closed_trades_count,
+  tradier_quote_attempted,
+  tradier_quote_success_count,
+  tradier_quote_missing_count,
+  option_market_value,
+  option_cost_basis,
+  option_unrealized_pnl,
+  options_value_method,
+  open_options_in_closed_trades_detected
+}
+
+Validation:
+Use the current uploaded CSV/imported data.
+
+Required checks:
+1. BWEN open call appears in option_open_positions.
+2. VIVO open call appears in option_open_positions.
+3. BWEN/VIVO do NOT appear in option_closed_trades unless there was an actual close/expiration.
+4. option_open_positions includes:
+   - underlying
+   - expiration
+   - strike
+   - option_type
+   - contracts_open
+   - avg_premium
+   - cost_basis
+   - entry_date
+5. Tradier valuation attempted for open options if existing helper supports it.
+6. current_mark / market_value / unrealized_pnl populated where quote is available.
+7. quote_unavailable_reason populated where unavailable.
+8. portfolio_summary includes option_market_value and total_portfolio_value.
+9. Stock open/partial/fully closed categories still work.
+10. Portfolio Terminal still works.
+11. Options Flow page is untouched.
+
+Return:
+- exact files changed
+- endpoint fields added
+- whether Tradier option valuation is available
+- validation table for open options
+- portfolio total before/after including options
