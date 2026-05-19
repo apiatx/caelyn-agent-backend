@@ -12,8 +12,8 @@ Schedule (ET, all >=30 min apart):
     Sun 01:45 ET   historical returns warm (2w/4w/10w for thematic universe)
     Sun 02:15 ET   chain reaction dynamic weekly output generation
     Sun 03:15 ET   bottlenecks fundamentals warm (uses dynamic CR output if available)
-    Mon-Fri 00:00 ET   social X/Grok scan trigger (rebuild social universe)
-    Mon-Fri 00:45 ET   social fundamentals warm
+    Sun-Fri 11:00 ET   social X/Grok scan trigger (= 10:00 AM Central; skips Saturday)
+    Sun-Fri 11:45 ET   social fundamentals warm
     Fri 02:00 ET   watchlist+portfolio fundamentals warm
 """
 from __future__ import annotations
@@ -34,6 +34,7 @@ except Exception:  # pragma: no cover
 def _is_sunday(d: int) -> bool: return d == 6
 def _is_friday(d: int) -> bool: return d == 4
 def _is_weekday(d: int) -> bool: return 0 <= d <= 4
+def _not_saturday(d: int) -> bool: return d != 5   # Sun(6)+Mon-Fri(0-4); skips Sat(5)
 
 
 async def _run_thematic_rebuild() -> None:
@@ -225,8 +226,8 @@ _SLOTS: list[tuple[Callable[[int], bool], int, int, str, Callable[[], Awaitable[
     (_is_sunday,  2, 15, "chain_reaction_dynamic",    _run_chain_reaction_dynamic),
     (_is_sunday,  3, 15, "bottlenecks_warm",          _run_bottlenecks_warm),
     (_is_sunday,  3, 45, "screener_snapshot_rebuild", _run_screener_snapshot_rebuild),
-    (_is_weekday, 0,  0, "social_scan",               _run_social_scan),
-    (_is_weekday, 0, 45, "social_warm",               _run_social_warm),
+    (_not_saturday, 11,  0, "social_scan",             _run_social_scan),
+    (_not_saturday, 11, 45, "social_warm",             _run_social_warm),
     (_is_friday,  2,  0, "watchlist_portfolio_warm",  _run_watchlist_portfolio_warm),
 ]
 
