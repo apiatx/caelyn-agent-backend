@@ -128,6 +128,8 @@ def _ensure_tables(conn) -> None:
             updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+    # Safe migrations — ADD COLUMN IF NOT EXISTS is idempotent
+    cur.execute("ALTER TABLE portfolio_option_positions ADD COLUMN IF NOT EXISTS notes TEXT")
 
     # ── Option closed trades ───────────────────────────────────────────────
     cur.execute("""
@@ -159,6 +161,7 @@ def _ensure_tables(conn) -> None:
             created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+    cur.execute("ALTER TABLE portfolio_option_closed_trades ADD COLUMN IF NOT EXISTS notes TEXT")
 
     conn.commit()
     cur.close()
@@ -474,5 +477,193 @@ def delete_csv_import_option_closed_trades() -> int:
         except Exception:
             pass
         return 0
+    finally:
+        _put_conn(conn)
+
+
+# ── Single-record helpers (edit / sell / full-close) ──────────────────────────
+
+def load_option_position_by_occ_key(occ_key: str) -> dict | None:
+    """Load a single option position row by occ_key. Returns None if not found."""
+    conn = _get_conn()
+    if not conn:
+        return None
+    try:
+        _ensure_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM portfolio_option_positions WHERE occ_key = %s",
+            (occ_key,),
+        )
+        row  = cur.fetchone()
+        desc = cur.description
+        cur.close()
+        return _pos_row_to_dict(row, desc) if row else None
+    except Exception as e:
+        print(f"[OPT_STORE] load_option_position_by_occ_key error: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+_POS_UPDATABLE_COLS = frozenset({
+    "contracts_open", "avg_premium", "cost_basis",
+    "expiration_date", "strike", "option_type", "final_status",
+    "first_entry_date", "last_entry_date", "last_exit_date",
+    "contracts_sold", "realized_pnl", "notes",
+})
+
+
+def update_option_position(occ_key: str, updates: dict) -> dict | None:
+    """Update a subset of allowed fields on a single option position row.
+
+    Only keys present in _POS_UPDATABLE_COLS are applied.
+    Returns the updated row dict, or None if the row was not found / error occurred.
+    """
+    _invalidate_opt_pos_cache()
+
+    set_clauses: list[str] = []
+    values:      list      = []
+    for col, val in updates.items():
+        if col in _POS_UPDATABLE_COLS:
+            set_clauses.append(f"{col} = %s")
+            values.append(val)
+
+    if not set_clauses:
+        return load_option_position_by_occ_key(occ_key)
+
+    set_clauses.append("updated_at = NOW()")
+    values.append(occ_key)
+    sql = (
+        f"UPDATE portfolio_option_positions "
+        f"SET {', '.join(set_clauses)} "
+        f"WHERE occ_key = %s RETURNING *"
+    )
+
+    conn = _get_conn()
+    if not conn:
+        return None
+    try:
+        _ensure_tables(conn)
+        cur = conn.cursor()
+        cur.execute(sql, values)
+        row  = cur.fetchone()
+        desc = cur.description
+        conn.commit()
+        cur.close()
+        if row is None:
+            return None
+        result = _pos_row_to_dict(row, desc)
+        print(f"[OPT_STORE] updated option position occ_key={occ_key} fields={list(updates.keys())}")
+        return result
+    except Exception as e:
+        print(f"[OPT_STORE] update_option_position error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def delete_option_position(occ_key: str) -> bool:
+    """Delete a single option position row by occ_key. Returns True if a row was deleted."""
+    _invalidate_opt_pos_cache()
+    conn = _get_conn()
+    if not conn:
+        return False
+    try:
+        _ensure_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM portfolio_option_positions WHERE occ_key = %s",
+            (occ_key,),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        if deleted:
+            print(f"[OPT_STORE] deleted option position occ_key={occ_key}")
+        return deleted
+    except Exception as e:
+        print(f"[OPT_STORE] delete_option_position error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def save_option_closed_trade(trade: dict) -> dict:
+    """Insert a single option closed trade record.
+
+    Returns the persisted row dict (with 'id' set), or the input dict with
+    an '_error' key on failure.
+    """
+    _invalidate_opt_ct_cache()
+    conn = _get_conn()
+    if not conn:
+        return {**trade, "_error": "no_db_connection"}
+    try:
+        _ensure_tables(conn)
+        cur      = conn.cursor()
+        trade_id = trade.get("id") or str(uuid.uuid4())
+        cur.execute("""
+            INSERT INTO portfolio_option_closed_trades
+              (id, occ_key, underlying, display_symbol, expiration_date,
+               strike, option_type, contracts_closed, entry_date, exit_date,
+               avg_entry_premium, exit_premium, cost_basis_sold, proceeds, fees,
+               realized_pnl, realized_pnl_pct, contracts_remaining_after,
+               is_full_close, close_type, final_option_status,
+               source, import_batch_id, source_file, notes)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING *
+        """, (
+            trade_id,
+            trade.get("occ_key", ""),
+            trade.get("underlying", ""),
+            trade.get("display_symbol", trade.get("occ_key", "")),
+            trade.get("expiration_date") or None,
+            trade.get("strike") or 0,
+            trade.get("option_type", ""),
+            trade.get("contracts_closed") or 0,
+            trade.get("entry_date") or None,
+            trade.get("exit_date") or None,
+            trade.get("avg_entry_premium") or 0,
+            trade.get("exit_premium") or 0,
+            trade.get("cost_basis_sold") or 0,
+            trade.get("proceeds") or 0,
+            trade.get("fees") or 0,
+            trade.get("realized_pnl"),
+            trade.get("realized_pnl_pct"),
+            trade.get("contracts_remaining_after"),
+            bool(trade.get("is_full_close", False)),
+            trade.get("close_type") or trade.get("sell_type") or None,
+            trade.get("final_option_status") or None,
+            trade.get("source") or "dashboard_manual",
+            trade.get("import_batch_id") or None,
+            trade.get("source_file") or None,
+            trade.get("notes") or trade.get("close_reason") or None,
+        ))
+        row  = cur.fetchone()
+        desc = cur.description
+        conn.commit()
+        cur.close()
+        result = _ct_row_to_dict(row, desc) if row else {**trade, "id": trade_id}
+        print(
+            f"[OPT_STORE] saved option closed trade id={trade_id} "
+            f"occ_key={trade.get('occ_key')} is_full={trade.get('is_full_close')}"
+        )
+        return result
+    except Exception as e:
+        print(f"[OPT_STORE] save_option_closed_trade error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {**trade, "_error": str(e)}
     finally:
         _put_conn(conn)

@@ -89,7 +89,8 @@
       "shares": 1512.0,
       "avg_cost": 3.9,
       "asset_type": "stock",
-      "entry_date": "2026-05-15"
+      "entry_date": "2026-05-15",
+      "notes": "regression check"
     },
     {
       "ticker": "FLNC",
@@ -113,6 +114,6 @@
       "entry_date": "2026-04-07"
     }
   ],
-  "_saved_at": "2026-05-18T18:12:45.625953Z",
+  "_saved_at": "2026-05-19T04:16:07.173611Z",
   "_source": "portfolio_store"
 }

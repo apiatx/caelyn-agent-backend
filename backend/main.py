@@ -8346,6 +8346,403 @@ async def portfolio_option_position_detail(
 
 
 # ============================================================
+# Options Position — Edit (PATCH) and Sell/Close (POST)
+# ============================================================
+
+@app.patch("/api/portfolio/options-positions/{occ_key}")
+@limiter.limit("60/minute")
+async def patch_option_position(
+    request: Request,
+    occ_key: str,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Edit editable fields on an open option position.
+
+    Updatable fields: contracts_open, avg_premium, cost_basis, entry_date,
+    expiration_date, strike, option_type, notes.
+
+    If contracts_open or avg_premium is changed but cost_basis is not
+    explicitly supplied, cost_basis is recomputed as
+    contracts_open × avg_premium × 100 (average-cost accounting).
+
+    Returns 404 if the occ_key is not found.
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        body = await request.json()
+    except Exception as _je:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    from data.option_trades_store import (
+        load_option_position_by_occ_key as _load_one,
+        update_option_position          as _update_pos,
+    )
+    from datetime import date as _dc
+
+    pos = _load_one(occ_key)
+    if pos is None:
+        raise HTTPException(status_code=404, detail=f"Option position {occ_key!r} not found")
+
+    updates: dict = {}
+
+    if "contracts_open" in body:
+        try:
+            _c = float(body["contracts_open"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="contracts_open must be a number")
+        if _c < 0:
+            raise HTTPException(status_code=400, detail="contracts_open must be >= 0")
+        updates["contracts_open"] = _c
+
+    if "avg_premium" in body:
+        try:
+            _ap = float(body["avg_premium"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="avg_premium must be a number")
+        if _ap < 0:
+            raise HTTPException(status_code=400, detail="avg_premium must be >= 0")
+        updates["avg_premium"] = _ap
+
+    # cost_basis: explicit override wins; otherwise recompute when contracts or premium changes
+    if "cost_basis" in body:
+        try:
+            updates["cost_basis"] = float(body["cost_basis"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="cost_basis must be a number")
+    elif "contracts_open" in updates or "avg_premium" in updates:
+        _contr_eff = updates.get("contracts_open", float(pos.get("contracts_open") or 0))
+        _prem_eff  = updates.get("avg_premium",    float(pos.get("avg_premium")    or 0))
+        updates["cost_basis"] = round(_contr_eff * _prem_eff * 100, 2)
+
+    # entry_date maps to both first_entry_date and last_entry_date
+    if "entry_date" in body:
+        _ed = str(body["entry_date"] or "").split("T")[0]
+        try:
+            _dc.fromisoformat(_ed)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"entry_date must be YYYY-MM-DD, got {_ed!r}")
+        updates["first_entry_date"] = _ed
+        updates["last_entry_date"]  = _ed
+
+    if "expiration_date" in body:
+        _xp = str(body["expiration_date"] or "").split("T")[0]
+        try:
+            _dc.fromisoformat(_xp)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"expiration_date must be YYYY-MM-DD, got {_xp!r}")
+        updates["expiration_date"] = _xp
+
+    if "strike" in body:
+        try:
+            updates["strike"] = float(body["strike"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="strike must be a number")
+
+    if "option_type" in body:
+        _ot = str(body["option_type"] or "").upper()
+        if _ot not in ("CALL", "PUT"):
+            raise HTTPException(status_code=400, detail="option_type must be CALL or PUT")
+        updates["option_type"] = _ot
+
+    if "notes" in body:
+        updates["notes"] = body["notes"]
+
+    if not updates:
+        return {"success": True, "occ_key": occ_key, "message": "no_changes", "position": pos}
+
+    updated = _update_pos(occ_key, updates)
+    if updated is None:
+        raise HTTPException(status_code=500, detail="Failed to update option position — row not found after write")
+
+    # Invalidate per-ticker options signal cache so next popup fetch is fresh
+    try:
+        from data.cache import cache as _dc2
+        _dc2.delete(f"portfolio_opts:{(pos.get('underlying') or '').upper()}")
+    except Exception:
+        pass
+
+    print(
+        f"[PATCH_OPTION_POS] occ_key={occ_key}  fields={list(updates.keys())}  "
+        f"contracts_open={updated.get('contracts_open')}  "
+        f"avg_premium={updated.get('avg_premium')}  cost_basis={updated.get('cost_basis')}"
+    )
+    return {
+        "success":       True,
+        "occ_key":       occ_key,
+        "updated_fields": list(updates.keys()),
+        "position":      updated,
+    }
+
+
+@app.post("/api/portfolio/options-positions/{occ_key}/sell")
+@limiter.limit("30/minute")
+async def sell_option_position(
+    request: Request,
+    occ_key: str,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Partial or full sell of an open option position (average-cost accounting).
+
+    sell_type: "contracts" | "dollars" | "percent" | "full"
+      contracts -> contracts_closed = body["contracts_closed"]
+      dollars   -> contracts_closed = dollar_amount / (exit_premium × 100)
+      percent   -> contracts_closed = contracts_open × percent_closed / 100
+      full      -> contracts_closed = contracts_open
+
+    Required: exit_premium >= 0, sell_type
+    Optional: contracts_closed / dollar_amount / percent_closed (per sell_type),
+              exit_date (default today), fees (default 0), close_reason
+
+    Contract multiplier: 100 (standard US equity options).
+    Accounting: average-cost — avg_premium unchanged on the remaining position.
+
+    Returns 404 if occ_key not found.
+    Returns 400 for invalid amounts or over-close attempts.
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+    try:
+        body = await request.json()
+    except Exception as _je:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {_je}")
+
+    from data.option_trades_store import (
+        load_option_position_by_occ_key as _load_one,
+        update_option_position          as _update_pos,
+        delete_option_position          as _del_pos,
+        save_option_closed_trade        as _save_ct,
+        load_option_positions           as _load_all_pos,
+    )
+    from datetime import date as _dc_cls
+
+    _MULT    = 100
+    _EPSILON = 0.001   # CONTRACTS_EPSILON from option_ledger
+
+    # ── Load and validate position ────────────────────────────────────────────
+    pos = _load_one(occ_key)
+    if pos is None:
+        raise HTTPException(status_code=404, detail=f"Option position {occ_key!r} not found")
+
+    _OPEN_ST = frozenset({"open", "partially_closed_open", "short_option_tracked_basic"})
+    if (pos.get("final_status") or "open") not in _OPEN_ST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Position {occ_key!r} is already fully closed (status={pos.get('final_status')})",
+        )
+
+    contracts_before = float(pos.get("contracts_open") or 0)
+    avg_premium      = float(pos.get("avg_premium")    or 0)
+    if contracts_before <= 0:
+        raise HTTPException(status_code=400, detail=f"Position {occ_key!r} has 0 contracts_open")
+
+    # ── sell_type ─────────────────────────────────────────────────────────────
+    sell_type = (body.get("sell_type") or "").lower().strip()
+    if sell_type not in ("contracts", "dollars", "percent", "full"):
+        raise HTTPException(
+            status_code=400,
+            detail="sell_type must be one of: contracts, dollars, percent, full",
+        )
+
+    # ── exit_premium ──────────────────────────────────────────────────────────
+    ep_raw = body.get("exit_premium")
+    if ep_raw is None:
+        raise HTTPException(status_code=400, detail="exit_premium is required")
+    try:
+        exit_premium = float(ep_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="exit_premium must be a number")
+    if exit_premium < 0:
+        raise HTTPException(status_code=400, detail="exit_premium must be >= 0")
+
+    # ── exit_date ─────────────────────────────────────────────────────────────
+    exit_date = str(body.get("exit_date") or _dc_cls.today().isoformat()).split("T")[0]
+    try:
+        _dc_cls.fromisoformat(exit_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"exit_date must be YYYY-MM-DD, got {exit_date!r}")
+
+    fees         = max(0.0, float(body.get("fees") or 0))
+    close_reason = body.get("close_reason") or body.get("notes") or None
+
+    # ── Resolve contracts_closed ──────────────────────────────────────────────
+    if sell_type == "full":
+        contracts_closed = contracts_before
+
+    elif sell_type == "contracts":
+        cc_raw = body.get("contracts_closed")
+        if cc_raw is None:
+            raise HTTPException(status_code=400, detail="contracts_closed is required for sell_type='contracts'")
+        try:
+            contracts_closed = float(cc_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="contracts_closed must be a number")
+        if contracts_closed <= 0:
+            raise HTTPException(status_code=400, detail="contracts_closed must be > 0")
+        if contracts_closed > contracts_before + _EPSILON:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot close {contracts_closed} contracts — only {contracts_before} open",
+            )
+        contracts_closed = min(contracts_closed, contracts_before)
+
+    elif sell_type == "dollars":
+        da_raw = body.get("dollar_amount")
+        if da_raw is None:
+            raise HTTPException(status_code=400, detail="dollar_amount is required for sell_type='dollars'")
+        try:
+            dollar_amount = float(da_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="dollar_amount must be a number")
+        if dollar_amount <= 0:
+            raise HTTPException(status_code=400, detail="dollar_amount must be > 0")
+        if exit_premium <= 0:
+            raise HTTPException(status_code=400, detail="exit_premium must be > 0 for sell_type='dollars'")
+        contracts_closed = min(round(dollar_amount / (exit_premium * _MULT), 8), contracts_before)
+
+    elif sell_type == "percent":
+        pc_raw = body.get("percent_closed")
+        if pc_raw is None:
+            raise HTTPException(status_code=400, detail="percent_closed is required for sell_type='percent'")
+        try:
+            percent_closed = float(pc_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="percent_closed must be a number")
+        if percent_closed <= 0 or percent_closed > 100:
+            raise HTTPException(status_code=400, detail="percent_closed must be between 0 and 100")
+        contracts_closed = min(round(contracts_before * percent_closed / 100.0, 8), contracts_before)
+
+    if contracts_closed <= 0:
+        raise HTTPException(status_code=400, detail="Resolved contracts_closed must be > 0")
+
+    # ── Average-cost P&L math ─────────────────────────────────────────────────
+    proceeds          = round(contracts_closed * exit_premium * _MULT - fees, 2)
+    cost_basis_closed = round(avg_premium * contracts_closed * _MULT, 2)
+    realized_pnl      = round(proceeds - cost_basis_closed, 2)
+    realized_pnl_pct  = (
+        round(realized_pnl / cost_basis_closed * 100, 4) if cost_basis_closed else None
+    )
+
+    contracts_remaining = round(contracts_before - contracts_closed, 8)
+    is_full_close       = contracts_remaining <= _EPSILON
+    if is_full_close:
+        contracts_remaining = 0.0
+
+    final_opt_status = "fully_closed" if is_full_close else "partially_closed_open"
+
+    # ── Closed trade record ───────────────────────────────────────────────────
+    _entry_date  = pos.get("first_entry_date") or pos.get("last_entry_date") or None
+    _display_sym = pos.get("display_symbol") or occ_key
+
+    trade_payload = {
+        "occ_key":                   occ_key,
+        "underlying":                pos.get("underlying", ""),
+        "display_symbol":            _display_sym,
+        "expiration_date":           pos.get("expiration_date"),
+        "strike":                    pos.get("strike"),
+        "option_type":               pos.get("option_type", ""),
+        "contracts_closed":          round(contracts_closed, 8),
+        "entry_date":                _entry_date,
+        "exit_date":                 exit_date,
+        "avg_entry_premium":         avg_premium,
+        "exit_premium":              exit_premium,
+        "cost_basis_sold":           cost_basis_closed,
+        "proceeds":                  proceeds,
+        "fees":                      fees,
+        "realized_pnl":              realized_pnl,
+        "realized_pnl_pct":          realized_pnl_pct,
+        "contracts_remaining_after": contracts_remaining,
+        "is_full_close":             is_full_close,
+        "close_type":                sell_type,
+        "final_option_status":       final_opt_status,
+        "source":                    "dashboard_manual",
+        "notes":                     close_reason,
+        "sell_type":                 sell_type,
+        "cost_method":               "average_cost",
+    }
+
+    closed_trade = _save_ct(trade_payload)
+    if closed_trade.get("_error"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save closed trade: {closed_trade['_error']}",
+        )
+
+    # ── Update the open position (mark fully_closed or update partial) ───────
+    # We always UPDATE (never delete) so fully-closed positions remain visible
+    # in option_fully_closed_positions inside GET /api/portfolio/holdings.
+    updated_pos: dict | None = None
+    if is_full_close:
+        _full_close_updates = {
+            "contracts_open":  0.0,
+            "cost_basis":      0.0,
+            "contracts_sold":  round(float(pos.get("contracts_sold") or 0) + contracts_closed, 8),
+            "realized_pnl":    round(float(pos.get("realized_pnl") or 0) + realized_pnl, 2),
+            "last_exit_date":  exit_date,
+            "final_status":    "fully_closed",
+        }
+        _update_pos(occ_key, _full_close_updates)
+        # updated_pos stays None — position is closed
+    else:
+        _remaining_cb   = round(avg_premium * contracts_remaining * _MULT, 2)
+        _pos_updates    = {
+            "contracts_open":  contracts_remaining,
+            "cost_basis":      _remaining_cb,
+            "contracts_sold":  round(float(pos.get("contracts_sold") or 0) + contracts_closed, 8),
+            "realized_pnl":    round(float(pos.get("realized_pnl") or 0) + realized_pnl, 2),
+            "last_exit_date":  exit_date,
+            "final_status":    "partially_closed_open",
+        }
+        updated_pos = _update_pos(occ_key, _pos_updates)
+
+    # ── Invalidate per-ticker options signal cache ────────────────────────────
+    try:
+        from data.cache import cache as _dcache2
+        _dcache2.delete(f"portfolio_opts:{(pos.get('underlying') or '').upper()}")
+    except Exception:
+        pass
+
+    # ── Live portfolio summary from refreshed positions ───────────────────────
+    _OPEN_ST_S    = frozenset({"open", "partially_closed_open", "short_option_tracked_basic"})
+    _remaining    = _load_all_pos()
+    _still_open   = [p for p in _remaining if (p.get("final_status") or "open") in _OPEN_ST_S]
+    _psum_cost    = round(sum(float(p.get("cost_basis") or 0)      for p in _still_open), 2)
+    _psum_contr   = round(sum(float(p.get("contracts_open") or 0)  for p in _still_open), 4)
+
+    print(
+        f"[SELL_OPTION_POS] occ_key={occ_key}  sell_type={sell_type}  "
+        f"contracts_closed={contracts_closed:.4f}  remaining={contracts_remaining:.4f}  "
+        f"exit_premium={exit_premium}  proceeds={proceeds}  realized_pnl={realized_pnl}  "
+        f"is_full_close={is_full_close}  trade_id={closed_trade.get('id')}"
+    )
+
+    return {
+        "success":              True,
+        "occ_key":              occ_key,
+        "underlying":           pos.get("underlying", ""),
+        "sell_type":            sell_type,
+        "contracts_before":     contracts_before,
+        "contracts_closed":     round(contracts_closed, 8),
+        "contracts_remaining":  contracts_remaining,
+        "exit_premium":         exit_premium,
+        "proceeds":             proceeds,
+        "cost_basis_closed":    cost_basis_closed,
+        "realized_pnl":         realized_pnl,
+        "realized_pnl_pct":     realized_pnl_pct,
+        "fees":                 fees,
+        "is_full_close":        is_full_close,
+        "final_option_status":  final_opt_status,
+        "closed_trade":         closed_trade,
+        "open_option_position": updated_pos,
+        "portfolio_summary": {
+            "open_option_positions_count": len(_still_open),
+            "total_contracts_open":        _psum_contr,
+            "total_cost_basis_open":       _psum_cost,
+        },
+    }
+
+
+# ============================================================
 # Portfolio Review (AI-powered Buy/Hold/Sell analysis)
 # ============================================================
 

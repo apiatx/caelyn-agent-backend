@@ -1,0 +1,261 @@
+BACKEND REPLIT AGENT — Add edit / partial close / full close support for open option positions
+
+The Portfolio Dashboard now correctly imports and displays open options positions. Next, users need to manage those open options manually from the Dashboard, the same way they can manage core stock positions.
+
+Goal:
+Users must be able to:
+1. Edit an open options position.
+2. Partially close an options position.
+3. Fully close an options position.
+4. Have closed/partially closed option activity show under the Options toggle in the Trade Journal.
+5. Preserve accurate realized P&L, remaining contracts, cost basis, and open option valuation.
+
+Do not rebuild the options import engine.
+Do not break stock/core position close/edit logic.
+Do not hardcode option symbols.
+Do not call frontend-only accounting logic.
+Do not mix options into stock positions.
+Do not change the global Options Flow page.
+
+Current option data already works:
+- option_open_positions
+- option_partially_closed_positions
+- option_fully_closed_positions
+- option_closed_trades
+- live Tradier mark valuation
+- portfolio_summary option totals
+
+Audit first:
+1. Inspect current stock/core edit/partial close/full close endpoints.
+2. Inspect current option store:
+   - portfolio_option_positions
+   - portfolio_option_closed_trades
+3. Inspect option ledger fields:
+   - occ_key
+   - underlying
+   - expiration_date
+   - strike
+   - option_type
+   - contracts_open
+   - avg_premium
+   - cost_basis
+   - entry_date
+4. Inspect how options are currently persisted after CSV import.
+5. Reuse existing cache invalidation patterns from stock position close/edit.
+
+Required backend endpoints:
+
+A. Edit open option position
+
+Add:
+
+PATCH /api/portfolio/options-positions/{occ_key}
+
+Payload fields should allow:
+{
+  "contracts_open": optional number,
+  "avg_premium": optional number,
+  "cost_basis": optional number,
+  "entry_date": optional "YYYY-MM-DD",
+  "expiration_date": optional "YYYY-MM-DD",
+  "strike": optional number,
+  "option_type": optional "CALL" | "PUT",
+  "notes": optional string
+}
+
+Behavior:
+- Load open option position by occ_key.
+- Validate it exists.
+- Update allowed fields.
+- If contracts_open and avg_premium are supplied, recompute cost_basis unless cost_basis is explicitly supplied.
+- Preserve underlying/occ_key consistency unless intentionally editable.
+- Invalidate holdings/options caches.
+- Return updated option position.
+
+B. Sell / close option position
+
+Add:
+
+POST /api/portfolio/options-positions/{occ_key}/sell
+
+Payload:
+{
+  "sell_type": "contracts" | "dollars" | "percent" | "full",
+  "contracts_closed": optional number,
+  "dollar_amount": optional number,
+  "percent_closed": optional number,
+  "exit_premium": number,
+  "exit_date": "YYYY-MM-DD",
+  "fees": optional number,
+  "close_reason": optional string
+}
+
+Behavior:
+- Load open option position by occ_key.
+- Validate:
+  - position exists
+  - exit_premium >= 0
+  - exit_date valid
+  - close amount > 0
+  - contracts_closed <= contracts_open for sell_type="contracts"
+- Use contract_multiplier = 100.
+- Average-cost accounting.
+
+Contract close math:
+- contracts_before = contracts_open
+- contracts_closed based on sell_type:
+  - contracts: exact contracts_closed
+  - dollars: dollar_amount / (exit_premium * 100)
+  - percent: contracts_open * percent_closed / 100
+  - full: contracts_open
+- proceeds = contracts_closed * exit_premium * 100 - fees
+- cost_basis_closed = avg_premium * contracts_closed * 100
+- realized_pnl = proceeds - cost_basis_closed
+- realized_pnl_pct = realized_pnl / cost_basis_closed * 100
+- contracts_remaining = contracts_before - contracts_closed
+- remaining_cost_basis = avg_premium * contracts_remaining * 100
+
+If contracts_remaining > tolerance:
+- update open option position:
+  - contracts_open = contracts_remaining
+  - cost_basis = remaining_cost_basis
+  - avg_premium remains same under average-cost accounting
+  - final_option_status = "partially_closed_open"
+- create option closed trade with:
+  - contracts_remaining_after = contracts_remaining
+  - is_full_close = false
+  - final_option_status = "partially_closed_open"
+
+If contracts_remaining <= tolerance:
+- remove or mark open option position as closed/inactive
+- create option closed trade with:
+  - contracts_remaining_after = 0
+  - is_full_close = true
+  - final_option_status = "fully_closed"
+
+Closed option trade record fields:
+- occ_key
+- underlying
+- display_symbol
+- expiration_date
+- strike
+- option_type
+- contracts_closed
+- entry_date
+- exit_date
+- avg_entry_premium
+- exit_premium
+- cost_basis_closed
+- proceeds
+- fees
+- realized_pnl
+- realized_pnl_pct
+- contracts_remaining_after
+- is_full_close
+- final_option_status
+- sell_type
+- cost_method = "average_cost"
+- source = "manual" or "dashboard_manual"
+- close_reason
+
+Response:
+{
+  "success": true,
+  "occ_key": "...",
+  "underlying": "...",
+  "sell_type": "...",
+  "contracts_before": number,
+  "contracts_closed": number,
+  "contracts_remaining": number,
+  "exit_premium": number,
+  "proceeds": number,
+  "cost_basis_closed": number,
+  "realized_pnl": number,
+  "realized_pnl_pct": number,
+  "closed_trade": {...},
+  "open_option_position": {...} | null,
+  "portfolio_summary": {...}
+}
+
+C. Full close compatibility
+
+If there is already an option close endpoint, either reuse it or route it through the new sell endpoint with sell_type="full".
+
+Do not make frontend call two separate endpoints to close:
+- create closed trade
+- update active position
+
+Backend should own the transaction.
+
+D. GET endpoints after close/edit
+
+After edit/sell:
+GET /api/portfolio/holdings must reflect:
+- option_open_positions updated
+- option_partially_closed_positions updated
+- option_fully_closed_positions updated
+- option_closed_trades updated
+- portfolio_summary updated
+
+Trade Journal Options toggle:
+- Partial option closes should appear in option_partially_closed_positions and option_closed_trades.
+- Full option closes should appear in option_fully_closed_positions and option_closed_trades.
+- Open options should remain only in option_open_positions.
+
+E. Cache invalidation
+
+Invalidate:
+- option positions cache
+- option closed trades cache
+- portfolio holdings cache
+- portfolio_summary cache if separate
+- any /api/caelyn-terminal portfolio cache if affected
+
+Validation:
+
+Create a safe TEST option position or use a test fixture:
+TEST 01/17/2027 $10 CALL
+10 contracts @ $2.00 avg premium
+cost_basis = $2,000
+
+Test A — Edit:
+- PATCH contracts_open or avg_premium.
+- Confirm GET /api/portfolio/holdings reflects update.
+- Confirm portfolio_summary updates.
+
+Test B — Partial close by contracts:
+- Sell 4 contracts @ $3.00.
+Expected:
+- proceeds = 4 * 3.00 * 100 = $1,200 minus fees
+- cost_basis_closed = 4 * 2.00 * 100 = $800
+- realized_pnl = $400 minus fees
+- contracts_remaining = 6
+- option remains in option_open_positions
+- option appears in option_partially_closed_positions
+- option_closed_trades has one record
+- final_option_status = partially_closed_open
+
+Test C — Full close:
+- Sell remaining 6 contracts @ $4.00.
+Expected:
+- option removed from option_open_positions
+- appears in option_fully_closed_positions
+- closed trade created
+- option_closed_trades has both events
+
+Test D — Invalid cases:
+- close more contracts than owned → 400
+- missing exit_premium → 400
+- nonexistent occ_key → 404
+
+Regression:
+- Stock/core edit and sell endpoints still work.
+- CSV-imported options still load.
+- Portfolio total includes updated option values.
+- Global Options Flow page untouched.
+
+Return:
+- files changed
+- endpoints added
+- exact request/response examples
+- validation results
