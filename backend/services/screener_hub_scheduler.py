@@ -12,7 +12,9 @@ Schedule (ET, all >=30 min apart):
     Sun 01:45 ET   historical returns warm (2w/4w/10w for thematic universe)
     Sun 02:15 ET   chain reaction dynamic weekly output generation
     Sun 03:15 ET   bottlenecks fundamentals warm (uses dynamic CR output if available)
-    Sun-Fri 11:00 ET   social X/Grok scan trigger (= 10:00 AM Central; skips Saturday)
+    Sun-Fri 11:10 ET   social universe rebuild (= 10:10 AM Central; skips Saturday)
+                       Intentionally 10 min after _x_consensus_loop fires at 10:00 AM CT
+                       so the rebuild always reads the freshly written Grok/XAI cache.
     Sun-Fri 11:45 ET   social fundamentals warm
     Fri 02:00 ET   watchlist+portfolio fundamentals warm
 """
@@ -226,7 +228,7 @@ _SLOTS: list[tuple[Callable[[int], bool], int, int, str, Callable[[], Awaitable[
     (_is_sunday,  2, 15, "chain_reaction_dynamic",    _run_chain_reaction_dynamic),
     (_is_sunday,  3, 15, "bottlenecks_warm",          _run_bottlenecks_warm),
     (_is_sunday,  3, 45, "screener_snapshot_rebuild", _run_screener_snapshot_rebuild),
-    (_not_saturday, 11,  0, "social_scan",             _run_social_scan),
+    (_not_saturday, 11, 10, "social_scan",             _run_social_scan),
     (_not_saturday, 11, 45, "social_warm",             _run_social_warm),
     (_is_friday,  2,  0, "watchlist_portfolio_warm",  _run_watchlist_portfolio_warm),
 ]

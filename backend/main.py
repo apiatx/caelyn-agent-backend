@@ -159,11 +159,16 @@ class JWTAuthMiddleware:
 
 
 async def _x_consensus_loop():
-    """Background loop: refresh X Select Trader Consensus once daily at 12:00 noon Chicago.
+    """Background loop: refresh X Select Trader Consensus once daily at 10:00 AM Chicago.
 
-    Sleeps until the next 12:00 noon America/Chicago, fires the refresh,
-    then sleeps 24 hours until the following noon.  Uses the same lock as
-    the on-demand path so manual and scheduled refreshes never race.
+    Sleeps until the next 10:00 AM America/Chicago, fires the Grok/XAI refresh,
+    then sleeps until the following 10:00 AM.  Uses the same lock as the
+    on-demand path so manual and scheduled refreshes never race.
+
+    The screener-hub scheduler's social_scan slot is intentionally offset to
+    10:10 AM CT (11:10 AM ET) so it always rebuilds the social universe from
+    the freshly written cache, not yesterday's snapshot.
+    Saturday is skipped on both this loop and the scheduler.
     """
     import asyncio as _asyncio
     from datetime import datetime, timedelta, timezone as _tz
@@ -182,30 +187,30 @@ async def _x_consensus_loop():
     from services.x_consensus_cache import _run_refresh
 
     _CT = ZoneInfo("America/Chicago")
-    _NOON = 12  # 12:00 Chicago
+    _TARGET_HOUR = 10  # 10:00 AM Chicago (= 11:00 AM ET)
 
-    print("[X_CONSENSUS_LOOP] Started — scheduled once daily at 12:00 noon America/Chicago")
+    print("[X_CONSENSUS_LOOP] Started — scheduled once daily at 10:00 AM America/Chicago")
 
     while True:
         now_ct = datetime.now(_CT)
 
-        # Next noon: today if before noon, otherwise tomorrow
-        if now_ct.hour < _NOON:
+        # Next 10:00 AM: today if before 10:00, otherwise tomorrow
+        if now_ct.hour < _TARGET_HOUR:
             target_date = now_ct.date()
         else:
             target_date = now_ct.date() + timedelta(days=1)
 
-        next_noon_ct = datetime(
+        next_target_ct = datetime(
             target_date.year, target_date.month, target_date.day,
-            _NOON, 0, 0,
+            _TARGET_HOUR, 0, 0,
             tzinfo=_CT,
         )
         sleep_secs = max(
-            (next_noon_ct.astimezone(_tz.utc) - datetime.now(_tz.utc)).total_seconds(),
+            (next_target_ct.astimezone(_tz.utc) - datetime.now(_tz.utc)).total_seconds(),
             0,
         )
         print(
-            f"[X_CONSENSUS_LOOP] Next refresh: {next_noon_ct.isoformat()} "
+            f"[X_CONSENSUS_LOOP] Next refresh: {next_target_ct.isoformat()} "
             f"(sleeping {sleep_secs / 3600:.1f}h)"
         )
         await _asyncio.sleep(sleep_secs)
@@ -214,13 +219,13 @@ async def _x_consensus_loop():
         if datetime.now(_CT).weekday() == 5:
             print("[X_CONSENSUS_LOOP] Saturday — skipping refresh (no Grok call)")
         else:
-            print("[X_CONSENSUS_LOOP] 12:00 noon reached — running daily refresh")
+            print("[X_CONSENSUS_LOOP] 10:00 AM CT reached — running daily Grok/XAI refresh")
             try:
                 await _run_refresh(data_service)
             except Exception as exc:
                 print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
 
-        # Small buffer before recalculating next noon (avoids same-minute re-trigger)
+        # Small buffer before recalculating next target (avoids same-minute re-trigger)
         await _asyncio.sleep(90)
 
 
@@ -360,8 +365,8 @@ async def lifespan(app):
     #   Sun 00:30 ET  thematic universe rebuild
     #   Sun 01:15 ET  thematic fundamentals warm
     #   Sun 03:15 ET  bottlenecks fundamentals warm
-    #   Mon-Fri 00:00 ET  social Grok/X scan
-    #   Mon-Fri 00:45 ET  social fundamentals warm
+    #   Sun-Fri 11:10 ET  social universe rebuild (10 min after Grok fires at 10:00 AM CT)
+    #   Sun-Fri 11:45 ET  social fundamentals warm
     #   Fri 02:00 ET  watchlist+portfolio fundamentals warm
     try:
         from services.screener_hub_scheduler import scheduler_loop as _screener_hub_loop
