@@ -1,0 +1,186 @@
+BACKEND REPLIT AGENT — Add option-position detail endpoint for Portfolio Dashboard option popup
+
+We need a backend endpoint for the Portfolio Dashboard Open Options section popup.
+
+Current frontend already shows Open Options positions in the Dashboard:
+- BWEN
+- FCEL
+- GSIT
+- SKYT
+- VIVO
+
+User wants each asset/underlying in the Options section to be clickable and open a TradingView-style popup, similar to the Core/Open Positions section popup.
+
+The popup should show:
+1. Underlying TradingView chart data/symbol metadata
+2. Full open option position details
+3. Existing portfolio-scoped options signal data
+4. Existing portfolio-scoped options risk score/custom risk logic
+5. Tradier-derived mark/quote fields already being used for open options valuation
+
+Important:
+Use existing backend logic.
+Do not rebuild options scoring.
+Do not duplicate Tradier calls if existing portfolio terminal/portfolio options service already has the data cached.
+Do not call market-wide Options Flow logic for all tickers.
+Do not affect the global Options Flow page.
+Do not hardcode BWEN/FCEL/GSIT/SKYT/VIVO.
+Only return popup data for underlyings/contracts currently present in the user’s open option positions.
+
+Audit first:
+1. Locate backend logic currently used by Portfolio Terminal Options section:
+   - portfolio_options
+   - score
+   - p_c / put_call
+   - iv
+   - em / expected_move
+   - vol / volume
+   - signal
+   - risk_score
+   - risk_level
+   - risk_reasons
+   - risk_confidence
+2. Locate backend logic currently used by Portfolio Dashboard Open Options section:
+   - option_open_positions
+   - mark_price
+   - mark_bid
+   - mark_ask
+   - mark_last
+   - market_value
+   - unrealized_pnl
+   - unrealized_pnl_pct
+   - tradier_symbol
+3. Locate any existing popup/chart metadata endpoint used by Core/Open Positions.
+4. Reuse these existing services/fields.
+
+Goal:
+Add a focused backend endpoint for option-position popup detail.
+
+Preferred endpoint:
+GET /api/portfolio/options-position-detail/{underlying}
+
+Alternative:
+GET /api/portfolio/options-position-detail?underlying=BWEN
+
+Required behavior:
+1. Load current user’s open option positions from the existing option positions store.
+2. Filter to matching underlying.
+3. If no open option position exists for that underlying, return 404 or structured empty result.
+4. Pull/enrich the same portfolio-scoped options signal/risk data used by Portfolio Terminal, but only for this underlying.
+5. Return contract-level option position details and underlying-level signal/risk data.
+6. Use existing Tradier option mark quote cache where possible.
+7. Do not scan the full market or all portfolio holdings if not necessary.
+
+Required response shape:
+
+{
+  "underlying": "BWEN",
+  "tradingview_symbol": "BWEN",
+  "chart_symbol": "BWEN",
+  "company_name": "Broadwind, Inc.",
+  "asset_type": "stock",
+  "open_option_positions": [
+    {
+      "underlying": "BWEN",
+      "option_symbol": "BWEN 07/17/2026 2.50 C",
+      "display_symbol": "BWEN 07/17/2026 $2.50 CALL",
+      "tradier_symbol": "BWEN260717C00002500",
+      "expiration_date": "2026-07-17",
+      "strike": 2.50,
+      "option_type": "CALL",
+      "contracts_open": 18,
+      "avg_premium": 1.6566,
+      "cost_basis": 2981.91,
+      "entry_date": "2026-05-15",
+      "mark_price": 1.50,
+      "mark_bid": number|null,
+      "mark_ask": number|null,
+      "mark_last": number|null,
+      "mark_source": "tradier",
+      "market_value": 2700,
+      "unrealized_pnl": -281.91,
+      "unrealized_pnl_pct": -9.5,
+      "quote_unavailable_reason": null
+    }
+  ],
+  "portfolio_options_signal": {
+    "ticker": "BWEN",
+    "score": number|null,
+    "p_c": number|null,
+    "put_call": number|null,
+    "iv": number|null,
+    "em": number|null,
+    "expected_move": number|null,
+    "vol": number|null,
+    "volume": number|null,
+    "signal": string|null,
+    "source": "portfolio_scoped_options_screener"
+  },
+  "portfolio_options_risk": {
+    "risk_score": number|null,
+    "risk_level": "LOW" | "WATCH" | "ELEVATED" | "HIGH" | "UNKNOWN",
+    "risk_signal": string|null,
+    "risk_reasons": string[],
+    "risk_confidence": "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN",
+    "risk_source": "portfolio_options_risk_v1"
+  },
+  "summary": {
+    "contracts_total": number,
+    "cost_basis_total": number,
+    "market_value_total": number|null,
+    "unrealized_pnl_total": number|null,
+    "unrealized_pnl_pct": number|null,
+    "valuation_available": true/false
+  },
+  "cache": {
+    "option_quote_cache_hit": true/false,
+    "signal_cache_hit": true/false,
+    "risk_cache_hit": true/false
+  }
+}
+
+If the underlying has multiple open option contracts, return all of them.
+
+Important:
+The risk/signal should be underlying-level portfolio options signal, not contract-only unless the existing service has contract-level scoring.
+
+If no signal/risk data is available:
+- return nulls plus unavailable reason
+- do not fail the popup if the open option position exists
+
+Validation:
+Use current open options from imported CSV.
+
+Validate:
+1. GET detail for BWEN returns:
+   - open option position
+   - Tradier mark fields
+   - market value / unrealized P&L
+   - portfolio_options_signal if available
+   - portfolio_options_risk if available
+2. Same for FCEL, GSIT, SKYT, VIVO.
+3. A ticker without open options returns 404 or empty structured result.
+4. Endpoint does not call global Options Flow page logic.
+5. Endpoint does not scan non-open-option symbols.
+6. No ticker-specific hardcoding.
+7. Existing GET /api/portfolio/holdings still works.
+8. Portfolio Terminal Options section still works.
+
+Add debug log:
+[portfolio-option-popup-detail] {
+  underlying,
+  open_option_contracts,
+  signal_found,
+  risk_found,
+  quote_found,
+  market_value_total,
+  source,
+  provider_calls,
+  cache_hit
+}
+
+Return:
+- files changed
+- endpoint path
+- fields returned
+- validation output for BWEN and at least one other open option underlying

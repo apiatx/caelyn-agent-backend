@@ -8038,6 +8038,314 @@ async def portfolio_options(
 
 
 # ============================================================
+# Portfolio Options Position Detail — per-underlying popup
+# ============================================================
+
+@app.get("/api/portfolio/options-position-detail/{underlying}")
+@limiter.limit("60/minute")
+async def portfolio_option_position_detail(
+    request: Request,
+    underlying: str,
+    api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
+):
+    """
+    Per-underlying option position detail for the Dashboard popup panel.
+
+    Loads the current user's open option positions for `underlying`, enriches
+    them with Tradier mark quotes (using existing per-symbol quote cache), and
+    attaches the portfolio-scoped options signal + pullback-risk data produced
+    by scan_portfolio_options.
+
+    Returns 404 if no open option positions exist for the underlying.
+    Returns nulls in signal/risk blocks if options data is unavailable —
+    the popup can still render contract-level position data.
+    """
+    import time as _t_opd
+    _t0_opd = _t_opd.perf_counter()
+
+    sym = underlying.strip().upper()
+    if not sym:
+        return JSONResponse(status_code=400, content={"error": "underlying required"})
+
+    # ── 1. Load open option positions; filter to this underlying ─────────────
+    from data.option_trades_store import load_option_positions as _load_opt_pos
+    _OPEN_ST = frozenset({"open", "partially_closed_open", "short_option_tracked_basic"})
+    _all_pos = _load_opt_pos()
+    _matching = [
+        p for p in _all_pos
+        if (p.get("underlying") or "").upper() == sym
+        and (p.get("final_status") or "open") in _OPEN_ST
+    ]
+    if not _matching:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No open option positions for {sym}", "underlying": sym},
+        )
+
+    # ── 2. OCC key → Tradier compact symbol ──────────────────────────────────
+    def _ok2ts(occ_key: str) -> str | None:
+        try:
+            parts = occ_key.split("_")
+            if len(parts) < 4:
+                return None
+            _u, _e, _s, _t = parts[0], parts[1], float(parts[2]), parts[3].upper()
+            from datetime import datetime as _dtz
+            _yymmdd = _dtz.strptime(_e, "%Y-%m-%d").strftime("%y%m%d")
+            _cp     = "C" if _t == "CALL" else "P"
+            return f"{_u}{_yymmdd}{_cp}{round(_s * 1000):08d}"
+        except Exception:
+            return None
+
+    _sym_map: dict[str, str] = {}   # occ_key → tradier compact sym
+    for _p in _matching:
+        _ok   = _p.get("occ_key", "")
+        _tsym = _ok2ts(_ok)
+        if _ok and _tsym:
+            _sym_map[_ok] = _tsym
+
+    # ── 3. Tradier option mark quotes (reuses existing 60-s quote cache) ─────
+    from data.cache import cache as _dcache
+    _tradier = data_service.tradier if data_service else None
+
+    _quote_map: dict[str, dict] = {}   # upper(tradier_sym) → quote dict
+    _opt_qcache_hit = True
+    if _sym_map and _tradier:
+        try:
+            _tradier_syms = list(_sym_map.values())
+            _raw_qs = await _tradier.get_quotes(_tradier_syms)
+            for _q in (_raw_qs or []):
+                _qs = (_q.get("symbol") or "").upper()
+                if _qs:
+                    _quote_map[_qs] = _q
+            _opt_qcache_hit = len(_quote_map) >= len(_tradier_syms)
+        except Exception as _qe:
+            print(f"[portfolio-option-popup-detail] option quote error: {_qe}")
+
+    # ── 4. Underlying equity quote → company_name, underlying_price ──────────
+    _company_name     = ""
+    _underlying_price: float | None = None
+    _eq_q = _dcache.get(f"tradier:quote:sym:{sym}")
+    if _eq_q:
+        _company_name     = _eq_q.get("description") or ""
+        _underlying_price = _eq_q.get("last")
+    elif _tradier:
+        try:
+            _eq_raw = await _tradier.get_quotes([sym])
+            _eq_q   = next(
+                (q for q in (_eq_raw or []) if (q.get("symbol") or "").upper() == sym), {}
+            )
+            _company_name     = _eq_q.get("description") or ""
+            _underlying_price = _eq_q.get("last")
+        except Exception as _eqe:
+            print(f"[portfolio-option-popup-detail] equity quote error: {_eqe}")
+
+    # ── 5. Build enriched contract list ──────────────────────────────────────
+    _MULT       = 100
+    _enriched:  list[dict] = []
+    _total_cost  = 0.0
+    _total_mv    = 0.0
+    _val_hit     = 0
+    _val_miss    = 0
+
+    for _p in _matching:
+        _ok      = _p.get("occ_key", "")
+        _tsym_u  = (_sym_map.get(_ok) or "").upper()
+        _q2      = _quote_map.get(_tsym_u) if _tsym_u else None
+        _contr   = float(_p.get("contracts_open") or 0)
+        _cb      = float(_p.get("cost_basis")     or 0)
+        _avgp    = float(_p.get("avg_premium")    or 0)
+        _total_cost += _cb
+
+        # Human-readable display symbol: "BWEN 07/17/2026 $2.50 CALL"
+        _exp  = _p.get("expiration_date", "")
+        _strk = float(_p.get("strike") or 0)
+        _otyp = (_p.get("option_type") or "CALL").upper()
+        try:
+            from datetime import datetime as _dtd
+            _exp_disp = _dtd.strptime(_exp, "%Y-%m-%d").strftime("%m/%d/%Y")
+        except Exception:
+            _exp_disp = _exp
+        _disp_sym = f"{sym} {_exp_disp} ${_strk:g} {_otyp}"
+
+        _mark = _bid = _ask = _last = None
+        _mark_src  = "unavailable"
+        _mktval = _upnl = _upnl_pct = None
+        _q_unavail = None
+
+        if _q2:
+            _bid  = _q2.get("bid")
+            _ask  = _q2.get("ask")
+            _last = _q2.get("last")
+            if _bid is not None and _ask is not None and (_bid + _ask) > 0:
+                _mark = round((_bid + _ask) / 2, 4)
+            elif _last is not None and _last > 0:
+                _mark = round(float(_last), 4)
+
+            if _mark is not None:
+                _mark_src  = "tradier"
+                _mktval    = round(_contr * _mark * _MULT, 2)
+                _upnl      = round(_mktval - _cb, 2)
+                _upnl_pct  = round(_upnl / _cb * 100, 4) if _cb else None
+                _total_mv += _mktval
+                _val_hit  += 1
+            else:
+                _mark_src = "tradier_no_mark"
+                _q_unavail = "no_active_market"
+                _val_miss += 1
+        else:
+            _q_unavail = "tradier_lookup_failed"
+            _val_miss += 1
+
+        _enriched.append({
+            "underlying":               sym,
+            "occ_key":                  _ok,
+            "option_symbol":            _p.get("display_symbol", ""),
+            "display_symbol":           _disp_sym,
+            "tradier_symbol":           _tsym_u or None,
+            "expiration_date":          _exp,
+            "strike":                   _strk,
+            "option_type":              _otyp,
+            "contracts_open":           _contr,
+            "avg_premium":              _avgp,
+            "cost_basis":               _cb,
+            "first_entry_date":         _p.get("first_entry_date"),
+            "last_entry_date":          _p.get("last_entry_date"),
+            "final_status":             _p.get("final_status", "open"),
+            "mark_price":               _mark,
+            "mark_bid":                 _bid,
+            "mark_ask":                 _ask,
+            "mark_last":                _last,
+            "mark_source":              _mark_src,
+            "market_value":             _mktval,
+            "unrealized_pnl":           _upnl,
+            "unrealized_pnl_pct":       _upnl_pct,
+            "quote_unavailable_reason": _q_unavail,
+        })
+
+    # ── 6. Portfolio-scoped options signal + risk (per-ticker cache) ──────────
+    # scan_portfolio_options checks portfolio_opts:{sym} cache (300s) first,
+    # then master screener cache, then live Tradier scan — in that order.
+    # _compute_pullback_risk is called inside scan_portfolio_options, so the
+    # returned row already contains risk_score / risk_level / risk_reasons.
+    _master_snap = _dcache.get(_OPTIONS_MASTER_CACHE_KEY) or _dcache.get(_OPTIONS_MASTER_LKG_KEY)
+    from data.portfolio_options_service import scan_portfolio_options as _scan_opt
+
+    _opt_scan = await _scan_opt(
+        symbols      = [sym],
+        tradier      = _tradier,
+        cache        = _dcache,
+        master_snap  = _master_snap,
+        holdings_sig = None,
+    )
+    _opt_row       = _opt_scan.get("by_symbol", {}).get(sym, {})
+    _sig_cache_hit = _opt_scan.get("cache_hit", False) or \
+                     _opt_scan.get("options_cache_status") == "all_cached"
+
+    if _opt_row.get("data_available"):
+        _signal_block = {
+            "ticker":             sym,
+            "score":              _opt_row.get("score"),
+            "p_c":                _opt_row.get("p_c"),
+            "put_call":           _opt_row.get("put_call"),
+            "iv":                 _opt_row.get("iv"),
+            "em":                 _opt_row.get("em"),
+            "expected_move":      _opt_row.get("expected_move"),
+            "vol":                _opt_row.get("vol"),
+            "volume":             _opt_row.get("volume"),
+            "signal":             _opt_row.get("signal"),
+            "source":             "portfolio_scoped_options_screener",
+        }
+        _risk_block = {
+            "risk_score":         _opt_row.get("risk_score"),
+            "risk_level":         _opt_row.get("risk_level", "UNKNOWN"),
+            "risk_signal":        _opt_row.get("risk_signal"),
+            "risk_reasons":       _opt_row.get("risk_reasons", []),
+            "risk_confidence":    _opt_row.get("risk_confidence", "LOW"),
+            "risk_source":        _opt_row.get("risk_source", "portfolio_options_risk_v1"),
+        }
+    else:
+        _unavail_reason = _opt_row.get("unavailable_reason", "options_data_unavailable")
+        _signal_block = {
+            "ticker":             sym,
+            "score":              None,
+            "p_c":                None,
+            "put_call":           None,
+            "iv":                 None,
+            "em":                 None,
+            "expected_move":      None,
+            "vol":                None,
+            "volume":             None,
+            "signal":             None,
+            "unavailable_reason": _unavail_reason,
+            "source":             "portfolio_scoped_options_screener",
+        }
+        _risk_block = {
+            "risk_score":         None,
+            "risk_level":         "UNKNOWN",
+            "risk_signal":        None,
+            "risk_reasons":       [_unavail_reason],
+            "risk_confidence":    "LOW",
+            "risk_source":        "portfolio_options_risk_v1",
+        }
+
+    # ── 7. Summary block ──────────────────────────────────────────────────────
+    _upnl_total = round(_total_mv - _total_cost, 2) if _val_hit else None
+    _upnl_pct_total = (
+        round(_upnl_total / _total_cost * 100, 4)
+        if (_upnl_total is not None and _total_cost)
+        else None
+    )
+    _summary = {
+        "contracts_total":      sum(float(p.get("contracts_open") or 0) for p in _matching),
+        "cost_basis_total":     round(_total_cost, 2),
+        "market_value_total":   round(_total_mv, 2) if _val_hit else None,
+        "unrealized_pnl_total": _upnl_total,
+        "unrealized_pnl_pct":   _upnl_pct_total,
+        "valuation_available":  _val_hit > 0,
+    }
+
+    _resp_ms = round((_t_opd.perf_counter() - _t0_opd) * 1000, 1)
+
+    print(
+        f"[portfolio-option-popup-detail] "
+        f"underlying={sym} "
+        f"open_option_contracts={len(_matching)} "
+        f"signal_found={_opt_row.get('data_available', False)} "
+        f"risk_found={_opt_row.get('risk_score') is not None} "
+        f"quote_found={_val_hit} "
+        f"market_value_total={round(_total_mv, 2)} "
+        f"source=portfolio_scoped_options_screener "
+        f"provider_calls={_opt_scan.get('provider_calls', 0)} "
+        f"cache_hit={_sig_cache_hit} "
+        f"resp_ms={_resp_ms}"
+    )
+
+    return {
+        "underlying":               sym,
+        "tradingview_symbol":       sym,
+        "chart_symbol":             sym,
+        "company_name":             _company_name,
+        "underlying_price":         _underlying_price,
+        "asset_type":               "stock",
+        "open_option_positions":    _enriched,
+        "portfolio_options_signal": _signal_block,
+        "portfolio_options_risk":   _risk_block,
+        "summary":                  _summary,
+        "cache": {
+            "option_quote_cache_hit": _opt_qcache_hit,
+            "signal_cache_hit":       _sig_cache_hit,
+            "risk_cache_hit":         _sig_cache_hit,
+        },
+        "_debug": {
+            "response_ms":          _resp_ms,
+            "provider_calls":       _opt_scan.get("provider_calls", 0),
+            "options_cache_status": _opt_scan.get("options_cache_status", "unknown"),
+        },
+    }
+
+
+# ============================================================
 # Portfolio Review (AI-powered Buy/Hold/Sell analysis)
 # ============================================================
 
