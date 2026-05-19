@@ -7087,6 +7087,217 @@ async def portfolio_source_audit(request: Request, api_key: str = Header(None, a
 
 
 # ============================================================
+# Portfolio Fundamentals (/api/portfolio/fundamentals)
+# ============================================================
+
+def _pf_row_from_cache(sym: str, neon_row: dict) -> dict:
+    """Reconstruct a fundamental row from a screener_fundamentals_cache Neon row.
+
+    Stored profile uses FMP-native camelCase keys; translate to snake_case so
+    _build_fundamental_row can consume it.  Income/balance/cashflow are not stored
+    in the cache so those statement fields (revenue, net_income, etc.) will be null —
+    data_quality will reflect partial coverage for cached rows.
+    """
+    from services.social_screener_service import _build_fundamental_row as _bfr
+    raw_profile = neon_row.get("profile") or {}
+    ratios      = neon_row.get("ratios")  or {}
+    metrics     = neon_row.get("metrics") or {}
+
+    profile_snake = {
+        "company_name": (
+            raw_profile.get("companyName")
+            or raw_profile.get("company_name")
+            or ""
+        ),
+        "market_cap": (
+            neon_row.get("market_cap")
+            or raw_profile.get("marketCap")
+            or raw_profile.get("market_cap")
+        ),
+    }
+
+    row = _bfr(sym, profile_snake, ratios, metrics, {}, {}, {})
+    row["sector"]        = neon_row.get("sector")   or raw_profile.get("sector")   or ""
+    row["industry"]      = neon_row.get("industry") or raw_profile.get("industry") or ""
+    row["_cache_source"] = "neon"
+    row["fetched_at"]    = neon_row.get("fetched_at")
+    return row
+
+
+@app.get("/api/portfolio/fundamentals")
+async def portfolio_fundamentals(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """FMP fundamentals for every current open stock holding.
+
+    Cache strategy (shared with Social Screener — no new table):
+      screener_fundamentals_cache (Neon), 7-day TTL.
+      Cache hit  → serve from Neon, zero FMP calls.
+      Cache miss → fetch all 6 FMP endpoints via fetch_enrichment_for_symbols,
+                   write-through to Neon, return fresh rows.
+
+    Only open stock/equity holdings (shares > 0) are included.
+    Closed positions, fully-closed positions, and option contracts are excluded.
+    Response shape mirrors Social Screener Fundamental toggle for frontend reuse.
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    import time as _pf_time
+    _t0 = _pf_time.monotonic()
+
+    from data.portfolio_store import load_active_holdings as _load_holdings
+    from data.screener_hub_store import (
+        get_fundamentals        as _get_fund,
+        fundamentals_fresh_symbols as _fresh_syms,
+    )
+    from services.social_screener_service import (
+        fetch_enrichment_for_symbols as _fetch_enrich,
+    )
+    from config import FMP_API_KEY as _fmp_key
+
+    _TTL_PORTFOLIO_FUND = 7 * 24 * 3600   # 7 days — matches Social Screener TTL
+
+    # ── 1. Current open stock holdings ─────────────────────────────────────
+    holdings = _load_holdings()
+    open_symbols: list[str] = sorted({
+        (h.get("ticker") or h.get("symbol") or "").upper().strip()
+        for h in holdings
+        if isinstance(h, dict)
+        and (h.get("ticker") or h.get("symbol"))
+        and float(h.get("shares", 0) or 0) > 0
+    })
+    open_symbols = [s for s in open_symbols if s]
+
+    _now_iso = _dt.now(_tz.utc).isoformat()
+    _empty_cache_meta = {
+        "source": "neon",
+        "hit_count": 0,
+        "miss_count": 0,
+        "stale_count": 0,
+        "ttl_seconds": _TTL_PORTFOLIO_FUND,
+        "updated_at": _now_iso,
+    }
+    if not open_symbols:
+        return JSONResponse({
+            "holdings_count": 0,
+            "symbols": [],
+            "rows": [],
+            "cache": _empty_cache_meta,
+            "unavailable": [],
+        })
+
+    # ── 2. Freshness check against Neon screener_fundamentals_cache ─────────
+    fresh_set: set[str] = _fresh_syms(open_symbols, max_age_days=7)
+    stale_set: set[str] = set(open_symbols) - fresh_set
+
+    # ── 3. Live FMP fetch for cache misses / stale symbols ─────────────────
+    live_enrichment: dict[str, dict] = {}
+    unavailable: list[dict] = []
+
+    if stale_set:
+        if _fmp_key:
+            _, fund_enr, _, _, _ = await _fetch_enrich(
+                [],          # skip social enrichment — not needed here
+                _fmp_key,
+                fundamental_symbols=sorted(stale_set),
+                allow_live_fmp=True,
+            )
+            for sym, row in fund_enr.items():
+                if row.get("data_quality") == "missing":
+                    unavailable.append({
+                        "symbol": sym,
+                        "reason": "No FMP fundamentals available",
+                    })
+                else:
+                    live_enrichment[sym] = row
+            # Symbols that returned no row at all from FMP
+            for sym in sorted(stale_set):
+                if sym not in fund_enr:
+                    unavailable.append({
+                        "symbol": sym,
+                        "reason": "No FMP fundamentals available",
+                    })
+        else:
+            for sym in sorted(stale_set):
+                unavailable.append({
+                    "symbol": sym,
+                    "reason": "FMP API key not configured",
+                })
+
+    # ── 4. Load fresh cached rows from Neon ────────────────────────────────
+    cached_rows: dict[str, dict] = {}
+    if fresh_set:
+        neon_data = _get_fund(list(fresh_set))
+        for sym, neon_row in neon_data.items():
+            cached_rows[sym] = _pf_row_from_cache(sym, neon_row)
+        # Guard: fresh_set said the symbol is fresh but the row wasn't in DB
+        # (edge case: cache was cleared between freshness check and load)
+        for sym in sorted(fresh_set):
+            if sym not in neon_data and sym not in live_enrichment:
+                unavailable.append({
+                    "symbol": sym,
+                    "reason": "Cache row missing (please retry)",
+                })
+
+    # ── 5. Assemble ordered rows (open_symbols order, then sort by mktcap) ─
+    unavail_syms = {u["symbol"] for u in unavailable}
+    rows: list[dict] = []
+    for sym in open_symbols:
+        if sym in live_enrichment:
+            rows.append(live_enrichment[sym])
+        elif sym in cached_rows:
+            rows.append(cached_rows[sym])
+        elif sym not in unavail_syms:
+            unavailable.append({
+                "symbol": sym,
+                "reason": "No fundamentals data available",
+            })
+
+    rows.sort(key=lambda r: -(r.get("market_cap") or 0))
+
+    # ── 6. Response metadata ───────────────────────────────────────────────
+    _ms        = int((_pf_time.monotonic() - _t0) * 1000)
+    hit_count  = len(fresh_set)
+    miss_count = len(stale_set)
+    source     = (
+        "neon"        if not stale_set else
+        "fresh_fetch" if not fresh_set else
+        "mixed"
+    )
+
+    print(
+        f"[portfolio-fundamentals-debug] "
+        f"open_symbols_count={len(open_symbols)} "
+        f"open_symbols={open_symbols} "
+        f"cache_hits={hit_count} "
+        f"cache_misses={miss_count} "
+        f"stale_symbols={sorted(stale_set)} "
+        f"fetched_symbols={sorted(live_enrichment)} "
+        f"unavailable_symbols={[u['symbol'] for u in unavailable]} "
+        f"provider_calls={len(stale_set)} "
+        f"response_ms={_ms} "
+        f"source={source}"
+    )
+
+    return {
+        "holdings_count": len(open_symbols),
+        "symbols": open_symbols,
+        "rows": rows,
+        "cache": {
+            "source":      source,
+            "hit_count":   hit_count,
+            "miss_count":  miss_count,
+            "stale_count": 0,
+            "ttl_seconds": _TTL_PORTFOLIO_FUND,
+            "updated_at":  _now_iso,
+        },
+        "unavailable": unavailable,
+    }
+
+
+# ============================================================
 # Portfolio Quotes (batch price lookup)
 # ============================================================
 

@@ -1,0 +1,215 @@
+BACKEND REPLIT AGENT — Add Portfolio Fundamentals data endpoint using existing Social Screener Fundamental logic
+
+Goal:
+Add a new “FUNDAMENTALS” toggle to the Portfolio page. Backend must provide fundamentals for every current open holding in the user’s portfolio.
+
+Important:
+Reuse the existing fundamentals logic/fields already used by:
+Social page → Social Screener → Fundamental toggle.
+
+Do not invent a new fundamentals schema.
+Do not make frontend call FMP directly.
+Do not duplicate expensive FMP calls if existing Social Screener/Fundamental logic already has a service/cache path.
+Do not affect the Social page.
+Do not affect Portfolio Terminal/Dashboard logic.
+Do not hardcode tickers.
+Do not include closed positions.
+Do not include fully closed options contracts as stock holdings.
+
+Scope:
+Portfolio Fundamentals should include current open stock/equity/ETF holdings from the user’s Portfolio Dashboard.
+
+Question to audit:
+Should open options underlyings be included?
+Default preferred behavior:
+- Include fundamentals for open stock/equity holdings.
+- Option contracts themselves should not get fundamentals.
+- If user owns open options on an underlying but not the underlying stock, optionally include the underlying only if clearly marked source="open_option_underlying".
+- Keep this optional and do not let options pollute the core holdings unless cleanly supported.
+
+Audit first:
+1. Find Social Screener Fundamental toggle code.
+2. Find backend endpoint/service that feeds those Fundamental columns.
+3. Identify exact fields/columns currently returned.
+4. Identify current FMP/fundamentals provider path and caching.
+5. Identify current Portfolio holdings source of truth:
+   - active holdings / open_positions from Neon
+6. Identify current Neon schema/cache utilities for portfolio data.
+7. Confirm how to invalidate cache when user:
+   - deletes a stock from portfolio
+   - fully closes a stock position
+   - imports CSV with full_replace
+   - edits ticker/holding if supported
+
+Backend requirements:
+
+A. New endpoint
+
+Add:
+
+GET /api/portfolio/fundamentals
+
+Returns fundamentals for every current open portfolio holding.
+
+Response shape:
+
+{
+  "holdings_count": number,
+  "symbols": ["AEHR", "MRVL", ...],
+  "rows": [
+    {
+      "symbol": "AEHR",
+      "...same fields as Social Screener Fundamental toggle..."
+    }
+  ],
+  "cache": {
+    "source": "neon" | "fresh_fetch" | "mixed",
+    "hit_count": number,
+    "miss_count": number,
+    "stale_count": number,
+    "ttl_seconds": number,
+    "updated_at": "..."
+  },
+  "unavailable": [
+    {
+      "symbol": "XYZ",
+      "reason": "No FMP fundamentals available"
+    }
+  ]
+}
+
+Important:
+The row fields should match the Social Screener Fundamental toggle as closely as possible.
+
+Do not rename columns unless absolutely necessary.
+Frontend wants to render the same column style.
+
+B. Neon persistence/cache
+
+Create or reuse a Neon table for portfolio fundamentals cache.
+
+Suggested table:
+portfolio_fundamentals_cache
+
+Fields:
+- user_id or account scope if existing app uses one
+- symbol
+- data_json JSONB
+- source
+- fetched_at
+- expires_at
+- updated_at
+- provider
+- schema_version
+
+Cache behavior:
+- When /api/portfolio/fundamentals is called:
+  1. Load current open portfolio symbols.
+  2. Check Neon cache.
+  3. Return cached rows if valid.
+  4. Fetch missing/stale rows using the existing Social Screener fundamentals service/provider.
+  5. Save fresh rows to Neon.
+  6. Return combined rows.
+
+TTL:
+Use an FMP-budget-friendly TTL.
+Fundamentals do not need minute-by-minute refresh.
+Suggested:
+- 24h TTL minimum
+- 7d acceptable if Social Screener uses similar cadence
+Use whatever existing Social Screener fundamentals cache policy uses if already defined.
+
+C. Invalidation
+
+Invalidate/delete cached portfolio fundamentals for a symbol when:
+- user deletes stock from active portfolio
+- user fully closes stock position
+- CSV full_replace removes symbol from active open holdings
+
+Do NOT delete global Social Screener fundamentals cache unless shared design requires it.
+Portfolio cache should stop showing a removed/closed symbol immediately because the endpoint scopes to current open holdings.
+
+Even if the cache row remains in Neon, /api/portfolio/fundamentals must not return a symbol unless it is in current open holdings.
+
+D. Use current holdings as source of truth
+
+Use current active open portfolio holdings from existing backend store:
+- open_positions / holdings from GET /api/portfolio/holdings source
+- Neon active holdings
+
+Do not use:
+- closed_trades
+- fully_closed_positions
+- stale local JSON
+- frontend localStorage
+- Watchlist
+- Stock Bank
+unless explicitly needed as fallback, and report if fallback used.
+
+E. Data fields
+
+Match Social Screener Fundamental toggle fields.
+
+Audit and return the exact fields found.
+
+Examples of possible fundamental fields may include:
+- market_cap
+- pe_ratio
+- forward_pe
+- price_to_sales
+- revenue_growth
+- gross_margin
+- operating_margin
+- profit_margin
+- eps_growth
+- debt_to_equity
+- current_ratio
+- free_cash_flow
+- analyst_rating
+- sector
+- industry
+- beta
+- etc.
+
+But do not assume. Use the actual existing Social Screener Fundamental fields.
+
+F. Debug
+
+Add backend log:
+
+[portfolio-fundamentals-debug] {
+  user_id,
+  open_symbols_count,
+  open_symbols,
+  cache_hits,
+  cache_misses,
+  stale_symbols,
+  fetched_symbols,
+  unavailable_symbols,
+  provider_calls,
+  response_ms,
+  source
+}
+
+Validation:
+Use current portfolio.
+
+1. Call GET /api/portfolio/fundamentals.
+2. Confirm returned symbols match current open portfolio holdings only.
+3. Confirm no closed/fully closed tickers are included.
+4. Confirm rows use same fields as Social Screener Fundamental toggle.
+5. Confirm first call fetches/cache-misses as needed.
+6. Confirm second call hits Neon cache.
+7. Confirm provider calls are minimized.
+8. Delete or fully close a test holding and confirm it no longer appears.
+9. Confirm Social page still works.
+10. Confirm Portfolio Terminal/Dashboard still work.
+
+Return:
+- exact Social Screener Fundamental fields reused
+- endpoint path
+- Neon table/schema
+- cache TTL
+- invalidation behavior
+- sample response rows
+- validation logs

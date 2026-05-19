@@ -3,10 +3,10 @@
   "active_themes": [
     {
       "name": "Oil Services",
-      "score": 80.4,
+      "score": 80.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (80/100) vs theme universe with broad participation (92% advancing). Outperforming SPY +3.1%, QQQ +3.5"
+        "Top-percentile RS (81/100) vs theme universe with broad participation (92% advancing). Outperforming SPY +3.1%, QQQ +3.5"
       ],
       "related_etfs": [
         "OIH",
@@ -17,6 +17,22 @@
         "RIG",
         "VAL",
         "BKR"
+      ]
+    },
+    {
+      "name": "Solar",
+      "score": 76.2,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (76/100) vs theme universe. Outperforming SPY -3.5%, QQQ -3.2%. Breadth 14%."
+      ],
+      "related_etfs": [
+        "TAN"
+      ],
+      "related_tickers": [
+        "FSLR",
+        "HASI",
+        "RUN"
       ]
     },
     {
@@ -39,27 +55,11 @@
       ]
     },
     {
-      "name": "Solar",
-      "score": 75.4,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (75/100) vs theme universe. Outperforming SPY -3.5%, QQQ -3.2%. Breadth 14%."
-      ],
-      "related_etfs": [
-        "TAN"
-      ],
-      "related_tickers": [
-        "FSLR",
-        "HASI",
-        "RUN"
-      ]
-    },
-    {
       "name": "Technology",
-      "score": 72.4,
+      "score": 71.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (72/100) vs theme universe. Outperforming SPY -1.0%, QQQ -0.6%. Breadth 36%.",
+        "Top-percentile RS (71/100) vs theme universe. Outperforming SPY -1.0%, QQQ -0.6%. Breadth 36%.",
         "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
@@ -130,23 +130,6 @@
       ]
     },
     {
-      "name": "Tech Equal-Weight",
-      "score": 69.1,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "RYT",
-        "QQEW"
-      ],
-      "related_tickers": [
-        "NXPI",
-        "INTC",
-        "AMD"
-      ]
-    },
-    {
       "name": "Oil & Gas",
       "score": 69.0,
       "source": "theme_rs_service",
@@ -180,6 +163,23 @@
         "SLB",
         "VLO",
         "PSX"
+      ]
+    },
+    {
+      "name": "Space Economy",
+      "score": 67.3,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (67/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "ARKX",
+        "UFO"
+      ],
+      "related_tickers": [
+        "RKLB",
+        "KTOS",
+        "ASTS"
       ]
     }
   ],
@@ -258,7 +258,7 @@
     },
     {
       "name": "Utilities",
-      "score": 28.4,
+      "score": 27.9,
       "source": "theme_rs_service",
       "evidence": [
         "Bottom-quartile RS (28/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +0.5%. Breadth 60% \u2014 minimal buying pressur"
@@ -278,7 +278,7 @@
     {
       "sector": "Technology",
       "ticker": "XLK",
-      "score": 71.9,
+      "score": 71.4,
       "posture": "leading"
     },
     {
@@ -298,12 +298,12 @@
     {
       "sector": "Utilities",
       "ticker": "XLU",
-      "score": 28.4,
+      "score": 27.9,
       "posture": "lagging"
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-05-19T04:39:18.962921+00:00",
+  "last_updated": "2026-05-19T05:07:24.964886+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -314,5 +314,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1779165558.9629812
+  "_saved_at": 1779167244.9649398
 }
