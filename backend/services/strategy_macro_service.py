@@ -25,10 +25,11 @@ from typing import Any
 from data.cache import cache
 
 # ── Cache TTLs ─────────────────────────────────────────────────────────────
-_SPX_HIST_TTL    = 14400   # 4 h — raw yfinance history
-_REGIME_TTL      =   900   # 15 min — VIX regime (tracks live VIX)
-_WEEKLY_TTL      = 14400   # 4 h — weekly scorecard (historical, rarely changes)
-_TEN_YEAR_TTL    =   900   # 15 min — 10Y vs SPX (tracks live yields)
+_SPX_HIST_TTL    = 21600   # 6 h — yfinance ^GSPC history (refreshed every 3 h by precompute loop)
+_STRATEGY_HIST_TTL = 21600 # 6 h — FRED VIXCLS / DGS10 strategy history (same loop)
+_REGIME_TTL      =   900   # 15 min — VIX regime payload (tracks live VIX from macro:dashboard)
+_WEEKLY_TTL      = 21600   # 6 h — weekly scorecard (deterministic, historical)
+_TEN_YEAR_TTL    =   900   # 15 min — 10Y vs SPX payload (tracks live yields from macro:dashboard)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -53,20 +54,26 @@ def _r(v: Any, n: int = 2) -> float | None:
 
 def _extract_current_snapshot(dashboard: dict) -> dict:
     """
-    Pull live market values from the already-cached macro dashboard.
-    SPX proxy = SPY (Tradier real-time quote, always in benchmark_etfs list).
-    """
-    vix_data  = dashboard.get("vix") or {}
-    rates     = dashboard.get("rates_and_yields") or {}
-    dollar    = dashboard.get("dollar") or {}
-    bench     = {e.get("ticker"): e for e in (dashboard.get("benchmark_etfs") or [])}
+    Pull live market values from the macro:dashboard:v3 cache
+    (pre-warmed every 12 min by _macro_precompute_loop).
 
-    spy = bench.get("SPY") or {}
+    SPX → dashboard.market_snapshot.sp500  (FMP ^GSPC, correct index level ~7350)
+    VIX → dashboard.vix.current            (FMP ^VIX)
+    10Y → dashboard.rates_and_yields.us_10y (FMP treasury real-time)
+    DXY → dashboard.dollar.dxy             (Yahoo Finance)
+
+    Never reads SPY benchmark_etfs — Tradier SPY price (~741) is a different
+    scale from the ^GSPC index (~7350) and must not be used as SPX.
+    """
+    snap     = dashboard.get("market_snapshot") or {}
+    vix_data = dashboard.get("vix") or {}
+    rates    = dashboard.get("rates_and_yields") or {}
+    dollar   = dashboard.get("dollar") or {}
 
     return {
-        "spx_proxy":        "SPY",
-        "spx_price":        _r(spy.get("price")),
-        "spx_change_pct":   _r(spy.get("change_pct")),
+        "spx_proxy":        "^GSPC (FMP real-time)",
+        "spx_price":        _r(snap.get("sp500")),
+        "spx_change_pct":   _r(snap.get("sp500_change_pct")),
         "vix":              _r(vix_data.get("current")),
         "vix_change_pct":   _r(vix_data.get("change_pct")),
         "vix_signal":       vix_data.get("signal"),
@@ -75,7 +82,7 @@ def _extract_current_snapshot(dashboard: dict) -> dict:
         "spread_2s10s":     _r(rates.get("spread_2s10s"), 3),
         "dxy":              _r(dollar.get("dxy"), 3),
         "dxy_change_pct":   _r(dollar.get("dxy_change_pct"), 3),
-        "snapshot_source":  "macro:dashboard:v3 (15-min TTL)",
+        "snapshot_source":  "macro:dashboard:v3 (FMP + Yahoo + FRED, 15-min TTL)",
     }
 
 
@@ -122,19 +129,32 @@ async def _get_spx_history(days: int) -> list[dict]:
         return []
 
 
-def _fred_series_with_retry(macro_provider, series_id: str, days: int, decimals: int = 2) -> list[dict]:
+def _fetch_fred_hist(macro_provider, series_id: str, days: int, decimals: int = 2) -> list[dict]:
     """
-    Fetch a FRED series via macro_provider with up to 3 retries on rate-limit.
-    Runs synchronously — must be called in asyncio.to_thread.
+    Fetch a FRED series and store in a strategy-specific cache slot
+    (key: strategy:hist:{series_id.lower()}:{days}, TTL: _STRATEGY_HIST_TTL = 6 h).
+
+    Cache hierarchy:
+      1. strategy:hist:{series}:{days}  — populated by precompute loop every 3 h
+      2. macro_provider._get_series()   — shared FRED fetch (4-h TTL); used only on
+         cache miss (e.g., very first startup before the loop has fired)
+
+    This function is synchronous — call via asyncio.to_thread.
     """
     import time as _time
+
+    cache_key = f"strategy:hist:{series_id.lower()}:{days}"
+    hit = cache.get(cache_key)
+    if hit is not None:
+        return hit
+
     for attempt in range(3):
         try:
             series = macro_provider._get_series(series_id, days)
             if series is None or (hasattr(series, "empty") and series.empty):
                 if attempt < 2:
-                    wait = 10 + attempt * 8
-                    print(f"[STRATEGY] {series_id} empty, retry {attempt+1} in {wait}s")
+                    wait = 12 + attempt * 10
+                    print(f"[STRATEGY_HIST] {series_id} empty, retry {attempt+1} in {wait}s")
                     _time.sleep(wait)
                     continue
                 return []
@@ -143,26 +163,65 @@ def _fred_series_with_retry(macro_provider, series_id: str, days: int, decimals:
                 v = _s(float(val))
                 if v is not None:
                     out.append({"date": str(idx.date()), "value": round(v, decimals)})
+            if out:
+                cache.set(cache_key, out, _STRATEGY_HIST_TTL)
             return out
         except Exception as exc:
             if attempt < 2:
-                wait = 10 + attempt * 8
-                print(f"[STRATEGY] {series_id} error ({exc}), retry {attempt+1} in {wait}s")
+                wait = 12 + attempt * 10
+                print(f"[STRATEGY_HIST] {series_id} error ({exc}), retry {attempt+1} in {wait}s")
                 _time.sleep(wait)
                 continue
-            print(f"[STRATEGY] {series_id} failed after retries: {exc}")
+            print(f"[STRATEGY_HIST] {series_id} failed after retries: {exc}")
             return []
     return []
 
 
 def _get_vix_history_sync(macro_provider, days: int) -> list[dict]:
-    """FRED VIXCLS series via macro_provider (already cached 4 h)."""
-    return _fred_series_with_retry(macro_provider, "VIXCLS", days, decimals=2)
+    """FRED VIXCLS — reads strategy:hist:vixcls:{days} first (pre-warmed by precompute loop)."""
+    return _fetch_fred_hist(macro_provider, "VIXCLS", days, decimals=2)
 
 
 def _get_10y_history_sync(macro_provider, days: int) -> list[dict]:
-    """FRED DGS10 series via macro_provider (already cached 4 h)."""
-    return _fred_series_with_retry(macro_provider, "DGS10", days, decimals=3)
+    """FRED DGS10 — reads strategy:hist:dgs10:{days} first (pre-warmed by precompute loop)."""
+    return _fetch_fred_hist(macro_provider, "DGS10", days, decimals=3)
+
+
+async def precompute_strategy_history(macro_provider) -> None:
+    """
+    Pre-warm strategy historical series caches.
+    Called by _strategy_history_precompute_loop in main.py every 3 hours.
+
+    Populates:
+      strategy:spx_hist:1830    → yfinance ^GSPC daily closes (6-h TTL)
+      strategy:hist:vixcls:1830 → FRED VIXCLS daily series   (6-h TTL)
+      strategy:hist:dgs10:1830  → FRED DGS10 daily series    (6-h TTL)
+
+    FRED calls are staggered 15 s after the SPX fetch to avoid colliding
+    with _macro_precompute_loop which also touches FRED on its 12-min cycle.
+    """
+    import time as _time
+
+    t0 = _time.time()
+    # SPX first (yfinance, no rate-limit concerns)
+    spx = await _get_spx_history(1830)
+
+    # Stagger FRED calls to avoid hitting the rate limit alongside
+    # the macro precompute loop (which calls FRED every 12 min)
+    await asyncio.sleep(15)
+
+    vix_hist, dgs10_hist = await asyncio.gather(
+        asyncio.to_thread(_fetch_fred_hist, macro_provider, "VIXCLS", 1830, 2),
+        asyncio.to_thread(_fetch_fred_hist, macro_provider, "DGS10",  1830, 3),
+        return_exceptions=True,
+    )
+    spx_n   = len(spx)      if isinstance(spx,       list) else 0
+    vix_n   = len(vix_hist)  if isinstance(vix_hist,  list) else 0
+    dgs10_n = len(dgs10_hist) if isinstance(dgs10_hist, list) else 0
+
+    elapsed = _time.time() - t0
+    print(f"[STRATEGY_HIST] Precomputed in {elapsed:.1f}s — "
+          f"SPX={spx_n} VIXCLS={vix_n} DGS10={dgs10_n}")
 
 
 def _daily_pct_changes(series: list[dict], value_key: str = "close") -> list[tuple[str, float]]:
@@ -336,15 +395,6 @@ async def build_vix_regime_payload(macro_provider) -> dict:
             "data_points":  min(len(vv), len(ss)),
         }
 
-    # Patch snapshot: replace SPY Tradier price with ^GSPC for correct SPX scale
-    if spx_hist:
-        current_snap["spx_price"]      = _r(spx_hist[-1].get("close"))
-        current_snap["spx_proxy"]      = "^GSPC"
-        if len(spx_hist) >= 2 and spx_hist[-2].get("close"):
-            prev = _s(spx_hist[-2].get("close"))
-            now_ = _s(spx_hist[-1].get("close"))
-            current_snap["spx_change_pct"] = _r((now_ - prev) / prev * 100, 2) if now_ and prev else None
-
     vix_sig = _vix_regime_signal(current_vix)
     result = {
         "generated_at":          datetime.now(timezone.utc).isoformat(),
@@ -375,9 +425,9 @@ async def build_vix_regime_payload(macro_provider) -> dict:
             "5y":      _window_summary(vix_hist,        spx_hist,        "5 years"),
         },
         "data_sources": {
-            "current_snapshot": "macro:dashboard:v3 cache (FMP + Tradier, 15-min TTL)",
-            "vix_history":      "FRED VIXCLS (4-h TTL)",
-            "spx_history":      "yfinance ^GSPC (4-h TTL)",
+            "current_snapshot": "macro:dashboard:v3 (FMP ^GSPC + ^VIX real-time, 15-min TTL)",
+            "vix_history":      "FRED VIXCLS → strategy:hist:vixcls:1830 (6-h TTL, pre-warmed every 3 h)",
+            "spx_history":      "yfinance ^GSPC → strategy:spx_hist:1830 (6-h TTL, pre-warmed every 3 h)",
         },
     }
 
@@ -772,9 +822,9 @@ async def build_ten_year_spx_payload(macro_provider) -> dict:
             "5y":      _hist_window(ten_y_hist,        spx_hist,        "5 years"),
         },
         "data_sources": {
-            "current_snapshot": "macro:dashboard:v3 cache (FMP + Tradier, 15-min TTL)",
-            "ten_y_history":    "FRED DGS10 (4-h TTL)",
-            "spx_history":      "yfinance ^GSPC (4-h TTL)",
+            "current_snapshot": "macro:dashboard:v3 (FMP treasury real-time + ^GSPC, 15-min TTL)",
+            "ten_y_history":    "FRED DGS10 → strategy:hist:dgs10:1830 (6-h TTL, pre-warmed every 3 h)",
+            "spx_history":      "yfinance ^GSPC → strategy:spx_hist:1830 (6-h TTL, pre-warmed every 3 h)",
         },
     }
 

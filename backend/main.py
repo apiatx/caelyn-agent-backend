@@ -333,6 +333,7 @@ async def lifespan(app):
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
     asyncio.create_task(_macro_precompute_loop())
+    asyncio.create_task(_strategy_history_precompute_loop())
     # _sector_rotation_precompute_loop DISABLED (2025-05):
     # /api/themes/relative-strength?classification=sector now covers all 11 SPDR sector RS data
     # via theme_rs_service (warmup_theme_rs loop). Running both loops duplicated Tradier + yfinance
@@ -12810,6 +12811,42 @@ async def _macro_precompute_loop():
             print(f"[MACRO_PRECOMPUTE] Error: {e}")
 
         await asyncio.sleep(_MACRO_PRECOMPUTE_INTERVAL)
+
+
+# ── Strategy History precompute loop ─────────────────────────────────
+
+async def _strategy_history_precompute_loop():
+    """
+    Background loop to pre-warm strategy historical series caches
+    (FRED VIXCLS, FRED DGS10, yfinance ^GSPC — all 5-year windows).
+
+    Fires 3 minutes after init (so _macro_precompute_loop's FRED calls
+    have already settled), then repeats every 3 hours.  The 6-h TTLs on
+    the strategy:hist:* and strategy:spx_hist:* cache keys never expire
+    between runs.  Strategy endpoints read from cache on every page load
+    — no provider calls at request time.
+    """
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _init_event.wait, 180)
+
+    import time as _time
+
+    while True:
+        mp = _get_macro_provider()
+        if not mp:
+            print("[STRATEGY_HIST] Macro provider not ready, retrying in 60s")
+            await asyncio.sleep(60)
+            continue
+
+        try:
+            from services.strategy_macro_service import precompute_strategy_history
+            await precompute_strategy_history(mp)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[STRATEGY_HIST] Precompute error: {e}")
+
+        await asyncio.sleep(10800)  # 3 hours
 
 
 # ── Sector Rotation precompute loop ──────────────────────────────────
