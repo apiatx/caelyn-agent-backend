@@ -184,12 +184,51 @@ async def _x_consensus_loop():
         print("[X_CONSENSUS_LOOP] xAI provider not available — background loop disabled")
         return
 
-    from services.x_consensus_cache import _run_refresh
+    from services.x_consensus_cache import _run_refresh, _CACHE_PATH, _CACHE_TTL_SECONDS
+    import time as _xc_time
 
     _CT = ZoneInfo("America/Chicago")
     _TARGET_HOUR = 10  # 10:00 AM Chicago (= 11:00 AM ET)
 
     print("[X_CONSENSUS_LOOP] Started — scheduled once daily at 10:00 AM America/Chicago")
+
+    # ── Startup catch-up ────────────────────────────────────────────────────
+    # Problem: if the server restarts AFTER 10 AM CT (deployments, checkpoints,
+    # manual restarts), the loop below always computes "next target = tomorrow
+    # 10 AM" and sleeps.  Repeated restarts after 10 AM mean the cache can go
+    # days without refreshing — users see "Last Updated N days ago".
+    # Fix: on startup, if the disk cache is stale AND we're within business
+    # hours (08:00–20:00 CT, not Saturday), fire immediately before entering
+    # the daily sleep/fire loop.
+    _now_ct_su  = datetime.now(_CT)
+    _in_window  = 8 <= _now_ct_su.hour < 20
+    _not_sat    = _now_ct_su.weekday() != 5  # Saturday = 5
+
+    if _CACHE_PATH.exists():
+        _cache_age  = _xc_time.time() - _CACHE_PATH.stat().st_mtime
+    else:
+        _cache_age  = float("inf")  # file missing → treat as infinitely stale
+
+    _is_stale   = _cache_age > _CACHE_TTL_SECONDS
+
+    if _is_stale and _in_window and _not_sat:
+        print(
+            f"[X_CONSENSUS_LOOP] Startup catch-up: cache is "
+            f"{_cache_age / 3600:.1f}h old (TTL={_CACHE_TTL_SECONDS / 3600:.0f}h), "
+            f"within business hours — firing refresh now instead of waiting until tomorrow"
+        )
+        try:
+            await _run_refresh(data_service)
+        except Exception as _su_exc:
+            print(f"[X_CONSENSUS_LOOP] Startup catch-up error: {_su_exc}")
+        await _asyncio.sleep(90)  # buffer before computing next target
+    else:
+        print(
+            f"[X_CONSENSUS_LOOP] Startup catch-up skipped: "
+            f"cache_age={_cache_age / 3600:.1f}h "
+            f"ttl={_CACHE_TTL_SECONDS / 3600:.0f}h "
+            f"stale={_is_stale} in_window={_in_window} not_saturday={_not_sat}"
+        )
 
     while True:
         now_ct = datetime.now(_CT)
