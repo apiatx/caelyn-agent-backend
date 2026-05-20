@@ -25,12 +25,12 @@
         "XES": "tradier_hist",
         "IEZ": "tradier_hist"
       },
-      "price": 454.07,
+      "price": 453.54,
       "lead_proxy": "OIH",
       "timeframe": "1D",
-      "return_pct": 0.73,
+      "return_pct": 0.56,
       "performance": {
-        "1D": 0.73,
+        "1D": 0.56,
         "7D": 3.98,
         "30D": 13.92,
         "YTD": 59.61,
@@ -38,13 +38,13 @@
         "5Y": null
       },
       "breadth_pct": 50.0,
-      "pct_from_50d": 9.49,
+      "pct_from_50d": 9.32,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:OIH + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "NRDY",
-          "return_pct": 4.7,
+          "return_pct": 4.71,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -53,7 +53,7 @@
         },
         {
           "symbol": "BKR",
-          "return_pct": 2.32,
+          "return_pct": 2.46,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -63,7 +63,7 @@
         },
         {
           "symbol": "WFRD",
-          "return_pct": 1.83,
+          "return_pct": 1.77,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -74,7 +74,7 @@
       "laggards": [
         {
           "symbol": "HAL",
-          "return_pct": -0.47,
+          "return_pct": -0.77,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -83,8 +83,8 @@
           ]
         },
         {
-          "symbol": "RIG",
-          "return_pct": -0.27,
+          "symbol": "VAL",
+          "return_pct": -0.74,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -92,8 +92,8 @@
           ]
         },
         {
-          "symbol": "VAL",
-          "return_pct": -0.24,
+          "symbol": "RIG",
+          "return_pct": -0.74,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -101,12 +101,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.901268+00:00",
-      "rs_score": 83.0,
-      "rs_vs_spy": 0.04,
-      "rs_vs_qqq": -0.44,
+      "last_updated": "2026-05-20T15:21:12.889524+00:00",
+      "rs_score": 82.9,
+      "rs_vs_spy": -0.39,
+      "rs_vs_qqq": -0.88,
       "state": "active",
-      "state_reason": "Top-percentile RS (83/100) vs theme universe. Outperforming SPY +0.0%, QQQ -0.4%. Breadth 50%.",
+      "state_reason": "Top-percentile RS (83/100) vs theme universe. Outperforming SPY -0.4%, QQQ -0.9%. Breadth 50%.",
       "momentum_rank": 1,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -126,7 +126,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.901216+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.889468+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -159,12 +159,12 @@
         "CRDO": "tradier_hist",
         "ALAB": "tradier_hist"
       },
-      "price": 141.15,
+      "price": 141.64,
       "lead_proxy": "ANET",
       "timeframe": "1D",
-      "return_pct": 7.31,
+      "return_pct": 7.52,
       "performance": {
-        "1D": 7.31,
+        "1D": 7.52,
         "7D": 1.13,
         "30D": 5.48,
         "YTD": 26.59,
@@ -172,15 +172,15 @@
         "5Y": null
       },
       "breadth_pct": null,
-      "pct_from_50d": 25.62,
+      "pct_from_50d": 26.39,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "x_consensus + static_fallback_seeds",
       "leaders": [],
       "laggards": [],
-      "last_updated": "2026-05-20T15:14:58.632507+00:00",
+      "last_updated": "2026-05-20T15:21:11.452836+00:00",
       "rs_score": 77.9,
-      "rs_vs_spy": 6.62,
-      "rs_vs_qqq": 6.14,
+      "rs_vs_spy": 6.57,
+      "rs_vs_qqq": 6.08,
       "state": "active",
       "state_reason": "Top-percentile RS (78/100) vs theme universe. Outperforming SPY +6.6%, QQQ +6.1%. Breadth N/A.",
       "momentum_rank": 2,
@@ -202,7 +202,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 80.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.632403+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.452709+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -232,12 +232,12 @@
         "XSD": "tradier_hist",
         "PSI": "tradier_hist"
       },
-      "price": 561.02,
+      "price": 563.2,
       "lead_proxy": "SMH",
       "timeframe": "1D",
-      "return_pct": 3.28,
+      "return_pct": 3.89,
       "performance": {
-        "1D": 3.28,
+        "1D": 3.89,
         "7D": -2.17,
         "30D": 22.38,
         "YTD": 71.64,
@@ -245,13 +245,13 @@
         "5Y": null
       },
       "breadth_pct": 83.3,
-      "pct_from_50d": 25.1,
+      "pct_from_50d": 25.78,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:SMH + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -261,7 +261,7 @@
         },
         {
           "symbol": "AMBA",
-          "return_pct": 7.05,
+          "return_pct": 7.48,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -270,7 +270,7 @@
         },
         {
           "symbol": "LRCX",
-          "return_pct": 6.36,
+          "return_pct": 7.2,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -281,7 +281,7 @@
       "laggards": [
         {
           "symbol": "ADI",
-          "return_pct": -6.38,
+          "return_pct": -5.71,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -290,7 +290,7 @@
         },
         {
           "symbol": "TXN",
-          "return_pct": -0.63,
+          "return_pct": -0.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -300,7 +300,7 @@
         },
         {
           "symbol": "NVDA",
-          "return_pct": 2.08,
+          "return_pct": 2.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -309,12 +309,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.003190+00:00",
+      "last_updated": "2026-05-20T15:21:12.990044+00:00",
       "rs_score": 76.6,
-      "rs_vs_spy": 2.59,
-      "rs_vs_qqq": 2.11,
+      "rs_vs_spy": 2.94,
+      "rs_vs_qqq": 2.45,
       "state": "active",
-      "state_reason": "Top-percentile RS (77/100) vs theme universe with broad participation (83% advancing). Outperforming SPY +2.6%, QQQ +2.1%.",
+      "state_reason": "Top-percentile RS (77/100) vs theme universe with broad participation (83% advancing). Outperforming SPY +2.9%, QQQ +2.5%.",
       "momentum_rank": 3,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -334,7 +334,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.003141+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.989974+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -362,12 +362,12 @@
         "SMH": "tradier_hist",
         "SOXX": "tradier_hist"
       },
-      "price": 561.02,
+      "price": 563.2,
       "lead_proxy": "SMH",
       "timeframe": "1D",
-      "return_pct": 3.14,
+      "return_pct": 3.6,
       "performance": {
-        "1D": 3.14,
+        "1D": 3.6,
         "7D": -2.32,
         "30D": 23.59,
         "YTD": 71.36,
@@ -375,13 +375,13 @@
         "5Y": null
       },
       "breadth_pct": 75.0,
-      "pct_from_50d": 23.56,
+      "pct_from_50d": 24.08,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:DRAM + etf_holding:SMH + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -390,7 +390,7 @@
         },
         {
           "symbol": "INTC",
-          "return_pct": 5.57,
+          "return_pct": 5.87,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -399,7 +399,7 @@
         },
         {
           "symbol": "KLAC",
-          "return_pct": 4.64,
+          "return_pct": 5.33,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -410,7 +410,7 @@
       "laggards": [
         {
           "symbol": "ADI",
-          "return_pct": -6.38,
+          "return_pct": -5.71,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -419,7 +419,7 @@
         },
         {
           "symbol": "TXN",
-          "return_pct": -0.63,
+          "return_pct": -0.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -428,7 +428,7 @@
         },
         {
           "symbol": "SIMO",
-          "return_pct": -0.22,
+          "return_pct": -0.21,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -436,12 +436,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.867389+00:00",
+      "last_updated": "2026-05-20T15:21:12.857090+00:00",
       "rs_score": 76.0,
-      "rs_vs_spy": 2.45,
-      "rs_vs_qqq": 1.97,
+      "rs_vs_spy": 2.65,
+      "rs_vs_qqq": 2.16,
       "state": "active",
-      "state_reason": "Top-percentile RS (76/100) vs theme universe with broad participation (75% advancing). Outperforming SPY +2.5%, QQQ +2.0%.",
+      "state_reason": "Top-percentile RS (76/100) vs theme universe with broad participation (75% advancing). Outperforming SPY +2.6%, QQQ +2.2%.",
       "momentum_rank": 5,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -461,7 +461,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.867344+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.857009+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -491,26 +491,26 @@
         "BUG": "tradier_hist",
         "IHAK": "tradier_hist"
       },
-      "price": 92.48,
+      "price": 92.34,
       "lead_proxy": "HACK",
       "timeframe": "1D",
-      "return_pct": 1.08,
+      "return_pct": 1.19,
       "performance": {
-        "1D": 1.08,
+        "1D": 1.19,
         "7D": 7.96,
         "30D": 18.99,
         "YTD": 12.25,
         "1Y": 8.33,
         "5Y": null
       },
-      "breadth_pct": 88.9,
-      "pct_from_50d": 18.23,
+      "breadth_pct": 77.8,
+      "pct_from_50d": 18.26,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:CIBR + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "CRWD",
-          "return_pct": 3.9,
+          "return_pct": 3.95,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -520,7 +520,7 @@
         },
         {
           "symbol": "PANW",
-          "return_pct": 2.77,
+          "return_pct": 3.28,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -530,7 +530,7 @@
         },
         {
           "symbol": "FFIV",
-          "return_pct": 1.37,
+          "return_pct": 1.67,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -541,7 +541,7 @@
       "laggards": [
         {
           "symbol": "ZS",
-          "return_pct": -1.29,
+          "return_pct": -1.48,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -551,7 +551,7 @@
         },
         {
           "symbol": "CHKP",
-          "return_pct": 0.3,
+          "return_pct": -0.03,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -560,7 +560,7 @@
         },
         {
           "symbol": "CSCO",
-          "return_pct": 0.43,
+          "return_pct": 0.28,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -568,12 +568,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.723716+00:00",
+      "last_updated": "2026-05-20T15:21:11.580775+00:00",
       "rs_score": 76.0,
-      "rs_vs_spy": 0.39,
-      "rs_vs_qqq": -0.09,
+      "rs_vs_spy": 0.24,
+      "rs_vs_qqq": -0.25,
       "state": "active",
-      "state_reason": "Top-percentile RS (76/100) vs theme universe with broad participation (89% advancing). Outperforming SPY +0.4%, QQQ -0.1%.",
+      "state_reason": "Top-percentile RS (76/100) vs theme universe with broad participation (78% advancing). Outperforming SPY +0.2%, QQQ -0.2%.",
       "momentum_rank": 4,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -593,7 +593,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.723669+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.580713+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -617,12 +617,12 @@
         "SOXX": "tradier_hist",
         "SMH": "tradier_hist"
       },
-      "price": 515.86,
+      "price": 518.2,
       "lead_proxy": "SOXX",
       "timeframe": "1D",
-      "return_pct": 3.5,
+      "return_pct": 3.93,
       "performance": {
-        "1D": 3.5,
+        "1D": 3.93,
         "7D": -2.11,
         "30D": 22.31,
         "YTD": 63.64,
@@ -630,13 +630,13 @@
         "5Y": null
       },
       "breadth_pct": 92.9,
-      "pct_from_50d": 23.56,
+      "pct_from_50d": 24.08,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:SOXX + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -645,7 +645,7 @@
         },
         {
           "symbol": "LRCX",
-          "return_pct": 6.36,
+          "return_pct": 7.2,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -654,7 +654,7 @@
         },
         {
           "symbol": "TER",
-          "return_pct": 5.8,
+          "return_pct": 6.42,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -665,7 +665,7 @@
       "laggards": [
         {
           "symbol": "TXN",
-          "return_pct": -0.63,
+          "return_pct": -0.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -673,17 +673,17 @@
           ]
         },
         {
-          "symbol": "AEHR",
-          "return_pct": 1.82,
+          "symbol": "NVDA",
+          "return_pct": 2.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "static_fallback"
+            "etf_holding:SOXX"
           ]
         },
         {
-          "symbol": "NVDA",
-          "return_pct": 2.08,
+          "symbol": "MU",
+          "return_pct": 3.43,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -691,12 +691,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.993756+00:00",
+      "last_updated": "2026-05-20T15:21:12.979837+00:00",
       "rs_score": 75.7,
-      "rs_vs_spy": 2.81,
-      "rs_vs_qqq": 2.33,
+      "rs_vs_spy": 2.98,
+      "rs_vs_qqq": 2.49,
       "state": "active",
-      "state_reason": "Top-percentile RS (76/100) vs theme universe with broad participation (93% advancing). Outperforming SPY +2.8%, QQQ +2.3%.",
+      "state_reason": "Top-percentile RS (76/100) vs theme universe with broad participation (93% advancing). Outperforming SPY +3.0%, QQQ +2.5%.",
       "momentum_rank": 6,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -716,7 +716,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.993709+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.979786+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -743,12 +743,12 @@
         "VDE": "tradier_hist",
         "XOP": "tradier_hist"
       },
-      "price": 60.6,
+      "price": 60.34,
       "lead_proxy": "XLE",
       "timeframe": "1D",
-      "return_pct": -1.12,
+      "return_pct": -1.56,
       "performance": {
-        "1D": -1.12,
+        "1D": -1.56,
         "7D": 4.99,
         "30D": 9.8,
         "YTD": 36.42,
@@ -756,13 +756,13 @@
         "5Y": null
       },
       "breadth_pct": 10.0,
-      "pct_from_50d": 3.59,
+      "pct_from_50d": 3.25,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLE",
       "leaders": [
         {
           "symbol": "SLB",
-          "return_pct": 1.06,
+          "return_pct": 1.04,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -771,7 +771,7 @@
         },
         {
           "symbol": "WMB",
-          "return_pct": -0.8,
+          "return_pct": -1.18,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -779,8 +779,8 @@
           ]
         },
         {
-          "symbol": "MPC",
-          "return_pct": -0.92,
+          "symbol": "KMI",
+          "return_pct": -1.3,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -791,7 +791,7 @@
       "laggards": [
         {
           "symbol": "VLO",
-          "return_pct": -1.96,
+          "return_pct": -2.45,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -800,7 +800,7 @@
         },
         {
           "symbol": "XOM",
-          "return_pct": -1.76,
+          "return_pct": -2.19,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -810,7 +810,7 @@
         },
         {
           "symbol": "CVX",
-          "return_pct": -1.56,
+          "return_pct": -1.77,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -819,12 +819,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.754900+00:00",
-      "rs_score": 74.5,
-      "rs_vs_spy": -1.81,
-      "rs_vs_qqq": -2.29,
+      "last_updated": "2026-05-20T15:21:11.617075+00:00",
+      "rs_score": 74.4,
+      "rs_vs_spy": -2.51,
+      "rs_vs_qqq": -3.0,
       "state": "active",
-      "state_reason": "Top-percentile RS (74/100) vs theme universe. Outperforming SPY -1.8%, QQQ -2.3%. Breadth 10%.",
+      "state_reason": "Top-percentile RS (74/100) vs theme universe. Outperforming SPY -2.5%, QQQ -3.0%. Breadth 10%.",
       "momentum_rank": 7,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -844,7 +844,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.754854+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.617009+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -871,12 +871,12 @@
         "XLE": "tradier_hist",
         "OIH": "tradier_hist"
       },
-      "price": 176.41,
+      "price": 175.29,
       "lead_proxy": "XOP",
       "timeframe": "1D",
-      "return_pct": -1.12,
+      "return_pct": -1.56,
       "performance": {
-        "1D": -1.12,
+        "1D": -1.56,
         "7D": 4.91,
         "30D": 10.15,
         "YTD": 39.88,
@@ -884,13 +884,13 @@
         "5Y": null
       },
       "breadth_pct": 13.3,
-      "pct_from_50d": 3.86,
+      "pct_from_50d": 3.39,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XOP + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "SM",
-          "return_pct": 2.25,
+          "return_pct": 1.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -899,7 +899,7 @@
         },
         {
           "symbol": "SLB",
-          "return_pct": 1.06,
+          "return_pct": 1.04,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -908,7 +908,7 @@
         },
         {
           "symbol": "PR",
-          "return_pct": -0.38,
+          "return_pct": -0.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -919,7 +919,7 @@
       "laggards": [
         {
           "symbol": "CHRD",
-          "return_pct": -2.9,
+          "return_pct": -3.25,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -928,7 +928,7 @@
         },
         {
           "symbol": "MTDR",
-          "return_pct": -2.11,
+          "return_pct": -2.78,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -937,7 +937,7 @@
         },
         {
           "symbol": "VLO",
-          "return_pct": -1.96,
+          "return_pct": -2.45,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -945,12 +945,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.890643+00:00",
-      "rs_score": 74.3,
-      "rs_vs_spy": -1.81,
-      "rs_vs_qqq": -2.29,
+      "last_updated": "2026-05-20T15:21:12.880802+00:00",
+      "rs_score": 74.2,
+      "rs_vs_spy": -2.51,
+      "rs_vs_qqq": -3.0,
       "state": "active",
-      "state_reason": "Top-percentile RS (74/100) vs theme universe. Outperforming SPY -1.8%, QQQ -2.3%. Breadth 13%.",
+      "state_reason": "Top-percentile RS (74/100) vs theme universe. Outperforming SPY -2.5%, QQQ -3.0%. Breadth 13%.",
       "momentum_rank": 8,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -970,7 +970,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.890567+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.880750+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -994,12 +994,12 @@
         "XLK": "tradier_hist",
         "VGT": "tradier_hist"
       },
-      "price": 176.21,
+      "price": 176.7,
       "lead_proxy": "XLK",
       "timeframe": "1D",
-      "return_pct": 1.67,
+      "return_pct": 1.95,
       "performance": {
-        "1D": 1.67,
+        "1D": 1.95,
         "7D": -0.25,
         "30D": 13.01,
         "YTD": 21.32,
@@ -1007,13 +1007,13 @@
         "5Y": null
       },
       "breadth_pct": 81.8,
-      "pct_from_50d": 15.44,
+      "pct_from_50d": 15.76,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLK + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1023,7 +1023,7 @@
         },
         {
           "symbol": "LRCX",
-          "return_pct": 6.36,
+          "return_pct": 7.2,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1032,7 +1032,7 @@
         },
         {
           "symbol": "INTC",
-          "return_pct": 5.57,
+          "return_pct": 5.87,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1043,7 +1043,7 @@
       "laggards": [
         {
           "symbol": "CRM",
-          "return_pct": -1.18,
+          "return_pct": -1.16,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1052,7 +1052,7 @@
         },
         {
           "symbol": "MSFT",
-          "return_pct": -0.25,
+          "return_pct": -0.05,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1062,7 +1062,7 @@
         },
         {
           "symbol": "AAPL",
-          "return_pct": 0.1,
+          "return_pct": 0.23,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1071,10 +1071,10 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.075924+00:00",
+      "last_updated": "2026-05-20T15:21:13.064057+00:00",
       "rs_score": 73.6,
-      "rs_vs_spy": 0.98,
-      "rs_vs_qqq": 0.5,
+      "rs_vs_spy": 1.0,
+      "rs_vs_qqq": 0.51,
       "state": "active",
       "state_reason": "Top-percentile RS (74/100) vs theme universe with broad participation (82% advancing). Outperforming SPY +1.0%, QQQ +0.5%.",
       "momentum_rank": 9,
@@ -1096,7 +1096,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.075879+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.063999+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1117,12 +1117,12 @@
       "proxy_source_health": {
         "QTUM": "tradier_hist"
       },
-      "price": 144.1,
+      "price": 144.96,
       "lead_proxy": "QTUM",
       "timeframe": "1D",
-      "return_pct": 2.47,
+      "return_pct": 3.08,
       "performance": {
-        "1D": 2.47,
+        "1D": 3.08,
         "7D": -1.73,
         "30D": 12.13,
         "YTD": 31.54,
@@ -1130,13 +1130,13 @@
         "5Y": null
       },
       "breadth_pct": 83.3,
-      "pct_from_50d": 15.89,
+      "pct_from_50d": 16.58,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:QTUM + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "IONQ",
-          "return_pct": 6.47,
+          "return_pct": 7.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1144,17 +1144,17 @@
           ]
         },
         {
-          "symbol": "INTC",
-          "return_pct": 5.57,
+          "symbol": "RGTI",
+          "return_pct": 6.77,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "etf_holding:QTUM"
+            "static_fallback"
           ]
         },
         {
-          "symbol": "RGTI",
-          "return_pct": 5.36,
+          "symbol": "QBTS",
+          "return_pct": 6.19,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1164,17 +1164,8 @@
       ],
       "laggards": [
         {
-          "symbol": "NOK",
-          "return_pct": -0.75,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:QTUM"
-          ]
-        },
-        {
           "symbol": "IBM",
-          "return_pct": -0.42,
+          "return_pct": -0.13,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1182,8 +1173,17 @@
           ]
         },
         {
+          "symbol": "NOK",
+          "return_pct": -0.11,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:QTUM"
+          ]
+        },
+        {
           "symbol": "MU",
-          "return_pct": 2.89,
+          "return_pct": 3.43,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1191,12 +1191,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.956294+00:00",
-      "rs_score": 71.4,
-      "rs_vs_spy": 1.78,
-      "rs_vs_qqq": 1.3,
+      "last_updated": "2026-05-20T15:21:12.935610+00:00",
+      "rs_score": 71.6,
+      "rs_vs_spy": 2.13,
+      "rs_vs_qqq": 1.64,
       "state": "active",
-      "state_reason": "Top-percentile RS (71/100) vs theme universe with broad participation (83% advancing). Outperforming SPY +1.8%, QQQ +1.3%.",
+      "state_reason": "Top-percentile RS (72/100) vs theme universe with broad participation (83% advancing). Outperforming SPY +2.1%, QQQ +1.6%.",
       "momentum_rank": 10,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -1216,7 +1216,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-05-20T15:14:58.956246+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.935541+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1241,26 +1241,26 @@
         "ARKX": "tradier_hist",
         "UFO": "tradier_hist"
       },
-      "price": 34.22,
+      "price": 34.43,
       "lead_proxy": "ARKX",
       "timeframe": "1D",
-      "return_pct": 1.5,
+      "return_pct": 2.23,
       "performance": {
-        "1D": 1.5,
+        "1D": 2.23,
         "7D": 0.7,
         "30D": 4.08,
         "YTD": 34.18,
         "1Y": 101.61,
         "5Y": null
       },
-      "breadth_pct": 78.6,
-      "pct_from_50d": 10.41,
+      "breadth_pct": 85.7,
+      "pct_from_50d": 11.21,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:ARKX + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1269,7 +1269,7 @@
         },
         {
           "symbol": "TER",
-          "return_pct": 5.8,
+          "return_pct": 6.42,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1278,7 +1278,7 @@
         },
         {
           "symbol": "ASTS",
-          "return_pct": 3.18,
+          "return_pct": 4.42,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1289,7 +1289,7 @@
       "laggards": [
         {
           "symbol": "SATL",
-          "return_pct": -1.92,
+          "return_pct": -0.94,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1298,7 +1298,7 @@
         },
         {
           "symbol": "LHX",
-          "return_pct": -1.11,
+          "return_pct": -0.9,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1307,7 +1307,7 @@
         },
         {
           "symbol": "TRMB",
-          "return_pct": -0.17,
+          "return_pct": 0.15,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1315,12 +1315,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.045699+00:00",
-      "rs_score": 68.5,
-      "rs_vs_spy": 0.81,
-      "rs_vs_qqq": 0.33,
+      "last_updated": "2026-05-20T15:21:13.033344+00:00",
+      "rs_score": 68.7,
+      "rs_vs_spy": 1.28,
+      "rs_vs_qqq": 0.79,
       "state": "emerging",
-      "state_reason": "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.8%, QQQ delta +0.3%.",
+      "state_reason": "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +1.3%, QQQ delta +0.8%.",
       "momentum_rank": 11,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -1340,131 +1340,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.045654+00:00",
-      "stage_source": "etf_proxy"
-    },
-    {
-      "theme_id": "solar",
-      "display_name": "Solar",
-      "classification": "sub_theme",
-      "parent_sector": "utilities",
-      "sector_tags": [
-        "Energy",
-        "Utilities",
-        "Clean Tech"
-      ],
-      "proxy_type": "etf",
-      "proxy_symbols": [
-        "TAN"
-      ],
-      "proxy_symbols_used": [
-        "TAN"
-      ],
-      "proxy_source_health": {
-        "TAN": "tradier_hist"
-      },
-      "price": 62.12,
-      "lead_proxy": "TAN",
-      "timeframe": "1D",
-      "return_pct": 1.88,
-      "performance": {
-        "1D": 1.88,
-        "7D": -2.57,
-        "30D": 11.92,
-        "YTD": 26.57,
-        "1Y": 81.41,
-        "5Y": null
-      },
-      "breadth_pct": 85.7,
-      "pct_from_50d": 8.07,
-      "trend_accel_20d": 0.0,
-      "leader_universe_source": "etf_holding:TAN + static_fallback_seeds",
-      "leaders": [
-        {
-          "symbol": "ENPH",
-          "return_pct": 9.07,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:TAN",
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "FSLR",
-          "return_pct": 3.7,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:TAN",
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "RUN",
-          "return_pct": 1.75,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:TAN"
-          ]
-        }
-      ],
-      "laggards": [
-        {
-          "symbol": "NXT",
-          "return_pct": -1.41,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:TAN"
-          ]
-        },
-        {
-          "symbol": "ARRY",
-          "return_pct": 0.87,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "HASI",
-          "return_pct": 0.96,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:TAN"
-          ]
-        }
-      ],
-      "last_updated": "2026-05-20T15:14:59.039291+00:00",
-      "rs_score": 65.8,
-      "rs_vs_spy": 1.19,
-      "rs_vs_qqq": 0.71,
-      "state": "emerging",
-      "state_reason": "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +1.2%, QQQ delta +0.7%.",
-      "momentum_rank": 12,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
-      "stage_score": 90.0,
-      "stage_confidence": "high",
-      "stage_reason": "Price +14.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
-      "stage_signals": {
-        "price_vs_30w_ma_pct": 14.94,
-        "ma_30w_slope_pct": 4.02,
-        "rs_vs_spy_trend": "flat",
-        "rs_vs_spy_8w_pct": 0.67,
-        "volume_ratio": null,
-        "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 27.11,
-        "breakout_watch": false,
-        "danger_zone": false,
-        "breadth_above_30w_ma_pct": null,
-        "breadth_rising_30w_ma_pct": null
-      },
-      "stage_updated_at": "2026-05-20T15:14:59.039245+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.033297+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1491,9 +1367,9 @@
       "price": 57.28,
       "lead_proxy": "RYT",
       "timeframe": "1D",
-      "return_pct": 0.31,
+      "return_pct": 0.48,
       "performance": {
-        "1D": 0.31,
+        "1D": 0.48,
         "7D": -0.18,
         "30D": 8.57,
         "YTD": 13.82,
@@ -1501,13 +1377,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": 10.99,
+      "pct_from_50d": 11.16,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:RYT",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1516,7 +1392,7 @@
         },
         {
           "symbol": "INTC",
-          "return_pct": 5.57,
+          "return_pct": 5.87,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1525,7 +1401,7 @@
         },
         {
           "symbol": "MPWR",
-          "return_pct": 3.88,
+          "return_pct": 4.28,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1536,7 +1412,7 @@
       "laggards": [
         {
           "symbol": "SNDK",
-          "return_pct": 1.65,
+          "return_pct": 2.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1545,7 +1421,7 @@
         },
         {
           "symbol": "WDC",
-          "return_pct": 2.06,
+          "return_pct": 2.69,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1553,8 +1429,8 @@
           ]
         },
         {
-          "symbol": "NXPI",
-          "return_pct": 2.86,
+          "symbol": "STX",
+          "return_pct": 2.91,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1562,13 +1438,13 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.062732+00:00",
-      "rs_score": 65.8,
-      "rs_vs_spy": -0.38,
-      "rs_vs_qqq": -0.86,
+      "last_updated": "2026-05-20T15:21:13.051689+00:00",
+      "rs_score": 65.9,
+      "rs_vs_spy": -0.47,
+      "rs_vs_qqq": -0.96,
       "state": "emerging",
-      "state_reason": "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -0.4%, QQQ delta -0.9%.",
-      "momentum_rank": 13,
+      "state_reason": "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -0.5%, QQQ delta -1.0%.",
+      "momentum_rank": 12,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
       "stage_score": 100.0,
@@ -1587,7 +1463,131 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.062669+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.051623+00:00",
+      "stage_source": "etf_proxy"
+    },
+    {
+      "theme_id": "solar",
+      "display_name": "Solar",
+      "classification": "sub_theme",
+      "parent_sector": "utilities",
+      "sector_tags": [
+        "Energy",
+        "Utilities",
+        "Clean Tech"
+      ],
+      "proxy_type": "etf",
+      "proxy_symbols": [
+        "TAN"
+      ],
+      "proxy_symbols_used": [
+        "TAN"
+      ],
+      "proxy_source_health": {
+        "TAN": "tradier_hist"
+      },
+      "price": 62.23,
+      "lead_proxy": "TAN",
+      "timeframe": "1D",
+      "return_pct": 2.07,
+      "performance": {
+        "1D": 2.07,
+        "7D": -2.57,
+        "30D": 11.92,
+        "YTD": 26.57,
+        "1Y": 81.41,
+        "5Y": null
+      },
+      "breadth_pct": 85.7,
+      "pct_from_50d": 8.27,
+      "trend_accel_20d": 0.0,
+      "leader_universe_source": "etf_holding:TAN + static_fallback_seeds",
+      "leaders": [
+        {
+          "symbol": "ENPH",
+          "return_pct": 8.94,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:TAN",
+            "static_fallback"
+          ]
+        },
+        {
+          "symbol": "FSLR",
+          "return_pct": 4.05,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:TAN",
+            "static_fallback"
+          ]
+        },
+        {
+          "symbol": "RUN",
+          "return_pct": 2.17,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:TAN"
+          ]
+        }
+      ],
+      "laggards": [
+        {
+          "symbol": "NXT",
+          "return_pct": -1.49,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:TAN"
+          ]
+        },
+        {
+          "symbol": "HASI",
+          "return_pct": 1.07,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:TAN"
+          ]
+        },
+        {
+          "symbol": "ARRY",
+          "return_pct": 1.31,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        }
+      ],
+      "last_updated": "2026-05-20T15:21:13.027182+00:00",
+      "rs_score": 65.8,
+      "rs_vs_spy": 1.12,
+      "rs_vs_qqq": 0.63,
+      "state": "emerging",
+      "state_reason": "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +1.1%, QQQ delta +0.6%.",
+      "momentum_rank": 13,
+      "stage": 2,
+      "stage_label": "Stage 2 Advance",
+      "stage_score": 90.0,
+      "stage_confidence": "high",
+      "stage_reason": "Price +14.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_signals": {
+        "price_vs_30w_ma_pct": 14.94,
+        "ma_30w_slope_pct": 4.02,
+        "rs_vs_spy_trend": "flat",
+        "rs_vs_spy_8w_pct": 0.67,
+        "volume_ratio": null,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 27.11,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_updated_at": "2026-05-20T15:21:13.027145+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1611,12 +1611,12 @@
         "SKYY": "tradier_hist",
         "CLOU": "tradier_hist"
       },
-      "price": 128.68,
+      "price": 129.08,
       "lead_proxy": "SKYY",
       "timeframe": "1D",
-      "return_pct": 0.18,
+      "return_pct": 0.41,
       "performance": {
-        "1D": 0.18,
+        "1D": 0.41,
         "7D": 3.0,
         "30D": 10.37,
         "YTD": -0.54,
@@ -1624,13 +1624,13 @@
         "5Y": null
       },
       "breadth_pct": 53.8,
-      "pct_from_50d": 10.59,
+      "pct_from_50d": 10.83,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:SKYY + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "DOCN",
-          "return_pct": 7.83,
+          "return_pct": 7.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1639,7 +1639,7 @@
         },
         {
           "symbol": "P",
-          "return_pct": 3.49,
+          "return_pct": 3.81,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1648,7 +1648,7 @@
         },
         {
           "symbol": "AMZN",
-          "return_pct": 1.69,
+          "return_pct": 2.08,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1660,7 +1660,7 @@
       "laggards": [
         {
           "symbol": "NTNX",
-          "return_pct": -6.01,
+          "return_pct": -6.3,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1669,7 +1669,7 @@
         },
         {
           "symbol": "SNOW",
-          "return_pct": -2.22,
+          "return_pct": -2.25,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1678,7 +1678,7 @@
         },
         {
           "symbol": "MDB",
-          "return_pct": -1.32,
+          "return_pct": -1.13,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1686,10 +1686,10 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.670411+00:00",
-      "rs_score": 65.1,
-      "rs_vs_spy": -0.51,
-      "rs_vs_qqq": -0.99,
+      "last_updated": "2026-05-20T15:21:11.517352+00:00",
+      "rs_score": 65.2,
+      "rs_vs_spy": -0.54,
+      "rs_vs_qqq": -1.03,
       "state": "emerging",
       "state_reason": "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -0.5%, QQQ delta -1.0%.",
       "momentum_rank": 14,
@@ -1711,7 +1711,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.670357+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.517294+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1735,12 +1735,12 @@
         "FCG": "tradier_hist",
         "UNG": "tradier_hist"
       },
-      "price": 31.21,
+      "price": 31.01,
       "lead_proxy": "FCG",
       "timeframe": "1D",
-      "return_pct": -2.0,
+      "return_pct": -2.37,
       "performance": {
-        "1D": -2.0,
+        "1D": -2.37,
         "7D": 4.93,
         "30D": 7.72,
         "YTD": 13.72,
@@ -1748,22 +1748,13 @@
         "5Y": null
       },
       "breadth_pct": 6.7,
-      "pct_from_50d": 2.31,
+      "pct_from_50d": 1.94,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:FCG + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "FLNG",
-          "return_pct": 0.83,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "LNG",
-          "return_pct": -0.17,
+          "return_pct": 0.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1772,7 +1763,16 @@
         },
         {
           "symbol": "HESM",
-          "return_pct": -0.18,
+          "return_pct": -0.29,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:FCG"
+          ]
+        },
+        {
+          "symbol": "PR",
+          "return_pct": -0.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1791,8 +1791,8 @@
           ]
         },
         {
-          "symbol": "WES",
-          "return_pct": -1.49,
+          "symbol": "APA",
+          "return_pct": -1.78,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1800,8 +1800,8 @@
           ]
         },
         {
-          "symbol": "EOG",
-          "return_pct": -1.18,
+          "symbol": "COP",
+          "return_pct": -1.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1809,12 +1809,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.850128+00:00",
-      "rs_score": 63.2,
-      "rs_vs_spy": -2.69,
-      "rs_vs_qqq": -3.17,
+      "last_updated": "2026-05-20T15:21:12.040203+00:00",
+      "rs_score": 63.1,
+      "rs_vs_spy": -3.32,
+      "rs_vs_qqq": -3.81,
       "state": "emerging",
-      "state_reason": "Rising RS (63/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -2.7%, QQQ delta -3.2%.",
+      "state_reason": "Rising RS (63/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -3.3%, QQQ delta -3.8%.",
       "momentum_rank": 15,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -1834,7 +1834,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.850075+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.040128+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1866,26 +1866,26 @@
         "QCLN": "tradier_hist",
         "CNRG": "tradier_hist"
       },
-      "price": 21.42,
+      "price": 21.48,
       "lead_proxy": "ICLN",
       "timeframe": "1D",
-      "return_pct": 3.16,
+      "return_pct": 3.52,
       "performance": {
-        "1D": 3.16,
+        "1D": 3.52,
         "7D": -3.66,
         "30D": 8.98,
         "YTD": 29.62,
         "1Y": 84.98,
         "5Y": null
       },
-      "breadth_pct": 62.5,
-      "pct_from_50d": 10.97,
+      "breadth_pct": 75.0,
+      "pct_from_50d": 11.31,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:ICLN + etf_holding:PBW + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "ENPH",
-          "return_pct": 9.07,
+          "return_pct": 8.94,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1895,7 +1895,7 @@
         },
         {
           "symbol": "MPWR",
-          "return_pct": 3.88,
+          "return_pct": 4.28,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1904,7 +1904,7 @@
         },
         {
           "symbol": "FSLR",
-          "return_pct": 3.7,
+          "return_pct": 4.05,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1916,7 +1916,7 @@
       "laggards": [
         {
           "symbol": "NXT",
-          "return_pct": -1.41,
+          "return_pct": -1.49,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1925,7 +1925,7 @@
         },
         {
           "symbol": "NEE",
-          "return_pct": -1.03,
+          "return_pct": -1.24,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1934,7 +1934,7 @@
         },
         {
           "symbol": "PLUG",
-          "return_pct": -0.46,
+          "return_pct": 0.46,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1944,12 +1944,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.663929+00:00",
-      "rs_score": 62.8,
-      "rs_vs_spy": 2.47,
-      "rs_vs_qqq": 1.99,
+      "last_updated": "2026-05-20T15:21:11.510634+00:00",
+      "rs_score": 62.9,
+      "rs_vs_spy": 2.57,
+      "rs_vs_qqq": 2.08,
       "state": "emerging",
-      "state_reason": "Rising RS (63/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +2.5%, QQQ delta +2.0%.",
+      "state_reason": "Rising RS (63/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +2.6%, QQQ delta +2.1%.",
       "momentum_rank": 16,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -1969,7 +1969,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.663883+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.510552+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1991,12 +1991,12 @@
       "proxy_source_health": {
         "VCX": "tradier_hist"
       },
-      "price": 239.89,
+      "price": 239.88,
       "lead_proxy": "VCX",
       "timeframe": "1D",
-      "return_pct": 3.94,
+      "return_pct": 3.93,
       "performance": {
-        "1D": 3.94,
+        "1D": 3.93,
         "7D": -2.65,
         "30D": 160.55,
         "YTD": 214.47,
@@ -2009,12 +2009,12 @@
       "leader_universe_source": "static_fallback",
       "leaders": [],
       "laggards": [],
-      "last_updated": "2026-05-20T15:14:58.952012+00:00",
+      "last_updated": "2026-05-20T15:21:12.931876+00:00",
       "rs_score": 62.3,
-      "rs_vs_spy": 3.25,
-      "rs_vs_qqq": 2.77,
+      "rs_vs_spy": 2.98,
+      "rs_vs_qqq": 2.49,
       "state": "emerging",
-      "state_reason": "Rising RS (62/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +3.2%, QQQ delta +2.8%.",
+      "state_reason": "Rising RS (62/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +3.0%, QQQ delta +2.5%.",
       "momentum_rank": 17,
       "stage": null,
       "stage_label": "Unknown",
@@ -2034,7 +2034,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-05-20T15:14:58.949261+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.930070+00:00",
       "stage_source": "fallback"
     },
     {
@@ -2059,12 +2059,12 @@
         "MAGS": "tradier_hist",
         "QQQ": "tradier_hist"
       },
-      "price": 68.95,
+      "price": 69.21,
       "lead_proxy": "MAGS",
       "timeframe": "1D",
-      "return_pct": 0.9,
+      "return_pct": 1.22,
       "performance": {
-        "1D": 0.9,
+        "1D": 1.22,
         "7D": -1.42,
         "30D": 7.35,
         "YTD": 10.09,
@@ -2072,13 +2072,13 @@
         "5Y": null
       },
       "breadth_pct": 60.0,
-      "pct_from_50d": 9.8,
+      "pct_from_50d": 10.15,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:MAGS + etf_holding:QQQ",
       "leaders": [
         {
           "symbol": "NVDA",
-          "return_pct": 2.08,
+          "return_pct": 2.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2089,7 +2089,7 @@
         },
         {
           "symbol": "AMZN",
-          "return_pct": 1.69,
+          "return_pct": 2.08,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2100,7 +2100,7 @@
         },
         {
           "symbol": "TSLA",
-          "return_pct": 1.34,
+          "return_pct": 2.06,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2112,7 +2112,7 @@
       "laggards": [
         {
           "symbol": "WMT",
-          "return_pct": -1.29,
+          "return_pct": -1.36,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2121,7 +2121,7 @@
         },
         {
           "symbol": "GOOG",
-          "return_pct": -0.87,
+          "return_pct": -0.6,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2130,7 +2130,7 @@
         },
         {
           "symbol": "GOOGL",
-          "return_pct": -0.83,
+          "return_pct": -0.5,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2140,12 +2140,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.069442+00:00",
-      "rs_score": 61.3,
-      "rs_vs_spy": 0.21,
-      "rs_vs_qqq": -0.27,
+      "last_updated": "2026-05-20T15:21:13.057930+00:00",
+      "rs_score": 61.4,
+      "rs_vs_spy": 0.27,
+      "rs_vs_qqq": -0.22,
       "state": "emerging",
-      "state_reason": "Rising RS (61/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.2%, QQQ delta -0.3%.",
+      "state_reason": "Rising RS (61/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.3%, QQQ delta -0.2%.",
       "momentum_rank": 18,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -2165,7 +2165,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.069392+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.057884+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2189,12 +2189,12 @@
         "IGV": "tradier_hist",
         "WCLD": "tradier_hist"
       },
-      "price": 92.22,
+      "price": 92.39,
       "lead_proxy": "IGV",
       "timeframe": "1D",
-      "return_pct": 0.17,
+      "return_pct": 0.38,
       "performance": {
-        "1D": 0.17,
+        "1D": 0.38,
         "7D": 6.0,
         "30D": 6.89,
         "YTD": -14.01,
@@ -2202,13 +2202,13 @@
         "5Y": null
       },
       "breadth_pct": 28.6,
-      "pct_from_50d": 7.95,
+      "pct_from_50d": 8.17,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:IGV + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "CRWD",
-          "return_pct": 3.9,
+          "return_pct": 3.95,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2217,7 +2217,7 @@
         },
         {
           "symbol": "PANW",
-          "return_pct": 2.77,
+          "return_pct": 3.28,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2226,7 +2226,7 @@
         },
         {
           "symbol": "ORCL",
-          "return_pct": 1.43,
+          "return_pct": 1.84,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2237,7 +2237,7 @@
       "laggards": [
         {
           "symbol": "INTU",
-          "return_pct": -3.37,
+          "return_pct": -3.6,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2246,7 +2246,7 @@
         },
         {
           "symbol": "SNOW",
-          "return_pct": -2.22,
+          "return_pct": -2.25,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2255,7 +2255,7 @@
         },
         {
           "symbol": "ADBE",
-          "return_pct": -2.02,
+          "return_pct": -2.06,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2263,12 +2263,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.025744+00:00",
-      "rs_score": 60.7,
-      "rs_vs_spy": -0.52,
-      "rs_vs_qqq": -1.0,
+      "last_updated": "2026-05-20T15:21:13.014840+00:00",
+      "rs_score": 60.8,
+      "rs_vs_spy": -0.57,
+      "rs_vs_qqq": -1.06,
       "state": "emerging",
-      "state_reason": "Rising RS (61/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -0.5%, QQQ delta -1.0%.",
+      "state_reason": "Rising RS (61/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -0.6%, QQQ delta -1.1%.",
       "momentum_rank": 19,
       "stage": 4,
       "stage_label": "Stage 4 Decline",
@@ -2288,7 +2288,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.025696+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.014794+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2319,12 +2319,12 @@
         "VUG": "tradier_hist",
         "QQQ": "tradier_hist"
       },
-      "price": 124.12,
+      "price": 124.45,
       "lead_proxy": "IWF",
       "timeframe": "1D",
-      "return_pct": 0.93,
+      "return_pct": 1.21,
       "performance": {
-        "1D": 0.93,
+        "1D": 1.21,
         "7D": -0.61,
         "30D": 6.19,
         "YTD": 8.62,
@@ -2332,13 +2332,13 @@
         "5Y": null
       },
       "breadth_pct": 55.6,
-      "pct_from_50d": 9.1,
+      "pct_from_50d": 9.41,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:IWF",
       "leaders": [
         {
           "symbol": "NVDA",
-          "return_pct": 2.08,
+          "return_pct": 2.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2347,7 +2347,7 @@
         },
         {
           "symbol": "AMZN",
-          "return_pct": 1.69,
+          "return_pct": 2.08,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2356,7 +2356,7 @@
         },
         {
           "symbol": "TSLA",
-          "return_pct": 1.34,
+          "return_pct": 2.06,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2367,16 +2367,7 @@
       "laggards": [
         {
           "symbol": "GOOG",
-          "return_pct": -0.87,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:IWF"
-          ]
-        },
-        {
-          "symbol": "GOOGL",
-          "return_pct": -0.83,
+          "return_pct": -0.6,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2385,7 +2376,16 @@
         },
         {
           "symbol": "LLY",
-          "return_pct": -0.27,
+          "return_pct": -0.53,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:IWF"
+          ]
+        },
+        {
+          "symbol": "GOOGL",
+          "return_pct": -0.5,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2393,12 +2393,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.793199+00:00",
+      "last_updated": "2026-05-20T15:21:11.662745+00:00",
       "rs_score": 60.3,
-      "rs_vs_spy": 0.24,
-      "rs_vs_qqq": -0.24,
+      "rs_vs_spy": 0.26,
+      "rs_vs_qqq": -0.23,
       "state": "emerging",
-      "state_reason": "Rising RS (60/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.2%, QQQ delta -0.2%.",
+      "state_reason": "Rising RS (60/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.3%, QQQ delta -0.2%.",
       "momentum_rank": 20,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -2418,7 +2418,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.793146+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.662681+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2449,26 +2449,26 @@
         "WGMI": "tradier_hist",
         "BKCH": "tradier_hist"
       },
-      "price": 61.98,
+      "price": 62.41,
       "lead_proxy": "BLOK",
       "timeframe": "1D",
-      "return_pct": 2.88,
+      "return_pct": 4.12,
       "performance": {
-        "1D": 2.88,
+        "1D": 4.12,
         "7D": -3.8,
         "30D": 7.11,
         "YTD": 30.0,
         "1Y": 64.5,
         "5Y": null
       },
-      "breadth_pct": 92.3,
-      "pct_from_50d": 14.44,
+      "breadth_pct": 100.0,
+      "pct_from_50d": 15.82,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:BLOK + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "BBBY",
-          "return_pct": 12.91,
+          "return_pct": 13.54,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2477,7 +2477,7 @@
         },
         {
           "symbol": "CLSK",
-          "return_pct": 7.8,
+          "return_pct": 9.06,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2486,7 +2486,7 @@
         },
         {
           "symbol": "MARA",
-          "return_pct": 6.11,
+          "return_pct": 7.72,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2496,8 +2496,17 @@
       ],
       "laggards": [
         {
+          "symbol": "OPRA",
+          "return_pct": 0.61,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:BLOK"
+          ]
+        },
+        {
           "symbol": "COIN",
-          "return_pct": -0.11,
+          "return_pct": 0.89,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2506,30 +2515,21 @@
           ]
         },
         {
-          "symbol": "OPRA",
-          "return_pct": 0.41,
+          "symbol": "GLXY",
+          "return_pct": 1.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
             "etf_holding:BLOK"
           ]
-        },
-        {
-          "symbol": "MSTR",
-          "return_pct": 1.05,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.714383+00:00",
-      "rs_score": 58.7,
-      "rs_vs_spy": 2.19,
-      "rs_vs_qqq": 1.71,
+      "last_updated": "2026-05-20T15:21:11.569543+00:00",
+      "rs_score": 59.0,
+      "rs_vs_spy": 3.17,
+      "rs_vs_qqq": 2.68,
       "state": "emerging",
-      "state_reason": "Rising RS (59/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +2.2%, QQQ delta +1.7%.",
+      "state_reason": "Rising RS (59/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +3.2%, QQQ delta +2.7%.",
       "momentum_rank": 21,
       "stage": 1,
       "stage_label": "Stage 1 \u2192 2 Breakout Watch",
@@ -2549,8 +2549,96 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.714334+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.569481+00:00",
       "stage_source": "etf_proxy"
+    },
+    {
+      "theme_id": "substrates_packaging",
+      "display_name": "Substrates / Packaging",
+      "classification": "sub_theme",
+      "parent_sector": "technology",
+      "sector_tags": [
+        "Technology",
+        "Semiconductors"
+      ],
+      "proxy_type": "custom",
+      "proxy_symbols": [
+        "TSM",
+        "AMKR"
+      ],
+      "proxy_symbols_used": [
+        "TSM",
+        "AMKR"
+      ],
+      "proxy_source_health": {
+        "TSM": "tradier_hist",
+        "AMKR": "tradier_hist"
+      },
+      "price": 402.7,
+      "lead_proxy": "TSM",
+      "timeframe": "1D",
+      "return_pct": 3.64,
+      "performance": {
+        "1D": 3.64,
+        "7D": -3.89,
+        "30D": 4.13,
+        "YTD": 52.7,
+        "1Y": 181.24,
+        "5Y": null
+      },
+      "breadth_pct": 100.0,
+      "pct_from_50d": 11.33,
+      "trend_accel_20d": 0.0,
+      "leader_universe_source": "static_fallback",
+      "leaders": [
+        {
+          "symbol": "ASX",
+          "return_pct": 2.4,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        }
+      ],
+      "laggards": [
+        {
+          "symbol": "ASX",
+          "return_pct": 2.4,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        }
+      ],
+      "last_updated": "2026-05-20T15:21:13.024295+00:00",
+      "rs_score": 58.6,
+      "rs_vs_spy": 2.69,
+      "rs_vs_qqq": 2.2,
+      "state": "emerging",
+      "state_reason": "Rising RS (59/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +2.7%, QQQ delta +2.2%.",
+      "momentum_rank": 23,
+      "stage": 2,
+      "stage_label": "Stage 2 Advance",
+      "stage_score": 100.0,
+      "stage_confidence": "high",
+      "stage_reason": "Price +29.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_signals": {
+        "price_vs_30w_ma_pct": 29.86,
+        "ma_30w_slope_pct": 8.91,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 20.03,
+        "volume_ratio": null,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 64.44,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": 100.0,
+        "breadth_rising_30w_ma_pct": 100.0
+      },
+      "stage_updated_at": "2026-05-20T15:21:13.024239+00:00",
+      "stage_source": "synthetic_basket"
     },
     {
       "theme_id": "datacenter_infra",
@@ -2581,23 +2669,23 @@
       "price": 29.52,
       "lead_proxy": "VPN",
       "timeframe": "1D",
-      "return_pct": 0.84,
+      "return_pct": 1.13,
       "performance": {
-        "1D": 0.84,
+        "1D": 1.13,
         "7D": -2.49,
         "30D": 5.28,
         "YTD": 39.91,
         "1Y": 70.22,
         "5Y": null
       },
-      "breadth_pct": 70.0,
+      "breadth_pct": 80.0,
       "pct_from_50d": 9.44,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:SRVR + etf_holding:VPN + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "CEG",
-          "return_pct": 5.56,
+          "return_pct": 5.93,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2606,7 +2694,7 @@
         },
         {
           "symbol": "DLR",
-          "return_pct": 1.69,
+          "return_pct": 1.93,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2617,7 +2705,7 @@
         },
         {
           "symbol": "IRM",
-          "return_pct": 1.46,
+          "return_pct": 1.84,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2628,7 +2716,7 @@
       "laggards": [
         {
           "symbol": "GDS",
-          "return_pct": -5.07,
+          "return_pct": -4.73,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2636,17 +2724,18 @@
           ]
         },
         {
-          "symbol": "NBIS",
-          "return_pct": -0.6,
+          "symbol": "AMT",
+          "return_pct": -0.08,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "static_fallback"
+            "etf_holding:SRVR",
+            "etf_holding:VPN"
           ]
         },
         {
-          "symbol": "AMT",
-          "return_pct": -0.07,
+          "symbol": "CCI",
+          "return_pct": 0.13,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2655,12 +2744,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.732786+00:00",
+      "last_updated": "2026-05-20T15:21:11.590809+00:00",
       "rs_score": 58.6,
-      "rs_vs_spy": 0.15,
-      "rs_vs_qqq": -0.33,
+      "rs_vs_spy": 0.18,
+      "rs_vs_qqq": -0.31,
       "state": "emerging",
-      "state_reason": "Rising RS (59/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.1%, QQQ delta -0.3%.",
+      "state_reason": "Rising RS (59/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.2%, QQQ delta -0.3%.",
       "momentum_rank": 22,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -2680,96 +2769,8 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.732738+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.590750+00:00",
       "stage_source": "etf_proxy"
-    },
-    {
-      "theme_id": "substrates_packaging",
-      "display_name": "Substrates / Packaging",
-      "classification": "sub_theme",
-      "parent_sector": "technology",
-      "sector_tags": [
-        "Technology",
-        "Semiconductors"
-      ],
-      "proxy_type": "custom",
-      "proxy_symbols": [
-        "TSM",
-        "AMKR"
-      ],
-      "proxy_symbols_used": [
-        "TSM",
-        "AMKR"
-      ],
-      "proxy_source_health": {
-        "TSM": "tradier_hist",
-        "AMKR": "tradier_hist"
-      },
-      "price": 401.38,
-      "lead_proxy": "TSM",
-      "timeframe": "1D",
-      "return_pct": 3.17,
-      "performance": {
-        "1D": 3.17,
-        "7D": -3.89,
-        "30D": 4.13,
-        "YTD": 52.7,
-        "1Y": 181.24,
-        "5Y": null
-      },
-      "breadth_pct": 100.0,
-      "pct_from_50d": 10.81,
-      "trend_accel_20d": 0.0,
-      "leader_universe_source": "static_fallback",
-      "leaders": [
-        {
-          "symbol": "ASX",
-          "return_pct": 2.01,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        }
-      ],
-      "laggards": [
-        {
-          "symbol": "ASX",
-          "return_pct": 2.01,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        }
-      ],
-      "last_updated": "2026-05-20T15:14:59.035969+00:00",
-      "rs_score": 58.5,
-      "rs_vs_spy": 2.48,
-      "rs_vs_qqq": 2.0,
-      "state": "emerging",
-      "state_reason": "Rising RS (58/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +2.5%, QQQ delta +2.0%.",
-      "momentum_rank": 23,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
-      "stage_score": 100.0,
-      "stage_confidence": "high",
-      "stage_reason": "Price +29.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
-      "stage_signals": {
-        "price_vs_30w_ma_pct": 29.86,
-        "ma_30w_slope_pct": 8.91,
-        "rs_vs_spy_trend": "rising",
-        "rs_vs_spy_8w_pct": 20.03,
-        "volume_ratio": null,
-        "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 64.44,
-        "breakout_watch": false,
-        "danger_zone": false,
-        "breadth_above_30w_ma_pct": 100.0,
-        "breadth_rising_30w_ma_pct": 100.0
-      },
-      "stage_updated_at": "2026-05-20T15:14:59.035914+00:00",
-      "stage_source": "synthetic_basket"
     },
     {
       "theme_id": "power_cooling",
@@ -2802,12 +2803,12 @@
         "TT": "tradier_hist",
         "BE": "tradier_hist"
       },
-      "price": 325.19,
+      "price": 327.81,
       "lead_proxy": "VRT",
       "timeframe": "1D",
-      "return_pct": 1.22,
+      "return_pct": 1.7,
       "performance": {
-        "1D": 1.22,
+        "1D": 1.7,
         "7D": -3.98,
         "30D": 3.74,
         "YTD": 57.18,
@@ -2815,17 +2816,17 @@
         "5Y": null
       },
       "breadth_pct": null,
-      "pct_from_50d": 4.67,
+      "pct_from_50d": 5.17,
       "trend_accel_20d": 0.0,
-      "leader_universe_source": "x_consensus + static_fallback_seeds",
+      "leader_universe_source": "static_fallback",
       "leaders": [],
       "laggards": [],
-      "last_updated": "2026-05-20T15:14:58.948189+00:00",
-      "rs_score": 53.4,
-      "rs_vs_spy": 0.53,
-      "rs_vs_qqq": 0.05,
+      "last_updated": "2026-05-20T15:21:12.928363+00:00",
+      "rs_score": 53.5,
+      "rs_vs_spy": 0.75,
+      "rs_vs_qqq": 0.26,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (53/100) \u2014 lagging stronger themes. SPY delta +0.5%, QQQ delta +0.1%.",
+      "state_reason": "Positive return but mid-table RS (54/100) \u2014 lagging stronger themes. SPY delta +0.8%, QQQ delta +0.3%.",
       "momentum_rank": 24,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -2845,7 +2846,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.948120+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.928285+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -2869,36 +2870,26 @@
         "XLP": "tradier_hist",
         "VDC": "tradier_hist"
       },
-      "price": 85.7,
+      "price": 85.71,
       "lead_proxy": "XLP",
       "timeframe": "1D",
-      "return_pct": -0.43,
+      "return_pct": -0.42,
       "performance": {
-        "1D": -0.43,
+        "1D": -0.42,
         "7D": 1.04,
         "30D": 3.48,
         "YTD": 10.39,
         "1Y": 4.37,
         "5Y": null
       },
-      "breadth_pct": 40.0,
-      "pct_from_50d": 2.96,
+      "breadth_pct": 50.0,
+      "pct_from_50d": 2.98,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLP",
       "leaders": [
         {
           "symbol": "PG",
-          "return_pct": 0.69,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:XLP",
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "KO",
-          "return_pct": 0.17,
+          "return_pct": 0.84,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2908,7 +2899,17 @@
         },
         {
           "symbol": "MDLZ",
-          "return_pct": 0.14,
+          "return_pct": 0.2,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:XLP",
+            "static_fallback"
+          ]
+        },
+        {
+          "symbol": "KO",
+          "return_pct": 0.19,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2920,7 +2921,7 @@
       "laggards": [
         {
           "symbol": "TGT",
-          "return_pct": -4.4,
+          "return_pct": -4.39,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2929,7 +2930,7 @@
         },
         {
           "symbol": "PM",
-          "return_pct": -1.75,
+          "return_pct": -1.63,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2939,7 +2940,7 @@
         },
         {
           "symbol": "WMT",
-          "return_pct": -1.29,
+          "return_pct": -1.36,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2948,12 +2949,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.697085+00:00",
+      "last_updated": "2026-05-20T15:21:11.548157+00:00",
       "rs_score": 52.8,
-      "rs_vs_spy": -1.12,
-      "rs_vs_qqq": -1.6,
+      "rs_vs_spy": -1.37,
+      "rs_vs_qqq": -1.86,
       "state": "neutral",
-      "state_reason": "Mid-range RS (53/100) vs peer themes. SPY delta -1.1%, QQQ delta -1.6%. Breadth 40%.",
+      "state_reason": "Mid-range RS (53/100) vs peer themes. SPY delta -1.4%, QQQ delta -1.9%. Breadth 50%.",
       "momentum_rank": 25,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -2973,7 +2974,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.697040+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.548109+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3007,9 +3008,9 @@
       "price": 63.79,
       "lead_proxy": "IRBO",
       "timeframe": "1D",
-      "return_pct": 0.77,
+      "return_pct": 1.24,
       "performance": {
-        "1D": 0.77,
+        "1D": 1.24,
         "7D": -4.47,
         "30D": 4.58,
         "YTD": 18.06,
@@ -3017,13 +3018,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": 7.79,
+      "pct_from_50d": 8.4,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:BOTZ + etf_holding:ROBO + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "TER",
-          "return_pct": 5.8,
+          "return_pct": 6.42,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3032,7 +3033,7 @@
         },
         {
           "symbol": "SYM",
-          "return_pct": 5.05,
+          "return_pct": 5.65,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3041,7 +3042,7 @@
         },
         {
           "symbol": "CGNX",
-          "return_pct": 4.96,
+          "return_pct": 4.51,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3053,7 +3054,7 @@
       "laggards": [
         {
           "symbol": "ISRG",
-          "return_pct": 0.88,
+          "return_pct": 0.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3064,7 +3065,7 @@
         },
         {
           "symbol": "NVDA",
-          "return_pct": 2.08,
+          "return_pct": 2.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3073,7 +3074,7 @@
         },
         {
           "symbol": "ABBNY",
-          "return_pct": 2.44,
+          "return_pct": 3.28,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3081,13 +3082,13 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.987385+00:00",
-      "rs_score": 51.4,
-      "rs_vs_spy": 0.08,
-      "rs_vs_qqq": -0.4,
+      "last_updated": "2026-05-20T15:21:12.965903+00:00",
+      "rs_score": 51.6,
+      "rs_vs_spy": 0.29,
+      "rs_vs_qqq": -0.2,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (51/100) \u2014 lagging stronger themes. SPY delta +0.1%, QQQ delta -0.4%.",
-      "momentum_rank": 28,
+      "state_reason": "Positive return but mid-table RS (52/100) \u2014 lagging stronger themes. SPY delta +0.3%, QQQ delta -0.2%.",
+      "momentum_rank": 26,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
       "stage_score": 90.7,
@@ -3106,7 +3107,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.987334+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.965844+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3127,12 +3128,12 @@
       "proxy_source_health": {
         "RSP": "tradier_hist"
       },
-      "price": 202.94,
+      "price": 203.53,
       "lead_proxy": "RSP",
       "timeframe": "1D",
-      "return_pct": 0.66,
+      "return_pct": 0.95,
       "performance": {
-        "1D": 0.66,
+        "1D": 0.95,
         "7D": 0.05,
         "30D": -0.39,
         "YTD": 5.98,
@@ -3140,13 +3141,13 @@
         "5Y": null
       },
       "breadth_pct": 80.0,
-      "pct_from_50d": 2.31,
+      "pct_from_50d": 2.61,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:RSP",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3155,7 +3156,7 @@
         },
         {
           "symbol": "INTC",
-          "return_pct": 5.57,
+          "return_pct": 5.87,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3164,7 +3165,7 @@
         },
         {
           "symbol": "MPWR",
-          "return_pct": 3.88,
+          "return_pct": 4.28,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3175,7 +3176,7 @@
       "laggards": [
         {
           "symbol": "HUM",
-          "return_pct": -1.29,
+          "return_pct": -0.96,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3184,7 +3185,7 @@
         },
         {
           "symbol": "CNC",
-          "return_pct": -0.85,
+          "return_pct": -0.82,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3193,7 +3194,7 @@
         },
         {
           "symbol": "SNDK",
-          "return_pct": 1.65,
+          "return_pct": 2.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3201,13 +3202,13 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.758132+00:00",
-      "rs_score": 51.4,
-      "rs_vs_spy": -0.03,
-      "rs_vs_qqq": -0.51,
+      "last_updated": "2026-05-20T15:21:11.620865+00:00",
+      "rs_score": 51.5,
+      "rs_vs_spy": 0.0,
+      "rs_vs_qqq": -0.49,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (51/100) \u2014 lagging stronger themes. SPY delta -0.0%, QQQ delta -0.5%.",
-      "momentum_rank": 26,
+      "state_reason": "Positive return but mid-table RS (52/100) \u2014 lagging stronger themes. SPY delta +0.0%, QQQ delta -0.5%.",
+      "momentum_rank": 27,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
       "stage_score": 69.2,
@@ -3226,7 +3227,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-05-20T15:14:58.758091+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.620815+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3256,12 +3257,12 @@
         "AAOI": "tradier_hist",
         "FN": "tradier_hist"
       },
-      "price": 360.86,
+      "price": 362.36,
       "lead_proxy": "COHR",
       "timeframe": "1D",
-      "return_pct": 0.49,
+      "return_pct": 0.95,
       "performance": {
-        "1D": 0.49,
+        "1D": 0.95,
         "7D": -12.56,
         "30D": 0.39,
         "YTD": 117.24,
@@ -3269,13 +3270,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": 15.22,
+      "pct_from_50d": 15.23,
       "trend_accel_20d": 0.0,
-      "leader_universe_source": "x_consensus + static_fallback_seeds",
+      "leader_universe_source": "static_fallback",
       "leaders": [
         {
           "symbol": "SIVEF",
-          "return_pct": 11.12,
+          "return_pct": 13.55,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3286,7 +3287,7 @@
       "laggards": [
         {
           "symbol": "SIVEF",
-          "return_pct": 11.12,
+          "return_pct": 13.55,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3294,13 +3295,13 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.925489+00:00",
+      "last_updated": "2026-05-20T15:21:12.907741+00:00",
       "rs_score": 51.4,
-      "rs_vs_spy": -0.2,
-      "rs_vs_qqq": -0.68,
+      "rs_vs_spy": 0.0,
+      "rs_vs_qqq": -0.49,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (51/100) \u2014 lagging stronger themes. SPY delta -0.2%, QQQ delta -0.7%.",
-      "momentum_rank": 27,
+      "state_reason": "Positive return but mid-table RS (51/100) \u2014 lagging stronger themes. SPY delta +0.0%, QQQ delta -0.5%.",
+      "momentum_rank": 28,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
       "stage_score": 100.0,
@@ -3319,7 +3320,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.925419+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.907669+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -3341,12 +3342,12 @@
       "proxy_source_health": {
         "FFTY": "tradier_hist"
       },
-      "price": 39.83,
+      "price": 40.1,
       "lead_proxy": "FFTY",
       "timeframe": "1D",
-      "return_pct": 2.38,
+      "return_pct": 3.09,
       "performance": {
-        "1D": 2.38,
+        "1D": 3.09,
         "7D": -5.1,
         "30D": 7.19,
         "YTD": 14.39,
@@ -3354,13 +3355,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": 7.61,
+      "pct_from_50d": 8.36,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:FFTY",
       "leaders": [
         {
           "symbol": "CLS",
-          "return_pct": 4.3,
+          "return_pct": 4.79,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3369,7 +3370,7 @@
         },
         {
           "symbol": "APLD",
-          "return_pct": 3.36,
+          "return_pct": 4.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3378,7 +3379,7 @@
         },
         {
           "symbol": "MU",
-          "return_pct": 2.89,
+          "return_pct": 3.43,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3389,7 +3390,7 @@
       "laggards": [
         {
           "symbol": "ANAB",
-          "return_pct": 0.46,
+          "return_pct": 0.56,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3398,7 +3399,7 @@
         },
         {
           "symbol": "TVTX",
-          "return_pct": 1.52,
+          "return_pct": 1.87,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3407,7 +3408,7 @@
         },
         {
           "symbol": "FIX",
-          "return_pct": 2.77,
+          "return_pct": 3.15,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3415,12 +3416,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.821379+00:00",
-      "rs_score": 50.8,
-      "rs_vs_spy": 1.69,
-      "rs_vs_qqq": 1.21,
+      "last_updated": "2026-05-20T15:21:11.681730+00:00",
+      "rs_score": 51.0,
+      "rs_vs_spy": 2.14,
+      "rs_vs_qqq": 1.65,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (51/100) \u2014 lagging stronger themes. SPY delta +1.7%, QQQ delta +1.2%.",
+      "state_reason": "Positive return but mid-table RS (51/100) \u2014 lagging stronger themes. SPY delta +2.1%, QQQ delta +1.6%.",
       "momentum_rank": 29,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -3440,7 +3441,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-05-20T15:14:58.821335+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.681676+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3464,26 +3465,26 @@
         "KIE": "tradier_hist",
         "IAK": "tradier_hist"
       },
-      "price": 57.71,
+      "price": 57.81,
       "lead_proxy": "KIE",
       "timeframe": "1D",
-      "return_pct": 0.24,
+      "return_pct": 0.42,
       "performance": {
-        "1D": 0.24,
+        "1D": 0.42,
         "7D": 3.35,
         "30D": -0.35,
         "YTD": -2.75,
         "1Y": -3.04,
         "5Y": null
       },
-      "breadth_pct": 64.3,
-      "pct_from_50d": 2.62,
+      "breadth_pct": 71.4,
+      "pct_from_50d": 2.79,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:KIE + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "LNC",
-          "return_pct": 3.15,
+          "return_pct": 3.63,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3492,7 +3493,7 @@
         },
         {
           "symbol": "LMND",
-          "return_pct": 2.82,
+          "return_pct": 3.52,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3501,7 +3502,7 @@
         },
         {
           "symbol": "MET",
-          "return_pct": 1.72,
+          "return_pct": 2.05,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3512,7 +3513,7 @@
       "laggards": [
         {
           "symbol": "OSCR",
-          "return_pct": -2.0,
+          "return_pct": -1.96,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3521,7 +3522,7 @@
         },
         {
           "symbol": "ALL",
-          "return_pct": -0.93,
+          "return_pct": -0.88,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3530,7 +3531,7 @@
         },
         {
           "symbol": "CB",
-          "return_pct": -0.36,
+          "return_pct": -0.39,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3538,12 +3539,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.834097+00:00",
+      "last_updated": "2026-05-20T15:21:11.697268+00:00",
       "rs_score": 50.6,
-      "rs_vs_spy": -0.45,
-      "rs_vs_qqq": -0.93,
+      "rs_vs_spy": -0.53,
+      "rs_vs_qqq": -1.02,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (51/100) \u2014 lagging stronger themes. SPY delta -0.5%, QQQ delta -0.9%.",
+      "state_reason": "Positive return but mid-table RS (51/100) \u2014 lagging stronger themes. SPY delta -0.5%, QQQ delta -1.0%.",
       "momentum_rank": 30,
       "stage": 4,
       "stage_label": "Stage 4 Decline",
@@ -3563,7 +3564,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.834051+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.697207+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3590,12 +3591,12 @@
         "VHT": "tradier_hist",
         "IYH": "tradier_hist"
       },
-      "price": 146.88,
+      "price": 146.92,
       "lead_proxy": "XLV",
       "timeframe": "1D",
-      "return_pct": -0.2,
+      "return_pct": -0.15,
       "performance": {
-        "1D": -0.2,
+        "1D": -0.15,
         "7D": -0.03,
         "30D": -0.6,
         "YTD": -5.12,
@@ -3603,13 +3604,13 @@
         "5Y": null
       },
       "breadth_pct": 10.0,
-      "pct_from_50d": 0.36,
+      "pct_from_50d": 0.4,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLV",
       "leaders": [
         {
           "symbol": "ISRG",
-          "return_pct": 0.88,
+          "return_pct": 0.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3618,7 +3619,7 @@
         },
         {
           "symbol": "JNJ",
-          "return_pct": -0.07,
+          "return_pct": -0.12,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3627,26 +3628,16 @@
           ]
         },
         {
-          "symbol": "LLY",
-          "return_pct": -0.27,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:XLV",
-            "static_fallback"
-          ]
-        }
-      ],
-      "laggards": [
-        {
-          "symbol": "TMO",
-          "return_pct": -1.3,
+          "symbol": "GILD",
+          "return_pct": -0.43,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
             "etf_holding:XLV"
           ]
-        },
+        }
+      ],
+      "laggards": [
         {
           "symbol": "ABT",
           "return_pct": -1.06,
@@ -3657,8 +3648,17 @@
           ]
         },
         {
+          "symbol": "TMO",
+          "return_pct": -1.06,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:XLV"
+          ]
+        },
+        {
           "symbol": "ABBV",
-          "return_pct": -0.65,
+          "return_pct": -0.71,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3667,12 +3667,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.811665+00:00",
+      "last_updated": "2026-05-20T15:21:11.671508+00:00",
       "rs_score": 49.3,
-      "rs_vs_spy": -0.89,
-      "rs_vs_qqq": -1.37,
+      "rs_vs_spy": -1.1,
+      "rs_vs_qqq": -1.59,
       "state": "neutral",
-      "state_reason": "Mid-range RS (49/100) vs peer themes. SPY delta -0.9%, QQQ delta -1.4%. Breadth 10%.",
+      "state_reason": "Mid-range RS (49/100) vs peer themes. SPY delta -1.1%, QQQ delta -1.6%. Breadth 10%.",
       "momentum_rank": 31,
       "stage": 1,
       "stage_label": "Stage 1 Base",
@@ -3692,7 +3692,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.811606+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.671454+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3719,12 +3719,12 @@
         "IJR": "tradier_hist",
         "VB": "tradier_hist"
       },
-      "price": 277.96,
+      "price": 278.99,
       "lead_proxy": "IWM",
       "timeframe": "1D",
-      "return_pct": 1.43,
+      "return_pct": 1.78,
       "performance": {
-        "1D": 1.43,
+        "1D": 1.78,
         "7D": -0.88,
         "30D": -0.81,
         "YTD": 12.37,
@@ -3732,13 +3732,13 @@
         "5Y": null
       },
       "breadth_pct": 71.4,
-      "pct_from_50d": 3.24,
+      "pct_from_50d": 3.58,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:IWM",
       "leaders": [
         {
           "symbol": "IONQ",
-          "return_pct": 6.47,
+          "return_pct": 7.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3747,7 +3747,7 @@
         },
         {
           "symbol": "TTMI",
-          "return_pct": 6.13,
+          "return_pct": 7.12,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3756,7 +3756,7 @@
         },
         {
           "symbol": "CDE",
-          "return_pct": 4.3,
+          "return_pct": 5.61,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3767,7 +3767,7 @@
       "laggards": [
         {
           "symbol": "SATS",
-          "return_pct": -2.02,
+          "return_pct": -1.53,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3776,7 +3776,7 @@
         },
         {
           "symbol": "NXT",
-          "return_pct": -1.41,
+          "return_pct": -1.49,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3784,8 +3784,8 @@
           ]
         },
         {
-          "symbol": "STRL",
-          "return_pct": 2.86,
+          "symbol": "AEIS",
+          "return_pct": 3.17,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3793,12 +3793,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.019229+00:00",
-      "rs_score": 48.7,
-      "rs_vs_spy": 0.74,
-      "rs_vs_qqq": 0.26,
+      "last_updated": "2026-05-20T15:21:13.008514+00:00",
+      "rs_score": 48.8,
+      "rs_vs_spy": 0.83,
+      "rs_vs_qqq": 0.34,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (49/100) \u2014 lagging stronger themes. SPY delta +0.7%, QQQ delta +0.3%.",
+      "state_reason": "Positive return but mid-table RS (49/100) \u2014 lagging stronger themes. SPY delta +0.8%, QQQ delta +0.3%.",
       "momentum_rank": 32,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -3818,7 +3818,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.019180+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.008460+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3846,26 +3846,26 @@
         "ARKW": "tradier_hist",
         "ARKQ": "tradier_hist"
       },
-      "price": 75.09,
+      "price": 75.53,
       "lead_proxy": "ARKK",
       "timeframe": "1D",
-      "return_pct": 1.74,
+      "return_pct": 2.29,
       "performance": {
-        "1D": 1.74,
+        "1D": 2.29,
         "7D": -2.98,
         "30D": 2.19,
         "YTD": -2.35,
         "1Y": 30.85,
         "5Y": null
       },
-      "breadth_pct": 80.0,
-      "pct_from_50d": 6.58,
+      "breadth_pct": 90.0,
+      "pct_from_50d": 7.23,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:ARKK",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3874,7 +3874,7 @@
         },
         {
           "symbol": "SHOP",
-          "return_pct": 2.78,
+          "return_pct": 2.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3883,7 +3883,7 @@
         },
         {
           "symbol": "ROKU",
-          "return_pct": 2.0,
+          "return_pct": 2.5,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3895,7 +3895,7 @@
       "laggards": [
         {
           "symbol": "TEM",
-          "return_pct": -1.12,
+          "return_pct": -0.69,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3903,8 +3903,8 @@
           ]
         },
         {
-          "symbol": "COIN",
-          "return_pct": -0.11,
+          "symbol": "PLTR",
+          "return_pct": 0.5,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3913,21 +3913,22 @@
           ]
         },
         {
-          "symbol": "CRCL",
-          "return_pct": 0.23,
+          "symbol": "COIN",
+          "return_pct": 0.89,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "etf_holding:ARKK"
+            "etf_holding:ARKK",
+            "static_fallback"
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.053627+00:00",
-      "rs_score": 47.3,
-      "rs_vs_spy": 1.05,
-      "rs_vs_qqq": 0.57,
+      "last_updated": "2026-05-20T15:21:13.041860+00:00",
+      "rs_score": 47.5,
+      "rs_vs_spy": 1.34,
+      "rs_vs_qqq": 0.85,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (47/100) \u2014 lagging stronger themes. SPY delta +1.1%, QQQ delta +0.6%.",
+      "state_reason": "Positive return but mid-table RS (48/100) \u2014 lagging stronger themes. SPY delta +1.3%, QQQ delta +0.8%.",
       "momentum_rank": 33,
       "stage": 4,
       "stage_label": "Stage 4 Decline",
@@ -3947,7 +3948,7 @@
         "breadth_above_30w_ma_pct": 66.7,
         "breadth_rising_30w_ma_pct": 33.3
       },
-      "stage_updated_at": "2026-05-20T15:14:59.053554+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.041805+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3972,12 +3973,12 @@
         "IWC": "tradier_hist",
         "FDM": "tradier_hist"
       },
-      "price": 179.99,
+      "price": 180.92,
       "lead_proxy": "IWC",
       "timeframe": "1D",
-      "return_pct": 1.56,
+      "return_pct": 1.83,
       "performance": {
-        "1D": 1.56,
+        "1D": 1.83,
         "7D": -1.75,
         "30D": -2.15,
         "YTD": 10.87,
@@ -3985,22 +3986,13 @@
         "5Y": null
       },
       "breadth_pct": 87.5,
-      "pct_from_50d": 2.45,
+      "pct_from_50d": 2.72,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:IWC",
       "leaders": [
         {
           "symbol": "CIFR",
-          "return_pct": 5.14,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:IWC"
-          ]
-        },
-        {
-          "symbol": "COGT",
-          "return_pct": 3.84,
+          "return_pct": 5.96,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4009,7 +4001,16 @@
         },
         {
           "symbol": "APLD",
-          "return_pct": 3.36,
+          "return_pct": 4.37,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:IWC"
+          ]
+        },
+        {
+          "symbol": "COGT",
+          "return_pct": 3.91,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4020,7 +4021,7 @@
       "laggards": [
         {
           "symbol": "AXTI",
-          "return_pct": -3.62,
+          "return_pct": -3.66,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4037,8 +4038,8 @@
           ]
         },
         {
-          "symbol": "WULF",
-          "return_pct": 1.69,
+          "symbol": "CELC",
+          "return_pct": 2.33,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4046,9 +4047,9 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.882141+00:00",
-      "rs_score": 46.6,
-      "rs_vs_spy": 0.87,
+      "last_updated": "2026-05-20T15:21:12.872381+00:00",
+      "rs_score": 46.7,
+      "rs_vs_spy": 0.88,
       "rs_vs_qqq": 0.39,
       "state": "neutral",
       "state_reason": "Positive return but mid-table RS (47/100) \u2014 lagging stronger themes. SPY delta +0.9%, QQQ delta +0.4%.",
@@ -4071,7 +4072,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.882093+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.872322+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4099,12 +4100,12 @@
         "CPER": "tradier_hist",
         "DBB": "tradier_hist"
       },
-      "price": 81.0,
+      "price": 81.9,
       "lead_proxy": "COPX",
       "timeframe": "1D",
-      "return_pct": 2.06,
+      "return_pct": 2.46,
       "performance": {
-        "1D": 2.06,
+        "1D": 2.46,
         "7D": -4.63,
         "30D": 1.76,
         "YTD": 10.72,
@@ -4112,13 +4113,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": 5.23,
+      "pct_from_50d": 5.44,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:COPX + etf_holding:DBB + static_fallback_seeds",
       "leaders": [
         {
-          "symbol": "SCCO",
-          "return_pct": 2.49,
+          "symbol": "FCX",
+          "return_pct": 3.39,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4127,8 +4128,8 @@
           ]
         },
         {
-          "symbol": "FCX",
-          "return_pct": 2.36,
+          "symbol": "SCCO",
+          "return_pct": 3.38,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4138,7 +4139,7 @@
         },
         {
           "symbol": "TECK",
-          "return_pct": 1.99,
+          "return_pct": 2.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4149,7 +4150,7 @@
       "laggards": [
         {
           "symbol": "HBM",
-          "return_pct": 0.51,
+          "return_pct": 1.74,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4158,7 +4159,7 @@
         },
         {
           "symbol": "TECK",
-          "return_pct": 1.99,
+          "return_pct": 2.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4166,8 +4167,8 @@
           ]
         },
         {
-          "symbol": "FCX",
-          "return_pct": 2.36,
+          "symbol": "SCCO",
+          "return_pct": 3.38,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4176,12 +4177,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.704954+00:00",
+      "last_updated": "2026-05-20T15:21:11.557153+00:00",
       "rs_score": 45.2,
-      "rs_vs_spy": 1.37,
-      "rs_vs_qqq": 0.89,
+      "rs_vs_spy": 1.51,
+      "rs_vs_qqq": 1.02,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (45/100) \u2014 lagging stronger themes. SPY delta +1.4%, QQQ delta +0.9%.",
+      "state_reason": "Positive return but mid-table RS (45/100) \u2014 lagging stronger themes. SPY delta +1.5%, QQQ delta +1.0%.",
       "momentum_rank": 35,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -4201,7 +4202,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.704909+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.557097+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4225,26 +4226,26 @@
         "XLC": "tradier_hist",
         "VOX": "tradier_hist"
       },
-      "price": 115.33,
+      "price": 115.64,
       "lead_proxy": "XLC",
       "timeframe": "1D",
-      "return_pct": -0.36,
+      "return_pct": -0.06,
       "performance": {
-        "1D": -0.36,
+        "1D": -0.06,
         "7D": -1.32,
         "30D": -2.22,
         "YTD": -0.81,
         "1Y": 17.76,
         "5Y": null
       },
-      "breadth_pct": 30.8,
-      "pct_from_50d": 1.21,
+      "breadth_pct": 38.5,
+      "pct_from_50d": 1.51,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLC + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "CHTR",
-          "return_pct": 1.71,
+          "return_pct": 2.33,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4253,7 +4254,7 @@
         },
         {
           "symbol": "DIS",
-          "return_pct": 1.0,
+          "return_pct": 1.46,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4263,7 +4264,7 @@
         },
         {
           "symbol": "CMCSA",
-          "return_pct": 0.95,
+          "return_pct": 1.19,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4274,7 +4275,7 @@
       "laggards": [
         {
           "symbol": "SATS",
-          "return_pct": -2.02,
+          "return_pct": -1.53,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4283,7 +4284,7 @@
         },
         {
           "symbol": "NFLX",
-          "return_pct": -1.21,
+          "return_pct": -1.24,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4293,7 +4294,7 @@
         },
         {
           "symbol": "TTWO",
-          "return_pct": -1.01,
+          "return_pct": -0.7,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4301,12 +4302,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.676744+00:00",
-      "rs_score": 43.4,
-      "rs_vs_spy": -1.05,
-      "rs_vs_qqq": -1.53,
+      "last_updated": "2026-05-20T15:21:11.525051+00:00",
+      "rs_score": 43.5,
+      "rs_vs_spy": -1.01,
+      "rs_vs_qqq": -1.5,
       "state": "neutral",
-      "state_reason": "Mid-range RS (43/100) vs peer themes. SPY delta -1.1%, QQQ delta -1.5%. Breadth 31%.",
+      "state_reason": "Mid-range RS (44/100) vs peer themes. SPY delta -1.0%, QQQ delta -1.5%. Breadth 38%.",
       "momentum_rank": 36,
       "stage": 1,
       "stage_label": "Stage 1 Base",
@@ -4326,7 +4327,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.676695+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.524968+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4350,12 +4351,12 @@
         "XLRE": "tradier_hist",
         "VNQ": "tradier_hist"
       },
-      "price": 44.23,
+      "price": 44.32,
       "lead_proxy": "XLRE",
       "timeframe": "1D",
-      "return_pct": 0.68,
+      "return_pct": 0.88,
       "performance": {
-        "1D": 0.68,
+        "1D": 0.88,
         "7D": -0.74,
         "30D": -1.22,
         "YTD": 8.61,
@@ -4363,23 +4364,13 @@
         "5Y": null
       },
       "breadth_pct": 72.7,
-      "pct_from_50d": 3.01,
+      "pct_from_50d": 3.21,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLRE + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "PSA",
-          "return_pct": 2.28,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:XLRE",
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "DLR",
-          "return_pct": 1.69,
+          "return_pct": 2.55,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4389,18 +4380,7 @@
         },
         {
           "symbol": "CBRE",
-          "return_pct": 1.37,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:XLRE"
-          ]
-        }
-      ],
-      "laggards": [
-        {
-          "symbol": "WELL",
-          "return_pct": -1.07,
+          "return_pct": 1.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4408,17 +4388,8 @@
           ]
         },
         {
-          "symbol": "O",
-          "return_pct": -0.37,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:XLRE"
-          ]
-        },
-        {
-          "symbol": "AMT",
-          "return_pct": -0.07,
+          "symbol": "DLR",
+          "return_pct": 1.93,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4427,12 +4398,42 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.968148+00:00",
-      "rs_score": 43.0,
-      "rs_vs_spy": -0.01,
-      "rs_vs_qqq": -0.49,
+      "laggards": [
+        {
+          "symbol": "WELL",
+          "return_pct": -0.83,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:XLRE"
+          ]
+        },
+        {
+          "symbol": "O",
+          "return_pct": -0.09,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:XLRE"
+          ]
+        },
+        {
+          "symbol": "AMT",
+          "return_pct": -0.08,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:XLRE",
+            "static_fallback"
+          ]
+        }
+      ],
+      "last_updated": "2026-05-20T15:21:12.946340+00:00",
+      "rs_score": 43.1,
+      "rs_vs_spy": -0.07,
+      "rs_vs_qqq": -0.56,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (43/100) \u2014 lagging stronger themes. SPY delta -0.0%, QQQ delta -0.5%.",
+      "state_reason": "Positive return but mid-table RS (43/100) \u2014 lagging stronger themes. SPY delta -0.1%, QQQ delta -0.6%.",
       "momentum_rank": 37,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -4452,7 +4453,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.968089+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.946258+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4476,26 +4477,26 @@
         "XLF": "tradier_hist",
         "VFH": "tradier_hist"
       },
-      "price": 51.42,
+      "price": 51.58,
       "lead_proxy": "XLF",
       "timeframe": "1D",
-      "return_pct": 0.69,
+      "return_pct": 1.02,
       "performance": {
-        "1D": 0.69,
+        "1D": 1.02,
         "7D": 0.94,
         "30D": -2.39,
         "YTD": -5.75,
         "1Y": 0.45,
         "5Y": null
       },
-      "breadth_pct": 60.0,
-      "pct_from_50d": 1.45,
+      "breadth_pct": 70.0,
+      "pct_from_50d": 1.78,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLF",
       "leaders": [
         {
           "symbol": "C",
-          "return_pct": 3.51,
+          "return_pct": 4.01,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4504,7 +4505,7 @@
         },
         {
           "symbol": "GS",
-          "return_pct": 3.47,
+          "return_pct": 3.91,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4514,7 +4515,7 @@
         },
         {
           "symbol": "MS",
-          "return_pct": 3.05,
+          "return_pct": 3.5,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4526,7 +4527,7 @@
       "laggards": [
         {
           "symbol": "MA",
-          "return_pct": -1.47,
+          "return_pct": -1.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4535,7 +4536,7 @@
         },
         {
           "symbol": "V",
-          "return_pct": -0.54,
+          "return_pct": -0.41,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4544,7 +4545,7 @@
         },
         {
           "symbol": "BRK-B",
-          "return_pct": -0.14,
+          "return_pct": 0.0,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4553,12 +4554,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.764552+00:00",
+      "last_updated": "2026-05-20T15:21:11.627899+00:00",
       "rs_score": 42.6,
-      "rs_vs_spy": 0.0,
-      "rs_vs_qqq": -0.48,
+      "rs_vs_spy": 0.07,
+      "rs_vs_qqq": -0.42,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (43/100) \u2014 lagging stronger themes. SPY delta +0.0%, QQQ delta -0.5%.",
+      "state_reason": "Positive return but mid-table RS (43/100) \u2014 lagging stronger themes. SPY delta +0.1%, QQQ delta -0.4%.",
       "momentum_rank": 38,
       "stage": 4,
       "stage_label": "Stage 4 Decline",
@@ -4578,7 +4579,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.764505+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.627841+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4603,26 +4604,26 @@
         "LIT": "tradier_hist",
         "BATT": "tradier_hist"
       },
-      "price": 82.94,
+      "price": 83.27,
       "lead_proxy": "LIT",
       "timeframe": "1D",
-      "return_pct": 1.59,
+      "return_pct": 1.91,
       "performance": {
-        "1D": 1.59,
+        "1D": 1.91,
         "7D": -8.6,
         "30D": -1.92,
         "YTD": 22.87,
         "1Y": 101.89,
         "5Y": null
       },
-      "breadth_pct": 88.9,
-      "pct_from_50d": 2.98,
+      "breadth_pct": 100.0,
+      "pct_from_50d": 3.29,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:LIT + etf_holding:BATT + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "ENVX",
-          "return_pct": 5.7,
+          "return_pct": 7.51,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4631,7 +4632,7 @@
         },
         {
           "symbol": "QS",
-          "return_pct": 2.88,
+          "return_pct": 3.91,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4640,7 +4641,7 @@
         },
         {
           "symbol": "FCX",
-          "return_pct": 2.36,
+          "return_pct": 3.39,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4651,7 +4652,7 @@
       "laggards": [
         {
           "symbol": "ALB",
-          "return_pct": -0.41,
+          "return_pct": 0.18,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4661,7 +4662,7 @@
         },
         {
           "symbol": "SQM",
-          "return_pct": 0.76,
+          "return_pct": 0.79,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4670,21 +4671,21 @@
           ]
         },
         {
-          "symbol": "RIO",
-          "return_pct": 1.29,
+          "symbol": "LAC",
+          "return_pct": 1.62,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "etf_holding:LIT"
+            "static_fallback"
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.840444+00:00",
-      "rs_score": 42.1,
-      "rs_vs_spy": 0.9,
-      "rs_vs_qqq": 0.42,
+      "last_updated": "2026-05-20T15:21:12.011493+00:00",
+      "rs_score": 42.2,
+      "rs_vs_spy": 0.96,
+      "rs_vs_qqq": 0.47,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (42/100) \u2014 lagging stronger themes. SPY delta +0.9%, QQQ delta +0.4%.",
+      "state_reason": "Positive return but mid-table RS (42/100) \u2014 lagging stronger themes. SPY delta +1.0%, QQQ delta +0.5%.",
       "momentum_rank": 39,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -4704,7 +4705,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.840399+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.011412+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4732,26 +4733,26 @@
         "PICK": "tradier_hist",
         "SLX": "tradier_hist"
       },
-      "price": 111.96,
+      "price": 112.49,
       "lead_proxy": "XME",
       "timeframe": "1D",
-      "return_pct": 1.68,
+      "return_pct": 2.16,
       "performance": {
-        "1D": 1.68,
+        "1D": 2.16,
         "7D": -7.87,
         "30D": -1.91,
         "YTD": 21.11,
         "1Y": 68.69,
         "5Y": null
       },
-      "breadth_pct": 80.0,
-      "pct_from_50d": 3.37,
+      "breadth_pct": 90.0,
+      "pct_from_50d": 4.16,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XME",
       "leaders": [
         {
           "symbol": "UEC",
-          "return_pct": 5.5,
+          "return_pct": 6.34,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4760,7 +4761,7 @@
         },
         {
           "symbol": "FCX",
-          "return_pct": 2.36,
+          "return_pct": 3.39,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4769,8 +4770,8 @@
           ]
         },
         {
-          "symbol": "AA",
-          "return_pct": 1.5,
+          "symbol": "STLD",
+          "return_pct": 1.8,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4782,7 +4783,7 @@
       "laggards": [
         {
           "symbol": "HCC",
-          "return_pct": -0.66,
+          "return_pct": -0.36,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4791,7 +4792,7 @@
         },
         {
           "symbol": "RS",
-          "return_pct": -0.15,
+          "return_pct": 0.19,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4800,7 +4801,7 @@
         },
         {
           "symbol": "MP",
-          "return_pct": 0.66,
+          "return_pct": 1.13,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4808,12 +4809,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.875530+00:00",
-      "rs_score": 41.2,
-      "rs_vs_spy": 0.99,
-      "rs_vs_qqq": 0.51,
+      "last_updated": "2026-05-20T15:21:12.865624+00:00",
+      "rs_score": 41.4,
+      "rs_vs_spy": 1.21,
+      "rs_vs_qqq": 0.72,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (41/100) \u2014 lagging stronger themes. SPY delta +1.0%, QQQ delta +0.5%.",
+      "state_reason": "Positive return but mid-table RS (41/100) \u2014 lagging stronger themes. SPY delta +1.2%, QQQ delta +0.7%.",
       "momentum_rank": 40,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -4833,7 +4834,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.875477+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.865545+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4861,26 +4862,26 @@
         "JETS": "tradier_hist",
         "XTN": "tradier_hist"
       },
-      "price": 25.88,
+      "price": 26.22,
       "lead_proxy": "JETS",
       "timeframe": "1D",
-      "return_pct": 3.18,
+      "return_pct": 3.74,
       "performance": {
-        "1D": 3.18,
+        "1D": 3.74,
         "7D": 0.21,
         "30D": -5.99,
         "YTD": 6.93,
         "1Y": 16.46,
         "5Y": null
       },
-      "breadth_pct": 70.0,
-      "pct_from_50d": 4.03,
+      "breadth_pct": 80.0,
+      "pct_from_50d": 4.59,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:IYT",
       "leaders": [
         {
           "symbol": "UAL",
-          "return_pct": 7.19,
+          "return_pct": 8.88,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4890,7 +4891,7 @@
         },
         {
           "symbol": "DAL",
-          "return_pct": 6.03,
+          "return_pct": 7.66,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4900,7 +4901,7 @@
         },
         {
           "symbol": "XPO",
-          "return_pct": 3.79,
+          "return_pct": 4.0,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4911,7 +4912,7 @@
       "laggards": [
         {
           "symbol": "NSC",
-          "return_pct": -0.97,
+          "return_pct": -0.53,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4920,7 +4921,7 @@
         },
         {
           "symbol": "UNP",
-          "return_pct": -0.65,
+          "return_pct": -0.13,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4929,7 +4930,7 @@
         },
         {
           "symbol": "UBER",
-          "return_pct": -0.09,
+          "return_pct": 0.67,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4937,12 +4938,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.083766+00:00",
-      "rs_score": 41.0,
-      "rs_vs_spy": 2.49,
-      "rs_vs_qqq": 2.01,
+      "last_updated": "2026-05-20T15:21:13.073136+00:00",
+      "rs_score": 41.2,
+      "rs_vs_spy": 2.79,
+      "rs_vs_qqq": 2.3,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (41/100) \u2014 lagging stronger themes. SPY delta +2.5%, QQQ delta +2.0%.",
+      "state_reason": "Positive return but mid-table RS (41/100) \u2014 lagging stronger themes. SPY delta +2.8%, QQQ delta +2.3%.",
       "momentum_rank": 41,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -4962,7 +4963,7 @@
         "breadth_above_30w_ma_pct": 66.7,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.083719+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.073086+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4986,26 +4987,26 @@
         "XLU": "tradier_hist",
         "VPU": "tradier_hist"
       },
-      "price": 44.59,
+      "price": 44.55,
       "lead_proxy": "XLU",
       "timeframe": "1D",
-      "return_pct": 0.57,
+      "return_pct": 0.52,
       "performance": {
-        "1D": 0.57,
+        "1D": 0.52,
         "7D": -0.23,
         "30D": -2.55,
         "YTD": 4.37,
         "1Y": 8.11,
         "5Y": null
       },
-      "breadth_pct": 60.0,
-      "pct_from_50d": -2.59,
+      "breadth_pct": 50.0,
+      "pct_from_50d": -2.64,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLU",
       "leaders": [
         {
           "symbol": "VST",
-          "return_pct": 5.78,
+          "return_pct": 6.16,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5015,7 +5016,7 @@
         },
         {
           "symbol": "CEG",
-          "return_pct": 5.56,
+          "return_pct": 5.93,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5025,7 +5026,7 @@
         },
         {
           "symbol": "ETR",
-          "return_pct": 1.18,
+          "return_pct": 1.22,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5036,7 +5037,7 @@
       "laggards": [
         {
           "symbol": "NEE",
-          "return_pct": -1.03,
+          "return_pct": -1.24,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5046,7 +5047,7 @@
         },
         {
           "symbol": "D",
-          "return_pct": -0.39,
+          "return_pct": -0.49,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5055,7 +5056,7 @@
         },
         {
           "symbol": "SO",
-          "return_pct": -0.15,
+          "return_pct": -0.48,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5064,12 +5065,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.098143+00:00",
+      "last_updated": "2026-05-20T15:21:13.089453+00:00",
       "rs_score": 40.3,
-      "rs_vs_spy": -0.12,
-      "rs_vs_qqq": -0.6,
+      "rs_vs_spy": -0.43,
+      "rs_vs_qqq": -0.92,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (40/100) \u2014 lagging stronger themes. SPY delta -0.1%, QQQ delta -0.6%.",
+      "state_reason": "Positive return but mid-table RS (40/100) \u2014 lagging stronger themes. SPY delta -0.4%, QQQ delta -0.9%.",
       "momentum_rank": 42,
       "stage": 1,
       "stage_label": "Stage 1 Base",
@@ -5089,7 +5090,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.098094+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.089399+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5113,12 +5114,12 @@
         "KBE": "tradier_hist",
         "XLF": "tradier_hist"
       },
-      "price": 51.42,
+      "price": 51.58,
       "lead_proxy": "XLF",
       "timeframe": "1D",
-      "return_pct": 1.38,
+      "return_pct": 1.65,
       "performance": {
-        "1D": 1.38,
+        "1D": 1.65,
         "7D": -0.14,
         "30D": -3.13,
         "YTD": -1.98,
@@ -5126,13 +5127,13 @@
         "5Y": null
       },
       "breadth_pct": 93.3,
-      "pct_from_50d": 2.05,
+      "pct_from_50d": 2.33,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:KBE + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "C",
-          "return_pct": 3.51,
+          "return_pct": 4.01,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5141,7 +5142,7 @@
         },
         {
           "symbol": "GS",
-          "return_pct": 3.47,
+          "return_pct": 3.91,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5150,7 +5151,7 @@
         },
         {
           "symbol": "MS",
-          "return_pct": 3.05,
+          "return_pct": 3.5,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5161,7 +5162,7 @@
       "laggards": [
         {
           "symbol": "APO",
-          "return_pct": -1.5,
+          "return_pct": -1.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5170,7 +5171,7 @@
         },
         {
           "symbol": "BK",
-          "return_pct": 1.18,
+          "return_pct": 1.38,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5179,7 +5180,7 @@
         },
         {
           "symbol": "BAC",
-          "return_pct": 1.24,
+          "return_pct": 1.51,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5187,9 +5188,9 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.639423+00:00",
+      "last_updated": "2026-05-20T15:21:11.483121+00:00",
       "rs_score": 40.2,
-      "rs_vs_spy": 0.69,
+      "rs_vs_spy": 0.7,
       "rs_vs_qqq": 0.21,
       "state": "neutral",
       "state_reason": "Positive return but mid-table RS (40/100) \u2014 lagging stronger themes. SPY delta +0.7%, QQQ delta +0.2%.",
@@ -5212,7 +5213,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.639370+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.483058+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5239,12 +5240,12 @@
         "KBE": "tradier_hist",
         "IAT": "tradier_hist"
       },
-      "price": 56.79,
+      "price": 57.04,
       "lead_proxy": "IAT",
       "timeframe": "1D",
-      "return_pct": 2.12,
+      "return_pct": 2.41,
       "performance": {
-        "1D": 2.12,
+        "1D": 2.41,
         "7D": -0.98,
         "30D": -3.99,
         "YTD": 2.92,
@@ -5252,13 +5253,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": 2.71,
+      "pct_from_50d": 2.95,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:KRE + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "VLY",
-          "return_pct": 3.02,
+          "return_pct": 3.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5267,7 +5268,7 @@
         },
         {
           "symbol": "ASB",
-          "return_pct": 2.78,
+          "return_pct": 3.13,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5276,7 +5277,7 @@
         },
         {
           "symbol": "WAL",
-          "return_pct": 2.67,
+          "return_pct": 2.88,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5287,8 +5288,17 @@
       ],
       "laggards": [
         {
+          "symbol": "EWBC",
+          "return_pct": 2.02,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:KRE"
+          ]
+        },
+        {
           "symbol": "KEY",
-          "return_pct": 1.96,
+          "return_pct": 2.44,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5296,17 +5306,8 @@
           ]
         },
         {
-          "symbol": "EWBC",
-          "return_pct": 1.96,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:KRE"
-          ]
-        },
-        {
-          "symbol": "CFG",
-          "return_pct": 2.15,
+          "symbol": "PNFP",
+          "return_pct": 2.47,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5314,12 +5315,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.976327+00:00",
-      "rs_score": 39.1,
-      "rs_vs_spy": 1.43,
-      "rs_vs_qqq": 0.95,
+      "last_updated": "2026-05-20T15:21:12.954728+00:00",
+      "rs_score": 39.2,
+      "rs_vs_spy": 1.46,
+      "rs_vs_qqq": 0.97,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (39/100) \u2014 lagging stronger themes. SPY delta +1.4%, QQQ delta +0.9%.",
+      "state_reason": "Positive return but mid-table RS (39/100) \u2014 lagging stronger themes. SPY delta +1.5%, QQQ delta +1.0%.",
       "momentum_rank": 44,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -5339,7 +5340,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.976278+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.954674+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5365,12 +5366,12 @@
         "XAR": "tradier_hist",
         "ITA": "tradier_hist"
       },
-      "price": 264.52,
+      "price": 266.25,
       "lead_proxy": "XAR",
       "timeframe": "1D",
-      "return_pct": 1.69,
+      "return_pct": 2.38,
       "performance": {
-        "1D": 1.69,
+        "1D": 2.38,
         "7D": -1.79,
         "30D": -4.2,
         "YTD": 6.61,
@@ -5378,13 +5379,13 @@
         "5Y": null
       },
       "breadth_pct": 93.8,
-      "pct_from_50d": -0.53,
+      "pct_from_50d": 0.14,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XAR + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "FTAI",
-          "return_pct": 6.55,
+          "return_pct": 8.09,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5393,7 +5394,7 @@
         },
         {
           "symbol": "RCAT",
-          "return_pct": 3.34,
+          "return_pct": 4.1,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5402,7 +5403,7 @@
         },
         {
           "symbol": "CW",
-          "return_pct": 2.93,
+          "return_pct": 3.73,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5413,7 +5414,7 @@
       "laggards": [
         {
           "symbol": "EH",
-          "return_pct": -2.02,
+          "return_pct": -1.81,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5422,7 +5423,7 @@
         },
         {
           "symbol": "AVAV",
-          "return_pct": 0.07,
+          "return_pct": 0.44,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5431,7 +5432,7 @@
         },
         {
           "symbol": "ACHR",
-          "return_pct": 0.94,
+          "return_pct": 1.87,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5439,12 +5440,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.747139+00:00",
-      "rs_score": 38.5,
-      "rs_vs_spy": 1.0,
-      "rs_vs_qqq": 0.52,
+      "last_updated": "2026-05-20T15:21:11.607749+00:00",
+      "rs_score": 38.6,
+      "rs_vs_spy": 1.43,
+      "rs_vs_qqq": 0.94,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (38/100) \u2014 lagging stronger themes. SPY delta +1.0%, QQQ delta +0.5%.",
+      "state_reason": "Positive return but mid-table RS (39/100) \u2014 lagging stronger themes. SPY delta +1.4%, QQQ delta +0.9%.",
       "momentum_rank": 45,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -5464,7 +5465,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.747090+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.607693+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5492,12 +5493,12 @@
         "DBA": "tradier_hist",
         "VEGI": "tradier_hist"
       },
-      "price": 80.91,
+      "price": 81.08,
       "lead_proxy": "MOO",
       "timeframe": "1D",
-      "return_pct": -0.3,
+      "return_pct": -0.12,
       "performance": {
-        "1D": -0.3,
+        "1D": -0.12,
         "7D": -1.76,
         "30D": -2.29,
         "YTD": 11.14,
@@ -5505,22 +5506,13 @@
         "5Y": null
       },
       "breadth_pct": 44.4,
-      "pct_from_50d": -2.25,
+      "pct_from_50d": -2.07,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:MOO + etf_holding:DBA + static_fallback_seeds",
       "leaders": [
         {
-          "symbol": "TSN",
-          "return_pct": 0.44,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:MOO"
-          ]
-        },
-        {
           "symbol": "DE",
-          "return_pct": 0.27,
+          "return_pct": 0.75,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5529,19 +5521,28 @@
           ]
         },
         {
-          "symbol": "ZTS",
-          "return_pct": 0.26,
+          "symbol": "TSN",
+          "return_pct": 0.58,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
             "etf_holding:MOO"
+          ]
+        },
+        {
+          "symbol": "MOS",
+          "return_pct": 0.43,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
           ]
         }
       ],
       "laggards": [
         {
           "symbol": "CF",
-          "return_pct": -4.02,
+          "return_pct": -4.6,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5551,7 +5552,7 @@
         },
         {
           "symbol": "NTR",
-          "return_pct": -1.62,
+          "return_pct": -1.8,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5560,7 +5561,7 @@
         },
         {
           "symbol": "ADM",
-          "return_pct": -1.29,
+          "return_pct": -1.4,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5569,12 +5570,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.611180+00:00",
+      "last_updated": "2026-05-20T15:21:08.944283+00:00",
       "rs_score": 37.8,
-      "rs_vs_spy": -0.99,
-      "rs_vs_qqq": -1.47,
+      "rs_vs_spy": -1.07,
+      "rs_vs_qqq": -1.56,
       "state": "neutral",
-      "state_reason": "Mid-range RS (38/100) vs peer themes. SPY delta -1.0%, QQQ delta -1.5%. Breadth 44%.",
+      "state_reason": "Mid-range RS (38/100) vs peer themes. SPY delta -1.1%, QQQ delta -1.6%. Breadth 44%.",
       "momentum_rank": 46,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -5594,7 +5595,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.611087+00:00",
+      "stage_updated_at": "2026-05-20T15:21:08.944201+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5622,26 +5623,26 @@
         "XAR": "tradier_hist",
         "PPA": "tradier_hist"
       },
-      "price": 221.43,
+      "price": 222.95,
       "lead_proxy": "ITA",
       "timeframe": "1D",
-      "return_pct": 1.43,
+      "return_pct": 2.13,
       "performance": {
-        "1D": 1.43,
+        "1D": 2.13,
         "7D": -1.74,
         "30D": -4.34,
         "YTD": 6.79,
         "1Y": 27.97,
         "5Y": null
       },
-      "breadth_pct": 58.3,
-      "pct_from_50d": -1.17,
+      "breadth_pct": 66.7,
+      "pct_from_50d": -0.49,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:ITA + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "GE",
-          "return_pct": 3.58,
+          "return_pct": 4.54,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5649,17 +5650,17 @@
           ]
         },
         {
-          "symbol": "KTOS",
-          "return_pct": 2.88,
+          "symbol": "BA",
+          "return_pct": 3.48,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "static_fallback"
+            "etf_holding:ITA"
           ]
         },
         {
-          "symbol": "BA",
-          "return_pct": 2.7,
+          "symbol": "RKLB",
+          "return_pct": 3.43,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5670,7 +5671,7 @@
       "laggards": [
         {
           "symbol": "LHX",
-          "return_pct": -1.11,
+          "return_pct": -0.9,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5679,7 +5680,7 @@
         },
         {
           "symbol": "LMT",
-          "return_pct": -0.89,
+          "return_pct": -0.82,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5689,7 +5690,7 @@
         },
         {
           "symbol": "NOC",
-          "return_pct": -0.82,
+          "return_pct": -0.7,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5698,12 +5699,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.740872+00:00",
-      "rs_score": 37.3,
-      "rs_vs_spy": 0.74,
-      "rs_vs_qqq": 0.26,
+      "last_updated": "2026-05-20T15:21:11.599330+00:00",
+      "rs_score": 37.4,
+      "rs_vs_spy": 1.18,
+      "rs_vs_qqq": 0.69,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (37/100) \u2014 lagging stronger themes. SPY delta +0.7%, QQQ delta +0.3%.",
+      "state_reason": "Positive return but mid-table RS (37/100) \u2014 lagging stronger themes. SPY delta +1.2%, QQQ delta +0.7%.",
       "momentum_rank": 47,
       "stage": 1,
       "stage_label": "Stage 1 Base",
@@ -5723,7 +5724,7 @@
         "breadth_above_30w_ma_pct": 66.7,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.740819+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.599270+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5747,26 +5748,26 @@
         "XLI": "tradier_hist",
         "VIS": "tradier_hist"
       },
-      "price": 170.15,
+      "price": 170.98,
       "lead_proxy": "XLI",
       "timeframe": "1D",
-      "return_pct": 1.03,
+      "return_pct": 1.47,
       "performance": {
-        "1D": 1.03,
+        "1D": 1.47,
         "7D": -2.65,
         "30D": -2.38,
         "YTD": 9.96,
         "1Y": 19.35,
         "5Y": null
       },
-      "breadth_pct": 55.6,
-      "pct_from_50d": 0.96,
+      "breadth_pct": 66.7,
+      "pct_from_50d": 1.4,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLI + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "GE",
-          "return_pct": 3.58,
+          "return_pct": 4.54,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5776,7 +5777,7 @@
         },
         {
           "symbol": "BA",
-          "return_pct": 2.7,
+          "return_pct": 3.48,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5785,7 +5786,7 @@
         },
         {
           "symbol": "CAT",
-          "return_pct": 1.14,
+          "return_pct": 1.59,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5797,16 +5798,7 @@
       "laggards": [
         {
           "symbol": "RTX",
-          "return_pct": -0.68,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:XLI"
-          ]
-        },
-        {
-          "symbol": "UNP",
-          "return_pct": -0.65,
+          "return_pct": -0.29,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5815,7 +5807,16 @@
         },
         {
           "symbol": "HON",
-          "return_pct": -0.46,
+          "return_pct": -0.15,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:XLI"
+          ]
+        },
+        {
+          "symbol": "UNP",
+          "return_pct": -0.13,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5823,12 +5824,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.827691+00:00",
-      "rs_score": 36.7,
-      "rs_vs_spy": 0.34,
-      "rs_vs_qqq": -0.14,
+      "last_updated": "2026-05-20T15:21:11.688895+00:00",
+      "rs_score": 36.8,
+      "rs_vs_spy": 0.52,
+      "rs_vs_qqq": 0.03,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (37/100) \u2014 lagging stronger themes. SPY delta +0.3%, QQQ delta -0.1%.",
+      "state_reason": "Positive return but mid-table RS (37/100) \u2014 lagging stronger themes. SPY delta +0.5%, QQQ delta +0.0%.",
       "momentum_rank": 48,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -5848,7 +5849,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.827645+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.688836+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5872,26 +5873,26 @@
         "XLY": "tradier_hist",
         "VCR": "tradier_hist"
       },
-      "price": 116.68,
+      "price": 117.26,
       "lead_proxy": "XLY",
       "timeframe": "1D",
-      "return_pct": 1.46,
+      "return_pct": 1.91,
       "performance": {
-        "1D": 1.46,
+        "1D": 1.91,
         "7D": -1.55,
         "30D": -2.73,
         "YTD": -2.1,
         "1Y": 7.28,
         "5Y": null
       },
-      "breadth_pct": 72.7,
-      "pct_from_50d": 1.85,
+      "breadth_pct": 81.8,
+      "pct_from_50d": 2.31,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLY + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "TJX",
-          "return_pct": 5.79,
+          "return_pct": 6.03,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5900,7 +5901,7 @@
         },
         {
           "symbol": "MAR",
-          "return_pct": 2.1,
+          "return_pct": 2.66,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5909,7 +5910,7 @@
         },
         {
           "symbol": "AMZN",
-          "return_pct": 1.69,
+          "return_pct": 2.08,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5920,8 +5921,8 @@
       ],
       "laggards": [
         {
-          "symbol": "LOW",
-          "return_pct": -0.6,
+          "symbol": "MCD",
+          "return_pct": -0.46,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5930,8 +5931,8 @@
           ]
         },
         {
-          "symbol": "MCD",
-          "return_pct": -0.5,
+          "symbol": "LOW",
+          "return_pct": -0.26,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5941,7 +5942,7 @@
         },
         {
           "symbol": "BKNG",
-          "return_pct": -0.27,
+          "return_pct": 0.47,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5949,12 +5950,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.684481+00:00",
-      "rs_score": 36.4,
-      "rs_vs_spy": 0.77,
-      "rs_vs_qqq": 0.29,
+      "last_updated": "2026-05-20T15:21:11.534319+00:00",
+      "rs_score": 36.6,
+      "rs_vs_spy": 0.96,
+      "rs_vs_qqq": 0.47,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (36/100) \u2014 lagging stronger themes. SPY delta +0.8%, QQQ delta +0.3%.",
+      "state_reason": "Positive return but mid-table RS (37/100) \u2014 lagging stronger themes. SPY delta +1.0%, QQQ delta +0.5%.",
       "momentum_rank": 49,
       "stage": 1,
       "stage_label": "Stage 1 Base",
@@ -5974,7 +5975,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.684429+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.534256+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5999,12 +6000,12 @@
         "XRT": "tradier_hist",
         "RTH": "tradier_hist"
       },
-      "price": 265.84,
+      "price": 266.72,
       "lead_proxy": "RTH",
       "timeframe": "1D",
-      "return_pct": 0.82,
+      "return_pct": 1.27,
       "performance": {
-        "1D": 0.82,
+        "1D": 1.27,
         "7D": -0.62,
         "30D": -4.96,
         "YTD": -0.34,
@@ -6012,13 +6013,13 @@
         "5Y": null
       },
       "breadth_pct": 64.3,
-      "pct_from_50d": -0.37,
+      "pct_from_50d": 0.06,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XRT + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "TJX",
-          "return_pct": 5.79,
+          "return_pct": 6.03,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6027,7 +6028,7 @@
         },
         {
           "symbol": "DKS",
-          "return_pct": 3.23,
+          "return_pct": 3.97,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6036,7 +6037,7 @@
         },
         {
           "symbol": "ETSY",
-          "return_pct": 2.28,
+          "return_pct": 2.79,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6047,7 +6048,7 @@
       "laggards": [
         {
           "symbol": "TGT",
-          "return_pct": -4.4,
+          "return_pct": -4.39,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6056,7 +6057,7 @@
         },
         {
           "symbol": "WMT",
-          "return_pct": -1.29,
+          "return_pct": -1.36,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6065,7 +6066,7 @@
         },
         {
           "symbol": "GO",
-          "return_pct": -1.15,
+          "return_pct": -1.24,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6073,12 +6074,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.690785+00:00",
-      "rs_score": 35.2,
-      "rs_vs_spy": 0.13,
-      "rs_vs_qqq": -0.35,
+      "last_updated": "2026-05-20T15:21:11.541550+00:00",
+      "rs_score": 35.3,
+      "rs_vs_spy": 0.32,
+      "rs_vs_qqq": -0.17,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (35/100) \u2014 lagging stronger themes. SPY delta +0.1%, QQQ delta -0.3%.",
+      "state_reason": "Positive return but mid-table RS (35/100) \u2014 lagging stronger themes. SPY delta +0.3%, QQQ delta -0.2%.",
       "momentum_rank": 50,
       "stage": 4,
       "stage_label": "Stage 4 Decline",
@@ -6098,7 +6099,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.690740+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.541493+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6119,35 +6120,26 @@
       "proxy_source_health": {
         "IHI": "tradier_hist"
       },
-      "price": 50.38,
+      "price": 50.44,
       "lead_proxy": "IHI",
       "timeframe": "1D",
-      "return_pct": 0.2,
+      "return_pct": 0.32,
       "performance": {
-        "1D": 0.2,
+        "1D": 0.32,
         "7D": 3.88,
         "30D": -6.44,
         "YTD": -18.92,
         "1Y": -20.03,
         "5Y": null
       },
-      "breadth_pct": 40.0,
-      "pct_from_50d": -4.06,
+      "breadth_pct": 60.0,
+      "pct_from_50d": -3.94,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:IHI + static_fallback_seeds",
       "leaders": [
         {
-          "symbol": "RMD",
-          "return_pct": 1.16,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:IHI"
-          ]
-        },
-        {
           "symbol": "GEHC",
-          "return_pct": 0.96,
+          "return_pct": 1.42,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6156,8 +6148,17 @@
           ]
         },
         {
+          "symbol": "RMD",
+          "return_pct": 1.2,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:IHI"
+          ]
+        },
+        {
           "symbol": "ISRG",
-          "return_pct": 0.88,
+          "return_pct": 0.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6169,7 +6170,7 @@
       "laggards": [
         {
           "symbol": "MDT",
-          "return_pct": -1.16,
+          "return_pct": -1.33,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6188,7 +6189,7 @@
         },
         {
           "symbol": "BSX",
-          "return_pct": -0.51,
+          "return_pct": -0.45,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6196,12 +6197,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.860178+00:00",
+      "last_updated": "2026-05-20T15:21:12.848533+00:00",
       "rs_score": 34.6,
-      "rs_vs_spy": -0.49,
-      "rs_vs_qqq": -0.97,
+      "rs_vs_spy": -0.63,
+      "rs_vs_qqq": -1.12,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (35/100) \u2014 lagging stronger themes. SPY delta -0.5%, QQQ delta -1.0%.",
+      "state_reason": "Positive return but mid-table RS (35/100) \u2014 lagging stronger themes. SPY delta -0.6%, QQQ delta -1.1%.",
       "momentum_rank": 51,
       "stage": 4,
       "stage_label": "Stage 4 Decline",
@@ -6221,7 +6222,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-05-20T15:14:58.860125+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.848470+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6248,12 +6249,12 @@
         "IBB": "tradier_hist",
         "ARKG": "tradier_hist"
       },
-      "price": 130.22,
+      "price": 130.21,
       "lead_proxy": "XBI",
       "timeframe": "1D",
-      "return_pct": 2.71,
+      "return_pct": 2.7,
       "performance": {
-        "1D": 2.71,
+        "1D": 2.7,
         "7D": -3.81,
         "30D": -5.79,
         "YTD": -0.45,
@@ -6261,13 +6262,13 @@
         "5Y": null
       },
       "breadth_pct": 66.7,
-      "pct_from_50d": 0.39,
+      "pct_from_50d": 0.38,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XBI + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "SMMT",
-          "return_pct": 8.17,
+          "return_pct": 8.81,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6276,7 +6277,7 @@
         },
         {
           "symbol": "MRNA",
-          "return_pct": 4.66,
+          "return_pct": 4.91,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6284,8 +6285,8 @@
           ]
         },
         {
-          "symbol": "RVMD",
-          "return_pct": 2.97,
+          "symbol": "TWST",
+          "return_pct": 3.58,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6296,7 +6297,16 @@
       "laggards": [
         {
           "symbol": "BIIB",
-          "return_pct": -0.98,
+          "return_pct": -1.16,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        },
+        {
+          "symbol": "VRTX",
+          "return_pct": -0.92,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6305,29 +6315,20 @@
         },
         {
           "symbol": "MDGL",
-          "return_pct": -0.84,
+          "return_pct": -0.47,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
             "etf_holding:XBI"
           ]
-        },
-        {
-          "symbol": "VRTX",
-          "return_pct": -0.81,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.647605+00:00",
+      "last_updated": "2026-05-20T15:21:11.491753+00:00",
       "rs_score": 31.9,
-      "rs_vs_spy": 2.02,
-      "rs_vs_qqq": 1.54,
+      "rs_vs_spy": 1.75,
+      "rs_vs_qqq": 1.26,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (32/100) \u2014 lagging stronger themes. SPY delta +2.0%, QQQ delta +1.5%.",
+      "state_reason": "Positive return but mid-table RS (32/100) \u2014 lagging stronger themes. SPY delta +1.8%, QQQ delta +1.3%.",
       "momentum_rank": 52,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -6347,7 +6348,129 @@
         "breadth_above_30w_ma_pct": 33.3,
         "breadth_rising_30w_ma_pct": 66.7
       },
-      "stage_updated_at": "2026-05-20T15:14:58.647531+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.491689+00:00",
+      "stage_source": "etf_proxy"
+    },
+    {
+      "theme_id": "rare_earth",
+      "display_name": "Rare Earth Metals",
+      "classification": "sub_theme",
+      "parent_sector": "materials",
+      "sector_tags": [
+        "Materials",
+        "Mining"
+      ],
+      "proxy_type": "etf",
+      "proxy_symbols": [
+        "REMX"
+      ],
+      "proxy_symbols_used": [
+        "REMX"
+      ],
+      "proxy_source_health": {
+        "REMX": "tradier_hist"
+      },
+      "price": 94.52,
+      "lead_proxy": "REMX",
+      "timeframe": "1D",
+      "return_pct": 2.6,
+      "performance": {
+        "1D": 2.6,
+        "7D": -11.47,
+        "30D": -8.78,
+        "YTD": 27.26,
+        "1Y": 146.58,
+        "5Y": null
+      },
+      "breadth_pct": 100.0,
+      "pct_from_50d": -1.38,
+      "trend_accel_20d": 0.0,
+      "leader_universe_source": "etf_holding:REMX + static_fallback_seeds",
+      "leaders": [
+        {
+          "symbol": "TMRC",
+          "return_pct": 4.71,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        },
+        {
+          "symbol": "LYSDY",
+          "return_pct": 4.3,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        },
+        {
+          "symbol": "UUUU",
+          "return_pct": 3.71,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        }
+      ],
+      "laggards": [
+        {
+          "symbol": "ALB",
+          "return_pct": 0.18,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:REMX"
+          ]
+        },
+        {
+          "symbol": "SQM",
+          "return_pct": 0.79,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:REMX"
+          ]
+        },
+        {
+          "symbol": "MP",
+          "return_pct": 1.13,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:REMX",
+            "static_fallback"
+          ]
+        }
+      ],
+      "last_updated": "2026-05-20T15:21:12.939017+00:00",
+      "rs_score": 31.5,
+      "rs_vs_spy": 1.65,
+      "rs_vs_qqq": 1.16,
+      "state": "neutral",
+      "state_reason": "Positive return but mid-table RS (32/100) \u2014 lagging stronger themes. SPY delta +1.6%, QQQ delta +1.2%.",
+      "momentum_rank": 54,
+      "stage": 2,
+      "stage_label": "Stage 2 Advance",
+      "stage_score": 79.3,
+      "stage_confidence": "high",
+      "stage_reason": "Price +9.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_signals": {
+        "price_vs_30w_ma_pct": 9.51,
+        "ma_30w_slope_pct": 4.7,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -6.86,
+        "volume_ratio": null,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 25.75,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_updated_at": "2026-05-20T15:21:12.938966+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6375,26 +6498,26 @@
         "ARKF": "tradier_hist",
         "IPAY": "tradier_hist"
       },
-      "price": 24.96,
+      "price": 25.03,
       "lead_proxy": "FINX",
       "timeframe": "1D",
-      "return_pct": 0.87,
+      "return_pct": 1.16,
       "performance": {
-        "1D": 0.87,
+        "1D": 1.16,
         "7D": -0.13,
         "30D": -6.87,
         "YTD": -13.88,
         "1Y": -18.98,
         "5Y": null
       },
-      "breadth_pct": 78.6,
-      "pct_from_50d": 0.73,
+      "breadth_pct": 86.7,
+      "pct_from_50d": 1.27,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:FINX + etf_holding:ARKF + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "AMD",
-          "return_pct": 7.27,
+          "return_pct": 7.76,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6402,17 +6525,17 @@
           ]
         },
         {
-          "symbol": "SHOP",
-          "return_pct": 2.78,
+          "symbol": "GPN",
+          "return_pct": 3.25,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "etf_holding:ARKF"
+            "etf_holding:FINX"
           ]
         },
         {
           "symbol": "XYZ",
-          "return_pct": 2.77,
+          "return_pct": 3.11,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6424,7 +6547,7 @@
       "laggards": [
         {
           "symbol": "INTU",
-          "return_pct": -3.37,
+          "return_pct": -3.6,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6433,7 +6556,7 @@
         },
         {
           "symbol": "FIS",
-          "return_pct": -1.89,
+          "return_pct": -1.69,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6441,22 +6564,21 @@
           ]
         },
         {
-          "symbol": "COIN",
-          "return_pct": -0.11,
+          "symbol": "SSNC",
+          "return_pct": 0.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "etf_holding:FINX",
-            "etf_holding:ARKF"
+            "etf_holding:FINX"
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.772521+00:00",
-      "rs_score": 31.4,
-      "rs_vs_spy": 0.18,
-      "rs_vs_qqq": -0.3,
+      "last_updated": "2026-05-20T15:21:11.636142+00:00",
+      "rs_score": 31.5,
+      "rs_vs_spy": 0.21,
+      "rs_vs_qqq": -0.28,
       "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (31/100) \u2014 lagging stronger themes. SPY delta +0.2%, QQQ delta -0.3%.",
+      "state_reason": "Positive return but mid-table RS (32/100) \u2014 lagging stronger themes. SPY delta +0.2%, QQQ delta -0.3%.",
       "momentum_rank": 53,
       "stage": 4,
       "stage_label": "Stage 4 Decline",
@@ -6476,129 +6598,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.772473+00:00",
-      "stage_source": "etf_proxy"
-    },
-    {
-      "theme_id": "rare_earth",
-      "display_name": "Rare Earth Metals",
-      "classification": "sub_theme",
-      "parent_sector": "materials",
-      "sector_tags": [
-        "Materials",
-        "Mining"
-      ],
-      "proxy_type": "etf",
-      "proxy_symbols": [
-        "REMX"
-      ],
-      "proxy_symbols_used": [
-        "REMX"
-      ],
-      "proxy_source_health": {
-        "REMX": "tradier_hist"
-      },
-      "price": 93.9,
-      "lead_proxy": "REMX",
-      "timeframe": "1D",
-      "return_pct": 1.93,
-      "performance": {
-        "1D": 1.93,
-        "7D": -11.47,
-        "30D": -8.78,
-        "YTD": 27.26,
-        "1Y": 146.58,
-        "5Y": null
-      },
-      "breadth_pct": 85.7,
-      "pct_from_50d": -2.03,
-      "trend_accel_20d": 0.0,
-      "leader_universe_source": "etf_holding:REMX + static_fallback_seeds",
-      "leaders": [
-        {
-          "symbol": "UUUU",
-          "return_pct": 3.4,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "LYSDY",
-          "return_pct": 3.36,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "TMRC",
-          "return_pct": 2.36,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        }
-      ],
-      "laggards": [
-        {
-          "symbol": "ALB",
-          "return_pct": -0.41,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:REMX"
-          ]
-        },
-        {
-          "symbol": "MP",
-          "return_pct": 0.66,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:REMX",
-            "static_fallback"
-          ]
-        },
-        {
-          "symbol": "SQM",
-          "return_pct": 0.76,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:REMX"
-          ]
-        }
-      ],
-      "last_updated": "2026-05-20T15:14:58.959923+00:00",
-      "rs_score": 31.3,
-      "rs_vs_spy": 1.24,
-      "rs_vs_qqq": 0.76,
-      "state": "neutral",
-      "state_reason": "Positive return but mid-table RS (31/100) \u2014 lagging stronger themes. SPY delta +1.2%, QQQ delta +0.8%.",
-      "momentum_rank": 54,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
-      "stage_score": 79.3,
-      "stage_confidence": "high",
-      "stage_reason": "Price +9.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
-      "stage_signals": {
-        "price_vs_30w_ma_pct": 9.51,
-        "ma_30w_slope_pct": 4.7,
-        "rs_vs_spy_trend": "falling",
-        "rs_vs_spy_8w_pct": -6.86,
-        "volume_ratio": null,
-        "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 25.75,
-        "breakout_watch": false,
-        "danger_zone": false,
-        "breadth_above_30w_ma_pct": null,
-        "breadth_rising_30w_ma_pct": null
-      },
-      "stage_updated_at": "2026-05-20T15:14:58.959861+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.636089+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6626,12 +6626,12 @@
         "SIL": "tradier_hist",
         "SILJ": "tradier_hist"
       },
-      "price": 68.47,
+      "price": 69.09,
       "lead_proxy": "SLV",
       "timeframe": "1D",
-      "return_pct": 2.35,
+      "return_pct": 3.28,
       "performance": {
-        "1D": 2.35,
+        "1D": 3.28,
         "7D": -13.73,
         "30D": -10.98,
         "YTD": 6.0,
@@ -6639,23 +6639,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": -4.42,
+      "pct_from_50d": -3.49,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:SIL + etf_holding:SILJ + static_fallback_seeds",
       "leaders": [
         {
-          "symbol": "AG",
-          "return_pct": 4.38,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:SILJ",
-            "static_fallback"
-          ]
-        },
-        {
           "symbol": "CDE",
-          "return_pct": 4.3,
+          "return_pct": 5.61,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6664,8 +6654,18 @@
           ]
         },
         {
+          "symbol": "AG",
+          "return_pct": 5.61,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:SILJ",
+            "static_fallback"
+          ]
+        },
+        {
           "symbol": "PAAS",
-          "return_pct": 2.71,
+          "return_pct": 3.58,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6678,42 +6678,42 @@
       "laggards": [
         {
           "symbol": "PAAS",
-          "return_pct": 2.71,
+          "return_pct": 3.58,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
             "etf_holding:SIL",
+            "etf_holding:SILJ",
+            "static_fallback"
+          ]
+        },
+        {
+          "symbol": "AG",
+          "return_pct": 5.61,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
             "etf_holding:SILJ",
             "static_fallback"
           ]
         },
         {
           "symbol": "CDE",
-          "return_pct": 4.3,
+          "return_pct": 5.61,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
             "etf_holding:SIL",
             "etf_holding:SILJ"
           ]
-        },
-        {
-          "symbol": "AG",
-          "return_pct": 4.38,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:SILJ",
-            "static_fallback"
-          ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.011243+00:00",
-      "rs_score": 27.3,
-      "rs_vs_spy": 1.66,
-      "rs_vs_qqq": 1.18,
+      "last_updated": "2026-05-20T15:21:13.000559+00:00",
+      "rs_score": 27.6,
+      "rs_vs_spy": 2.33,
+      "rs_vs_qqq": 1.84,
       "state": "dead_zone",
-      "state_reason": "Bottom-quartile RS (27/100) vs 60-theme universe. SPY delta +1.7%, QQQ delta +1.2%. Breadth 100% \u2014 minimal buying pressure.",
+      "state_reason": "Bottom-quartile RS (28/100) vs 60-theme universe. SPY delta +2.3%, QQQ delta +1.8%. Breadth 100% \u2014 minimal buying pressure.",
       "momentum_rank": 55,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -6733,7 +6733,7 @@
         "breadth_above_30w_ma_pct": 33.3,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:59.011196+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.000505+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6757,12 +6757,12 @@
         "XLB": "tradier_hist",
         "IYM": "tradier_hist"
       },
-      "price": 49.42,
+      "price": 49.62,
       "lead_proxy": "XLB",
       "timeframe": "1D",
-      "return_pct": 0.91,
+      "return_pct": 1.32,
       "performance": {
-        "1D": 0.91,
+        "1D": 1.32,
         "7D": -5.15,
         "30D": -4.65,
         "YTD": 12.41,
@@ -6770,22 +6770,13 @@
         "5Y": null
       },
       "breadth_pct": 83.3,
-      "pct_from_50d": -1.52,
+      "pct_from_50d": -1.11,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLB + static_fallback_seeds",
       "leaders": [
         {
-          "symbol": "DD",
-          "return_pct": 2.42,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        },
-        {
           "symbol": "FCX",
-          "return_pct": 2.36,
+          "return_pct": 3.39,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6793,8 +6784,17 @@
           ]
         },
         {
+          "symbol": "DD",
+          "return_pct": 3.12,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        },
+        {
           "symbol": "CRH",
-          "return_pct": 2.29,
+          "return_pct": 2.82,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6805,7 +6805,7 @@
       "laggards": [
         {
           "symbol": "APD",
-          "return_pct": -1.35,
+          "return_pct": -1.19,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6815,7 +6815,7 @@
         },
         {
           "symbol": "CTVA",
-          "return_pct": -0.19,
+          "return_pct": -0.02,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6823,21 +6823,22 @@
           ]
         },
         {
-          "symbol": "MLM",
-          "return_pct": 0.25,
+          "symbol": "LIN",
+          "return_pct": 0.56,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "etf_holding:XLB"
+            "etf_holding:XLB",
+            "static_fallback"
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.654167+00:00",
-      "rs_score": 26.7,
-      "rs_vs_spy": 0.22,
-      "rs_vs_qqq": -0.26,
+      "last_updated": "2026-05-20T15:21:11.498225+00:00",
+      "rs_score": 26.9,
+      "rs_vs_spy": 0.37,
+      "rs_vs_qqq": -0.12,
       "state": "dead_zone",
-      "state_reason": "Bottom-quartile RS (27/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta -0.3%. Breadth 83% \u2014 minimal buying pressure.",
+      "state_reason": "Bottom-quartile RS (27/100) vs 60-theme universe. SPY delta +0.4%, QQQ delta -0.1%. Breadth 83% \u2014 minimal buying pressure.",
       "momentum_rank": 56,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -6857,7 +6858,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.654123+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.498171+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6888,12 +6889,12 @@
         "GDX": "tradier_hist",
         "GDXJ": "tradier_hist"
       },
-      "price": 415.4,
+      "price": 417.19,
       "lead_proxy": "GLD",
       "timeframe": "1D",
-      "return_pct": 1.58,
+      "return_pct": 2.27,
       "performance": {
-        "1D": 1.58,
+        "1D": 2.27,
         "7D": -7.22,
         "30D": -9.79,
         "YTD": 2.37,
@@ -6901,13 +6902,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": -5.14,
+      "pct_from_50d": -4.56,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:GDX + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "GOLD",
-          "return_pct": 2.85,
+          "return_pct": 3.6,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6916,7 +6917,7 @@
         },
         {
           "symbol": "PAAS",
-          "return_pct": 2.71,
+          "return_pct": 3.58,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6925,7 +6926,7 @@
         },
         {
           "symbol": "AEM",
-          "return_pct": 1.82,
+          "return_pct": 2.51,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6937,7 +6938,7 @@
       "laggards": [
         {
           "symbol": "NEM",
-          "return_pct": 1.66,
+          "return_pct": 2.34,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6947,7 +6948,7 @@
         },
         {
           "symbol": "AEM",
-          "return_pct": 1.82,
+          "return_pct": 2.51,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6957,7 +6958,7 @@
         },
         {
           "symbol": "PAAS",
-          "return_pct": 2.71,
+          "return_pct": 3.58,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6965,12 +6966,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.782552+00:00",
-      "rs_score": 26.5,
-      "rs_vs_spy": 0.89,
-      "rs_vs_qqq": 0.41,
+      "last_updated": "2026-05-20T15:21:11.645930+00:00",
+      "rs_score": 26.7,
+      "rs_vs_spy": 1.32,
+      "rs_vs_qqq": 0.83,
       "state": "dead_zone",
-      "state_reason": "Bottom-quartile RS (26/100) vs 60-theme universe. SPY delta +0.9%, QQQ delta +0.4%. Breadth 100% \u2014 minimal buying pressure.",
+      "state_reason": "Bottom-quartile RS (27/100) vs 60-theme universe. SPY delta +1.3%, QQQ delta +0.8%. Breadth 100% \u2014 minimal buying pressure.",
       "momentum_rank": 57,
       "stage": 1,
       "stage_label": "Stage 1 \u2192 2 Breakout Watch",
@@ -6990,7 +6991,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.782495+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.645871+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7014,12 +7015,12 @@
         "XLB": "tradier_hist",
         "VAW": "tradier_hist"
       },
-      "price": 49.42,
+      "price": 49.62,
       "lead_proxy": "XLB",
       "timeframe": "1D",
-      "return_pct": 0.88,
+      "return_pct": 1.27,
       "performance": {
-        "1D": 0.88,
+        "1D": 1.27,
         "7D": -4.99,
         "30D": -5.48,
         "YTD": 8.51,
@@ -7027,13 +7028,13 @@
         "5Y": null
       },
       "breadth_pct": 83.3,
-      "pct_from_50d": -2.33,
+      "pct_from_50d": -1.96,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLB + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "FCX",
-          "return_pct": 2.36,
+          "return_pct": 3.39,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7043,7 +7044,7 @@
         },
         {
           "symbol": "CRH",
-          "return_pct": 2.29,
+          "return_pct": 2.82,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7052,7 +7053,7 @@
         },
         {
           "symbol": "NEM",
-          "return_pct": 1.66,
+          "return_pct": 2.34,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7064,7 +7065,7 @@
       "laggards": [
         {
           "symbol": "APD",
-          "return_pct": -1.35,
+          "return_pct": -1.19,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7074,7 +7075,7 @@
         },
         {
           "symbol": "CTVA",
-          "return_pct": -0.19,
+          "return_pct": -0.02,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7082,21 +7083,22 @@
           ]
         },
         {
-          "symbol": "MLM",
-          "return_pct": 0.25,
+          "symbol": "LIN",
+          "return_pct": 0.56,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "etf_holding:XLB"
+            "etf_holding:XLB",
+            "static_fallback"
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.856734+00:00",
-      "rs_score": 24.9,
-      "rs_vs_spy": 0.19,
-      "rs_vs_qqq": -0.29,
+      "last_updated": "2026-05-20T15:21:12.804148+00:00",
+      "rs_score": 25.0,
+      "rs_vs_spy": 0.32,
+      "rs_vs_qqq": -0.17,
       "state": "dead_zone",
-      "state_reason": "Bottom-quartile RS (25/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta -0.3%. Breadth 83% \u2014 minimal buying pressure.",
+      "state_reason": "Bottom-quartile RS (25/100) vs 60-theme universe. SPY delta +0.3%, QQQ delta -0.2%. Breadth 83% \u2014 minimal buying pressure.",
       "momentum_rank": 58,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -7116,7 +7118,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.856687+00:00",
+      "stage_updated_at": "2026-05-20T15:21:12.804079+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7144,12 +7146,12 @@
         "URNM": "tradier_hist",
         "NLR": "tradier_hist"
       },
-      "price": 47.87,
+      "price": 48.22,
       "lead_proxy": "URA",
       "timeframe": "1D",
-      "return_pct": 1.42,
+      "return_pct": 2.17,
       "performance": {
-        "1D": 1.42,
+        "1D": 2.17,
         "7D": -9.14,
         "30D": -14.25,
         "YTD": 5.74,
@@ -7157,13 +7159,13 @@
         "5Y": null
       },
       "breadth_pct": 100.0,
-      "pct_from_50d": -7.73,
+      "pct_from_50d": -7.24,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:URA + static_fallback_seeds",
       "leaders": [
         {
           "symbol": "OKLO",
-          "return_pct": 7.88,
+          "return_pct": 8.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7173,7 +7175,7 @@
         },
         {
           "symbol": "UEC",
-          "return_pct": 5.5,
+          "return_pct": 6.34,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7182,7 +7184,7 @@
         },
         {
           "symbol": "SMR",
-          "return_pct": 4.13,
+          "return_pct": 5.17,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7193,7 +7195,7 @@
       "laggards": [
         {
           "symbol": "LEU",
-          "return_pct": 0.9,
+          "return_pct": 1.63,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7203,7 +7205,7 @@
         },
         {
           "symbol": "CCJ",
-          "return_pct": 1.34,
+          "return_pct": 1.99,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7212,7 +7214,7 @@
         },
         {
           "symbol": "BWXT",
-          "return_pct": 2.07,
+          "return_pct": 2.74,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7220,12 +7222,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:59.091739+00:00",
-      "rs_score": 22.5,
-      "rs_vs_spy": 0.73,
-      "rs_vs_qqq": 0.25,
+      "last_updated": "2026-05-20T15:21:13.081596+00:00",
+      "rs_score": 22.7,
+      "rs_vs_spy": 1.22,
+      "rs_vs_qqq": 0.73,
       "state": "dead_zone",
-      "state_reason": "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.7%, QQQ delta +0.2%. Breadth 100% \u2014 minimal buying pressure.",
+      "state_reason": "Bottom-quartile RS (23/100) vs 60-theme universe. SPY delta +1.2%, QQQ delta +0.7%. Breadth 100% \u2014 minimal buying pressure.",
       "momentum_rank": 59,
       "stage": 1,
       "stage_label": "Stage 1 Base",
@@ -7245,7 +7247,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 33.3
       },
-      "stage_updated_at": "2026-05-20T15:14:59.091691+00:00",
+      "stage_updated_at": "2026-05-20T15:21:13.081522+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7270,12 +7272,12 @@
         "ITB": "tradier_hist",
         "XHB": "tradier_hist"
       },
-      "price": 88.3,
+      "price": 88.73,
       "lead_proxy": "ITB",
       "timeframe": "1D",
-      "return_pct": 2.28,
+      "return_pct": 2.85,
       "performance": {
-        "1D": 2.28,
+        "1D": 2.85,
         "7D": -4.83,
         "30D": -11.74,
         "YTD": -9.16,
@@ -7283,13 +7285,13 @@
         "5Y": null
       },
       "breadth_pct": 90.0,
-      "pct_from_50d": -5.13,
+      "pct_from_50d": -4.59,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:ITB",
       "leaders": [
         {
           "symbol": "TOL",
-          "return_pct": 6.55,
+          "return_pct": 7.24,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7299,7 +7301,7 @@
         },
         {
           "symbol": "DHI",
-          "return_pct": 2.83,
+          "return_pct": 3.58,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7308,8 +7310,8 @@
           ]
         },
         {
-          "symbol": "PHM",
-          "return_pct": 2.62,
+          "symbol": "LEN",
+          "return_pct": 3.15,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7321,16 +7323,7 @@
       "laggards": [
         {
           "symbol": "LOW",
-          "return_pct": -0.6,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:ITB"
-          ]
-        },
-        {
-          "symbol": "SHW",
-          "return_pct": 1.24,
+          "return_pct": -0.26,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7339,7 +7332,16 @@
         },
         {
           "symbol": "LII",
-          "return_pct": 1.46,
+          "return_pct": 1.57,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:ITB"
+          ]
+        },
+        {
+          "symbol": "NVR",
+          "return_pct": 1.78,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -7347,12 +7349,12 @@
           ]
         }
       ],
-      "last_updated": "2026-05-20T15:14:58.818141+00:00",
-      "rs_score": 14.5,
-      "rs_vs_spy": 1.59,
-      "rs_vs_qqq": 1.11,
+      "last_updated": "2026-05-20T15:21:11.678050+00:00",
+      "rs_score": 14.6,
+      "rs_vs_spy": 1.9,
+      "rs_vs_qqq": 1.41,
       "state": "dead_zone",
-      "state_reason": "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta +1.6%, QQQ delta +1.1%. Breadth 90% \u2014 minimal buying pressure.",
+      "state_reason": "Bottom-quartile RS (15/100) vs 60-theme universe. SPY delta +1.9%, QQQ delta +1.4%. Breadth 90% \u2014 minimal buying pressure.",
       "momentum_rank": 60,
       "stage": 4,
       "stage_label": "Stage 4 Decline",
@@ -7372,7 +7374,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-05-20T15:14:58.818091+00:00",
+      "stage_updated_at": "2026-05-20T15:21:11.677983+00:00",
       "stage_source": "etf_proxy"
     }
   ]
