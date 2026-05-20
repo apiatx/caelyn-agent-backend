@@ -23,8 +23,8 @@ class XAISentimentProvider:
 
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.model = "grok-4-1-fast-reasoning"
-        self.deep_model = "grok-4-1-fast-reasoning"
+        self.model = "grok-4.3"
+        self.deep_model = "grok-4.3"
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
