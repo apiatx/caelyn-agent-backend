@@ -1,0 +1,226 @@
+We need to add backend support for three new Strategy page tabs, while preserving existing architecture and avoiding duplicate API calls.
+
+IMPORTANT ARCHITECTURAL RULE:
+Do NOT create new direct quote/API calls for S&P 500, VIX, US 10Y Yield, DXY, Dow, Nasdaq, Bitcoin, etc. The Home page already displays a Market Snapshot with:
+- S&P 500
+- Dow Jones
+- Nasdaq 100
+- Bitcoin
+- US 10Y Yield
+- VIX
+- US Dollar
+
+Find the existing backend route/service/cache that powers the Home page Market Snapshot and reuse that same service/cache/output for these new Strategy tabs. Do not duplicate provider calls. Do not create a parallel FMP/Tradier/FRED quote fetcher if one already exists.
+
+Goal:
+Add backend endpoints/data services for three separate Strategy tabs:
+
+1. VIX Risk Regime
+2. Weekly Price Movements
+3. 10Y Yield vs S&P 500
+
+These should be separate strategy payloads, not one combined "Macro & Trends" tab.
+
+Data provider rules:
+- Reuse existing Home Market Snapshot API/cache for current VIX, S&P 500, US 10Y Yield, DXY and related live/current values.
+- For historical analysis, use the existing historical price provider wrappers already in the backend where possible.
+- Prefer existing FMP historical wrappers if present, because the paid FMP plan supports up to 5 years of historical data.
+- Use FRED/FMP treasury history only through existing backend provider abstractions if they already exist.
+- Do not call providers from frontend.
+- Do not add expensive request-time recomputation of 5-year histories on every page load.
+
+Storage:
+Store only computed strategy scorecard snapshots in Neon/Postgres, not raw full historical daily data.
+Create compact tables only if no existing strategy/snapshot table is appropriate.
+
+Suggested Neon tables if needed:
+- strategy_vix_regime_snapshots
+- strategy_weekly_price_movement_scorecards
+- strategy_ten_year_spx_snapshots
+
+But first audit existing tables/services for strategy snapshots or macro snapshots and reuse if reasonable.
+
+Retention:
+Keep computed snapshots compact. Do not store tick-by-tick data. Add simple retention comments or cleanup path if existing scheduler/retention patterns exist.
+
+Endpoints to add or reuse:
+Please implement these backend endpoints, matching existing route style/naming conventions:
+
+GET /api/strategy/vix-risk-regime
+GET /api/strategy/weekly-price-movements
+GET /api/strategy/ten-year-spx
+
+Optional diagnostics endpoint if consistent with existing app:
+GET /api/strategy/macro-diagnostics
+
+If the app already has a strategy router pattern, use that pattern instead of inventing a new route structure.
+
+1) VIX Risk Regime tab backend requirements
+
+Payload should include:
+
+A) current_market_snapshot
+Reuse the exact existing Home Market Snapshot service/cache. Include at minimum:
+- spx/current S&P value
+- spx 1D %
+- vix value
+- vix 1D %
+- us_10y value
+- us_10y bps or percent change if already available
+- dxy value/change if already available
+- snapshot freshness/cache_age/source metadata if available
+
+B) vix_regime_signal
+Use current VIX level and trend to return a signal object:
+- current_vix
+- current_zone
+- warning_level
+- signal_title
+- signal_summary
+- rules_used
+
+Signal rules:
+- VIX < 20: Calm / complacency zone. Profit protection / risk monitoring.
+- VIX rising back above 20: risk regime worsening warning.
+- VIX 20-30: elevated risk.
+- VIX 30-40: stress regime.
+- VIX > 40: panic/dislocation regime; long-term opportunity watch, not hard buy advice.
+
+Do NOT write hard advice like "buy" or "sell." Use signal/warning language.
+
+C) vix_spx_correlation
+Calculate true rolling statistical correlation between VIX % changes and S&P 500 % changes:
+- 1D move side-by-side
+- 7D move side-by-side
+- rolling_corr_7d
+- rolling_corr_30d if data is available
+- sample_size
+- calculation_window
+- last_updated
+
+Use daily historical data. For correlation, use daily percent changes over the selected window. Do not fake correlation from only two points.
+
+D) historical windows
+Support these lookback windows:
+- immediate: 7 trading days
+- short_term: past quarter / about 63 trading days
+- medium_term: 1 year
+- long_term: 5 years
+
+2) Weekly Price Movements tab backend requirements
+
+This must be deterministic Python/backend logic, not AI calculation.
+
+Use real historical S&P 500/SPY/index daily data, depending on whichever historical source already exists and is reliable in the backend. Prefer the same S&P proxy/symbol already used across the app if one exists.
+
+Compute four scenarios across each lookback window:
+- 5y
+- 1y
+- quarter / 63 trading days
+- 7d / immediate, if enough samples exist; if not enough samples, return insufficient_sample=true
+
+Definitions:
+A) Red Friday -> Monday outcome
+- Friday is red if Friday close < Thursday close.
+- Monday outcome is green/red based on Monday close vs Friday close.
+
+B) Green Friday -> Monday outcome
+- Friday is green if Friday close > Thursday close.
+- Monday outcome is green/red based on Monday close vs Friday close.
+
+C) Red Monday -> rest of week outcome
+- Monday is red if Monday close < prior Friday close.
+- Rest of week outcome is Friday close vs Monday close.
+
+D) Green Monday -> rest of week outcome
+- Monday is green if Monday close > prior Friday close.
+- Rest of week outcome is Friday close vs Monday close.
+
+For each scenario return:
+- sample_count
+- green_count
+- red_count
+- green_probability
+- red_probability
+- average_return_pct
+- median_return_pct
+- best_return_pct
+- worst_return_pct
+- current_read
+- confidence_label based on sample size
+- insufficient_sample flag if needed
+
+Also return:
+- most_recent_matching_cases, maybe last 5
+- current_week_context if today/current week has already created a matching condition
+- scorecard_updated_at
+- data_source
+- cache_age_seconds
+
+AI enhancement:
+Do NOT run AI automatically on every page load.
+Add a backend route or payload-compatible path for an "Ask Caelyn" enhancement if existing AI query flow supports contextual prompts.
+
+Preferred approach:
+- The frontend button should call the existing /api/query or agent route with this tab's deterministic data injected as screen/context.
+- If backend needs a helper endpoint, add one minimally:
+POST /api/strategy/weekly-price-movements/ai-summary
+
+But only add that if it fits existing architecture. Do not create a second agent system.
+
+3) 10Y Yield vs S&P 500 tab backend requirements
+
+Payload should include:
+
+A) current_market_snapshot
+Again reuse exact existing Home Market Snapshot service/cache for current US 10Y Yield and S&P 500 values.
+
+B) ten_year_spx_tracker
+Side-by-side:
+- US 10Y current value
+- US 10Y 1D change, preferably bps if existing snapshot has bps
+- US 10Y 7D change
+- S&P 500 current value
+- S&P 500 1D %
+- S&P 500 7D %
+- DXY current/change if available from same market snapshot
+
+C) true rolling statistical correlation
+Calculate rolling/statistical relationship between 10Y yield changes and S&P 500 % changes:
+- rolling_corr_7d
+- rolling_corr_30d
+- rolling_corr_63d if available
+- sample_size
+- lookback_window
+- last_updated
+
+Use daily changes:
+- 10Y should use daily bps changes or percent changes consistently. Prefer bps changes for yield.
+- S&P should use daily percent changes.
+Be explicit in returned metadata: correlation_basis = "10Y daily bps change vs S&P 500 daily percent return"
+
+D) historical windows:
+- 7 trading days
+- quarter / 63 trading days
+- 1 year
+- 5 years
+
+Return trend/regime labels:
+- yields rising + SPX rising
+- yields rising + SPX falling
+- yields falling + SPX rising
+- yields falling + SPX falling
+- mixed/flat
+
+Validation requirements:
+After implementation, run backend tests or smoke tests and report:
+- exact route names added
+- whether Home Market Snapshot service/cache was reused
+- whether any new provider calls were added
+- sample JSON shape for each endpoint
+- cache/freshness behavior
+- Neon tables created or reused
+- no frontend changes made in backend repo
+
+Critical:
+This needs to be a surgical extension. Do not refactor the Home page. Do not break existing Market Snapshot. Do not replace existing provider wrappers. Preserve existing paths.

@@ -14091,3 +14091,110 @@ async def strategy_smart_options(
 
     result = await build_smart_options_data(_hl_state, tradier, options_lkg)
     return JSONResponse(content=result)
+
+
+# ── GET /api/strategy/vix-risk-regime ───────────────────────────────────────
+
+@app.get("/api/strategy/vix-risk-regime")
+@limiter.limit("30/minute")
+async def strategy_vix_risk_regime(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    VIX Risk Regime tab payload.
+
+    Reuses the existing macro:dashboard:v3 cache (no new provider calls) for
+    current VIX, SPX proxy (SPY), 10Y yield, DXY.  Historical VIX comes from
+    FRED VIXCLS (4-h cache); historical SPX from yfinance ^GSPC (4-h cache).
+
+    Response includes:
+      current_market_snapshot  — live values from Home Market Snapshot cache
+      vix_regime_signal        — zone/warning/signal_title/summary
+      vix_spx_correlation      — rolling 7d/30d/63d Pearson correlation
+      historical_windows       — 7d / quarter / 1y / 5y summaries
+    """
+    from services.strategy_macro_service import build_vix_regime_payload
+    mp = _get_macro_provider()
+    if not mp:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Macro provider not ready — retry in ~30 s"},
+        )
+    try:
+        result = await build_vix_regime_payload(mp)
+        return JSONResponse(content=result)
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ── GET /api/strategy/weekly-price-movements ────────────────────────────────
+
+@app.get("/api/strategy/weekly-price-movements")
+@limiter.limit("30/minute")
+async def strategy_weekly_price_movements(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Weekly Price Movements scorecard tab payload.
+
+    Deterministic Python — no AI.  Uses yfinance ^GSPC daily history (4-h
+    cache, ~5 years).  Computes four scenarios across 5y / 1y / quarter / 7d
+    windows:
+
+      red_friday_to_monday   — Friday closes red → Monday outcome
+      green_friday_to_monday — Friday closes green → Monday outcome
+      red_monday_to_friday   — Monday closes red → rest-of-week outcome
+      green_monday_to_friday — Monday closes green → rest-of-week outcome
+
+    Each scenario includes: sample_count, green/red probabilities,
+    avg/median/best/worst return %, confidence_label, insufficient_sample flag.
+    """
+    from services.strategy_macro_service import build_weekly_price_movements_payload
+    try:
+        result = await build_weekly_price_movements_payload()
+        return JSONResponse(content=result)
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ── GET /api/strategy/ten-year-spx ──────────────────────────────────────────
+
+@app.get("/api/strategy/ten-year-spx")
+@limiter.limit("30/minute")
+async def strategy_ten_year_spx(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    10Y Yield vs S&P 500 tab payload.
+
+    Reuses the existing macro:dashboard:v3 cache for current values.
+    10Y yield history from FRED DGS10 (4-h cache); SPX history from
+    yfinance ^GSPC (4-h cache).
+
+    Correlation basis: US 10Y daily bps change vs S&P 500 daily % return.
+
+    Response includes:
+      current_market_snapshot  — live values from Home Market Snapshot cache
+      ten_year_spx_tracker     — side-by-side current + 7d changes
+      rolling_correlation      — 7d / 30d / 63d Pearson correlation
+      regime_labels            — yields_rising_spx_rising / _falling / mixed_flat
+      historical_windows       — 7d / quarter / 1y / 5y summaries
+    """
+    from services.strategy_macro_service import build_ten_year_spx_payload
+    mp = _get_macro_provider()
+    if not mp:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Macro provider not ready — retry in ~30 s"},
+        )
+    try:
+        result = await build_ten_year_spx_payload(mp)
+        return JSONResponse(content=result)
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(exc)})
