@@ -345,6 +345,185 @@ def _rolling_corr(a: list[float], b: list[float], window: int) -> float | None:
     return _pearson(a[-window:], b[-window:]) if len(a) >= window else None
 
 
+def _rolling_corr_series(
+    xs: list[float | None],
+    ys: list[float | None],
+    window: int,
+) -> list[float | None]:
+    """
+    Per-row rolling Pearson correlation over a `window`-day trailing slice.
+    Both xs and ys may contain None (e.g. row 0 has no daily change).
+    Returns None until at least `window` valid (non-None) pairs are present.
+    Uses numpy vectorised corrcoef; falls back to pure-Python on ImportError.
+    """
+    n = len(xs)
+    out: list[float | None] = [None] * n
+    try:
+        import numpy as _np
+        xa = _np.array([v if v is not None else _np.nan for v in xs], dtype=float)
+        ya = _np.array([v if v is not None else _np.nan for v in ys], dtype=float)
+        for i in range(window - 1, n):
+            sx = xa[i + 1 - window : i + 1]
+            sy = ya[i + 1 - window : i + 1]
+            mask = ~(_np.isnan(sx) | _np.isnan(sy))
+            if mask.sum() < 5:
+                continue
+            sx_c, sy_c = sx[mask], sy[mask]
+            try:
+                c = float(_np.corrcoef(sx_c, sy_c)[0, 1])
+                if not (math.isnan(c) or math.isinf(c)):
+                    out[i] = round(c, 3)
+            except Exception:
+                pass
+    except ImportError:
+        for i in range(window - 1, n):
+            sx = [xs[j] for j in range(i + 1 - window, i + 1)
+                  if xs[j] is not None and ys[j] is not None]
+            sy = [ys[j] for j in range(i + 1 - window, i + 1)
+                  if xs[j] is not None and ys[j] is not None]
+            out[i] = _pearson(sx, sy)
+    return out
+
+
+# ── Chart data builders ───────────────────────────────────────────────────────
+
+def _build_vix_spx_chart_data(vix_hist: list[dict], spx_hist: list[dict]) -> dict:
+    """
+    Build chart_data for /api/strategy/vix-risk-regime.
+    Returns aligned daily rows with per-row daily changes and rolling correlations.
+    Up to ~1300 rows (full 5-year series); frontend filters locally for sub-windows.
+    """
+    vix_map = {r["date"]: _s(r.get("value")) for r in vix_hist if r.get("date")}
+    spx_map = {r["date"]: _s(r.get("close")) for r in spx_hist if r.get("date")}
+    dates   = sorted(set(vix_map) & set(spx_map))
+
+    vix_vals = [vix_map[d] for d in dates]
+    spx_vals = [spx_map[d] for d in dates]
+
+    # Daily % changes — row 0 has no previous bar so stays None
+    vix_chg: list[float | None] = [None]
+    spx_chg: list[float | None] = [None]
+    for i in range(1, len(dates)):
+        pv, cv = vix_vals[i - 1], vix_vals[i]
+        vix_chg.append(_r((cv - pv) / pv * 100, 3) if pv and cv and pv != 0 else None)
+        ps, cs = spx_vals[i - 1], spx_vals[i]
+        spx_chg.append(_r((cs - ps) / ps * 100, 3) if ps and cs and ps != 0 else None)
+
+    rc7  = _rolling_corr_series(vix_chg, spx_chg, 7)
+    rc30 = _rolling_corr_series(vix_chg, spx_chg, 30)
+    rc63 = _rolling_corr_series(vix_chg, spx_chg, 63)
+
+    rows = [
+        {
+            "date":             d,
+            "spx_close":        _r(spx_vals[i]),
+            "vix_close":        _r(vix_vals[i]),
+            "spx_return_pct":   spx_chg[i],
+            "vix_change_pct":   vix_chg[i],
+            "rolling_corr_7d":  rc7[i],
+            "rolling_corr_30d": rc30[i],
+            "rolling_corr_63d": rc63[i],
+        }
+        for i, d in enumerate(dates)
+    ]
+    return {
+        "vix_spx_timeseries": rows,
+        "row_count": len(rows),
+        "regime_bands": [
+            {"label": "Calm",     "min": 0,  "max": 20},
+            {"label": "Elevated", "min": 20, "max": 30},
+            {"label": "Stress",   "min": 30, "max": 40},
+            {"label": "Panic",    "min": 40, "max": None},
+        ],
+    }
+
+
+def _build_10y_spx_chart_data(ten_y_hist: list[dict], spx_hist: list[dict]) -> dict:
+    """
+    Build chart_data for /api/strategy/ten-year-spx.
+    Returns aligned daily rows with per-row bps changes, pct returns,
+    rolling correlations (basis: 10Y bps vs SPX %), and per-row regime label.
+    """
+    ten_map = {r["date"]: _s(r.get("value")) for r in ten_y_hist if r.get("date")}
+    spx_map = {r["date"]: _s(r.get("close")) for r in spx_hist if r.get("date")}
+    dates   = sorted(set(ten_map) & set(spx_map))
+
+    ten_vals = [ten_map[d] for d in dates]
+    spx_vals = [spx_map[d] for d in dates]
+
+    ten_bps: list[float | None] = [None]
+    spx_chg: list[float | None] = [None]
+    for i in range(1, len(dates)):
+        pt, ct = ten_vals[i - 1], ten_vals[i]
+        ten_bps.append(_r((ct - pt) * 100, 2) if pt is not None and ct is not None else None)
+        ps, cs = spx_vals[i - 1], spx_vals[i]
+        spx_chg.append(_r((cs - ps) / ps * 100, 3) if ps and cs and ps != 0 else None)
+
+    rc7  = _rolling_corr_series(ten_bps, spx_chg, 7)
+    rc30 = _rolling_corr_series(ten_bps, spx_chg, 30)
+    rc63 = _rolling_corr_series(ten_bps, spx_chg, 63)
+
+    def _row_regime(bps: float | None, pct: float | None) -> str:
+        if bps is None or pct is None:
+            return "mixed_flat"
+        if bps > 2:
+            return "yields_rising_spx_rising" if pct > 0 else "yields_rising_spx_falling"
+        if bps < -2:
+            return "yields_falling_spx_rising" if pct > 0 else "yields_falling_spx_falling"
+        return "mixed_flat"
+
+    rows = [
+        {
+            "date":             d,
+            "spx_close":        _r(spx_vals[i]),
+            "ten_yield":        _r(ten_vals[i], 3),
+            "spx_return_pct":   spx_chg[i],
+            "ten_y_change_bps": ten_bps[i],
+            "rolling_corr_7d":  rc7[i],
+            "rolling_corr_30d": rc30[i],
+            "rolling_corr_63d": rc63[i],
+            "regime_label":     _row_regime(ten_bps[i], spx_chg[i]),
+        }
+        for i, d in enumerate(dates)
+    ]
+    return {
+        "ten_y_spx_timeseries": rows,
+        "row_count": len(rows),
+    }
+
+
+def _build_weekly_chart_data(windows: dict) -> dict:
+    """
+    Flatten the windows dict into chart-ready probability bar rows.
+    One entry per (window_key × scenario_key) for easy frontend iteration.
+    """
+    _SCENARIO_KEYS = [
+        "red_friday_to_monday",
+        "green_friday_to_monday",
+        "red_monday_to_friday",
+        "green_monday_to_friday",
+    ]
+    summaries = []
+    for wk, wdata in windows.items():
+        if not isinstance(wdata, dict) or wdata.get("insufficient_sample"):
+            continue
+        for sk in _SCENARIO_KEYS:
+            sc = wdata.get(sk)
+            if not isinstance(sc, dict):
+                continue
+            summaries.append({
+                "window_key":          wk,
+                "scenario_key":        sk,
+                "green_probability":   sc.get("green_probability"),
+                "red_probability":     sc.get("red_probability"),
+                "average_return_pct":  sc.get("average_return_pct"),
+                "sample_count":        sc.get("sample_count"),
+                "confidence_label":    sc.get("confidence_label"),
+                "insufficient_sample": sc.get("insufficient_sample", False),
+            })
+    return {"window_summaries": summaries}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ── 1. VIX Risk Regime ────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
@@ -497,6 +676,7 @@ async def build_vix_regime_payload(macro_provider) -> dict:
                 )
             } if any(k in _NEON_STALE_WARN for k in ("strategy:hist:vixcls:1830", "strategy:spx_hist:1830")) else {}),
         },
+        "chart_data": _build_vix_spx_chart_data(vix_hist, spx_hist),
     }
 
     cache.set(cache_key, result, _REGIME_TTL)
@@ -689,6 +869,7 @@ async def build_weekly_price_movements_payload() -> dict:
         "intraweek_scenarios":  windows,
         "current_week_context": _current_week_context(bars),
         "cache_age_seconds":    0,
+        "chart_data":           _build_weekly_chart_data(windows),
     }
 
     cache.set(cache_key, result, _WEEKLY_TTL)
@@ -905,6 +1086,7 @@ async def build_ten_year_spx_payload(macro_provider) -> dict:
                 )
             } if any(k in _NEON_STALE_WARN for k in ("strategy:hist:dgs10:1830", "strategy:spx_hist:1830")) else {}),
         },
+        "chart_data": _build_10y_spx_chart_data(ten_y_hist, spx_hist),
     }
 
     cache.set(cache_key, result, _TEN_YEAR_TTL)

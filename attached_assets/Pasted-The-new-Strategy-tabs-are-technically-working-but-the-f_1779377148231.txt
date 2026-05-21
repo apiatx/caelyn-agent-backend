@@ -1,0 +1,106 @@
+The new Strategy tabs are technically working, but the frontend cannot visualize correlations well because the endpoints mostly return summary stats. We need chart-ready time-series arrays added to the existing endpoints.
+
+Do not break existing fields. Add new fields only.
+
+Goal:
+Make the VIX Risk Regime and 10Y Yield vs S&P 500 tabs visually useful by returning paired daily time series for charts.
+
+Keep existing architecture:
+- Current values still come from macro:dashboard:v3
+- Historical data still uses memory → Neon strategy_hist_snapshots → provider fallback
+- Do not add frontend provider calls
+- Do not remove existing summary fields
+
+Add chart_data objects to:
+
+1. GET /api/strategy/vix-risk-regime
+
+Add:
+
+chart_data: {
+  vix_spx_timeseries: [
+    {
+      date: "YYYY-MM-DD",
+      spx_close: number,
+      vix_close: number,
+      spx_return_pct: number | null,
+      vix_change_pct: number | null,
+      rolling_corr_7d: number | null,
+      rolling_corr_30d: number | null,
+      rolling_corr_63d: number | null
+    }
+  ],
+  regime_bands: [
+    { label: "Calm", min: 0, max: 20 },
+    { label: "Elevated", min: 20, max: 30 },
+    { label: "Stress", min: 30, max: 40 },
+    { label: "Panic", min: 40, max: null }
+  ]
+}
+
+Use aligned dates only where both SPX and VIX exist.
+Return enough rows for charting:
+- default: full 5-year daily aligned series, capped around 1300 rows
+- frontend can filter locally by 7d / quarter / 1y / 5y
+
+For rolling correlations:
+- calculate using daily percent changes
+- do not calculate correlation from only two points
+- null until enough samples exist
+
+2. GET /api/strategy/ten-year-spx
+
+Add:
+
+chart_data: {
+  ten_y_spx_timeseries: [
+    {
+      date: "YYYY-MM-DD",
+      spx_close: number,
+      ten_yield: number,
+      spx_return_pct: number | null,
+      ten_y_change_bps: number | null,
+      rolling_corr_7d: number | null,
+      rolling_corr_30d: number | null,
+      rolling_corr_63d: number | null,
+      regime_label: "yields_rising_spx_rising" | "yields_rising_spx_falling" | "yields_falling_spx_rising" | "yields_falling_spx_falling" | "mixed_flat"
+    }
+  ]
+}
+
+Use aligned dates only where both SPX and 10Y yield exist.
+
+For 10Y correlation:
+- basis remains: US 10Y daily bps change vs S&P 500 daily percent return
+- rolling_corr_7d / 30d / 63d should be included per row
+
+3. GET /api/strategy/weekly-price-movements
+
+Optional but helpful:
+Add chart_data for visual scorecards:
+
+chart_data: {
+  window_summaries: [
+    {
+      window_key: "5y" | "1y" | "quarter" | "7d",
+      scenario_key: "red_friday_to_monday" | "green_friday_to_monday" | "red_monday_to_friday" | "green_monday_to_friday",
+      green_probability: number,
+      red_probability: number,
+      average_return_pct: number,
+      sample_count: number,
+      confidence_label: string,
+      insufficient_sample: boolean
+    }
+  ]
+}
+
+This lets frontend render probability bars and comparison charts.
+
+Validation:
+After implementation, return compact sample JSON for chart_data only:
+- first 2 rows
+- last 2 rows
+- row count
+- confirm rolling_corr fields are populated after enough rows
+- confirm no existing fields were removed
+- confirm repeated calls still hit memory/Neon, not provider
