@@ -443,6 +443,28 @@ def init_tables():
             )
         """)
 
+        # ── Strategy macro history snapshots (durable restart-survival) ────────
+        # Stores the three precomputed historical series for the Strategy page tabs.
+        # key: cache key string (e.g. "strategy:spx_hist:1830")
+        # payload: JSONB array of {date, close|value} dicts — compact daily series
+        # expires_at: created_at + 24 h (set by writer)
+        # max_age rule: use if (NOW() - created_at) < 24 h; refresh every 3 h
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.strategy_hist_snapshots (
+                key         TEXT PRIMARY KEY,
+                source      TEXT NOT NULL DEFAULT '',
+                as_of       TIMESTAMPTZ NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                expires_at  TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
+                row_count   INTEGER NOT NULL DEFAULT 0,
+                payload     JSONB NOT NULL DEFAULT '[]'::jsonb
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_strategy_hist_snapshots_expires
+            ON public.strategy_hist_snapshots (expires_at DESC)
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
@@ -1260,6 +1282,166 @@ def calendar_snapshot_write(
         return False
     finally:
         _put_conn(conn)
+# ── Strategy History Snapshots (durable restart-survival) ────────────────────
+
+def _ensure_strategy_hist_table(cur) -> None:
+    """Idempotent table creation — self-heal if init_tables didn't run."""
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS public.strategy_hist_snapshots (
+            key         TEXT PRIMARY KEY,
+            source      TEXT NOT NULL DEFAULT '',
+            as_of       TIMESTAMPTZ NULL,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at  TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours'),
+            row_count   INTEGER NOT NULL DEFAULT 0,
+            payload     JSONB NOT NULL DEFAULT '[]'::jsonb
+        )
+    """)
+
+
+def strategy_hist_read(key: str, max_age_seconds: int | None = 86400) -> list | None:
+    """Read a strategy history snapshot from Neon.
+
+    Returns the payload list if:
+      - Neon is reachable
+      - a row exists for `key`
+      - the row is within `max_age_seconds` of NOW()  (pass None to skip age check)
+
+    Returns None on any failure, missing row, or age exceeded.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        try:
+            if max_age_seconds is not None:
+                cur.execute(
+                    """
+                    SELECT payload, created_at, source, row_count
+                    FROM public.strategy_hist_snapshots
+                    WHERE key = %s
+                      AND created_at >= NOW() - (%s * INTERVAL '1 second')
+                    """,
+                    (key, max_age_seconds),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT payload, created_at, source, row_count
+                    FROM public.strategy_hist_snapshots
+                    WHERE key = %s
+                    """,
+                    (key,),
+                )
+            row = cur.fetchone()
+        except Exception as inner_e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[PG_STORAGE] strategy_hist_read self-heal: {inner_e}")
+            _ensure_strategy_hist_table(cur)
+            conn.commit()
+            return None
+        cur.close()
+        if row is None:
+            return None
+        payload = row[0]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, list):
+            return None
+        created_at_str = row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1])
+        print(f"[STRATEGY_HIST_NEON] read key={key} rows={row[3]} created_at={created_at_str} source={row[2]}")
+        return payload
+    except Exception as e:
+        print(f"[PG_STORAGE] strategy_hist_read error key={key}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def strategy_hist_write(key: str, payload: list, source: str, row_count: int) -> bool:
+    """Upsert a strategy history snapshot to Neon. Returns True on success.
+
+    as_of is set to the date of the last element in the payload (if available).
+    expires_at is set to NOW() + 24 hours.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        from psycopg2.extras import Json
+        as_of = None
+        if payload:
+            last = payload[-1]
+            date_str = last.get("date")
+            if date_str:
+                try:
+                    from datetime import datetime as _dt, timezone as _tz
+                    as_of = _dt.fromisoformat(date_str).replace(tzinfo=_tz.utc)
+                except Exception:
+                    pass
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO public.strategy_hist_snapshots
+                    (key, source, as_of, created_at, expires_at, row_count, payload)
+                VALUES (%s, %s, %s, NOW(), NOW() + INTERVAL '24 hours', %s, %s)
+                ON CONFLICT (key) DO UPDATE SET
+                    source     = EXCLUDED.source,
+                    as_of      = EXCLUDED.as_of,
+                    created_at = NOW(),
+                    expires_at = NOW() + INTERVAL '24 hours',
+                    row_count  = EXCLUDED.row_count,
+                    payload    = EXCLUDED.payload
+                """,
+                (key, source, as_of, row_count, Json(payload)),
+            )
+        except Exception as inner_e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[PG_STORAGE] strategy_hist_write self-heal: {inner_e}")
+            _ensure_strategy_hist_table(cur)
+            conn.commit()
+            cur.execute(
+                """
+                INSERT INTO public.strategy_hist_snapshots
+                    (key, source, as_of, created_at, expires_at, row_count, payload)
+                VALUES (%s, %s, %s, NOW(), NOW() + INTERVAL '24 hours', %s, %s)
+                ON CONFLICT (key) DO UPDATE SET
+                    source     = EXCLUDED.source,
+                    as_of      = EXCLUDED.as_of,
+                    created_at = NOW(),
+                    expires_at = NOW() + INTERVAL '24 hours',
+                    row_count  = EXCLUDED.row_count,
+                    payload    = EXCLUDED.payload
+                """,
+                (key, source, as_of, row_count, Json(payload)),
+            )
+        conn.commit()
+        cur.close()
+        print(f"[STRATEGY_HIST_NEON] wrote key={key} rows={row_count} source={source}")
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] strategy_hist_write error key={key}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
 def calendar_snapshot_get_meta_field(tab: str, field: str) -> str | None:
     """Read a single field from the meta JSON (e.g. 'last_run_week'). None if missing."""
     snap = calendar_snapshot_read(tab)

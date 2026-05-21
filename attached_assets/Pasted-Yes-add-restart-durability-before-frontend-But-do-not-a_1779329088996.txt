@@ -1,0 +1,53 @@
+Yes, add restart durability before frontend.
+
+But do not add a brand-new random disk cache unless there is already an established durable disk snapshot pattern in this backend that survives deployment restarts reliably.
+
+Preferred fix:
+Use Neon/Postgres for compact strategy history snapshots.
+
+Create or reuse a compact snapshot table for strategy macro history, storing only the three precomputed historical series needed by these strategy tabs:
+
+- strategy:spx_hist:1830
+- strategy:hist:vixcls:1830
+- strategy:hist:dgs10:1830
+
+Requirements:
+1. On successful precompute, write each series snapshot to durable storage.
+2. On process startup / first endpoint call:
+   - check in-memory TTL cache first
+   - if missing, load most recent durable snapshot into memory
+   - only call providers if both memory and durable snapshot are missing/stale
+3. Page requests immediately after restart should not hit FRED/yfinance if a usable durable snapshot exists.
+4. Keep this compact. Do not store tick-by-tick data. Store only daily historical series payloads needed for:
+   - 5y
+   - 1y
+   - quarter / 63 trading days
+   - 7d
+5. Include metadata:
+   - key
+   - source
+   - as_of
+   - created_at
+   - expires_at or ttl_seconds
+   - row_count
+   - payload JSONB
+6. Add a max age rule:
+   - use durable snapshot if less than 24 hours old
+   - refresh in background every 3 hours as currently planned
+7. Do not block endpoint response for 30 seconds if durable snapshot exists.
+8. If provider refresh fails, fall back to last known durable snapshot and return a freshness warning instead of failing or blanking.
+9. Keep current in-memory cache for fast repeated calls.
+10. Validate by restarting the app and immediately calling:
+   - /api/strategy/vix-risk-regime
+   - /api/strategy/weekly-price-movements
+   - /api/strategy/ten-year-spx
+
+The immediate post-restart calls should return quickly from durable snapshot, not live FRED/yfinance fetch.
+
+Final report should include:
+- whether Neon or existing durable snapshot storage was used
+- table/schema if created
+- cold restart behavior
+- first request response time after restart
+- fallback behavior when provider refresh fails
+- confirmation that repeated page loads still hit memory cache

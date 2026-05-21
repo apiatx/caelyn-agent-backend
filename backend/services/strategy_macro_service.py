@@ -23,6 +23,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from data.cache import cache
+from data.pg_storage import strategy_hist_read, strategy_hist_write
 
 # ── Cache TTLs ─────────────────────────────────────────────────────────────
 _SPX_HIST_TTL    = 21600   # 6 h — yfinance ^GSPC history (refreshed every 3 h by precompute loop)
@@ -30,6 +31,13 @@ _STRATEGY_HIST_TTL = 21600 # 6 h — FRED VIXCLS / DGS10 strategy history (same 
 _REGIME_TTL      =   900   # 15 min — VIX regime payload (tracks live VIX from macro:dashboard)
 _WEEKLY_TTL      = 21600   # 6 h — weekly scorecard (deterministic, historical)
 _TEN_YEAR_TTL    =   900   # 15 min — 10Y vs SPX payload (tracks live yields from macro:dashboard)
+
+# ── Neon stale-fallback warning registry ─────────────────────────────────────
+# Set when a provider fetch fails and we fall back to a stale Neon snapshot.
+# Cleared when a fresh fetch succeeds.  Checked by payload builders to include
+# a freshness_warning field in the data_sources section of the response.
+# Keys match cache_key strings e.g. "strategy:spx_hist:1830".
+_NEON_STALE_WARN: dict[str, str] = {}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -88,14 +96,28 @@ def _extract_current_snapshot(dashboard: dict) -> dict:
 
 async def _get_spx_history(days: int) -> list[dict]:
     """
-    ^GSPC daily closes via yfinance, cached 4 h.
-    Returns [{date: "YYYY-MM-DD", close: float}, ...] oldest-first.
+    ^GSPC daily closes — three-tier read path:
+      1. In-memory TTL cache (6 h)  — instant, no I/O
+      2. Neon strategy_hist_snapshots (max 24 h old)  — survives process restarts
+      3. yfinance ^GSPC live fetch  — only on true cold start with no Neon data
+    On fetch success, writes to both memory cache and Neon.
+    On fetch failure, falls back to any-age Neon snapshot with a stale warning.
     """
     cache_key = f"strategy:spx_hist:{days}"
+
+    # 1. Memory cache
     hit = cache.get(cache_key)
     if hit is not None:
         return hit
 
+    # 2. Neon snapshot (max 24 h)
+    neon_hit = await asyncio.to_thread(strategy_hist_read, cache_key, 86400)
+    if neon_hit is not None:
+        cache.set(cache_key, neon_hit, _SPX_HIST_TTL)
+        _NEON_STALE_WARN.pop(cache_key, None)
+        return neon_hit
+
+    # 3. Live yfinance fetch
     def _fetch():
         import yfinance as yf
         end   = datetime.now()
@@ -123,31 +145,51 @@ async def _get_spx_history(days: int) -> list[dict]:
         data = await asyncio.to_thread(_fetch)
         if data:
             cache.set(cache_key, data, _SPX_HIST_TTL)
+            _NEON_STALE_WARN.pop(cache_key, None)
+            # Write to Neon in background — don't await
+            asyncio.create_task(
+                asyncio.to_thread(strategy_hist_write, cache_key, data, "yfinance ^GSPC", len(data))
+            )
         return data or []
     except Exception as exc:
         print(f"[STRATEGY] SPX history fetch error: {exc}")
+        # Fallback: any-age Neon snapshot
+        stale = await asyncio.to_thread(strategy_hist_read, cache_key, None)
+        if stale:
+            cache.set(cache_key, stale, 3600)
+            _NEON_STALE_WARN[cache_key] = f"yfinance fetch failed ({exc}); using stale Neon snapshot"
+            print(f"[STRATEGY_HIST] stale Neon fallback for {cache_key}: {exc}")
+            return stale
         return []
 
 
 def _fetch_fred_hist(macro_provider, series_id: str, days: int, decimals: int = 2) -> list[dict]:
     """
-    Fetch a FRED series and store in a strategy-specific cache slot
-    (key: strategy:hist:{series_id.lower()}:{days}, TTL: _STRATEGY_HIST_TTL = 6 h).
-
-    Cache hierarchy:
-      1. strategy:hist:{series}:{days}  — populated by precompute loop every 3 h
-      2. macro_provider._get_series()   — shared FRED fetch (4-h TTL); used only on
-         cache miss (e.g., very first startup before the loop has fired)
-
-    This function is synchronous — call via asyncio.to_thread.
+    Fetch a FRED series — three-tier read path (synchronous; call via asyncio.to_thread):
+      1. In-memory TTL cache (6 h)
+      2. Neon strategy_hist_snapshots (max 24 h old)
+      3. FRED via macro_provider._get_series() — only on true cold start
+    On fetch success, writes to both memory cache and Neon.
+    On fetch failure, falls back to any-age Neon snapshot with a stale warning.
     """
     import time as _time
 
     cache_key = f"strategy:hist:{series_id.lower()}:{days}"
+
+    # 1. Memory cache
     hit = cache.get(cache_key)
     if hit is not None:
         return hit
 
+    # 2. Neon snapshot (max 24 h)
+    neon_hit = strategy_hist_read(cache_key, 86400)
+    if neon_hit is not None:
+        cache.set(cache_key, neon_hit, _STRATEGY_HIST_TTL)
+        _NEON_STALE_WARN.pop(cache_key, None)
+        return neon_hit
+
+    # 3. Live FRED fetch
+    last_exc = None
     for attempt in range(3):
         try:
             series = macro_provider._get_series(series_id, days)
@@ -157,7 +199,7 @@ def _fetch_fred_hist(macro_provider, series_id: str, days: int, decimals: int = 
                     print(f"[STRATEGY_HIST] {series_id} empty, retry {attempt+1} in {wait}s")
                     _time.sleep(wait)
                     continue
-                return []
+                break
             out = []
             for idx, val in series.items():
                 v = _s(float(val))
@@ -165,15 +207,26 @@ def _fetch_fred_hist(macro_provider, series_id: str, days: int, decimals: int = 
                     out.append({"date": str(idx.date()), "value": round(v, decimals)})
             if out:
                 cache.set(cache_key, out, _STRATEGY_HIST_TTL)
+                _NEON_STALE_WARN.pop(cache_key, None)
+                strategy_hist_write(cache_key, out, f"FRED {series_id}", len(out))
             return out
         except Exception as exc:
+            last_exc = exc
             if attempt < 2:
                 wait = 12 + attempt * 10
                 print(f"[STRATEGY_HIST] {series_id} error ({exc}), retry {attempt+1} in {wait}s")
                 _time.sleep(wait)
                 continue
             print(f"[STRATEGY_HIST] {series_id} failed after retries: {exc}")
-            return []
+
+    # Fallback: any-age Neon snapshot
+    stale = strategy_hist_read(cache_key, None)
+    if stale:
+        cache.set(cache_key, stale, 3600)
+        warn_msg = f"FRED {series_id} fetch failed ({last_exc}); using stale Neon snapshot"
+        _NEON_STALE_WARN[cache_key] = warn_msg
+        print(f"[STRATEGY_HIST] stale Neon fallback for {cache_key}: {last_exc}")
+        return stale
     return []
 
 
@@ -189,13 +242,15 @@ def _get_10y_history_sync(macro_provider, days: int) -> list[dict]:
 
 async def precompute_strategy_history(macro_provider) -> None:
     """
-    Pre-warm strategy historical series caches.
-    Called by _strategy_history_precompute_loop in main.py every 3 hours.
+    Pre-warm strategy historical series caches every 3 hours.
+    Writes to both in-memory cache AND Neon strategy_hist_snapshots so that
+    the data survives process restarts (cold-start requests read from Neon
+    before touching any external provider).
 
     Populates:
-      strategy:spx_hist:1830    → yfinance ^GSPC daily closes (6-h TTL)
-      strategy:hist:vixcls:1830 → FRED VIXCLS daily series   (6-h TTL)
-      strategy:hist:dgs10:1830  → FRED DGS10 daily series    (6-h TTL)
+      strategy:spx_hist:1830    → yfinance ^GSPC daily closes
+      strategy:hist:vixcls:1830 → FRED VIXCLS daily series
+      strategy:hist:dgs10:1830  → FRED DGS10 daily series
 
     FRED calls are staggered 15 s after the SPX fetch to avoid colliding
     with _macro_precompute_loop which also touches FRED on its 12-min cycle.
@@ -203,7 +258,12 @@ async def precompute_strategy_history(macro_provider) -> None:
     import time as _time
 
     t0 = _time.time()
-    # SPX first (yfinance, no rate-limit concerns)
+
+    # Force cache bypass so we always fetch fresh data (not the current memory hit)
+    for k in ("strategy:spx_hist:1830", "strategy:hist:vixcls:1830", "strategy:hist:dgs10:1830"):
+        cache.delete(k)
+
+    # SPX first (yfinance, no rate-limit concerns) — _get_spx_history will write to Neon
     spx = await _get_spx_history(1830)
 
     # Stagger FRED calls to avoid hitting the rate limit alongside
@@ -215,13 +275,13 @@ async def precompute_strategy_history(macro_provider) -> None:
         asyncio.to_thread(_fetch_fred_hist, macro_provider, "DGS10",  1830, 3),
         return_exceptions=True,
     )
-    spx_n   = len(spx)      if isinstance(spx,       list) else 0
+    spx_n   = len(spx)       if isinstance(spx,       list) else 0
     vix_n   = len(vix_hist)  if isinstance(vix_hist,  list) else 0
     dgs10_n = len(dgs10_hist) if isinstance(dgs10_hist, list) else 0
 
     elapsed = _time.time() - t0
     print(f"[STRATEGY_HIST] Precomputed in {elapsed:.1f}s — "
-          f"SPX={spx_n} VIXCLS={vix_n} DGS10={dgs10_n}")
+          f"SPX={spx_n} VIXCLS={vix_n} DGS10={dgs10_n} (written to memory + Neon)")
 
 
 def _daily_pct_changes(series: list[dict], value_key: str = "close") -> list[tuple[str, float]]:
@@ -428,6 +488,14 @@ async def build_vix_regime_payload(macro_provider) -> dict:
             "current_snapshot": "macro:dashboard:v3 (FMP ^GSPC + ^VIX real-time, 15-min TTL)",
             "vix_history":      "FRED VIXCLS → strategy:hist:vixcls:1830 (6-h TTL, pre-warmed every 3 h)",
             "spx_history":      "yfinance ^GSPC → strategy:spx_hist:1830 (6-h TTL, pre-warmed every 3 h)",
+            "durable_cache":    "Neon strategy_hist_snapshots (24-h max age, written on every precompute)",
+            **({
+                "freshness_warning": " | ".join(
+                    _NEON_STALE_WARN[k]
+                    for k in ("strategy:hist:vixcls:1830", "strategy:spx_hist:1830")
+                    if k in _NEON_STALE_WARN
+                )
+            } if any(k in _NEON_STALE_WARN for k in ("strategy:hist:vixcls:1830", "strategy:spx_hist:1830")) else {}),
         },
     }
 
@@ -606,11 +674,14 @@ async def build_weekly_price_movements_payload() -> dict:
             else {"window": "7 trading days", "insufficient_sample": True, "sample_count": len(bars)}
         ),
     }
+    spx_key = "strategy:spx_hist:1830"
     result = {
         "generated_at":         now.isoformat(),
         "cache_ttl_seconds":    _WEEKLY_TTL,
         "scorecard_updated_at": now.isoformat(),
         "data_source":          "yfinance ^GSPC daily OHLCV",
+        "durable_cache":        "Neon strategy_hist_snapshots (24-h max age, written on every precompute)",
+        **({"freshness_warning": _NEON_STALE_WARN[spx_key]} if spx_key in _NEON_STALE_WARN else {}),
         "total_bars_loaded":    len(bars),
         "spx_proxy":            "^GSPC",
         "computation":          "deterministic Python — no AI",
@@ -825,6 +896,14 @@ async def build_ten_year_spx_payload(macro_provider) -> dict:
             "current_snapshot": "macro:dashboard:v3 (FMP treasury real-time + ^GSPC, 15-min TTL)",
             "ten_y_history":    "FRED DGS10 → strategy:hist:dgs10:1830 (6-h TTL, pre-warmed every 3 h)",
             "spx_history":      "yfinance ^GSPC → strategy:spx_hist:1830 (6-h TTL, pre-warmed every 3 h)",
+            "durable_cache":    "Neon strategy_hist_snapshots (24-h max age, written on every precompute)",
+            **({
+                "freshness_warning": " | ".join(
+                    _NEON_STALE_WARN[k]
+                    for k in ("strategy:hist:dgs10:1830", "strategy:spx_hist:1830")
+                    if k in _NEON_STALE_WARN
+                )
+            } if any(k in _NEON_STALE_WARN for k in ("strategy:hist:dgs10:1830", "strategy:spx_hist:1830")) else {}),
         },
     }
 
