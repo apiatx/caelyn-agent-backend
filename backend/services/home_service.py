@@ -33,8 +33,11 @@ from typing import Any, Optional
 from data.cache import cache
 from services.hyperliquid.router import get_state_optional as _hl_get_state
 
-_HOME_CACHE_KEY = "home:dashboard:v3"
-_HOME_CACHE_TTL = 60  # 1 minute — upstream caches do the heavy lifting
+_HOME_CACHE_KEY     = "home:dashboard:v3"
+_HOME_CACHE_LKG_KEY = "home:dashboard:v3:lkg"
+_HOME_CACHE_TTL     = 60        # 1 min  — upstream caches do the heavy lifting
+_HOME_CACHE_LKG_TTL = 4 * 3600  # 4 h    — survives cold restarts / redeploys
+_HOME_REBUILD_ACTIVE = False    # single-flight guard for background LKG rebuild
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -744,7 +747,19 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
     out: dict[str, dict] = {}
 
     # ── Step 1: Tradier live batch ────────────────────────────────────────
+    # Skip live call when the process-wide Tradier rate limiter is saturated.
+    # Background jobs (THEME_RS, HL enrichment) consume all 100 slots/min after
+    # a cold restart. Rather than blocking for up to 20s and then timing out,
+    # skip straight to LKG — results are stale but instant.
+    _tradier_saturated = False
     if data_service and getattr(data_service, "tradier", None):
+        try:
+            from data.tradier_provider import TRADIER_LIMITER as _TL
+            _tradier_saturated = _TL.is_saturated()
+        except Exception:
+            pass
+
+    if data_service and getattr(data_service, "tradier", None) and not _tradier_saturated:
         try:
             quotes = await data_service.tradier.get_quotes(us_tickers)
             for q in (quotes or []):
@@ -764,6 +779,8 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
             print(f"[HOME] Tradier live: {len(out)} of {len(us_tickers)} covered")
         except Exception as exc:
             print(f"[HOME] batch_quotes Tradier error (non-fatal): {exc}")
+    elif _tradier_saturated:
+        print(f"[HOME_PERF] batch_quotes=skipped_saturated tickers={len(us_tickers)} → LKG fallback")
 
     # ── Step 2: LKG Tradier for tickers Tradier missed ────────────────────
     for sym in us_tickers:
@@ -985,10 +1002,16 @@ async def _fetch_sub_theme_performance(
     # Fetch missing tickers in one Tradier batch call (cached via per-ticker cache)
     extra_quotes: dict[str, dict] = {}
     if missing and data_service and getattr(data_service, "tradier", None):
+        _ts_bq = time.time()
         try:
-            extra_quotes = await _batch_quotes(missing, data_service)
+            extra_quotes = await asyncio.wait_for(
+                _batch_quotes(missing, data_service), timeout=4.0
+            )
+            print(f"[HOME_PERF] section=sub_theme_batch_quotes status=ok elapsed_ms={round((time.time()-_ts_bq)*1000)} tickers={len(missing)}")
+        except asyncio.TimeoutError:
+            print(f"[HOME_PERF] section=sub_theme_batch_quotes status=timeout elapsed_ms={round((time.time()-_ts_bq)*1000)} tickers={len(missing)}")
         except Exception as exc:
-            print(f"[HOME] sub_theme extra_quotes failed (non-fatal): {exc}")
+            print(f"[HOME_PERF] section=sub_theme_batch_quotes status=error elapsed_ms={round((time.time()-_ts_bq)*1000)} exc={type(exc).__name__}")
 
     # Merge quote sources: watchlist quotes take priority
     all_quotes = {**extra_quotes, **wq}
@@ -1087,6 +1110,22 @@ async def _fetch_latest_news(data_service, limit: int = 8) -> list[dict]:
 
 # ── Main aggregator ────────────────────────────────────────────────────────
 
+async def _bg_rebuild_home(data_service, macro_provider) -> None:
+    """Single-flight background rebuild — called after serving LKG stale data."""
+    global _HOME_REBUILD_ACTIVE
+    if _HOME_REBUILD_ACTIVE:
+        return
+    _HOME_REBUILD_ACTIVE = True
+    try:
+        await build_home_dashboard(
+            data_service=data_service, macro_provider=macro_provider, force=True
+        )
+    except Exception as _bg_exc:
+        print(f"[HOME_PERF] bg_rebuild error={type(_bg_exc).__name__}: {_bg_exc}")
+    finally:
+        _HOME_REBUILD_ACTIVE = False
+
+
 async def build_home_dashboard(
     *,
     data_service,
@@ -1099,37 +1138,54 @@ async def build_home_dashboard(
         cached = cache.get(_HOME_CACHE_KEY)
         if cached is not None:
             return {**cached, "from_cache": True}
+        # Hot cache miss — serve LKG immediately and rebuild in background
+        lkg = cache.get(_HOME_CACHE_LKG_KEY)
+        if lkg is not None:
+            asyncio.create_task(_bg_rebuild_home(data_service, macro_provider))
+            print("[HOME_PERF] endpoint=/api/home/dashboard cache=lkg bg_rebuild=triggered")
+            return {**lkg, "from_cache": True, "cache_status": "lkg"}
 
     t0 = time.time()
+    print("[HOME_PERF] endpoint=/api/home/dashboard cache=miss rebuild=start")
 
     # ── Tasks (all optional / fail-soft) ──────────────────────────────
     tasks: dict[str, Optional[asyncio.Task]] = {}
 
+    # Per-task hard timeouts — prevents any single hung provider from blocking the page.
+    # asyncio.TimeoutError is caught in the collect loop below and logged as [HOME_PERF].
+    _t_task_start: dict[str, float] = {}
+
+    def _task(name: str, coro, timeout: float) -> asyncio.Task:
+        _t_task_start[name] = time.time()
+        return asyncio.create_task(asyncio.wait_for(coro, timeout=timeout))
+
     if macro_provider:
-        tasks["macro"] = asyncio.create_task(macro_provider.get_dashboard())
+        tasks["macro"] = _task("macro", macro_provider.get_dashboard(), 8.0)
 
     try:
         from services.sector_rotation.service import get_dashboard as _sr_get
-        tasks["sector"] = asyncio.create_task(_sr_get(include_analysis=False))
+        tasks["sector"] = _task("sector", _sr_get(include_analysis=False), 6.0)
     except Exception:
         tasks["sector"] = None
 
     if data_service and getattr(data_service, "fmp", None):
-        tasks["movers"] = asyncio.create_task(data_service.fmp.get_gainers_losers())
+        tasks["movers"] = _task("movers", data_service.fmp.get_gainers_losers(), 10.0)
     if data_service and getattr(data_service, "finviz", None):
-        tasks["fv_gainers"] = asyncio.create_task(data_service.finviz.get_screener_results("ta_topgainers"))
-        tasks["fv_losers"] = asyncio.create_task(data_service.finviz.get_screener_results("ta_toplosers"))
+        tasks["fv_gainers"] = _task("fv_gainers", data_service.finviz.get_screener_results("ta_topgainers"), 5.0)
+        tasks["fv_losers"]  = _task("fv_losers",  data_service.finviz.get_screener_results("ta_toplosers"),  5.0)
     if data_service and getattr(data_service, "fear_greed", None):
-        tasks["fg"] = asyncio.create_task(data_service.fear_greed.get_fear_greed_index())
+        tasks["fg"] = _task("fg", data_service.fear_greed.get_fear_greed_index(), 5.0)
     if data_service and getattr(data_service, "stocktwits", None):
-        tasks["trending"] = asyncio.create_task(data_service.stocktwits.get_trending())
+        tasks["trending"] = _task("trending", data_service.stocktwits.get_trending(), 5.0)
 
-    tasks["news"] = asyncio.create_task(_fetch_latest_news(data_service))
+    tasks["news"] = _task("news", _fetch_latest_news(data_service), 8.0)
 
     # ── Primary watchlist — load FULL data (fix: was metadata-only) ────
     watchlist: dict | None = None
     try:
-        watchlist = await _load_primary_watchlist()
+        watchlist = await asyncio.wait_for(_load_primary_watchlist(), timeout=4.0)
+    except asyncio.TimeoutError:
+        print("[HOME_PERF] section=load_watchlist status=timeout")
     except Exception as exc:
         print(f"[HOME] watchlist load error (non-fatal): {exc}")
 
@@ -1143,20 +1199,26 @@ async def build_home_dashboard(
         print(f"[HOME] options_index build error (non-fatal): {exc}")
 
     # ── Watchlist data (quotes + highlighted) — one Tradier batch call ─
-    tasks["watchlist_data"] = asyncio.create_task(
-        _fetch_watchlist_data(watchlist, data_service, options_index, csv_index)
+    tasks["watchlist_data"] = _task(
+        "watchlist_data",
+        _fetch_watchlist_data(watchlist, data_service, options_index, csv_index),
+        8.0,
     )
 
     # ── Portfolio snapshot ─────────────────────────────────────────────
-    tasks["portfolio_snap"] = asyncio.create_task(
-        _fetch_portfolio_snapshot(data_service, options_index)
+    tasks["portfolio_snap"] = _task(
+        "portfolio_snap",
+        _fetch_portfolio_snapshot(data_service, options_index),
+        8.0,
     )
 
     # ── Unusual options flows — served from fast-loop cache (pure read) ─
     # _home_options_fast_loop() in main.py refreshes every ~90s.
     # This call is instant (no Tradier calls). Returns (flows, meta).
-    tasks["unusual_options"] = asyncio.create_task(
-        _fetch_unusual_options_live(data_service)
+    tasks["unusual_options"] = _task(
+        "unusual_options",
+        _fetch_unusual_options_live(data_service),
+        3.0,
     )
 
     # ── Await all tasks ────────────────────────────────────────────────
@@ -1167,8 +1229,16 @@ async def build_home_dashboard(
             continue
         try:
             results[name] = await task
+            _elapsed = round((time.time() - _t_task_start.get(name, t0)) * 1000)
+            print(f"[HOME_PERF] section={name} status=ok elapsed_ms={_elapsed}")
+        except asyncio.TimeoutError:
+            results[name] = None
+            _elapsed = round((time.time() - _t_task_start.get(name, t0)) * 1000)
+            print(f"[HOME_PERF] section={name} status=timeout elapsed_ms={_elapsed}")
         except Exception as exc:
             results[name] = exc
+            _elapsed = round((time.time() - _t_task_start.get(name, t0)) * 1000)
+            print(f"[HOME_PERF] section={name} status=error elapsed_ms={_elapsed} exc={type(exc).__name__}")
 
     macro_raw = _safe(results.get("macro"), {}) or {}
     sector_dash = _safe(results.get("sector"), None)
@@ -1234,22 +1304,27 @@ async def build_home_dashboard(
         unusual_options_meta = {"data_state": "no_data_yet", "source": "none"}
     unusual_options_flows = unusual_options_flows or []
 
-    # ── Sub-theme performance — uses already-fetched watchlist quotes ──
-    # Pass watchlist quotes so the sub-theme engine reuses them (no extra
-    # Tradier calls for tickers already in the watchlist).
+    # ── Sub-theme performance ─────────────────────────────────────────────
+    # Reuse any quotes already fetched by the watchlist_data task via LKG cache.
+    # _fetch_sub_theme_performance calls _batch_quotes internally, which
+    # fast-falls to LKG when Tradier is saturated — no extra serial call needed.
     watchlist_quote_by_sym: dict[str, dict] = {}
-    if watchlist:
-        wl_tickers = [t for t in (watchlist.get("tickers") or []) if ":" not in t]
-        if wl_tickers and data_service and getattr(data_service, "tradier", None):
-            try:
-                raw_q = await data_service.tradier.get_quotes(wl_tickers)
-                watchlist_quote_by_sym = {(q.get("symbol") or "").upper(): q for q in (raw_q or [])}
-            except Exception:
-                pass
 
-    sub_theme_performance = await _fetch_sub_theme_performance(
-        data_service, options_index, watchlist_quotes=watchlist_quote_by_sym
-    )
+    _ts_stp = time.time()
+    try:
+        sub_theme_performance = await asyncio.wait_for(
+            _fetch_sub_theme_performance(
+                data_service, options_index, watchlist_quotes=watchlist_quote_by_sym
+            ),
+            timeout=6.0,
+        )
+        print(f"[HOME_PERF] section=sub_theme_performance status=ok elapsed_ms={round((time.time()-_ts_stp)*1000)}")
+    except asyncio.TimeoutError:
+        sub_theme_performance = []
+        print(f"[HOME_PERF] section=sub_theme_performance status=timeout elapsed_ms={round((time.time()-_ts_stp)*1000)}")
+    except Exception as _stp_exc:
+        sub_theme_performance = []
+        print(f"[HOME_PERF] section=sub_theme_performance status=error elapsed_ms={round((time.time()-_ts_stp)*1000)} exc={type(_stp_exc).__name__}")
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1296,7 +1371,9 @@ async def build_home_dashboard(
         "from_cache": False,
     }
 
-    cache.set(_HOME_CACHE_KEY, payload, _HOME_CACHE_TTL)
+    cache.set(_HOME_CACHE_KEY,     payload, _HOME_CACHE_TTL)
+    cache.set(_HOME_CACHE_LKG_KEY, payload, _HOME_CACHE_LKG_TTL)
+    print(f"[HOME_PERF] endpoint=/api/home/dashboard total_ms={round((time.time()-t0)*1000)} cache=written")
     return payload
 
 

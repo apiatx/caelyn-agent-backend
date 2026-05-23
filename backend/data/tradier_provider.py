@@ -66,6 +66,20 @@ class _TradierRateLimiter:
             )
             await asyncio.sleep(wait_for)
 
+    def is_saturated(self) -> bool:
+        """Non-blocking check: True when the rate window is full.
+
+        Reads without acquiring the lock — intentionally approximate.
+        Used by callers that want to skip a live call and fall back to LKG
+        rather than block for up to ``window_seconds``.
+        """
+        try:
+            now = asyncio.get_event_loop().time()
+        except RuntimeError:
+            return False
+        recent = [t for t in self._timestamps if t > now - self._window]
+        return len(recent) >= self._max
+
     def status(self) -> dict:
         try:
             now = asyncio.get_event_loop().time()

@@ -1,0 +1,103 @@
+URGENT PERFORMANCE AUDIT: Home page now takes 5+ minutes to load all sections. This is a regression. Do not rebuild architecture. Do not invent replacement endpoints. Audit the current homepage API path and preserve existing endpoint contracts.
+
+Goal:
+Find exactly which backend endpoint(s) are making the Home page slow, then make the page load from cached/LKG data near-instant again.
+
+Rules:
+- Do not change response shapes unless absolutely necessary.
+- Do not remove existing sections.
+- Do not trigger fresh FMP/Tradier/AI/model/web-search calls during normal Home page load unless that was already intentionally designed and cached.
+- Prefer cached snapshots, Neon snapshots, in-memory cache, and last-known-good fallbacks.
+- If a live provider call is needed, it must be timeout-protected and non-blocking.
+- Every Home section should return independently. One slow section must not block the entire homepage.
+
+Step 1 — Identify Home page endpoints:
+Find the backend route(s) used by the frontend Home page. Common possibilities may include:
+- /api/caelyn-terminal
+- /api/home
+- /api/home/*
+- /api/market/*
+- /api/watchlist/*
+- /api/sectors/*
+- /api/themes/*
+- /api/notifai/*
+- any frontend proxy target used on the Home page
+
+Step 2 — Add timing instrumentation:
+Add lightweight server-side timing logs around every major Home page endpoint and major internal section builder.
+
+Log format should be easy to grep:
+[HOME_PERF] endpoint=/api/whatever total_ms=123 cache=hit section=...
+[HOME_PERF] section=options_flow total_ms=...
+[HOME_PERF] section=themes total_ms=...
+[HOME_PERF] provider=FMP symbol=AAPL total_ms=... reason=...
+[HOME_PERF] provider=TRADIER count=... total_ms=... reason=...
+
+Do not log API keys or sensitive user data.
+
+Step 3 — Detect accidental live calls:
+Search for any fresh provider calls during Home page load:
+- FMP
+- Tradier
+- Finnhub
+- TwelveData
+- Polygon
+- Perplexity/Gemini/Grok/Claude/OpenAI
+- Finviz scraping
+- Neon repeated per-symbol queries
+
+If the Home page is doing per-symbol calls on request, fix it. It should use batched cached reads or existing snapshots.
+
+Step 4 — Add hard timeouts:
+Every external provider call used by Home page paths needs a short timeout:
+- quote/market data: 2-4 seconds max
+- fundamentals/news/snapshots: 3-6 seconds max
+- AI/model calls: should not run on Home page initial load unless user explicitly asks
+
+On timeout, return cached/LKG/stale data with:
+cache_status: "stale" or "lkg"
+freshness_seconds or cache_age_seconds where existing convention exists
+warning field only if existing UI supports it
+
+Step 5 — Prevent one bad section from blocking all sections:
+If /api/caelyn-terminal or another aggregator builds many sections, wrap each section builder independently:
+- run sections concurrently where safe
+- each section gets its own timeout
+- failed/slow sections return fallback payload, not a 500 for the entire response
+- preserve existing response keys so frontend does not break
+
+Step 6 — Check cache warm/cold behavior:
+Verify whether caches were wiped after redeploy.
+Check whether homepage endpoints have cold cache paths that rebuild everything synchronously.
+If yes:
+- never do full warmup synchronously during page request
+- return LKG/stale response immediately
+- kick warm path only through existing scheduler/startup job if already present, not request blocking
+
+Step 7 — Check Neon:
+Because Neon Launch can scale to zero, make sure DB connection is pooled/reused and not opening excessive connections per section.
+Look for N+1 queries per ticker/section. Replace with batch reads where possible.
+Add timing logs for Neon calls:
+[HOME_PERF] db=query_name total_ms=...
+
+Step 8 — Validate:
+Run curl timing tests against each Home-related endpoint.
+
+Use:
+curl -w "\nDNS:%{time_namelookup} CONNECT:%{time_connect} TTFB:%{time_starttransfer} TOTAL:%{time_total}\n" -o /tmp/home.json -s "BACKEND_URL/api/..."
+
+Report:
+- endpoint
+- total time
+- slowest internal section
+- whether cache hit/miss/stale
+- provider calls made
+- DB query count if easy to determine
+- fix applied
+
+Success criteria:
+- Main Home API/aggregator returns in under 2 seconds on warm cache.
+- Individual slow sections timeout/fallback under 5 seconds.
+- No Home page load should take 5+ minutes.
+- No accidental AI/model calls during initial Home page render.
+- No per-symbol FMP/Tradier storm on initial Home page render.
