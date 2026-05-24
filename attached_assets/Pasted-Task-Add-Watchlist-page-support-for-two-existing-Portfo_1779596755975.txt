@@ -1,0 +1,77 @@
+Task: Add Watchlist-page support for two existing Portfolio Terminal concepts without inventing replacement architecture.
+
+Important constraints:
+- Audit first. Do not assume paths. Find the existing Portfolio page Terminal tab backend logic for:
+  1) Holdings section Vol/MC ratio
+  2) Portfolio Terminal earnings section
+- Reuse the existing portfolio-terminal logic/services/helpers as much as possible.
+- Do not create a separate duplicate data pipeline if the Portfolio Terminal already has one.
+- Preserve all existing routes and response shapes unless a small additive field is required.
+- Do not break Portfolio Terminal.
+- Do not increase Tradier/FMP calls unnecessarily. Use existing caches, Neon snapshots, LKG paths, and shared quote/fundamental loaders where available.
+- The goal is Watchlist scope using the user’s uploaded/saved watchlist tickers, not portfolio holdings.
+
+Feature 1: Add Vol/MC ratio for Watchlist tickers
+- Find the backend logic currently used by Portfolio Terminal “Holdings” for Vol/MC ratio.
+- Identify:
+  - where volume comes from
+  - where market cap comes from
+  - the exact field names used in the Portfolio Terminal response
+  - formatting/units/scoring/null behavior
+- Reuse that calculation for watchlist tickers.
+- Apply it to every ticker in the user’s saved Watchlist page source of truth.
+- Do not refetch data per ticker if the same quote/fundamental/market-cap data is already cached by existing watchlist/terminal/portfolio services.
+- If market cap or volume is missing, return a safe null/empty value and do not fail the whole watchlist response.
+- Add the output field to the Watchlist tickers payload, preferably using the same field name as Portfolio Terminal if compatible. If the frontend Watchlist row shape needs a clearer additive alias, include both:
+  - existing Portfolio-compatible field
+  - watchlist-friendly alias like vol_mc_ratio or volMarketCapRatio
+- Include raw numeric value and optionally display value if the existing Portfolio logic already does both.
+- Do not change existing Watchlist save/load behavior.
+
+Feature 2: Add Watchlist earnings section using same display/data pattern as Portfolio Terminal
+- Find the backend route/service that powers the Portfolio Terminal earnings section.
+- Reuse the same earnings fetch/cache/normalize logic but change the symbol universe to the user’s saved watchlist tickers.
+- Do not poll FMP one symbol at a time on every page load if there is already a cached calendar/snapshot mechanism.
+- Use the same earnings event object shape as Portfolio Terminal wherever possible.
+- Add a Watchlist-scoped endpoint only if no existing endpoint supports scope=watchlist.
+- Preferred options, in order:
+  1) If an existing terminal/catalyst/earnings endpoint already supports scope=watchlist, wire Watchlist page to that.
+  2) If an existing portfolio terminal earnings service can accept a symbol list, add a watchlist caller around it.
+  3) Only if necessary, add a minimal additive route such as:
+     GET /api/watchlist/terminal/earnings
+     or
+     GET /api/watchlist/earnings
+- The route must derive tickers from the authenticated/current user’s saved watchlist, not from request body tickers unless an existing pattern already does that.
+- Respect user separation and Neon-backed watchlist source of truth.
+- Return an empty but successful payload if the user has no watchlist tickers.
+- Include cache/freshness metadata if the Portfolio Terminal earnings section already does.
+
+Audit requirements before editing:
+1) Locate the current Watchlist page backend routes/services.
+2) Locate the Portfolio Terminal holdings Vol/MC calculation path.
+3) Locate the Portfolio Terminal earnings section path.
+4) Report exact files/functions/routes you found.
+5) Then implement the smallest reuse-based change.
+
+Expected backend outcome:
+- Watchlist ticker payload includes Vol/MC ratio for each ticker.
+- Watchlist has a backend-accessible earnings payload using the same normalized shape as Portfolio Terminal earnings.
+- Portfolio Terminal behavior remains unchanged.
+- Existing watchlist save/load remains unchanged.
+- No new expensive duplicate polling loops.
+
+Validation:
+Run backend tests/probes after implementation:
+1) Load a real user watchlist from the existing source of truth.
+2) Hit the Watchlist tickers endpoint and confirm at least one row includes the Vol/MC ratio field.
+3) Hit the Watchlist earnings endpoint or scoped existing endpoint and confirm it returns only saved watchlist symbols.
+4) Confirm empty/missing market cap does not 500.
+5) Confirm Portfolio Terminal holdings and earnings endpoints still work.
+6) Log/cache-check that the implementation reuses existing quote/market-cap/earnings cache paths where possible.
+
+Return summary:
+- Files changed
+- Existing Portfolio logic reused
+- Backend endpoint(s) frontend should call
+- Exact response field names for Vol/MC and earnings
+- Any cache/freshness metadata included

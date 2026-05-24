@@ -35,6 +35,85 @@ from services.watchlist_analysis import run_analysis_pipeline
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
 
+# ── Market-cap string parser ─────────────────────────────────────────────────
+
+def _parse_market_cap_str(raw: Any) -> float | None:
+    """
+    Parse a market-cap value from various CSV formats into a raw float (USD).
+
+    Handles: "1.23B", "456.78M", "12.34K", "$1,234,567", "1234567890",
+             "1.5T", numbers (int/float), None / empty / "-".
+    Returns None when unparseable.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw) if raw > 0 else None
+    s = str(raw).strip().replace(",", "").replace("$", "").replace(" ", "")
+    if not s or s in ("-", "N/A", "n/a", "--"):
+        return None
+    multipliers = {"T": 1e12, "B": 1e9, "M": 1e6, "K": 1e3}
+    upper = s.upper()
+    for suffix, mult in multipliers.items():
+        if upper.endswith(suffix):
+            try:
+                return float(upper[:-1]) * mult
+            except ValueError:
+                return None
+    try:
+        v = float(s)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
+def _vol_mc_fields(price: float | None, volume: float | None, market_cap: float | None) -> dict:
+    """
+    Compute Vol/MC ratio fields using the same formula as CaelynTerminalProvider.
+
+    Returns dict with:
+      market_cap, dollar_volume, vol_mc_ratio, vol_mc_pct,
+      vol_mc_label, vol_mc_unavailable_reason
+    All values are None-safe — never raises.
+    """
+    dollar_vol: float | None = None
+    if price and volume and price > 0 and volume > 0:
+        dollar_vol = round(price * volume, 2)
+
+    vol_mc_ratio: float | None = None
+    vol_mc_pct:   float | None = None
+    vol_mc_label: str   | None = None
+    vol_mc_unavail: str | None = None
+
+    if dollar_vol is not None and market_cap and market_cap > 0:
+        vol_mc_ratio = round(dollar_vol / market_cap, 6)
+        vol_mc_pct   = round(vol_mc_ratio * 100, 4)
+        if vol_mc_pct >= 10:
+            vol_mc_label = "high"
+        elif vol_mc_pct >= 5:
+            vol_mc_label = "elevated"
+        elif vol_mc_pct >= 1:
+            vol_mc_label = "normal"
+        else:
+            vol_mc_label = "low"
+    else:
+        if not volume:
+            vol_mc_unavail = "volume_unavailable"
+        elif not market_cap:
+            vol_mc_unavail = "market_cap_unavailable"
+        else:
+            vol_mc_unavail = "price_missing"
+
+    return {
+        "market_cap":                market_cap,
+        "dollar_volume":             dollar_vol,
+        "vol_mc_ratio":              vol_mc_ratio,
+        "vol_mc_pct":                vol_mc_pct,
+        "vol_mc_label":              vol_mc_label,
+        "vol_mc_unavailable_reason": vol_mc_unavail,
+    }
+
+
 # ── Quote enrichment helper ──────────────────────────────────────────────────
 
 async def _enrich_store_with_quotes(store: dict) -> dict:
@@ -121,6 +200,29 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 enriched["relative_volume"]  = rel_vol
                 enriched["quote_source"]     = q.get("quote_source") or "tradier"
                 enriched["quote_updated_at"] = q.get("quote_updated_at", now_str)
+
+            # ── Vol/MC ratio ───────────────────────────────────────────────
+            # Market cap: prefer CSV column, then existing row field.
+            # Volume and price come from the quote above (already populated).
+            _raw_mc = (
+                csv_row.get("Market Cap")
+                or csv_row.get("MarketCap")
+                or csv_row.get("market_cap")
+                or enriched.get("market_cap")
+            )
+            _mc = _parse_market_cap_str(_raw_mc)
+            _price_for_mc  = enriched.get("price")
+            _volume_for_mc = enriched.get("volume")
+            try:
+                _price_for_mc  = float(_price_for_mc)  if _price_for_mc  is not None else None
+            except Exception:
+                _price_for_mc = None
+            try:
+                _volume_for_mc = float(_volume_for_mc) if _volume_for_mc is not None else None
+            except Exception:
+                _volume_for_mc = None
+
+            enriched.update(_vol_mc_fields(_price_for_mc, _volume_for_mc, _mc))
 
             enriched_tickers.append(enriched)
 
@@ -311,6 +413,145 @@ async def delete_endpoint():
     except Exception as _e:
         print(f"[watchlist-delete] earnings invalidation skipped: {_e}")
     return result
+
+
+# ── Watchlist Earnings ───────────────────────────────────────────────────────
+
+@router.get("/earnings")
+async def watchlist_earnings_endpoint(
+    from_date: Optional[str] = None,
+    to_date:   Optional[str] = None,
+):
+    """
+    Return upcoming earnings for the current user's saved watchlist tickers.
+
+    Reuses user_earnings_service.get_or_sync_user_earnings("watchlist", ...)
+    which is the same Neon-cached FMP pipeline used by the Catalyst Calendar
+    (30-day cache TTL, auto-re-syncs when the symbol set changes, invalidated
+    on watchlist save/delete).
+
+    Response shape is compatible with Portfolio Terminal earnings_calendar:
+      ticker, company, next_date, est_eps, last_eps, wtd, in_watchlist,
+      + FMP extras: revenue_estimated, revenue_actual, time, period,
+                    market_cap, logo, importance
+
+    Returns {earnings: [], meta: {cache_status: "empty"}} for an empty watchlist.
+    """
+    import time as _tm
+    from datetime import date as _date, timedelta as _td
+
+    _t0 = _tm.time()
+
+    store = load_watchlist()
+    if store is None or not store.get("tickers"):
+        return {
+            "earnings":    [],
+            "meta": {
+                "universe":      "watchlist",
+                "symbols_count": 0,
+                "events_count":  0,
+                "cache_status":  "empty",
+                "source":        "fmp",
+            },
+        }
+
+    tickers: list[str] = [t.upper() for t in store["tickers"] if t]
+    symbols: set[str]  = set(tickers)
+
+    # Default date window: today → +90 days
+    _today = _date.today().isoformat()
+    _from  = from_date or _today
+    _to    = to_date   or (_date.today() + _td(days=90)).isoformat()
+
+    # FMP key
+    try:
+        from config import FMP_API_KEY as _fmp_key  # type: ignore
+    except Exception:
+        _fmp_key = os.getenv("FMP_API_KEY", "")
+
+    if not _fmp_key:
+        return {
+            "earnings": [],
+            "meta": {
+                "universe":      "watchlist",
+                "symbols_count": len(symbols),
+                "events_count":  0,
+                "cache_status":  "error",
+                "error":         "fmp_key_unavailable",
+            },
+        }
+
+    try:
+        from services.user_earnings_service import get_or_sync_user_earnings  # type: ignore
+        events, meta = await get_or_sync_user_earnings(
+            universe  = "watchlist",
+            symbols   = symbols,
+            fmp_key   = _fmp_key,
+            from_date = _from,
+            to_date   = _to,
+        )
+    except Exception as _e:
+        print(f"[WATCHLIST_EARNINGS] get_or_sync error: {_e}")
+        return {
+            "earnings": [],
+            "meta": {
+                "universe":      "watchlist",
+                "symbols_count": len(symbols),
+                "events_count":  0,
+                "cache_status":  "error",
+                "error":         str(_e),
+            },
+        }
+
+    # ── Normalise to Portfolio Terminal-compatible shape ───────────────────
+    def _fmt_date(dt_str: str | None) -> str:
+        if not dt_str:
+            return "N/A"
+        try:
+            from datetime import datetime as _dt
+            return _dt.strptime(dt_str, "%Y-%m-%d").strftime("%b %-d")
+        except Exception:
+            return dt_str or "N/A"
+
+    normalised = []
+    for ev in (events or []):
+        sym = (ev.get("symbol") or "").upper()
+        if not sym:
+            continue
+        normalised.append({
+            # ── Portfolio Terminal-compatible fields ──
+            "ticker":       sym,
+            "company":      ev.get("companyName") or ev.get("name") or sym,
+            "in_watchlist": True,
+            "next_date":    _fmt_date(ev.get("date")),
+            "date_raw":     ev.get("date"),
+            "est_eps":      ev.get("epsEstimated"),
+            "last_eps":     ev.get("epsActual"),
+            "wtd":          None,   # no position — watchlist only
+            # ── FMP extras (superset of Finnhub shape) ──
+            "revenue_estimated": ev.get("revenueEstimated"),
+            "revenue_actual":    ev.get("revenueActual"),
+            "time":              ev.get("time"),
+            "period":            ev.get("period"),
+            "market_cap":        ev.get("marketCap"),
+            "logo":              ev.get("logo"),
+            "importance":        ev.get("importance"),
+        })
+
+    # Sort by date_raw ascending
+    normalised.sort(key=lambda x: x.get("date_raw") or "")
+
+    _ms = round((_tm.time() - _t0) * 1000)
+    meta["elapsed_ms"]   = _ms
+    meta["from_date"]    = _from
+    meta["to_date"]      = _to
+    meta["events_count"] = len(normalised)
+
+    print(
+        f"[WATCHLIST_EARNINGS] symbols={len(symbols)} events={len(normalised)} "
+        f"cache_status={meta.get('cache_status')} elapsed_ms={_ms}"
+    )
+    return {"earnings": normalised, "meta": meta}
 
 
 # ── Stock Deep-Dive ─────────────────────────────────────────────────────────
