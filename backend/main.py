@@ -8084,6 +8084,7 @@ async def portfolio_relative_volume(
     Frontend should call this instead of N per-ticker Tradier quote calls.
     Cached 60 s matching the Tradier quote TTL.
     """
+    import time as _time_mod
     from data.cache import cache as _cache
 
     if not _jwt_or_key(request, api_key):
@@ -8091,60 +8092,90 @@ async def portfolio_relative_volume(
 
     await _wait_for_init()
 
-    if not data_service or not data_service.tradier:
-        return {"tickers": {}, "error": "tradier_unavailable"}
-
     syms = [t.strip().upper() for t in tickers.split(",") if t.strip()][:25]
     if not syms:
-        # Auto-read from the canonical portfolio store (Neon DB)
         from data.portfolio_store import load_active_holdings as _load_h
         syms = [h["ticker"].upper() for h in _load_h() if h.get("ticker")][:25]
     if not syms:
         return {"tickers": {}}
 
-    _ck = f"portfolio:relvol:{','.join(sorted(syms))}"
-    _cached = _cache.get(_ck)
-    if _cached is not None:
-        return {"tickers": _cached, "from_cache": True}
+    _sym_key  = ",".join(sorted(syms))
+    _ck       = f"portfolio:relvol:{_sym_key}"
+    _lkg_ck   = f"portfolio:relvol:lkg:{_sym_key}"
+    _lkg_ttl  = 4 * 3600  # 4 h — survives restarts / Tradier outages
 
+    # ── Hot cache ─────────────────────────────────────────────────────────
+    _t0 = _time_mod.time()
+    _hot = _cache.get(_ck)
+    if _hot is not None:
+        return {"tickers": _hot, "from_cache": True, "data_status": "live",
+                "cache_age_seconds": round(_time_mod.time() - _t0)}
+
+    # ── Saturation / provider check → serve LKG immediately ──────────────
+    _saturated = False
+    if not data_service or not data_service.tradier:
+        _saturated = True
+    else:
+        try:
+            from data.tradier_provider import TRADIER_LIMITER as _TL
+            _saturated = _TL.is_saturated()
+        except Exception:
+            pass
+
+    if _saturated:
+        _lkg = _cache.get(_lkg_ck)
+        _ms  = round((_time_mod.time() - _t0) * 1000)
+        if _lkg is not None:
+            print(f"[PORTFOLIO_RELVOL] status=lkg_saturated tickers={len(syms)} elapsed_ms={_ms}")
+            return {"tickers": _lkg["data"], "from_cache": True,
+                    "data_status": "lkg", "lkg_age_seconds": round(_time_mod.time() - _lkg["ts"])}
+        print(f"[PORTFOLIO_RELVOL] status=saturated_no_lkg tickers={len(syms)} elapsed_ms={_ms}")
+        return {"tickers": {t: {"volume": None, "avg_volume": None, "vol_x": None} for t in syms},
+                "data_status": "unavailable", "error": "tradier_saturated"}
+
+    # ── Live Tradier call ─────────────────────────────────────────────────
     try:
-        raw = await __import__("asyncio").wait_for(
-            data_service.tradier.get_quotes(syms), timeout=8.0
+        import asyncio as _aio
+        raw = await _aio.wait_for(
+            data_service.tradier.get_quotes(syms), timeout=5.0
         )
     except Exception as _e:
-        print(f"[PORTFOLIO_RELVOL] Tradier batch error: {_e}")
-        return {"tickers": {}, "error": str(_e)}
+        _ms = round((_time_mod.time() - _t0) * 1000)
+        print(f"[PORTFOLIO_RELVOL] status=tradier_error elapsed_ms={_ms} exc={type(_e).__name__}")
+        # Tradier failed — serve LKG if available
+        _lkg = _cache.get(_lkg_ck)
+        if _lkg is not None:
+            return {"tickers": _lkg["data"], "from_cache": True,
+                    "data_status": "lkg", "lkg_age_seconds": round(_time_mod.time() - _lkg["ts"]),
+                    "error": str(_e)}
+        return {"tickers": {t: {"volume": None, "avg_volume": None, "vol_x": None} for t in syms},
+                "data_status": "unavailable", "error": str(_e)}
 
     result: dict = {}
     for q in (raw or []):
         sym = (q.get("symbol") or "").upper()
         if not sym:
             continue
-        vol     = q.get("volume")      # int — 0 when market closed
-        avg_vol = q.get("average_volume")  # int — 3-month avg
-        # vol_x is null when no trades yet today (pre-market / closed) or no avg data
-        if vol and avg_vol and avg_vol > 0:
-            vol_x = round(vol / avg_vol, 2)
-        else:
-            vol_x = None
-        result[sym] = {
-            "volume":     vol,
-            "avg_volume": avg_vol,
-            "vol_x":      vol_x,
-        }
+        vol     = q.get("volume")
+        avg_vol = q.get("average_volume")
+        vol_x   = round(vol / avg_vol, 2) if vol and avg_vol and avg_vol > 0 else None
+        result[sym] = {"volume": vol, "avg_volume": avg_vol, "vol_x": vol_x}
 
-    # Tickers Tradier returned no data for (OTC / pink-sheet / delisted)
     for sym in syms:
         if sym not in result:
             result[sym] = {"volume": None, "avg_volume": None, "vol_x": None}
 
-    _cache.set(_ck, result, 60)
+    _ms = round((_time_mod.time() - _t0) * 1000)
+    _found = sum(1 for v in result.values() if v["avg_volume"])
     print(
-        f"[PORTFOLIO_RELVOL] tickers={syms} "
-        f"found={sum(1 for v in result.values() if v['avg_volume'])} "
-        f"vol_x_available={sum(1 for v in result.values() if v['vol_x'] is not None)}"
+        f"[PORTFOLIO_RELVOL] status=live elapsed_ms={_ms} tickers={len(syms)} "
+        f"found={_found} vol_x_available={sum(1 for v in result.values() if v['vol_x'] is not None)}"
     )
-    return {"tickers": result, "from_cache": False}
+
+    _now_ts = _time_mod.time()
+    _cache.set(_ck, result, 60)
+    _cache.set(_lkg_ck, {"data": result, "ts": _now_ts}, _lkg_ttl)
+    return {"tickers": result, "from_cache": False, "data_status": "live"}
 
 
 @app.get("/api/portfolio/events")

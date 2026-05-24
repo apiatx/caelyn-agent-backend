@@ -868,6 +868,10 @@ def _snapshot_row(
         "options_signal": opts.get("primary_signal"),
         "rsi": round(rsi, 1) if rsi is not None else None,
         "signal_label": signal_label,
+        # Quote provenance — lets frontend distinguish live vs LKG/stale data
+        "quote_source": quote.get("quote_source"),        # "tradier" | "fmp" | None
+        "quote_is_stale": quote.get("quote_is_stale"),    # True = LKG / not live
+        "quote_fallback_reason": quote.get("quote_fallback_reason"),  # "tradier_lkg" | None
     }
     if asset_type is not None:
         row["asset_type"] = asset_type

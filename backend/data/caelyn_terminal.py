@@ -987,13 +987,61 @@ class CaelynTerminalProvider:
     # ── Data fetchers ─────────────────────────────────────────────────────
 
     async def _fetch_tradier_quotes(self, syms: list[str]) -> list[dict]:
+        """Batch Tradier quote fetch with saturation-skip + per-ticker LKG fallback.
+
+        Uses the same LKG prefix as home_service._batch_quotes so that quotes
+        written by the home dashboard are reused here and vice-versa.
+        """
+        import time as _tm
         if not syms or not self.tradier:
             return []
+
+        _LKG_PFX = "home:wl_tradier_lkg:"
+        _LKG_TTL = 72 * 3600
+        from data.cache import cache as _dc
+
+        # ── Saturation check — skip live call, fall to per-ticker LKG ────
+        _saturated = False
         try:
-            return await asyncio.wait_for(self.tradier.get_quotes(syms), timeout=12.0)
-        except Exception as e:
-            print(f"[CAELYN] Tradier quotes error: {e}")
-            return []
+            from data.tradier_provider import TRADIER_LIMITER as _TL
+            _saturated = _TL.is_saturated()
+        except Exception:
+            pass
+
+        if not _saturated:
+            _t0 = _tm.time()
+            try:
+                raw = await asyncio.wait_for(self.tradier.get_quotes(syms), timeout=8.0)
+                # Write per-ticker LKG for future saturated rebuilds
+                _now = _tm.time()
+                for q in (raw or []):
+                    _s = (q.get("symbol") or "").upper()
+                    if _s and q.get("last"):
+                        _dc.set(f"{_LKG_PFX}{_s}", {**q,
+                            "quote_source": "tradier",
+                            "quote_cached_at": _now,
+                            "quote_is_stale": False,
+                            "quote_fallback_reason": None,
+                        }, _LKG_TTL)
+                print(f"[CAELYN] tradier_quotes=live elapsed_ms={round((_tm.time()-_t0)*1000)} syms={len(syms)} returned={len(raw or [])}")
+                return raw or []
+            except Exception as e:
+                print(f"[CAELYN] Tradier quotes error (falling to LKG): {type(e).__name__}: {e}")
+
+        # ── LKG fallback — assemble from per-ticker cache ─────────────────
+        _now = _tm.time()
+        lkg_rows: list[dict] = []
+        for sym in syms:
+            entry = _dc.get(f"{_LKG_PFX}{sym.upper()}")
+            if entry and entry.get("last"):
+                lkg_rows.append({
+                    **entry,
+                    "quote_is_stale": True,
+                    "quote_fallback_reason": "tradier_lkg_saturated" if _saturated else "tradier_lkg_error",
+                    "quote_cached_at": _now,
+                })
+        print(f"[CAELYN] tradier_quotes=lkg saturated={_saturated} syms={len(syms)} lkg_hits={len(lkg_rows)}")
+        return lkg_rows
 
     async def _fetch_crypto_quotes(self, tickers: list[str]) -> dict[str, dict]:
         """Returns {TICKER: {price, change, change_pct, w52_high, w52_low}}."""

@@ -1,0 +1,64 @@
+One remaining Home performance issue remains after validation.
+
+Frontend validation shows /api/home/dashboard through Express can still take 15.030s on first uncached request when Tradier is degraded.
+
+Important: this is not the main FastAPI /api/home/dashboard path you already fixed. That path is good:
+- cold no LKG: 3.09s
+- LKG restart: instant + 910ms background rebuild
+- warm: 10–52ms
+- Tradier saturation skip works
+
+The remaining slow path appears to be the portfolio snapshot path embedded by the frontend Express /api/home/dashboard route, described in frontend logs as:
+
+“portfolioSnapP inside the route waits up to ~8s per ticker timeout × N parallel Tradier calls”
+“[tradier-relvol] 15/16 quote fetches failed”
+
+Please audit the backend endpoint used by the frontend route’s portfolioSnapP dependency, likely one of:
+- /api/trading-dashboard?mode=swing
+- /api/caelyn-terminal
+- /api/stock-holdings related portfolio analytics
+- any portfolio snapshot / dashboard / terminal endpoint called from Express routes.ts during /api/home/dashboard composition
+
+Goal:
+No Home page composition path should wait 15 seconds because Tradier quote/relvol calls fail.
+
+Rules:
+- Do not change frontend response shapes.
+- Do not remove portfolio snapshot from Home.
+- Do not increase timeouts.
+- Do not rely on Express cache to hide this.
+- Preserve existing endpoint paths.
+- Make portfolio snapshot cache/LKG-first when requested by Home.
+
+Specific fixes to apply:
+1. Find the exact portfolioSnapP backend endpoint called by Express /api/home/dashboard.
+2. Add [HOME_PERF] or [PORTFOLIO_PERF] timing around:
+   - total endpoint time
+   - Tradier quote/relvol fetches
+   - number of tickers requested
+   - number failed
+   - cache/LKG hit/miss
+3. If Tradier limiter is saturated, degraded, or quote failure rate is high, immediately return cached/LKG portfolio snapshot instead of waiting for per-ticker timeouts.
+4. Do not allow per-ticker Tradier quote failures to multiply into 8–15s Home delays.
+5. Add a Home-mode fast path if needed:
+   - Either a query param like ?home_fast=1 if frontend already can pass it safely
+   - Or internal detection for the Home composition endpoint
+   - This path should return cached holdings/risk/summary immediately and skip live relvol refresh if provider is degraded.
+6. Ensure portfolio snapshot timeout budget is section-level:
+   - max 2–3s for Home composition
+   - stale/LKG fallback if exceeded
+7. Confirm this path does not make duplicate Tradier calls already made by home_service.py.
+
+Validation:
+Run this exact scenario:
+- Restart backend
+- Simulate or observe Tradier degraded / quote failures
+- Hit the portfolio snapshot endpoint directly
+- Hit frontend-composed /api/home/dashboard if possible
+- Confirm first uncached Home request does not exceed 5s even when Tradier is degraded
+
+Success criteria:
+- portfolioSnapP path under Home returns in under 3s with LKG/stale if Tradier is degraded
+- full uncached /api/home/dashboard through Express under 5s even with Tradier failures
+- cached Express hit remains under 50ms
+- response keys unchanged
