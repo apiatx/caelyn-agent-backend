@@ -84,9 +84,13 @@ _CRYPTO_WEIGHTS: dict[str, float] = {
 # Minimum independent signal categories to qualify
 _MIN_SIGNALS = 2
 
-# Timing signals — at least one required
-_STOCK_TIMING  = {"ta", "rel_volume", "catalyst", "options"}
+# Timing signals — at least one required for basic qualification
+_STOCK_TIMING  = {"ta", "rel_volume", "catalyst", "options", "social", "news"}
 _CRYPTO_TIMING = {"momentum", "oi", "volume_velocity", "liquidation"}
+
+# External timing signals — required for Top-N qualification (not stage-derived)
+# If the ONLY timing signals are theme+stage-ta (same file), candidate is watch_only
+_STOCK_EXTERNAL_TIMING = {"rel_volume", "catalyst", "options", "social"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -222,16 +226,18 @@ def _make_candidate(
 
 def _score_candidate(candidate: dict, regime: dict) -> float:
     """
-    Compute and return a 0-1 score using available-signal weighted normalization.
-    Sets candidate["score"] and candidate["confidence"] in-place.
+    Compute and return a normalised score (0–100 on candidate["score"],
+    raw 0–1 kept in candidate["score_raw"]) using available-signal weighted
+    normalization.  Sets candidate["confidence"] and candidate["has_timing_signal"].
     Returns 0 if the candidate doesn't have enough qualifying signals.
+
+    external_api_calls: 0 — reads only in-process candidate dict.
     """
     atype = candidate.get("asset_type", "stock")
     sigs  = candidate.get("signals", {})
 
     if atype in ("crypto", "perp"):
         weights = _CRYPTO_WEIGHTS
-        # remap: theme→social_news if crypto social not separate
         sig_map = {
             "momentum":             sigs.get("momentum"),
             "oi":                   sigs.get("hyperliquid"),
@@ -254,7 +260,7 @@ def _score_candidate(candidate: dict, regime: dict) -> float:
             "social":       sigs.get("social"),
             "news":         sigs.get("news"),
             "fundamentals": sigs.get("fundamentals"),
-            "relevance":    sigs.get("macro"),   # regime relevance
+            "relevance":    sigs.get("macro"),
         }
         timing_keys = _STOCK_TIMING
 
@@ -263,7 +269,7 @@ def _score_candidate(candidate: dict, regime: dict) -> float:
     if len(present) < _MIN_SIGNALS:
         return 0.0
 
-    # Require at least one timing signal
+    # Require at least one timing signal (expanded set includes social/news)
     if not (present & timing_keys):
         return 0.0
 
@@ -289,7 +295,6 @@ def _score_candidate(candidate: dict, regime: dict) -> float:
         elif candidate.get("status") == "extended":
             score = max(0.0, score * (1 - 0.05 * conf))
     elif rlabel == "major_macro_event_soon":
-        # lower confidence on crowded momentum unless catalyst-specific
         if sigs.get("catalysts") is None:
             score = max(0.0, score * 0.92)
 
@@ -298,15 +303,37 @@ def _score_candidate(candidate: dict, regime: dict) -> float:
     if rs_boost and rlabel in ("risk_off", "neutral"):
         score = min(1.0, score * 1.05)
 
-    # Set confidence label
-    if score >= 0.72:
+    # ── Theme-only guard ──────────────────────────────────────────────────────
+    # Candidates whose ONLY source is the themes LKG file carry stage-derived ta
+    # and 1D-perf news — all from the same file, not independent market data.
+    # They cannot be high-conviction Top-N unless they also have an external
+    # actionable timing signal (rel_volume, catalyst, options, or social).
+    src_pages = set(candidate.get("source_pages", []))
+    has_external_timing = bool(present & _STOCK_EXTERNAL_TIMING)
+    is_themes_only = (src_pages == {"themes"} and atype not in ("crypto", "perp"))
+
+    if is_themes_only and not has_external_timing:
+        # Apply score penalty and cap confidence — mark as watch_only
+        score = max(0.0, score * 0.85)
+        candidate["has_timing_signal"] = False
+        candidate["watch_only_reason"] = "theme_only_no_external_timing"
+    else:
+        candidate["has_timing_signal"] = True
+
+    # ── Confidence label (based on 0-100 scale thresholds) ───────────────────
+    score_100 = score * 100
+    if candidate.get("has_timing_signal", True) is False:
+        conf_label = "medium" if score_100 >= 50 else "low"
+    elif score_100 >= 72:
         conf_label = "high"
-    elif score >= 0.50:
+    elif score_100 >= 50:
         conf_label = "medium"
     else:
         conf_label = "low"
 
-    candidate["score"]      = round(score, 4)
+    # ── Store scores ──────────────────────────────────────────────────────────
+    candidate["score_raw"]  = round(score, 4)           # 0-1 for internal use
+    candidate["score"]      = round(score_100, 2)       # 0-100 for frontend
     candidate["confidence"] = conf_label
     return score
 
@@ -519,14 +546,25 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
                     )
                     candidates.append(c)
 
-        status = "ok" if candidates else "missing"
-        if candidates and sf < 1.0:
+        symbols_ok = len(candidates) > 0
+        status = "ok" if symbols_ok else "missing"
+        if symbols_ok and sf < 1.0:
             status = "stale"
-        return candidates, status
+
+        wl_meta = {
+            "symbols_status":    "ok" if symbols_ok else "missing",
+            "signal_status":     "ok" if sf >= 1.0 else ("stale" if symbols_ok else "missing"),
+            "symbol_count":      len(candidates),
+            "signal_age_seconds": int(age_s) if age_s is not None else None,
+        }
+        return candidates, status, wl_meta
 
     except Exception as exc:
         print(f"[daily-alpha] skipped_source=watchlist reason={exc!r}")
-        return [], "error"
+        return [], "error", {
+            "symbols_status": "error", "signal_status": "error",
+            "symbol_count": 0, "signal_age_seconds": None,
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1511,15 +1549,15 @@ def build_daily_alpha_board(
     # ── Collect from all sources ─────────────────────────────────────────────
     sh = _SourceHealth()
 
-    wl_cands,   wl_status  = collect_watchlist_cache_candidates()
-    port_cands, port_status = collect_portfolio_cache_candidates()
-    soc_cands,  soc_status = collect_social_screener_cache_candidates()
-    th_cands,   th_status  = collect_themes_cache_candidates()
-    str_cands,  str_status = collect_strategy_cache_candidates()
-    cat_cands,  cat_status = collect_catalyst_cache_candidates()
-    opt_cands,  opt_status = collect_options_cache_candidates()
-    hl_cands,   hl_status  = collect_hyperliquid_cache_candidates()
-    regime,     reg_status = collect_macro_cache_context()
+    wl_cands,   wl_status,  wl_meta  = collect_watchlist_cache_candidates()
+    port_cands, port_status          = collect_portfolio_cache_candidates()
+    soc_cands,  soc_status           = collect_social_screener_cache_candidates()
+    th_cands,   th_status            = collect_themes_cache_candidates()
+    str_cands,  str_status           = collect_strategy_cache_candidates()
+    cat_cands,  cat_status           = collect_catalyst_cache_candidates()
+    opt_cands,  opt_status           = collect_options_cache_candidates()
+    hl_cands,   hl_status            = collect_hyperliquid_cache_candidates()
+    regime,     reg_status           = collect_macro_cache_context()
 
     sh.set("watchlist",   wl_status,   len(wl_cands))
     sh.set("portfolio",   port_status, len(port_cands))
@@ -1568,31 +1606,61 @@ def build_daily_alpha_board(
             stocks_scored += 1
 
     candidates_qualified = len(scored)
-    print(f"[daily-alpha] candidates_qualified={candidates_qualified} "
+    print(f"[daily-alpha] mode=cache_only external_api_calls=0 "
+          f"provider_calls_blocked=true candidates_qualified={candidates_qualified} "
           f"stocks={stocks_scored} crypto={crypto_scored}")
 
-    # ── Sort and cap ──────────────────────────────────────────────────────────
+    # ── Sort and cap — timing-signal ideas rank before watch_only ─────────────
     scored.sort(key=lambda c: c["score"], reverse=True)
 
-    # Remove internal helper key before output
+    timing_ideas  = [c for c in scored if c.get("has_timing_signal", True)]
+    watchonly_ideas = [c for c in scored if not c.get("has_timing_signal", True)]
+
+    # Fill top-N with timing ideas first; pad with watch_only if slots remain
+    top_candidates = timing_ideas[:limit]
+    if len(top_candidates) < limit:
+        top_candidates += watchonly_ideas[:limit - len(top_candidates)]
+
+    # Remove internal helper keys before output
     ideas = []
-    for c in scored[:limit]:
+    for c in top_candidates:
         out = {k: v for k, v in c.items() if not k.startswith("_")}
         ideas.append(out)
 
     top_syms = [c["symbol"] for c in ideas]
-    print(f"[daily-alpha] top_symbols={top_syms}")
+    watch_only_count = sum(1 for c in ideas if not c.get("has_timing_signal", True))
+    print(f"[daily-alpha] top_symbols={top_syms} watch_only_in_top={watch_only_count}")
+
+    # ── Unsafe/skipped sources summary ────────────────────────────────────────
+    unsafe_sources_skipped = [
+        {"source": k, "reason": "unavailable_cache_only"}
+        for k, v in sh.health.items()
+        if v == "unavailable_cache_only"
+    ]
+
+    # ── Source health with split watchlist detail ─────────────────────────────
+    full_source_health = dict(sh.health)
+    watchlist_detail = {
+        "watchlist_symbols_status":    wl_meta.get("symbols_status", "missing"),
+        "watchlist_signal_status":     wl_meta.get("signal_status", "missing"),
+        "watchlist_symbol_count":      wl_meta.get("symbol_count", 0),
+        "watchlist_signal_age_seconds": wl_meta.get("signal_age_seconds"),
+    }
 
     # ── Build response ────────────────────────────────────────────────────────
     result: dict[str, Any] = {
-        "ok":                  True,
-        "generated_at":        _now_iso(),
-        "mode":                "cache_only",
-        "external_api_calls":  0,
-        "limit":               limit,
-        "regime":              regime,
-        "ideas":               ideas,
-        "source_health":       sh.health,
+        "ok":                     True,
+        "generated_at":           _now_iso(),
+        "mode":                   "cache_only",
+        "external_api_calls":     0,
+        "provider_calls_blocked": True,
+        "provider_call_attempts": [],
+        "unsafe_sources_skipped": unsafe_sources_skipped,
+        "limit":                  limit,
+        "regime":                 regime,
+        "ideas":                  ideas,
+        "source_health":          full_source_health,
+        **watchlist_detail,
         "counts": {
             "candidates_seen":       candidates_seen,
             "candidates_qualified":  candidates_qualified,
@@ -1600,6 +1668,7 @@ def build_daily_alpha_board(
             "crypto_scored":         crypto_scored,
             "watchlist_candidates":  len(wl_cands),
             "portfolio_candidates":  len(port_cands),
+            "watch_only_in_top":     watch_only_count,
         },
         "cache": {
             "hit":          False,
@@ -1608,8 +1677,11 @@ def build_daily_alpha_board(
             "stale_served": False,
         },
         "diagnostics": {
+            "mode":                   "cache_only",
             "provider_calls_blocked": True,
             "external_api_calls":     0,
+            "provider_call_attempts": [],
+            "unsafe_sources_skipped": unsafe_sources_skipped,
             "source_modes": {
                 k: "cache_only" for k in sh.health
             },
@@ -1662,19 +1734,27 @@ def build_daily_alpha_board_safe(
             out["ok"] = True
             return out
         return {
-            "ok":                  False,
-            "generated_at":        _now_iso(),
-            "mode":                "cache_only",
-            "external_api_calls":  0,
-            "limit":               limit,
-            "regime":              {"label": "neutral", "summary": "unavailable", "drivers": [], "confidence": 0.0},
-            "ideas":               [],
-            "source_health":       {k: "error" for k in (
-                                    "watchlist","portfolio","social","themes",
-                                    "strategy","catalysts","options","hyperliquid","macro")},
+            "ok":                     False,
+            "generated_at":           _now_iso(),
+            "mode":                   "cache_only",
+            "external_api_calls":     0,
+            "provider_calls_blocked": True,
+            "provider_call_attempts": [],
+            "unsafe_sources_skipped": [],
+            "limit":                  limit,
+            "regime":                 {"label": "neutral", "summary": "unavailable", "drivers": [], "confidence": 0.0},
+            "ideas":                  [],
+            "source_health":          {k: "error" for k in (
+                                       "watchlist","portfolio","social","themes",
+                                       "strategy","catalysts","options","hyperliquid","macro")},
+            "watchlist_symbols_status":    "error",
+            "watchlist_signal_status":     "error",
+            "watchlist_symbol_count":      0,
+            "watchlist_signal_age_seconds": None,
             "counts":              {"candidates_seen":0,"candidates_qualified":0,
                                     "stocks_scored":0,"crypto_scored":0,
-                                    "watchlist_candidates":0,"portfolio_candidates":0},
+                                    "watchlist_candidates":0,"portfolio_candidates":0,
+                                    "watch_only_in_top":0},
             "cache":               {"hit":False,"age_seconds":0,"ttl_seconds":300,"stale_served":False},
             "diagnostics":         None,
             "error":               str(exc),
@@ -1694,6 +1774,7 @@ def build_diagnostics() -> dict:
     sh = _SourceHealth()
     all_source_data: dict[str, list] = {}
 
+    wl_diag_meta: dict = {}
     for name, fn in [
         ("watchlist",   collect_watchlist_cache_candidates),
         ("portfolio",   collect_portfolio_cache_candidates),
@@ -1704,7 +1785,11 @@ def build_diagnostics() -> dict:
         ("options",     collect_options_cache_candidates),
         ("hyperliquid", collect_hyperliquid_cache_candidates),
     ]:
-        cands, status = fn()
+        raw_result = fn()
+        if name == "watchlist":
+            cands, status, wl_diag_meta = raw_result
+        else:
+            cands, status = raw_result
         sh.set(name, status, len(cands))
         all_source_data[name] = cands
 
@@ -1746,14 +1831,27 @@ def build_diagnostics() -> dict:
 
     cache_age = int(time.time() - _BOARD_CACHE["ts"])
 
+    unsafe_skipped = [
+        {"source": k, "reason": "unavailable_cache_only"}
+        for k, v in sh.health.items()
+        if v == "unavailable_cache_only"
+    ]
+
     return {
-        "ok":                  True,
-        "generated_at":        _now_iso(),
-        "external_api_calls":  0,
+        "ok":                     True,
+        "generated_at":           _now_iso(),
+        "mode":                   "cache_only",
+        "external_api_calls":     0,
         "provider_calls_blocked": True,
-        "elapsed_ms":          round((time.time() - t0) * 1000, 1),
-        "source_health":       sh.health,
-        "source_counts":       sh.counts,
+        "provider_call_attempts": [],
+        "unsafe_sources_skipped": unsafe_skipped,
+        "elapsed_ms":             round((time.time() - t0) * 1000, 1),
+        "source_health":          sh.health,
+        "source_counts":          sh.counts,
+        "watchlist_symbols_status":     wl_diag_meta.get("symbols_status", "missing"),
+        "watchlist_signal_status":      wl_diag_meta.get("signal_status", "missing"),
+        "watchlist_symbol_count":       wl_diag_meta.get("symbol_count", 0),
+        "watchlist_signal_age_seconds": wl_diag_meta.get("signal_age_seconds"),
         "regime":              regime,
         "file_ages":           file_ages,
         "aggregator_cache": {
@@ -1763,9 +1861,5 @@ def build_diagnostics() -> dict:
             "ttl_seconds":      _BOARD_CACHE.get("ttl", _TTL_OFF_HOURS),
         },
         "top_20_pre_ranked":   top20,
-        "skipped_sources":     [
-            {"source": k, "reason": "unavailable_cache_only"}
-            for k, v in sh.health.items()
-            if v == "unavailable_cache_only"
-        ],
+        "skipped_sources":     unsafe_skipped,
     }
