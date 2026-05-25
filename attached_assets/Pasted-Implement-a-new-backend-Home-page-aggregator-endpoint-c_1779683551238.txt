@@ -1,0 +1,276 @@
+Implement a new backend Home page aggregator endpoint called:
+
+GET /api/home/daily-alpha-board
+
+Purpose:
+Create a cache-only cross-market signal ranking engine that returns the top 10 trade ideas of the day across stocks, ETFs, watchlist, portfolio, strategy/TA, themes, catalysts, social/news, options, and Hyperliquid/crypto signals.
+
+CRITICAL RULE:
+This endpoint must make ZERO external provider/API calls.
+
+It must NOT call:
+- FMP
+- Tradier
+- Finnhub
+- Polygon
+- TwelveData
+- Yahoo
+- Grok/X
+- Gemini
+- Perplexity
+- OpenAI
+- Anthropic
+- Hyperliquid live endpoints
+- Any other external data provider
+
+This endpoint is only allowed to read from:
+- Existing in-memory caches
+- Existing disk/JSON snapshots
+- Existing Neon snapshot tables
+- Existing already-computed service outputs that are guaranteed cache-only
+- Existing LKG data already used by page sections
+
+If a source cannot be read without making an external provider call, skip that source and mark it in source_health as unavailable_cache_only.
+
+Do not add new external data collection logic. This is a composer/ranker over data the app already has.
+
+Create a new service file:
+
+services/daily_alpha_board_service.py
+
+Add endpoint:
+
+GET /api/home/daily-alpha-board
+
+Query params:
+- limit=10
+- asset_type=all|stocks|crypto
+- scope=all|watchlist|portfolio
+- refresh=false
+- diagnostics=false
+
+The refresh param may refresh the aggregator’s own ranking cache only. It must not refresh provider data.
+
+The service should collect candidates from existing cached/page data sources such as:
+- Watchlist page saved/enriched data already loaded from Neon/cache
+- Portfolio page terminal/dashboard cached data
+- Social Screener cached rows
+- Themes/Sectors relative strength cached output
+- Strategy/TA screener latest cached output
+- Catalyst/Earnings cached snapshots
+- Options overlay/flow cached output
+- Hyperliquid Matrix cached output
+- Macro regime cached output
+- X/news consensus cached output if already persisted
+
+Important:
+Before using any existing function, inspect whether it can trigger an external API call. If it can, do not call it directly. Instead use its cache/LKG read path or skip it.
+
+Implement clear source adapters:
+
+collect_watchlist_cache_candidates()
+collect_portfolio_cache_candidates()
+collect_social_screener_cache_candidates()
+collect_themes_cache_candidates()
+collect_strategy_cache_candidates()
+collect_catalyst_cache_candidates()
+collect_options_cache_candidates()
+collect_hyperliquid_cache_candidates()
+collect_macro_cache_context()
+
+Each adapter must:
+- Be best-effort
+- Never throw hard failure
+- Return [] if cache is missing
+- Mark source_health
+- Never trigger provider calls
+
+Normalize every candidate to this shared schema:
+
+{
+  "symbol": str,
+  "name": str | None,
+  "asset_type": "stock" | "etf" | "crypto" | "perp" | "macro",
+  "direction": "long" | "short" | "watch",
+  "timeframe": "intraday" | "2-10d" | "swing" | "position",
+  "score": float,
+  "confidence": "low" | "medium" | "high",
+  "status": "active_setup" | "pre_breakout" | "extended" | "watch_only",
+  "setup_type": str,
+  "theme": str | None,
+  "sector": str | None,
+  "summary": str,
+  "trigger": str | None,
+  "invalidation": str | None,
+  "signals": {
+    "ta": float | None,
+    "fundamentals": float | None,
+    "catalysts": float | None,
+    "social": float | None,
+    "news": float | None,
+    "options": float | None,
+    "theme": float | None,
+    "macro": float | None,
+    "hyperliquid": float | None,
+    "momentum": float | None,
+    "rel_volume": float | None
+  },
+  "evidence": list[str],
+  "risks": list[str],
+  "source_pages": list[str],
+  "updated_at": str
+}
+
+Scoring:
+Use deterministic scoring only. Do not call an LLM to rank.
+
+For stocks:
+
+stock_score = (
+  theme_score * 0.20 +
+  ta_score * 0.18 +
+  rel_volume_score * 0.15 +
+  catalyst_score * 0.12 +
+  options_score * 0.10 +
+  social_score * 0.10 +
+  news_score * 0.08 +
+  fundamentals_score * 0.05 +
+  relevance_score * 0.02
+)
+
+For crypto/perps:
+
+crypto_score = (
+  momentum_score * 0.25 +
+  oi_score * 0.18 +
+  volume_velocity_score * 0.15 +
+  funding_quality_score * 0.12 +
+  liquidation_score * 0.10 +
+  volatility_expansion_score * 0.08 +
+  macro_score * 0.07 +
+  social_news_score * 0.05
+)
+
+If a signal is missing, do not treat it as zero automatically. Use available-signal weighted normalization so assets are not unfairly punished for missing optional sources.
+
+Example:
+If a stock has TA, theme, rel volume, and catalysts but no options data, normalize score over the available weighted inputs.
+
+However:
+- Require at least 2 independent signal categories for an idea to qualify.
+- Require at least one timing signal: TA, rel volume, momentum, catalyst proximity, Hyperliquid momentum, or options activity.
+- Penalize stale data based on source age.
+
+Add stale-data handling:
+- Fresh: full weight
+- Mildly stale: small penalty
+- Very stale: source excluded
+- Unknown age: slight penalty
+
+Add deduping:
+- Same symbol appearing from multiple sources should merge into one candidate.
+- Merge evidence, risks, source_pages, and signal scores.
+- Prefer richer candidate metadata.
+- For duplicate crypto/perp display coins, dedupe by display symbol where possible.
+
+Add regime modifiers, but only from cached macro/regime data:
+- risk_on: modest boost to growth/theme momentum and crypto momentum
+- risk_off: penalty to extended high-beta and crowded crypto longs
+- major_macro_event_soon: lower confidence on crowded momentum unless catalyst-specific
+- relative_strength_in_weak_market: boost
+
+If cached regime data does not exist, return neutral regime.
+
+Response shape:
+
+{
+  "ok": true,
+  "generated_at": "...",
+  "mode": "cache_only",
+  "external_api_calls": 0,
+  "limit": 10,
+  "regime": {
+    "label": "risk_on" | "neutral" | "risk_off",
+    "summary": str,
+    "drivers": list[str]
+  },
+  "ideas": [...],
+  "source_health": {
+    "watchlist": "ok|missing|stale|unavailable_cache_only|error",
+    "portfolio": "ok|missing|stale|unavailable_cache_only|error",
+    "social": "ok|missing|stale|unavailable_cache_only|error",
+    "themes": "ok|missing|stale|unavailable_cache_only|error",
+    "strategy": "ok|missing|stale|unavailable_cache_only|error",
+    "catalysts": "ok|missing|stale|unavailable_cache_only|error",
+    "options": "ok|missing|stale|unavailable_cache_only|error",
+    "hyperliquid": "ok|missing|stale|unavailable_cache_only|error",
+    "macro": "ok|missing|stale|unavailable_cache_only|error"
+  },
+  "counts": {
+    "candidates_seen": int,
+    "candidates_qualified": int,
+    "stocks_scored": int,
+    "crypto_scored": int,
+    "watchlist_candidates": int,
+    "portfolio_candidates": int
+  },
+  "cache": {
+    "hit": true,
+    "age_seconds": int,
+    "ttl_seconds": int,
+    "stale_served": false
+  },
+  "diagnostics": {
+    "provider_calls_blocked": true,
+    "external_api_calls": 0,
+    "source_modes": {
+      "watchlist": "cache_only",
+      "portfolio": "cache_only"
+    }
+  }
+}
+
+Caching:
+Add an aggregator-level TTL cache:
+- 60 seconds during market hours
+- 5 minutes outside market hours
+- Always return stale LKG if rebuilding the ranking fails
+
+This cache is only for the ranking result. It must not refresh provider data.
+
+Logging:
+Add logs:
+
+[daily-alpha] mode=cache_only external_api_calls=0
+[daily-alpha] candidates_seen=...
+[daily-alpha] candidates_qualified=...
+[daily-alpha] source_health=...
+[daily-alpha] top_symbols=...
+[daily-alpha] cache_hit=... age=...
+[daily-alpha] skipped_source=... reason=provider_call_risk
+
+Diagnostics:
+Add:
+
+GET /api/home/daily-alpha-board/diagnostics
+
+Return:
+- source availability
+- cache ages
+- candidate counts by source
+- top 20 pre-ranked candidates
+- external_api_calls: 0
+- list of skipped sources and why
+
+Validation:
+Add simple validation/probe script or curl examples proving:
+1. Endpoint returns 200
+2. external_api_calls is 0
+3. mode is cache_only
+4. One broken/missing source does not break endpoint
+5. Home page never receives blank ideas if LKG exists
+6. No provider keys are touched
+7. No new FMP/Tradier/Hyperliquid/Grok/Gemini/Perplexity calls are made from this endpoint
+
+Do not break existing endpoints.
+Do not change existing provider services except to expose safe cache-read helpers if needed.

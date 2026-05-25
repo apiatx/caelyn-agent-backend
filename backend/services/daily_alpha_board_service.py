@@ -1,0 +1,1771 @@
+"""
+services/daily_alpha_board_service.py
+======================================
+Daily Alpha Board — cache-only cross-market signal ranking engine.
+
+GET /api/home/daily-alpha-board
+
+CRITICAL: ZERO external provider/API calls.
+Reads ONLY from:
+  - Disk JSON snapshots  (strategy_screener_lkg, themes_rs_lkg,
+                          hyperliquid_signal_snapshots, x_consensus_weekly,
+                          options_master_lkg_v1, earnings_snap_*)
+  - In-memory TTLCache   (regime:current_v1, options LKG, social LKG)
+  - Neon snapshot tables (watchlist rows, portfolio holdings)
+  - In-process module caches (_matrix_cache in hyperliquid router)
+
+If a source cannot be read without an external call, it is skipped and
+marked as 'unavailable_cache_only' in source_health.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import time
+import os
+from datetime import datetime, timezone, date
+from pathlib import Path
+from typing import Any, Optional
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────────────────
+_DATA_DIR           = Path(__file__).parent.parent / "data"
+_STRATEGY_LKG_PATH  = _DATA_DIR / "strategy_screener_lkg.json"
+_THEMES_LKG_PATH    = _DATA_DIR / "themes_rs_lkg.json"
+_HL_SNAP_PATH       = _DATA_DIR / "hyperliquid_signal_snapshots.json"
+_X_CONSENSUS_PATH   = _DATA_DIR / "x_consensus_weekly.json"
+_OPTIONS_PATHS      = [
+    _DATA_DIR / "options_master_lkg_v1.json",
+    _DATA_DIR / "options_lkg_v1_large_cap.json",
+    _DATA_DIR / "options_lkg_v1_small_cap.json",
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Aggregator TTL cache  (ranking result only — never provider data)
+# ─────────────────────────────────────────────────────────────────────────────
+_TTL_MARKET_HOURS = 60       # seconds — Mon-Fri 09:30–16:00 ET
+_TTL_OFF_HOURS    = 300      # seconds — evenings / weekends
+
+_BOARD_CACHE: dict[str, Any] = {
+    "result": None,
+    "ts":     0.0,
+    "lkg":    None,   # last-known-good ranking result
+    "ttl":    _TTL_OFF_HOURS,
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scoring weight tables
+# ─────────────────────────────────────────────────────────────────────────────
+_STOCK_WEIGHTS: dict[str, float] = {
+    "theme":        0.20,
+    "ta":           0.18,
+    "rel_volume":   0.15,
+    "catalyst":     0.12,
+    "options":      0.10,
+    "social":       0.10,
+    "news":         0.08,
+    "fundamentals": 0.05,
+    "relevance":    0.02,
+}
+
+_CRYPTO_WEIGHTS: dict[str, float] = {
+    "momentum":             0.25,
+    "oi":                   0.18,
+    "volume_velocity":      0.15,
+    "funding_quality":      0.12,
+    "liquidation":          0.10,
+    "volatility_expansion": 0.08,
+    "macro":                0.07,
+    "social_news":          0.05,
+}
+
+# Minimum independent signal categories to qualify
+_MIN_SIGNALS = 2
+
+# Timing signals — at least one required
+_STOCK_TIMING  = {"ta", "rel_volume", "catalyst", "options"}
+_CRYPTO_TIMING = {"momentum", "oi", "volume_velocity", "liquidation"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_market_hours() -> bool:
+    """True Mon-Fri 09:30–16:00 US/Eastern (approximated from UTC-4/UTC-5)."""
+    import datetime as _dt
+    now_utc = _dt.datetime.now(_dt.timezone.utc)
+    weekday = now_utc.weekday()           # 0=Mon … 4=Fri
+    if weekday >= 5:
+        return False
+    # rough ET offset — close enough for TTL selection
+    hour_et = (now_utc.hour - 4) % 24    # EDT; EST would be -5
+    return 9 <= hour_et < 16
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _load_json_safe(path: Path | str) -> Any | None:
+    """Read a JSON file; return None on any error."""
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _staleness_factor(age_seconds: float | None) -> float:
+    """Return a weight multiplier based on how old the source data is."""
+    if age_seconds is None:
+        return 0.85          # unknown age — slight penalty
+    if age_seconds < 7_200:   # < 2 h   → fresh
+        return 1.0
+    if age_seconds < 43_200:  # 2 – 12 h → mildly stale
+        return 0.90
+    if age_seconds < 172_800: # 12 – 48 h → stale
+        return 0.70
+    return 0.0               # > 48 h → exclude
+
+
+def _source_age_s(ts: float | None) -> float | None:
+    if ts is None:
+        return None
+    return max(0.0, time.time() - ts)
+
+
+def _clamp01(v: float | None) -> float | None:
+    if v is None:
+        return None
+    return max(0.0, min(1.0, float(v)))
+
+
+def _grade_to_score(grade: str | None) -> float | None:
+    if not grade:
+        return None
+    return {"A": 0.95, "B": 0.75, "C": 0.55, "D": 0.35, "F": 0.15}.get(
+        str(grade).upper(), None
+    )
+
+
+def _current_week_bounds() -> tuple[str, str]:
+    """Return ISO dates for Mon-Fri of the current week."""
+    today = date.today()
+    mon = today - __import__("datetime").timedelta(days=today.weekday())
+    fri = mon + __import__("datetime").timedelta(days=4)
+    return mon.isoformat(), fri.isoformat()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Candidate factory
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_candidate(
+    symbol: str,
+    *,
+    name: str | None = None,
+    asset_type: str = "stock",
+    direction: str = "long",
+    timeframe: str = "2-10d",
+    score: float = 0.0,
+    confidence: str = "low",
+    status: str = "watch_only",
+    setup_type: str = "",
+    theme: str | None = None,
+    sector: str | None = None,
+    summary: str = "",
+    trigger: str | None = None,
+    invalidation: str | None = None,
+    signals: dict | None = None,
+    evidence: list[str] | None = None,
+    risks: list[str] | None = None,
+    source_pages: list[str] | None = None,
+    updated_at: str | None = None,
+) -> dict:
+    base_signals: dict[str, Any] = {
+        "ta": None, "fundamentals": None, "catalysts": None,
+        "social": None, "news": None, "options": None,
+        "theme": None, "macro": None, "hyperliquid": None,
+        "momentum": None, "rel_volume": None,
+    }
+    if signals:
+        base_signals.update(signals)
+    return {
+        "symbol":       symbol.upper().strip(),
+        "name":         name,
+        "asset_type":   asset_type,
+        "direction":    direction,
+        "timeframe":    timeframe,
+        "score":        round(float(score), 4),
+        "confidence":   confidence,
+        "status":       status,
+        "setup_type":   setup_type,
+        "theme":        theme,
+        "sector":       sector,
+        "summary":      summary,
+        "trigger":      trigger,
+        "invalidation": invalidation,
+        "signals":      base_signals,
+        "evidence":     list(evidence or []),
+        "risks":        list(risks or []),
+        "source_pages": list(source_pages or []),
+        "updated_at":   updated_at or _now_iso(),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Available-signal weighted scoring
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _score_candidate(candidate: dict, regime: dict) -> float:
+    """
+    Compute and return a 0-1 score using available-signal weighted normalization.
+    Sets candidate["score"] and candidate["confidence"] in-place.
+    Returns 0 if the candidate doesn't have enough qualifying signals.
+    """
+    atype = candidate.get("asset_type", "stock")
+    sigs  = candidate.get("signals", {})
+
+    if atype in ("crypto", "perp"):
+        weights = _CRYPTO_WEIGHTS
+        # remap: theme→social_news if crypto social not separate
+        sig_map = {
+            "momentum":             sigs.get("momentum"),
+            "oi":                   sigs.get("hyperliquid"),
+            "volume_velocity":      sigs.get("rel_volume"),
+            "funding_quality":      sigs.get("ta"),
+            "liquidation":          None,
+            "volatility_expansion": None,
+            "macro":                sigs.get("macro"),
+            "social_news":          sigs.get("social") or sigs.get("news"),
+        }
+        timing_keys = _CRYPTO_TIMING
+    else:
+        weights  = _STOCK_WEIGHTS
+        sig_map  = {
+            "theme":        sigs.get("theme"),
+            "ta":           sigs.get("ta"),
+            "rel_volume":   sigs.get("rel_volume"),
+            "catalyst":     sigs.get("catalysts"),
+            "options":      sigs.get("options"),
+            "social":       sigs.get("social"),
+            "news":         sigs.get("news"),
+            "fundamentals": sigs.get("fundamentals"),
+            "relevance":    sigs.get("macro"),   # regime relevance
+        }
+        timing_keys = _STOCK_TIMING
+
+    # Count independent signal categories present
+    present = {k for k, v in sig_map.items() if v is not None}
+    if len(present) < _MIN_SIGNALS:
+        return 0.0
+
+    # Require at least one timing signal
+    if not (present & timing_keys):
+        return 0.0
+
+    # Available-weight normalization
+    avail_weight = sum(weights[k] for k in present)
+    if avail_weight < 0.01:
+        return 0.0
+
+    raw = sum(float(sig_map[k] or 0) * weights[k] for k in present)
+    score = raw / avail_weight   # 0-1
+
+    # ── Regime modifier (cache-only) ──────────────────────────────────────────
+    rlabel = (regime or {}).get("label", "neutral")
+    conf   = (regime or {}).get("confidence", 0.5)
+    if rlabel == "risk_on":
+        if atype in ("crypto", "perp"):
+            score = min(1.0, score * (1 + 0.06 * conf))
+        elif candidate.get("theme"):
+            score = min(1.0, score * (1 + 0.04 * conf))
+    elif rlabel == "risk_off":
+        if atype in ("crypto", "perp"):
+            score = max(0.0, score * (1 - 0.08 * conf))
+        elif candidate.get("status") == "extended":
+            score = max(0.0, score * (1 - 0.05 * conf))
+    elif rlabel == "major_macro_event_soon":
+        # lower confidence on crowded momentum unless catalyst-specific
+        if sigs.get("catalysts") is None:
+            score = max(0.0, score * 0.92)
+
+    # Relative strength boost in weak market
+    rs_boost = candidate.get("_rs_boost", False)
+    if rs_boost and rlabel in ("risk_off", "neutral"):
+        score = min(1.0, score * 1.05)
+
+    # Set confidence label
+    if score >= 0.72:
+        conf_label = "high"
+    elif score >= 0.50:
+        conf_label = "medium"
+    else:
+        conf_label = "low"
+
+    candidate["score"]      = round(score, 4)
+    candidate["confidence"] = conf_label
+    return score
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deduplication / merge
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _merge_candidates(candidates: list[dict]) -> list[dict]:
+    """
+    Collapse candidates with the same symbol into a single richer entry.
+    For crypto/perps that share a display coin (e.g. BTC vs BTCUSDT),
+    also dedupe by the base coin portion.
+    """
+    merged: dict[str, dict] = {}
+
+    def _key(c: dict) -> str:
+        sym = c["symbol"].upper().replace("-PERP", "").replace("USDT", "").strip("@")
+        return sym
+
+    for c in candidates:
+        k = _key(c)
+        if k not in merged:
+            merged[k] = dict(c)
+        else:
+            m = merged[k]
+            # Merge lists
+            m["evidence"]     = list(dict.fromkeys(m["evidence"]     + c["evidence"]))
+            m["risks"]        = list(dict.fromkeys(m["risks"]        + c["risks"]))
+            m["source_pages"] = list(dict.fromkeys(m["source_pages"] + c["source_pages"]))
+            # Merge signals — prefer non-None and higher values
+            for sig, val in c["signals"].items():
+                if val is not None:
+                    existing = m["signals"].get(sig)
+                    if existing is None or float(val) > float(existing):
+                        m["signals"][sig] = val
+            # Prefer richer metadata
+            if not m.get("name") and c.get("name"):
+                m["name"] = c["name"]
+            if not m.get("theme") and c.get("theme"):
+                m["theme"] = c["theme"]
+            if not m.get("sector") and c.get("sector"):
+                m["sector"] = c["sector"]
+            if not m.get("trigger") and c.get("trigger"):
+                m["trigger"] = c["trigger"]
+            if not m.get("invalidation") and c.get("invalidation"):
+                m["invalidation"] = c["invalidation"]
+            # Prefer longer summary
+            if len(c.get("summary", "")) > len(m.get("summary", "")):
+                m["summary"] = c["summary"]
+            if c.get("_rs_boost"):
+                m["_rs_boost"] = True
+
+    return list(merged.values())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Source health tracker
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _SourceHealth:
+    STATUSES = ("ok", "missing", "stale", "unavailable_cache_only", "error")
+
+    def __init__(self):
+        self._h: dict[str, str] = {
+            k: "missing" for k in (
+                "watchlist", "portfolio", "social", "themes",
+                "strategy", "catalysts", "options", "hyperliquid", "macro",
+            )
+        }
+        self._counts: dict[str, int] = {k: 0 for k in self._h}
+
+    def set(self, source: str, status: str, count: int = 0):
+        self._h[source]      = status
+        self._counts[source] = count
+
+    @property
+    def health(self) -> dict[str, str]:
+        return dict(self._h)
+
+    @property
+    def counts(self) -> dict[str, int]:
+        return dict(self._counts)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Watchlist collector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
+    """
+    Read all saved watchlists from Neon (pure DB read, zero API calls).
+    Extracts ticker rows from analysis.sections[].tickers[].
+    Returns (candidates, status).
+    """
+    try:
+        from services.watchlist_service import list_watchlists, load_watchlist
+
+        all_lists = list_watchlists()
+        if not all_lists:
+            return [], "missing"
+
+        candidates: list[dict] = []
+        seen: set[str] = set()
+
+        for meta in all_lists[:5]:      # cap at 5 watchlists to stay fast
+            wl_id = meta.get("id")
+            if not wl_id:
+                continue
+            store = load_watchlist(wl_id)
+            if not store:
+                continue
+
+            sections = store.get("analysis", {}).get("sections", [])
+
+            # Prefer updated_at (last re-analysis) over saved_at (initial creation)
+            # Watchlist data is user-curated; apply a soft staleness floor — never
+            # fully exclude it just because the Claude analysis is weeks old.
+            ts_str = store.get("updated_at") or store.get("saved_at") or ""
+            source_ts: float | None = None
+            try:
+                from dateutil import parser as _dp
+                source_ts = _dp.parse(ts_str).timestamp() if ts_str else None
+            except Exception:
+                pass
+
+            age_s = _source_age_s(source_ts)
+            sf    = max(_staleness_factor(age_s), 0.55)  # floor: always use watchlist data
+
+            for section in sections:
+                for row in section.get("tickers", []):
+                    sym = (row.get("symbol") or "").upper().strip()
+                    if not sym or sym in seen:
+                        continue
+                    seen.add(sym)
+
+                    # Vol/MC ratio → rel_volume signal  (0-1 normalized)
+                    vol_mc = row.get("vol_mc_ratio")
+                    rel_vol_sig: float | None = None
+                    if vol_mc is not None:
+                        # Thresholds: 0=0, 0.05=0.5, 0.15=0.8, 0.30+=1.0
+                        rel_vol_sig = _clamp01(float(vol_mc) / 0.30)
+
+                    # Theme signal from canonical_theme mapping
+                    theme_id = row.get("canonical_theme_id") or row.get("theme_source")
+                    theme_sig = 0.6 if theme_id else None   # "present" = moderate signal
+
+                    # TA signal: parse sentiment/action_note text
+                    sentiment = (row.get("sentiment") or "").lower()
+                    ta_sig: float | None = None
+                    if "bullish" in sentiment or "buy" in sentiment:
+                        ta_sig = 0.70
+                    elif "bearish" in sentiment or "sell" in sentiment:
+                        ta_sig = 0.30
+                    elif sentiment in ("neutral", "watch"):
+                        ta_sig = 0.50
+
+                    # 1D change → momentum proxy
+                    chg = row.get("change_pct_1d") or row.get("change_pct")
+                    news_sig: float | None = None
+                    if chg is not None:
+                        try:
+                            chg_f = float(chg)
+                            # Map [-5%, +5%] → [0.2, 0.8]
+                            news_sig = _clamp01((chg_f + 5.0) / 10.0)
+                        except Exception:
+                            pass
+
+                    evidence: list[str] = []
+                    action = row.get("action_note") or ""
+                    if action:
+                        evidence.append(f"Watchlist: {action[:120]}")
+                    catalyst = row.get("catalyst") or ""
+                    if catalyst:
+                        evidence.append(f"Catalyst: {catalyst[:100]}")
+
+                    risks: list[str] = []
+                    risk_level = row.get("risk_level") or ""
+                    if risk_level:
+                        risks.append(f"Risk: {risk_level}")
+
+                    direction = "watch"
+                    if ta_sig is not None and ta_sig >= 0.65:
+                        direction = "long"
+                    elif ta_sig is not None and ta_sig <= 0.35:
+                        direction = "short"
+
+                    # Apply staleness factor to signals
+                    def _sf(v: float | None) -> float | None:
+                        return round(v * sf, 4) if v is not None else None
+
+                    c = _make_candidate(
+                        sym,
+                        name=row.get("name"),
+                        asset_type="stock",
+                        direction=direction,
+                        timeframe="2-10d",
+                        theme=row.get("canonical_theme_name") or theme_id,
+                        sector=row.get("sector"),
+                        summary=action[:200] if action else f"{sym} from watchlist",
+                        signals={
+                            "theme":      _sf(theme_sig),
+                            "ta":         _sf(ta_sig),
+                            "rel_volume": _sf(rel_vol_sig),
+                            "news":       _sf(news_sig),
+                        },
+                        evidence=evidence,
+                        risks=risks,
+                        source_pages=["watchlist"],
+                    )
+                    candidates.append(c)
+
+        status = "ok" if candidates else "missing"
+        if candidates and sf < 1.0:
+            status = "stale"
+        return candidates, status
+
+    except Exception as exc:
+        print(f"[daily-alpha] skipped_source=watchlist reason={exc!r}")
+        return [], "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Portfolio collector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_portfolio_cache_candidates() -> tuple[list[dict], str]:
+    """
+    Read active holdings from Neon portfolio_holdings table.
+    Zero external API calls — pure DB read.
+    """
+    try:
+        from data.portfolio_store import load_active_holdings
+
+        holdings = load_active_holdings()
+        if not holdings:
+            return [], "missing"
+
+        candidates: list[dict] = []
+        for h in holdings:
+            sym = (h.get("ticker") or h.get("symbol") or "").upper().strip()
+            if not sym:
+                continue
+
+            # Fundamentals proxy from avg_cost vs current (if available)
+            avg_cost     = h.get("avg_cost")
+            current_price = h.get("current_price") or h.get("price")
+            fund_sig: float | None = None
+            if avg_cost and current_price:
+                try:
+                    pnl_pct = (float(current_price) - float(avg_cost)) / float(avg_cost)
+                    fund_sig = _clamp01((pnl_pct + 0.50) / 1.00)   # [-50%, +50%] → [0, 1]
+                except Exception:
+                    pass
+
+            asset_type = str(h.get("asset_type") or "stock").lower()
+            if asset_type not in ("stock", "etf", "crypto", "perp"):
+                asset_type = "stock"
+
+            c = _make_candidate(
+                sym,
+                asset_type=asset_type,
+                direction="long",
+                timeframe="position",
+                summary=f"{sym} active portfolio position",
+                signals={"fundamentals": fund_sig},
+                evidence=[f"Portfolio: {h.get('shares','')} shares @ avg ${avg_cost or '?'}"],
+                source_pages=["portfolio"],
+            )
+            candidates.append(c)
+
+        return candidates, "ok" if candidates else "missing"
+
+    except Exception as exc:
+        print(f"[daily-alpha] skipped_source=portfolio reason={exc!r}")
+        return [], "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Social / X Consensus collector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_social_screener_cache_candidates() -> tuple[list[dict], str]:
+    """
+    Read x_consensus_weekly.json (_backend_ranked array).
+    Pure disk read — zero provider calls.
+    """
+    try:
+        raw = _load_json_safe(_X_CONSENSUS_PATH)
+        if not raw:
+            return [], "missing"
+
+        generated_at = raw.get("generated_at")
+        source_ts: float | None = None
+        try:
+            from dateutil import parser as _dp
+            source_ts = _dp.parse(generated_at).timestamp() if generated_at else None
+        except Exception:
+            pass
+
+        age_s = _source_age_s(source_ts)
+        sf    = _staleness_factor(age_s)
+        if sf == 0.0:
+            print("[daily-alpha] skipped_source=social reason=data_too_stale")
+            return [], "stale"
+
+        ranked = raw.get("_backend_ranked") or raw.get("top_tickers") or []
+        if not ranked:
+            return [], "missing"
+
+        # Normalize backend_score — empirically max ~10, treat 10 as ceiling
+        max_score = max((float(r.get("backend_score") or 0) for r in ranked), default=1.0)
+        max_score = max(max_score, 1.0)
+
+        candidates: list[dict] = []
+        for row in ranked[:50]:
+            sym = (row.get("ticker") or row.get("symbol") or "").upper().strip()
+            if not sym:
+                continue
+
+            bs = float(row.get("backend_score") or 0)
+            social_sig = _clamp01(bs / max_score * sf)
+
+            conviction = row.get("has_top_conviction", False)
+            if conviction:
+                social_sig = min(1.0, float(social_sig) * 1.15)
+
+            recency_days = row.get("recency_days_min")
+            news_sig: float | None = None
+            if recency_days is not None:
+                news_sig = _clamp01(1.0 - float(recency_days) / 30.0)
+                news_sig = round(news_sig * sf, 4)
+
+            evidence: list[str] = []
+            fragments = row.get("thesis_fragments") or []
+            for frag in fragments[:2]:
+                txt = frag.get("text") or ""
+                if txt:
+                    evidence.append(f"X/{frag.get('handle','')}: {txt[:120]}")
+            cats = row.get("catalyst_list") or []
+            if cats:
+                evidence.append(f"Catalysts: {', '.join(str(c) for c in cats[:4])}")
+
+            rationale = (
+                row.get("rationale")
+                or (fragments[0].get("text") if fragments else "")
+                or f"{sym} X consensus mention"
+            )
+
+            c = _make_candidate(
+                sym,
+                direction="long",
+                timeframe="2-10d",
+                summary=str(rationale)[:220],
+                signals={
+                    "social": round(float(social_sig), 4),
+                    "news":   news_sig,
+                },
+                evidence=evidence,
+                source_pages=["social"],
+            )
+            candidates.append(c)
+
+        status = "ok" if candidates else "missing"
+        if sf < 1.0:
+            status = "stale"
+        return candidates, status
+
+    except Exception as exc:
+        print(f"[daily-alpha] skipped_source=social reason={exc!r}")
+        return [], "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Themes / Sector RS collector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_themes_cache_candidates() -> tuple[list[dict], str]:
+    """
+    Read themes_rs_lkg.json; for each top-performing theme, emit its
+    proxy symbols as candidates carrying a theme-RS signal.
+    Pure disk read — zero provider calls.
+    """
+    try:
+        raw = _load_json_safe(_THEMES_LKG_PATH)
+        if not raw:
+            return [], "missing"
+
+        rows = raw.get("rows") or (raw if isinstance(raw, list) else [])
+        if not rows:
+            return [], "missing"
+
+        schema_raw = raw.get("_schema", {})
+        schema = schema_raw if isinstance(schema_raw, dict) else {}
+        last_updated_str = schema.get("updated_at") or schema.get("computed_at")
+
+        # Fall back to file mtime if the schema dict has no timestamp
+        source_ts: float | None = None
+        try:
+            from dateutil import parser as _dp
+            source_ts = _dp.parse(last_updated_str).timestamp() if last_updated_str else None
+        except Exception:
+            pass
+        if source_ts is None:
+            try:
+                source_ts = os.path.getmtime(str(_THEMES_LKG_PATH))
+            except Exception:
+                pass
+
+        age_s = _source_age_s(source_ts)
+        sf    = _staleness_factor(age_s)
+        if sf == 0.0:
+            print("[daily-alpha] skipped_source=themes reason=data_too_stale")
+            return [], "stale"
+
+        # Sort by rs_score descending, take top 20 themes
+        top_themes = sorted(rows, key=lambda r: float(r.get("rs_score") or 0), reverse=True)[:20]
+
+        candidates: list[dict] = []
+        seen_syms: set[str] = set()
+
+        for theme_row in top_themes:
+            rs_score = float(theme_row.get("rs_score") or 0)
+            if rs_score < 40:
+                continue   # skip weak themes
+
+            theme_sig = _clamp01(rs_score / 100.0 * sf)
+            stage     = theme_row.get("stage")
+            theme_id  = theme_row.get("theme_id", "")
+            theme_name = theme_row.get("display_name") or theme_id
+
+            # Stage 2 (advancing) → rs boost flag
+            rs_boost = (stage == 2)
+
+            perf = theme_row.get("performance") or {}
+            perf_1d = perf.get("1D")
+            news_sig: float | None = None
+            if perf_1d is not None:
+                try:
+                    news_sig = _clamp01((float(perf_1d) + 3.0) / 6.0 * sf)
+                except Exception:
+                    pass
+
+            # Stage → TA proxy
+            ta_sig: float | None = None
+            if stage == 2:
+                ta_sig = round(0.70 * sf, 4)    # advancing
+            elif stage == 1:
+                ta_sig = round(0.55 * sf, 4)    # base building
+            elif stage == 3:
+                ta_sig = round(0.40 * sf, 4)    # topping
+            elif stage == 4:
+                ta_sig = round(0.20 * sf, 4)    # downtrend
+
+            proxy_syms = theme_row.get("proxy_symbols") or []
+            leaders    = [l.get("symbol") or l if isinstance(l, dict) else l
+                          for l in (theme_row.get("leaders") or [])][:3]
+            priority   = leaders + [s for s in proxy_syms if s not in leaders]
+
+            for sym in priority[:6]:
+                sym = str(sym).upper().strip()
+                if not sym or sym in seen_syms:
+                    continue
+                seen_syms.add(sym)
+
+                stage_label = theme_row.get("stage_label") or f"Stage {stage}"
+                summary = (
+                    f"{sym} — {theme_name} ({stage_label}, RS={rs_score:.0f})"
+                )
+                evidence = [
+                    f"Theme RS {rs_score:.1f}/100 — {theme_name}",
+                    f"Stage: {stage_label}",
+                ]
+                if perf_1d is not None:
+                    evidence.append(f"1D perf: {perf_1d:+.2f}%")
+
+                c = _make_candidate(
+                    sym,
+                    direction="long" if (stage or 0) <= 2 else "watch",
+                    timeframe="swing",
+                    theme=theme_id,
+                    sector=theme_row.get("parent_sector"),
+                    summary=summary,
+                    signals={
+                        "theme":      round(float(theme_sig), 4),
+                        "ta":         ta_sig,
+                        "news":       news_sig,
+                    },
+                    evidence=evidence,
+                    source_pages=["themes"],
+                )
+                c["_rs_boost"] = rs_boost
+                candidates.append(c)
+
+        status = "ok" if candidates else "missing"
+        if sf < 1.0:
+            status = "stale"
+        return candidates, status
+
+    except Exception as exc:
+        print(f"[daily-alpha] skipped_source=themes reason={exc!r}")
+        return [], "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Strategy / TA screener collector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_strategy_cache_candidates() -> tuple[list[dict], str]:
+    """
+    Read strategy_screener_lkg.json.
+    Pure disk read — zero provider calls.
+    """
+    try:
+        raw = _load_json_safe(_STRATEGY_LKG_PATH)
+        if not raw:
+            return [], "missing"
+
+        generated_at = raw.get("generated_at")
+        source_ts: float | None = None
+        try:
+            from dateutil import parser as _dp
+            source_ts = _dp.parse(generated_at).timestamp() if generated_at else None
+        except Exception:
+            pass
+
+        age_s = _source_age_s(source_ts)
+        sf    = _staleness_factor(age_s)
+        if sf == 0.0:
+            print("[daily-alpha] skipped_source=strategy reason=data_too_stale")
+            return [], "stale"
+
+        results = raw.get("results") or []
+        if not results:
+            return [], "missing"
+
+        # Regime context from the snapshot itself
+        rc = raw.get("regime_context") or {}
+
+        candidates: list[dict] = []
+        for row in results:
+            sym = (row.get("ticker") or "").upper().strip()
+            if not sym:
+                continue
+
+            grade      = row.get("grade")
+            blend_score = float(row.get("best_blend_score") or 0)   # 0-100
+            bottleneck  = float(row.get("bottleneck_criticality_score") or 0)  # 0-100
+            chain_role  = row.get("chain_role_type") or ""
+            theme_name  = row.get("theme") or ""
+            themes      = row.get("themes") or ([theme_name] if theme_name else [])
+
+            ta_sig    = _clamp01(blend_score / 100.0 * sf)
+            fund_sig  = _grade_to_score(grade)
+            if fund_sig is not None:
+                fund_sig = round(fund_sig * sf, 4)
+
+            theme_sig: float | None = None
+            if themes:
+                # Use bottleneck score as theme-strength signal
+                theme_sig = _clamp01(bottleneck / 100.0 * sf)
+
+            evidence: list[str] = []
+            summary_txt = row.get("one_line_summary") or row.get("thesis_summary") or ""
+            if summary_txt:
+                evidence.append(f"Strategy: {summary_txt[:140]}")
+            why_now = row.get("why_now") or []
+            if isinstance(why_now, list) and why_now:
+                evidence.append(f"Why now: {why_now[0][:120]}")
+            chain_layers = row.get("chain_layers") or []
+            if chain_layers:
+                evidence.append(f"Chain role: {chain_role} ({', '.join(str(l) for l in chain_layers[:2])})")
+
+            risks: list[str] = []
+            breaks = row.get("what_would_break_thesis")
+            if isinstance(breaks, list) and breaks:
+                risks.append(str(breaks[0])[:120])
+            elif isinstance(breaks, str) and breaks:
+                risks.append(breaks[:120])
+            crowding = row.get("crowding_flags") or []
+            if crowding:
+                risks.append(f"Crowding: {', '.join(str(f) for f in crowding[:2])}")
+
+            is_anchor = row.get("is_anchor", False)
+            c = _make_candidate(
+                sym,
+                name=row.get("company_name"),
+                direction="long",
+                timeframe="2-10d",
+                theme=theme_name or (themes[0] if themes else None),
+                sector=row.get("chain_role_type"),
+                setup_type=chain_role,
+                summary=summary_txt[:200] if summary_txt else f"{sym} strategy screener candidate",
+                signals={
+                    "ta":           ta_sig,
+                    "fundamentals": fund_sig,
+                    "theme":        theme_sig,
+                },
+                evidence=evidence,
+                risks=risks,
+                source_pages=["strategy"],
+            )
+            if is_anchor:
+                c["_rs_boost"] = True
+            candidates.append(c)
+
+        status = "ok" if candidates else "missing"
+        if sf < 1.0:
+            status = "stale"
+        return candidates, status
+
+    except Exception as exc:
+        print(f"[daily-alpha] skipped_source=strategy reason={exc!r}")
+        return [], "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Catalyst / Earnings collector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_catalyst_cache_candidates() -> tuple[list[dict], str]:
+    """
+    Read current + next week earnings snap disk files.
+    Filters events within ±7 days of today.
+    Pure disk read — zero provider calls.
+    """
+    try:
+        today_str = date.today().isoformat()
+        today_ord = date.today().toordinal()
+
+        all_snap_files = sorted(
+            glob.glob(str(_DATA_DIR / "earnings_snap_202*.json"))
+        )
+        if not all_snap_files:
+            return [], "missing"
+
+        # Select snaps whose filename date range overlaps with [today-1, today+14].
+        # Snap filenames look like: earnings_snap_20260525_20260529.json
+        # Pick files where the END date in the name >= today-1 AND start <= today+14.
+        import re as _re
+        _snap_pat = _re.compile(r"earnings_snap_(\d{8})_(\d{8})\.json$")
+        target_start = today_ord - 1
+        target_end   = today_ord + 14
+
+        snap_files: list[str] = []
+        for fp in all_snap_files:
+            m = _snap_pat.search(os.path.basename(fp))
+            if not m:
+                continue
+            try:
+                f_start = date(int(m.group(1)[:4]), int(m.group(1)[4:6]), int(m.group(1)[6:])).toordinal()
+                f_end   = date(int(m.group(2)[:4]), int(m.group(2)[4:6]), int(m.group(2)[6:])).toordinal()
+            except Exception:
+                continue
+            if f_end >= target_start and f_start <= target_end:
+                snap_files.append(fp)
+
+        # Fallback: if no files matched (e.g. future-only snaps), take the 3 most recent
+        if not snap_files:
+            snap_files = all_snap_files[-3:]
+
+        all_events: list[dict] = []
+
+        for fp in snap_files:
+            raw = _load_json_safe(fp)
+            if not raw:
+                continue
+            events = raw.get("allEvents") or raw.get("events") or []
+            all_events.extend(events)
+
+        if not all_events:
+            return [], "missing"
+
+        # Earnings snap files are pre-generated for upcoming weeks by design.
+        # Their file mtime reflects when they were built, NOT when the events expire.
+        # Use sf=1.0 — validity is determined by event dates (filtered below), not mtime.
+        sf = 1.0
+
+        candidates: list[dict] = []
+        seen: set[str] = set()
+
+        for ev in all_events:
+            sym = (ev.get("symbol") or "").upper().strip()
+            if not sym or sym in seen:
+                continue
+
+            ev_date_str = ev.get("date") or ""
+            if not ev_date_str:
+                continue
+
+            try:
+                ev_ord = date.fromisoformat(ev_date_str).toordinal()
+                days_away = ev_ord - today_ord
+            except Exception:
+                continue
+
+            # Only events within 7 days ahead (upcoming catalysts) or 1 day behind
+            if not (-1 <= days_away <= 7):
+                continue
+
+            seen.add(sym)
+
+            importance = float(ev.get("importanceScore") or ev.get("importance") or 50)
+            # Normalize 0-100 → 0-1; events closer in time get a boost
+            proximity_boost = max(0.0, (7 - abs(days_away)) / 7.0)
+            cat_sig = _clamp01((importance / 100.0) * 0.7 + proximity_boost * 0.3)
+            cat_sig = round(cat_sig * sf, 4)
+
+            is_anchor     = ev.get("isThemeAnchor", False)
+            is_bottleneck = ev.get("isBottleneck", False)
+            theme_tags    = ev.get("themeTags") or []
+
+            theme_sig: float | None = None
+            if is_anchor or theme_tags:
+                theme_sig = round(0.65 * sf, 4)
+
+            ev_type   = ev.get("eventType") or "earnings"
+            ev_label  = ev.get("eventLabel") or ev_type
+            eps_est   = ev.get("epsEstimated")
+            rev_est   = ev.get("revenueEstimated")
+
+            evidence: list[str] = [
+                f"{ev_label} on {ev_date_str} (T{days_away:+d}d)",
+            ]
+            if eps_est is not None:
+                evidence.append(f"EPS est: ${eps_est:.2f}")
+            if rev_est is not None:
+                evidence.append(f"Rev est: ${rev_est/1e6:.0f}M")
+            if theme_tags:
+                evidence.append(f"Themes: {', '.join(str(t) for t in theme_tags[:3])}")
+
+            time_label = ev.get("time") or ""
+            trigger = f"{ev_label} in {days_away}d" + (f" ({time_label})" if time_label else "")
+
+            c = _make_candidate(
+                sym,
+                name=ev.get("companyName"),
+                direction="watch",
+                timeframe="intraday" if days_away <= 1 else "2-10d",
+                theme=theme_tags[0] if theme_tags else None,
+                sector=ev.get("sector"),
+                summary=f"{sym} {ev_label} T{days_away:+d}d — {ev.get('companyName','')[:60]}",
+                trigger=trigger,
+                signals={
+                    "catalysts": cat_sig,
+                    "theme":     theme_sig,
+                },
+                evidence=evidence,
+                source_pages=["catalysts"],
+            )
+            if is_anchor or is_bottleneck:
+                c["_rs_boost"] = True
+            candidates.append(c)
+
+        status = "ok" if candidates else "missing"
+        if sf < 1.0:
+            status = "stale"
+        return candidates, status
+
+    except Exception as exc:
+        print(f"[daily-alpha] skipped_source=catalysts reason={exc!r}")
+        return [], "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Options collector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_options_cache_candidates() -> tuple[list[dict], str]:
+    """
+    Read options_master_lkg_v1.json (and fallback files).
+    Pure disk read — zero provider calls.
+    """
+    try:
+        raw: dict | None = None
+        source_path: Path | None = None
+
+        for p in _OPTIONS_PATHS:
+            if p.exists():
+                d = _load_json_safe(p)
+                if d and d.get("tickers"):
+                    raw = d
+                    source_path = p
+                    break
+
+        if not raw:
+            return [], "missing"
+
+        cached_at_str = raw.get("cached_at") or raw.get("updated_at")
+        source_ts: float | None = None
+        try:
+            from dateutil import parser as _dp
+            source_ts = _dp.parse(cached_at_str).timestamp() if cached_at_str else None
+        except Exception:
+            pass
+        if source_ts is None and source_path:
+            try:
+                source_ts = os.path.getmtime(source_path)
+            except Exception:
+                pass
+
+        age_s = _source_age_s(source_ts)
+        sf    = _staleness_factor(age_s)
+        if sf == 0.0:
+            print("[daily-alpha] skipped_source=options reason=data_too_stale")
+            return [], "stale"
+
+        tickers = raw.get("tickers") or []
+        candidates: list[dict] = []
+
+        for row in tickers:
+            if not isinstance(row, dict):
+                continue
+            sym = (row.get("ticker") or row.get("symbol") or "").upper().strip()
+            if not sym:
+                continue
+
+            composite  = float(row.get("composite_score") or row.get("final_composite_score") or 0)
+            conf_score = float(row.get("confidence_score") or 50)
+            side_bias  = (row.get("side_bias") or "").lower()
+            primary_sig = (row.get("primary_signal") or "").lower()
+
+            opt_sig  = _clamp01(composite / 100.0 * sf)
+            theme_sig: float | None = None
+            if row.get("theme_name"):
+                ts = float(row.get("regime_alignment_score") or 50)
+                theme_sig = _clamp01(ts / 100.0 * sf)
+
+            direction = "long" if side_bias == "bullish" else \
+                        "short" if side_bias == "bearish" else "watch"
+
+            conf_label = "high" if conf_score >= 75 else \
+                         "medium" if conf_score >= 50 else "low"
+
+            evidence: list[str] = []
+            thesis = row.get("thesis") or row.get("options_context_summary") or ""
+            if thesis:
+                evidence.append(f"Options: {str(thesis)[:150]}")
+            if primary_sig:
+                evidence.append(f"Signal: {primary_sig}")
+            if row.get("theme_name"):
+                evidence.append(f"Theme: {row['theme_name']} ({row.get('regime_alignment_label','')})")
+
+            risks = []
+            row_risks = row.get("risks") or []
+            if isinstance(row_risks, list):
+                risks = [str(r)[:100] for r in row_risks[:2]]
+            elif isinstance(row_risks, str):
+                risks = [row_risks[:100]]
+
+            # PC ratio → additional signal
+            pc = row.get("pc_ratio")
+            ta_sig: float | None = None
+            if pc is not None:
+                try:
+                    # Low put/call (< 0.7) = bullish; high (> 1.3) = bearish
+                    pf = float(pc)
+                    ta_sig = _clamp01(1.0 - (pf - 0.5) / 1.5) if 0.5 <= pf <= 2.0 else None
+                    if ta_sig is not None:
+                        ta_sig = round(ta_sig * sf, 4)
+                except Exception:
+                    pass
+
+            c = _make_candidate(
+                sym,
+                direction=direction,
+                confidence=conf_label,
+                timeframe="intraday" if primary_sig in ("sweep", "block") else "2-10d",
+                setup_type=primary_sig,
+                theme=row.get("theme_name"),
+                sector=row.get("category"),
+                summary=str(thesis)[:200] if thesis else f"{sym} options flow: {primary_sig}",
+                signals={
+                    "options": opt_sig,
+                    "theme":   theme_sig,
+                    "ta":      ta_sig,
+                },
+                evidence=evidence,
+                risks=risks,
+                source_pages=["options"],
+            )
+            candidates.append(c)
+
+        status = "ok" if candidates else "missing"
+        if sf < 1.0:
+            status = "stale"
+        return candidates, status
+
+    except Exception as exc:
+        print(f"[daily-alpha] skipped_source=options reason={exc!r}")
+        return [], "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Hyperliquid / Crypto collector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
+    """
+    Read hyperliquid_signal_snapshots.json for OI velocity signals.
+    Also tries get_matrix_stocks_snapshot() from hyperliquid router
+    (in-process module cache — zero API calls).
+    """
+    try:
+        raw = _load_json_safe(_HL_SNAP_PATH)
+        if not raw:
+            return [], "missing"
+
+        saved_at  = float(raw.get("saved_at") or 0)
+        age_s     = _source_age_s(saved_at if saved_at else None)
+        sf        = _staleness_factor(age_s)
+        if sf == 0.0:
+            print("[daily-alpha] skipped_source=hyperliquid reason=data_too_stale")
+            return [], "stale"
+
+        snapshots: dict[str, list] = raw.get("snapshots") or {}
+        if not snapshots:
+            return [], "missing"
+
+        # Compute OI velocity: (latest - first) / first  for each coin
+        oi_velocities: list[tuple[str, float, float, float]] = []   # (coin, vel, latest_oi, age)
+
+        for coin, pts in snapshots.items():
+            if not pts or len(pts) < 2:
+                continue
+            pts_sorted = sorted(pts, key=lambda p: p.get("ts", 0))
+            first_oi   = float(pts_sorted[0].get("oi_usd") or 0)
+            last_oi    = float(pts_sorted[-1].get("oi_usd") or 0)
+            last_ts    = float(pts_sorted[-1].get("ts") or saved_at)
+
+            if first_oi <= 0:
+                continue
+
+            velocity    = (last_oi - first_oi) / first_oi   # fractional change
+            snap_age_s  = _source_age_s(last_ts)
+            oi_velocities.append((coin, velocity, last_oi, snap_age_s or 0))
+
+        # Sort by absolute velocity descending; prefer large caps by capping velocity
+        oi_velocities.sort(key=lambda x: abs(x[1]), reverse=True)
+
+        candidates: list[dict] = []
+
+        # Also try in-process matrix cache for additional signals
+        matrix_rows: dict[str, dict] = {}
+        try:
+            from services.hyperliquid.router import get_matrix_stocks_snapshot as _gms
+            stocks = _gms()
+            for asset in stocks:
+                sym = (asset.get("symbol") or asset.get("display_symbol") or "").upper()
+                if sym:
+                    matrix_rows[sym] = asset
+        except Exception:
+            pass
+
+        for coin, velocity, latest_oi_usd, snap_age_s in oi_velocities[:60]:
+            coin_upper = coin.upper().strip()
+
+            # Skip if snapshot is too stale for this specific coin
+            coin_sf = _staleness_factor(snap_age_s)
+            if coin_sf == 0.0:
+                continue
+
+            oi_sig = _clamp01(min(abs(velocity) / 0.30, 1.0) * coin_sf * sf)
+            direction = "long" if velocity > 0 else "short"
+            if abs(velocity) < 0.02:
+                direction = "watch"
+
+            # Momentum: from OI velocity sign + magnitude
+            mom_sig = _clamp01(abs(velocity) / 0.20 * coin_sf * sf)
+
+            # Volume velocity from matrix if available
+            vol_sig: float | None = None
+            mx = matrix_rows.get(coin_upper) or matrix_rows.get(f"{coin_upper}-PERP")
+            if mx:
+                chg_pct = mx.get("24h_change_pct") or mx.get("price_change_24h_pct")
+                if chg_pct is not None:
+                    try:
+                        vol_sig = _clamp01((float(chg_pct) + 10.0) / 20.0 * sf)
+                    except Exception:
+                        pass
+
+            oi_b = latest_oi_usd / 1e9 if latest_oi_usd else 0
+            vel_pct = velocity * 100
+
+            evidence = [
+                f"OI velocity: {vel_pct:+.1f}% (${oi_b:.2f}B open interest)",
+            ]
+            if mx:
+                fr = mx.get("funding_rate")
+                if fr is not None:
+                    evidence.append(f"Funding: {float(fr)*100:.4f}%/hr")
+
+            setup_type = (
+                "oi_expansion"  if velocity > 0.05 else
+                "oi_contraction" if velocity < -0.05 else
+                "oi_watch"
+            )
+
+            status_label = (
+                "active_setup" if abs(velocity) > 0.10 else
+                "pre_breakout" if abs(velocity) > 0.03 else
+                "watch_only"
+            )
+
+            c = _make_candidate(
+                coin_upper,
+                asset_type="perp",
+                direction=direction,
+                timeframe="intraday" if abs(velocity) > 0.15 else "2-10d",
+                setup_type=setup_type,
+                status=status_label,
+                summary=f"{coin_upper} perp OI {vel_pct:+.1f}% (${oi_b:.2f}B)",
+                signals={
+                    "hyperliquid":    round(float(oi_sig), 4),
+                    "momentum":       round(float(mom_sig), 4),
+                    "rel_volume":     vol_sig,
+                },
+                evidence=evidence,
+                source_pages=["hyperliquid"],
+            )
+            candidates.append(c)
+
+        # Also harvest crypto matrix rows not already in snapshots
+        for sym, asset in matrix_rows.items():
+            if any(c["symbol"] == sym for c in candidates):
+                continue
+            chg_pct = asset.get("24h_change_pct") or asset.get("price_change_24h_pct")
+            if chg_pct is None:
+                continue
+            try:
+                chg = float(chg_pct)
+            except Exception:
+                continue
+            if abs(chg) < 3.0:
+                continue   # skip low-volatility matrix entries
+
+            mom_sig = _clamp01((abs(chg) - 3.0) / 20.0 * sf)
+            c = _make_candidate(
+                sym,
+                asset_type=asset.get("asset_type", "crypto"),
+                direction="long" if chg > 0 else "short",
+                timeframe="intraday",
+                summary=f"{sym} +{chg:.1f}% 24h on Hyperliquid",
+                signals={"momentum": round(mom_sig, 4)},
+                evidence=[f"24h move: {chg:+.1f}%"],
+                source_pages=["hyperliquid"],
+            )
+            candidates.append(c)
+
+        status = "ok" if candidates else "missing"
+        if sf < 1.0:
+            status = "stale"
+        return candidates, status
+
+    except Exception as exc:
+        print(f"[daily-alpha] skipped_source=hyperliquid reason={exc!r}")
+        return [], "error"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Macro regime context  (NOT a candidate source — used as modifier)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def collect_macro_cache_context() -> tuple[dict, str]:
+    """
+    Read cached macro regime from TTLCache or regime_engine module vars.
+    Zero external calls — all paths read already-computed state.
+    Returns (regime_dict, status).
+    """
+    regime_result: dict | None = None
+
+    # Path 1: TTLCache write-through key
+    try:
+        from data.cache import cache as _cache
+        regime_result = _cache.get("regime:current_v1")
+    except Exception:
+        pass
+
+    # Path 2: module-level cache in regime_engine
+    if not regime_result:
+        try:
+            import core.regime_engine as _re
+            cached = _re._regime_cache
+            if cached.get("result") and time.time() < cached.get("expires", 0):
+                regime_result = cached["result"]
+            elif _re._last_known_regime:
+                regime_result = dict(_re._last_known_regime)
+                regime_result["degraded"] = True
+        except Exception:
+            pass
+
+    if not regime_result:
+        return {
+            "label":      "neutral",
+            "summary":    "No cached regime data — neutral fallback",
+            "drivers":    [],
+            "confidence": 0.0,
+        }, "missing"
+
+    raw_label = regime_result.get("regime", "neutral")
+    # Map internal labels to board labels
+    label_map = {
+        "risk_on":         "risk_on",
+        "risk_off":        "risk_off",
+        "neutral":         "neutral",
+        "inflationary":    "risk_off",   # treat as risk-off for scoring
+        "stagflationary":  "risk_off",
+        "deflationary":    "risk_off",
+    }
+    label = label_map.get(raw_label, "neutral")
+
+    confidence = float(regime_result.get("confidence") or 0.5)
+    degraded   = regime_result.get("degraded", False)
+
+    drivers: list[str] = []
+    sigs = regime_result.get("signals") or {}
+    if isinstance(sigs, dict):
+        for k, v in list(sigs.items())[:4]:
+            drivers.append(f"{k}: {v}")
+    elif isinstance(sigs, list):
+        drivers = [str(s) for s in sigs[:4]]
+
+    regime = {
+        "label":      label,
+        "summary":    f"Regime: {raw_label} (confidence {confidence:.0%})" + (
+                      " [degraded]" if degraded else ""
+                      ),
+        "drivers":    drivers,
+        "confidence": confidence,
+    }
+    status = "stale" if degraded else "ok"
+    return regime, status
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Board builder
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_filters(
+    candidates: list[dict],
+    asset_type: str,
+    scope: str,
+    watchlist_syms: set[str],
+    portfolio_syms: set[str],
+) -> list[dict]:
+    out = []
+    for c in candidates:
+        at = c.get("asset_type", "stock")
+        if asset_type == "stocks" and at not in ("stock", "etf"):
+            continue
+        if asset_type == "crypto" and at not in ("crypto", "perp"):
+            continue
+        if scope == "watchlist" and c["symbol"] not in watchlist_syms:
+            continue
+        if scope == "portfolio" and c["symbol"] not in portfolio_syms:
+            continue
+        out.append(c)
+    return out
+
+
+def build_daily_alpha_board(
+    limit: int = 10,
+    asset_type: str = "all",
+    scope: str = "all",
+    refresh: bool = False,
+    include_diagnostics: bool = False,
+) -> dict:
+    """
+    Core entry-point.  Collects, scores, dedupes, ranks, and returns
+    the top `limit` trade ideas from purely cached sources.
+
+    external_api_calls is always 0.
+    """
+    t0 = time.time()
+
+    # ── Aggregator TTL cache check ────────────────────────────────────────────
+    ttl = _TTL_MARKET_HOURS if _is_market_hours() else _TTL_OFF_HOURS
+    _BOARD_CACHE["ttl"] = ttl
+
+    cache_age = time.time() - _BOARD_CACHE["ts"]
+    cache_hit = (
+        not refresh
+        and _BOARD_CACHE["result"] is not None
+        and cache_age < ttl
+        # only exact same params hit cache; simple approach: cache is for default params
+        and asset_type == "all"
+        and scope == "all"
+        and limit == 10
+    )
+
+    if cache_hit:
+        result = dict(_BOARD_CACHE["result"])
+        result["cache"] = {
+            "hit":          True,
+            "age_seconds":  int(cache_age),
+            "ttl_seconds":  ttl,
+            "stale_served": False,
+        }
+        print(f"[daily-alpha] cache_hit=True age={int(cache_age)}s")
+        return result
+
+    # ── Collect from all sources ─────────────────────────────────────────────
+    sh = _SourceHealth()
+
+    wl_cands,   wl_status  = collect_watchlist_cache_candidates()
+    port_cands, port_status = collect_portfolio_cache_candidates()
+    soc_cands,  soc_status = collect_social_screener_cache_candidates()
+    th_cands,   th_status  = collect_themes_cache_candidates()
+    str_cands,  str_status = collect_strategy_cache_candidates()
+    cat_cands,  cat_status = collect_catalyst_cache_candidates()
+    opt_cands,  opt_status = collect_options_cache_candidates()
+    hl_cands,   hl_status  = collect_hyperliquid_cache_candidates()
+    regime,     reg_status = collect_macro_cache_context()
+
+    sh.set("watchlist",   wl_status,   len(wl_cands))
+    sh.set("portfolio",   port_status, len(port_cands))
+    sh.set("social",      soc_status,  len(soc_cands))
+    sh.set("themes",      th_status,   len(th_cands))
+    sh.set("strategy",    str_status,  len(str_cands))
+    sh.set("catalysts",   cat_status,  len(cat_cands))
+    sh.set("options",     opt_status,  len(opt_cands))
+    sh.set("hyperliquid", hl_status,   len(hl_cands))
+    sh.set("macro",       reg_status,  0)
+
+    all_raw = (
+        wl_cands + port_cands + soc_cands +
+        th_cands + str_cands + cat_cands +
+        opt_cands + hl_cands
+    )
+    candidates_seen = len(all_raw)
+
+    print(f"[daily-alpha] mode=cache_only external_api_calls=0 "
+          f"candidates_seen={candidates_seen}")
+    print(f"[daily-alpha] source_health={sh.health}")
+
+    # ── Dedup (merge same symbol from multiple sources) ───────────────────────
+    merged = _merge_candidates(all_raw)
+
+    # ── Build scope filter sets ───────────────────────────────────────────────
+    wl_syms   = {c["symbol"] for c in wl_cands}
+    port_syms = {c["symbol"] for c in port_cands}
+
+    # ── Apply query filters ───────────────────────────────────────────────────
+    filtered = _apply_filters(merged, asset_type, scope, wl_syms, port_syms)
+
+    # ── Score ─────────────────────────────────────────────────────────────────
+    scored: list[dict] = []
+    stocks_scored = 0
+    crypto_scored = 0
+
+    for c in filtered:
+        s = _score_candidate(c, regime)
+        if s <= 0.0:
+            continue
+        scored.append(c)
+        if c.get("asset_type") in ("crypto", "perp"):
+            crypto_scored += 1
+        else:
+            stocks_scored += 1
+
+    candidates_qualified = len(scored)
+    print(f"[daily-alpha] candidates_qualified={candidates_qualified} "
+          f"stocks={stocks_scored} crypto={crypto_scored}")
+
+    # ── Sort and cap ──────────────────────────────────────────────────────────
+    scored.sort(key=lambda c: c["score"], reverse=True)
+
+    # Remove internal helper key before output
+    ideas = []
+    for c in scored[:limit]:
+        out = {k: v for k, v in c.items() if not k.startswith("_")}
+        ideas.append(out)
+
+    top_syms = [c["symbol"] for c in ideas]
+    print(f"[daily-alpha] top_symbols={top_syms}")
+
+    # ── Build response ────────────────────────────────────────────────────────
+    result: dict[str, Any] = {
+        "ok":                  True,
+        "generated_at":        _now_iso(),
+        "mode":                "cache_only",
+        "external_api_calls":  0,
+        "limit":               limit,
+        "regime":              regime,
+        "ideas":               ideas,
+        "source_health":       sh.health,
+        "counts": {
+            "candidates_seen":       candidates_seen,
+            "candidates_qualified":  candidates_qualified,
+            "stocks_scored":         stocks_scored,
+            "crypto_scored":         crypto_scored,
+            "watchlist_candidates":  len(wl_cands),
+            "portfolio_candidates":  len(port_cands),
+        },
+        "cache": {
+            "hit":          False,
+            "age_seconds":  0,
+            "ttl_seconds":  ttl,
+            "stale_served": False,
+        },
+        "diagnostics": {
+            "provider_calls_blocked": True,
+            "external_api_calls":     0,
+            "source_modes": {
+                k: "cache_only" for k in sh.health
+            },
+        } if include_diagnostics else None,
+    }
+
+    # ── Write to aggregator cache (only for default-param calls) ──────────────
+    if asset_type == "all" and scope == "all" and limit == 10:
+        _BOARD_CACHE["result"] = result
+        _BOARD_CACHE["ts"]     = time.time()
+        if ideas:
+            _BOARD_CACHE["lkg"] = result
+
+    elapsed = time.time() - t0
+    print(f"[daily-alpha] cache_hit=False elapsed={elapsed:.3f}s")
+
+    return result
+
+
+def build_daily_alpha_board_safe(
+    limit: int = 10,
+    asset_type: str = "all",
+    scope: str = "all",
+    refresh: bool = False,
+    include_diagnostics: bool = False,
+) -> dict:
+    """
+    Wrapper with LKG fallback — home page always gets a response.
+    If ranking fails, serve last-known-good result (stale_served=True).
+    """
+    try:
+        return build_daily_alpha_board(
+            limit=limit,
+            asset_type=asset_type,
+            scope=scope,
+            refresh=refresh,
+            include_diagnostics=include_diagnostics,
+        )
+    except Exception as exc:
+        print(f"[daily-alpha] BUILD_FAILED — serving LKG: {exc!r}")
+        lkg = _BOARD_CACHE.get("lkg")
+        if lkg:
+            out = dict(lkg)
+            out["cache"] = {
+                "hit":          True,
+                "age_seconds":  int(time.time() - _BOARD_CACHE["ts"]),
+                "ttl_seconds":  _BOARD_CACHE.get("ttl", _TTL_OFF_HOURS),
+                "stale_served": True,
+            }
+            out["ok"] = True
+            return out
+        return {
+            "ok":                  False,
+            "generated_at":        _now_iso(),
+            "mode":                "cache_only",
+            "external_api_calls":  0,
+            "limit":               limit,
+            "regime":              {"label": "neutral", "summary": "unavailable", "drivers": [], "confidence": 0.0},
+            "ideas":               [],
+            "source_health":       {k: "error" for k in (
+                                    "watchlist","portfolio","social","themes",
+                                    "strategy","catalysts","options","hyperliquid","macro")},
+            "counts":              {"candidates_seen":0,"candidates_qualified":0,
+                                    "stocks_scored":0,"crypto_scored":0,
+                                    "watchlist_candidates":0,"portfolio_candidates":0},
+            "cache":               {"hit":False,"age_seconds":0,"ttl_seconds":300,"stale_served":False},
+            "diagnostics":         None,
+            "error":               str(exc),
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Diagnostics helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_diagnostics() -> dict:
+    """
+    Full diagnostics — top 20 pre-ranked candidates, source ages, cache info.
+    """
+    t0 = time.time()
+
+    sh = _SourceHealth()
+    all_source_data: dict[str, list] = {}
+
+    for name, fn in [
+        ("watchlist",   collect_watchlist_cache_candidates),
+        ("portfolio",   collect_portfolio_cache_candidates),
+        ("social",      collect_social_screener_cache_candidates),
+        ("themes",      collect_themes_cache_candidates),
+        ("strategy",    collect_strategy_cache_candidates),
+        ("catalysts",   collect_catalyst_cache_candidates),
+        ("options",     collect_options_cache_candidates),
+        ("hyperliquid", collect_hyperliquid_cache_candidates),
+    ]:
+        cands, status = fn()
+        sh.set(name, status, len(cands))
+        all_source_data[name] = cands
+
+    regime, reg_status = collect_macro_cache_context()
+    sh.set("macro", reg_status, 0)
+
+    all_raw = []
+    for cands in all_source_data.values():
+        all_raw.extend(cands)
+
+    merged = _merge_candidates(all_raw)
+    for c in merged:
+        _score_candidate(c, regime)
+    merged.sort(key=lambda c: c["score"], reverse=True)
+
+    top20 = [{k: v for k, v in c.items() if not k.startswith("_")} for c in merged[:20]]
+
+    # Check LKG file ages
+    file_ages: dict[str, Any] = {}
+    for label, path in [
+        ("strategy_lkg",    _STRATEGY_LKG_PATH),
+        ("themes_lkg",      _THEMES_LKG_PATH),
+        ("hl_snapshots",    _HL_SNAP_PATH),
+        ("x_consensus",     _X_CONSENSUS_PATH),
+        ("options_master",  _OPTIONS_PATHS[0]),
+    ]:
+        try:
+            if path.exists():
+                age_s = _source_age_s(os.path.getmtime(str(path)))
+                file_ages[label] = {
+                    "age_seconds": int(age_s or 0),
+                    "staleness_factor": _staleness_factor(age_s),
+                    "path": str(path.name),
+                }
+            else:
+                file_ages[label] = {"status": "file_not_found"}
+        except Exception as e:
+            file_ages[label] = {"error": str(e)}
+
+    cache_age = int(time.time() - _BOARD_CACHE["ts"])
+
+    return {
+        "ok":                  True,
+        "generated_at":        _now_iso(),
+        "external_api_calls":  0,
+        "provider_calls_blocked": True,
+        "elapsed_ms":          round((time.time() - t0) * 1000, 1),
+        "source_health":       sh.health,
+        "source_counts":       sh.counts,
+        "regime":              regime,
+        "file_ages":           file_ages,
+        "aggregator_cache": {
+            "has_result":       _BOARD_CACHE["result"] is not None,
+            "has_lkg":          _BOARD_CACHE["lkg"] is not None,
+            "age_seconds":      cache_age,
+            "ttl_seconds":      _BOARD_CACHE.get("ttl", _TTL_OFF_HOURS),
+        },
+        "top_20_pre_ranked":   top20,
+        "skipped_sources":     [
+            {"source": k, "reason": "unavailable_cache_only"}
+            for k, v in sh.health.items()
+            if v == "unavailable_cache_only"
+        ],
+    }

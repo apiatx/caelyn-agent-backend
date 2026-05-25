@@ -12983,6 +12983,97 @@ async def home_movers(
         )
 
 
+# ── GET /api/home/daily-alpha-board ──────────────────────────────────
+# Cache-only cross-market signal ranking engine.
+# ZERO external provider/API calls — reads only from existing caches,
+# disk snapshots, and Neon snapshot tables.
+
+@app.get("/api/home/daily-alpha-board/diagnostics")
+@limiter.limit("30/minute")
+async def daily_alpha_board_diagnostics(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Full diagnostics for the Daily Alpha Board:
+    source availability, cache ages, candidate counts, top-20 pre-ranked ideas.
+    external_api_calls is always 0.
+    """
+    try:
+        from services.daily_alpha_board_service import build_diagnostics
+        payload = build_diagnostics()
+        return JSONResponse(content=payload)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "error": f"Diagnostics error: {str(exc)}",
+                "external_api_calls": 0,
+            },
+        )
+
+
+@app.get("/api/home/daily-alpha-board")
+@limiter.limit("60/minute")
+async def daily_alpha_board(
+    request: Request,
+    limit: int = 10,
+    asset_type: str = "all",
+    scope: str = "all",
+    refresh: bool = False,
+    diagnostics: bool = False,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Daily Alpha Board — top trade ideas ranked across stocks, ETFs, crypto,
+    watchlist, portfolio, social, themes, catalysts, options, and Hyperliquid.
+
+    ZERO external provider/API calls.  Reads only from existing in-memory
+    caches, disk JSON snapshots, and Neon snapshot tables.
+
+    Query params:
+      limit      — number of ideas to return (default 10)
+      asset_type — all | stocks | crypto
+      scope      — all | watchlist | portfolio
+      refresh    — force re-rank from cached sources (bypasses aggregator cache)
+      diagnostics — include full diagnostics block in response
+    """
+    # Clamp limit to sane range
+    limit = max(1, min(int(limit), 50))
+    asset_type = asset_type.lower().strip()
+    scope      = scope.lower().strip()
+    if asset_type not in ("all", "stocks", "crypto"):
+        asset_type = "all"
+    if scope not in ("all", "watchlist", "portfolio"):
+        scope = "all"
+
+    try:
+        from services.daily_alpha_board_service import build_daily_alpha_board_safe
+        payload = build_daily_alpha_board_safe(
+            limit=limit,
+            asset_type=asset_type,
+            scope=scope,
+            refresh=refresh,
+            include_diagnostics=diagnostics,
+        )
+        return JSONResponse(content=payload)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok":                 False,
+                "error":              f"Daily alpha board error: {str(exc)}",
+                "external_api_calls": 0,
+                "mode":               "cache_only",
+            },
+        )
+
+
 # ── GET /api/macro/dashboard ─────────────────────────────────────────
 
 @app.get("/api/macro/dashboard")
