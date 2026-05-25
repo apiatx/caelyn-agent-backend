@@ -115,6 +115,14 @@ _HL_DIAG: dict = {
     "accepted_tsm":     [],
 }
 
+# Module-level diagnostic counters populated by the long-bias safety pass
+_LB_DIAG: dict = {
+    "stock_shorts_suppressed":            0,
+    "stock_short_candidates_converted_to_watch": 0,
+    "stock_extension_notes_added":        0,
+    "crypto_short_candidates":            [],
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -186,6 +194,36 @@ def _current_week_bounds() -> tuple[str, str]:
     return mon.isoformat(), fri.isoformat()
 
 
+# ── Stock summary / evidence text sanitiser ────────────────────────────────
+# Rewrites short-biased phrases from watchlist action_notes so the main board
+# always reads as a long-watchlist tool, never a short-recommendation tool.
+import re as _re
+
+_STOCK_TEXT_REPLACEMENTS: list[tuple] = [
+    # Most specific patterns first
+    (_re.compile(r'\bshort\s*/\s*reduce exposure\b', _re.I), "watch for better entry"),
+    (_re.compile(r'\breduce exposure\b', _re.I),             "watch for better entry"),
+    (_re.compile(r'\breduce position\b', _re.I),             "size carefully given extension"),
+    (_re.compile(r'\btake profits?\b', _re.I),               "consider trimming into strength"),
+    (_re.compile(r'\boverbought[,;]\s*fade\b', _re.I),       "extended near-term"),
+    (_re.compile(r'\boverbought[,;]\s*short\b', _re.I),      "extended — better entry on pullback"),
+    (_re.compile(r'\bsell due to rsi\b', _re.I),             "entry quality lower due to extension"),
+    (_re.compile(r'\bbearish because rsi\b', _re.I),         "extended near-term — better entry on pullback"),
+    (_re.compile(r'\bshort the\b', _re.I),                   "watch"),
+    # "short" standalone as verb (not "short-term", "short-term setup", etc.)
+    (_re.compile(r'(?<!\w)short(?!\s*[-–]term)(?!\s*term)(?!\w)', _re.I), "watch"),
+]
+
+
+def _clean_stock_text(text: str) -> str:
+    """Rewrite short-biased phrases in stock watchlist text to long-bias framing."""
+    if not text:
+        return text
+    for pattern, replacement in _STOCK_TEXT_REPLACEMENTS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Candidate factory
 # ─────────────────────────────────────────────────────────────────────────────
@@ -220,27 +258,89 @@ def _make_candidate(
     }
     if signals:
         base_signals.update(signals)
+    _is_stock = asset_type not in ("crypto", "perp")
     return {
-        "symbol":       symbol.upper().strip(),
-        "name":         name,
-        "asset_type":   asset_type,
-        "direction":    direction,
-        "timeframe":    timeframe,
-        "score":        round(float(score), 4),
-        "confidence":   confidence,
-        "status":       status,
-        "setup_type":   setup_type,
-        "theme":        theme,
-        "sector":       sector,
-        "summary":      summary,
-        "trigger":      trigger,
-        "invalidation": invalidation,
-        "signals":      base_signals,
-        "evidence":     list(evidence or []),
-        "risks":        list(risks or []),
-        "source_pages": list(source_pages or []),
-        "updated_at":   updated_at or _now_iso(),
+        "symbol":           symbol.upper().strip(),
+        "name":             name,
+        "asset_type":       asset_type,
+        "direction":        direction,
+        "timeframe":        timeframe,
+        "score":            round(float(score), 4),
+        "confidence":       confidence,
+        "status":           status,
+        "setup_type":       setup_type,
+        "theme":            theme,
+        "sector":           sector,
+        "summary":          summary,
+        "trigger":          trigger,
+        "invalidation":     invalidation,
+        "signals":          base_signals,
+        "evidence":         list(evidence or []),
+        "risks":            list(risks or []),
+        "source_pages":     list(source_pages or []),
+        "updated_at":       updated_at or _now_iso(),
+        "long_bias":        _is_stock,
+        "entry_quality":    None,
+        "preferred_action": None,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Long-bias helper — assigns entry_quality + preferred_action for stocks/ETFs
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _set_stock_long_fields(c: dict) -> None:
+    """
+    Mutates a stock/ETF candidate in-place:
+      • Converts any remaining direction="short" → "watch"
+      • Assigns entry_quality and preferred_action based on setup and extension signals
+      • Never sets direction="short" for stocks/ETFs
+    """
+    at = c.get("asset_type", "stock")
+    if at not in ("stock", "etf"):
+        return
+
+    # Hard rule: no short direction for stocks/ETFs
+    if c.get("direction") == "short":
+        c["direction"] = "watch"
+
+    ext_risk    = c.get("extension_risk") or "low"
+    setup_b     = c.get("setup_bucket") or ""
+    timing_q    = c.get("timing_quality") or "medium"
+    cat_window  = c.get("catalyst_window") or ""
+    days_earn   = c.get("days_to_earnings")
+    earn_result = c.get("earnings_result") or ""
+
+    # entry_quality
+    if ext_risk == "high":
+        entry_q = "extended"
+    elif setup_b in ("stage_1_to_2_base", "cup_handle_watch", "early_breakout"):
+        entry_q = "early" if timing_q == "high" else "good"
+    elif setup_b in ("dip_reversal_watch", "momentum_resumption"):
+        entry_q = "good"
+    elif earn_result == "Miss":
+        entry_q = "wait_for_pullback"
+    else:
+        entry_q = "good"
+
+    # preferred_action
+    if earn_result == "Beat" and days_earn is not None and days_earn < 0:
+        pref = "post_earnings_watch"
+    elif cat_window in ("pre_earnings_core", "pre_earnings_extended"):
+        pref = "pre_earnings_build"
+    elif ext_risk == "high":
+        pref = "wait_for_pullback"
+    elif setup_b in ("stage_1_to_2_base", "cup_handle_watch"):
+        pref = "watch_for_entry"
+    elif setup_b in ("early_breakout", "momentum_resumption"):
+        pref = "active_long_setup"
+    elif earn_result == "Miss":
+        pref = "watch_for_entry"
+    else:
+        pref = "momentum_continuation" if c.get("direction") == "long" else "watch_for_entry"
+
+    c["entry_quality"]    = entry_q
+    c["preferred_action"] = pref
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -414,7 +514,7 @@ def _merge_candidates(candidates: list[dict]) -> list[dict]:
                 "catalyst_window", "days_to_earnings", "earnings_result",
                 "eps_surprise_pct", "setup_bucket", "extension_risk",
                 "timing_quality", "hyperliquid_quality_gate", "tsm_quality",
-                "matrix_signal",
+                "matrix_signal", "entry_quality", "preferred_action",
             ):
                 if m.get(_ext_key) is None and c.get(_ext_key) is not None:
                     m[_ext_key] = c[_ext_key]
@@ -624,12 +724,17 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
                         (tech_score is not None and float(tech_score or 0) > 88)
                     ) else "low"
 
-                    # ── Direction ─────────────────────────────────────────────
+                    # ── Direction (stocks: long or watch only — never short) ───
+                    # Low TA signal or bearish sentiment → watch, not short.
+                    # Overbought RSI / stage 3 → entry quality note, not short thesis.
                     direction = "watch"
                     if ta_sig is not None and ta_sig >= 0.65:
                         direction = "long"
-                    elif ta_sig is not None and ta_sig <= 0.32:
-                        direction = "short"
+                    # ta_sig <= 0.32 → watch (not short); entry_quality will reflect it
+
+                    # Sanitize action_note text — remove short-biased language
+                    # before it propagates to summary/evidence on the long board.
+                    action_note = _clean_stock_text(action_note)
 
                     # ── Evidence ─────────────────────────────────────────────
                     evidence: list[str] = []
@@ -652,7 +757,7 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
                     if risk_level:
                         risks.append(f"Risk: {risk_level}")
                     if extension_risk == "high":
-                        risks.append("Extension risk: may be overextended")
+                        risks.append("Extended near-term — avoid chasing vertical moves; better entry on consolidation or controlled pullback")
 
                     # Apply staleness factor to signals
                     def _sf(v: float | None) -> float | None:
@@ -1239,7 +1344,7 @@ def collect_catalyst_cache_candidates() -> tuple[list[dict], str]:
                     result_label = "Beat"
                 elif is_miss:
                     cat_sig   = round(_clamp01(importance / 100.0 * 0.4 + 0.30) * recency, 4)
-                    direction  = "short"
+                    direction  = "watch"   # stocks: never short — miss → watch for stabilization
                     result_label = "Miss"
                 else:
                     # Reported but no clear beat/miss — watch
@@ -1429,8 +1534,8 @@ def collect_options_cache_candidates() -> tuple[list[dict], str]:
                 ts = float(row.get("regime_alignment_score") or 50)
                 theme_sig = _clamp01(ts / 100.0 * sf)
 
-            direction = "long" if side_bias == "bullish" else \
-                        "short" if side_bias == "bearish" else "watch"
+            # Stocks/ETFs: bearish options signal → watch (not short); long bias enforced
+            direction = "long" if side_bias == "bullish" else "watch"
 
             conf_label = "high" if conf_score >= 75 else \
                          "medium" if conf_score >= 50 else "low"
@@ -1975,6 +2080,27 @@ def build_daily_alpha_board(
     # ── Dedup (merge same symbol from multiple sources) ───────────────────────
     merged = _merge_candidates(all_raw)
 
+    # ── Long-bias safety pass (board_mode = "long_watchlist") ────────────────
+    # Hard rule: stocks/ETFs never get direction="short" on the main board.
+    # Crypto/perp shorts are tracked separately in crypto_short_candidates.
+    _LB_DIAG["stock_shorts_suppressed"]            = 0
+    _LB_DIAG["stock_short_candidates_converted_to_watch"] = 0
+    _LB_DIAG["stock_extension_notes_added"]        = 0
+    _LB_DIAG["crypto_short_candidates"]            = []
+
+    for _c in merged:
+        _at = _c.get("asset_type", "stock")
+        if _at in ("stock", "etf"):
+            if _c.get("direction") == "short":
+                _c["direction"] = "watch"
+                _LB_DIAG["stock_short_candidates_converted_to_watch"] += 1
+                _LB_DIAG["stock_shorts_suppressed"] += 1
+            if _c.get("extension_risk") == "high":
+                _LB_DIAG["stock_extension_notes_added"] += 1
+            _set_stock_long_fields(_c)
+        elif _at in ("crypto", "perp") and _c.get("direction") == "short":
+            _LB_DIAG["crypto_short_candidates"].append(_c["symbol"])
+
     # ── Build scope filter sets ───────────────────────────────────────────────
     wl_syms   = {c["symbol"] for c in wl_cands}
     port_syms = {c["symbol"] for c in port_cands}
@@ -2044,6 +2170,7 @@ def build_daily_alpha_board(
         "ok":                     True,
         "generated_at":           _now_iso(),
         "mode":                   "cache_only",
+        "board_mode":             "long_watchlist",
         "external_api_calls":     0,
         "provider_calls_blocked": True,
         "provider_call_attempts": [],
@@ -2077,6 +2204,12 @@ def build_daily_alpha_board(
             "source_modes": {
                 k: "cache_only" for k in sh.health
             },
+            "long_watchlist_mode":   True,
+            "stock_shorts_suppressed":            _LB_DIAG.get("stock_shorts_suppressed", 0),
+            "stock_short_candidates_converted_to_watch": _LB_DIAG.get("stock_short_candidates_converted_to_watch", 0),
+            "stock_extension_notes_added":        _LB_DIAG.get("stock_extension_notes_added", 0),
+            "crypto_short_candidates":            _LB_DIAG.get("crypto_short_candidates", [])[:10],
+            "crypto_short_candidates_count":      len(_LB_DIAG.get("crypto_short_candidates", [])),
             "crypto_quality_gates": {
                 "accepted_tsm_count":     len(_HL_DIAG.get("accepted_tsm", [])),
                 "rejected_pump_count":    len(_HL_DIAG.get("rejected_pump", [])),
