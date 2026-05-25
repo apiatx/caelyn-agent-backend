@@ -1,0 +1,44 @@
+Great work. Before frontend starts, make these final hardening changes to /api/home/daily-alpha-board.
+
+1. Normalize frontend-facing scores to 0–100.
+- Return "score" as 0–100, e.g. 89.31.
+- Optionally keep "score_raw" as 0–1 for diagnostics/internal use.
+- Update diagnostics/top pre-ranked output the same way so frontend never has to infer the scale.
+
+2. Tighten Top 10 qualification so theme-only ideas cannot dominate.
+- A stock idea may use theme strength as a major boost, but cannot qualify for Top 10 from theme score alone.
+- Require at least one actionable timing signal for Top 10:
+  TA, relative volume, catalyst proximity, options activity, social acceleration, news acceleration, or equivalent.
+- If a candidate has only theme/fundamental strength but no timing signal, mark it as watch_only and allow it only below high-conviction ideas.
+
+3. Split watchlist source health.
+- Loading current symbols from Neon should be considered "ok" if successful.
+- Stale enrichment/analysis should be represented separately.
+- Add fields like:
+  watchlist_symbols_status
+  watchlist_signal_status
+  watchlist_symbol_count
+  watchlist_signal_age_seconds
+- Do not label the whole watchlist source stale if current saved symbols loaded correctly.
+
+4. Strengthen zero-provider-call diagnostics.
+- Diagnostics response should explicitly include:
+  mode: cache_only
+  external_api_calls: 0
+  provider_calls_blocked: true
+  provider_call_attempts: []
+  unsafe_sources_skipped: [...]
+- Add logs confirming no external provider calls were made or attempted.
+
+5. Re-run the same validation probes:
+- Main endpoint 200
+- Diagnostics 200
+- Cache hit works
+- refresh=true only rebuilds aggregator ranking, not provider data
+- asset_type=stocks only returns stocks/ETFs
+- asset_type=crypto only returns crypto/perp
+- external_api_calls remains 0
+- Top 10 contains no theme-only high-conviction ideas unless it also has a timing signal
+
+Do not change the endpoint contract in a way that breaks the frontend plan.
+Do not add any provider/API calls.
