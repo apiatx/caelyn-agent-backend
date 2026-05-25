@@ -92,6 +92,24 @@ _CRYPTO_TIMING = {"momentum", "oi", "volume_velocity", "liquidation"}
 # If the ONLY timing signals are theme+stage-ta (same file), candidate is watch_only
 _STOCK_EXTERNAL_TIMING = {"rel_volume", "catalyst", "options", "social"}
 
+# ── Crypto / Hyperliquid quality gates ────────────────────────────────────────
+# Matrix signal labels that pass long quality gate
+_CRYPTO_MATRIX_PASS  = {"LONG", "WATCH"}
+_CRYPTO_MATRIX_AVOID = {"CROWDED", "AVOID"}
+
+# Anti-pump thresholds (percentage, from oiDelta*Pct fields)
+_PUMP_OI_5M_PCT_THRESH  = 15.0   # >15% OI spike in 5m = suspicious without TSM
+_PUMP_OI_15M_PCT_THRESH = 20.0   # >20% in 15m = suspicious
+_PUMP_24H_NO_TSM        = 0.20   # >20% 24h without structural quality = pump
+_MIN_STRUCT_Q_HIGH      = 0.28   # structural quality below this = low quality
+
+# Module-level diagnostic counters populated by the Hyperliquid collector
+_HL_DIAG: dict = {
+    "rejected_pump":    [],
+    "rejected_crowded": [],
+    "accepted_tsm":     [],
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -386,6 +404,15 @@ def _merge_candidates(candidates: list[dict]) -> list[dict]:
                 m["summary"] = c["summary"]
             if c.get("_rs_boost"):
                 m["_rs_boost"] = True
+            # Propagate extended fields from quality passes — keep first non-None value
+            for _ext_key in (
+                "catalyst_window", "days_to_earnings", "earnings_result",
+                "eps_surprise_pct", "setup_bucket", "extension_risk",
+                "timing_quality", "hyperliquid_quality_gate", "tsm_quality",
+                "matrix_signal",
+            ):
+                if m.get(_ext_key) is None and c.get(_ext_key) is not None:
+                    m[_ext_key] = c[_ext_key]
 
     return list(merged.values())
 
@@ -470,42 +497,147 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
                         continue
                     seen.add(sym)
 
-                    # Vol/MC ratio → rel_volume signal  (0-1 normalized)
-                    vol_mc = row.get("vol_mc_ratio")
-                    rel_vol_sig: float | None = None
-                    if vol_mc is not None:
-                        # Thresholds: 0=0, 0.05=0.5, 0.15=0.8, 0.30+=1.0
-                        rel_vol_sig = _clamp01(float(vol_mc) / 0.30)
+                    # ── Stage / setup classification ─────────────────────────
+                    stage       = row.get("stage")          # int 1-4 (Weinstein)
+                    stage_label = (row.get("stage_label") or "").lower()
+                    setup_type  = (row.get("setup_type") or row.get("pattern") or "").lower()
+                    action_str  = (row.get("action") or "").lower()  # "strong buy", "buy", etc.
+                    action_note = row.get("action_note") or ""
 
-                    # Theme signal from canonical_theme mapping
-                    theme_id = row.get("canonical_theme_id") or row.get("theme_source")
-                    theme_sig = 0.6 if theme_id else None   # "present" = moderate signal
-
-                    # TA signal: parse sentiment/action_note text
-                    sentiment = (row.get("sentiment") or "").lower()
+                    # ── TA signal (prefer technical_score over sentiment text) ─
+                    tech_score = row.get("technical_score")   # 0-100
                     ta_sig: float | None = None
-                    if "bullish" in sentiment or "buy" in sentiment:
-                        ta_sig = 0.70
-                    elif "bearish" in sentiment or "sell" in sentiment:
-                        ta_sig = 0.30
-                    elif sentiment in ("neutral", "watch"):
-                        ta_sig = 0.50
-
-                    # 1D change → momentum proxy
-                    chg = row.get("change_pct_1d") or row.get("change_pct")
-                    news_sig: float | None = None
-                    if chg is not None:
+                    if tech_score is not None:
                         try:
-                            chg_f = float(chg)
-                            # Map [-5%, +5%] → [0.2, 0.8]
-                            news_sig = _clamp01((chg_f + 5.0) / 10.0)
+                            ta_sig = _clamp01(float(tech_score) / 100.0)
+                        except Exception:
+                            pass
+                    if ta_sig is None:
+                        # Fallback: parse action label
+                        if "strong buy" in action_str or "bullish" in action_str:
+                            ta_sig = 0.82
+                        elif "buy" in action_str:
+                            ta_sig = 0.68
+                        elif "hold" in action_str or "neutral" in action_str:
+                            ta_sig = 0.50
+                        elif "sell" in action_str or "bearish" in action_str:
+                            ta_sig = 0.25
+                        else:
+                            sentiment = (row.get("sentiment") or "").lower()
+                            if "bullish" in sentiment or "buy" in sentiment:
+                                ta_sig = 0.68
+                            elif "bearish" in sentiment or "sell" in sentiment:
+                                ta_sig = 0.28
+                            elif sentiment in ("neutral", "watch"):
+                                ta_sig = 0.50
+
+                    # Stage modifier for TA signal
+                    if stage is not None:
+                        try:
+                            st = int(stage)
+                            if st == 2:   # advancing — boost
+                                ta_sig = min(1.0, (ta_sig or 0.55) + 0.12)
+                            elif st == 1: # base building — modest boost
+                                ta_sig = min(1.0, (ta_sig or 0.50) + 0.06)
+                            elif st == 3: # topping — penalize
+                                ta_sig = max(0.0, (ta_sig or 0.40) - 0.10)
+                            elif st == 4: # downtrend — hard penalize
+                                ta_sig = max(0.0, (ta_sig or 0.30) - 0.20)
                         except Exception:
                             pass
 
+                    # ── Relative volume signal ────────────────────────────────
+                    vol_ratio = row.get("volume_ratio")   # e.g. 1.5 = 1.5x avg
+                    vol_mc    = row.get("vol_mc_ratio")
+                    rel_vol_sig: float | None = None
+                    if vol_ratio is not None:
+                        try:
+                            # 0.5x→0.25, 1.0x→0.50, 2.0x→0.75, 4.0x→1.0
+                            rel_vol_sig = _clamp01(float(vol_ratio) / 4.0)
+                        except Exception:
+                            pass
+                    elif vol_mc is not None:
+                        try:
+                            rel_vol_sig = _clamp01(float(vol_mc) / 0.30)
+                        except Exception:
+                            pass
+
+                    # ── RS / social signal from rs_score ─────────────────────
+                    rs_score = row.get("rs_score")
+                    social_sig: float | None = None
+                    if rs_score is not None:
+                        try:
+                            social_sig = _clamp01(float(rs_score) / 100.0)
+                        except Exception:
+                            pass
+
+                    # ── Theme signal ──────────────────────────────────────────
+                    theme_id  = row.get("canonical_theme_id") or row.get("theme_source")
+                    theme_sig = 0.6 if theme_id else None
+
+                    # ── Momentum from returns ─────────────────────────────────
+                    # Use 1d + 5d/7d returns as news/momentum proxy
+                    chg_1d = row.get("change") or row.get("change_pct_1d") or row.get("change_pct")
+                    chg_7d = row.get("change_7d") or row.get("change_5d")
+                    news_sig: float | None = None
+                    if chg_1d is not None:
+                        try:
+                            chg_f = float(chg_1d)
+                            news_sig = _clamp01((chg_f + 5.0) / 10.0)
+                        except Exception:
+                            pass
+                    if news_sig is None and chg_7d is not None:
+                        try:
+                            chg_f = float(chg_7d)
+                            news_sig = _clamp01((chg_f + 10.0) / 20.0)
+                        except Exception:
+                            pass
+
+                    # ── Setup bucket classification ───────────────────────────
+                    setup_bucket = "watchlist_general"
+                    try:
+                        st = int(stage) if stage is not None else 0
+                        sp = setup_type
+                        if st in (1, 2) and ("base" in sp or "break" in sp or st == 2):
+                            setup_bucket = "stage_1_to_2_base"
+                        elif "cup" in sp or "handle" in sp:
+                            setup_bucket = "cup_handle_watch"
+                        elif "breakout" in sp or ("break" in sp and "breakdown" not in sp):
+                            setup_bucket = "early_breakout"
+                        elif "momentum" in sp or "trend_cont" in sp:
+                            setup_bucket = "momentum_resumption"
+                        elif "dip" in sp or "reversal" in sp or "reclaim" in sp:
+                            setup_bucket = "dip_reversal_watch"
+                        elif st == 3:
+                            setup_bucket = "extended_momentum"
+                    except Exception:
+                        pass
+
+                    # ── Extension risk (stage 3 or very high tech score) ──────
+                    extension_risk = "high" if (
+                        (stage is not None and int(stage or 0) >= 3) or
+                        (tech_score is not None and float(tech_score or 0) > 88)
+                    ) else "low"
+
+                    # ── Direction ─────────────────────────────────────────────
+                    direction = "watch"
+                    if ta_sig is not None and ta_sig >= 0.65:
+                        direction = "long"
+                    elif ta_sig is not None and ta_sig <= 0.32:
+                        direction = "short"
+
+                    # ── Evidence ─────────────────────────────────────────────
                     evidence: list[str] = []
-                    action = row.get("action_note") or ""
-                    if action:
-                        evidence.append(f"Watchlist: {action[:120]}")
+                    if action_note:
+                        evidence.append(f"Watchlist: {action_note[:120]}")
+                    if stage is not None and stage_label:
+                        evidence.append(f"Stage {stage} — {stage_label}")
+                    elif stage is not None:
+                        evidence.append(f"Stage {stage}")
+                    if setup_type and setup_type != "watchlist_general":
+                        evidence.append(f"Setup: {setup_type[:60]}")
+                    if rs_score is not None:
+                        evidence.append(f"RS: {float(rs_score):.0f}/100")
                     catalyst = row.get("catalyst") or ""
                     if catalyst:
                         evidence.append(f"Catalyst: {catalyst[:100]}")
@@ -514,12 +646,8 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
                     risk_level = row.get("risk_level") or ""
                     if risk_level:
                         risks.append(f"Risk: {risk_level}")
-
-                    direction = "watch"
-                    if ta_sig is not None and ta_sig >= 0.65:
-                        direction = "long"
-                    elif ta_sig is not None and ta_sig <= 0.35:
-                        direction = "short"
+                    if extension_risk == "high":
+                        risks.append("Extension risk: may be overextended")
 
                     # Apply staleness factor to signals
                     def _sf(v: float | None) -> float | None:
@@ -533,17 +661,23 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
                         timeframe="2-10d",
                         theme=row.get("canonical_theme_name") or theme_id,
                         sector=row.get("sector"),
-                        summary=action[:200] if action else f"{sym} from watchlist",
+                        summary=action_note[:200] if action_note else f"{sym} watchlist ({setup_bucket})",
                         signals={
                             "theme":      _sf(theme_sig),
                             "ta":         _sf(ta_sig),
                             "rel_volume": _sf(rel_vol_sig),
                             "news":       _sf(news_sig),
+                            "social":     _sf(social_sig),
                         },
                         evidence=evidence,
                         risks=risks,
                         source_pages=["watchlist"],
                     )
+                    c["setup_bucket"]    = setup_bucket
+                    c["extension_risk"]  = extension_risk
+                    c["timing_quality"]  = "high" if setup_bucket in (
+                        "stage_1_to_2_base", "early_breakout", "dip_reversal_watch"
+                    ) else "medium"
                     candidates.append(c)
 
         symbols_ok = len(candidates) > 0
@@ -967,12 +1101,13 @@ def collect_strategy_cache_candidates() -> tuple[list[dict], str]:
 
 def collect_catalyst_cache_candidates() -> tuple[list[dict], str]:
     """
-    Read current + next week earnings snap disk files.
-    Filters events within ±7 days of today.
+    Read current + adjacent week earnings snap disk files.
+    Window: [-10d, +21d] from today.
+      • Upcoming events (0..+21d): scored by importance + proximity.
+      • Recent earnings (-10d..0d): scored by beat/miss magnitude + surprise %.
     Pure disk read — zero provider calls.
     """
     try:
-        today_str = date.today().isoformat()
         today_ord = date.today().toordinal()
 
         all_snap_files = sorted(
@@ -981,13 +1116,11 @@ def collect_catalyst_cache_candidates() -> tuple[list[dict], str]:
         if not all_snap_files:
             return [], "missing"
 
-        # Select snaps whose filename date range overlaps with [today-1, today+14].
-        # Snap filenames look like: earnings_snap_20260525_20260529.json
-        # Pick files where the END date in the name >= today-1 AND start <= today+14.
+        # Select snaps whose filename date range overlaps with [today-10, today+21].
         import re as _re
         _snap_pat = _re.compile(r"earnings_snap_(\d{8})_(\d{8})\.json$")
-        target_start = today_ord - 1
-        target_end   = today_ord + 14
+        target_start = today_ord - 10
+        target_end   = today_ord + 21
 
         snap_files: list[str] = []
         for fp in all_snap_files:
@@ -1002,12 +1135,11 @@ def collect_catalyst_cache_candidates() -> tuple[list[dict], str]:
             if f_end >= target_start and f_start <= target_end:
                 snap_files.append(fp)
 
-        # Fallback: if no files matched (e.g. future-only snaps), take the 3 most recent
+        # Fallback: if no files matched take 4 most recent
         if not snap_files:
-            snap_files = all_snap_files[-3:]
+            snap_files = all_snap_files[-4:]
 
         all_events: list[dict] = []
-
         for fp in snap_files:
             raw = _load_json_safe(fp)
             if not raw:
@@ -1018,9 +1150,7 @@ def collect_catalyst_cache_candidates() -> tuple[list[dict], str]:
         if not all_events:
             return [], "missing"
 
-        # Earnings snap files are pre-generated for upcoming weeks by design.
-        # Their file mtime reflects when they were built, NOT when the events expire.
-        # Use sf=1.0 — validity is determined by event dates (filtered below), not mtime.
+        # Snap files are pre-generated; validity is determined by event dates.
         sf = 1.0
 
         candidates: list[dict] = []
@@ -1036,72 +1166,193 @@ def collect_catalyst_cache_candidates() -> tuple[list[dict], str]:
                 continue
 
             try:
-                ev_ord = date.fromisoformat(ev_date_str).toordinal()
+                ev_ord    = date.fromisoformat(ev_date_str).toordinal()
                 days_away = ev_ord - today_ord
             except Exception:
                 continue
 
-            # Only events within 7 days ahead (upcoming catalysts) or 1 day behind
-            if not (-1 <= days_away <= 7):
+            # Window: recent earnings [-10d, 0d) and upcoming [-0d, +21d]
+            if not (-10 <= days_away <= 21):
                 continue
 
             seen.add(sym)
 
-            importance = float(ev.get("importanceScore") or ev.get("importance") or 50)
-            # Normalize 0-100 → 0-1; events closer in time get a boost
-            proximity_boost = max(0.0, (7 - abs(days_away)) / 7.0)
-            cat_sig = _clamp01((importance / 100.0) * 0.7 + proximity_boost * 0.3)
-            cat_sig = round(cat_sig * sf, 4)
-
+            importance    = float(ev.get("importanceScore") or ev.get("importance") or 50)
             is_anchor     = ev.get("isThemeAnchor", False)
             is_bottleneck = ev.get("isBottleneck", False)
             theme_tags    = ev.get("themeTags") or []
+            ev_type       = ev.get("eventType") or "earnings"
+            ev_label      = ev.get("eventLabel") or ev_type
+            time_label    = ev.get("time") or ""
 
             theme_sig: float | None = None
             if is_anchor or theme_tags:
                 theme_sig = round(0.65 * sf, 4)
 
-            ev_type   = ev.get("eventType") or "earnings"
-            ev_label  = ev.get("eventLabel") or ev_type
-            eps_est   = ev.get("epsEstimated")
-            rev_est   = ev.get("revenueEstimated")
+            # ── Branch: recent earnings (days_away < 0) ───────────────────────
+            if days_away < 0:
+                eps_actual  = ev.get("epsActual")
+                eps_est     = ev.get("epsEstimated")
+                rev_actual  = ev.get("revenueActual")
+                rev_est     = ev.get("revenueEstimated")
+                surprise_pct = ev.get("surprisePercent")
+                title        = ev.get("title") or ""
 
-            evidence: list[str] = [
-                f"{ev_label} on {ev_date_str} (T{days_away:+d}d)",
-            ]
-            if eps_est is not None:
-                evidence.append(f"EPS est: ${eps_est:.2f}")
-            if rev_est is not None:
-                evidence.append(f"Rev est: ${rev_est/1e6:.0f}M")
-            if theme_tags:
-                evidence.append(f"Themes: {', '.join(str(t) for t in theme_tags[:3])}")
+                # Only score recent events if we have actual results
+                if eps_actual is None and rev_actual is None:
+                    continue
 
-            time_label = ev.get("time") or ""
-            trigger = f"{ev_label} in {days_away}d" + (f" ({time_label})" if time_label else "")
+                is_beat = False
+                is_miss = False
+                if eps_actual is not None and eps_est is not None:
+                    try:
+                        is_beat = float(eps_actual) >= float(eps_est)
+                        is_miss = not is_beat
+                    except Exception:
+                        pass
+                elif "(beat)" in title.lower():
+                    is_beat = True
+                elif "(miss)" in title.lower():
+                    is_miss = True
 
-            c = _make_candidate(
-                sym,
-                name=ev.get("companyName"),
-                direction="watch",
-                timeframe="intraday" if days_away <= 1 else "2-10d",
-                theme=theme_tags[0] if theme_tags else None,
-                sector=ev.get("sector"),
-                summary=f"{sym} {ev_label} T{days_away:+d}d — {ev.get('companyName','')[:60]}",
-                trigger=trigger,
-                signals={
-                    "catalysts": cat_sig,
-                    "theme":     theme_sig,
-                },
-                evidence=evidence,
-                source_pages=["catalysts"],
-            )
-            if is_anchor or is_bottleneck:
-                c["_rs_boost"] = True
-            candidates.append(c)
+                # Score from surprise magnitude
+                surp_factor = 0.55   # base for beats
+                if surprise_pct is not None:
+                    try:
+                        sp = abs(float(surprise_pct))
+                        # 0%→0.55, 5%→0.65, 15%→0.80, 30%+→1.0
+                        surp_factor = _clamp01(0.55 + sp / 50.0)
+                    except Exception:
+                        pass
+
+                # Recency decay: older beats lose relevance
+                recency = max(0.3, (10 + days_away) / 10.0)   # days_away is negative
+
+                if is_beat:
+                    cat_sig  = round(_clamp01(importance / 100.0 * 0.5 + surp_factor * 0.5) * recency, 4)
+                    direction = "long"
+                    result_label = "Beat"
+                elif is_miss:
+                    cat_sig   = round(_clamp01(importance / 100.0 * 0.4 + 0.30) * recency, 4)
+                    direction  = "short"
+                    result_label = "Miss"
+                else:
+                    # Reported but no clear beat/miss — watch
+                    cat_sig      = round(_clamp01(importance / 100.0 * 0.4) * recency, 4)
+                    direction    = "watch"
+                    result_label = "Reported"
+
+                evidence = [f"{ev_label} {result_label} on {ev_date_str} (T{days_away:+d}d)"]
+                if eps_actual is not None and eps_est is not None:
+                    try:
+                        evidence.append(f"EPS: ${float(eps_actual):.2f} vs est ${float(eps_est):.2f}")
+                    except Exception:
+                        pass
+                if surprise_pct is not None:
+                    try:
+                        evidence.append(f"Surprise: {float(surprise_pct):+.1f}%")
+                    except Exception:
+                        pass
+                if rev_actual is not None and rev_est is not None:
+                    try:
+                        rev_surp_pct = (float(rev_actual) - float(rev_est)) / float(rev_est) * 100
+                        evidence.append(f"Rev: ${float(rev_actual)/1e6:.0f}M vs est ${float(rev_est)/1e6:.0f}M ({rev_surp_pct:+.1f}%)")
+                    except Exception:
+                        pass
+                if theme_tags:
+                    evidence.append(f"Themes: {', '.join(str(t) for t in theme_tags[:3])}")
+
+                trigger = f"{ev_label} {result_label} T{days_away:+d}d"
+                summary = f"{sym} Earnings {result_label} T{days_away:+d}d — {ev.get('companyName','')[:55]}"
+
+                c = _make_candidate(
+                    sym,
+                    name=ev.get("companyName"),
+                    direction=direction,
+                    timeframe="intraday",
+                    theme=theme_tags[0] if theme_tags else None,
+                    sector=ev.get("sector"),
+                    summary=summary,
+                    trigger=trigger,
+                    signals={
+                        "catalysts": cat_sig,
+                        "theme":     theme_sig,
+                    },
+                    evidence=evidence,
+                    source_pages=["catalysts"],
+                )
+                c["catalyst_window"]   = "recent_earnings"
+                c["earnings_result"]   = result_label
+                c["days_to_earnings"]  = days_away
+                if surprise_pct is not None:
+                    try:
+                        c["eps_surprise_pct"] = round(float(surprise_pct), 2)
+                    except Exception:
+                        pass
+                if is_anchor or is_bottleneck:
+                    c["_rs_boost"] = True
+                candidates.append(c)
+
+            # ── Branch: upcoming earnings (days_away >= 0) ────────────────────
+            else:
+                eps_est = ev.get("epsEstimated")
+                rev_est = ev.get("revenueEstimated")
+
+                # Proximity boost: tighter window scores higher
+                # Peak window 0-7d; extends to 21d with decay
+                if days_away <= 7:
+                    proximity_boost = max(0.0, (7 - days_away) / 7.0)
+                else:
+                    # 8-21d: weaker proximity
+                    proximity_boost = max(0.0, (21 - days_away) / 42.0)
+
+                cat_sig = _clamp01((importance / 100.0) * 0.70 + proximity_boost * 0.30)
+                cat_sig = round(cat_sig * sf, 4)
+
+                evidence = [f"{ev_label} on {ev_date_str} (T{days_away:+d}d)"]
+                if eps_est is not None:
+                    try:
+                        evidence.append(f"EPS est: ${float(eps_est):.2f}")
+                    except Exception:
+                        pass
+                if rev_est is not None:
+                    try:
+                        evidence.append(f"Rev est: ${float(rev_est)/1e6:.0f}M")
+                    except Exception:
+                        pass
+                if theme_tags:
+                    evidence.append(f"Themes: {', '.join(str(t) for t in theme_tags[:3])}")
+
+                trigger = (f"{ev_label} in {days_away}d"
+                           + (f" ({time_label})" if time_label else ""))
+                window  = ("intraday" if days_away <= 1
+                           else "2-10d" if days_away <= 10
+                           else "10-21d")
+
+                c = _make_candidate(
+                    sym,
+                    name=ev.get("companyName"),
+                    direction="watch",
+                    timeframe=window,
+                    theme=theme_tags[0] if theme_tags else None,
+                    sector=ev.get("sector"),
+                    summary=f"{sym} {ev_label} T{days_away:+d}d — {ev.get('companyName','')[:60]}",
+                    trigger=trigger,
+                    signals={
+                        "catalysts": cat_sig,
+                        "theme":     theme_sig,
+                    },
+                    evidence=evidence,
+                    source_pages=["catalysts"],
+                )
+                c["catalyst_window"]  = ("pre_earnings_core" if days_away <= 7
+                                         else "pre_earnings_extended")
+                c["days_to_earnings"] = days_away
+                if is_anchor or is_bottleneck:
+                    c["_rs_boost"] = True
+                candidates.append(c)
 
         status = "ok" if candidates else "missing"
-        if sf < 1.0:
-            status = "stale"
         return candidates, status
 
     except Exception as exc:
@@ -1244,159 +1495,242 @@ def collect_options_cache_candidates() -> tuple[list[dict], str]:
 
 def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
     """
-    Read hyperliquid_signal_snapshots.json for OI velocity signals.
-    Also tries get_matrix_stocks_snapshot() from hyperliquid router
-    (in-process module cache — zero API calls).
+    ZERO external API calls. Uses only in-process matrix cache + disk OI snapshots.
+
+    PRIMARY source: get_matrix_perps_snapshot() — the same time-series momentum
+    and matrix signal ranking the Hyperliquid page uses.  OI velocity from
+    hyperliquid_signal_snapshots.json is used as corroborating evidence only.
+
+    Anti-pump gates:
+      - Rejects candidates with sudden OI/price spikes but weak structural quality.
+      - Rejects CROWDED/AVOID matrix signals for long ideas.
+      - Penalizes crowded funding and exhaustion signals.
+      - Requires sustained momentum confirmation for high-conviction ideas.
     """
     try:
-        raw = _load_json_safe(_HL_SNAP_PATH)
-        if not raw:
-            return [], "missing"
-
-        saved_at  = float(raw.get("saved_at") or 0)
-        age_s     = _source_age_s(saved_at if saved_at else None)
-        sf        = _staleness_factor(age_s)
-        if sf == 0.0:
-            print("[daily-alpha] skipped_source=hyperliquid reason=data_too_stale")
-            return [], "stale"
-
-        snapshots: dict[str, list] = raw.get("snapshots") or {}
-        if not snapshots:
-            return [], "missing"
-
-        # Compute OI velocity: (latest - first) / first  for each coin
-        oi_velocities: list[tuple[str, float, float, float]] = []   # (coin, vel, latest_oi, age)
-
-        for coin, pts in snapshots.items():
-            if not pts or len(pts) < 2:
-                continue
-            pts_sorted = sorted(pts, key=lambda p: p.get("ts", 0))
-            first_oi   = float(pts_sorted[0].get("oi_usd") or 0)
-            last_oi    = float(pts_sorted[-1].get("oi_usd") or 0)
-            last_ts    = float(pts_sorted[-1].get("ts") or saved_at)
-
-            if first_oi <= 0:
-                continue
-
-            velocity    = (last_oi - first_oi) / first_oi   # fractional change
-            snap_age_s  = _source_age_s(last_ts)
-            oi_velocities.append((coin, velocity, last_oi, snap_age_s or 0))
-
-        # Sort by absolute velocity descending; prefer large caps by capping velocity
-        oi_velocities.sort(key=lambda x: abs(x[1]), reverse=True)
-
-        candidates: list[dict] = []
-
-        # Also try in-process matrix cache for additional signals
-        matrix_rows: dict[str, dict] = {}
+        # ── PRIMARY: matrix-ranked perps (in-process cache, zero API calls) ─────
+        perps: list[dict] = []
         try:
-            from services.hyperliquid.router import get_matrix_stocks_snapshot as _gms
-            stocks = _gms()
-            for asset in stocks:
-                sym = (asset.get("symbol") or asset.get("display_symbol") or "").upper()
-                if sym:
-                    matrix_rows[sym] = asset
+            from services.hyperliquid.router import get_matrix_perps_snapshot as _gmp
+            perps = _gmp()
         except Exception:
             pass
 
-        for coin, velocity, latest_oi_usd, snap_age_s in oi_velocities[:60]:
-            coin_upper = coin.upper().strip()
+        # ── SECONDARY: OI velocity from disk snapshot (corroboration only) ───────
+        oi_snap_vel: dict[str, float] = {}   # coin_upper → fractional velocity
+        oi_snap_oi:  dict[str, float] = {}   # coin_upper → latest OI USD
+        snap_sf = 0.85   # default: treat matrix as fresh
+        raw_snap = _load_json_safe(_HL_SNAP_PATH)
+        if raw_snap:
+            saved_at = float(raw_snap.get("saved_at") or 0)
+            snap_age_s = _source_age_s(saved_at if saved_at else None)
+            snap_sf = _staleness_factor(snap_age_s) or 0.85
+            for coin, pts in (raw_snap.get("snapshots") or {}).items():
+                if not pts or len(pts) < 2:
+                    continue
+                pts_s    = sorted(pts, key=lambda p: p.get("ts", 0))
+                first_oi = float(pts_s[0].get("oi_usd") or 0)
+                last_oi  = float(pts_s[-1].get("oi_usd") or 0)
+                if first_oi > 0:
+                    oi_snap_vel[coin.upper()] = (last_oi - first_oi) / first_oi
+                    oi_snap_oi[coin.upper()]  = last_oi
 
-            # Skip if snapshot is too stale for this specific coin
-            coin_sf = _staleness_factor(snap_age_s)
-            if coin_sf == 0.0:
+        # If no matrix AND no snap → empty
+        if not perps and not oi_snap_vel:
+            return [], "missing"
+
+        candidates: list[dict] = []
+        rejected_pump:    list[str] = []
+        rejected_crowded: list[str] = []
+        accepted_tsm:     list[str] = []
+
+        # ── Process matrix perps (primary path) ──────────────────────────────────
+        seen_syms: set[str] = set()
+        for asset in perps[:100]:
+            sym = (asset.get("displaySymbol") or asset.get("coin") or "").upper().strip()
+            if not sym or sym in seen_syms:
+                continue
+            seen_syms.add(sym)
+
+            matrix_signal = (asset.get("matrixSignal") or "").upper()
+            signal_dir    = (asset.get("signalDirection") or "watch").lower()
+
+            overall      = float(asset.get("overallScore")           or 0)
+            composite    = float(asset.get("compositeSignal")        or 0)
+            structural_q = float(asset.get("structuralQualityScore") or 0)
+            momentum_sc  = float(asset.get("momentum")              or 0)
+            trend_sc     = float(asset.get("trend")                 or 0)
+            flow_sc      = float(asset.get("flow")                  or 0)
+            avoid_sc     = float(asset.get("avoidScore")            or 0)
+            exhaust_sc   = float(asset.get("exhaustionScore")       or 0)
+            collapse_sc  = float(asset.get("collapseRiskScore")     or 0)
+
+            funding_label = (asset.get("fundingLabel") or "").lower()
+            market_type   = (asset.get("marketType")  or "perp").lower()
+
+            oi_delta_5m  = asset.get("oiDelta5mPct")    # already in %
+            oi_delta_15m = asset.get("oiDelta15mPct")
+            change_24h   = asset.get("change24hPct")    # decimal
+
+            # OI velocity corroboration from snapshot
+            oi_vel   = oi_snap_vel.get(sym) or oi_snap_vel.get(sym.replace("-PERP", ""))
+            oi_usd   = oi_snap_oi.get(sym)  or oi_snap_oi.get(sym.replace("-PERP", "")) or 0
+
+            # ── Hard-exclude gates ────────────────────────────────────────────
+            # 1. Avoid/collapse — not actionable for longs
+            if avoid_sc > 0.72 or collapse_sc > 0.72:
+                rejected_pump.append(sym)
                 continue
 
-            oi_sig = _clamp01(min(abs(velocity) / 0.30, 1.0) * coin_sf * sf)
-            direction = "long" if velocity > 0 else "short"
-            if abs(velocity) < 0.02:
+            # 2. Matrix explicitly labels as CROWDED or AVOID for long ideas
+            if matrix_signal in _CRYPTO_MATRIX_AVOID and signal_dir not in ("short", "bearish"):
+                rejected_crowded.append(sym)
+                continue
+
+            # ── Soft-penalty gates ────────────────────────────────────────────
+            quality_gate = "passed_tsm"
+            penalty      = 1.0
+
+            # 3. Extreme short-window OI spike without sustained quality
+            pump_detected = False
+            if oi_delta_5m is not None and abs(oi_delta_5m) > _PUMP_OI_5M_PCT_THRESH:
+                if structural_q < _MIN_STRUCT_Q_HIGH and trend_sc < 0.40:
+                    pump_detected  = True
+                    quality_gate   = "failed_pump_filter"
+                    penalty       *= 0.58
+
+            if oi_delta_15m is not None and abs(oi_delta_15m) > _PUMP_OI_15M_PCT_THRESH:
+                if structural_q < _MIN_STRUCT_Q_HIGH and momentum_sc < 0.35:
+                    pump_detected  = True
+                    quality_gate   = "failed_pump_filter"
+                    penalty       *= 0.55
+
+            # 4. Big 24h move without structural quality
+            if change_24h is not None:
+                chg24 = float(change_24h)
+                if abs(chg24) > _PUMP_24H_NO_TSM and structural_q < _MIN_STRUCT_Q_HIGH:
+                    pump_detected  = True
+                    quality_gate   = "failed_pump_filter"
+                    penalty       *= 0.65
+
+            # Drop if pump evidence is overwhelming
+            if pump_detected and penalty < 0.40:
+                rejected_pump.append(sym)
+                continue
+
+            # 5. Crowded funding reduces conviction
+            if "crowded" in funding_label:
+                if quality_gate == "passed_tsm":
+                    quality_gate = "crowded_funding"
+                penalty *= 0.80
+
+            # 6. Exhaustion for long ideas
+            if exhaust_sc > 0.55 and signal_dir in ("long", "bullish"):
+                if quality_gate == "passed_tsm":
+                    quality_gate = "failed_sustained_momentum"
+                penalty *= 0.75
+
+            if quality_gate == "passed_tsm":
+                accepted_tsm.append(sym)
+
+            # ── Score ─────────────────────────────────────────────────────────
+            base = (composite * 0.40 + structural_q * 0.30
+                    + momentum_sc * 0.15 + trend_sc * 0.10 + flow_sc * 0.05)
+
+            # OI velocity corroboration boost
+            if oi_vel is not None:
+                if (oi_vel > 0.03 and signal_dir in ("long", "bullish")) or \
+                   (oi_vel < -0.03 and signal_dir in ("short", "bearish")):
+                    base = min(1.0, base * 1.08)
+
+            oi_sig  = _clamp01(base * penalty)
+            mom_sig = _clamp01(momentum_sc * penalty)
+            vol_sig = _clamp01(composite * penalty)
+
+            # ── Evidence ──────────────────────────────────────────────────────
+            evidence = []
+            mx_reason = asset.get("matrixSignalReason") or asset.get("matrixSignalDetail") or ""
+            if mx_reason:
+                evidence.append(f"Matrix: {str(mx_reason)[:120]}")
+            if oi_vel is not None:
+                oi_b = oi_usd / 1e9 if oi_usd else 0
+                evidence.append(f"OI velocity: {oi_vel*100:+.1f}% (${oi_b:.2f}B)")
+            if change_24h is not None:
+                evidence.append(f"24h: {float(change_24h)*100:+.1f}%")
+            fr = asset.get("funding")
+            if fr is not None:
+                evidence.append(f"Funding: {float(fr)*100:.4f}%/hr")
+            if pump_detected:
+                evidence.append(f"⚠ pump filter: {quality_gate}")
+
+            # ── Direction ─────────────────────────────────────────────────────
+            if signal_dir in ("long", "bullish"):
+                direction = "long"
+            elif signal_dir in ("short", "bearish"):
+                direction = "short"
+            else:
+                direction = "watch"
+            if pump_detected:
                 direction = "watch"
 
-            # Momentum: from OI velocity sign + magnitude
-            mom_sig = _clamp01(abs(velocity) / 0.20 * coin_sf * sf)
-
-            # Volume velocity from matrix if available
-            vol_sig: float | None = None
-            mx = matrix_rows.get(coin_upper) or matrix_rows.get(f"{coin_upper}-PERP")
-            if mx:
-                chg_pct = mx.get("24h_change_pct") or mx.get("price_change_24h_pct")
-                if chg_pct is not None:
-                    try:
-                        vol_sig = _clamp01((float(chg_pct) + 10.0) / 20.0 * sf)
-                    except Exception:
-                        pass
-
-            oi_b = latest_oi_usd / 1e9 if latest_oi_usd else 0
-            vel_pct = velocity * 100
-
-            evidence = [
-                f"OI velocity: {vel_pct:+.1f}% (${oi_b:.2f}B open interest)",
-            ]
-            if mx:
-                fr = mx.get("funding_rate")
-                if fr is not None:
-                    evidence.append(f"Funding: {float(fr)*100:.4f}%/hr")
-
-            setup_type = (
-                "oi_expansion"  if velocity > 0.05 else
-                "oi_contraction" if velocity < -0.05 else
-                "oi_watch"
-            )
-
-            status_label = (
-                "active_setup" if abs(velocity) > 0.10 else
-                "pre_breakout" if abs(velocity) > 0.03 else
-                "watch_only"
-            )
-
+            at = "perp" if market_type == "perp" else "crypto"
             c = _make_candidate(
-                coin_upper,
-                asset_type="perp",
+                sym,
+                asset_type=at,
                 direction=direction,
-                timeframe="intraday" if abs(velocity) > 0.15 else "2-10d",
-                setup_type=setup_type,
-                status=status_label,
-                summary=f"{coin_upper} perp OI {vel_pct:+.1f}% (${oi_b:.2f}B)",
+                timeframe="intraday" if (oi_delta_5m or 0) > 5 else "2-10d",
+                setup_type=asset.get("setupType") or "matrix_ranked",
+                summary=(f"{sym} Matrix:{matrix_signal} "
+                         f"Q={structural_q:.2f} Score={int(composite*100)}"),
                 signals={
-                    "hyperliquid":    round(float(oi_sig), 4),
-                    "momentum":       round(float(mom_sig), 4),
-                    "rel_volume":     vol_sig,
+                    "hyperliquid": round(oi_sig, 4),
+                    "momentum":    round(mom_sig, 4),
+                    "rel_volume":  round(vol_sig, 4),
                 },
                 evidence=evidence,
                 source_pages=["hyperliquid"],
             )
+            c["hyperliquid_quality_gate"] = quality_gate
+            c["tsm_quality"]             = round(structural_q, 4)
+            c["matrix_signal"]           = matrix_signal
             candidates.append(c)
 
-        # Also harvest crypto matrix rows not already in snapshots
-        for sym, asset in matrix_rows.items():
-            if any(c["symbol"] == sym for c in candidates):
-                continue
-            chg_pct = asset.get("24h_change_pct") or asset.get("price_change_24h_pct")
-            if chg_pct is None:
-                continue
-            try:
-                chg = float(chg_pct)
-            except Exception:
-                continue
-            if abs(chg) < 3.0:
-                continue   # skip low-volatility matrix entries
+        # ── Fallback: OI-velocity-only if matrix cache is cold ────────────────
+        if not candidates and oi_snap_vel and snap_sf > 0.0:
+            oi_list = sorted(oi_snap_vel.items(), key=lambda x: abs(x[1]), reverse=True)
+            for coin, velocity in oi_list[:30]:
+                oi_usd  = oi_snap_oi.get(coin, 0)
+                oi_sig  = _clamp01(min(abs(velocity) / 0.30, 1.0) * snap_sf)
+                mom_sig = _clamp01(abs(velocity) / 0.20 * snap_sf)
+                direction = "long" if velocity > 0.02 else "short" if velocity < -0.02 else "watch"
+                oi_b = oi_usd / 1e9 if oi_usd else 0
+                c = _make_candidate(
+                    coin,
+                    asset_type="perp",
+                    direction=direction,
+                    timeframe="intraday" if abs(velocity) > 0.15 else "2-10d",
+                    setup_type="oi_expansion" if velocity > 0 else "oi_contraction",
+                    summary=f"{coin} perp OI {velocity*100:+.1f}% (${oi_b:.2f}B)",
+                    signals={
+                        "hyperliquid": round(oi_sig, 4),
+                        "momentum":    round(mom_sig, 4),
+                    },
+                    evidence=[f"OI velocity: {velocity*100:+.1f}% (${oi_b:.2f}B)"],
+                    source_pages=["hyperliquid"],
+                )
+                c["hyperliquid_quality_gate"] = "oi_only_fallback"
+                candidates.append(c)
 
-            mom_sig = _clamp01((abs(chg) - 3.0) / 20.0 * sf)
-            c = _make_candidate(
-                sym,
-                asset_type=asset.get("asset_type", "crypto"),
-                direction="long" if chg > 0 else "short",
-                timeframe="intraday",
-                summary=f"{sym} +{chg:.1f}% 24h on Hyperliquid",
-                signals={"momentum": round(mom_sig, 4)},
-                evidence=[f"24h move: {chg:+.1f}%"],
-                source_pages=["hyperliquid"],
-            )
-            candidates.append(c)
+        # Store diagnostic counters for diagnostics endpoint
+        _HL_DIAG["rejected_pump"]    = rejected_pump[:]
+        _HL_DIAG["rejected_crowded"] = rejected_crowded[:]
+        _HL_DIAG["accepted_tsm"]     = accepted_tsm[:]
+
+        print(f"[daily-alpha] hyperliquid candidates={len(candidates)} "
+              f"accepted_tsm={len(accepted_tsm)} rejected_pump={len(rejected_pump)} "
+              f"rejected_crowded={len(rejected_crowded)}")
 
         status = "ok" if candidates else "missing"
-        if sf < 1.0:
-            status = "stale"
         return candidates, status
 
     except Exception as exc:
@@ -1684,6 +2018,14 @@ def build_daily_alpha_board(
             "unsafe_sources_skipped": unsafe_sources_skipped,
             "source_modes": {
                 k: "cache_only" for k in sh.health
+            },
+            "crypto_quality_gates": {
+                "accepted_tsm_count":     len(_HL_DIAG.get("accepted_tsm", [])),
+                "rejected_pump_count":    len(_HL_DIAG.get("rejected_pump", [])),
+                "rejected_crowded_count": len(_HL_DIAG.get("rejected_crowded", [])),
+                "accepted_tsm":     _HL_DIAG.get("accepted_tsm", [])[:10],
+                "rejected_pump":    _HL_DIAG.get("rejected_pump", [])[:10],
+                "rejected_crowded": _HL_DIAG.get("rejected_crowded", [])[:10],
             },
         } if include_diagnostics else None,
     }

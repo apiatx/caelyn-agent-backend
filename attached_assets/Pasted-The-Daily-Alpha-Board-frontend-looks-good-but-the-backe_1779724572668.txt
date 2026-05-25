@@ -1,0 +1,226 @@
+The Daily Alpha Board frontend looks good, but the backend ranking needs another quality pass.
+
+Important:
+Do not add any external API calls.
+Do not call FMP, Tradier, Finnhub, Polygon, TwelveData, Yahoo, Grok, Gemini, Perplexity, OpenAI, Anthropic, or Hyperliquid live endpoints.
+Only use data already cached, snapshotted, or already returned to existing pages.
+
+Main issues to fix:
+
+1. Hyperliquid is ranking sudden scam-pump shitcoins too highly.
+Example: HMSTR got recommended after a sudden pump but was already dumping back down.
+The Daily Alpha Board should use logic much closer to the existing Hyperliquid page's time-series momentum logic, not simple short-term pump/volume/OI logic.
+
+2. Stock ranking is not properly accounting for:
+- upcoming earnings dates
+- very recent earnings beats
+- stocks building momentum into upcoming events
+- stocks that recently beat earnings and are starting to trend
+- watchlist names with early base/stage 1-to-2 setups
+- emerging theme names that are not extended yet
+
+3. Watchlist stocks should use a time-series momentum / stage-analysis style ranking:
+- emerging theme alignment
+- stage 1/2 transition
+- large base / cup-and-handle / compression
+- recent dip but improving momentum
+- early trend resumption before the move fully rips
+- avoid already-overextended names unless momentum continuation is very clean
+
+Do this surgically inside services/daily_alpha_board_service.py.
+
+Do not change the frontend contract except to add optional fields if useful.
+Do not break existing endpoint response shape.
+
+Required changes:
+
+A. Replace/upgrade Hyperliquid scoring quality gates
+
+Find the current Hyperliquid/crypto candidate collector and scoring logic.
+
+Instead of rewarding sudden 1-bar pumps, score Hyperliquid candidates using existing cached Hyperliquid page outputs that already represent time-series momentum / matrix signal quality.
+
+Prefer fields already used on the Hyperliquid page such as:
+- time_series_momentum
+- matrix_score
+- signal
+- signal_label
+- trend_score
+- momentum_score
+- oi_delta_15m / oi_change
+- volume_velocity / vol_15m
+- funding
+- premium / basis
+- liquidation bias
+- volatility expansion
+- risk flags
+- asset class / display coin dedupe
+- any existing “long candidate” / “short candidate” / “momentum” classification from the Hyperliquid page
+
+Only use whatever exists in cached snapshots. Do not fetch live Hyperliquid.
+
+Add Hyperliquid anti-pump filters:
+
+- Penalize coins with huge very-short-term pump but weak sustained time-series momentum.
+- Penalize assets where 15m/short-window move is extreme but 1h/4h/longer trend confirmation is missing.
+- Penalize assets with signs of blowoff/reversal:
+  - extreme volume spike without trend confirmation
+  - OI spike followed by price fade if available
+  - high liquidation/pump imbalance against the trade
+  - funding/premium overly crowded in same direction
+  - signal label/risk flag suggests crowded, unstable, or squeeze-only move
+- Penalize low-quality/illiquid/meme/scam-style tickers if existing metadata or symbol quality maps exist.
+- Require a sustained momentum confirmation for long ideas:
+  - time-series momentum positive
+  - matrix signal bullish/constructive
+  - not marked as high-risk pump/chop
+  - not just a single short-term velocity spike
+
+Add a `hyperliquid_quality_gate` field or diagnostic reason where useful:
+- "passed_tsm"
+- "failed_pump_filter"
+- "failed_sustained_momentum"
+- "crowded_funding"
+- "illiquid_or_low_quality"
+- "watch_only"
+
+If the candidate fails quality gates, either exclude it from Top 10 or mark as watch_only with low/medium confidence.
+
+HMSTR-like names should not appear as high-conviction long ideas unless the existing Hyperliquid time-series momentum page would also support them.
+
+B. Reuse existing Hyperliquid time-series momentum output directly if possible
+
+Search the backend for the exact service/function/cache used by the Hyperliquid page for time-series momentum.
+
+If there is an existing cached time-series momentum list or Matrix ranking, use that as the primary source for crypto/perp ranking.
+
+The Daily Alpha Board should not invent a separate inferior crypto model if the Hyperliquid page already has a better one.
+
+Preferred order:
+1. Existing Hyperliquid time-series momentum cached ranking
+2. Existing Hyperliquid Matrix cached signal ranking
+3. Other Hyperliquid snapshots only as supporting evidence
+
+C. Improve stock catalyst/earnings scoring
+
+The board should recognize stocks with:
+- earnings coming up soon
+- recent earnings beats
+- momentum building into earnings
+- recent post-earnings strength
+- catalyst proximity plus theme/watchlist support
+
+Use only existing cached catalyst/earnings snapshots already used by the Calendar/Earnings/Catalyst pages.
+
+No new FMP/Finnhub calls.
+
+Add/strengthen stock catalyst fields:
+- next_earnings_date if available
+- days_to_earnings if available
+- recent_earnings_date if available
+- earnings_result / beat/miss if cached
+- eps_surprise / revenue_surprise if cached
+- catalyst_type
+- catalyst_score
+- catalyst_window
+
+Scoring rules:
+- Boost stocks with upcoming earnings within roughly 3–21 calendar days if they also have momentum/theme/TA support.
+- Boost stocks with recent earnings beats in the last roughly 1–10 trading days if they are showing positive momentum or relative strength.
+- Do not boost earnings proximity alone. Earnings date must combine with at least one timing/momentum signal.
+- Penalize upcoming earnings if the setup is extended, weak, or risk-off without confirmation.
+- Add evidence text like:
+  - "Earnings in 8 days with improving momentum"
+  - "Recent earnings beat + post-event strength"
+  - "Catalyst window active, but setup not confirmed"
+
+D. Improve watchlist stock time-series momentum / stage setup logic
+
+For watchlist stocks, add a watchlist momentum setup score based on existing cached data only.
+
+Use any existing fields from Watchlist, Themes, Strategy, TA, Social Screener, Portfolio Terminal, or snapshots:
+- 1D / 5D / 1M / 3M / 6M returns if available
+- stage classification if available
+- moving average relationship if available
+- relative strength
+- rel volume / volX if cached
+- theme strength
+- drawdown from highs if available
+- base duration / compression if available
+- breakout proximity if available
+- strategy screener setup labels if cached
+- cup/handle/base/breakout labels if any existing logic already identifies these
+
+Add setup buckets:
+- "stage_1_to_2_base"
+- "cup_handle_watch"
+- "early_breakout"
+- "momentum_resumption"
+- "post_earnings_momentum"
+- "catalyst_build"
+- "dip_reversal_watch"
+- "extended_momentum"
+
+Desired behavior:
+- Surface emerging theme watchlist names before they fully rip.
+- Surface stocks in large bases / stage 1-to-2 transitions.
+- Surface momentum names that dipped and are starting to reclaim trend.
+- Avoid ranking stocks purely because they are already very extended.
+- Avoid ranking “good companies” if there is no actionable setup.
+
+E. Add stronger actionability gates for Top 10
+
+For a stock to be high-confidence Top 10, require:
+- at least 2 independent signal categories
+- at least 1 timing signal
+- not stale-only
+- not theme-only
+- preferably catalyst/momentum/TA/watchlist confirmation
+
+For Hyperliquid long candidates, require:
+- sustained momentum or matrix confirmation
+- not just short-term pump
+- not crowded/reversal flagged
+- not low-quality pump token unless strong sustained confirmation exists
+
+Add fields to each idea if easy:
+- actionability_score
+- timing_quality
+- extension_risk
+- catalyst_window
+- tsm_quality for crypto/perps
+- quality_gate_reason
+
+F. Diagnostics
+
+Update /api/home/daily-alpha-board/diagnostics to include:
+- hyperliquid candidates rejected by pump filter
+- hyperliquid candidates accepted by time-series momentum
+- earnings/catalyst candidates found
+- recent earnings beat candidates found
+- watchlist stage/momentum candidates found
+- count of excluded theme-only candidates
+- count of excluded pump/chop crypto candidates
+
+Keep top-level guarantees:
+- mode: cache_only
+- external_api_calls: 0
+- provider_calls_blocked: true
+- provider_call_attempts: []
+- unsafe_sources_skipped: []
+
+G. Validation probes
+
+Run and report:
+1. Main endpoint returns 200.
+2. external_api_calls remains 0.
+3. provider_call_attempts remains [].
+4. asset_type=crypto does not rank HMSTR-like sudden pump names high unless they pass sustained TSM quality.
+5. asset_type=crypto top ideas align with the existing Hyperliquid page’s time-series momentum recommendations.
+6. stock top ideas include catalyst/earnings evidence when applicable.
+7. watchlist names with stage 1/2, base, early breakout, or momentum resumption logic are surfaced.
+8. theme-only candidates remain capped/watch-only.
+9. Refresh only rebuilds aggregator ranking and does not fetch providers.
+10. Frontend response shape remains backward compatible.
+
+Do not touch frontend yet.

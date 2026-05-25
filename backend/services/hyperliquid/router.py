@@ -963,6 +963,20 @@ def get_matrix_stocks_snapshot() -> list[dict]:
     return []
 
 
+def get_matrix_perps_snapshot() -> list[dict]:
+    """
+    Return the crypto/perp assets from the latest market-matrix cache.
+    Used by the Daily Alpha Board for zero-API-call crypto ranking.
+    Returns an empty list on cold start (before first matrix request).
+    """
+    for key in ("payload", "last_good"):
+        cached = _matrix_cache.get(key)
+        if cached:
+            tabs = cached.get("tabs", {})
+            return tabs.get("crypto", {}).get("assets", [])
+    return []
+
+
 @router.get("/market-matrix")
 async def get_market_matrix():
     """
