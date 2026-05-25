@@ -1,0 +1,161 @@
+The Daily Alpha Board needs a directional philosophy fix.
+
+Current issue:
+It is sometimes giving stock short/reduce signals for leading thematic stocks going into earnings, e.g. language like:
+“RSI 80 extremely overbought; reduce exposure and wait for pullback to $115–120”
+or suggesting short signals on leading stocks.
+
+That is wrong for this product.
+
+The Daily Alpha Board should primarily be:
+- the top stock/ETF long watchlist for TODAY / this week
+- strongest highest-confidence imminent long setups
+- good entries that may not last long
+- thematic winners, catalyst builds, stage 1-to-2 / stage 2 momentum setups, post-earnings strength, and early breakout/watch setups
+
+Do not treat overbought RSI alone as a bearish/short signal for stocks.
+
+Hard rules:
+
+1. Stocks/ETFs should never receive direction="short" from this endpoint.
+- For asset_type stock or etf, allowed directions are only:
+  - "long"
+  - "watch"
+- If existing logic produces "short" for a stock/ETF, convert it to "watch" or exclude it.
+- Do not rank stock shorts in the main Daily Alpha Board.
+
+2. Do not short thematic winners into earnings.
+If a stock is:
+- in a strong theme
+- has upcoming earnings within roughly 3–21 days
+- has momentum / relative strength / watchlist confirmation
+Then high RSI or extension should become an entry-risk note, not a short signal.
+
+Example:
+Bad:
+“RSI 80 extremely overbought; short / reduce exposure.”
+
+Good:
+“Extended near-term; watch for tight consolidation, VWAP reclaim, or controlled pullback before entry.”
+
+3. Reframe extension/RSI logic for stocks.
+For stocks:
+- Overbought RSI should lower entry_quality or timing_quality if extreme.
+- It should not flip direction to short.
+- It can change status to:
+  - "extended_watch"
+  - "wait_for_pullback"
+  - "watch_only"
+- It can add risks:
+  - "Extended near-term"
+  - "Better entry may come on consolidation"
+  - "Avoid chasing a vertical move"
+- But it should not create short thesis language.
+
+4. Main board should prioritize imminent long setups.
+Rank stocks higher when they have:
+- strong theme alignment
+- stage 1-to-2 or stage 2 setup
+- base / cup-and-handle / compression
+- momentum resumption after dip
+- upcoming earnings with momentum building
+- recent earnings beat with post-event strength
+- catalyst window plus relative strength
+- watchlist or portfolio relevance
+- non-stale timing signal
+
+5. Weak stocks should be excluded, not shorted.
+If a stock has weak fundamentals, weak theme, weak TA, no catalyst, or poor momentum:
+- do not show it as a short
+- just exclude it from the main board
+- or mark it low-confidence watch_only only if there is a valid long setup forming
+
+6. Hyperliquid exception:
+Short signals are allowed only for Hyperliquid crypto/perps, and only under strict conditions:
+- sudden huge pump over minutes to 2 days
+- low-quality / meme / shitcoin behavior
+- weak sustained time-series momentum
+- Matrix signal says AVOID/CROWDED/reversal-risk
+- blowoff / OI spike / funding crowding / price fade conditions
+- clear pump-and-dump / fade setup
+
+Even then:
+- direction="short" should only be used for asset_type crypto/perp
+- add setup_type like "pump_fade_short" or "blowoff_reversal"
+- confidence should depend on quality of reversal evidence
+- do not mix these into the primary long board unless shorts are enabled or market regime strongly favors shorts
+
+7. Add board_mode.
+Add a top-level response field:
+
+board_mode: "long_watchlist"
+
+Default behavior:
+- Main endpoint returns long/watch ideas only for stocks and ETFs.
+- Crypto/perps can be long/watch by default.
+- Crypto short/fade candidates should either be excluded from main ideas or returned in an optional separate field:
+  crypto_short_candidates
+
+Optional future query param:
+direction=long_only|all|shorts
+
+For now default should behave like long_only for stocks.
+
+8. Change summary/evidence language.
+Remove language that sounds like direct stock shorting or “reduce exposure” from main idea summaries.
+
+For stock/ETF ideas, use language like:
+- “High-conviction long watch”
+- “Momentum build into catalyst”
+- “Extended but still a leader”
+- “Wait for controlled pullback or consolidation”
+- “Entry quality improves on reset”
+- “Do not chase vertical extension”
+
+Avoid:
+- “short”
+- “reduce exposure”
+- “bearish because RSI overbought”
+- “sell due to RSI”
+- “overbought, fade it”
+
+9. Add fields if helpful:
+- long_bias: true
+- entry_quality: "good" | "extended" | "wait_for_pullback" | "early"
+- extension_risk: "low" | "medium" | "high"
+- preferred_action:
+  - "watch_for_entry"
+  - "active_long_setup"
+  - "wait_for_pullback"
+  - "momentum_continuation"
+  - "post_earnings_watch"
+  - "pre_earnings_build"
+
+10. Diagnostics:
+Update diagnostics to report:
+- stock_shorts_suppressed count
+- stock_short_candidates_converted_to_watch count
+- stock_extension_notes_added count
+- crypto_short_candidates count
+- long_watchlist_mode: true
+
+11. Validation probes:
+Run:
+- /api/home/daily-alpha-board
+- /api/home/daily-alpha-board?asset_type=stocks
+- /api/home/daily-alpha-board?asset_type=crypto
+- /api/home/daily-alpha-board?diagnostics=true
+
+Confirm:
+- No stock/ETF idea has direction="short"
+- Stock/ETF summaries do not recommend shorting
+- Leading thematic earnings names are treated as long/watch, not shorts
+- RSI/extension appears only as entry risk, not bearish thesis
+- Hyperliquid crypto/perps may have shorts only if pump-fade gates pass
+- external_api_calls remains 0
+- provider_call_attempts remains []
+- response shape remains backward compatible for frontend
+
+Do not add any external API/provider calls.
+Do not call live Hyperliquid.
+Only use existing cached/snapshotted data.
