@@ -103,6 +103,11 @@ _PUMP_OI_15M_PCT_THRESH = 20.0   # >20% in 15m = suspicious
 _PUMP_24H_NO_TSM        = 0.20   # >20% 24h without structural quality = pump
 _MIN_STRUCT_Q_HIGH      = 0.28   # structural quality below this = low quality
 
+# High-confidence crypto thresholds
+_MIN_STRUCT_Q_HARD_EXCLUDE = 0.35  # pump + below this → hard exclude (not penalize)
+_MIN_STRUCT_Q_HIGH_CONF    = 0.45  # required for high confidence crypto ideas
+_OI_ONLY_MAX_SIGNAL        = 0.68  # hard cap on all signals for OI-only fallback (~69/100 score)
+
 # Module-level diagnostic counters populated by the Hyperliquid collector
 _HL_DIAG: dict = {
     "rejected_pump":    [],
@@ -1497,15 +1502,27 @@ def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
     """
     ZERO external API calls. Uses only in-process matrix cache + disk OI snapshots.
 
-    PRIMARY source: get_matrix_perps_snapshot() — the same time-series momentum
-    and matrix signal ranking the Hyperliquid page uses.  OI velocity from
-    hyperliquid_signal_snapshots.json is used as corroborating evidence only.
+    PRIMARY source: get_matrix_perps_snapshot() — matrix-ranked, multi-factor scored.
+    OI velocity from hyperliquid_signal_snapshots.json is corroboration only.
 
-    Anti-pump gates:
-      - Rejects candidates with sudden OI/price spikes but weak structural quality.
-      - Rejects CROWDED/AVOID matrix signals for long ideas.
-      - Penalizes crowded funding and exhaustion signals.
-      - Requires sustained momentum confirmation for high-conviction ideas.
+    Confidence rules (matrix path):
+      HIGH   → matrix_signal=LONG, structuralQuality>=0.45, momentum>=0.45,
+                trend>=0.40, quality_gate=passed_tsm, no pump detected
+      MEDIUM → matrix_signal in (LONG, WATCH), structuralQuality>=0.28,
+                no pump, WATCH requires momentum+trend both >=0.70
+      LOW    → everything else that passes hard gates
+
+    Hard-exclude rules:
+      • avoidScore>0.72 or collapseRiskScore>0.72
+      • CROWDED/AVOID matrix signal for a long idea
+      • pump detected AND structuralQuality < 0.35
+      • cumulative penalty < 0.40 after soft gates
+
+    OI-only fallback (matrix cache cold):
+      • All candidates → direction=watch, confidence=medium
+      • All signal values capped at 0.68 (~score ≤ 69/100)
+      • hyperliquid_quality_gate = "matrix_cache_cold_oi_only"
+      • Source status returned as "matrix_cache_cold"
     """
     try:
         # ── PRIMARY: matrix-ranked perps (in-process cache, zero API calls) ─────
@@ -1517,14 +1534,14 @@ def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
             pass
 
         # ── SECONDARY: OI velocity from disk snapshot (corroboration only) ───────
-        oi_snap_vel: dict[str, float] = {}   # coin_upper → fractional velocity
-        oi_snap_oi:  dict[str, float] = {}   # coin_upper → latest OI USD
-        snap_sf = 0.85   # default: treat matrix as fresh
+        oi_snap_vel: dict[str, float] = {}
+        oi_snap_oi:  dict[str, float] = {}
+        snap_sf = 0.85
         raw_snap = _load_json_safe(_HL_SNAP_PATH)
         if raw_snap:
-            saved_at = float(raw_snap.get("saved_at") or 0)
+            saved_at   = float(raw_snap.get("saved_at") or 0)
             snap_age_s = _source_age_s(saved_at if saved_at else None)
-            snap_sf = _staleness_factor(snap_age_s) or 0.85
+            snap_sf    = _staleness_factor(snap_age_s) or 0.85
             for coin, pts in (raw_snap.get("snapshots") or {}).items():
                 if not pts or len(pts) < 2:
                     continue
@@ -1535,16 +1552,17 @@ def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
                     oi_snap_vel[coin.upper()] = (last_oi - first_oi) / first_oi
                     oi_snap_oi[coin.upper()]  = last_oi
 
-        # If no matrix AND no snap → empty
         if not perps and not oi_snap_vel:
             return [], "missing"
 
-        candidates: list[dict] = []
-        rejected_pump:    list[str] = []
-        rejected_crowded: list[str] = []
-        accepted_tsm:     list[str] = []
+        candidates:       list[dict] = []
+        rejected_pump:    list[str]  = []
+        rejected_crowded: list[str]  = []
+        accepted_tsm:     list[str]  = []
 
-        # ── Process matrix perps (primary path) ──────────────────────────────────
+        # ══════════════════════════════════════════════════════════════════════
+        # PATH A: Matrix-backed candidates (rich signals, full confidence rules)
+        # ══════════════════════════════════════════════════════════════════════
         seen_syms: set[str] = set()
         for asset in perps[:100]:
             sym = (asset.get("displaySymbol") or asset.get("coin") or "").upper().strip()
@@ -1555,7 +1573,6 @@ def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
             matrix_signal = (asset.get("matrixSignal") or "").upper()
             signal_dir    = (asset.get("signalDirection") or "watch").lower()
 
-            overall      = float(asset.get("overallScore")           or 0)
             composite    = float(asset.get("compositeSignal")        or 0)
             structural_q = float(asset.get("structuralQualityScore") or 0)
             momentum_sc  = float(asset.get("momentum")              or 0)
@@ -1568,63 +1585,66 @@ def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
             funding_label = (asset.get("fundingLabel") or "").lower()
             market_type   = (asset.get("marketType")  or "perp").lower()
 
-            oi_delta_5m  = asset.get("oiDelta5mPct")    # already in %
+            oi_delta_5m  = asset.get("oiDelta5mPct")
             oi_delta_15m = asset.get("oiDelta15mPct")
-            change_24h   = asset.get("change24hPct")    # decimal
+            change_24h   = asset.get("change24hPct")
 
-            # OI velocity corroboration from snapshot
-            oi_vel   = oi_snap_vel.get(sym) or oi_snap_vel.get(sym.replace("-PERP", ""))
-            oi_usd   = oi_snap_oi.get(sym)  or oi_snap_oi.get(sym.replace("-PERP", "")) or 0
+            oi_vel = oi_snap_vel.get(sym) or oi_snap_vel.get(sym.replace("-PERP", ""))
+            oi_usd = oi_snap_oi.get(sym)  or oi_snap_oi.get(sym.replace("-PERP", "")) or 0
 
-            # ── Hard-exclude gates ────────────────────────────────────────────
-            # 1. Avoid/collapse — not actionable for longs
+            # ── Hard-exclude gate 1: avoid/collapse ───────────────────────────
             if avoid_sc > 0.72 or collapse_sc > 0.72:
                 rejected_pump.append(sym)
                 continue
 
-            # 2. Matrix explicitly labels as CROWDED or AVOID for long ideas
+            # ── Hard-exclude gate 2: CROWDED/AVOID matrix signal for longs ────
             if matrix_signal in _CRYPTO_MATRIX_AVOID and signal_dir not in ("short", "bearish"):
                 rejected_crowded.append(sym)
                 continue
 
-            # ── Soft-penalty gates ────────────────────────────────────────────
-            quality_gate = "passed_tsm"
-            penalty      = 1.0
-
-            # 3. Extreme short-window OI spike without sustained quality
+            # ── Pump detection (before hard-exclude gate 3) ───────────────────
+            quality_gate  = "passed_tsm"
+            penalty       = 1.0
             pump_detected = False
+
             if oi_delta_5m is not None and abs(oi_delta_5m) > _PUMP_OI_5M_PCT_THRESH:
                 if structural_q < _MIN_STRUCT_Q_HIGH and trend_sc < 0.40:
-                    pump_detected  = True
-                    quality_gate   = "failed_pump_filter"
-                    penalty       *= 0.58
+                    pump_detected = True
+                    quality_gate  = "failed_pump_filter"
+                    penalty      *= 0.58
 
             if oi_delta_15m is not None and abs(oi_delta_15m) > _PUMP_OI_15M_PCT_THRESH:
                 if structural_q < _MIN_STRUCT_Q_HIGH and momentum_sc < 0.35:
-                    pump_detected  = True
-                    quality_gate   = "failed_pump_filter"
-                    penalty       *= 0.55
+                    pump_detected = True
+                    quality_gate  = "failed_pump_filter"
+                    penalty      *= 0.55
 
-            # 4. Big 24h move without structural quality
             if change_24h is not None:
                 chg24 = float(change_24h)
                 if abs(chg24) > _PUMP_24H_NO_TSM and structural_q < _MIN_STRUCT_Q_HIGH:
-                    pump_detected  = True
-                    quality_gate   = "failed_pump_filter"
-                    penalty       *= 0.65
+                    pump_detected = True
+                    quality_gate  = "failed_pump_filter"
+                    penalty      *= 0.65
 
-            # Drop if pump evidence is overwhelming
+            # ── Hard-exclude gate 3: pump + structuralQuality too weak ─────────
+            # Even soft-penalty cannot redeem a candidate that has a pump signal
+            # and no structural foundation at all.
+            if pump_detected and structural_q < _MIN_STRUCT_Q_HARD_EXCLUDE:
+                rejected_pump.append(sym)
+                continue
+
+            # Drop if accumulated penalty is overwhelming
             if pump_detected and penalty < 0.40:
                 rejected_pump.append(sym)
                 continue
 
-            # 5. Crowded funding reduces conviction
+            # ── Soft-penalty: crowded funding ─────────────────────────────────
             if "crowded" in funding_label:
                 if quality_gate == "passed_tsm":
                     quality_gate = "crowded_funding"
                 penalty *= 0.80
 
-            # 6. Exhaustion for long ideas
+            # ── Soft-penalty: exhaustion for long ideas ───────────────────────
             if exhaust_sc > 0.55 and signal_dir in ("long", "bullish"):
                 if quality_gate == "passed_tsm":
                     quality_gate = "failed_sustained_momentum"
@@ -1633,11 +1653,32 @@ def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
             if quality_gate == "passed_tsm":
                 accepted_tsm.append(sym)
 
+            # ── Confidence derivation (matrix path) ───────────────────────────
+            # HIGH: LONG signal + strong structural foundation + no red flags
+            if (matrix_signal == "LONG"
+                    and structural_q >= _MIN_STRUCT_Q_HIGH_CONF
+                    and momentum_sc  >= 0.45
+                    and trend_sc     >= 0.40
+                    and quality_gate == "passed_tsm"
+                    and not pump_detected):
+                confidence_label = "high"
+            # MEDIUM: LONG or WATCH + meets minimum quality bar
+            elif (matrix_signal in ("LONG", "WATCH")
+                  and structural_q >= _MIN_STRUCT_Q_HIGH
+                  and not pump_detected
+                  and quality_gate in ("passed_tsm", "crowded_funding")):
+                if matrix_signal == "WATCH":
+                    # WATCH → medium only if sustained momentum+trend are strong
+                    confidence_label = "medium" if (momentum_sc >= 0.70 and trend_sc >= 0.70) else "low"
+                else:
+                    confidence_label = "medium"
+            else:
+                confidence_label = "low"
+
             # ── Score ─────────────────────────────────────────────────────────
             base = (composite * 0.40 + structural_q * 0.30
                     + momentum_sc * 0.15 + trend_sc * 0.10 + flow_sc * 0.05)
 
-            # OI velocity corroboration boost
             if oi_vel is not None:
                 if (oi_vel > 0.03 and signal_dir in ("long", "bullish")) or \
                    (oi_vel < -0.03 and signal_dir in ("short", "bearish")):
@@ -1678,6 +1719,7 @@ def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
                 sym,
                 asset_type=at,
                 direction=direction,
+                confidence=confidence_label,
                 timeframe="intraday" if (oi_delta_5m or 0) > 5 else "2-10d",
                 setup_type=asset.get("setupType") or "matrix_ranked",
                 summary=(f"{sym} Matrix:{matrix_signal} "
@@ -1695,42 +1737,58 @@ def collect_hyperliquid_cache_candidates() -> tuple[list[dict], str]:
             c["matrix_signal"]           = matrix_signal
             candidates.append(c)
 
-        # ── Fallback: OI-velocity-only if matrix cache is cold ────────────────
+        # ══════════════════════════════════════════════════════════════════════
+        # PATH B: OI-only fallback — matrix cache is cold (server cold start)
+        # All candidates are watch/medium with score capped at ~69/100.
+        # Prefer stock candidates — these are only included if no matrix data.
+        # ══════════════════════════════════════════════════════════════════════
+        oi_only_used = False
         if not candidates and oi_snap_vel and snap_sf > 0.0:
+            oi_only_used = True
             oi_list = sorted(oi_snap_vel.items(), key=lambda x: abs(x[1]), reverse=True)
-            for coin, velocity in oi_list[:30]:
+            for coin, velocity in oi_list[:20]:
                 oi_usd  = oi_snap_oi.get(coin, 0)
-                oi_sig  = _clamp01(min(abs(velocity) / 0.30, 1.0) * snap_sf)
-                mom_sig = _clamp01(abs(velocity) / 0.20 * snap_sf)
-                direction = "long" if velocity > 0.02 else "short" if velocity < -0.02 else "watch"
-                oi_b = oi_usd / 1e9 if oi_usd else 0
+                # Hard cap all signals at _OI_ONLY_MAX_SIGNAL so score ≤ ~69/100
+                oi_sig  = min(_clamp01(min(abs(velocity) / 0.30, 1.0) * snap_sf), _OI_ONLY_MAX_SIGNAL)
+                mom_sig = min(_clamp01(abs(velocity) / 0.20 * snap_sf), _OI_ONLY_MAX_SIGNAL)
+                oi_b    = oi_usd / 1e9 if oi_usd else 0
                 c = _make_candidate(
                     coin,
                     asset_type="perp",
-                    direction=direction,
-                    timeframe="intraday" if abs(velocity) > 0.15 else "2-10d",
-                    setup_type="oi_expansion" if velocity > 0 else "oi_contraction",
-                    summary=f"{coin} perp OI {velocity*100:+.1f}% (${oi_b:.2f}B)",
+                    direction="watch",       # never long/short without matrix
+                    confidence="medium",     # hard cap — no matrix = no high confidence
+                    timeframe="2-10d",
+                    setup_type="oi_watch",
+                    summary=f"{coin} OI vel {velocity*100:+.1f}% (matrix cache cold — watch only)",
                     signals={
                         "hyperliquid": round(oi_sig, 4),
                         "momentum":    round(mom_sig, 4),
                     },
-                    evidence=[f"OI velocity: {velocity*100:+.1f}% (${oi_b:.2f}B)"],
+                    evidence=[
+                        f"OI velocity: {velocity*100:+.1f}% (${oi_b:.2f}B)",
+                        "⚠ Matrix cache cold — no multi-factor confirmation available",
+                    ],
                     source_pages=["hyperliquid"],
                 )
-                c["hyperliquid_quality_gate"] = "oi_only_fallback"
+                c["hyperliquid_quality_gate"] = "matrix_cache_cold_oi_only"
+                c["tsm_quality"]             = None
+                c["matrix_signal"]           = None
                 candidates.append(c)
 
-        # Store diagnostic counters for diagnostics endpoint
+        # ── Diagnostic counters ───────────────────────────────────────────────
         _HL_DIAG["rejected_pump"]    = rejected_pump[:]
         _HL_DIAG["rejected_crowded"] = rejected_crowded[:]
         _HL_DIAG["accepted_tsm"]     = accepted_tsm[:]
 
         print(f"[daily-alpha] hyperliquid candidates={len(candidates)} "
               f"accepted_tsm={len(accepted_tsm)} rejected_pump={len(rejected_pump)} "
-              f"rejected_crowded={len(rejected_crowded)}")
+              f"rejected_crowded={len(rejected_crowded)} "
+              f"oi_only_fallback={oi_only_used}")
 
-        status = "ok" if candidates else "missing"
+        if not candidates:
+            return [], "missing"
+
+        status = "matrix_cache_cold" if oi_only_used else "ok"
         return candidates, status
 
     except Exception as exc:
