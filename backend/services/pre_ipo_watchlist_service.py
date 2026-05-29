@@ -454,6 +454,7 @@ async def _fetch_perplexity_for_company(company: str) -> dict[str, Any]:
     Query Perplexity sonar for IPO/valuation/timing intel.  Returns a dict
     with structured fields plus citations.  Never raises — on failure
     returns an empty skeleton so the caller can still emit the company.
+    Only runs when PERPLEXITY_PAGELOAD_ENABLED=true (default: false).
     """
     empty = {
         "ipo_status":          "Unknown",
@@ -464,8 +465,15 @@ async def _fetch_perplexity_for_company(company: str) -> dict[str, Any]:
         "sources":             [],
     }
 
+    from data.perplexity_guards import pplx_pageload_allowed, pplx_blocked, pplx_allowed
+    if not pplx_pageload_allowed():
+        pplx_blocked("pageload", f"_fetch_perplexity_for_company:{company}")
+        return empty
+
     if not PERPLEXITY_API_KEY:
         return empty
+
+    pplx_allowed("pageload", f"_fetch_perplexity_for_company:{company}")
 
     system_prompt = (
         "You are a financial research assistant. "

@@ -901,17 +901,22 @@ async def _briefing_precompute_loop():
                 data_service.stocktwits.get_trending(),
                 asyncio.to_thread(data_service.finnhub.get_upcoming_earnings),
             ]
-            # News: prefer web_search (Perplexity→Brave→Tavily), FMP free tier is slow/unreliable
-            if data_service.web_search:
+            # News: FMP is primary source. Perplexity only if PERPLEXITY_BACKGROUND_ENABLED=true.
+            from data.perplexity_guards import pplx_background_allowed as _pplx_bg, pplx_blocked as _pplx_blk, pplx_allowed as _pplx_ok
+            if _pplx_bg() and data_service.web_search:
                 briefing_tasks.append(
                     asyncio.wait_for(
                         data_service.web_search.get_market_news(topic="stock market financial news today"),
                         timeout=10.0))
+                _pplx_ok("background", "_briefing_precompute_loop:market_news")
+                print("[BRIEFING_PRECOMPUTE] news source=perplexity_enabled")
             elif data_service.fmp:
                 briefing_tasks.append(
                     asyncio.wait_for(data_service.fmp.get_market_news(limit=15), timeout=8.0))
+                print("[BRIEFING_PRECOMPUTE] news source=fmp")
             else:
                 briefing_tasks.append(asyncio.sleep(0))
+                print("[BRIEFING_PRECOMPUTE] news source=none")
 
             results = await asyncio.gather(*briefing_tasks, return_exceptions=True)
 
@@ -1060,23 +1065,36 @@ async def _briefing_precompute_loop():
                 filler = [t for t in single_signal.keys() if t not in priority_tickers][:remaining_slots]
                 priority_tickers.extend(filler)
 
-            # Pre-cache market news via Perplexity (1 API call per 30-min cycle)
-            web_news = {}
-            if data_service.web_search:
+            # web_news: reuse Phase-1 market_news already fetched above (no second API call).
+            # If PERPLEXITY_BACKGROUND_ENABLED=true the Phase-1 call already used Perplexity;
+            # in all other cases market_news came from FMP so we reuse it here too.
+            web_news_source = "fmp_reuse"
+            if _pplx_bg() and data_service.web_search:
                 from api_budget import daily_budget
                 if daily_budget.can_spend("web_search", 1):
                     try:
-                        web_news = await asyncio.wait_for(
+                        _wn = await asyncio.wait_for(
                             data_service.web_search.get_market_news(
                                 topic="stock market today breaking news"
                             ),
                             timeout=12.0,
                         )
                         daily_budget.spend("web_search", 1)
-                        print(f"[BRIEFING_PRECOMPUTE] Web search: {web_news.get('article_count', 0)} articles cached")
+                        web_news = _wn
+                        web_news_source = "perplexity_enabled"
+                        _pplx_ok("background", "_briefing_precompute_loop:web_news")
+                        print(f"[BRIEFING_PRECOMPUTE] web_news source=perplexity_enabled articles={web_news.get('article_count', 0)}")
                     except Exception as e:
-                        print(f"[BRIEFING_PRECOMPUTE] Web search failed: {e}")
-                        web_news = {}
+                        print(f"[BRIEFING_PRECOMPUTE] Perplexity web_news failed: {e}")
+                        web_news = {"articles": market_news, "article_count": len(market_news), "source": "fmp_reuse"}
+                        web_news_source = "fmp_reuse"
+                else:
+                    _pplx_blk("background", "_briefing_precompute_loop:web_news_budget_stop")
+                    web_news = {"articles": market_news, "article_count": len(market_news), "source": "fmp_reuse"}
+            else:
+                _pplx_blk("background", "_briefing_precompute_loop:web_news_disabled")
+                web_news = {"articles": market_news, "article_count": len(market_news), "source": "fmp_reuse"}
+                print(f"[BRIEFING_PRECOMPUTE] web_news source={web_news_source} (reusing Phase-1 FMP news)")
 
             precomputed = {
                 "macro_snapshot": macro_snapshot,
@@ -4609,6 +4627,21 @@ async def candle_stats(request: Request):
 async def health_budget(request: Request):
     from api_budget import daily_budget
     return daily_budget.status()
+
+
+@app.get("/api/health/perplexity-guards")
+async def perplexity_guards_status(request: Request):
+    """
+    Diagnostic: Perplexity safety guard state and blocked-call counters.
+    Shows which flags are active and how many automatic Perplexity calls
+    have been blocked since boot.
+    """
+    from data.perplexity_guards import guard_diagnostics
+    from api_budget import daily_budget
+    diag = guard_diagnostics()
+    budget = daily_budget.status().get("providers", {}).get("web_search", {})
+    diag["web_search_budget"] = budget
+    return diag
 
 
 # ============================================================

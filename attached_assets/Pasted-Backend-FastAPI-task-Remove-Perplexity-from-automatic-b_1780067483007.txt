@@ -1,0 +1,164 @@
+Backend FastAPI task: Remove Perplexity from automatic/background/page-load/silent fallback paths only. Do NOT change the default AI agent collaborator routing.
+
+Important correction:
+- Do NOT edit backend/agent/caelyn_routing.py for now.
+- Do NOT remove Perplexity from the manual AI Terminal/chat collaborator behavior.
+- Do NOT change the frontend collaborator UI contract.
+- Agent collab is user-triggered/manual and currently working. Leave it alone.
+- Focus only on automatic background loops, startup jobs, page-load enrichment, and silent fallback calls.
+
+Ground rules:
+- Do not rebuild architecture.
+- Do not remove endpoint shapes.
+- Do not break existing page contracts.
+- Preserve working paths.
+- Make surgical changes only.
+- FMP is the primary paid proprietary data source for news/market data.
+- For ticker news fallback, use FMP first, then RSS, then cache/LKG, then Finnhub only if budget-safe. Do not use Perplexity silently.
+- Finnhub limits are low, so RSS should come before Finnhub unless there is already a budgeted Finnhub helper with strict caps.
+- Perplexity must not run from startup, background loops, page-load enrichment, or fallback logic.
+
+Specific changes:
+
+1) Add Perplexity safety flags
+Add centralized env/config helpers with defaults:
+- PERPLEXITY_BACKGROUND_ENABLED=false
+- PERPLEXITY_PAGELOAD_ENABLED=false
+- PERPLEXITY_FALLBACK_ENABLED=false
+
+Behavior:
+- Background loops must not call Perplexity unless PERPLEXITY_BACKGROUND_ENABLED=true.
+- Normal page loads must not call Perplexity unless PERPLEXITY_PAGELOAD_ENABLED=true.
+- Silent fallback paths must not call Perplexity unless PERPLEXITY_FALLBACK_ENABLED=true.
+- Leave manual agent/collab behavior unchanged.
+
+Do not require changing or deleting PERPLEXITY_API_KEY.
+
+2) Fix backend/main.py `_briefing_precompute_loop`
+Audit found two Perplexity market-news calls every 30 minutes:
+- web_search.get_market_news("stock market financial news today")
+- web_search.get_market_news("stock market today breaking news")
+
+Change:
+- Remove Perplexity from the default briefing precompute loop.
+- Replace briefing market-news fetches with existing FMP news/articles/general-news helpers where available.
+- Use one shared cache key for briefing market news.
+- Add LKG fallback so briefing never blanks if FMP/RSS fails.
+- Optional fallback order:
+  a) FMP Articles / General News
+  b) RSS/free existing news helper
+  c) prior cached/LKG briefing news
+  d) empty graceful result
+- Do not call Perplexity unless PERPLEXITY_BACKGROUND_ENABLED=true.
+- Log the source used: fmp/rss/lkg/empty/perplexity_disabled/perplexity_enabled.
+
+3) Fix Whale Watch Perplexity startup and refresh calls
+Audit found:
+- seed_whales() / discover_top_whales_via_perplexity() runs on app startup.
+- refresh_all_whales() can call discover_top_whales_via_perplexity() and discover_famous_investors_via_perplexity() every 24h.
+- These bypass api_budget.
+
+Change:
+- No Perplexity on startup.
+- No Perplexity in 24h refresh by default.
+- Use existing static/hardcoded whale/famous investor fallback list.
+- Use existing stored/cached whale data when available.
+- If useful, enrich with FMP Senate/House trades and insider trades, but do not over-fetch.
+- Keep Whale Watch endpoint response shape unchanged.
+- Add logs showing Perplexity background discovery disabled.
+
+4) Fix Insider Activity AI daily loop
+Audit found:
+- insider_activity_service.py `_ai_daily_loop()` calls run_perplexity_analysis() 5 minutes after startup and daily.
+- It uses sonar-reasoning-pro and bypasses api_budget.
+
+Change:
+- Disable Perplexity from this daily loop by default.
+- Replace with deterministic FMP insider trades / insider statistics / existing scoring logic.
+- If a written AI summary is needed, summarize already-fetched structured data using the existing final reasoning provider, not Perplexity web search.
+- Do not call Perplexity unless PERPLEXITY_BACKGROUND_ENABLED=true.
+- Keep Insider Activity endpoint response shape unchanged.
+
+5) Fix Pre-IPO Watchlist page-load enrichment
+Audit found:
+- pre_ipo_watchlist_service.py `_fetch_perplexity_for_company(company)` can run one Perplexity call per company per page load.
+- The feature is not currently working reliably anyway.
+
+Change:
+- Remove/disable Perplexity from normal Pre-IPO page load.
+- Do not call one Perplexity request per company.
+- Use cached/static/manual metadata where available.
+- If no data exists, return a graceful empty/enrichment_unavailable state.
+- Keep the endpoint and frontend response shape unchanged.
+- Perplexity can only be used here if PERPLEXITY_PAGELOAD_ENABLED=true, but default false.
+
+6) Fix Watchlist ticker-news fallback
+Audit found:
+- watchlist_service.py falls back to `_fetch_news_perplexity(ticker)` when RSS returns empty.
+
+Change:
+- Remove Perplexity as silent fallback.
+- New ticker news fallback order:
+  a) FMP Search Stock News / Stock News for ticker
+  b) existing RSS feeds
+  c) cached/LKG ticker news
+  d) Finnhub company news only if a strict Finnhub budget/cap helper exists
+  e) graceful empty result
+- Do not call Perplexity unless PERPLEXITY_FALLBACK_ENABLED=true.
+- Since Finnhub limits are low, RSS must come before Finnhub unless existing code already uses Finnhub safely.
+
+7) Do NOT change these yet
+Do not modify:
+- backend/agent/caelyn_routing.py
+- default agent collaborator selection
+- AI Terminal manual collaborator behavior
+- frontend collaborator UI
+- Smart Earnings manual Ask Caelyn path
+- Playbook discovery manual validation path
+
+Those are user-triggered/manual and not the immediate background spend problem.
+
+8) Add diagnostics/log proof
+Add or update a diagnostic endpoint/log summary showing:
+- PERPLEXITY_BACKGROUND_ENABLED
+- PERPLEXITY_PAGELOAD_ENABLED
+- PERPLEXITY_FALLBACK_ENABLED
+- count of blocked background Perplexity attempts since boot
+- count of blocked page-load Perplexity attempts since boot
+- count of blocked fallback Perplexity attempts since boot
+- last blocked call site
+- last allowed Perplexity call site, if any
+
+9) Required audit after changes
+Run repo-wide search for:
+- "perplexity"
+- "api.perplexity.ai"
+- "sonar"
+- "get_market_news"
+- "_fetch_news_perplexity"
+- "discover_top_whales_via_perplexity"
+- "discover_famous_investors_via_perplexity"
+- "run_perplexity_analysis"
+- "_fetch_perplexity_for_company"
+
+Report every remaining Perplexity call site with:
+- file
+- function
+- automatic/background/page-load/fallback/manual
+- whether it is guarded
+- which env flag guards it
+- whether it can run on startup
+- whether it can run without explicit user action
+
+10) Runtime validation
+After changes, boot backend and verify:
+- no Perplexity call on startup
+- no Perplexity call after 5 minutes
+- briefing still returns data
+- Whale Watch still returns data
+- Insider Activity still returns data
+- Pre-IPO page does not trigger Perplexity
+- Watchlist ticker news does not trigger Perplexity when RSS is empty
+- AI Terminal/manual collaborator behavior remains unchanged
+
+Return a final report with exact files changed, tests run, and proof that automatic Perplexity calls are stopped.

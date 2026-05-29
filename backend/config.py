@@ -25,3 +25,11 @@ TRADIER_SANDBOX = os.getenv("TRADIER_SANDBOX", "false").lower() in ("true", "1",
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 TAOSTATS_API_KEY = os.getenv("TAOSTATS_API_KEY")
 TAOAPP_API_KEY = os.getenv("TAOAPP_API_KEY")
+
+# ── Perplexity safety flags (all default False) ───────────────────────────────
+# Background loops (briefing precompute, whale watch, insider AI daily loop)
+PERPLEXITY_BACKGROUND_ENABLED = os.getenv("PERPLEXITY_BACKGROUND_ENABLED", "false").lower() in ("true", "1", "yes")
+# Per-page-load enrichment (Pre-IPO Watchlist company enrichment)
+PERPLEXITY_PAGELOAD_ENABLED   = os.getenv("PERPLEXITY_PAGELOAD_ENABLED",   "false").lower() in ("true", "1", "yes")
+# Silent fallback paths (watchlist ticker news when RSS is empty)
+PERPLEXITY_FALLBACK_ENABLED   = os.getenv("PERPLEXITY_FALLBACK_ENABLED",   "false").lower() in ("true", "1", "yes")

@@ -296,10 +296,17 @@ async def discover_top_whales_via_perplexity() -> list[dict]:
     Call Perplexity sonar to discover the top-performing hedge funds/investors
     right now, verify each has a CIK (must be a 13F filer), and return the list.
     Returns [] if Perplexity fails so callers can fall back gracefully.
+    Only runs when PERPLEXITY_BACKGROUND_ENABLED=true.
     """
+    from data.perplexity_guards import pplx_background_allowed, pplx_blocked, pplx_allowed
+    if not pplx_background_allowed():
+        pplx_blocked("background", "discover_top_whales_via_perplexity")
+        logger.info("[WHALE_DISCOVER] PERPLEXITY_BACKGROUND_ENABLED=false — skipping discovery, using default list")
+        return []
     if not _PERPLEXITY_KEY:
         logger.warning("[WHALE_DISCOVER] PERPLEXITY_API_KEY not set — skipping discovery")
         return []
+    pplx_allowed("background", "discover_top_whales_via_perplexity")
 
     system_prompt = (
         "You are a financial research assistant. "
@@ -402,19 +409,25 @@ async def discover_top_whales_via_perplexity() -> list[dict]:
 async def seed_whales() -> None:
     """
     Upsert whales into DB.
-    Attempts Perplexity discovery first; falls back to DEFAULT_WHALES if discovery
-    fails or returns an empty list so the app never breaks.
+    Uses DEFAULT_WHALES list by default (no Perplexity).
+    Perplexity discovery only runs when PERPLEXITY_BACKGROUND_ENABLED=true.
     """
+    from data.perplexity_guards import pplx_background_allowed, pplx_blocked
     whales_to_seed: list[dict] = []
-    try:
-        discovered = await discover_top_whales_via_perplexity()
-        if discovered:
-            whales_to_seed = discovered
-        else:
-            logger.info("[WHALE] Discovery returned nothing — using default whale list")
+    if pplx_background_allowed():
+        try:
+            discovered = await discover_top_whales_via_perplexity()
+            if discovered:
+                whales_to_seed = discovered
+            else:
+                logger.info("[WHALE] Discovery returned nothing — using default whale list")
+                whales_to_seed = DEFAULT_WHALES
+        except Exception as e:
+            logger.error("[WHALE] Discovery error (%s) — falling back to default list", e)
             whales_to_seed = DEFAULT_WHALES
-    except Exception as e:
-        logger.error("[WHALE] Discovery error (%s) — falling back to default list", e)
+    else:
+        pplx_blocked("background", "seed_whales:discover_top_whales")
+        logger.info("[WHALE] PERPLEXITY_BACKGROUND_ENABLED=false — using default whale list directly")
         whales_to_seed = DEFAULT_WHALES
 
     conn = _get_conn()
@@ -620,10 +633,17 @@ async def discover_famous_investors_via_perplexity() -> list[dict]:
     Upserts each person into whales with category='famous_investor' and cik=NULL.
     Saves their known positions into whale_holdings with null weights/values.
     Stores estimated 1-year return directly into return_1y on the whales table.
+    Only runs when PERPLEXITY_BACKGROUND_ENABLED=true.
     """
+    from data.perplexity_guards import pplx_background_allowed, pplx_blocked, pplx_allowed
+    if not pplx_background_allowed():
+        pplx_blocked("background", "discover_famous_investors_via_perplexity")
+        logger.info("[FAMOUS] PERPLEXITY_BACKGROUND_ENABLED=false — skipping famous investor discovery")
+        return []
     if not _PERPLEXITY_KEY:
         logger.warning("[FAMOUS] PERPLEXITY_API_KEY not set — skipping famous investor discovery")
         return []
+    pplx_allowed("background", "discover_famous_investors_via_perplexity")
 
     from datetime import date as _date
     import json as _json, re as _re

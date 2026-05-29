@@ -322,10 +322,40 @@ async def fetch_news_for_ticker(ticker: str, client: httpx.AsyncClient) -> List[
         except Exception as e:
             print(f"[WATCHLIST-NEWS] Google News RSS failed for {ticker}: {e}")
 
-    # Final fallback: Perplexity Sonar (fast web search)
+    # FMP stock news fallback (replaces Perplexity — FMP is the primary paid news source)
     if not articles:
-        print(f"[WATCHLIST-NEWS] RSS feeds empty for {ticker}, falling back to Perplexity")
-        articles = await _fetch_news_perplexity(ticker)
+        from config import FMP_API_KEY as _fmp_key
+        if _fmp_key:
+            try:
+                fmp_resp = await client.get(
+                    "https://financialmodelingprep.com/stable/news/stock",
+                    params={"symbols": ticker.upper(), "limit": 8, "apikey": _fmp_key},
+                    timeout=6.0,
+                )
+                if fmp_resp.status_code == 200:
+                    fmp_items = fmp_resp.json()
+                    if isinstance(fmp_items, list):
+                        for item in fmp_items:
+                            articles.append({
+                                "title":        item.get("title", ""),
+                                "summary":      (item.get("text") or "")[:300],
+                                "url":          item.get("url", ""),
+                                "published_at": item.get("publishedDate", ""),
+                                "source":       item.get("site", "") or item.get("publisher", "FMP"),
+                            })
+                        if articles:
+                            print(f"[WATCHLIST-NEWS] FMP: {len(articles)} articles for {ticker}")
+            except Exception as _fmp_err:
+                print(f"[WATCHLIST-NEWS] FMP news failed for {ticker}: {_fmp_err}")
+
+    # Perplexity fallback only if PERPLEXITY_FALLBACK_ENABLED=true (default: false)
+    if not articles:
+        from data.perplexity_guards import pplx_fallback_allowed, pplx_blocked
+        if pplx_fallback_allowed():
+            articles = await _fetch_news_perplexity(ticker)
+        else:
+            pplx_blocked("fallback", f"fetch_news_for_ticker:{ticker}")
+            print(f"[WATCHLIST-NEWS] No news for {ticker} — RSS+FMP empty, PERPLEXITY_FALLBACK_ENABLED=false")
 
     # Cache results
     _news_cache[ticker] = {"fetched_at": time.time(), "articles": articles[:15]}

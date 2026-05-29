@@ -1681,7 +1681,7 @@ async def run_perplexity_analysis() -> dict:
 
 
 async def get_ai_analysis_cached() -> dict:
-    """Return cached AI analysis (in-memory → DB → fresh call)."""
+    """Return cached AI analysis (in-memory → DB → fresh call if background enabled)."""
     global _ai_cache, _last_ai_run
     loop = asyncio.get_event_loop()
 
@@ -1698,20 +1698,36 @@ async def get_ai_analysis_cached() -> dict:
         logger.info("[INSIDER_AI] Loaded today's analysis from DB cache")
         return cached
 
-    # Nothing cached — run fresh
-    logger.info("[INSIDER_AI] No cache found — running fresh Perplexity analysis")
-    return await run_perplexity_analysis()
+    # Nothing cached — only run fresh Perplexity if background is explicitly enabled
+    from data.perplexity_guards import pplx_background_allowed, pplx_blocked
+    if pplx_background_allowed():
+        logger.info("[INSIDER_AI] No cache found — running fresh Perplexity analysis")
+        return await run_perplexity_analysis()
+
+    pplx_blocked("background", "get_ai_analysis_cached:no_cache")
+    logger.info("[INSIDER_AI] No cache found, PERPLEXITY_BACKGROUND_ENABLED=false — returning empty analysis")
+    return {
+        "top_buys": [], "top_sells": [],
+        "market_summary": "AI analysis not available. Enable PERPLEXITY_BACKGROUND_ENABLED to activate.",
+        "standout_buy": None, "standout_sell": None,
+        "data_date": datetime.utcnow().strftime("%Y-%m-%d"),
+        "source": "disabled",
+    }
 
 
 # ── Background Loop ───────────────────────────────────────────────────────────
 
 async def _ai_daily_loop():
-    """Runs Perplexity analysis once per day. Waits for initial data to exist first."""
+    """
+    Runs Perplexity analysis once per day.
+    Only fires when PERPLEXITY_BACKGROUND_ENABLED=true (default: false).
+    Always loads any existing DB cache on startup regardless of flag.
+    """
     global _ai_cache, _last_ai_run
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(_executor, _create_ai_cache_table)
 
-    # Load existing cached analysis from DB immediately on startup
+    # Always load existing cached analysis from DB on startup (no API call)
     try:
         cached = await loop.run_in_executor(_executor, _load_ai_cache_from_db)
         if cached:
@@ -1722,14 +1738,19 @@ async def _ai_daily_loop():
     except Exception as e:
         logger.warning("[INSIDER_AI] Startup cache load failed: %s", e)
 
-    # Short initial delay before running a fresh analysis
+    # Short initial delay before first active cycle
     await asyncio.sleep(300)
 
+    from data.perplexity_guards import pplx_background_allowed, pplx_blocked
     while True:
-        try:
-            await run_perplexity_analysis()
-        except Exception as e:
-            logger.error("[INSIDER_AI] Daily loop error: %s", e)
+        if pplx_background_allowed():
+            try:
+                await run_perplexity_analysis()
+            except Exception as e:
+                logger.error("[INSIDER_AI] Daily loop error: %s", e)
+        else:
+            pplx_blocked("background", "_ai_daily_loop")
+            logger.info("[INSIDER_AI] PERPLEXITY_BACKGROUND_ENABLED=false — skipping daily Perplexity analysis")
         await asyncio.sleep(_AI_INTERVAL)
 
 
