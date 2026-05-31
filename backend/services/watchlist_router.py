@@ -344,21 +344,61 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             + ", ".join(missing_syms[:10]) + ("…" if len(missing_syms) > 10 else "")
         )
 
-    total_rows = sum(len(s["tickers"]) for s in enriched_sections)
+    # ── DEDUP + SAVED-FILTER PASS ─────────────────────────────────────────────
+    # Two passes in one walk:
+    #   a) Drop symbols Claude emitted that are not in the saved list.
+    #      Example: saved has "OTC:CGEH", Claude strips prefix and emits "CGEH" —
+    #      that bare row is an impostor; the correct OTC:CGEH row was already
+    #      appended by the missing-append pass above.
+    #   b) Drop duplicate symbols (Claude emits same ticker across chunks).
+    #      First occurrence wins (always the richer Claude row since Claude
+    #      sections are processed before missing-append rows).
+    # Sections that become empty after filtering are dropped.
+    seen_final: set[str] = set()
+    dedup_sections: list[dict] = []
+    dup_count       = 0
+    not_saved_count = 0
+    for section in enriched_sections:
+        deduped: list[dict] = []
+        for row in section.get("tickers", []):
+            sym = str(row.get("symbol", "")).upper()
+            if not sym:
+                continue
+            if sym not in seen_saved:
+                # Claude invented or format-mismatched symbol — skip
+                not_saved_count += 1
+                continue
+            if sym in seen_final:
+                dup_count += 1
+                continue
+            seen_final.add(sym)
+            deduped.append(row)
+        if deduped:
+            dedup_sections.append({**section, "tickers": deduped})
+
+    if dup_count or not_saved_count:
+        print(
+            f"[WATCHLIST_ENRICH] dedup removed {dup_count} duplicate rows, "
+            f"{not_saved_count} not-in-saved rows"
+        )
+
+    total_rows = sum(len(s["tickers"]) for s in dedup_sections)
     elapsed_ms = round((_time.monotonic() - _t0) * 1000)
     print(
-        f"[WATCHLIST_ENRICH] sections={len(enriched_sections)} "
+        f"[WATCHLIST_ENRICH] sections={len(dedup_sections)} "
         f"tickers_in={total_in} tickers_out={total_rows} "
-        f"appended_missing={appended_count} "
-        f"quoted={sum(1 for s in enriched_sections for t in s['tickers'] if t.get('price') is not None)} "
+        f"appended_missing={appended_count} dups_removed={dup_count} "
+        f"quoted={sum(1 for s in dedup_sections for t in s['tickers'] if t.get('price') is not None)} "
         f"elapsed={elapsed_ms}ms"
     )
     return {
         **store,
         "analysis": {
             **analysis,
-            "sections": enriched_sections,
+            "sections": dedup_sections,
             "_missing_symbols_appended_count": appended_count,
+            "_duplicate_symbols_removed":      dup_count,
+            "_not_in_saved_removed":           not_saved_count,
         },
     }
 

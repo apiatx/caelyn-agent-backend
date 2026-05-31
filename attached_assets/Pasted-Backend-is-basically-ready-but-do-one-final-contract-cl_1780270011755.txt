@@ -1,0 +1,67 @@
+Backend is basically ready, but do one final contract cleanup before I start the frontend agent.
+
+Do NOT redesign anything.
+Do NOT change page behavior.
+Do NOT change the saved watchlist model.
+Do NOT change Portfolio/Home behavior.
+Do NOT change Claude analysis logic unless needed for dedupe safety.
+
+Current validation:
+- Saved symbols: 302
+- Unique normalized saved symbols: 302
+- analysis.sections[].tickers[] rows: 303
+- Missing symbols after append: 0
+- analysis._missing_symbols_appended_count: 24
+
+Issue:
+The backend now appends missing symbols correctly, but Claude emitted one duplicate symbol across sections, so the final ticker row count is 303 instead of 302.
+
+Required invariant:
+For GET /api/watchlist/{watchlist_id}, the flattened analysis.sections[].tickers[] should include each unique saved normalized symbol exactly once whenever possible.
+
+For this active watchlist:
+- 302 unique saved symbols should produce 302 final ticker rows.
+- Missing symbols should be appended.
+- Duplicate Claude-emitted symbols should be removed or ignored safely.
+
+Implementation guidance:
+- After enriching Claude sections and appending missing saved symbols, run a final dedupe pass across analysis.sections[].tickers[] by normalized symbol.
+- Preserve the first/best row when duplicates exist.
+- Prefer keeping the row that has richer LLM fields/canonical theme info over a skeleton row if there is a conflict.
+- Do not drop a symbol completely.
+- Do not require frontend dedupe.
+- Keep rows inside sections. If removing a duplicate leaves an empty section, only remove the section if that is already safe for the existing response shape.
+
+Also clarify the earnings count discrepancy:
+Earlier validation showed GET /api/watchlist/earnings returned 238 events.
+Latest validation showed 6 events.
+Please explain why:
+- different date window?
+- cache changed?
+- endpoint default changed?
+- event filtering changed?
+- stale cache?
+No code change unless you find a bug. I just need the frontend handoff contract to be stable.
+
+Final validation to return:
+1) saved symbols count
+2) unique normalized saved symbols count
+3) analysis.sections count
+4) flattened ticker rows count
+5) unique flattened ticker symbols count
+6) duplicate symbols count
+7) missing symbols count
+8) analysis._missing_symbols_appended_count
+9) rows with market_cap
+10) rows with vol_mc_pct
+11) rows with vol_mc_unavailable_reason
+12) earnings events count and date window used
+13) no NaN/undefined values
+
+Expected:
+- saved symbols: 302
+- unique normalized saved symbols: 302
+- flattened ticker rows: 302
+- unique flattened ticker symbols: 302
+- duplicate symbols: 0
+- missing symbols: 0
