@@ -269,7 +269,17 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         }
 
     # ── NORMAL PATH: enrich existing LLM section rows ─────────────────────────
+    # Normalize saved ticker list (dedup, strip whitespace, uppercase)
+    saved_normalized: list[str] = []
+    seen_saved: set[str] = set()
+    for t in tickers:
+        s = t.strip().upper()
+        if s and s not in seen_saved:
+            saved_normalized.append(s)
+            seen_saved.add(s)
+
     enriched_sections: list[dict] = []
+    symbols_in_sections: set[str] = set()
     total_in  = 0
     total_out = 0
     for section in sections:
@@ -280,19 +290,76 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 continue
             total_in += 1
             enriched_tickers.append(_build_ticker_row(sym, row))
+            symbols_in_sections.add(sym)
             total_out += 1
         enriched_sections.append({**section, "tickers": enriched_tickers})
 
+    # ── MISSING-SYMBOL APPEND ─────────────────────────────────────────────────
+    # Any saved symbol absent from the enriched sections gets a skeleton row
+    # appended to the existing other_uncategorized section, or a new synthetic
+    # section if none exists. This guarantees every saved symbol appears in the
+    # ticker table regardless of Claude parse quality.
+    missing_syms = [s for s in saved_normalized if s not in symbols_in_sections]
+    appended_count = 0
+
+    if missing_syms:
+        missing_rows = []
+        for sym in missing_syms:
+            missing_rows.append(_build_ticker_row(sym, {
+                "symbol":              sym,
+                "catalyst":            None,
+                "sentiment":           None,
+                "action_note":         None,
+                "conviction":          None,
+                "theme":               None,
+                "canonical_theme_name": "Other / Uncategorized",
+                "canonical_theme_id":   "other_uncategorized",
+                "theme_source":         "missing_append",
+            }))
+        appended_count = len(missing_rows)
+
+        # Find existing other_uncategorized section and append, or create new
+        unc_idx = next(
+            (i for i, s in enumerate(enriched_sections)
+             if s.get("id") in ("other_uncategorized", "all_tickers", "all_tickers_missing")),
+            None,
+        )
+        if unc_idx is not None:
+            existing = enriched_sections[unc_idx]
+            enriched_sections[unc_idx] = {
+                **existing,
+                "tickers": existing["tickers"] + missing_rows,
+            }
+        else:
+            enriched_sections.append({
+                "id":       "other_uncategorized",
+                "title":    "Other / Uncategorized",
+                "subtitle": "Saved tickers not categorized by AI analysis",
+                "tickers":  missing_rows,
+            })
+
+        print(
+            f"[WATCHLIST_ENRICH] appended {appended_count} missing symbols to uncategorized "
+            f"(saved={len(saved_normalized)} in_sections={len(symbols_in_sections)}): "
+            + ", ".join(missing_syms[:10]) + ("…" if len(missing_syms) > 10 else "")
+        )
+
+    total_rows = sum(len(s["tickers"]) for s in enriched_sections)
     elapsed_ms = round((_time.monotonic() - _t0) * 1000)
     print(
         f"[WATCHLIST_ENRICH] sections={len(enriched_sections)} "
-        f"tickers_in={total_in} tickers_out={total_out} "
+        f"tickers_in={total_in} tickers_out={total_rows} "
+        f"appended_missing={appended_count} "
         f"quoted={sum(1 for s in enriched_sections for t in s['tickers'] if t.get('price') is not None)} "
         f"elapsed={elapsed_ms}ms"
     )
     return {
         **store,
-        "analysis": {**analysis, "sections": enriched_sections},
+        "analysis": {
+            **analysis,
+            "sections": enriched_sections,
+            "_missing_symbols_appended_count": appended_count,
+        },
     }
 
 

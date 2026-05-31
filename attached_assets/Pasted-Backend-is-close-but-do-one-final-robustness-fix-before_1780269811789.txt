@@ -1,0 +1,76 @@
+Backend is close, but do one final robustness fix before frontend starts.
+
+Do NOT redesign anything.
+Do NOT change the frontend contract.
+Do NOT change the saved watchlist model.
+Do NOT change Portfolio/Home behavior.
+Do NOT rerun or redesign Claude analysis.
+
+Issue:
+For the 302-symbol watchlist, skeleton/pending mode returns 302 rows, but completed Claude analysis mode returns only 279 rows in analysis.sections[].tickers[].
+
+That is not acceptable for the Watchlist page. A saved ticker should never disappear from the ticker table just because Claude failed to categorize it, skipped it, or a response parsed imperfectly.
+
+Required backend invariant:
+For GET /api/watchlist/{watchlist_id}, analysis.sections[].tickers[] must include one ticker row for every saved normalized symbol whenever possible.
+
+This must be true in all states:
+1) analysis pending / skeleton mode
+2) analysis complete
+3) partial Claude parse
+4) quote throttling
+5) missing market cap
+6) missing LLM fields
+
+Implementation guidance:
+- Keep the current skeleton fallback.
+- Keep the current canonical Claude sections.
+- After building/enriching analyzed sections, compare:
+  saved_symbols_normalized
+  vs
+  symbols_present_in_analysis_sections_tickers
+- Any saved symbol missing from the analyzed sections should be appended to an existing uncategorized section if one exists.
+- If no uncategorized section exists, create a minimal synthetic section:
+  id: "other_uncategorized" or "all_tickers_missing"
+  title: "Other / Uncategorized"
+  subtitle: "Saved tickers not categorized by AI analysis"
+  tickers: [...]
+- Build missing rows using the same _build_ticker_row() helper used for skeleton rows, so fields stay consistent.
+- Missing rows should have LLM fields null and should not crash the page.
+- Add a meta/debug field only if you already have a safe place for it, such as:
+  analysis._missing_symbols_appended_count
+  But do not require the frontend to depend on it.
+
+Important:
+- Do not drop rows because price/volume/market cap is missing.
+- Do not drop rows because Claude did not mention them.
+- Do not drop rows because section parsing failed for a chunk.
+- Never return fewer ticker rows than saved symbols unless there are duplicate normalized symbols or truly invalid symbols. If duplicates/invalids explain a delta, log it clearly.
+
+Also confirm exact row keys remain:
+- symbol, not ticker
+- name, not company
+- section display uses section.title, with fallback to section.name if needed
+- analysis._analysis_pending lives at parent level
+- section._analysis_pending may exist in skeleton mode
+- _analysis_pending is not required on individual rows
+
+Validation:
+Run live probes on the active 302-symbol watchlist and report:
+
+1) saved symbols count
+2) unique normalized symbols count
+3) analysis.sections count
+4) total analysis.sections[].tickers[] rows
+5) missing symbols count after append
+6) appended uncategorized rows count
+7) rows with market_cap
+8) rows with vol_mc_pct
+9) rows with vol_mc_unavailable_reason
+10) earnings events count
+11) confirm no NaN/undefined values
+12) confirm old 137-symbol watchlist still works
+
+Expected:
+- If there are 302 unique valid saved symbols, ticker rows should be 302.
+- If there are duplicates/invalids, explain the exact delta.
