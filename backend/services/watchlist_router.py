@@ -128,15 +128,23 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
     Foreign/exchange-prefixed tickers that Tradier cannot quote keep whatever
     fields they already have.  This function never blocks — it uses the LKG
     quote cache and triggers a background refresh when the 10-min TTL expires.
+
+    FALLBACK: when analysis.sections is empty but tickers are saved (e.g. analysis
+    has not yet completed for a large watchlist), a single synthetic "All Tickers"
+    section is built from the raw ticker list + CSV data + quote cache so the
+    frontend table never renders 0 rows while analysis is pending.
     """
+    import time as _time
+    _t0 = _time.monotonic()
+
     from services.watchlist_quote_cache import get_watchlist_quotes
 
-    tickers: list[str]  = store.get("tickers", [])
+    tickers: list[str]   = store.get("tickers", [])
     csv_data: list[dict] = store.get("csv_data", [])
     analysis: dict       = store.get("analysis") or {}
     sections: list[dict] = analysis.get("sections", [])
 
-    if not tickers or not sections:
+    if not tickers:
         return store
 
     # CSV fundamentals map — keyed by SYMBOL (uppercase)
@@ -147,87 +155,141 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             csv_map[sym] = row
 
     # Get cached quotes (non-blocking); stale cache triggers background refresh
-    quote_map: dict[str, dict] = await get_watchlist_quotes(tickers)
+    quote_map: dict[str, dict] = {}
+    try:
+        quote_map = await get_watchlist_quotes(tickers)
+    except Exception as _qe:
+        print(f"[WATCHLIST_ENRICH] quote fetch failed (non-fatal): {_qe}")
 
     now_str = datetime.now(timezone.utc).isoformat() + "Z"
 
+    def _build_ticker_row(sym: str, base_row: dict) -> dict:
+        """Build one enriched ticker row from quote + CSV data."""
+        sym = sym.strip().upper()
+        q       = quote_map.get(sym, {})
+        csv_row = csv_map.get(sym, {})
+        enriched = dict(base_row)
+
+        # ── Name ──────────────────────────────────────────────────────────
+        if not enriched.get("name"):
+            enriched["name"] = (
+                q.get("name")
+                or csv_row.get("Company Name")
+                or csv_row.get("Name")
+                or sym
+            )
+
+        # ── Price ──────────────────────────────────────────────────────────
+        if q.get("price") is not None:
+            enriched["price"] = q["price"]
+        elif not enriched.get("price"):
+            csv_price = csv_row.get("Stock Price")
+            if csv_price:
+                try:
+                    enriched["price"] = float(csv_price)
+                except Exception:
+                    pass
+
+        # ── Live market fields (always overwrite with freshest Tradier data)
+        if q:
+            enriched["change_pct_1d"]  = q.get("change_pct_1d")
+            enriched["volume"]         = q.get("volume")
+            enriched["average_volume"] = q.get("average_volume")
+            rel_vol = q.get("relative_volume")
+            if rel_vol is None:
+                v  = q.get("volume")
+                av = q.get("average_volume")
+                if v is not None and av:
+                    try:
+                        rel_vol = round(float(v) / float(av), 4)
+                    except Exception:
+                        rel_vol = None
+            enriched["relative_volume"]  = rel_vol
+            enriched["quote_source"]     = q.get("quote_source") or "tradier"
+            enriched["quote_updated_at"] = q.get("quote_updated_at", now_str)
+
+        # ── Vol/MC ratio ───────────────────────────────────────────────────
+        _raw_mc = (
+            csv_row.get("Market Cap")
+            or csv_row.get("MarketCap")
+            or csv_row.get("market_cap")
+            or enriched.get("market_cap")
+        )
+        _mc = _parse_market_cap_str(_raw_mc)
+        _price_f = enriched.get("price")
+        _vol_f   = enriched.get("volume")
+        try:
+            _price_f = float(_price_f) if _price_f is not None else None
+        except Exception:
+            _price_f = None
+        try:
+            _vol_f = float(_vol_f) if _vol_f is not None else None
+        except Exception:
+            _vol_f = None
+        enriched.update(_vol_mc_fields(_price_f, _vol_f, _mc))
+        return enriched
+
+    # ── FALLBACK: no sections yet (analysis pending / never completed) ─────────
+    # Build one synthetic section from the raw tickers list so the frontend
+    # table always renders saved symbols, even for large watchlists that are
+    # still being analysed in the background.
+    if not sections:
+        skeleton: list[dict] = []
+        for sym in tickers:
+            row = _build_ticker_row(sym, {
+                "symbol":       sym.strip().upper(),
+                "catalyst":     None,
+                "sentiment":    None,
+                "action_note":  None,
+                "conviction":   None,
+                "theme":        None,
+            })
+            skeleton.append(row)
+
+        elapsed_ms = round((_time.monotonic() - _t0) * 1000)
+        quoted_count = sum(1 for s in skeleton if s.get("price") is not None)
+        print(
+            f"[WATCHLIST_ENRICH] analysis_pending — built {len(skeleton)} skeleton rows "
+            f"({quoted_count} quoted) from {len(tickers)} saved tickers in {elapsed_ms}ms"
+        )
+        return {
+            **store,
+            "analysis": {
+                **analysis,
+                "sections": [{
+                    "name":              "All Tickers",
+                    "id":                "all_tickers",
+                    "subtitle":          "Showing saved tickers — AI analysis running in background",
+                    "tickers":           skeleton,
+                    "_analysis_pending": True,
+                }],
+                "_analysis_pending": True,
+                "_skeleton_reason":  "analysis_not_yet_run",
+            },
+        }
+
+    # ── NORMAL PATH: enrich existing LLM section rows ─────────────────────────
     enriched_sections: list[dict] = []
+    total_in  = 0
+    total_out = 0
     for section in sections:
         enriched_tickers: list[dict] = []
         for row in section.get("tickers", []):
-            sym      = str(row.get("symbol", "")).upper()
-            q        = quote_map.get(sym, {})
-            csv_row  = csv_map.get(sym, {})
-            enriched = dict(row)   # copy — preserve all existing LLM fields
-
-            # ── Name ──────────────────────────────────────────────────────
-            # Priority: existing row name > Tradier description > symbol
-            if not enriched.get("name"):
-                enriched["name"] = (
-                    q.get("name")
-                    or csv_row.get("Company Name")
-                    or csv_row.get("Name")
-                    or sym
-                )
-
-            # ── Price ─────────────────────────────────────────────────────
-            # Priority: Tradier live > existing row price > CSV Stock Price
-            if q.get("price") is not None:
-                enriched["price"] = q["price"]
-            elif not enriched.get("price"):
-                csv_price = csv_row.get("Stock Price")
-                if csv_price:
-                    try:
-                        enriched["price"] = float(csv_price)
-                    except Exception:
-                        pass
-
-            # ── 1D % change (always overwrite with freshest Tradier data) ─
-            if q:
-                enriched["change_pct_1d"]    = q.get("change_pct_1d")
-                enriched["volume"]           = q.get("volume")
-                enriched["average_volume"]   = q.get("average_volume")
-                # Pre-computed relative_volume (volume / average_volume) when both present.
-                rel_vol = q.get("relative_volume")
-                if rel_vol is None:
-                    v  = q.get("volume")
-                    av = q.get("average_volume")
-                    if v is not None and av:
-                        try:
-                            rel_vol = round(float(v) / float(av), 4)
-                        except Exception:
-                            rel_vol = None
-                enriched["relative_volume"]  = rel_vol
-                enriched["quote_source"]     = q.get("quote_source") or "tradier"
-                enriched["quote_updated_at"] = q.get("quote_updated_at", now_str)
-
-            # ── Vol/MC ratio ───────────────────────────────────────────────
-            # Market cap: prefer CSV column, then existing row field.
-            # Volume and price come from the quote above (already populated).
-            _raw_mc = (
-                csv_row.get("Market Cap")
-                or csv_row.get("MarketCap")
-                or csv_row.get("market_cap")
-                or enriched.get("market_cap")
-            )
-            _mc = _parse_market_cap_str(_raw_mc)
-            _price_for_mc  = enriched.get("price")
-            _volume_for_mc = enriched.get("volume")
-            try:
-                _price_for_mc  = float(_price_for_mc)  if _price_for_mc  is not None else None
-            except Exception:
-                _price_for_mc = None
-            try:
-                _volume_for_mc = float(_volume_for_mc) if _volume_for_mc is not None else None
-            except Exception:
-                _volume_for_mc = None
-
-            enriched.update(_vol_mc_fields(_price_for_mc, _volume_for_mc, _mc))
-
-            enriched_tickers.append(enriched)
-
+            sym = str(row.get("symbol", "")).upper()
+            if not sym:
+                continue
+            total_in += 1
+            enriched_tickers.append(_build_ticker_row(sym, row))
+            total_out += 1
         enriched_sections.append({**section, "tickers": enriched_tickers})
 
+    elapsed_ms = round((_time.monotonic() - _t0) * 1000)
+    print(
+        f"[WATCHLIST_ENRICH] sections={len(enriched_sections)} "
+        f"tickers_in={total_in} tickers_out={total_out} "
+        f"quoted={sum(1 for s in enriched_sections for t in s['tickers'] if t.get('price') is not None)} "
+        f"elapsed={elapsed_ms}ms"
+    )
     return {
         **store,
         "analysis": {**analysis, "sections": enriched_sections},

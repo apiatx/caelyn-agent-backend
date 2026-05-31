@@ -1,0 +1,122 @@
+We need to debug the Watchlist page after uploading a 302-ticker watchlist.
+
+Important:
+Do NOT redesign the Watchlist page.
+Do NOT change the visual layout.
+Do NOT remove existing sections.
+Do NOT change the saved watchlist model unless you prove the bug is there.
+The page worked correctly for the previous 137-ticker watchlist. The goal is to make the existing page robust enough for 300+ tickers by fixing timeout/batching/partial-result handling only.
+
+Current observed behavior:
+- New uploaded watchlist appears in the top tab: “AAOI, ACLS, ADEA +299 (302)”
+- Live News section works and shows around 300 items.
+- Home page Watchlist section also works.
+- But Watchlist page “Tickers” section shows 0 / “No stocks”.
+- The page shows “Agent analysis running…”
+- Last analyzed says 18h ago, so the new 302-symbol analysis may not be completing or may be falling back to stale/empty analysis.
+
+Likely issue:
+The upload/save path is probably fine.
+The raw symbol list is probably fine.
+The failure is likely in the Watchlist page enriched analysis path, probably where GET /api/watchlist/{watchlist_id} builds or returns analysis.sections[].tickers[].
+For 302 tickers, something may be timing out, aborting, failing validation, hitting provider limits, or returning partial data where tickers becomes empty even though symbols/news are present.
+
+Backend debug steps:
+1) Reproduce with the active 302-symbol watchlist.
+2) Find the exact frontend endpoint used by the Watchlist page for the main ticker table.
+   - Earlier backend confirmed GET /api/watchlist/{watchlist_id} is the enriched load path.
+   - Confirm whether the frontend is using that endpoint.
+3) Probe these endpoints directly:
+   - GET /api/watchlist
+   - GET /api/watchlist/{active_watchlist_id}
+   - GET /api/watchlist/{active_watchlist_id}/refresh if this exists
+   - GET /api/watchlist/earnings
+4) For GET /api/watchlist/{watchlist_id}, inspect the returned JSON and count:
+   - total saved symbols
+   - unique normalized symbols
+   - analysis exists?
+   - analysis.sections exists?
+   - analysis.sections[].tickers total count
+   - live_news count
+   - signals count
+   - any error/meta/status fields
+5) Add temporary debug logging around the existing watchlist analysis/enrichment path:
+   - watchlist_id
+   - symbol_count
+   - normalized_symbol_count
+   - tickers_before_enrichment_count
+   - tickers_after_quote_enrichment_count
+   - tickers_after_analysis_count
+   - news_count
+   - elapsed_ms per stage
+   - exceptions per stage
+   - timeout/abort indicators
+6) Do not swallow errors silently. If a stage fails, log the stage name and return a safe meta error, but do not destroy the whole page payload.
+
+Specific thing to check:
+The screenshot shows Live News works but Tickers is 0. That means some parts of the symbol universe are flowing through, but the ticker table source is empty. Find the exact function that populates analysis.sections[].tickers[] and determine why it returns 0 for 302 symbols.
+
+Fix requirements:
+- Keep the same response shape the frontend already expects.
+- Do not make frontend calculate data that backend already owns.
+- Do not do one-provider-call-per-symbol in the request path for 302 tickers.
+- Use existing quote cache, market cap CSV/cache, Neon/LKG, and existing enrichment helpers.
+- Batch large symbol lists.
+- Prefer partial success over empty failure.
+
+If the issue is timeout/provider pressure:
+Implement batching inside the existing backend enrichment path:
+- Process symbols in chunks, for example 50 or 75 symbols per batch.
+- Use existing batch quote/cache helpers.
+- Use bounded concurrency only if the existing provider helper supports it safely.
+- Add per-batch timeout protection.
+- If one batch fails, log it and continue with the remaining batches.
+- Return rows for all saved tickers, even if some fields are null.
+- Do not return 0 tickers just because quotes, market cap, or analysis failed for some symbols.
+
+Expected robust behavior:
+For a 302-symbol watchlist:
+- Tickers section should render close to 302 rows.
+- Rows with missing quote/market cap/analysis should still appear with null/dash fields.
+- Vol/MC should show when available and dash when not available.
+- Earnings section should load from GET /api/watchlist/earnings separately and not block the ticker table.
+- Live News should continue working.
+- The agent/analysis can continue running in the background, but the ticker table should not be empty while waiting.
+
+Frontend debug steps:
+1) Inspect the Watchlist page component.
+2) Confirm what endpoint populates the ticker table.
+3) Confirm the table is reading from analysis.sections[].tickers[] or wherever the backend returns enriched ticker rows.
+4) Add temporary console logging only during debug:
+   - activeWatchlistId
+   - raw watchlist symbol count
+   - analysis.sections keys/counts
+   - tickerRows.length
+   - loading/error state
+5) Make sure frontend does not show “No stocks” while analysis is still loading if it already has saved symbols.
+6) If the enriched ticker rows are missing but saved symbols are present, show a loading/partial state, not a final empty state.
+7) Do not change the UI style. Only fix data wiring/loading guards if needed.
+
+Validation:
+1) Upload or select the 302-symbol watchlist.
+2) Confirm top tab count still shows 302.
+3) Confirm Tickers section renders rows, not 0.
+4) Confirm Live News still renders.
+5) Confirm Watchlist earnings endpoint still works.
+6) Confirm Vol/MC column still works for rows with available market cap/volume.
+7) Confirm missing Vol/MC shows dash, not NaN/undefined.
+8) Confirm the old 137-symbol watchlist still works.
+9) Confirm no console errors.
+10) Confirm backend logs show no unhandled timeout/abort.
+
+Return:
+- Exact root cause found
+- Exact endpoint the Watchlist ticker table uses
+- Exact backend function that returned 0 tickers
+- Files changed
+- Whether the fix was batching, timeout handling, response fallback, frontend loading guard, or something else
+- Before/after counts for the 302-symbol watchlist:
+  saved symbols count
+  enriched ticker rows count
+  news count
+  earnings count
