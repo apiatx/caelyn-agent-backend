@@ -1,0 +1,103 @@
+Backend news scorer is directionally good, but do one final signal-quality pass before frontend starts.
+
+Do NOT redesign the news pipeline.
+Do NOT remove the existing full news feed.
+Do NOT break the existing {TICKER: [articles]} shape.
+Do NOT change Portfolio/Home behavior.
+Do NOT add LLM calls yet.
+This is a ranking/threshold quality pass only.
+
+Current validation:
+- 4,232 total articles
+- 534 articles marked is_major_development = true
+- 13 high-signal articles
+- endpoint latency ~8s
+- old fields preserved
+
+Issue:
+534 “major developments” is too many. That will still look like a noisy firehose on the frontend. “Major Developments” should mean truly surface-worthy items:
+- hyperscaler/customer anchor deal
+- government/defense/military contract
+- major commercial contract
+- major technical milestone
+- major partnership
+- material financing/dilution
+- earnings/guidance shock
+- M&A/strategic investment
+
+Goal:
+Keep scoring every article, but create a stricter surfacing layer so frontend can show only the best major developments at the top.
+
+Please add additive top-level fields to the news response if safe:
+- major_developments: top 20 articles max across all tickers
+- major_developments_count
+- high_signal_count
+- by_catalyst_type
+- news_signal_meta
+
+If the existing endpoint must remain {TICKER: [articles]} only, add a companion endpoint instead:
+GET /api/watchlist/news/major
+or
+GET /api/watchlist/{watchlist_id}/news/major
+
+Preferred:
+Keep existing news endpoint backward compatible and either:
+1) include an additive "_meta" / "_major_developments" key only if frontend can safely ignore it
+or
+2) create a companion major-news endpoint.
+
+Do not break the current frontend.
+
+Major Developments surfacing rule:
+- major_developments should include max 20 items
+- Sort by:
+  1) major_news_score desc
+  2) signal_strength priority high > medium > low
+  3) recency
+- Deduplicate near-duplicate articles by normalized title/url/source cluster.
+  Example: same news syndicated across 12 outlets should appear once in major_developments.
+- Prefer primary/source-quality article if duplicates exist.
+
+Threshold adjustment:
+- Keep article-level major_news_score on all items.
+- But is_major_development should be stricter if needed.
+- Recommended:
+  - score >= 80 => is_major_development true
+  - score 65–79 => important/watch, not necessarily top major unless limited supply
+  - score <65 => routine/noise
+- Or keep is_major_development as-is but add:
+  - is_top_major_development: boolean
+  - surface_priority: number
+I prefer adding is_top_major_development so we do not break existing article-level behavior.
+
+Add fields:
+- is_top_major_development: boolean
+- surface_priority: number | null
+- duplicate_cluster_key: string | null
+- major_news_rank: number | null
+
+Validation:
+Run against the active 302-symbol watchlist and report:
+1) total articles
+2) is_major_development count
+3) is_top_major_development count
+4) high signal count
+5) top major_developments count
+6) top 20 list with:
+   - symbol
+   - title
+   - score
+   - label
+   - catalyst_type
+   - source_quality
+   - why_it_matters
+7) duplicate clusters removed count
+8) examples demoted from major/top-major and why
+9) endpoint latency cached and uncached
+10) confirm old {TICKER: [articles]} fields still preserved
+11) confirm no frontend-breaking shape change
+
+Expected:
+- Top major developments should be around 10–20 items, not hundreds.
+- Full feed still exists.
+- Frontend has a clean, obvious list to render at the top.

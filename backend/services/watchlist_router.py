@@ -32,6 +32,7 @@ from services.watchlist_service import (
     _WATCHLIST_FILE,
 )
 from services.watchlist_analysis import run_analysis_pipeline
+from services.news_major_service import build_major_developments as _build_major
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
@@ -829,7 +830,13 @@ async def news_endpoint():
     tickers = store.get("tickers", [])
     if not tickers:
         return {}
-    return await fetch_news_for_tickers(tickers)
+    raw_map = await fetch_news_for_tickers(tickers)
+    try:
+        enriched_map, _ = _build_major(raw_map)
+        return enriched_map
+    except Exception as _err:
+        print(f"[NEWS_MAJOR] build pass failed (non-fatal): {_err}")
+        return raw_map
 
 
 @router.post("/refresh")
@@ -1808,16 +1815,62 @@ async def refresh_by_id_endpoint(watchlist_id: str):
         raise HTTPException(status_code=500, detail=f"Refresh failed: {e}")
 
 
+@router.get("/{watchlist_id}/news/major")
+async def news_major_by_id_endpoint(watchlist_id: str):
+    """
+    Return the top major developments for a watchlist (deduplicated, ranked).
+
+    Response shape:
+    {
+      "major_developments":       [...top-20 articles...],
+      "major_developments_count": int,
+      "high_signal_count":        int,
+      "by_catalyst_type":         {catalyst_type: count, ...},
+      "news_signal_meta": {
+          "total_articles":             int,
+          "total_major_developments":   int,
+          "total_top_major":            int,
+          "duplicate_clusters_removed": int,
+          "unique_clusters":            int,
+      },
+    }
+    """
+    store = load_watchlist(watchlist_id)
+    if store is None:
+        return {"major_developments": [], "major_developments_count": 0}
+    tickers = store.get("tickers", [])
+    if not tickers:
+        return {"major_developments": [], "major_developments_count": 0}
+    raw_map = await fetch_news_for_tickers(tickers)
+    _, major_summary = _build_major(raw_map)
+    return major_summary
+
+
 @router.get("/{watchlist_id}/news")
 async def news_by_id_endpoint(watchlist_id: str):
-    """Fetch news for a specific watchlist's tickers."""
+    """
+    Fetch news for a specific watchlist's tickers.
+
+    Returns {TICKER: [articles]} — existing shape preserved.
+    Each article now includes additive signal fields from the scorer plus:
+      is_top_major_development  bool
+      surface_priority          int | None
+      major_news_rank           int | None
+      duplicate_cluster_key     str | None
+    """
     store = load_watchlist(watchlist_id)
     if store is None:
         return {}
     tickers = store.get("tickers", [])
     if not tickers:
         return {}
-    return await fetch_news_for_tickers(tickers)
+    raw_map = await fetch_news_for_tickers(tickers)
+    try:
+        enriched_map, _ = _build_major(raw_map)
+        return enriched_map
+    except Exception as _err:
+        print(f"[NEWS_MAJOR] build pass failed (non-fatal): {_err}")
+        return raw_map
 
 
 @router.get("/{watchlist_id}/stock/{ticker}")
