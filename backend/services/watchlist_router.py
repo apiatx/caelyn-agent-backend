@@ -227,6 +227,25 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         except Exception:
             _vol_f = None
         enriched.update(_vol_mc_fields(_price_f, _vol_f, _mc))
+
+        # ── More-specific unavail reasons ──────────────────────────────────
+        # Foreign-exchange-prefixed tickers (AIM:, STO:, FRA:, etc.) cannot
+        # be quoted by Tradier; "volume_unavailable" is technically correct but
+        # misleading.  Replace with a clearer reason so the frontend can show
+        # a meaningful tooltip.
+        if ":" in sym and enriched.get("vol_mc_unavailable_reason") == "volume_unavailable":
+            enriched["vol_mc_unavailable_reason"] = "foreign_exchange_ticker_unsupported"
+
+        # For US tickers that have market_cap + price but still no volume after
+        # quote enrichment, add a clearer "quote_unavailable" reason so it's
+        # distinguishable from foreign-ticker gaps.
+        if (
+            ":" not in sym
+            and enriched.get("vol_mc_unavailable_reason") == "volume_unavailable"
+            and enriched.get("price") is not None
+        ):
+            enriched["vol_mc_unavailable_reason"] = "quote_unavailable"
+
         return enriched
 
     # ── FALLBACK: no sections yet (analysis pending / never completed) ─────────

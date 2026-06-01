@@ -41,6 +41,9 @@ _FOREIGN_PREFIXES = (
     "ASX:", "TSX:", "TSXV:", "OTC:", "LSE:", "HK:", "SHE:", "SHA:", "NSE:", "BSE:",
     "KRX:", "STO:", "AIM:", "EPA:", "ETR:", "FRA:", "AMS:", "BIT:", "BME:", "JSE:",
     "TYO:", "TPE:", "SET:", "SGX:", "IDX:", "BVMF:", "BVC:", "SZSE:", "SSE:",
+    # Additional exchange prefixes observed in watchlists
+    "LON:", "CSE:", "TPEX:", "WSE:", "XSAT:", "OSL:", "SWX:", "NZX:",
+    "KLSE:", "BKK:", "IST:", "BCBA:", "MCX:", "MOEX:", "JNB:", "CPH:", "OMX:",
 )
 
 
@@ -176,7 +179,19 @@ async def _fetch_direct(symbols: list[str]) -> dict[str, dict]:
 # ── Refresh orchestration ──────────────────────────────────────────────────
 
 async def _do_refresh(symbols: list[str]) -> None:
-    """Refresh via shared home_service path; legacy direct path as fallback."""
+    """Refresh via shared home_service path; legacy direct path as fallback.
+
+    Top-up strategy:
+    When the Tradier rate limiter is saturated at startup (background enrichment
+    jobs consuming 100 calls/min), _batch_quotes in home_service skips the live
+    Tradier call and returns only LKG-cached symbols (typically 40–70 of 257
+    eligible US tickers).  The module-level _quote_cache is then "warm" at that
+    low count for the full 10-minute TTL, leaving ~200 rows with blank Ch%/Vol.
+
+    After the shared path, we identify which eligible US symbols were missed and
+    fetch them directly via httpx — bypassing the limiter's is_saturated() guard.
+    Batched at 50 symbols per request; each batch fails independently.
+    """
     global _quote_cache, _cache_ts
 
     merged: dict[str, dict] = {}
@@ -194,6 +209,25 @@ async def _do_refresh(symbols: list[str]) -> None:
         fetch_source = "direct(tradier)"
 
     eligible_count = sum(1 for s in symbols if _is_tradier_eligible(s))
+
+    # ── Direct top-up for symbols the shared path missed ─────────────────────
+    # This fires when the Tradier limiter was saturated (startup burst), so the
+    # shared path skipped live data and fell back to a small LKG set.
+    # We do NOT skip if merged is already full — compare against eligible count.
+    merged_upper = {k.upper() for k in merged}
+    missed_eligible = [s for s in symbols if _is_tradier_eligible(s)
+                       and s.upper() not in merged_upper]
+    if missed_eligible:
+        print(
+            f"[WQ_CACHE] Shared path covered {len(merged)}/{eligible_count} eligible — "
+            f"direct top-up for {len(missed_eligible)} missed symbols"
+        )
+        top_up = await _fetch_direct(missed_eligible)
+        if top_up:
+            # shared path wins on conflict (it returned fresher live data)
+            merged = {**top_up, **merged}
+            fetch_source += f"+topup({len(top_up)})"
+            print(f"[WQ_CACHE] Top-up added {len(top_up)} more quotes")
 
     if merged:
         _quote_cache = {**_quote_cache, **merged}

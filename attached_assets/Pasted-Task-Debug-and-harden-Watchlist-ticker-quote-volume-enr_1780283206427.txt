@@ -1,0 +1,124 @@
+Task: Debug and harden Watchlist ticker quote/volume enrichment coverage for 300+ ticker watchlists.
+
+Important:
+Do NOT redesign the Watchlist page.
+Do NOT change the frontend response shape.
+Do NOT remove the existing 302-row robustness/categorization fixes.
+Do NOT change Portfolio/Home behavior.
+Do NOT add frontend-side provider calls.
+This is backend quote/enrichment coverage hardening only.
+
+Current issue:
+The Watchlist page now renders all 302 tickers and categories correctly, but these ticker table columns are blank for roughly 80–90% of rows:
+- Ch%
+- Volume
+- Vol/MC
+- Rel Vol
+- Earnings, if this column depends on row-level merged earnings data
+
+Likely cause:
+The backend contract previously showed only around 55/302 rows had vol_mc_pct. Since Vol/MC depends on price + volume + market_cap, and Ch%/Volume/Rel Vol depend on quote data, this likely means the Tradier quote/enrichment path is only populating a small subset of rows for large watchlists, likely due to batching, cache warm-up, throttling, or symbol normalization.
+
+Goal:
+For GET /api/watchlist/{watchlist_id}, all 302 rows should still return, but quote/enrichment coverage should be much higher and deterministic:
+- price coverage should be as high as provider permits
+- change_pct_1d coverage should be as high as provider permits
+- volume coverage should be as high as provider permits
+- relative_volume coverage should be as high as provider/cache permits
+- vol_mc_pct coverage should exist whenever price + volume + market_cap are present
+- missing fields should include explicit unavailable reason where possible, not silent blanks
+
+Audit first:
+1) Locate the quote enrichment path used by GET /api/watchlist/{watchlist_id}.
+2) Locate watchlist_quote_cache.py or equivalent quote cache helper.
+3) Locate the Tradier batch quote helper being reused with Home/Portfolio.
+4) Confirm whether the current helper:
+   - sends all 302 symbols
+   - chunks symbols
+   - rate-limits batches
+   - returns partial results silently
+   - skips exchange-prefixed symbols like OTC:CGEH, STO:ACCON
+   - only uses first N symbols
+   - has a timeout/abort causing partial cache fill
+5) Probe the active 302-watchlist and report coverage counts:
+   - total rows
+   - rows with price
+   - rows with change_pct_1d
+   - rows with volume
+   - rows with relative_volume
+   - rows with market_cap
+   - rows with dollar_volume
+   - rows with vol_mc_pct
+   - rows with vol_mc_unavailable_reason
+   - count of symbols requested from Tradier
+   - count of symbols returned by Tradier
+   - failed/skipped symbols and why
+
+Specific suspicion:
+The previous backend validation showed something like 55/302 rows with vol_mc_pct. That suggests either:
+- quote cache only has around 50–60 symbols warm
+- Tradier requests are being throttled or truncated
+- current code only handles one chunk
+- current code bails after the first failed batch
+- symbol format mismatch prevents quote lookup for many rows
+
+Fix requirements:
+1) Use existing quote cache/helpers. Do not create a parallel quote system.
+2) Batch 302 symbols safely.
+   - Use chunks, for example 50 symbols per batch, unless existing helper has a known safe chunk size.
+   - Respect Tradier market data limits.
+   - Use bounded concurrency only if existing provider helper is safe.
+   - If one batch fails, log it and continue.
+3) Do not block the page forever.
+   - Prefer cache-first + background refresh if that is the existing app pattern.
+   - But the initial response should try to populate as much as possible from cache and safe batch refresh.
+4) For missing quote data:
+   - keep the ticker row
+   - set price/change/volume/rel_vol null
+   - set useful unavailable reason if a field exists
+   - never return NaN
+5) Keep Vol/MC computed backend-side:
+   - vol_mc_pct should populate whenever price, volume, and market_cap exist
+   - if only market_cap exists but no volume/price, show vol_mc_unavailable_reason like quote_unavailable / volume_unavailable / price_missing
+6) Do not let Tradier throttling result in permanent blanks if another refresh/page load happens later.
+
+Potential implementation approach:
+- In _enrich_store_with_quotes or the quote cache layer:
+  1) Collect all normalized symbols from the final 302 ticker rows.
+  2) Ask quote cache for all symbols.
+  3) Identify missing/stale quotes.
+  4) Refresh missing/stale quotes in safe batches.
+  5) Re-read/merge quote cache into rows.
+  6) Compute volume, change_pct_1d, relative_volume, dollar_volume, vol_mc_pct.
+
+Earnings column:
+If the Watchlist ticker table has an Earnings column, confirm whether row-level ticker rows include earnings fields.
+If not, either:
+- add a lightweight backend merge from GET /api/watchlist/earnings into the ticker-row payload, keyed by symbol, if that is consistent with existing Portfolio Terminal behavior
+or
+- clearly tell the frontend that earnings should be rendered by the separate earnings section only, not as a row-level ticker table column.
+
+Do not guess. Audit the existing Portfolio Terminal earnings/table behavior and preserve the same pattern.
+
+Validation:
+Run on the active 302-symbol watchlist after fix:
+1) total rows = 302
+2) unique symbols = 302
+3) rows with price
+4) rows with change_pct_1d
+5) rows with volume
+6) rows with relative_volume
+7) rows with market_cap
+8) rows with vol_mc_pct
+9) rows with vol_mc_unavailable_reason
+10) Tradier requested symbols count
+11) Tradier returned symbols count
+12) failed/skipped symbols list with reasons
+13) no NaN/undefined values
+14) categories still normalized
+15) Other / Uncategorized still small
+16) Portfolio/Home unchanged
+
+Expected:
+- Quote-driven fields should improve far beyond 55/302 if Tradier supports the symbols.
+- Any remaining blanks should be explainable: unsupported symbol, exchange-prefixed non-US, missing quote, no avg volume, missing market cap, etc.
