@@ -12,6 +12,7 @@ from agent.model_policy import MODEL_CLAUDE_PREMIUM, MODEL_GROK, MODEL_GPT4O, MO
 
 import asyncio
 import json as _json
+import math as _math
 import re as _re
 from datetime import datetime, timezone
 
@@ -33,6 +34,11 @@ from services.watchlist_service import (
 from services.watchlist_analysis import run_analysis_pipeline
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
+
+# ── Rel-vol rank snapshot: in-memory fallback (survives within process) ───────
+# Keyed by watchlist_id → {"current": {SYM: {rank, rel_vol}},
+#                           "previous": {SYM: {rank, rel_vol}} | None}
+_rv_mem: dict[str, dict] = {}
 
 
 # ── Market-cap string parser ─────────────────────────────────────────────────
@@ -112,6 +118,180 @@ def _vol_mc_fields(price: float | None, volume: float | None, market_cap: float 
         "vol_mc_label":              vol_mc_label,
         "vol_mc_unavailable_reason": vol_mc_unavail,
     }
+
+
+# ── Rel-vol rank + momentum helper ───────────────────────────────────────────
+
+async def _apply_rv_rank_fields(
+    watchlist_id: str,
+    dedup_sections: list[dict],
+    saved_normalized: list[str],
+) -> list[dict]:
+    """
+    Compute relative-volume ranks for the current enrichment pass, compare
+    against the previous snapshot (Neon-durable, in-memory fallback), and
+    add the following fields to every ticker row:
+
+        rel_vol_rank           int | None   — rank 1=highest rel_vol this pass
+        rel_vol_prev_rank      int | None   — rank from previous snapshot
+        rel_vol_rank_delta     int | None   — prev_rank - cur_rank (pos = moved up)
+        rel_vol_trend          "up"|"down"|"flat"|"unknown"
+        rel_vol_value_delta    float | None — cur_rel_vol - prev_rel_vol
+        rel_vol_prev_value     float | None
+        rel_vol_momentum_label "surging"|"rising"|"fading"|"falling"|"flat"|"unknown"
+
+    Only writes a new snapshot when quote coverage is adequate (≥50% of
+    US-eligible saved symbols have a numeric relative_volume), to avoid
+    committing garbage signals during provider outages.
+
+    Storage precedence: Neon (persistent across restarts) → in-memory dict
+    (_rv_mem, survives within the process lifetime).
+    """
+    if not watchlist_id:
+        return dedup_sections
+
+    # ── 1. Build current snapshot from enriched rows ──────────────────────────
+    eligible_rows: list[tuple[dict, float]] = []
+    for section in dedup_sections:
+        for row in section.get("tickers", []):
+            rv = row.get("relative_volume")
+            if isinstance(rv, (int, float)) and not _math.isnan(rv) and rv > 0:
+                eligible_rows.append((row, float(rv)))
+
+    eligible_rows.sort(key=lambda x: x[1], reverse=True)
+
+    current_snap: dict[str, dict] = {}
+    for rank_0, (row, rv) in enumerate(eligible_rows):
+        sym = str(row.get("symbol", "")).upper()
+        if sym:
+            current_snap[sym] = {"rank": rank_0 + 1, "rel_vol": round(rv, 6)}
+
+    # ── 2. Coverage guard — only save when ≥50% US-eligible symbols have rv ──
+    us_eligible_count = sum(1 for s in saved_normalized if ":" not in s)
+    rv_coverage = len(current_snap) / us_eligible_count if us_eligible_count > 0 else 0
+    should_save = rv_coverage >= 0.5
+
+    # ── 3. Load previous snapshot ─────────────────────────────────────────────
+    prev_snap: dict[str, dict] | None = None
+
+    # Try in-memory first (zero-latency within the process)
+    mem_entry = _rv_mem.get(watchlist_id)
+    if mem_entry:
+        prev_snap = mem_entry.get("previous") or mem_entry.get("current")
+
+    # Neon fallback (cross-restart persistence) — run in thread executor
+    if prev_snap is None:
+        try:
+            loop = asyncio.get_event_loop()
+            _cur, _prev = await loop.run_in_executor(
+                None,
+                lambda: _rv_neon_load(watchlist_id),
+            )
+            # On first run current==None, second run use current as previous
+            prev_snap = _prev or _cur
+        except Exception as _exc:
+            print(f"[RV_RANK] Neon load error wl={watchlist_id}: {_exc}")
+
+    # ── 4. Augment every row with rank/trend fields ───────────────────────────
+    for section in dedup_sections:
+        augmented: list[dict] = []
+        for row in section.get("tickers", []):
+            sym = str(row.get("symbol", "")).upper()
+            cur_entry  = current_snap.get(sym)
+            prev_entry = prev_snap.get(sym) if prev_snap else None
+
+            cur_rank  = cur_entry["rank"]    if cur_entry  else None
+            cur_rv    = cur_entry["rel_vol"] if cur_entry  else None
+            prev_rank = prev_entry["rank"]    if prev_entry else None
+            prev_rv   = prev_entry["rel_vol"] if prev_entry else None
+
+            if cur_rank is not None and prev_rank is not None:
+                delta = prev_rank - cur_rank   # positive = moved up (rank# fell)
+                if delta > 0:
+                    trend = "up"
+                elif delta < 0:
+                    trend = "down"
+                else:
+                    trend = "flat"
+            else:
+                delta = None
+                trend  = "unknown"
+
+            rv_delta = (
+                round(cur_rv - prev_rv, 4)
+                if cur_rv is not None and prev_rv is not None
+                else None
+            )
+
+            if trend == "up" and delta is not None and delta >= 10:
+                label = "surging"
+            elif trend == "up":
+                label = "rising"
+            elif trend == "down" and delta is not None and delta <= -10:
+                label = "falling"
+            elif trend == "down":
+                label = "fading"
+            elif trend == "flat":
+                label = "flat"
+            else:
+                label = "unknown"
+
+            augmented.append({
+                **row,
+                "rel_vol_rank":           cur_rank,
+                "rel_vol_prev_rank":      prev_rank,
+                "rel_vol_rank_delta":     delta,
+                "rel_vol_trend":          trend,
+                "rel_vol_value_delta":    rv_delta,
+                "rel_vol_prev_value":     prev_rv,
+                "rel_vol_momentum_label": label,
+            })
+        section["tickers"] = augmented
+
+    # ── 5. Save current snapshot (fire-and-forget) ────────────────────────────
+    if should_save and current_snap:
+        # Update in-memory immediately
+        _rv_mem[watchlist_id] = {
+            "previous": _rv_mem[watchlist_id]["current"] if watchlist_id in _rv_mem else None,
+            "current":  current_snap,
+        }
+        # Persist to Neon in background
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            None,
+            lambda: _rv_neon_save(watchlist_id, current_snap),
+        )
+        print(
+            f"[RV_RANK] wl={watchlist_id} ranked={len(current_snap)} "
+            f"prev_known={prev_snap is not None} "
+            f"coverage={rv_coverage:.0%} saved={should_save}"
+        )
+    else:
+        print(
+            f"[RV_RANK] wl={watchlist_id} ranked={len(current_snap)} "
+            f"coverage={rv_coverage:.0%} snapshot_skipped (coverage<50%)"
+        )
+
+    return dedup_sections
+
+
+def _rv_neon_load(watchlist_id: str) -> tuple:
+    """Thin sync wrapper around pg_storage.rv_snapshot_load."""
+    try:
+        from data.pg_storage import rv_snapshot_load
+        return rv_snapshot_load(watchlist_id)
+    except Exception as exc:
+        print(f"[RV_RANK] pg load skipped: {exc}")
+        return (None, None)
+
+
+def _rv_neon_save(watchlist_id: str, current_snap: dict) -> None:
+    """Thin sync wrapper around pg_storage.rv_snapshot_save."""
+    try:
+        from data.pg_storage import rv_snapshot_save
+        rv_snapshot_save(watchlist_id, current_snap)
+    except Exception as exc:
+        print(f"[RV_RANK] pg save skipped: {exc}")
 
 
 # ── Quote enrichment helper ──────────────────────────────────────────────────
@@ -532,6 +712,18 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             f"[WATCHLIST_ENRICH] dedup removed {dup_count} duplicate rows, "
             f"{not_saved_count} not-in-saved rows"
         )
+
+    # ── REL-VOL RANK + MOMENTUM PASS ─────────────────────────────────────────
+    # Additive pass: adds rel_vol_rank / trend / momentum_label to every row.
+    # Must run AFTER the dedup pass (final row set is fixed here).
+    # Does not reorder sections — only annotates existing rows.
+    _wl_id_for_rank = store.get("id") or ""
+    try:
+        dedup_sections = await _apply_rv_rank_fields(
+            _wl_id_for_rank, dedup_sections, saved_normalized
+        )
+    except Exception as _rv_err:
+        print(f"[WATCHLIST_ENRICH] rv_rank pass failed (non-fatal): {_rv_err}")
 
     total_rows = sum(len(s["tickers"]) for s in dedup_sections)
     elapsed_ms = round((_time.monotonic() - _t0) * 1000)

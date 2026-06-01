@@ -1,0 +1,118 @@
+Task: Add relative-volume momentum/rank movement fields to Watchlist ticker rows.
+
+Important:
+Do NOT redesign the Watchlist page.
+Do NOT change the existing response shape destructively.
+Do NOT remove any existing fields.
+Do NOT break the 302-row Watchlist fixes.
+Do NOT change Portfolio/Home behavior unless reusing shared helpers safely.
+Do NOT add frontend-side provider calls.
+This is an additive backend enrichment only.
+
+Current Watchlist ticker rows are returned from:
+GET /api/watchlist/{watchlist_id}
+
+Ticker rows live at:
+analysis.sections[].tickers[]
+
+Existing row fields include:
+- symbol
+- name
+- price
+- change_pct_1d
+- volume
+- relative_volume
+- market_cap
+- dollar_volume
+- vol_mc_pct
+- vol_mc_label
+- vol_mc_unavailable_reason
+
+New feature:
+On the Watchlist page ticker table, we want tickers with increasing relative volume / volume momentum that are moving up the list to show green, and tickers with falling relative volume / moving down the list to show red.
+
+Backend should add additive fields to each ticker row:
+- rel_vol_rank: number | null
+- rel_vol_prev_rank: number | null
+- rel_vol_rank_delta: number | null
+- rel_vol_trend: "up" | "down" | "flat" | "unknown"
+- rel_vol_value_delta: number | null
+- rel_vol_prev_value: number | null
+- rel_vol_momentum_label: "surging" | "rising" | "fading" | "falling" | "flat" | "unknown"
+
+Definition:
+- Sort eligible tickers by current relative_volume descending.
+- rel_vol_rank = current rank among rows with numeric relative_volume.
+- Compare against the prior watchlist snapshot/ranking.
+- If current rank number is lower than previous rank, the ticker moved up.
+  Example: previous rank 40, current rank 12 => rel_vol_rank_delta = +28, trend = "up"
+- If current rank number is higher than previous rank, the ticker moved down.
+  Example: previous rank 10, current rank 35 => rel_vol_rank_delta = -25, trend = "down"
+- If no previous snapshot exists, trend = "unknown".
+- If current or previous relative_volume is missing, trend = "unknown" unless rank comparison is still safe.
+
+Audit first:
+1) Locate GET /api/watchlist/{watchlist_id}.
+2) Locate _enrich_store_with_quotes and the current relative_volume enrichment.
+3) Locate existing Neon/cache tables used for watchlist quote/cache/history, if any.
+4) Determine whether there is already a place to store recent watchlist analysis snapshots or quote snapshots.
+5) Do not create a big new table if an existing cache/snapshot table can safely support this.
+
+Preferred implementation:
+- Store a small per-watchlist previous rel-vol snapshot in Neon or existing cache:
+  watchlist_id
+  symbol
+  relative_volume
+  rank
+  captured_at
+- Keep only recent snapshots, e.g. latest/current and previous, or a rolling 24h retention.
+- On each successful enrichment:
+  1) build current ranks from rows with numeric relative_volume
+  2) load previous ranks for the same watchlist_id
+  3) compute trend/delta fields
+  4) return additive fields in ticker rows
+  5) save current snapshot for next comparison
+- Avoid writing a snapshot if quote coverage is extremely low due to provider outage, because that would create garbage trend signals.
+  Example guard: only snapshot when at least 50% of saved US-eligible symbols have relative_volume.
+- For foreign/unsupported tickers, trend should be "unknown".
+
+Fallback implementation if persistent snapshot is too much:
+- Use in-memory TTL cache only as a temporary fallback.
+- But prefer Neon/durable cache so page refresh/restart does not erase movement history.
+
+Momentum label guidance:
+- If rel_vol_trend = "up" and rel_vol_rank_delta >= 10, label "surging"
+- If rel_vol_trend = "up", label "rising"
+- If rel_vol_trend = "down" and rel_vol_rank_delta <= -10, label "falling"
+- If rel_vol_trend = "down", label "fading"
+- If no meaningful movement, label "flat"
+- If no prior data, label "unknown"
+
+Important:
+- Do not reorder the backend sections unless the existing UI already sorts by relative_volume.
+- This feature should not force a new sort order by itself.
+- It only adds movement metadata so frontend can render green/red arrows next to rows.
+- No NaN values.
+- Nulls are okay.
+
+Validation:
+Run against the active 302-symbol watchlist:
+1) total rows = 302
+2) rows with relative_volume
+3) rows with rel_vol_rank
+4) rows with rel_vol_trend
+5) first run behavior if no previous snapshot exists
+6) second run behavior after snapshot exists
+7) sample 5 "up" rows if available
+8) sample 5 "down" rows if available
+9) confirm foreign unsupported tickers get unknown
+10) confirm no NaN/undefined values
+11) confirm categories still render correctly
+12) confirm Portfolio/Home unchanged
+
+Return:
+- Files changed
+- Storage/cache used for previous rel-vol snapshot
+- New row fields added
+- Exact trend/delta definitions
+- Validation counts

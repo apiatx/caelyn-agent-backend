@@ -465,6 +465,17 @@ def init_tables():
             ON public.strategy_hist_snapshots (expires_at DESC)
         """)
 
+        # ── Watchlist relative-volume rank snapshots ───────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.watchlist_rv_snapshots (
+                watchlist_id         TEXT PRIMARY KEY,
+                payload              JSONB NOT NULL DEFAULT '{}'::jsonb,
+                previous_payload     JSONB,
+                captured_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                previous_captured_at TIMESTAMPTZ
+            )
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
@@ -1497,5 +1508,80 @@ def calendar_snapshot_set_meta_field(tab: str, field: str, value) -> bool:
         except Exception:
             pass
         return False
+    finally:
+        _put_conn(conn)
+
+
+# ── Watchlist Rel-Vol Rank Snapshots ─────────────────────────────────────────
+
+def rv_snapshot_save(watchlist_id: str, current_payload: dict) -> bool:
+    """
+    Upsert a relative-volume rank snapshot for watchlist_id.
+
+    On each call the existing payload column is shifted into previous_payload
+    and current_payload becomes the new payload.  This gives a one-step
+    previous snapshot without extra rows.
+
+    current_payload shape: {SYMBOL_UPPER: {"rank": int, "rel_vol": float}}
+    """
+    import json as _json_rv
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.watchlist_rv_snapshots
+                    (watchlist_id, payload, previous_payload,
+                     captured_at, previous_captured_at)
+                VALUES (%s, %s::jsonb, NULL, NOW(), NULL)
+                ON CONFLICT (watchlist_id) DO UPDATE SET
+                    previous_payload     = watchlist_rv_snapshots.payload,
+                    previous_captured_at = watchlist_rv_snapshots.captured_at,
+                    payload              = EXCLUDED.payload,
+                    captured_at          = NOW()
+                """,
+                (watchlist_id, _json_rv.dumps(current_payload)),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[PG] rv_snapshot_save error wl={watchlist_id}: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def rv_snapshot_load(watchlist_id: str) -> tuple:
+    """
+    Load (current_payload, previous_payload) for watchlist_id.
+    Either element is None when no data exists yet.
+    Returns a plain tuple so callers avoid Union import.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return (None, None)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT payload, previous_payload "
+                "FROM public.watchlist_rv_snapshots "
+                "WHERE watchlist_id = %s",
+                (watchlist_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return (None, None)
+        current  = row[0] or {}
+        previous = row[1] or {}
+        return (current or None, previous or None)
+    except Exception as exc:
+        print(f"[PG] rv_snapshot_load error wl={watchlist_id}: {exc}")
+        return (None, None)
     finally:
         _put_conn(conn)
