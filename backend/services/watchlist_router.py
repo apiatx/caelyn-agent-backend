@@ -294,52 +294,184 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             total_out += 1
         enriched_sections.append({**section, "tickers": enriched_tickers})
 
-    # ── MISSING-SYMBOL APPEND ─────────────────────────────────────────────────
-    # Any saved symbol absent from the enriched sections gets a skeleton row
-    # appended to the existing other_uncategorized section, or a new synthetic
-    # section if none exists. This guarantees every saved symbol appears in the
-    # ticker table regardless of Claude parse quality.
+    # ── SECTION NORMALIZATION (GET-time) ──────────────────────────────────────
+    # Merge overlapping section titles into their canonical equivalents so the
+    # frontend never sees duplicate/redundant sections.
+    # "Solar" → "Clean Energy", "Renewable Energy" → "Clean Energy", etc.
+    _SECTION_ALIAS_MAP: dict[str, str] = {
+        "Solar":                    "Clean Energy",
+        "Renewable Energy":         "Clean Energy",
+        "Alternative Energy":       "Clean Energy",
+        "Fuel Cell":                "Clean Energy",
+        "Hydrogen Energy":          "Clean Energy",
+        "Energy Storage":           "Lithium & Battery Tech",
+        "Optical Networking":       "AI Networking",
+        "Networking":               "AI Networking",
+        "AI Chips":                 "Semiconductors",
+        "Chips":                    "Semiconductors",
+        "Memory / Storage":         "Memory & Storage",
+        "Robotics / Automation":    "Robotics & Automation",
+        "Datacenter / Compute":     "Data Center Infrastructure",
+        "Aerospace / Defense":      "Defense",
+    }
+
+    _aliases_applied = 0
+    _merged_map: dict[str, dict] = {}   # canonical_title → section dict (with mutable tickers list)
+    for _sec in enriched_sections:
+        _raw = (_sec.get("title") or _sec.get("name") or _sec.get("id") or "").strip()
+        _canon = _SECTION_ALIAS_MAP.get(_raw, _raw)
+        if _canon in _merged_map:
+            _merged_map[_canon]["tickers"].extend(_sec.get("tickers", []))
+            _aliases_applied += 1
+        else:
+            _merged_map[_canon] = {**_sec, "title": _canon, "tickers": list(_sec.get("tickers", []))}
+            if _canon != _raw:
+                _aliases_applied += 1
+    enriched_sections = list(_merged_map.values())
+
+    # ── UNCATEGORIZED RECLASSIFICATION (GET-time) ─────────────────────────────
+    # For tickers that ended up in "Other / Uncategorized" (either from a
+    # previous BG_REFRESH or from the missing-append pass), use the CSV Industry
+    # column as a deterministic fallback to move them into proper canonical
+    # sections.  No AI calls — pure lookup, runs on every GET.
+    _reclassified_count = 0
+    try:
+        from services.theme_ticker_mapper import map_industry_to_theme as _map_ind
+    except ImportError:
+        _map_ind = None
+
+    if _map_ind:
+        _unc_idx = next(
+            (i for i, _s in enumerate(enriched_sections)
+             if _s.get("id") == "other_uncategorized" or
+             (_s.get("title") or "").lower() in ("other / uncategorized", "other/uncategorized")),
+            None,
+        )
+        if _unc_idx is not None:
+            _sec_title_idx: dict[str, int] = {
+                (_s.get("title") or ""): i for i, _s in enumerate(enriched_sections)
+            }
+            _still_unc: list[dict] = []
+            for _row in enriched_sections[_unc_idx].get("tickers", []):
+                _sym = str(_row.get("symbol", "")).upper()
+                _csv_r = csv_map.get(_sym) or csv_map.get(_sym.split(":")[-1] if ":" in _sym else _sym) or {}
+                _ind = (_csv_r.get("Industry") or _csv_r.get("industry") or "").strip()
+                _mapping = _map_ind(_ind)
+                if _mapping:
+                    _tgt_name, _tgt_id = _mapping
+                    _tgt_name = _SECTION_ALIAS_MAP.get(_tgt_name, _tgt_name)
+                    _enriched_row = {
+                        **_row,
+                        "canonical_theme_name": _tgt_name,
+                        "canonical_theme_id":   _tgt_id,
+                        "theme_source":         "industry_fallback",
+                    }
+                    if _tgt_name in _sec_title_idx:
+                        _i = _sec_title_idx[_tgt_name]
+                        enriched_sections[_i]["tickers"].append(_enriched_row)
+                    else:
+                        _new_sec = {
+                            "id":           _tgt_id,
+                            "title":        _tgt_name,
+                            "subtitle":     "Classified via industry data",
+                            "tickers":      [_enriched_row],
+                            "theme_source": "industry_fallback",
+                        }
+                        _sec_title_idx[_tgt_name] = len(enriched_sections)
+                        enriched_sections.append(_new_sec)
+                    _reclassified_count += 1
+                else:
+                    _still_unc.append(_row)
+            # Keep only the truly-unclassifiable tickers in uncategorized
+            enriched_sections[_unc_idx] = {
+                **enriched_sections[_unc_idx],
+                "tickers": _still_unc,
+            }
+            # Drop empty sections (e.g. uncategorized that became fully reclassified)
+            enriched_sections = [_s for _s in enriched_sections if _s.get("tickers")]
+            if _reclassified_count:
+                print(
+                    f"[WATCHLIST_ENRICH] reclassified {_reclassified_count} uncategorized tickers "
+                    f"→ canonical sections via industry fallback"
+                )
+
+    # ── MISSING-SYMBOL APPEND (industry-aware) ────────────────────────────────
+    # Any saved symbol absent from the enriched sections gets a skeleton row.
+    # Before defaulting to "Other / Uncategorized", try the CSV industry fallback
+    # so skeleton rows land in the correct canonical section rather than a catch-all.
+    # This ensures tickers missed by Claude's last BG_REFRESH are still displayed
+    # in a meaningful thematic context.
     missing_syms = [s for s in saved_normalized if s not in symbols_in_sections]
     appended_count = 0
 
     if missing_syms:
-        missing_rows = []
-        for sym in missing_syms:
-            missing_rows.append(_build_ticker_row(sym, {
-                "symbol":              sym,
-                "catalyst":            None,
-                "sentiment":           None,
-                "action_note":         None,
-                "conviction":          None,
-                "theme":               None,
-                "canonical_theme_name": "Other / Uncategorized",
-                "canonical_theme_id":   "other_uncategorized",
-                "theme_source":         "missing_append",
-            }))
-        appended_count = len(missing_rows)
+        # Build a section-title → index map for routing skeleton rows
+        _miss_sec_idx: dict[str, int] = {
+            (s.get("title") or ""): i for i, s in enumerate(enriched_sections)
+        }
 
-        # Find existing other_uncategorized section and append, or create new
-        unc_idx = next(
-            (i for i, s in enumerate(enriched_sections)
-             if s.get("id") in ("other_uncategorized", "all_tickers", "all_tickers_missing")),
-            None,
-        )
-        if unc_idx is not None:
-            existing = enriched_sections[unc_idx]
-            enriched_sections[unc_idx] = {
-                **existing,
-                "tickers": existing["tickers"] + missing_rows,
-            }
-        else:
-            enriched_sections.append({
-                "id":       "other_uncategorized",
-                "title":    "Other / Uncategorized",
-                "subtitle": "Saved tickers not categorized by AI analysis",
-                "tickers":  missing_rows,
-            })
+        # Resolve industry-fallback mapper (may already be imported above)
+        _miss_map_ind = _map_ind if "_map_ind" in dir() else None
+        if _miss_map_ind is None:
+            try:
+                from services.theme_ticker_mapper import map_industry_to_theme as _miss_map_ind
+            except ImportError:
+                _miss_map_ind = None
+
+        for sym in missing_syms:
+            _csv_r = csv_map.get(sym) or csv_map.get(sym.split(":")[-1] if ":" in sym else sym) or {}
+            _ind   = (_csv_r.get("Industry") or _csv_r.get("industry") or "").strip()
+            _mapped = _miss_map_ind(_ind) if _miss_map_ind and _ind else None
+
+            if _mapped:
+                _tgt_name, _tgt_id = _mapped
+                _tgt_name = _SECTION_ALIAS_MAP.get(_tgt_name, _tgt_name)
+                _base_row = {
+                    "symbol":              sym,
+                    "catalyst":            None,
+                    "sentiment":           None,
+                    "action_note":         None,
+                    "conviction":          None,
+                    "theme":               None,
+                    "canonical_theme_name": _tgt_name,
+                    "canonical_theme_id":   _tgt_id,
+                    "theme_source":         "missing_append_industry",
+                }
+            else:
+                _tgt_name = "Other / Uncategorized"
+                _tgt_id   = "other_uncategorized"
+                _base_row = {
+                    "symbol":              sym,
+                    "catalyst":            None,
+                    "sentiment":           None,
+                    "action_note":         None,
+                    "conviction":          None,
+                    "theme":               None,
+                    "canonical_theme_name": _tgt_name,
+                    "canonical_theme_id":   _tgt_id,
+                    "theme_source":         "missing_append",
+                }
+
+            _built_row = _build_ticker_row(sym, _base_row)
+            appended_count += 1
+
+            if _tgt_name in _miss_sec_idx:
+                _i = _miss_sec_idx[_tgt_name]
+                enriched_sections[_i]["tickers"].append(_built_row)
+            else:
+                _new_s = {
+                    "id":       _tgt_id,
+                    "title":    _tgt_name,
+                    "subtitle": ("Saved tickers not categorized by AI analysis"
+                                 if _tgt_id == "other_uncategorized"
+                                 else "Classified via industry data"),
+                    "tickers":  [_built_row],
+                }
+                _miss_sec_idx[_tgt_name] = len(enriched_sections)
+                enriched_sections.append(_new_s)
 
         print(
-            f"[WATCHLIST_ENRICH] appended {appended_count} missing symbols to uncategorized "
+            f"[WATCHLIST_ENRICH] appended {appended_count} missing symbols "
             f"(saved={len(saved_normalized)} in_sections={len(symbols_in_sections)}): "
             + ", ".join(missing_syms[:10]) + ("…" if len(missing_syms) > 10 else "")
         )
@@ -1147,28 +1279,99 @@ async def _run_claude_analysis_background(watchlist_id: str) -> None:
 
         _OTHER_LABEL = "Other / Uncategorized"
         _OTHER_ID    = "other_uncategorized"
+
+        # Section-name aliases: normalize overlapping/sub-theme names into canonical ones.
+        # Claude sometimes invents sub-theme names; these guards ensure consistent grouping.
         _NAME_NORMALIZE: dict[str, str] = {
-            "Memory / Storage":      "Memory & Storage",
-            "Robotics / Automation": "Robotics & Automation",
-            "Datacenter / Compute":  "Data Center Infrastructure",
-            "Aerospace / Defense":   "Defense",
+            # Clean energy consolidation (solar, hydrogen, fuel cells → Clean Energy)
+            "Solar":                    "Clean Energy",
+            "Renewable Energy":         "Clean Energy",
+            "Alternative Energy":       "Clean Energy",
+            "Fuel Cell":                "Clean Energy",
+            "Fuel Cells":               "Clean Energy",
+            "Hydrogen":                 "Clean Energy",
+            "Hydrogen Energy":          "Clean Energy",
+            "Energy Storage":           "Lithium & Battery Tech",
+            # Networking variants
+            "Optical Networking":       "AI Networking",
+            "Networking":               "AI Networking",
+            # Semiconductor variants
+            "AI Chips":                 "Semiconductors",
+            "Chips":                    "Semiconductors",
+            # Slash-style legacy names
+            "Memory / Storage":         "Memory & Storage",
+            "Robotics / Automation":    "Robotics & Automation",
+            "Datacenter / Compute":     "Data Center Infrastructure",
+            "Aerospace / Defense":      "Defense",
         }
         _ID_NORMALIZE: dict[str, str] = {
-            "memory_/_storage":      "memory_storage",
-            "robotics_/_automation": "robotics_automation",
-            "datacenter_/_compute":  "datacenter_infra",
-            "aerospace_/_defense":   "defense",
+            "solar":                    "clean_energy",
+            "renewable_energy":         "clean_energy",
+            "alternative_energy":       "clean_energy",
+            "fuel_cell":                "clean_energy",
+            "fuel_cells":               "clean_energy",
+            "hydrogen":                 "clean_energy",
+            "hydrogen_energy":          "clean_energy",
+            "energy_storage":           "lithium_battery",
+            "optical_networking":       "ai_networking",
+            "networking":               "ai_networking",
+            "ai_chips":                 "semiconductors",
+            "chips":                    "semiconductors",
+            "memory_/_storage":         "memory_storage",
+            "robotics_/_automation":    "robotics_automation",
+            "datacenter_/_compute":     "datacenter_infra",
+            "aerospace_/_defense":      "defense",
         }
+
+        # Industry fallback — used when primary mapper returns None
+        try:
+            from services.theme_ticker_mapper import map_industry_to_theme as _bg_map_ind
+        except ImportError:
+            _bg_map_ind = None
 
         ticker_to_canon_name: dict[str, str] = {}
         ticker_to_canon_id:   dict[str, str] = {}
         theme_groups: dict[str, list[str]]   = {}
 
+        _stat_registry   = 0  # mapped by theme_ticker_mapper (primary registries)
+        _stat_fallback   = 0  # mapped by CSV industry fallback
+        _stat_other      = 0  # truly uncategorized
+        _stat_aliases    = 0  # section names normalized via _NAME_NORMALIZE
+
         for sym in tickers:
-            cname = map_ticker_to_primary_theme(sym) or _OTHER_LABEL
-            cid   = map_ticker_to_theme_id(sym)      or _OTHER_ID
-            cname = _NAME_NORMALIZE.get(cname, cname)
-            cid   = _ID_NORMALIZE.get(cid, cid)
+            raw_cname = map_ticker_to_primary_theme(sym)
+            raw_cid   = map_ticker_to_theme_id(sym)
+
+            # If primary mapper failed, try bare symbol (strips exchange prefix).
+            # Example: "AIM:TRT" → try "TRT" — handles foreign-listed stocks where
+            # the exchange prefix prevents a direct dict lookup.
+            if raw_cname is None and ":" in sym:
+                _base = sym.split(":")[-1]
+                raw_cname = map_ticker_to_primary_theme(_base)
+                raw_cid   = map_ticker_to_theme_id(_base)
+
+            if raw_cname is not None:
+                _stat_registry += 1
+            elif _bg_map_ind:
+                # CSV industry deterministic fallback
+                csv_row  = csv_map.get(sym) or csv_map.get(sym.split(":")[-1] if ":" in sym else sym) or {}
+                industry = (csv_row.get("Industry") or csv_row.get("industry") or "").strip()
+                _ind_res = _bg_map_ind(industry)
+                if _ind_res:
+                    raw_cname, raw_cid = _ind_res
+                    _stat_fallback += 1
+                else:
+                    raw_cname, raw_cid = _OTHER_LABEL, _OTHER_ID
+                    _stat_other += 1
+            else:
+                raw_cname, raw_cid = _OTHER_LABEL, _OTHER_ID
+                _stat_other += 1
+
+            cname = _NAME_NORMALIZE.get(raw_cname, raw_cname)
+            cid   = _ID_NORMALIZE.get(raw_cid or "", raw_cid or _OTHER_ID)
+            if cname != raw_cname:
+                _stat_aliases += 1
+
             ticker_to_canon_name[sym] = cname
             ticker_to_canon_id[sym]   = cid
             theme_groups.setdefault(cname, []).append(sym)
@@ -1179,7 +1382,9 @@ async def _run_claude_analysis_background(watchlist_id: str) -> None:
         )
         print(
             f"[BG_REFRESH] {watchlist_id}: {len(tickers)} tickers → "
-            f"{len(sorted_groups)} canonical theme groups"
+            f"{len(sorted_groups)} canonical theme groups "
+            f"(registry={_stat_registry} industry_fallback={_stat_fallback} "
+            f"other={_stat_other} aliases={_stat_aliases})"
         )
 
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -1314,6 +1519,14 @@ async def _run_claude_analysis_background(watchlist_id: str) -> None:
             "generated_at":           datetime.now(timezone.utc).isoformat() + "Z",
             "theme_source":           "canonical",
             "classification_method":  "canonical_theme_registry",
+            "_classification_stats": {
+                "saved_symbols_count":            len(tickers),
+                "categorized_by_registry_count":  _stat_registry,
+                "categorized_by_fallback_count":  _stat_fallback,
+                "uncategorized_count":            _stat_other,
+                "normalized_section_count":       len(sections),
+                "section_aliases_applied_count":  _stat_aliases,
+            },
         }
 
         try:

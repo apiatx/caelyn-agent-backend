@@ -1,0 +1,119 @@
+Task: Improve Watchlist AI categorization quality for 300+ ticker watchlists.
+
+Important:
+Do NOT redesign the Watchlist page.
+Do NOT change the frontend response shape.
+Do NOT remove the skeleton fallback.
+Do NOT break the existing 302-row robustness fix.
+Do NOT change Portfolio/Home behavior.
+This is backend classification quality hardening only.
+
+Current issue:
+The Watchlist page now renders correctly, but too many tickers are ending up in “Other / Uncategorized.”
+Also, overlapping top-level categories are being created, especially “Clean Energy” and “Solar.” Solar should not be a separate top-level section if we already have Clean Energy. Solar should roll into Clean Energy, optionally as a subcategory/row-level theme.
+
+Goal:
+Every saved ticker should fit into one canonical Watchlist section whenever reasonably possible.
+“Other / Uncategorized” should be used only as a last resort for:
+- invalid symbols
+- delisted/unknown symbols
+- symbols with insufficient company metadata after fallback lookup
+- genuinely unclassifiable tickers
+
+Audit first:
+1) Locate the Claude watchlist analysis prompt/function.
+2) Locate the canonical category/section list used for Watchlist analysis.
+3) Locate where Claude output sections are normalized into analysis.sections.
+4) Locate where missing symbols are appended into other_uncategorized.
+5) Locate any company metadata available to classification:
+   - CSV Company Name
+   - sector
+   - industry
+   - market cap
+   - profile/fundamentals cache
+   - quote description
+6) Report exactly why so many names are currently landing in other_uncategorized.
+
+Required classification rules:
+1) Use a fixed canonical section list.
+2) Claude must choose from that canonical list only.
+3) Do not allow Claude to invent new top-level categories unless the backend explicitly allows it.
+4) Consolidate overlapping categories:
+   - Solar -> Clean Energy
+   - Renewable Energy -> Clean Energy
+   - Energy Storage -> Clean Energy, unless there is already a canonical Battery/Storage section
+   - Hydrogen/Fuel Cell -> Clean Energy unless separate canonical section exists
+5) If a symbol is not emitted by Claude, do not automatically leave it uncategorized.
+   Instead, run deterministic fallback mapping based on company name/sector/industry/known ticker patterns.
+6) Only after AI + deterministic fallback fail should the symbol go to Other / Uncategorized.
+
+Specific request:
+Please add or improve a canonical category mapping layer after Claude returns sections.
+
+Example:
+If Claude returns section.title = "Solar", normalize it to:
+section.title = "Clean Energy"
+and optionally preserve:
+row.subcategory = "Solar"
+or
+row.theme_source/detail = "Solar"
+only if there is already a safe row-level field for it.
+
+Do not require the frontend to understand new required fields. Any subcategory field should be optional and safe to ignore.
+
+Recommended canonical top-level sections:
+Use the existing category sections already in the app if they exist. Do not invent a totally new taxonomy without auditing first.
+
+But apply these consolidation rules at minimum:
+- Solar -> Clean Energy
+- Renewable Energy -> Clean Energy
+- Alternative Energy -> Clean Energy
+- Fuel Cell -> Clean Energy
+- Hydrogen -> Clean Energy
+- Energy Storage -> Clean Energy unless canonical storage/battery category already exists
+- AI Networking / Networking / Optical Networking should normalize consistently based on existing categories
+- Semiconductors / Chips / AI Chips should normalize consistently based on existing categories
+- Data Center Power / Power / Cooling should normalize consistently based on existing categories
+- Photonics / Lasers / Optical should normalize consistently based on existing categories
+
+Important invariant:
+For GET /api/watchlist/{watchlist_id}:
+- flattened analysis.sections[].tickers[] should still cover every unique saved symbol exactly once
+- no duplicate symbols
+- no not-in-saved symbols
+- no NaN/undefined
+- uncategorized count should be minimized
+
+Add debug/meta counts if safe:
+analysis._classification_stats = {
+  saved_symbols_count,
+  categorized_by_claude_count,
+  categorized_by_fallback_count,
+  uncategorized_count,
+  normalized_section_count,
+  section_aliases_applied_count
+}
+
+Safe to ignore on frontend.
+
+Validation:
+Run on the active 302-symbol watchlist and report:
+1) saved symbols count
+2) flattened ticker rows count
+3) unique ticker symbols count
+4) duplicate count
+5) missing count
+6) uncategorized row count before fix
+7) uncategorized row count after fix
+8) top-level section names after normalization
+9) count per section
+10) examples of solar/clean energy tickers and where they landed
+11) examples of formerly uncategorized tickers and where they landed
+12) confirm GET /api/watchlist/{watchlist_id} response shape unchanged
+13) confirm frontend still reads analysis.sections[].tickers[]
+14) confirm no Portfolio/Home regression
+
+Expected:
+- Many fewer tickers in Other / Uncategorized
+- Solar consolidated under Clean Energy unless the existing canonical taxonomy intentionally has Solar as its own top-level category
+- Every saved ticker still appears exactly once

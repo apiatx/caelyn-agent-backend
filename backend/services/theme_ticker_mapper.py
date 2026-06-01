@@ -68,12 +68,15 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
 
     # Cybersecurity
     "LAES":       ("Cybersecurity",                 "cybersecurity"),        # SEALSQ Corp — post-quantum secure RISC-V microchips for IoT/automotive (WISeKey spinoff)
+    "AKAM":       ("Cybersecurity",                 "cybersecurity"),        # Akamai — CDN / edge security / bot protection (classified as "Software-Infrastructure" in screeners but core business is cybersecurity)
 
     # Semiconductor Equipment
     "TRT":        ("Semiconductor Equipment",       "semicap_equipment"),    # Trio-Tech International — semiconductor burn-in/test services for memory & logic
+    "AIM:TRT":    ("Semiconductor Equipment",       "semicap_equipment"),    # Trio-Tech International (AIM listing) — same company, overrides wrong "Auto Parts" CSV industry
 
     # Power / Cooling
     "SEI":        ("Power / Cooling",               "power_/_cooling"),      # Solaris Energy Infrastructure — mobile power generation for AI data centers & industrial
+    "AIM:VLX":    ("Power / Cooling",               "power_/_cooling"),      # Volex (AIM) — power/data cables & interconnects for data centers & industrial
 
     # Quantum Computing
     "INFQ":       ("Quantum Computing",             "quantum"),              # Infleqtion (formerly ColdQuanta) — quantum computing & sensing, Sqynet quantum network
@@ -93,6 +96,21 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
     "RDW":        ("Space Economy",                 "space"),                # Redwire Space — in-space manufacturing & solar arrays
     "SIDU":       ("Space Economy",                 "space"),                # Sidus Space — small satellite constellation
     "TSAT":       ("Space Economy",                 "space"),                # Telesat — LEO satellite constellation (Lightspeed)
+
+    # AI Networking
+    "AEVA":       ("AI Networking",                 "ai_networking"),        # Aeva Technologies — FMCW LiDAR perception chips for autonomous vehicles / robotics (classified as "Software-Infrastructure" in screeners)
+    "AIM:FTC":    ("AI Networking",                 "ai_networking"),        # FastForward Innovations (AIM) — AI connectivity & communications portfolio company
+
+    # Semiconductors
+    "ADEA":       ("Semiconductors",                "semiconductors"),       # Adeia — semiconductor IP licensing (memory/storage patents); core value is semiconductor IP
+    "AIM:ENSI":   ("Semiconductors",                "semiconductors"),       # Ensurge Micropower (AIM) — ultra-thin embedded semiconductor solutions
+
+    # Clean Energy
+    "AMSC":       ("Clean Energy",                  "clean_energy"),         # American Superconductor — power electronics & grid-tied systems for wind turbines & grid stability
+    "AMRC":       ("Clean Energy",                  "clean_energy"),         # Ameresco — energy efficiency & renewable energy project developer/owner-operator
+
+    # Lithium & Battery Tech
+    "AMPX":       ("Lithium & Battery Tech",        "lithium_battery"),      # Amprius Technologies — silicon anode lithium battery cells (EV/aerospace/defense)
 }
 
 # ── Index dicts (built once at import time, cheap in-memory) ─────────────────
@@ -357,6 +375,92 @@ def _build_index() -> None:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+# ── Industry → Canonical Theme mapping ───────────────────────────────────────
+# Maps CSV "Industry" column values to (display_name, theme_id) pairs.
+# Used as a deterministic fallback when a ticker is not in any of the three
+# primary sources (THEME_RS_UNIVERSE, THEME_MAP, THEME_ETF_UNIVERSE).
+# Keys are exact CSV industry strings (case-sensitive as they appear in FMP/Finviz CSV exports).
+# Only high-confidence mappings are included — when in doubt, leave unlisted (returns None).
+INDUSTRY_TO_THEME: dict[str, tuple[str, str]] = {
+    # ── Semiconductors ──────────────────────────────────────────────────────
+    "Semiconductors":                                       ("Semiconductors",             "semiconductors"),
+    "Semiconductors and Related Devices":                   ("Semiconductors",             "semiconductors"),
+    "Electronic Components":                                ("Semiconductors",             "semiconductors"),
+    "Electronic Components, not elsewhere classified":      ("Semiconductors",             "semiconductors"),
+    "Semiconductor Memory":                                 ("Memory & Storage",           "memory_storage"),
+
+    # ── Semiconductor Equipment ─────────────────────────────────────────────
+    "Semiconductor Equipment & Materials":                  ("Semiconductor Equipment",    "semicap_equipment"),
+    "Scientific & Technical Instruments":                   ("Semiconductor Equipment",    "semicap_equipment"),
+
+    # ── AI Networking / Communication ───────────────────────────────────────
+    "Communication Equipment":                              ("AI Networking",              "ai_networking"),
+    "Telephone and Telegraph Apparatus":                    ("AI Networking",              "ai_networking"),
+    "Telecom Services":                                     ("AI Networking",              "ai_networking"),
+
+    # ── Data Center / Cloud ─────────────────────────────────────────────────
+    "Computer Hardware":                                    ("Data Center Infrastructure", "datacenter_infra"),
+    "Information Technology Services":                      ("Data Center Infrastructure", "datacenter_infra"),
+    "Software - Infrastructure":                            ("Data Center Infrastructure", "datacenter_infra"),
+    "REIT - Specialty":                                     ("Data Center Infrastructure", "datacenter_infra"),
+
+    # ── Cloud Software ───────────────────────────────────────────────────────
+    "Software - Application":                               ("Cloud Software",             "cloud_software"),
+    "Specialty Business Services":                          ("Cloud Software",             "cloud_software"),
+
+    # ── Defense / Aerospace ─────────────────────────────────────────────────
+    "Aerospace & Defense":                                  ("Defense",                    "defense"),
+
+    # ── Clean Energy ────────────────────────────────────────────────────────
+    "Solar":                                                ("Clean Energy",               "clean_energy"),
+    "Utilities - Renewable":                                ("Clean Energy",               "clean_energy"),
+    "Utilities - Independent Power Producers":              ("Clean Energy",               "clean_energy"),
+    "Pollution & Treatment Controls":                       ("Clean Energy",               "clean_energy"),
+
+    # ── Power / Cooling ─────────────────────────────────────────────────────
+    "Electrical Equipment & Parts":                         ("Power / Cooling",            "power_/_cooling"),
+    "Utilities - Regulated Electric":                       ("Nuclear / Grid",             "nuclear_/_grid"),
+
+    # ── Lithium & Battery Tech ──────────────────────────────────────────────
+    # (covered by explicit _FOREIGN_ALIAS_MAP entries for specific tickers)
+
+    # ── Uranium & Nuclear ────────────────────────────────────────────────────
+    "Uranium":                                              ("Uranium & Nuclear Energy",   "uranium_nuclear"),
+
+    # ── Rare Earth / Metals ───────────────────────────────────────────────────
+    "Other Industrial Metals & Mining":                     ("Rare Earth Metals",          "rare_earth"),
+    "Other Precious Metals & Mining":                       ("Rare Earth Metals",          "rare_earth"),
+
+    # ── Semi Materials ────────────────────────────────────────────────────────
+    "Specialty Chemicals":                                  ("Semi Materials",             "semi_materials"),
+
+    # ── Industrials ─────────────────────────────────────────────────────────
+    "Specialty Industrial Machinery":                       ("Industrials",                "industrials"),
+    "Engineering & Construction":                           ("Industrials",                "industrials"),
+    "Auto Parts":                                           ("Industrials",                "industrials"),
+    "Conglomerates":                                        ("Industrials",                "industrials"),
+    "Oil & Gas Exploration & Production":                   ("Industrials",                "industrials"),
+    "Oil & Gas Drilling":                                   ("Industrials",                "industrials"),
+    "Thermal Coal":                                         ("Industrials",                "industrials"),
+    "Industrial and Commercial Fans and Blowers and Air Purification Equipment": (
+                                                             "Industrials",                "industrials"),
+    # ── Intentionally left unmapped (return None) ────────────────────────────
+    # "Capital Markets", "Asset Management", "Agricultural Inputs" — no clear fit
+}
+
+
+def map_industry_to_theme(industry: str) -> tuple[str, str] | None:
+    """
+    Return (display_name, theme_id) for a CSV Industry string, or None if not mapped.
+
+    Used as a deterministic fallback classifier when a ticker is absent from all
+    primary theme registries.  Never raises.
+    """
+    if not industry:
+        return None
+    return INDUSTRY_TO_THEME.get(industry.strip())
+
 
 def map_ticker_to_themes(ticker: str) -> list[str]:
     """Return list of theme names for a ticker (may be empty). Never raises."""
