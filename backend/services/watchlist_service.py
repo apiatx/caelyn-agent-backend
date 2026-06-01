@@ -22,6 +22,8 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
+from services.news_signal_scorer import score_article as _score_article
+
 # ── Persistence (JSON file store) ────────────────────────────────────────────
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -357,9 +359,12 @@ async def fetch_news_for_ticker(ticker: str, client: httpx.AsyncClient) -> List[
             pplx_blocked("fallback", f"fetch_news_for_ticker:{ticker}")
             print(f"[WATCHLIST-NEWS] No news for {ticker} — RSS+FMP empty, PERPLEXITY_FALLBACK_ENABLED=false")
 
-    # Cache results
-    _news_cache[ticker] = {"fetched_at": time.time(), "articles": articles[:15]}
-    return articles[:15]
+    # ── Score articles (deterministic, no I/O) before caching ────────────────
+    articles = [_score_article(a, ticker) for a in articles[:15]]
+
+    # Cache results (articles already contain signal fields)
+    _news_cache[ticker] = {"fetched_at": time.time(), "articles": articles}
+    return articles
 
 
 async def fetch_news_for_tickers(tickers: List[str]) -> Dict[str, List[Dict[str, Any]]]:

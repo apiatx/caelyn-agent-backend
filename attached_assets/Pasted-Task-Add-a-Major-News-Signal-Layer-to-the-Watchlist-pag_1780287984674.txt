@@ -1,0 +1,220 @@
+Task: Add a Major News Signal Layer to the Watchlist page news pipeline.
+
+Important:
+Do NOT redesign the Watchlist page.
+Do NOT change the existing news response shape destructively.
+Do NOT remove existing news items.
+Do NOT break the 302-row Watchlist fixes.
+Do NOT change Portfolio/Home behavior unless explicitly reusing shared helpers safely.
+Do NOT add frontend-side news scoring logic.
+Backend owns scoring/classification.
+
+Current issue:
+The Watchlist page News section returns articles that mention any ticker on the user's watchlist. That creates too much noise. I need the backend to identify and surface major developments clearly:
+- hyperscaler deals or customer anchors
+- government / military / defense involvement
+- major contracts / design wins / deployments
+- major technical advancements
+- major strategic partnerships
+- major financing/dilution events
+- earnings/guidance shocks
+- M&A / strategic investments
+- anything that could materially change the thesis
+
+Goal:
+Keep the existing news feed, but add backend fields that let frontend:
+1) highlight major developments
+2) sort/filter by major news signal
+3) show why the article matters
+4) distinguish bullish vs bearish material developments
+
+Audit first:
+1) Locate the Watchlist page news endpoint/service.
+2) Locate the source(s) of current watchlist news:
+   - FMP stock news
+   - Gemini/Perplexity/search
+   - cached news service
+   - any existing agent/news summarizer
+3) Locate the current news response shape consumed by frontend.
+4) Locate any existing news scoring/sentiment/catalyst logic elsewhere in the app, especially Home, Portfolio Terminal, Catalyst Calendar, Daily Alpha, or Theme pages.
+5) Reuse existing helpers if practical.
+6) Report exact files/functions/routes before editing.
+
+Feature:
+For each watchlist news item, add additive fields:
+
+- is_major_development: boolean
+- major_news_score: number from 0 to 100
+- major_news_label: string
+  Examples:
+  "Hyperscaler Deal"
+  "Government / Defense"
+  "Major Contract"
+  "Strategic Partnership"
+  "Technical Breakthrough"
+  "Earnings Shock"
+  "Financing / Dilution"
+  "M&A"
+  "Routine Mention"
+- catalyst_type: string | null
+  Examples:
+  "hyperscaler_anchor"
+  "government_contract"
+  "defense_military"
+  "commercial_contract"
+  "technical_milestone"
+  "product_launch"
+  "earnings_guidance"
+  "financing"
+  "mna"
+  "routine"
+- signal_strength: "high" | "medium" | "low" | "none"
+- bull_bear_impact: "bullish" | "bearish" | "mixed" | "neutral" | "unknown"
+- why_it_matters: short string, max 180 chars
+- matched_entities: string[]
+  Examples: ["Microsoft", "AWS", "DoD", "NVIDIA", "NASA"]
+- matched_keywords: string[]
+- related_watchlist_symbols: string[]
+- source_quality: "primary" | "tier1" | "syndicated" | "low" | "unknown" if feasible
+- published_at/date preserved from existing object
+
+Major signal scoring:
+Use deterministic scoring first, with optional LLM refinement only for ambiguous/high-value articles.
+
+High-priority keyword/entity rules:
+
+Hyperscaler / AI anchors:
+- Microsoft, Azure
+- Amazon, AWS
+- Google, Google Cloud
+- Meta
+- Oracle
+- NVIDIA
+- OpenAI
+- CoreWeave
+- xAI
+- Tesla
+- Apple, if relevant to AI/datacenter/silicon
+- Broadcom, Marvell, Arista, TSMC, ASML as thematic anchors where relevant
+
+Government / military:
+- Department of Defense, DoD
+- DARPA
+- Army, Navy, Air Force, Space Force
+- NASA
+- DOE, Department of Energy
+- CHIPS Act
+- federal contract
+- military contract
+- defense contract
+- government grant
+- SBIR/STTR
+- national security
+- classified, secure, hardened, mission-critical
+
+Major deal language:
+- contract
+- awarded
+- selected by
+- design win
+- customer win
+- strategic partnership
+- multi-year
+- supply agreement
+- deployment
+- expansion
+- purchase order
+- production ramp
+- commercial launch
+- volume production
+- qualification
+- certified
+- approved supplier
+
+Technical advancement:
+- breakthrough
+- milestone
+- world first
+- record performance
+- qualified
+- certification
+- new product launch
+- sampling
+- tape-out
+- yield improvement
+- production-ready
+- validates
+- successful test
+
+Bearish material events:
+- stock offering
+- ATM program
+- dilution
+- convertible notes
+- going concern
+- downgrade
+- guidance cut
+- customer loss
+- delay
+- investigation
+- lawsuit
+- restatement
+- short report
+
+Important:
+Do not mark every article as major just because it mentions a big company.
+Example:
+"Stocks move higher as Nvidia rises" should not be major.
+"Company announces supply agreement with Nvidia for AI datacenter deployment" should be major.
+
+Ranking:
+- major_news_score 85–100: must-surface
+- 65–84: important
+- 40–64: watch
+- below 40: routine/noise
+
+For Watchlist News endpoint, return:
+1) existing full news list, unchanged except additive fields
+2) optional top-level summary:
+   major_developments: top 10 to 20 articles where is_major_development = true
+   major_developments_count
+   high_signal_count
+   by_catalyst_type counts
+Only add this if it does not break frontend. Otherwise, additive item-level fields are enough.
+
+Caching:
+- Cache scored news in Neon/existing cache if available.
+- Avoid scoring the same article repeatedly.
+- Key by url/title/published_at/source.
+- Do not run expensive LLM classification on every page load for every article.
+- Deterministic keyword/entity scoring should handle most articles cheaply.
+- Optional LLM pass should only run on articles above a threshold or ambiguous cases.
+
+Validation:
+Run on the active 302-symbol watchlist and report:
+1) total news items returned
+2) items marked is_major_development
+3) high signal count
+4) top 10 major developments with:
+   - symbol(s)
+   - title
+   - major_news_score
+   - major_news_label
+   - catalyst_type
+   - bull_bear_impact
+   - why_it_matters
+   - matched_entities
+5) examples correctly NOT marked major
+6) confirm old news fields still present
+7) confirm endpoint latency before/after
+8) confirm caching behavior
+9) confirm no NaN/undefined
+10) confirm Portfolio/Home unchanged
+
+Return:
+- Files changed
+- Endpoint/response shape
+- New fields added
+- Scoring rules
+- Whether LLM is used or deterministic only
+- Validation examples
