@@ -1,0 +1,88 @@
+Task: Add Vol/MC momentum fields to Watchlist ticker rows, analogous to the existing Rel Vol momentum fields.
+
+Important:
+Do NOT change existing response fields destructively.
+Do NOT remove or rename vol_mc_pct.
+Do NOT remove or rename relative_volume.
+Do NOT change Portfolio/Home behavior.
+Do NOT break the existing 302-row Watchlist fixes.
+This is additive backend enrichment only.
+
+Current issue:
+Frontend needs separate columns:
+- Rel Vol = current row.relative_volume
+- Rel Vol Δ = existing rel_vol_trend / rel_vol_rank_delta fields
+- Vol/MC = current row.vol_mc_pct
+- Vol/MC Δ = new backend-provided Vol/MC movement fields
+
+Backend already added Rel Vol movement fields:
+- rel_vol_rank
+- rel_vol_prev_rank
+- rel_vol_rank_delta
+- rel_vol_trend
+- rel_vol_value_delta
+- rel_vol_prev_value
+- rel_vol_momentum_label
+
+Now add analogous Vol/MC movement fields using current row.vol_mc_pct.
+
+Add these fields to each Watchlist ticker row:
+- vol_mc_prev_pct: number | null
+- vol_mc_pct_delta: number | null
+- vol_mc_trend: "up" | "down" | "flat" | "unknown"
+- vol_mc_momentum_label: "surging" | "rising" | "flat" | "fading" | "falling" | "unknown"
+
+Optional if easy and useful:
+- vol_mc_rank: number | null
+- vol_mc_prev_rank: number | null
+- vol_mc_rank_delta: number | null
+
+Definitions:
+- vol_mc_pct is the current volume / market cap percentage already returned.
+- vol_mc_prev_pct is the previous snapshot value for that symbol.
+- vol_mc_pct_delta = current vol_mc_pct - previous vol_mc_pct.
+- vol_mc_trend:
+  - "up" if vol_mc_pct_delta > meaningful threshold
+  - "down" if vol_mc_pct_delta < negative meaningful threshold
+  - "flat" if approximately unchanged
+  - "unknown" if current or previous value missing
+- Use a small threshold to avoid noise, e.g. absolute delta < 0.05 percentage points = flat, unless you have a better existing threshold.
+
+Storage:
+- Reuse the existing watchlist_rv_snapshots table if safe by extending payload shape, or add a similarly small snapshot table if cleaner.
+- Do not create a heavy historical table.
+- One previous snapshot is enough.
+- Must survive restart if possible.
+- In-memory fallback is acceptable only as fallback, not primary.
+
+Snapshot write guard:
+- Only save Vol/MC snapshot if enough symbols have valid vol_mc_pct.
+- Suggested guard: at least 50% of US-eligible symbols with valid vol_mc_pct, or reuse the existing Rel Vol snapshot guard.
+- Do not save garbage snapshot during provider outage.
+
+Important:
+- Keep row.vol_mc_pct as the raw current metric.
+- Do not replace it with a trend/delta.
+- The frontend will display Vol/MC and Vol/MC Δ separately.
+- No NaN values.
+- Foreign/unquoted/missing rows should get unknown/null.
+
+Validation:
+Run against active 302-symbol watchlist:
+1) total rows = 302
+2) rows with vol_mc_pct
+3) rows with vol_mc_prev_pct after second call
+4) rows with vol_mc_pct_delta after second call
+5) rows with vol_mc_trend
+6) sample up/down/flat/unknown if available
+7) confirm row.vol_mc_pct still exists and is unchanged
+8) confirm rel_vol fields still exist and are unchanged
+9) confirm no NaN/undefined values
+10) confirm Portfolio/Home unchanged
+
+Return:
+- Files changed
+- Snapshot storage used
+- New fields added
+- Exact delta/trend definitions
+- Validation counts

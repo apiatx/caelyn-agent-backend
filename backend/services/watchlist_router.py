@@ -40,6 +40,7 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 # Keyed by watchlist_id → {"current": {SYM: {rank, rel_vol}},
 #                           "previous": {SYM: {rank, rel_vol}} | None}
 _rv_mem: dict[str, dict] = {}
+_volmc_mem: dict[str, dict] = {}
 
 
 # ── Market-cap string parser ─────────────────────────────────────────────────
@@ -293,6 +294,183 @@ def _rv_neon_save(watchlist_id: str, current_snap: dict) -> None:
         rv_snapshot_save(watchlist_id, current_snap)
     except Exception as exc:
         print(f"[RV_RANK] pg save skipped: {exc}")
+
+
+# ── Vol/MC rank + momentum helper ─────────────────────────────────────────────
+
+_VOLMC_FLAT_THRESHOLD = 0.05   # percentage-point delta below which = "flat"
+_VOLMC_SURGE_THRESHOLD = 1.0   # ppt delta for "surging" / "falling" labels
+
+
+async def _apply_volmc_rank_fields(
+    watchlist_id: str,
+    dedup_sections: list[dict],
+    saved_normalized: list[str],
+) -> list[dict]:
+    """
+    Compute Vol/MC ranks for the current enrichment pass, compare against the
+    previous snapshot (Neon-durable, in-memory fallback), and add the following
+    additive fields to every ticker row:
+
+        vol_mc_rank           int | None   — rank 1=highest vol_mc_pct this pass
+        vol_mc_prev_rank      int | None   — rank from previous snapshot
+        vol_mc_rank_delta     int | None   — prev_rank - cur_rank (pos = moved up)
+        vol_mc_prev_pct       float | None — previous snapshot vol_mc_pct
+        vol_mc_pct_delta      float | None — cur_vol_mc_pct - prev_vol_mc_pct
+        vol_mc_trend          "up"|"down"|"flat"|"unknown"
+        vol_mc_momentum_label "surging"|"rising"|"flat"|"fading"|"falling"|"unknown"
+
+    Trend threshold: |vol_mc_pct_delta| < 0.05 ppt → "flat".
+    Momentum labels use value delta magnitude:
+        ≥ +1.0 ppt  → surging   |  < +1.0 ppt up   → rising
+        ≤ -1.0 ppt  → falling   |  > -1.0 ppt down  → fading
+
+    Coverage guard: only saves snapshot when ≥50% of US-eligible symbols have
+    a valid vol_mc_pct (reuses same threshold as rv_rank to reject outage data).
+
+    Storage: Neon (persistent across restarts) → _volmc_mem (process-local).
+    """
+    if not watchlist_id:
+        return dedup_sections
+
+    # ── 1. Build current snapshot ─────────────────────────────────────────────
+    eligible_rows: list[tuple[dict, float]] = []
+    for section in dedup_sections:
+        for row in section.get("tickers", []):
+            pct = row.get("vol_mc_pct")
+            if isinstance(pct, (int, float)) and not _math.isnan(pct) and pct > 0:
+                eligible_rows.append((row, float(pct)))
+
+    eligible_rows.sort(key=lambda x: x[1], reverse=True)
+
+    current_snap: dict[str, dict] = {}
+    for rank_0, (row, pct) in enumerate(eligible_rows):
+        sym = str(row.get("symbol", "")).upper()
+        if sym:
+            current_snap[sym] = {"rank": rank_0 + 1, "vol_mc_pct": round(pct, 6)}
+
+    # ── 2. Coverage guard — only save when ≥50% US-eligible have vol_mc_pct ──
+    us_eligible_count = sum(1 for s in saved_normalized if ":" not in s)
+    vm_coverage = len(current_snap) / us_eligible_count if us_eligible_count > 0 else 0
+    should_save = vm_coverage >= 0.5
+
+    # ── 3. Load previous snapshot ─────────────────────────────────────────────
+    prev_snap: dict[str, dict] | None = None
+
+    mem_entry = _volmc_mem.get(watchlist_id)
+    if mem_entry:
+        prev_snap = mem_entry.get("previous") or mem_entry.get("current")
+
+    if prev_snap is None:
+        try:
+            loop = asyncio.get_event_loop()
+            _cur, _prev = await loop.run_in_executor(
+                None,
+                lambda: _volmc_neon_load(watchlist_id),
+            )
+            prev_snap = _prev or _cur
+        except Exception as _exc:
+            print(f"[VOLMC_RANK] Neon load error wl={watchlist_id}: {_exc}")
+
+    # ── 4. Augment every row ──────────────────────────────────────────────────
+    for section in dedup_sections:
+        augmented: list[dict] = []
+        for row in section.get("tickers", []):
+            sym = str(row.get("symbol", "")).upper()
+            cur_entry  = current_snap.get(sym)
+            prev_entry = prev_snap.get(sym) if prev_snap else None
+
+            cur_rank   = cur_entry["rank"]       if cur_entry  else None
+            cur_pct    = cur_entry["vol_mc_pct"] if cur_entry  else None
+            prev_rank  = prev_entry["rank"]       if prev_entry else None
+            prev_pct   = prev_entry["vol_mc_pct"] if prev_entry else None
+
+            # Rank delta (optional fields)
+            rank_delta: int | None = None
+            if cur_rank is not None and prev_rank is not None:
+                rank_delta = prev_rank - cur_rank  # positive = moved up
+
+            # Value delta + trend (primary signal)
+            pct_delta: float | None = None
+            if cur_pct is not None and prev_pct is not None:
+                pct_delta = round(cur_pct - prev_pct, 6)
+
+            if pct_delta is None:
+                trend = "unknown"
+            elif pct_delta > _VOLMC_FLAT_THRESHOLD:
+                trend = "up"
+            elif pct_delta < -_VOLMC_FLAT_THRESHOLD:
+                trend = "down"
+            else:
+                trend = "flat"
+
+            if trend == "up" and pct_delta is not None and pct_delta >= _VOLMC_SURGE_THRESHOLD:
+                label = "surging"
+            elif trend == "up":
+                label = "rising"
+            elif trend == "down" and pct_delta is not None and pct_delta <= -_VOLMC_SURGE_THRESHOLD:
+                label = "falling"
+            elif trend == "down":
+                label = "fading"
+            elif trend == "flat":
+                label = "flat"
+            else:
+                label = "unknown"
+
+            augmented.append({
+                **row,
+                "vol_mc_rank":           cur_rank,
+                "vol_mc_prev_rank":      prev_rank,
+                "vol_mc_rank_delta":     rank_delta,
+                "vol_mc_prev_pct":       prev_pct,
+                "vol_mc_pct_delta":      pct_delta,
+                "vol_mc_trend":          trend,
+                "vol_mc_momentum_label": label,
+            })
+        section["tickers"] = augmented
+
+    # ── 5. Save current snapshot (fire-and-forget) ────────────────────────────
+    if should_save and current_snap:
+        _volmc_mem[watchlist_id] = {
+            "previous": _volmc_mem[watchlist_id]["current"] if watchlist_id in _volmc_mem else None,
+            "current":  current_snap,
+        }
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            None,
+            lambda: _volmc_neon_save(watchlist_id, current_snap),
+        )
+        print(
+            f"[VOLMC_RANK] wl={watchlist_id} ranked={len(current_snap)} "
+            f"prev_known={prev_snap is not None} "
+            f"coverage={vm_coverage:.0%} saved={should_save}"
+        )
+    else:
+        print(
+            f"[VOLMC_RANK] wl={watchlist_id} ranked={len(current_snap)} "
+            f"coverage={vm_coverage:.0%} snapshot_skipped (coverage<50%)"
+        )
+
+    return dedup_sections
+
+
+def _volmc_neon_load(watchlist_id: str) -> tuple:
+    """Thin sync wrapper around pg_storage.volmc_snapshot_load."""
+    try:
+        from data.pg_storage import volmc_snapshot_load
+        return volmc_snapshot_load(watchlist_id)
+    except Exception as exc:
+        print(f"[VOLMC_RANK] pg load skipped: {exc}")
+        return (None, None)
+
+
+def _volmc_neon_save(watchlist_id: str, current_snap: dict) -> None:
+    """Thin sync wrapper around pg_storage.volmc_snapshot_save."""
+    try:
+        from data.pg_storage import volmc_snapshot_save
+        volmc_snapshot_save(watchlist_id, current_snap)
+    except Exception as exc:
+        print(f"[VOLMC_RANK] pg save skipped: {exc}")
 
 
 # ── Quote enrichment helper ──────────────────────────────────────────────────
@@ -725,6 +903,17 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         )
     except Exception as _rv_err:
         print(f"[WATCHLIST_ENRICH] rv_rank pass failed (non-fatal): {_rv_err}")
+
+    # ── VOL/MC RANK + MOMENTUM PASS ───────────────────────────────────────────
+    # Additive pass: adds vol_mc_rank / vol_mc_prev_pct / vol_mc_pct_delta /
+    # vol_mc_trend / vol_mc_momentum_label to every row.
+    # Runs after rv_rank (both passes operate on the same final dedup_sections).
+    try:
+        dedup_sections = await _apply_volmc_rank_fields(
+            _wl_id_for_rank, dedup_sections, saved_normalized
+        )
+    except Exception as _vm_err:
+        print(f"[WATCHLIST_ENRICH] volmc_rank pass failed (non-fatal): {_vm_err}")
 
     total_rows = sum(len(s["tickers"]) for s in dedup_sections)
     elapsed_ms = round((_time.monotonic() - _t0) * 1000)
