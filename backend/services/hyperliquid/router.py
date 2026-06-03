@@ -29,6 +29,7 @@ from .signal_modules import build_signal_payload
 from .signals import build_signal_sections, build_summary_cards, generate_agent_briefing, generate_hero_signals, _compute_market_regime
 from .state import HyperliquidState
 from .tsmom import compute_tsmom_signals
+from .trade_radar import build_trade_radar
 
 router = APIRouter(prefix="/api/hyperliquid/screener", tags=["hyperliquid"])
 
@@ -1251,6 +1252,36 @@ async def get_tsmom_signals(top_n: int = 60):
         }
 
     return compute_tsmom_signals(state, top_n=top_n)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/hyperliquid/screener/trade-radar
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/trade-radar")
+async def get_trade_radar(min_volume_usd: float = 1_000_000):
+    """
+    Trade Radar — deterministic high-signal setup engine.
+
+    Scores every active Hyperliquid perp (≥$1M/day volume) across six
+    components (momentum, positioning, funding, flow, microstructure, risk)
+    and surfaces:
+
+    - market_regime: breadth & regime context
+    - cards.best_long / best_short / squeeze_watch / pullback_buy / crowded_avoid
+    - top_setups: ranked list of up to 10 actionable SetupCards
+
+    No LLM calls. 100% deterministic. ~5–20ms.
+    """
+    state = _get_state()
+    if not state.is_ready and not state.all_assets():
+        raise HTTPException(
+            503,
+            "Screener has no data yet — retry in ~30 seconds after startup.",
+        )
+
+    min_vol = max(0.0, min(float(min_volume_usd), 500_000_000))
+    return build_trade_radar(state, min_volume_usd=min_vol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

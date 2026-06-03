@@ -1,0 +1,167 @@
+Hyperliquid page restructure — add Trade Radar signal engine while preserving existing logic.
+
+Important:
+- Do NOT change or break the Market Matrix endpoint/payload.
+- Do NOT change or break the Time-Series Momentum endpoint/payload.
+- Reuse existing Hyperliquid logic and calculations wherever possible.
+- Do not invent replacement endpoints if existing ones already power the page.
+- Keep existing raw widget logic available because frontend will move it into a new “Signal Lab” tab.
+- Add a higher-level signal layer for the new “Trade Radar” tab.
+
+Goal:
+Create a cleaner Hyperliquid decision engine that sits on top of existing data.
+
+New UI plan:
+Tab 1: Trade Radar
+- new concise signal engine
+- Market Matrix unchanged
+- selected ticker setup explanation
+- Time-Series Momentum unchanged
+
+Tab 2: Signal Lab
+- all existing current widgets/cards except Market Matrix and Time-Series Momentum
+- raw scanner/debug view
+
+Backend task:
+Audit existing Hyperliquid services/endpoints and identify the fields already produced for:
+- top gainers/losers
+- funding
+- OI leaders
+- volume leaders
+- breakout watch
+- mark/oracle gap
+- vol impulse
+- squeeze/flush
+- funding extremes
+- relative strength
+- order book pressure
+- OI regime shift
+- OI cap risk
+- Market Matrix
+- Time-Series Momentum
+
+Then add/extend a higher-level trade_radar payload using existing calculations.
+
+Preferred shape:
+
+trade_radar: {
+  market_regime: {
+    long_pct: number,
+    short_pct: number,
+    watch_pct: number,
+    avoid_pct: number,
+    total_assets_scanned: number,
+    regime_label: string,
+    summary: string
+  },
+  cards: {
+    best_long: SetupCard | null,
+    best_short: SetupCard | null,
+    squeeze_watch: SetupCard | null,
+    pullback_buy: SetupCard | null,
+    crowded_avoid: SetupCard | null
+  },
+  top_setups: SetupCard[],
+  selected_defaults: {
+    top_ticker: string | null
+  },
+  explanation_version: "v1"
+}
+
+SetupCard:
+{
+  ticker: string,
+  name?: string,
+  category?: string,
+  theme?: string,
+  side: "LONG" | "SHORT" | "WATCH" | "AVOID" | "NEUTRAL",
+  setup_type: "TRADE_NOW" | "WATCH_BREAKOUT" | "BUY_PULLBACK" | "SQUEEZE_WATCH" | "SHORT_WATCH" | "CROWDED_AVOID" | "NO_SETUP",
+  score: number,
+  confidence: number,
+  risk_label: "LOW" | "MED" | "HIGH" | "CROWDED",
+  timing_state: "EARLY" | "ARMING" | "TRIGGERED" | "EXTENDED" | "EXHAUSTED" | "NO_SETUP",
+  action_label: string,
+  why_now: string,
+  entry_condition: string,
+  invalidation_hint: string,
+  warnings: string[],
+  components: {
+    momentum: ComponentScore,
+    positioning: ComponentScore,
+    funding: ComponentScore,
+    flow: ComponentScore,
+    microstructure: ComponentScore,
+    risk: ComponentScore
+  },
+  raw_refs: {
+    price_change_24h?: number,
+    oi?: number,
+    oi_delta?: number,
+    volume?: number,
+    volume_velocity?: number,
+    funding?: number,
+    premium?: number,
+    mark_oracle_delta?: number,
+    book_imbalance?: number,
+    risk_score?: number
+  }
+}
+
+ComponentScore:
+{
+  score: number,
+  label: "BULLISH" | "BEARISH" | "NEUTRAL" | "CAUTION" | "RISK",
+  explanation: string
+}
+
+Signal scoring v1:
+- Keep this explainable and deterministic.
+- No ML.
+- Reuse existing per-asset metrics already calculated for Market Matrix and current widgets.
+- Long setup should reward:
+  - positive price momentum
+  - positive mark/oracle delta
+  - positive premium
+  - strong trade flow
+  - constructive OI
+  - volume velocity
+  - funding not too extreme
+  - low/medium risk
+- Penalize:
+  - extreme funding
+  - crowded/cap risk
+  - weak volume
+  - OI not confirming
+  - overextension
+  - high risk score
+- Short setup should mirror the same logic.
+- Use WATCH_BREAKOUT or BUY_PULLBACK when setup is good but not immediately actionable.
+- Use CROWDED_AVOID when funding/crowding/risk are too high.
+- TRADE_NOW should be rare and require high score/confidence and non-high risk.
+
+Plain-English explanation rules:
+- Do not say “will go up” or “guaranteed.”
+- Use language like:
+  - “bias”
+  - “setup”
+  - “watch”
+  - “trigger”
+  - “risk”
+  - “wait for confirmation”
+  - “avoid chase”
+- Every SetupCard needs why_now, entry_condition, invalidation_hint, and warnings.
+
+Important:
+The existing raw sections should still be returned somewhere for the frontend Signal Lab tab. If they already exist in the payload, preserve them. If they are scattered across multiple endpoints, do not consolidate destructively. Just make sure frontend can still render them.
+
+Add logs:
+[HL_RADAR] assets=... top_setups=... elapsed_ms=...
+[HL_RADAR] ticker=... setup=... score=... confidence=... risk=...
+
+Validation:
+- Market Matrix unchanged.
+- Time-Series Momentum unchanged.
+- Existing raw widget data still available for Signal Lab.
+- New trade_radar payload exists.
+- trade_radar cards populate when data supports it.
+- No endpoint becomes meaningfully slower.
