@@ -38,11 +38,26 @@
       ]
     },
     {
+      "name": "AI Networking",
+      "score": 86.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (87/100) vs theme universe. Outperforming SPY +0.2%, QQQ -0.2%. Breadth N/A."
+      ],
+      "related_etfs": [
+        "ANET",
+        "AVGO",
+        "MRVL",
+        "CRDO"
+      ],
+      "related_tickers": []
+    },
+    {
       "name": "Semiconductors",
       "score": 87.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (87/100) vs theme universe with broad participation (83% advancing). Outperforming SPY +2.2%, QQQ +1.7",
+        "Top-percentile RS (87/100) vs theme universe with broad participation (83% advancing). Outperforming SPY +2.1%, QQQ +1.7",
         "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
@@ -56,21 +71,6 @@
         "AMD",
         "KLAC"
       ]
-    },
-    {
-      "name": "AI Networking",
-      "score": 86.3,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (86/100) vs theme universe. Outperforming SPY +0.2%, QQQ -0.2%. Breadth N/A."
-      ],
-      "related_etfs": [
-        "ANET",
-        "AVGO",
-        "MRVL",
-        "CRDO"
-      ],
-      "related_tickers": []
     },
     {
       "name": "Quantum Computing",
@@ -145,11 +145,28 @@
   ],
   "emerging_themes": [
     {
-      "name": "Metals & Mining",
-      "score": 69.4,
+      "name": "Photonics / Lasers",
+      "score": 69.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "COHR",
+        "LITE",
+        "AAOI",
+        "FN"
+      ],
+      "related_tickers": [
+        "SIVEF"
+      ]
+    },
+    {
+      "name": "Metals & Mining",
+      "score": 67.8,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "XME",
@@ -163,30 +180,11 @@
       ]
     },
     {
-      "name": "Crypto Equities / Blockchain",
-      "score": 67.7,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "BLOK",
-        "BITQ",
-        "WGMI",
-        "BKCH"
-      ],
-      "related_tickers": [
-        "RIOT",
-        "CLSK",
-        "CIFR"
-      ]
-    },
-    {
       "name": "Copper Miners",
-      "score": 65.2,
+      "score": 65.8,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "COPX",
@@ -200,25 +198,8 @@
       ]
     },
     {
-      "name": "Software",
-      "score": 65.1,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "IGV",
-        "WCLD"
-      ],
-      "related_tickers": [
-        "SNPS",
-        "ADBE",
-        "CRWD"
-      ]
-    },
-    {
       "name": "Robotics & Automation",
-      "score": 64.7,
+      "score": 65.2,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -233,6 +214,25 @@
         "TER",
         "ISRG",
         "CGNX"
+      ]
+    },
+    {
+      "name": "Crypto Equities / Blockchain",
+      "score": 65.1,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "BLOK",
+        "BITQ",
+        "WGMI",
+        "BKCH"
+      ],
+      "related_tickers": [
+        "RIOT",
+        "CLSK",
+        "CIFR"
       ]
     }
   ],
@@ -257,10 +257,10 @@
     },
     {
       "name": "Utilities",
-      "score": 15.0,
+      "score": 14.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (15/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta -0.2%. Breadth 40% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (15/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta -0.2%. Breadth 20% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XLU",
@@ -269,15 +269,15 @@
       "related_tickers": [
         "ETR",
         "EXC",
-        "SRE"
+        "SO"
       ]
     },
     {
       "name": "Insurance",
-      "score": 16.2,
+      "score": 16.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (16/100) vs 60-theme universe. SPY delta -0.5%, QQQ delta -1.0%. Breadth 14% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (17/100) vs 60-theme universe. SPY delta -0.6%, QQQ delta -1.0%. Breadth 14% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "KIE",
@@ -291,10 +291,10 @@
     },
     {
       "name": "Medical Devices",
-      "score": 16.9,
+      "score": 17.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (17/100) vs 60-theme universe. SPY delta +1.4%, QQQ delta +1.0%. Breadth 90% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (18/100) vs 60-theme universe. SPY delta +1.4%, QQQ delta +1.0%. Breadth 90% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "IHI"
@@ -335,25 +335,25 @@
     {
       "sector": "Financials",
       "ticker": "XLF",
-      "score": 25.9,
+      "score": 26.4,
       "posture": "lagging"
     },
     {
       "sector": "Consumer Discretionary",
       "ticker": "XLY",
-      "score": 25.2,
+      "score": 25.7,
       "posture": "lagging"
     },
     {
       "sector": "Real Estate",
       "ticker": "XLRE",
-      "score": 25.0,
+      "score": 25.2,
       "posture": "lagging"
     },
     {
       "sector": "Communication Services",
       "ticker": "XLC",
-      "score": 20.7,
+      "score": 21.3,
       "posture": "lagging"
     },
     {
@@ -364,7 +364,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-03T20:41:21.583209+00:00",
+  "last_updated": "2026-06-03T20:51:36.212963+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -375,5 +375,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1780519281.5832543
+  "_saved_at": 1780519896.2130437
 }
