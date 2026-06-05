@@ -207,7 +207,7 @@ def clear_watchlist(watchlist_id: Optional[str] = None) -> Dict[str, Any]:
 # ── News Aggregation via RSS ─────────────────────────────────────────────────
 
 _news_cache: Dict[str, Dict[str, Any]] = {}  # ticker -> {"fetched_at": float, "articles": [...]}
-_NEWS_CACHE_TTL = 900  # 15 minutes
+_NEWS_CACHE_TTL = 1800  # 30 minutes — reduce per-ticker refetch frequency
 
 
 def _parse_rss_xml(xml_text: str, source_label: str) -> List[Dict[str, Any]]:

@@ -14,6 +14,7 @@ import asyncio
 import json as _json
 import math as _math
 import re as _re
+import time as _time
 from datetime import datetime, timezone
 
 import httpx
@@ -41,6 +42,101 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 #                           "previous": {SYM: {rank, rel_vol}} | None}
 _rv_mem: dict[str, dict] = {}
 _volmc_mem: dict[str, dict] = {}
+
+
+# ── News endpoint LKG (last-known-good) cache ────────────────────────────────
+# Keyed by watchlist_id (use "default" for the no-id endpoint).
+# Stores the fully-built + scored response so callers get instant results while
+# a background refresh runs silently in the background when data goes stale.
+#
+#   _NEWS_LKG_SERVE_TTL : serve stale data from cache and kick a bg refresh
+#   per-ticker fetch TTL : controlled by _NEWS_CACHE_TTL in watchlist_service.py (30 min)
+#
+_news_lkg: dict[str, dict] = {}    # watchlist_id -> {"data": dict, "ts": float}
+_news_bg_building: set[str] = set()
+_NEWS_LKG_SERVE_TTL = 20 * 60      # 20 min — after this, serve stale + bg-refresh
+
+
+def _news_response(
+    enriched_map: dict,
+    major_summary: dict,
+    ts: float,
+    is_building: bool = False,
+) -> dict:
+    """Build the standardised Live News response."""
+    age = round(_time.time() - ts)
+    cached_at = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        # Original per-ticker map — preserved for any existing consumer
+        "articles":         enriched_map,
+        # Pre-ranked high-signal articles — use this for the Live News panel
+        "top_articles":     major_summary.get("major_developments", []),
+        "high_signal_count": major_summary.get("high_signal_count", 0),
+        "by_catalyst_type":  major_summary.get("by_catalyst_type", {}),
+        "news_signal_meta":  major_summary.get("news_signal_meta", {}),
+        # Cache metadata
+        "cached_at":        cached_at,
+        "cache_age_s":      age,
+        "is_building":      is_building,
+    }
+
+
+async def _bg_refresh_news(watchlist_id: str, tickers: list[str]) -> None:
+    """Background task: silently refresh news LKG cache for a watchlist."""
+    if watchlist_id in _news_bg_building:
+        return
+    _news_bg_building.add(watchlist_id)
+    try:
+        raw_map = await fetch_news_for_tickers(tickers)
+        try:
+            enriched_map, major_summary = _build_major(raw_map)
+        except Exception as _e:
+            print(f"[NEWS_LKG] major build error (non-fatal): {_e}")
+            enriched_map, major_summary = raw_map, {}
+        ts   = _time.time()
+        data = _news_response(enriched_map, major_summary, ts)
+        _news_lkg[watchlist_id] = {"data": data, "ts": ts}
+        top_ct = len(data.get("top_articles") or [])
+        art_ct = sum(len(v) for v in enriched_map.values())
+        print(f"[NEWS_LKG] refresh done  wl={watchlist_id}  articles={art_ct}  top={top_ct}")
+    except Exception as exc:
+        print(f"[NEWS_LKG] refresh error wl={watchlist_id}: {exc}")
+    finally:
+        _news_bg_building.discard(watchlist_id)
+
+
+async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict:
+    """
+    Return a Live News response, using the LKG cache:
+      - Hit  & fresh  (<20 min) → instant return, no I/O
+      - Hit  & stale (≥20 min) → instant return of stale data + bg refresh
+      - Miss (first call)       → blocking build, then cache
+    """
+    now = _time.time()
+    lkg = _news_lkg.get(watchlist_id)
+
+    if lkg:
+        age  = now - lkg["ts"]
+        data = dict(lkg["data"])
+        data["cache_age_s"] = round(age)
+        data["is_building"] = watchlist_id in _news_bg_building
+        if age > _NEWS_LKG_SERVE_TTL and watchlist_id not in _news_bg_building:
+            asyncio.create_task(_bg_refresh_news(watchlist_id, tickers))
+            data["is_building"] = True
+        return data
+
+    # Cold start — build synchronously (only happens once per process restart)
+    print(f"[NEWS_LKG] cold build  wl={watchlist_id}  tickers={len(tickers)}")
+    raw_map = await fetch_news_for_tickers(tickers)
+    try:
+        enriched_map, major_summary = _build_major(raw_map)
+    except Exception as _e:
+        print(f"[NEWS_LKG] major build error (non-fatal): {_e}")
+        enriched_map, major_summary = raw_map, {}
+    ts   = _time.time()
+    data = _news_response(enriched_map, major_summary, ts)
+    _news_lkg[watchlist_id] = {"data": data, "ts": ts}
+    return data
 
 
 # ── Market-cap string parser ─────────────────────────────────────────────────
@@ -1012,20 +1108,28 @@ async def debug_endpoint():
 
 @router.get("/news")
 async def news_endpoint():
-    """Fetch fresh news for all tickers in the most recent watchlist."""
+    """
+    Live News for the default watchlist — LKG cached, never blocks on stale data.
+
+    Response shape:
+      {
+        "articles":          {TICKER: [article, ...]},   // per-ticker map
+        "top_articles":      [...],                       // pre-ranked signal articles (use this)
+        "high_signal_count": int,
+        "by_catalyst_type":  {type: count},
+        "news_signal_meta":  {...},
+        "cached_at":         "ISO timestamp",
+        "cache_age_s":       int,
+        "is_building":       bool,                        // true = bg refresh in progress
+      }
+    """
     store = load_watchlist()
     if store is None:
-        return {}
+        return _news_response({}, {}, _time.time())
     tickers = store.get("tickers", [])
     if not tickers:
-        return {}
-    raw_map = await fetch_news_for_tickers(tickers)
-    try:
-        enriched_map, _ = _build_major(raw_map)
-        return enriched_map
-    except Exception as _err:
-        print(f"[NEWS_MAJOR] build pass failed (non-fatal): {_err}")
-        return raw_map
+        return _news_response({}, {}, _time.time())
+    return await _get_news_for_watchlist("default", tickers)
 
 
 @router.post("/refresh")
@@ -2008,6 +2112,7 @@ async def refresh_by_id_endpoint(watchlist_id: str):
 async def news_major_by_id_endpoint(watchlist_id: str):
     """
     Return the top major developments for a watchlist (deduplicated, ranked).
+    Uses the shared LKG news cache — instant if data is already warm.
 
     Response shape:
     {
@@ -2015,51 +2120,57 @@ async def news_major_by_id_endpoint(watchlist_id: str):
       "major_developments_count": int,
       "high_signal_count":        int,
       "by_catalyst_type":         {catalyst_type: count, ...},
-      "news_signal_meta": {
-          "total_articles":             int,
-          "total_major_developments":   int,
-          "total_top_major":            int,
-          "duplicate_clusters_removed": int,
-          "unique_clusters":            int,
-      },
+      "news_signal_meta":         {...},
+      "cached_at":                "ISO timestamp",
+      "cache_age_s":              int,
+      "is_building":              bool,
     }
     """
     store = load_watchlist(watchlist_id)
     if store is None:
-        return {"major_developments": [], "major_developments_count": 0}
+        return {"major_developments": [], "major_developments_count": 0, "cache_age_s": 0}
     tickers = store.get("tickers", [])
     if not tickers:
-        return {"major_developments": [], "major_developments_count": 0}
-    raw_map = await fetch_news_for_tickers(tickers)
-    _, major_summary = _build_major(raw_map)
-    return major_summary
+        return {"major_developments": [], "major_developments_count": 0, "cache_age_s": 0}
+
+    full = await _get_news_for_watchlist(watchlist_id, tickers)
+    top  = full.get("top_articles") or []
+    return {
+        "major_developments":       top,
+        "major_developments_count": len(top),
+        "high_signal_count":        full.get("high_signal_count", 0),
+        "by_catalyst_type":         full.get("by_catalyst_type", {}),
+        "news_signal_meta":         full.get("news_signal_meta", {}),
+        "cached_at":                full.get("cached_at"),
+        "cache_age_s":              full.get("cache_age_s", 0),
+        "is_building":              full.get("is_building", False),
+    }
 
 
 @router.get("/{watchlist_id}/news")
 async def news_by_id_endpoint(watchlist_id: str):
     """
-    Fetch news for a specific watchlist's tickers.
+    Live News for a specific watchlist — LKG cached, never blocks on stale data.
 
-    Returns {TICKER: [articles]} — existing shape preserved.
-    Each article now includes additive signal fields from the scorer plus:
-      is_top_major_development  bool
-      surface_priority          int | None
-      major_news_rank           int | None
-      duplicate_cluster_key     str | None
+    Response shape:
+      {
+        "articles":          {TICKER: [article, ...]},   // per-ticker map
+        "top_articles":      [...],                       // pre-ranked signal articles (use this)
+        "high_signal_count": int,
+        "by_catalyst_type":  {type: count},
+        "news_signal_meta":  {...},
+        "cached_at":         "ISO timestamp",
+        "cache_age_s":       int,
+        "is_building":       bool,
+      }
     """
     store = load_watchlist(watchlist_id)
     if store is None:
-        return {}
+        return _news_response({}, {}, _time.time())
     tickers = store.get("tickers", [])
     if not tickers:
-        return {}
-    raw_map = await fetch_news_for_tickers(tickers)
-    try:
-        enriched_map, _ = _build_major(raw_map)
-        return enriched_map
-    except Exception as _err:
-        print(f"[NEWS_MAJOR] build pass failed (non-fatal): {_err}")
-        return raw_map
+        return _news_response({}, {}, _time.time())
+    return await _get_news_for_watchlist(watchlist_id, tickers)
 
 
 @router.get("/{watchlist_id}/stock/{ticker}")
