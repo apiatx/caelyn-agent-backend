@@ -412,12 +412,35 @@ async def universe_endpoint(
         }
 
     groups = _group_symbols(symbols, group_by)
+
+    # ── TradingView symbol coverage audit ────────────────────────────────────
+    # Count how many symbols have an exchange prefix vs. bare ticker.
+    # Bare-ticker fallback is safe for US equities (TradingView auto-resolves);
+    # OTC / foreign tickers without a prefix may not resolve correctly.
+    prefixed_ct  = sum(1 for s in symbols if ":" in s.get("tradingview_symbol", ""))
+    bare_ct      = len(symbols) - prefixed_ct
+    tv_coverage  = {
+        "prefixed":    prefixed_ct,
+        "bare_ticker": bare_ct,
+        "note": (
+            f"{bare_ct} of {len(symbols)} symbols use bare ticker (no exchange prefix). "
+            "US equities resolve automatically in TradingView. "
+            "OTC/foreign tickers (e.g. LPKFF, SIVEF) may need a manual EXCHANGE:TICKER prefix."
+        ) if bare_ct > 0 else "All symbols have exchange prefixes.",
+    }
+    if bare_ct > 0:
+        warnings.append(
+            f"{bare_ct} tradingview_symbol(s) are bare tickers — "
+            "fine for US equities, may not resolve for OTC/foreign."
+        )
+
     return {
-        "source":   source,
-        "group_by": group_by,
-        "count":    len(symbols),
-        "groups":   groups,
-        "warnings": warnings,
+        "source":               source,
+        "group_by":             group_by,
+        "count":                len(symbols),
+        "tradingview_coverage": tv_coverage,
+        "groups":               groups,
+        "warnings":             warnings,
     }
 
 
