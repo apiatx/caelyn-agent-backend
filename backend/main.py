@@ -462,6 +462,15 @@ app.include_router(_bittensor_router)
 app.include_router(_watchlist_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Chart Radar router (/api/chart-radar/*) ───────────────────────────────────
+try:
+    from services.chart_radar_router import router as _chart_radar_router
+    app.include_router(_chart_radar_router)
+    print("[CHART_RADAR] Router registered at /api/chart-radar/*")
+except Exception as _cr_err:
+    print(f"[CHART_RADAR] Router unavailable (non-fatal): {_cr_err}")
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Playbook engine router (isolated, additive — does NOT modify /api/query) ──
 try:
     from services.playbook.router import router as _playbook_router

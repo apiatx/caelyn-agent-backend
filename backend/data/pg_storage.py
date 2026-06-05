@@ -487,6 +487,26 @@ def init_tables():
             )
         """)
 
+        # ── Chart Radar saved views ────────────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.chart_radar_views (
+                id           TEXT PRIMARY KEY,
+                user_id      TEXT        NOT NULL DEFAULT 'default',
+                name         TEXT        NOT NULL DEFAULT 'My Chart View',
+                source       TEXT        NOT NULL DEFAULT 'watchlist',
+                group_by     TEXT        NOT NULL DEFAULT 'theme',
+                watchlist_id TEXT        NULL,
+                filters      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+                layout       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_chart_radar_views_user
+            ON public.chart_radar_views (user_id, updated_at DESC)
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
