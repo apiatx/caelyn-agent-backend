@@ -15,10 +15,13 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import json
+import logging
 import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request, HTTPException
+
+logger = logging.getLogger("chart_radar")
 from pydantic import BaseModel
 
 from services.watchlist_service import load_watchlist
@@ -412,6 +415,15 @@ async def universe_endpoint(
         }
 
     groups = _group_symbols(symbols, group_by)
+
+    # ── Beacon log — easily grep-able proof this backend was actually hit ─────
+    # Use print() so the line is guaranteed to appear in stdout regardless of
+    # uvicorn's logging filter level for unconfigured loggers.
+    print(
+        f"[CHART_RADAR_UNIVERSE_HIT] source={source} group_by={group_by}"
+        f" count={len(symbols)} groups={len(groups)}",
+        flush=True,
+    )
 
     # ── TradingView symbol coverage audit ────────────────────────────────────
     # Count how many symbols have an exchange prefix vs. bare ticker.
