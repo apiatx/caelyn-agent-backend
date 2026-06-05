@@ -196,7 +196,6 @@
         "SLX"
       ],
       "related_tickers": [
-        "CLF",
         "AA"
       ]
     }
@@ -207,7 +206,7 @@
       "score": 13.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta +0.8%, QQQ delta +1.7%. Breadth 50% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta +0.8%, QQQ delta +1.7%. Breadth 67% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "FINX",
@@ -216,6 +215,7 @@
       ],
       "related_tickers": [
         "AFRM",
+        "AMZN",
         "AMD"
       ]
     },
@@ -237,14 +237,14 @@
       "score": 19.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 100% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "XLU",
         "VPU"
       ],
       "related_tickers": [
-        "DUK"
+        "CEG"
       ]
     },
     {
@@ -252,28 +252,28 @@
       "score": 20.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (20/100) vs 60-theme universe. SPY delta +0.5%, QQQ delta +1.4%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (20/100) vs 60-theme universe. SPY delta +0.5%, QQQ delta +1.4%. Breadth N/A \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XLC",
         "VOX"
       ],
-      "related_tickers": [
-        "CMCSA"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Consumer Retail",
       "score": 21.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth N/A \u2014 minimal buying pressur"
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
         "XRT",
         "RTH"
       ],
-      "related_tickers": []
+      "related_tickers": [
+        "AMZN"
+      ]
     }
   ],
   "sector_leaders": [
@@ -311,7 +311,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-05T13:03:57.924636+00:00",
+  "last_updated": "2026-06-05T18:22:29.357894+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -322,5 +322,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1780664637.9246907
+  "_saved_at": 1780683749.3579493
 }
