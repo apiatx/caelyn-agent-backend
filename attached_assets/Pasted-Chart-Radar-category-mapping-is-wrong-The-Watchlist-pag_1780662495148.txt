@@ -1,0 +1,67 @@
+Chart Radar category mapping is wrong.
+
+The Watchlist page already has the stocks categorized properly by theme/category. Only about 4 stocks are Uncategorized/Unknown on the Watchlist page.
+
+But Chart Radar is showing about 204 Uncategorized/Unknown. That means `/api/chart-radar/universe?source=watchlist&group_by=theme` is not using the same source-of-truth category/theme field that the Watchlist page uses.
+
+Please fix the backend Chart Radar adapter to use the exact same Watchlist category/theme/grouping logic as the Watchlist page.
+
+Important:
+
+* Do not create a new theme mapper.
+* Do not rely primarily on the static `theme_ticker_mapper` if the Watchlist row already has a category/theme.
+* Do not infer themes from ticker manually.
+* Do not make external API calls.
+* Do not call FMP/Tradier/Polygon/Finnhub/etc.
+* Do not change the Watchlist page behavior.
+* Chart Radar should mirror the Watchlist categories exactly.
+
+Debug requirement:
+Compare the raw data source used by:
+
+1. The Watchlist page endpoint/service
+2. The Chart Radar endpoint/service
+
+Find the field that Watchlist uses for its visible group/category labels. It may be named something like:
+
+* category
+* theme
+* group
+* section
+* watchlist_section
+* sector_group
+* tag
+* bucket
+* category_name
+* theme_name
+
+Then use that exact field in Chart Radar.
+
+Current bad behavior:
+
+* Chart Radar returns too many `theme: null`, `theme: Unknown`, or `watchlist_section: Unknown`.
+* Watchlist visibly has those same tickers categorized correctly.
+
+Expected behavior:
+
+* `/api/chart-radar/universe?source=watchlist&group_by=theme` should return the same group labels and ticker memberships as the Watchlist page.
+* Unknown/Uncategorized count should roughly match Watchlist, around 4, not 204.
+
+Please add a temporary comparison diagnostic:
+For the current 302 watchlist symbols, print/report:
+
+* total symbols
+* number with Watchlist category/theme
+* number missing Watchlist category/theme
+* top 20 category counts from the Watchlist source
+* top 20 group counts from Chart Radar response
+* list of 20 tickers that Chart Radar marks Unknown but Watchlist categorizes, including the raw watchlist row fields for each
+
+Acceptance tests:
+
+1. Watchlist page still works unchanged.
+2. Chart Radar source=watchlist&group_by=theme returns the same categories as Watchlist.
+3. Unknown group count is around the same as Watchlist, not 204.
+4. No external API calls are made.
+5. Backend returns groups[].label matching Watchlist section/category labels.
+6. Frontend does not need custom remapping to fix this.

@@ -378,6 +378,61 @@ async def universe_endpoint(
             if sym_key:
                 csv_map[sym_key] = row
 
+        # ── Build ticker→section map from analysis.sections ───────────────────
+        # This is the exact same source the Watchlist page uses for its visible
+        # group labels.  Mirrors watchlist_router._enrich_store_with_quotes:
+        #   1. Direct membership in named sections
+        #   2. Industry fallback for "Other / Uncategorized" bucket
+        #   3. Industry fallback for saved tickers absent from all sections
+        # No external API calls — pure in-memory lookups.
+        _UNCATEGORIZED = {"other / uncategorized", "other/uncategorized",
+                          "uncategorized", "other"}
+        section_map: dict[str, str] = {}   # ticker (upper) → section title
+        _unc_syms: list[str] = []
+        for _sec in store.get("analysis", {}).get("sections", []):
+            _title = (_sec.get("title") or _sec.get("name") or "").strip()
+            if _title.lower() in _UNCATEGORIZED or _sec.get("id") == "other_uncategorized":
+                for _row in _sec.get("tickers", []):
+                    _s = str(_row.get("symbol") or _row.get("ticker") or "").strip().upper()
+                    if _s:
+                        _unc_syms.append(_s)
+            else:
+                for _row in _sec.get("tickers", []):
+                    _s = str(_row.get("symbol") or _row.get("ticker") or "").strip().upper()
+                    if _s:
+                        section_map[_s] = _title
+
+        # Industry fallback — identical to watchlist_router reclassification
+        try:
+            from services.theme_ticker_mapper import map_industry_to_theme as _map_ind
+        except ImportError:
+            _map_ind = None  # type: ignore[assignment]
+
+        def _sec_via_industry(sym: str) -> str | None:
+            if not _map_ind:
+                return None
+            _r = csv_map.get(sym) or csv_map.get(
+                sym.split(":")[-1] if ":" in sym else sym, {}
+            )
+            _ind = (_r.get("Industry") or _r.get("industry") or "").strip()
+            if not _ind:
+                return None
+            _res = _map_ind(_ind)
+            return _res[0] if _res else None
+
+        for _sym in _unc_syms:
+            if _sym not in section_map:
+                _m = _sec_via_industry(_sym)
+                if _m:
+                    section_map[_sym] = _m
+
+        for _t in tickers:
+            _tu = str(_t).strip().upper()
+            if _tu not in section_map:
+                _m = _sec_via_industry(_tu)
+                if _m:
+                    section_map[_tu] = _m
+
         all_tickers = tickers or list(csv_map.keys())
         if not all_tickers:
             return {
@@ -388,9 +443,15 @@ async def universe_endpoint(
 
         symbols = []
         for t in all_tickers:
-            row = dict(csv_map.get(t, {}))  # copy so we don't mutate the store
-            # Ensure the ticker is resolvable even when the CSV row is empty
-            row.setdefault("Symbol", t)
+            t_upper = str(t).strip().upper()
+            row = dict(csv_map.get(t_upper, {}))
+            row.setdefault("Symbol", t_upper)
+            # Inject section-derived category so _get_theme() and
+            # watchlist_section both use the Watchlist page's source of truth.
+            sec_name = section_map.get(t_upper)
+            if sec_name:
+                row["canonical_theme_name"] = sec_name
+                row["watchlist_section"]    = sec_name
             sym = _normalize_symbol(row, source="watchlist")
             if sym:
                 symbols.append(sym)

@@ -6,7 +6,7 @@
       "score": 88.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (89/100) vs theme universe. Outperforming SPY -2.5%, QQQ -1.6%. Breadth 17%."
+        "Top-percentile RS (89/100) vs theme universe. Outperforming SPY -2.5%, QQQ -1.6%. Breadth 0%."
       ],
       "related_etfs": [
         "DRAM",
@@ -14,9 +14,7 @@
         "SOXX"
       ],
       "related_tickers": [
-        "NVDA",
-        "KLAC",
-        "INTC"
+        "AMD"
       ]
     },
     {
@@ -24,16 +22,16 @@
       "score": 88.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (89/100) vs theme universe. Outperforming SPY -2.2%, QQQ -1.4%. Breadth 43%."
+        "Top-percentile RS (89/100) vs theme universe with broad participation (67% advancing). Outperforming SPY -2.2%, QQQ -1.4"
       ],
       "related_etfs": [
         "SOXX",
         "SMH"
       ],
       "related_tickers": [
-        "NVDA",
         "ASML",
-        "AEHR"
+        "AMAT",
+        "AMD"
       ]
     },
     {
@@ -41,7 +39,7 @@
       "score": 86.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (86/100) vs theme universe. Outperforming SPY -1.9%, QQQ -1.0%. Breadth 33%.",
+        "Top-percentile RS (86/100) vs theme universe. Outperforming SPY -1.9%, QQQ -1.0%. Breadth 50%.",
         "X consensus: 2 tickers mentioned"
       ],
       "related_etfs": [
@@ -51,9 +49,9 @@
         "PSI"
       ],
       "related_tickers": [
-        "NVDA",
         "ASML",
-        "KLAC"
+        "AMAT",
+        "AMBA"
       ]
     },
     {
@@ -61,16 +59,12 @@
       "score": 83.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (83/100) vs theme universe. Outperforming SPY -1.1%, QQQ -0.3%. Breadth 17%."
+        "Top-percentile RS (83/100) vs theme universe. Outperforming SPY -1.1%, QQQ -0.3%. Breadth N/A."
       ],
       "related_etfs": [
         "QTUM"
       ],
-      "related_tickers": [
-        "QBTS",
-        "RGTI",
-        "QUBT"
-      ]
+      "related_tickers": []
     },
     {
       "name": "AI Networking",
@@ -89,28 +83,11 @@
       "related_tickers": []
     },
     {
-      "name": "Tech Equal-Weight",
-      "score": 80.5,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Top-percentile RS (80/100) vs theme universe. Outperforming SPY -1.1%, QQQ -0.3%. Breadth 20%."
-      ],
-      "related_etfs": [
-        "RYT",
-        "QQEW"
-      ],
-      "related_tickers": [
-        "DELL",
-        "NXPI",
-        "INTC"
-      ]
-    },
-    {
       "name": "Photonics / Lasers",
       "score": 80.4,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (80/100) vs theme universe. Outperforming SPY +0.5%, QQQ +1.4%. Breadth 0%."
+        "Top-percentile RS (80/100) vs theme universe. Outperforming SPY +0.5%, QQQ +1.4%. Breadth N/A."
       ],
       "related_etfs": [
         "COHR",
@@ -118,8 +95,21 @@
         "AAOI",
         "FN"
       ],
+      "related_tickers": []
+    },
+    {
+      "name": "Tech Equal-Weight",
+      "score": 79.1,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Top-percentile RS (79/100) vs theme universe. Outperforming SPY -1.4%, QQQ -0.6%. Breadth 0%."
+      ],
+      "related_etfs": [
+        "RYT",
+        "QQEW"
+      ],
       "related_tickers": [
-        "SIVEF"
+        "AMD"
       ]
     },
     {
@@ -127,7 +117,7 @@
       "score": 76.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (77/100) vs theme universe with broad participation (67% advancing). Outperforming SPY -1.3%, QQQ -0.5"
+        "Top-percentile RS (77/100) vs theme universe. Outperforming SPY -1.3%, QQQ -0.5%. Breadth N/A."
       ],
       "related_etfs": [
         "CIBR",
@@ -135,11 +125,7 @@
         "BUG",
         "IHAK"
       ],
-      "related_tickers": [
-        "CSCO",
-        "FTNT",
-        "NET"
-      ]
+      "related_tickers": []
     }
   ],
   "emerging_themes": [
@@ -154,27 +140,7 @@
         "TAN"
       ],
       "related_tickers": [
-        "ARRY",
-        "NXT",
-        "HASI"
-      ]
-    },
-    {
-      "name": "Copper Miners",
-      "score": 65.2,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "COPX",
-        "CPER",
-        "DBB"
-      ],
-      "related_tickers": [
-        "TECK",
-        "HBM",
-        "SCCO"
+        "FSLR"
       ]
     },
     {
@@ -187,35 +153,41 @@
       "related_etfs": [
         "FFTY"
       ],
-      "related_tickers": [
-        "STRL",
-        "FIX",
-        "TVTX"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Software",
-      "score": 64.3,
+      "score": 64.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "IGV",
         "WCLD"
       ],
-      "related_tickers": [
-        "MDB",
-        "ORCL",
-        "NOW"
-      ]
+      "related_tickers": []
+    },
+    {
+      "name": "Copper Miners",
+      "score": 64.6,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "COPX",
+        "CPER",
+        "DBB"
+      ],
+      "related_tickers": []
     },
     {
       "name": "Metals & Mining",
-      "score": 63.8,
+      "score": 63.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (63/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "XME",
@@ -223,9 +195,8 @@
         "SLX"
       ],
       "related_tickers": [
-        "LEU",
         "CLF",
-        "NUE"
+        "AA"
       ]
     }
   ],
@@ -235,7 +206,7 @@
       "score": 13.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta +0.8%, QQQ delta +1.7%. Breadth 73% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta +0.8%, QQQ delta +1.7%. Breadth 50% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "FINX",
@@ -243,9 +214,8 @@
         "IPAY"
       ],
       "related_tickers": [
-        "HOOD",
-        "AFRM",
-        "SOFI"
+        "AMZN",
+        "AMD"
       ]
     },
     {
@@ -253,33 +223,27 @@
       "score": 16.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (17/100) vs 60-theme universe. SPY delta -0.5%, QQQ delta +0.3%. Breadth 50% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (17/100) vs 60-theme universe. SPY delta -0.5%, QQQ delta +0.3%. Breadth N/A \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XLP",
         "VDC"
       ],
-      "related_tickers": [
-        "COST",
-        "WMT",
-        "PG"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Utilities",
-      "score": 19.0,
+      "score": 19.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 70% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "XLU",
         "VPU"
       ],
       "related_tickers": [
-        "D",
-        "NEE",
-        "SO"
+        "CEG"
       ]
     },
     {
@@ -287,33 +251,27 @@
       "score": 20.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta +0.5%, QQQ delta +1.4%. Breadth 62% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta +0.5%, QQQ delta +1.4%. Breadth N/A \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XLC",
         "VOX"
       ],
-      "related_tickers": [
-        "GOOG",
-        "GOOGL",
-        "SATS"
-      ]
+      "related_tickers": []
     },
     {
       "name": "Consumer Retail",
       "score": 22.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.1%, QQQ delta +0.8%. Breadth 67% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.1%, QQQ delta +0.8%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
         "XRT",
         "RTH"
       ],
       "related_tickers": [
-        "CVNA",
-        "CART",
-        "GO"
+        "AMZN"
       ]
     }
   ],
@@ -321,15 +279,21 @@
     {
       "sector": "Technology",
       "ticker": "XLK",
-      "score": 75.8,
+      "score": 76.4,
       "posture": "leading"
     }
   ],
   "sector_laggards": [
     {
+      "sector": "Real Estate",
+      "ticker": "XLRE",
+      "score": 28.1,
+      "posture": "lagging"
+    },
+    {
       "sector": "Consumer Discretionary",
       "ticker": "XLY",
-      "score": 24.6,
+      "score": 25.2,
       "posture": "lagging"
     },
     {
@@ -341,7 +305,7 @@
     {
       "sector": "Utilities",
       "ticker": "XLU",
-      "score": 19.0,
+      "score": 19.3,
       "posture": "lagging"
     },
     {
@@ -352,7 +316,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-05T03:51:36.682588+00:00",
+  "last_updated": "2026-06-05T12:32:47.044063+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -363,5 +327,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1780631496.6827152
+  "_saved_at": 1780662767.0441632
 }
