@@ -145,7 +145,7 @@
   "emerging_themes": [
     {
       "name": "Solar",
-      "score": 67.3,
+      "score": 66.9,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (67/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -250,10 +250,10 @@
     },
     {
       "name": "Consumer Staples",
-      "score": 16.3,
+      "score": 16.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (16/100) vs 60-theme universe. SPY delta -0.5%, QQQ delta +0.3%. Breadth 50% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (17/100) vs 60-theme universe. SPY delta -0.5%, QQQ delta +0.3%. Breadth 50% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XLP",
@@ -267,7 +267,7 @@
     },
     {
       "name": "Utilities",
-      "score": 19.3,
+      "score": 19.0,
       "source": "theme_rs_service",
       "evidence": [
         "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 70% \u2014 minimal buying pressur"
@@ -284,10 +284,10 @@
     },
     {
       "name": "Communication Services",
-      "score": 20.0,
+      "score": 20.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (20/100) vs 60-theme universe. SPY delta +0.5%, QQQ delta +1.4%. Breadth 62% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta +0.5%, QQQ delta +1.4%. Breadth 62% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XLC",
@@ -301,10 +301,10 @@
     },
     {
       "name": "Consumer Retail",
-      "score": 21.6,
+      "score": 22.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 67% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.1%, QQQ delta +0.8%. Breadth 67% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XRT",
@@ -327,38 +327,32 @@
   ],
   "sector_laggards": [
     {
-      "sector": "Real Estate",
-      "ticker": "XLRE",
-      "score": 28.1,
-      "posture": "lagging"
-    },
-    {
       "sector": "Consumer Discretionary",
       "ticker": "XLY",
-      "score": 25.2,
+      "score": 24.6,
       "posture": "lagging"
     },
     {
       "sector": "Communication Services",
       "ticker": "XLC",
-      "score": 20.0,
+      "score": 20.6,
       "posture": "lagging"
     },
     {
       "sector": "Utilities",
       "ticker": "XLU",
-      "score": 19.3,
+      "score": 19.0,
       "posture": "lagging"
     },
     {
       "sector": "Consumer Staples",
       "ticker": "XLP",
-      "score": 16.3,
+      "score": 16.9,
       "posture": "lagging"
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-05T02:02:42.563044+00:00",
+  "last_updated": "2026-06-05T02:14:26.975061+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -369,5 +363,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1780624962.5630937
+  "_saved_at": 1780625666.9751124
 }

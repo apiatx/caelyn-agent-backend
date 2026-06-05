@@ -421,6 +421,42 @@ async def universe_endpoint(
     }
 
 
+# ── User-ID resolver ──────────────────────────────────────────────────────────
+# JWTAuthMiddleware is currently disabled (pure pass-through), so
+# request.state.user_id is NEVER set by middleware.  The authoritative
+# source is the Authorization: Bearer <token> header, which the frontend
+# sends on every authenticated request.  We parse it directly here —
+# the same approach used by subscription.py's require_subscription guard.
+
+def _get_user_id(request: Request) -> str:
+    """
+    Resolve user_id for a request.
+
+    Priority:
+      1. request.state.user_id — populated if middleware is ever re-enabled
+      2. Authorization: Bearer <JWT> → payload["sub"]
+      3. "default" — unauthenticated / dev fallback
+    """
+    # 1. Middleware-set (future-proof)
+    uid = getattr(request.state, "user_id", None)
+    if uid:
+        return str(uid)
+    # 2. Parse Bearer token directly (current working path)
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        try:
+            from auth import verify_token
+            payload = verify_token(token)
+            sub = payload.get("sub")
+            if sub:
+                return str(sub)
+        except Exception:
+            pass
+    # 3. Unauthenticated / local dev
+    return "default"
+
+
 # ── Saved views Pydantic models ───────────────────────────────────────────────
 
 class SaveViewRequest(BaseModel):
@@ -465,7 +501,7 @@ def _release(conn) -> None:
 @router.post("/views", status_code=201)
 async def create_view(request: Request, body: SaveViewRequest):
     """Persist a saved chart-radar view for the current user."""
-    user_id = getattr(request.state, "user_id", None) or "default"
+    user_id = _get_user_id(request)
     view_id = str(uuid.uuid4())
     conn = _db()
     if conn is None:
@@ -510,7 +546,7 @@ async def create_view(request: Request, body: SaveViewRequest):
 @router.get("/views")
 async def list_views(request: Request):
     """Return all saved chart-radar views for the current user."""
-    user_id = getattr(request.state, "user_id", None) or "default"
+    user_id = _get_user_id(request)
     conn = _db()
     if conn is None:
         return {"views": []}
@@ -556,7 +592,7 @@ async def list_views(request: Request):
 @router.patch("/views/{view_id}")
 async def update_view(view_id: str, request: Request, body: UpdateViewRequest):
     """Update a saved chart-radar view. Only supplied fields are changed."""
-    user_id = getattr(request.state, "user_id", None) or "default"
+    user_id = _get_user_id(request)
     conn = _db()
     if conn is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -612,7 +648,7 @@ async def update_view(view_id: str, request: Request, body: UpdateViewRequest):
 @router.delete("/views/{view_id}")
 async def delete_view(view_id: str, request: Request):
     """Delete a saved chart-radar view (user-scoped)."""
-    user_id = getattr(request.state, "user_id", None) or "default"
+    user_id = _get_user_id(request)
     conn = _db()
     if conn is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
