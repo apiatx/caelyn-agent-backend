@@ -848,17 +848,20 @@ def _snapshot_row(
     vol_ratio = round(vol / avg_vol, 2) if vol and avg_vol and avg_vol > 0 else None
     opts = options_index.get(symbol.upper(), {})
 
-    # RSI and relative volume from watchlist csv_data (optional — watchlist rows only)
+    # RSI from watchlist csv_data (watchlist rows only); rel_vol starts from live quote.
     rsi: float | None = None
-    signal_label: str | None = None
+    effective_rel_vol = vol_ratio  # live quote vol ratio; upgraded below if csv available
     if csv_row:
         rsi = _parse_float(
             csv_row.get("Relative Strength Index (RSI)") or csv_row.get("RSI")
         )
         rel_vol_csv = _parse_pct(csv_row.get("Relative Volume"))
         rel_vol_x = (rel_vol_csv / 100.0) if rel_vol_csv is not None else None
-        effective_rel_vol = vol_ratio if vol_ratio is not None else rel_vol_x
-        signal_label = _signal_label(chg_pct, rsi, effective_rel_vol, opts.get("primary_signal")) or None
+        # Prefer live vol_ratio; fall back to CSV rel_vol when live is unavailable
+        if effective_rel_vol is None:
+            effective_rel_vol = rel_vol_x
+    # Always compute signal_label — works with rsi=None (portfolio rows included)
+    signal_label = _signal_label(chg_pct, rsi, effective_rel_vol, opts.get("primary_signal")) or None
 
     row = {
         "symbol": symbol.upper(),
@@ -930,13 +933,14 @@ async def _fetch_portfolio_snapshot(
     """
     Compact snapshot for the user's portfolio holdings.
     Privacy: NEVER exposes shares, avg_cost, cost_basis, or market value.
+
+    Uses portfolio_store.load_active_holdings() — the same authoritative
+    source as the Portfolio page and every other service in the backend
+    (Neon DB primary → data/portfolio/active_holdings.json fallback).
     """
     try:
-        pf_file = _DATA_DIR / "portfolio_holdings.json"
-        if not pf_file.exists():
-            return []
-        raw = json.loads(pf_file.read_text())
-        holdings = raw.get("holdings", [])
+        from data.portfolio_store import load_active_holdings as _load_holdings
+        holdings = await asyncio.to_thread(_load_holdings)
         if not isinstance(holdings, list) or not holdings:
             return []
     except Exception as exc:
