@@ -102,6 +102,13 @@ def _init_postgres_chat_storage_on_startup(reason: str = "startup"):
             _pg_last_init_error = "init_tables returned False"
             return
 
+        # Seed user-approved category corrections (idempotent upsert)
+        try:
+            from services.category_overrides import seed_initial_overrides as _seed_overrides
+            _seed_overrides(user_id="default")
+        except Exception as _seed_err:
+            print(f"[STARTUP] category override seeding failed (non-fatal): {_seed_err}")
+
         after = _pg_probe()
         print(
             f"[STARTUP][PG] tables_after={after.get('tables', [])} "

@@ -1020,6 +1020,16 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         f"quoted={sum(1 for s in dedup_sections for t in s['tickers'] if t.get('price') is not None)} "
         f"elapsed={elapsed_ms}ms"
     )
+
+    # ── CATEGORY OVERRIDES (always last — manual assignments always win) ───────
+    # Applies user-approved ticker→section corrections from the DB override table.
+    # This ensures manual moves persist across AI re-analyses and server restarts.
+    try:
+        from services.category_overrides import apply_to_sections as _apply_cat_overrides
+        dedup_sections = _apply_cat_overrides(dedup_sections, user_id="default")
+    except Exception as _ov_err:
+        print(f"[WATCHLIST_ENRICH] category overrides failed (non-fatal): {_ov_err}")
+
     return {
         **store,
         "analysis": {
@@ -1679,6 +1689,110 @@ async def stock_deep_dive_endpoint(ticker: str, body: StockDeepDiveRequest):
     except Exception as e:
         _tb.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Category override endpoints ──────────────────────────────────────────────
+
+@router.patch("/category")
+async def patch_category_endpoint(request: Request, body: dict):
+    """
+    Persist a single manual ticker→category assignment.
+
+    Body: {ticker, category, source='manual', reason=null}
+
+    Overrides are applied immediately on the next Watchlist/Chart Radar GET.
+    They survive server restarts and AI re-analyses.
+    """
+    ticker   = str(body.get("ticker") or "").strip().upper()
+    category = str(body.get("category") or "").strip()
+    source   = str(body.get("source") or "manual")
+    reason   = body.get("reason")
+
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    if not category:
+        raise HTTPException(status_code=400, detail="category is required")
+
+    try:
+        from auth import verify_token as _vt
+        token = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+        payload = _vt(token) if token else {}
+        user_id = payload.get("sub") or "default"
+    except Exception:
+        user_id = "default"
+
+    from services.category_overrides import upsert_override as _upsert
+    ok = _upsert(user_id, ticker, category, source, reason)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to persist override")
+    return {"success": True, "ticker": ticker, "category": category, "user_id": user_id}
+
+
+@router.post("/categories/bulk")
+async def bulk_categories_endpoint(request: Request, body: dict):
+    """
+    Persist multiple manual category assignments in one call.
+
+    Body:
+    {
+      "updates": [
+        {"ticker": "BTDR", "category": "Data Center Infrastructure", "source": "manual"},
+        ...
+      ],
+      "categoryMoves": [
+        {"from": "Crypto Equities / Blockchain", "to": "Data Center Infrastructure"},
+        {"from": "Solar", "to": "Clean Energy"}
+      ]
+    }
+
+    categoryMoves resolves which tickers are currently in the 'from' section
+    and adds an override for each one pointing to 'to'.
+    All operations are idempotent (upsert).
+    """
+    try:
+        from auth import verify_token as _vt
+        token = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+        payload = _vt(token) if token else {}
+        user_id = payload.get("sub") or "default"
+    except Exception:
+        user_id = "default"
+
+    updates: list[dict] = list(body.get("updates") or [])
+
+    # Resolve categoryMoves → individual ticker overrides
+    cat_moves: list[dict] = list(body.get("categoryMoves") or [])
+    if cat_moves:
+        try:
+            from services.watchlist_service import load_watchlist as _lw
+            store = _lw()
+            if store:
+                sections = store.get("analysis", {}).get("sections", [])
+                for move in cat_moves:
+                    from_cat = str(move.get("from") or "").strip()
+                    to_cat   = str(move.get("to")   or "").strip()
+                    if not from_cat or not to_cat:
+                        continue
+                    for sec in sections:
+                        if (sec.get("title") or "").strip() == from_cat:
+                            for row in sec.get("tickers", []):
+                                sym = str(row.get("symbol") or "").strip().upper()
+                                if sym:
+                                    updates.append({
+                                        "ticker":   sym,
+                                        "category": to_cat,
+                                        "source":   "manual",
+                                        "reason":   f"category_move:{from_cat}→{to_cat}",
+                                    })
+        except Exception as _cm_err:
+            print(f"[WATCHLIST] categoryMoves resolution failed (non-fatal): {_cm_err}")
+
+    from services.category_overrides import bulk_upsert as _bulk
+    count = _bulk(user_id, updates)
+    return {
+        "success": True,
+        "upserted": count,
+        "user_id": user_id,
+    }
 
 
 # ── Parameterized endpoints (MUST be after static paths) ────────────────────

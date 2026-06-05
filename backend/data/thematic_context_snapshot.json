@@ -3,7 +3,7 @@
   "active_themes": [
     {
       "name": "Memory & Storage",
-      "score": 88.9,
+      "score": 89.3,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (89/100) vs theme universe. Outperforming SPY -2.5%, QQQ -1.6%. Breadth 0%."
@@ -19,10 +19,10 @@
     },
     {
       "name": "Semiconductor Equipment",
-      "score": 88.7,
+      "score": 89.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (89/100) vs theme universe with broad participation (67% advancing). Outperforming SPY -2.2%, QQQ -1.4"
+        "Top-percentile RS (89/100) vs theme universe with broad participation (80% advancing). Outperforming SPY -2.2%, QQQ -1.4"
       ],
       "related_etfs": [
         "SOXX",
@@ -30,8 +30,8 @@
       ],
       "related_tickers": [
         "ASML",
-        "AMAT",
-        "AMD"
+        "AEHR",
+        "ACLS"
       ]
     },
     {
@@ -68,10 +68,10 @@
     },
     {
       "name": "AI Networking",
-      "score": 82.9,
+      "score": 83.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (82/100) vs theme universe. Outperforming SPY -1.9%, QQQ -1.0%. Breadth N/A.",
+        "Top-percentile RS (83/100) vs theme universe. Outperforming SPY -1.9%, QQQ -1.0%. Breadth N/A.",
         "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
@@ -99,10 +99,10 @@
     },
     {
       "name": "Tech Equal-Weight",
-      "score": 79.1,
+      "score": 78.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (79/100) vs theme universe. Outperforming SPY -1.4%, QQQ -0.6%. Breadth 0%."
+        "Top-percentile RS (78/100) vs theme universe. Outperforming SPY -1.3%, QQQ -0.5%. Breadth 0%."
       ],
       "related_etfs": [
         "RYT",
@@ -131,7 +131,7 @@
   "emerging_themes": [
     {
       "name": "Solar",
-      "score": 66.9,
+      "score": 67.3,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (67/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -140,7 +140,8 @@
         "TAN"
       ],
       "related_tickers": [
-        "FSLR"
+        "ARRY",
+        "ENPH"
       ]
     },
     {
@@ -184,7 +185,7 @@
     },
     {
       "name": "Metals & Mining",
-      "score": 63.3,
+      "score": 62.9,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (63/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -214,16 +215,16 @@
         "IPAY"
       ],
       "related_tickers": [
-        "AMZN",
+        "AFRM",
         "AMD"
       ]
     },
     {
       "name": "Consumer Staples",
-      "score": 16.9,
+      "score": 16.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (17/100) vs 60-theme universe. SPY delta -0.5%, QQQ delta +0.3%. Breadth N/A \u2014 minimal buying pressur"
+        "Bottom-quartile RS (16/100) vs 60-theme universe. SPY delta -0.5%, QQQ delta +0.3%. Breadth N/A \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XLP",
@@ -233,46 +234,46 @@
     },
     {
       "name": "Utilities",
-      "score": 19.3,
+      "score": 19.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
         "XLU",
         "VPU"
       ],
       "related_tickers": [
-        "CEG"
+        "DUK"
       ]
     },
     {
       "name": "Communication Services",
-      "score": 20.6,
+      "score": 20.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta +0.5%, QQQ delta +1.4%. Breadth N/A \u2014 minimal buying pressur"
+        "Bottom-quartile RS (20/100) vs 60-theme universe. SPY delta +0.5%, QQQ delta +1.4%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "XLC",
         "VOX"
       ],
-      "related_tickers": []
+      "related_tickers": [
+        "CMCSA"
+      ]
     },
     {
       "name": "Consumer Retail",
-      "score": 22.0,
+      "score": 21.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.1%, QQQ delta +0.8%. Breadth 100% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +1.1%. Breadth N/A \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XRT",
         "RTH"
       ],
-      "related_tickers": [
-        "AMZN"
-      ]
+      "related_tickers": []
     }
   ],
   "sector_leaders": [
@@ -285,38 +286,32 @@
   ],
   "sector_laggards": [
     {
-      "sector": "Real Estate",
-      "ticker": "XLRE",
-      "score": 28.1,
-      "posture": "lagging"
-    },
-    {
       "sector": "Consumer Discretionary",
       "ticker": "XLY",
-      "score": 25.2,
+      "score": 24.6,
       "posture": "lagging"
     },
     {
       "sector": "Communication Services",
       "ticker": "XLC",
-      "score": 20.6,
+      "score": 20.0,
       "posture": "lagging"
     },
     {
       "sector": "Utilities",
       "ticker": "XLU",
-      "score": 19.3,
+      "score": 19.0,
       "posture": "lagging"
     },
     {
       "sector": "Consumer Staples",
       "ticker": "XLP",
-      "score": 16.9,
+      "score": 16.3,
       "posture": "lagging"
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-05T12:32:47.044063+00:00",
+  "last_updated": "2026-06-05T13:03:57.924636+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -327,5 +322,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1780662767.0441632
+  "_saved_at": 1780664637.9246907
 }

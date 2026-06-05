@@ -326,6 +326,7 @@ async def universe_endpoint(
     sources (watchlist CSV rows, portfolio holdings, theme mapper).
     """
     warnings: list[str] = []
+    user_id = _get_user_id(request)
 
     # ── Portfolio source ──────────────────────────────────────────────────────
     if source == "portfolio":
@@ -432,6 +433,14 @@ async def universe_endpoint(
                 _m = _sec_via_industry(_tu)
                 if _m:
                     section_map[_tu] = _m
+
+        # Apply manual overrides — wins over all automated classification.
+        # Same source of truth as the Watchlist page override layer.
+        try:
+            from services.category_overrides import apply_to_section_map as _apply_cat_overrides
+            section_map = _apply_cat_overrides(section_map, user_id=user_id)
+        except Exception:
+            pass
 
         all_tickers = tickers or list(csv_map.keys())
         if not all_tickers:

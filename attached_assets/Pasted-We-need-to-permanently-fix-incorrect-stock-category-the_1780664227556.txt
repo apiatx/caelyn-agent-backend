@@ -1,0 +1,125 @@
+We need to permanently fix incorrect stock category/theme assignments used by Watchlist and Chart Radar.
+
+Important:
+These category corrections must be durable and must become the source of truth for both:
+
+* Watchlist page
+* Chart Radar page
+
+Do not fix this only in frontend.
+Do not use temporary client-side remapping.
+Do not call FMP/Tradier/Polygon/Finnhub/etc.
+Do not ask AI to recategorize these same tickers again on every page load.
+Do not overwrite user-approved manual corrections with AI-generated categories.
+
+Goal:
+Create or use an existing category override layer so user-approved category assignments always win over AI-generated/fallback categories.
+
+Required behavior:
+Category resolution should follow this priority:
+
+1. User/manual category override
+2. Existing saved watchlist category from DB/CSV
+3. Existing app category mapper/static theme map
+4. AI-generated category only when no saved/manual category exists
+5. Unknown/Uncategorized as final fallback
+
+Once a manual correction exists, AI should not replace it unless the user explicitly asks to recategorize/overwrite.
+
+Specific corrections to apply now:
+
+Move these out of Cloud Software:
+
+* BTDR → Datacenter Infra
+* ADEA → Datacenter Infra
+* BZAI → Datacenter Infra
+* BKSY → Space Economy
+* PDFS → Semiconductors
+* SVCO → Semiconductors
+
+Move entire category:
+
+* Everything currently in “Crypto Equities / Blockchain” should move to “Datacenter Infra”
+
+Consolidate category:
+
+* “Solar” should be merged into “Clean Energy”
+* Any stock currently categorized as Solar should become Clean Energy
+* Solar should not remain as a separate category unless explicitly reintroduced later
+
+Manual ticker moves:
+
+* HYLN → Clean Energy
+* AUR → Robotics and Automation
+* AMBA → Robotics and Automation
+* OUST → Robotics and Automation
+* AEVA → Robotics and Automation
+
+Implementation options:
+First inspect existing watchlist/category storage. If there is already a watchlist category/theme column or user category override table, use that. Do not create duplicate category storage if one already exists.
+
+If no override mechanism exists, add a lightweight durable override table in Neon:
+
+watchlist_category_overrides
+
+* id
+* user_id
+* ticker
+* category
+* source, e.g. manual
+* reason nullable
+* created_at
+* updated_at
+
+Unique constraint:
+(user_id, ticker)
+
+Then update the category resolver used by Watchlist and Chart Radar so overrides are applied before AI/static/fallback category mapping.
+
+Also add a helper or script/endpoint to apply the corrections above safely.
+
+Needed backend endpoints if not already present:
+PATCH /api/watchlist/category
+Body:
+{
+"ticker": "BTDR",
+"category": "Datacenter Infra",
+"source": "manual"
+}
+
+Optional bulk endpoint:
+POST /api/watchlist/categories/bulk
+Body:
+{
+"updates": [
+{ "ticker": "BTDR", "category": "Datacenter Infra", "source": "manual" },
+{ "ticker": "ADEA", "category": "Datacenter Infra", "source": "manual" }
+],
+"categoryMoves": [
+{ "from": "Crypto Equities / Blockchain", "to": "Datacenter Infra" },
+{ "from": "Solar", "to": "Clean Energy" }
+]
+}
+
+Critical acceptance tests:
+
+1. Watchlist page shows BTDR, ADEA, BZAI in Datacenter Infra, not Cloud Software.
+2. Watchlist page shows BKSY in Space Economy.
+3. Watchlist page shows PDFS and SVCO in Semiconductors.
+4. Everything previously in Crypto Equities / Blockchain now appears in Datacenter Infra.
+5. Solar category is gone or empty; those tickers appear in Clean Energy.
+6. HYLN appears in Clean Energy.
+7. AUR, AMBA, OUST, and AEVA appear in Robotics and Automation.
+8. Chart Radar source=watchlist&group_by=theme returns the exact same categories as Watchlist.
+9. Manual overrides persist after server restart.
+10. AI category generation does not overwrite these manual corrections.
+11. No external provider API calls are made for this correction.
+12. Unknown/Uncategorized count should match the actual Watchlist page, not balloon due to fallback mapper issues.
+
+Please report:
+
+* where categories are currently stored
+* what field Watchlist uses for grouping
+* what field Chart Radar uses after the fix
+* how manual overrides are persisted
+* the final category counts after applying corrections

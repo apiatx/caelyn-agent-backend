@@ -507,6 +507,25 @@ def init_tables():
             ON public.chart_radar_views (user_id, updated_at DESC)
         """)
 
+        # ── Manual category overrides ───────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.watchlist_category_overrides (
+                id          BIGSERIAL   PRIMARY KEY,
+                user_id     TEXT        NOT NULL DEFAULT 'default',
+                ticker      TEXT        NOT NULL,
+                category    TEXT        NOT NULL,
+                source      TEXT        NOT NULL DEFAULT 'manual',
+                reason      TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, ticker)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wl_cat_overrides_user
+            ON public.watchlist_category_overrides (user_id)
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
@@ -515,6 +534,114 @@ def init_tables():
         print(f"[PG_STORAGE] Table creation error: {e}")
         conn.rollback()
         return False
+    finally:
+        _put_conn(conn)
+
+
+# ── Category overrides CRUD ───────────────────────────────────────────────────
+
+def get_category_overrides(user_id: str = "default") -> dict[str, str]:
+    """Return {ticker: category} map for user. Returns {} on DB unavailability."""
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ticker, category FROM public.watchlist_category_overrides "
+                "WHERE user_id = %s",
+                (user_id,),
+            )
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as e:
+        print(f"[PG_STORAGE] get_category_overrides failed: {e}")
+        return {}
+    finally:
+        _put_conn(conn)
+
+
+def upsert_category_override(
+    user_id: str,
+    ticker: str,
+    category: str,
+    source: str = "manual",
+    reason: str | None = None,
+) -> bool:
+    """Insert or update a single ticker→category override. Returns True on success."""
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.watchlist_category_overrides
+                    (user_id, ticker, category, source, reason, updated_at)
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (user_id, ticker)
+                DO UPDATE SET
+                    category   = EXCLUDED.category,
+                    source     = EXCLUDED.source,
+                    reason     = EXCLUDED.reason,
+                    updated_at = NOW()
+                """,
+                (user_id, ticker, category, source, reason),
+            )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] upsert_category_override failed: {e}")
+        conn.rollback()
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def bulk_upsert_category_overrides(
+    user_id: str,
+    updates: list[dict],
+) -> int:
+    """
+    Upsert multiple overrides in one transaction.
+    Each dict: {ticker, category, source='manual', reason=None}
+    Returns count of rows affected.
+    """
+    if not updates:
+        return 0
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    try:
+        count = 0
+        with conn.cursor() as cur:
+            for u in updates:
+                ticker   = str(u.get("ticker", "")).strip().upper()
+                category = str(u.get("category", "")).strip()
+                source   = str(u.get("source", "manual"))
+                reason   = u.get("reason")
+                if not ticker or not category:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO public.watchlist_category_overrides
+                        (user_id, ticker, category, source, reason, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (user_id, ticker)
+                    DO UPDATE SET
+                        category   = EXCLUDED.category,
+                        source     = EXCLUDED.source,
+                        reason     = EXCLUDED.reason,
+                        updated_at = NOW()
+                    """,
+                    (user_id, ticker, category, source, reason),
+                )
+                count += 1
+        conn.commit()
+        return count
+    except Exception as e:
+        print(f"[PG_STORAGE] bulk_upsert_category_overrides failed: {e}")
+        conn.rollback()
+        return 0
     finally:
         _put_conn(conn)
 
