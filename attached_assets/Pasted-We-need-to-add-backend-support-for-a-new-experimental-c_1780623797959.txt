@@ -1,0 +1,134 @@
+We need to add backend support for a new experimental chart organization page without breaking the existing Watchlist, Portfolio, or Multi-Charts behavior.
+
+Important: Do not invent replacement architecture. First inspect existing backend routes/services/models for:
+- watchlist data endpoints
+- portfolio holdings endpoints
+- multi-chart saved tabs/layouts if they exist
+- user auth / user_id separation
+- existing theme/company/market_cap fields already returned to frontend
+- any Neon persistence patterns already used for user-specific saved settings
+
+Goal:
+Create a lightweight backend API that lets the frontend build a TradingView chart matrix from either the user’s Watchlist or Portfolio, grouped/sorted by existing metadata.
+
+This feature should NOT fetch OHLC chart data for every ticker. TradingView widgets handle chart rendering client-side. Backend only returns ticker metadata needed to organize charts:
+- ticker
+- company_name
+- source: watchlist | portfolio | manual
+- theme
+- sector if available
+- market_cap if available
+- price if already available
+- daily_change_pct if already available
+- relative_volume if already available
+- portfolio_weight_pct if source is portfolio
+- watchlist_section/category if source is watchlist
+- exchange if available, for TradingView symbol formatting
+- asset_type if available
+- logo_url if already available
+
+Add a new route namespace like:
+GET /api/chart-radar/universe?source=watchlist|portfolio|manual&group_by=theme|market_cap|leader_tier|watchlist_section|portfolio_weight|none
+
+Do not duplicate expensive logic. Reuse existing watchlist and portfolio services/selectors. The endpoint should act as an adapter/normalizer over existing data.
+
+Expected response shape:
+{
+  "source": "watchlist",
+  "group_by": "theme",
+  "count": 302,
+  "groups": [
+    {
+      "key": "AI Networking",
+      "label": "AI Networking",
+      "count": 25,
+      "summary": {
+        "avg_change_pct": 2.4,
+        "avg_relative_volume": 1.8,
+        "total_portfolio_weight_pct": null
+      },
+      "symbols": [
+        {
+          "ticker": "AAOI",
+          "tradingview_symbol": "NASDAQ:AAOI",
+          "company_name": "Applied Optoelectronics",
+          "theme": "Photonics / Lasers",
+          "sector": "Technology",
+          "market_cap": 123456789,
+          "market_cap_bucket": "Small Cap",
+          "leader_tier": "Niche Breakout",
+          "price": 202.89,
+          "daily_change_pct": 10.2,
+          "relative_volume": 1.2,
+          "portfolio_weight_pct": null,
+          "watchlist_section": "Photonics / Lasers"
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}
+
+Market cap buckets:
+- Mega Cap: >= $200B
+- Large Cap: >= $25B and < $200B
+- Mid Cap: >= $2B and < $25B
+- Small Cap: >= $300M and < $2B
+- Micro Cap: < $300M
+- Unknown: null
+
+Leader tier logic v1:
+- "Leader": market_cap >= 25B
+- "Emerging Leader": market_cap >= 2B and < 25B
+- "Niche Breakout": market_cap >= 300M and < 2B
+- "Speculative": market_cap < 300M
+- "Unknown": missing market cap
+
+Do not make fresh FMP calls in the initial version unless existing stored market cap/theme data is missing and there is already a safe cached profile/enrichment helper. If fallback enrichment exists, use cache-first only and rate-limit it. No per-render mass API fetching.
+
+Add optional persistence for saved chart-radar views if there is already a user settings/table pattern:
+POST /api/chart-radar/views
+GET /api/chart-radar/views
+PATCH /api/chart-radar/views/{id}
+DELETE /api/chart-radar/views/{id}
+
+Saved view fields:
+- id
+- user_id
+- name
+- source
+- group_by
+- filters JSON
+- layout JSON
+- created_at
+- updated_at
+
+Filters/layout JSON example:
+{
+  "themes": ["AI Networking", "Clean Energy"],
+  "market_cap_buckets": ["Small Cap", "Mid Cap"],
+  "min_relative_volume": 1.5,
+  "sort": "daily_change_pct_desc",
+  "columns": 3,
+  "interval": "60",
+  "range": "3M"
+}
+
+Critical constraints:
+- Preserve current Watchlist page behavior.
+- Preserve current Portfolio page behavior.
+- Preserve current Multi-Charts page behavior.
+- Do not rename existing endpoints.
+- Do not migrate unrelated tables.
+- Do not create a second source of truth for watchlist or portfolio tickers.
+- Do not store chart iframe data in Neon. Store only saved view preferences.
+- All user-specific views must be scoped by the authenticated user_id.
+- If an existing admin/master stock bank concept exists, do not touch it for v1.
+
+Validation:
+- Test source=watchlist returns all current user watchlist tickers with groups.
+- Test source=portfolio returns all current user holdings with portfolio_weight_pct.
+- Test missing market_cap/theme does not crash; it should fall into Unknown.
+- Test endpoint does not trigger large external API fanout.
+- Test auth separation.
+- Test frontend can call endpoint after app restart.
