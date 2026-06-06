@@ -1,0 +1,95 @@
+Hyperliquid frontend logic audit only — no consolidation yet.
+
+Important:
+Do NOT remove Signal Lab sections.
+Do NOT assume Trade Radar is better.
+Do NOT add 5m/15m/1h/4h columns yet.
+Do NOT make major UI changes.
+
+Problem:
+Trade Radar and Signal Lab are both working, but they show different tickers/signals. Signal Lab appears to show better trade ideas from the user’s perspective.
+
+Current examples:
+Trade Radar:
+- Best Long: SILVER
+- Best Short: CL
+- Crowded/Avoid: TSLA
+- Top Setups include CL, JPY, AVGO, SILVER, US500, PLTR, GOOGL
+
+Signal Lab:
+- Best Long: BASED
+- Best Short: CAR
+- Best Watch: USA100
+- ranked/selected list includes ANTHROPIC, SILVER, BASED, LIGHTER, SPACEX, US500
+
+I need a frontend audit that maps every displayed Signal Lab and Trade Radar field back to its exact source.
+
+Audit Trade Radar:
+For each UI element, report:
+- component/file/function
+- endpoint called
+- response path
+- field names used
+- any frontend sorting/filtering/transformation
+
+Elements:
+- Market Regime strip
+- Best Long card
+- Best Short card
+- Squeeze Watch card
+- Pullback Buy card
+- Crowded/Avoid card
+- Top Setups table
+- Setup Explanation panel
+
+Audit Signal Lab:
+For each UI element, report:
+- component/file/function
+- endpoint called
+- response path
+- field names used
+- any frontend sorting/filtering/transformation
+
+Elements:
+- Best Long
+- Best Short
+- Best Watch
+- Crowded/Avoid
+- Market Regime
+- left ranked signal list
+- selected detail panel
+- chart panel
+- raw cards/widgets below
+
+Important:
+Determine whether Signal Lab’s “Best Long / Best Short / Best Watch” is:
+- coming from backend as already-ranked picks
+- calculated on frontend from Market Matrix rows
+- calculated from /signals
+- calculated from another payload
+- using stale legacy fields
+
+Compare:
+Create a table:
+
+UI element | Endpoint | Response path | Sort/filter logic | Final displayed field
+
+Then answer:
+1. Why does Signal Lab show BASED as Best Long while Trade Radar shows SILVER?
+2. Why does Signal Lab show CAR as Best Short while Trade Radar shows CL?
+3. Why does Signal Lab rank ANTHROPIC highly while Trade Radar does not?
+4. Is Signal Lab using a different universe, score, or filter?
+5. Is any Signal Lab logic frontend-only?
+6. Is any Signal Lab data stale or from a different refresh cycle than Trade Radar?
+
+Recommendation:
+Do not implement yet.
+Recommend how we should combine the two:
+- keep Signal Lab as-is?
+- make Trade Radar consume Signal Lab picks?
+- merge Signal Lab opportunity score into Trade Radar?
+- use Trade Radar only for explanation, not selection?
+- rename sections to reduce confusion?
+
+Deliverable:
+A concise audit report with exact file names, function names, endpoints, response paths, and field mappings.
