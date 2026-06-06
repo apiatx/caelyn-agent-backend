@@ -55,7 +55,7 @@
     },
     {
       "name": "Travel & Transportation",
-      "score": 71.1,
+      "score": 70.7,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (71/100) vs theme universe. Outperforming SPY +2.4%, QQQ +4.6%. Breadth 50%."
@@ -73,6 +73,25 @@
     }
   ],
   "emerging_themes": [
+    {
+      "name": "Cybersecurity",
+      "score": 69.8,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "CIBR",
+        "HACK",
+        "BUG",
+        "IHAK"
+      ],
+      "related_tickers": [
+        "CHKP",
+        "PANW",
+        "ZS"
+      ]
+    },
     {
       "name": "Semiconductors",
       "score": 69.7,
@@ -107,25 +126,6 @@
         "IBM",
         "ONTO",
         "STM"
-      ]
-    },
-    {
-      "name": "Cybersecurity",
-      "score": 67.9,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "CIBR",
-        "HACK",
-        "BUG",
-        "IHAK"
-      ],
-      "related_tickers": [
-        "CHKP",
-        "PANW",
-        "ZS"
       ]
     },
     {
@@ -169,7 +169,7 @@
       "score": 13.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta -2.5%, QQQ delta -0.3%. Breadth 7% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta -2.6%, QQQ delta -0.4%. Breadth 7% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "FINX",
@@ -220,10 +220,10 @@
     },
     {
       "name": "Gold",
-      "score": 26.4,
+      "score": 27.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (26/100) vs 60-theme universe. SPY delta -3.6%, QQQ delta -1.4%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (27/100) vs 60-theme universe. SPY delta -3.6%, QQQ delta -1.4%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "GLD",
@@ -270,13 +270,13 @@
     {
       "sector": "Industrials",
       "ticker": "XLI",
-      "score": 61.7,
+      "score": 61.3,
       "posture": "improving"
     }
   ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-06-06T18:19:34.103533+00:00",
+  "last_updated": "2026-06-06T19:06:28.573951+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -287,5 +287,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1780769974.1035929
+  "_saved_at": 1780772788.5740635
 }
