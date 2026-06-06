@@ -234,6 +234,9 @@ _SEED_OVERRIDES: list[tuple[str, str]] = [
     ("AMBA", "Robotics & Automation"),
     ("OUST", "Robotics & Automation"),
     ("AEVA", "Robotics & Automation"),
+    # Nuclear / Grid → split: grid tech → Clean Energy, nuclear → Uranium & Nuclear Energy
+    ("ASPI", "Clean Energy"),
+    ("IMSR", "Uranium & Nuclear Energy"),
 ]
 
 
