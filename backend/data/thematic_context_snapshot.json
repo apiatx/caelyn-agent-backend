@@ -74,25 +74,6 @@
   ],
   "emerging_themes": [
     {
-      "name": "Cybersecurity",
-      "score": 69.8,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "CIBR",
-        "HACK",
-        "BUG",
-        "IHAK"
-      ],
-      "related_tickers": [
-        "CHKP",
-        "PANW",
-        "ZS"
-      ]
-    },
-    {
       "name": "Semiconductors",
       "score": 69.7,
       "source": "theme_rs_service",
@@ -126,6 +107,25 @@
         "IBM",
         "ONTO",
         "STM"
+      ]
+    },
+    {
+      "name": "Cybersecurity",
+      "score": 67.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "CIBR",
+        "HACK",
+        "BUG",
+        "IHAK"
+      ],
+      "related_tickers": [
+        "CHKP",
+        "PANW",
+        "ZS"
       ]
     },
     {
@@ -220,10 +220,10 @@
     },
     {
       "name": "Gold",
-      "score": 27.0,
+      "score": 26.4,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (27/100) vs 60-theme universe. SPY delta -3.6%, QQQ delta -1.4%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (26/100) vs 60-theme universe. SPY delta -3.6%, QQQ delta -1.4%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "GLD",
@@ -276,7 +276,7 @@
   ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-06-06T16:39:10.448595+00:00",
+  "last_updated": "2026-06-06T16:52:04.984250+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -287,5 +287,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1780763950.4486458
+  "_saved_at": 1780764724.9843004
 }

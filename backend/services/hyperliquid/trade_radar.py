@@ -539,10 +539,24 @@ def _make_setup_card(
     tags     = a.tags or []
     theme    = next((t for t in ["AI", "DeFi", "L1", "RWA", "meme", "gaming", "commodity", "pre-IPO"] if t in tags), None)
 
+    # Clean ticker: use display_name (strips "xyz:", "km:", "cash:" Hyperliquid
+    # prefixes) so the frontend always gets a readable symbol like "TSLA" not "xyz:TSLA".
+    # Preserve the raw coin ID in coin_id for asset-detail lookups.
+    clean_ticker = a.display_name or a.coin
+    # name: only populate when display_name differs from coin (non-native assets
+    # like xyz:TSLA where display_name="TSLA" gives a cleaner display string).
+    # For native crypto (XLM, BTC) display_name==coin — leave name None so the
+    # frontend just renders ticker.
+    display_name_val = (a.display_name if a.display_name and a.display_name != a.coin else None)
+    # category: first non-"perp" tag gives the sub-category; fall back to "perp".
+    non_perp_tags = [t for t in tags if t not in ("perp", "spot")]
+    category_val  = non_perp_tags[0] if non_perp_tags else (tags[0] if tags else None)
+
     return {
-        "ticker":           a.coin,
-        "name":             (a.display_name if a.display_name and a.display_name != a.coin else None),
-        "category":         (tags[0] if tags else None),
+        "ticker":           clean_ticker,
+        "coin_id":          a.coin,         # raw Hyperliquid market ID for API lookups
+        "name":             display_name_val,
+        "category":         category_val,
         "theme":            theme,
         "side":             side,
         "setup_type":       setup_type,
@@ -574,6 +588,9 @@ def _make_setup_card(
             "mark_oracle_delta": a.distance_mark_oracle_pct,
             "book_imbalance":    a.orderbook_imbalance,
             "risk_score":        a.risk_score,
+            "pullback_quality":  a.pullback_quality_score,
+            "asset_regime":      a.asset_regime,
+            "squeeze_candidate": a.squeeze_candidate,
         },
     }
 
@@ -669,8 +686,19 @@ def build_trade_radar(
     # ── 5. Feature cards (best by category) ───────────────────────────────────
     longs    = sorted([c for c in actionable if c["side"] == "LONG"],  key=lambda c: -c["score"])
     shorts   = sorted([c for c in actionable if c["side"] == "SHORT"], key=lambda c: -c["score"])
-    squeezes = sorted([c for c in actionable if c["setup_type"] == "SQUEEZE_WATCH"], key=lambda c: -c["score"])
-    pullbacks = sorted([c for c in actionable if c["setup_type"] == "BUY_PULLBACK"],  key=lambda c: -c["score"])
+
+    # squeeze_watch: strict — must be a real squeeze_candidate; null is acceptable
+    # when no crowded-short compression exists in the current regime.
+    squeezes  = sorted([c for c in actionable if c["setup_type"] == "SQUEEZE_WATCH"], key=lambda c: -c["score"])
+
+    # pullback_buy: try strict BUY_PULLBACK first; fall back to the best LONG
+    # whose timing is "ARMING" (developing signal) so this slot rarely goes null.
+    pullbacks_strict  = [c for c in actionable if c["setup_type"] == "BUY_PULLBACK"]
+    pullbacks_arming  = [c for c in actionable
+                         if c["side"] == "LONG" and c["timing_state"] == "ARMING"
+                         and c["setup_type"] != "BUY_PULLBACK"]
+    pullbacks = sorted(pullbacks_strict or pullbacks_arming, key=lambda c: -c["score"])
+
     crowded  = sorted([c for c in all_cards  if c["setup_type"] == "CROWDED_AVOID"], key=lambda c: -c["score"])
 
     cards = {
@@ -688,8 +716,33 @@ def build_trade_radar(
     print(
         f"[HL_RADAR] assets={len(assets)} top_setups={len(top_setups)} "
         f"longs={len(longs)} shorts={len(shorts)} squeezes={len(squeezes)} "
-        f"pullbacks={len(pullbacks)} elapsed_ms={elapsed_ms}"
+        f"pullbacks_strict={len(pullbacks_strict)} pullbacks_arming={len(pullbacks_arming)} "
+        f"elapsed_ms={elapsed_ms}"
     )
+
+    # ── [HL_RADAR_AUDIT] card-level audit log ─────────────────────────────────
+    for slot_name, card in cards.items():
+        if card:
+            print(
+                f"[HL_RADAR_AUDIT] card={slot_name} "
+                f"ticker={card['ticker']} coin_id={card['coin_id']} "
+                f"setup={card['setup_type']} score={card['score']:.1f} "
+                f"confidence={card['confidence']:.2f} "
+                f"timing={card['timing_state']} risk={card['risk_label']} "
+                f"why_now={card['why_now']!r}"
+            )
+        else:
+            print(f"[HL_RADAR_AUDIT] card={slot_name} NULL")
+
+    # ── [HL_RADAR_AUDIT] top-setup audit log ──────────────────────────────────
+    for rank, s in enumerate(top_setups, 1):
+        print(
+            f"[HL_RADAR_AUDIT] top_setup_rank={rank} "
+            f"ticker={s['ticker']} coin_id={s['coin_id']} "
+            f"side={s['side']} setup={s['setup_type']} "
+            f"score={s['score']:.1f} timing={s['timing_state']} "
+            f"why_now={s['why_now']!r}"
+        )
 
     return {
         "trade_radar": {
