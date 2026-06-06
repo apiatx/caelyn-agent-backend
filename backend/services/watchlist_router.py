@@ -1962,6 +1962,19 @@ async def _run_claude_analysis_background(watchlist_id: str) -> None:
         _stat_fallback   = 0  # mapped by CSV industry fallback
         _stat_other      = 0  # truly uncategorized
         _stat_aliases    = 0  # section names normalized via _NAME_NORMALIZE
+        _stat_overridden = 0  # overridden by manual category override
+
+        # Load manual overrides once — these always win over AI/static classification.
+        # Applying them here ensures the SAVED DB sections reflect user corrections,
+        # not just the display layer.  Without this, a background refresh would save
+        # AI-classified sections to DB, even though the display layer re-applies
+        # overrides on every GET.
+        _bg_cat_overrides: dict[str, str] = {}
+        try:
+            from services.category_overrides import get_overrides as _bg_get_overrides
+            _bg_cat_overrides = _bg_get_overrides("default")
+        except Exception as _bg_ov_err:
+            print(f"[BG_REFRESH] category overrides load failed (non-fatal): {_bg_ov_err}")
 
         for sym in tickers:
             raw_cname = map_ticker_to_primary_theme(sym)
@@ -1997,6 +2010,24 @@ async def _run_claude_analysis_background(watchlist_id: str) -> None:
             if cname != raw_cname:
                 _stat_aliases += 1
 
+            # Manual override wins over everything — checked last so it cannot
+            # be undone by any upstream classifier or alias normalization.
+            _sym_upper = sym.strip().upper()
+            _override_cat = (
+                _bg_cat_overrides.get(_sym_upper)
+                or _bg_cat_overrides.get(_sym_upper.split(":")[-1] if ":" in _sym_upper else _sym_upper)
+            )
+            if _override_cat:
+                cname = _override_cat
+                cid   = (
+                    cname.lower()
+                    .replace(" ", "_")
+                    .replace("/", "_")
+                    .replace("&", "and")
+                    .replace("-", "_")
+                )
+                _stat_overridden += 1
+
             ticker_to_canon_name[sym] = cname
             ticker_to_canon_id[sym]   = cid
             theme_groups.setdefault(cname, []).append(sym)
@@ -2009,7 +2040,7 @@ async def _run_claude_analysis_background(watchlist_id: str) -> None:
             f"[BG_REFRESH] {watchlist_id}: {len(tickers)} tickers → "
             f"{len(sorted_groups)} canonical theme groups "
             f"(registry={_stat_registry} industry_fallback={_stat_fallback} "
-            f"other={_stat_other} aliases={_stat_aliases})"
+            f"other={_stat_other} aliases={_stat_aliases} overridden={_stat_overridden})"
         )
 
         anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
