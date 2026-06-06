@@ -1,0 +1,138 @@
+Implement Home Risk Intelligence by reusing existing backend data sources only. Do not add any new FMP calls or new upstream API calls.
+
+Goal:
+Make the Home page surface an obvious market risk signal when multiple existing risk indicators are flashing, while preserving the current architecture and avoiding duplicate data collection.
+
+Current architecture requirement:
+The Home page “Should I Trade?” bubble must continue using the same existing backend logic/data that powers the Macro page “Should I Be Trading?” tab. Do not create a second scoring engine. Do not duplicate scoring logic. Do not move scoring into the frontend.
+
+The Home page “Upcoming Economic Events” card must reuse the same economic release data already powering the Calendar page → Economic Releases tab. Do not call FMP again for Home. Do not create a new economic-calendar fetch path. Reuse the existing cached calendar/economic releases payload.
+
+The Home page Market Snapshot must reuse the existing Market Snapshot source/cache. Do not add new quote calls. Do not create a parallel quote provider. Do not fetch FMP again for any of this.
+
+Backend task:
+Create or extend a backend-composed Home Risk Intelligence payload that aggregates existing cached service outputs:
+
+* existing Home Market Snapshot data
+* existing Macro → Should I Be Trading data
+* existing Macro/Risk tab data if already available
+* existing Calendar → Economic Releases data
+* existing breadth / market quality / sector data already used elsewhere in the app
+
+This endpoint should be a composer/aggregator over existing cached service outputs, not a new upstream data collector.
+
+Required response shape:
+
+{
+"as_of": "...",
+"market_open": true,
+"data_freshness": {
+"market_snapshot_age_seconds": 0,
+"calendar_age_seconds": 0,
+"macro_age_seconds": 0,
+"source_summary": "reused existing cached Home/Macro/Calendar data",
+"market_snapshot_status": "live | cached | stale",
+"calendar_status": "cached | stale",
+"macro_status": "live | cached | stale"
+},
+"market_snapshot": {
+"sp500": { "symbol": "SPY or canonical existing symbol", "price": 0, "change_pct": 0 },
+"dow": { "symbol": "DIA or canonical existing symbol", "price": 0, "change_pct": 0 },
+"nasdaq100": { "symbol": "QQQ or canonical existing symbol", "price": 0, "change_pct": 0 },
+"bitcoin": { "symbol": "BTC", "price": 0, "change_pct": 0 },
+"us10y": { "symbol": "US10Y", "price": 0, "change_bps": 0 },
+"vix": { "symbol": "VIX", "price": 0, "change_pct": 0 },
+"dxy": { "symbol": "DXY", "price": 0, "change_pct": 0 }
+},
+"trade_decision": {
+"label": "YES | CAUTION | NO",
+"score": 0,
+"mode": "day | swing",
+"position_size_hint": "normal | selective | half-size | preserve capital",
+"one_line": "",
+"avoid": []
+},
+"risk_cluster": {
+"active": true,
+"severity": "LOW | MODERATE | ELEVATED | HIGH | EXTREME",
+"score": 0,
+"headline": "",
+"summary": "",
+"trigger_count": 0,
+"triggers": [
+{
+"key": "vix_spike",
+"label": "VIX spike",
+"status": "green | yellow | orange | red",
+"value": "",
+"threshold": "",
+"message": ""
+}
+]
+},
+"upcoming_economic_events": [
+{
+"date": "YYYY-MM-DD",
+"time": null,
+"title": "CPI Report",
+"importance": "low | medium | high",
+"actual": null,
+"estimate": null,
+"previous": null,
+"country": "US",
+"source": "calendar_reused"
+}
+],
+"why_market_is_moving": [
+"short bullet 1",
+"short bullet 2",
+"short bullet 3"
+]
+}
+
+Risk cluster logic:
+Use deterministic rules from existing values. Do not rely only on LLM output.
+
+Initial trigger rules:
+
+* VIX spike red if VIX change_pct >= +20% or VIX >= 25
+* VIX elevated yellow/orange if VIX >= 20
+* QQQ/Nasdaq100 red if daily change_pct <= -2.5%
+* SPY/S&P red if daily change_pct <= -1.5%
+* BTC risk-off red if daily change_pct <= -5%
+* Market breadth red if breadth score < 40, yellow if < 50
+* 10Y yield pressure yellow if 10Y >= 4.5, red if >= 4.75
+* DXY headwind yellow if DXY is rising materially based on already-available DXY data
+* HY OAS / credit stress red only if existing Macro/Risk data says credit stress is elevated
+* Upcoming high-impact macro event within 3 trading days adds yellow/orange event risk
+
+Severity rules:
+
+* 0–1 orange/red triggers: LOW or MODERATE
+* 2 orange/red triggers: ELEVATED
+* 3 orange/red triggers: HIGH
+* 4+ orange/red triggers: EXTREME
+
+Bad-market validation example:
+The following should activate a prominent risk cluster:
+VIX +33.94%, QQQ -4.80%, BTC -9.12%, breadth 36/100, 10Y 4.55.
+
+Caching and freshness:
+Add freshness metadata around existing cached responses. Do not fetch again just to calculate freshness.
+
+Diagnostics:
+Add logs or a lightweight diagnostic output showing:
+
+* which existing services were reused
+* whether each value came from cache
+* confirmation that no new FMP/upstream call was made for Home Risk Intelligence
+
+Validation checklist:
+
+* Home “Should I Trade?” matches Macro → Should I Be Trading.
+* Home Upcoming Economic Events match Calendar → Economic Releases.
+* Home Market Snapshot uses the same existing market snapshot source/cache.
+* Loading Home does not increase FMP call count.
+* Risk cluster activates on multi-signal risk days.
+* No duplicate scoring engine is created.
+* No frontend-only risk scoring is required beyond display mapping.

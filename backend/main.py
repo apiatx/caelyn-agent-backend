@@ -13130,6 +13130,51 @@ async def daily_alpha_board(
         )
 
 
+# ── GET /api/home/risk-intelligence ──────────────────────────────────
+# Composer/aggregator: reuses existing cached services only.
+# - market_snapshot  → macro:dashboard:v3  (same source as Home page)
+# - trade_decision   → strategy:vix_regime:v1  (same engine as Macro "Should I Be Trading?")
+# - upcoming_events  → calendar_snapshots/economic_releases Neon  (same as Calendar page)
+# - risk_cluster     → deterministic rules on already-cached values
+# - BTC              → Hyperliquid in-memory state (zero API call)
+# ZERO new FMP/upstream calls.
+
+@app.get("/api/home/risk-intelligence")
+@limiter.limit("60/minute")
+async def home_risk_intelligence(
+    request: Request,
+    force: bool = False,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Home Risk Intelligence payload — single endpoint for the risk banner,
+    trade decision bubble, market snapshot, and upcoming economic events.
+
+    Validation checklist (all must hold):
+      ✓ trade_decision matches /api/strategy/vix-risk-regime
+      ✓ upcoming_economic_events match /api/catalysts/events?tab=economic_releases
+      ✓ market_snapshot values match /api/home/dashboard cards
+      ✓ Loading this endpoint does NOT increase FMP call count
+      ✓ risk_cluster activates automatically on multi-signal risk days
+    """
+    await _wait_for_init()
+    mp = _get_macro_provider()
+    if force:
+        from data.cache import cache as _cache
+        _cache.delete("home:risk_intel:v1")
+    try:
+        from services.home_risk_intelligence import build_home_risk_intelligence_safe
+        payload = await build_home_risk_intelligence_safe(mp)
+        return JSONResponse(content=payload)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Risk Intelligence error: {str(exc)}"},
+        )
+
+
 # ── GET /api/macro/dashboard ─────────────────────────────────────────
 
 @app.get("/api/macro/dashboard")
