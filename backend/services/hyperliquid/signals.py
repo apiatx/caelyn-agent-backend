@@ -714,6 +714,10 @@ def _build_idea(asset: ScreenerAsset) -> dict:
     return {
         "coin":               asset.coin,
         "displayName":        asset.display_name,
+        # normalized_symbol — canonical join key between Signal Lab and Trade Radar.
+        # Always equals displayName (display_name or raw coin as fallback).
+        # Frontend: match on normalized_symbol across both payloads.
+        "normalized_symbol":  asset.display_name or asset.coin,
         "side":               side,
         "setup_type":         setup,
         "asset_regime":       asset.asset_regime or "chop_low_quality",
@@ -1077,6 +1081,7 @@ def build_signal_sections(
         return {
             "coin":            a.coin,
             "displayName":     a.display_name,
+            "normalized_symbol": a.display_name or a.coin,
             "marketType":      a.market_type,
             "markPrice":       a.mark_px,
             "change24hPct":    round(a.pct_change_24h / 100, 6) if a.pct_change_24h is not None else None,

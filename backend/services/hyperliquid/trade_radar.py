@@ -555,6 +555,9 @@ def _make_setup_card(
     return {
         "ticker":           clean_ticker,
         "coin_id":          a.coin,         # raw Hyperliquid market ID for API lookups
+        # normalized_symbol — canonical join key between Trade Radar and Signal Lab.
+        # Equals ticker (display_name or raw coin). Frontend: match on this field.
+        "normalized_symbol": clean_ticker,
         "name":             display_name_val,
         "category":         category_val,
         "theme":            theme,
