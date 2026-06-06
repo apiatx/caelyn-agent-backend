@@ -244,6 +244,8 @@ _SEED_OVERRIDES: list[tuple[str, str]] = [
     # Fintech
     ("CRCL", "Fintech"),
     ("INV",  "Fintech"),
+    # Quantum Computing
+    ("XNDU", "Quantum Computing"),
 ]
 
 

@@ -823,6 +823,7 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
                             "average_volume": item.get("avgVolume"),
                             "high": item.get("dayHigh"),
                             "low": item.get("dayLow"),
+                            "description": item.get("name") or "",
                             "quote_source": "fmp",
                             "quote_cached_at": _now_ts,
                             "quote_is_stale": False,

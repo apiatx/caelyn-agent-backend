@@ -526,6 +526,25 @@ def init_tables():
             ON public.watchlist_category_overrides (user_id)
         """)
 
+        # ── Manual ticker name overrides ────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.ticker_name_overrides (
+                id          BIGSERIAL   PRIMARY KEY,
+                user_id     TEXT        NOT NULL DEFAULT 'default',
+                ticker      TEXT        NOT NULL,
+                name        TEXT        NOT NULL,
+                source      TEXT        NOT NULL DEFAULT 'manual',
+                reason      TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, ticker)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ticker_name_overrides_user
+            ON public.ticker_name_overrides (user_id)
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
@@ -640,6 +659,114 @@ def bulk_upsert_category_overrides(
         return count
     except Exception as e:
         print(f"[PG_STORAGE] bulk_upsert_category_overrides failed: {e}")
+        conn.rollback()
+        return 0
+    finally:
+        _put_conn(conn)
+
+
+# ── Ticker name overrides CRUD ───────────────────────────────────────────────
+
+def get_name_overrides(user_id: str = "default") -> dict[str, str]:
+    """Return {ticker: name} map for user. Returns {} on DB unavailability."""
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ticker, name FROM public.ticker_name_overrides "
+                "WHERE user_id = %s",
+                (user_id,),
+            )
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as e:
+        print(f"[PG_STORAGE] get_name_overrides failed: {e}")
+        return {}
+    finally:
+        _put_conn(conn)
+
+
+def upsert_name_override(
+    user_id: str,
+    ticker: str,
+    name: str,
+    source: str = "manual",
+    reason: str | None = None,
+) -> bool:
+    """Insert or update a single ticker→name override. Returns True on success."""
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.ticker_name_overrides
+                    (user_id, ticker, name, source, reason, updated_at)
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (user_id, ticker)
+                DO UPDATE SET
+                    name       = EXCLUDED.name,
+                    source     = EXCLUDED.source,
+                    reason     = EXCLUDED.reason,
+                    updated_at = NOW()
+                """,
+                (user_id, ticker, name, source, reason),
+            )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[PG_STORAGE] upsert_name_override failed: {e}")
+        conn.rollback()
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def bulk_upsert_name_overrides(
+    user_id: str,
+    updates: list[dict],
+) -> int:
+    """
+    Upsert multiple name overrides in one transaction.
+    Each dict: {ticker, name, source='manual', reason=None}
+    Returns count of rows affected.
+    """
+    if not updates:
+        return 0
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    try:
+        count = 0
+        with conn.cursor() as cur:
+            for u in updates:
+                ticker = str(u.get("ticker", "")).strip().upper()
+                name   = str(u.get("name", "")).strip()
+                source = str(u.get("source", "manual"))
+                reason = u.get("reason")
+                if not ticker or not name:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO public.ticker_name_overrides
+                        (user_id, ticker, name, source, reason, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (user_id, ticker)
+                    DO UPDATE SET
+                        name       = EXCLUDED.name,
+                        source     = EXCLUDED.source,
+                        reason     = EXCLUDED.reason,
+                        updated_at = NOW()
+                    """,
+                    (user_id, ticker, name, source, reason),
+                )
+                count += 1
+        conn.commit()
+        return count
+    except Exception as e:
+        print(f"[PG_STORAGE] bulk_upsert_name_overrides failed: {e}")
         conn.rollback()
         return 0
     finally:

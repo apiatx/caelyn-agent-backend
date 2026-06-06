@@ -109,6 +109,13 @@ def _init_postgres_chat_storage_on_startup(reason: str = "startup"):
         except Exception as _seed_err:
             print(f"[STARTUP] category override seeding failed (non-fatal): {_seed_err}")
 
+        # Seed user-approved company name corrections (idempotent upsert)
+        try:
+            from services.name_overrides import seed_initial_name_overrides as _seed_names
+            _seed_names(user_id="default")
+        except Exception as _seed_name_err:
+            print(f"[STARTUP] name override seeding failed (non-fatal): {_seed_name_err}")
+
         after = _pg_probe()
         print(
             f"[STARTUP][PG] tables_after={after.get('tables', [])} "

@@ -618,6 +618,16 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
 
     now_str = datetime.now(timezone.utc).isoformat() + "Z"
 
+    # Load name overrides once for this enrichment pass — applied last in
+    # _build_ticker_row so they win over Tradier description, FMP quote name,
+    # and CSV columns.  Cache-backed; no DB hit if cache is warm.
+    _name_overrides: dict[str, str] = {}
+    try:
+        from services.name_overrides import get_name_overrides as _get_name_overrides
+        _name_overrides = _get_name_overrides("default")
+    except Exception as _nov_err:
+        print(f"[WATCHLIST_ENRICH] name overrides load failed (non-fatal): {_nov_err}")
+
     def _build_ticker_row(sym: str, base_row: dict) -> dict:
         """Build one enriched ticker row from quote + CSV data."""
         sym = sym.strip().upper()
@@ -626,6 +636,8 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         enriched = dict(base_row)
 
         # ── Name ──────────────────────────────────────────────────────────
+        # Priority: name override (DB) > Tradier description > FMP quote name
+        #           > CSV column > ticker symbol
         if not enriched.get("name"):
             enriched["name"] = (
                 q.get("name")
@@ -633,6 +645,11 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 or csv_row.get("Name")
                 or sym
             )
+        # Manual override wins over everything — applied after initial name
+        # resolution so it can correct wrong API names without blocking them.
+        _override_name = _name_overrides.get(sym)
+        if _override_name:
+            enriched["name"] = _override_name
 
         # ── Price ──────────────────────────────────────────────────────────
         if q.get("price") is not None:
