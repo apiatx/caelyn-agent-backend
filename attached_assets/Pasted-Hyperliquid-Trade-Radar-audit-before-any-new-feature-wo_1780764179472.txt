@@ -1,0 +1,69 @@
+Hyperliquid Trade Radar audit before any new feature work.
+
+Problem:
+The new Trade Radar tab is not working correctly in the UI. Cards show blanks/dashes and Top Setups rows show setup/confidence but no ticker/thesis. It may be a backend payload issue, frontend mapping issue, or both.
+
+Do not add 5m/15m/1h/4h columns yet. First audit Trade Radar.
+
+Please run and report the exact JSON shape returned by:
+
+GET /api/hyperliquid/screener/trade-radar
+
+Specifically inspect:
+1. trade_radar.cards.best_long
+2. trade_radar.cards.best_short
+3. trade_radar.cards.squeeze_watch
+4. trade_radar.cards.pullback_buy
+5. trade_radar.cards.crowded_avoid
+6. trade_radar.top_setups[0:10]
+7. trade_radar.market_regime
+8. trade_radar.selected_defaults
+
+For each SetupCard, confirm these fields exist and are non-empty where possible:
+- ticker
+- side
+- setup_type
+- score
+- confidence
+- risk_label
+- timing_state
+- action_label
+- why_now
+- entry_condition
+- invalidation_hint
+- warnings
+- components
+- raw_refs
+
+Important:
+If top_setups contains rows with missing ticker or missing why_now, fix backend.
+If cards are null because thresholds are too strict, tune v1 thresholds so the cards populate with best available candidates, even if they are WATCH instead of TRADE_NOW.
+If cards are populated correctly in JSON, report that clearly so frontend can fix mapping.
+
+Also compare Trade Radar vs existing Signal Lab:
+- Which existing raw widgets feed Trade Radar?
+- Which metrics are unique to Trade Radar?
+- Which fields are reused from Market Matrix?
+- Which fields are frontend-only today?
+
+Goal:
+Trade Radar should be a decision layer, not a duplicate of Signal Lab.
+
+Expected backend behavior:
+- Best Long card should choose the highest quality long-biased setup, even if setup_type is WATCH_BREAKOUT or BUY_PULLBACK.
+- Best Short card should choose the highest quality short-biased setup.
+- Squeeze Watch should populate only if a real squeeze candidate exists; otherwise null is okay.
+- Pullback Buy should populate if a good trend exists but entry is extended/not ideal.
+- Crowded/Avoid should populate with the most obvious “do not chase” candidate.
+- Top Setups must always include ticker and a plain-English why_now.
+
+Add temporary debug output/logs:
+[HL_RADAR_AUDIT] card=best_long ticker=... setup=... score=... confidence=... why_now=...
+[HL_RADAR_AUDIT] top_setup_rank=1 ticker=... side=... setup=... why_now=...
+
+Validation:
+- Endpoint returns usable non-empty cards when data supports it.
+- top_setups rows all have ticker.
+- top_setups rows all have why_now or action_label.
+- No change to Market Matrix.
+- No change to Time-Series Momentum.
