@@ -220,10 +220,10 @@
     },
     {
       "name": "Gold",
-      "score": 26.4,
+      "score": 27.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (26/100) vs 60-theme universe. SPY delta -3.6%, QQQ delta -1.4%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (27/100) vs 60-theme universe. SPY delta -3.6%, QQQ delta -1.4%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "GLD",
@@ -270,13 +270,13 @@
     {
       "sector": "Industrials",
       "ticker": "XLI",
-      "score": 60.9,
+      "score": 61.3,
       "posture": "improving"
     }
   ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-06-06T16:28:30.305927+00:00",
+  "last_updated": "2026-06-06T16:39:10.448595+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -287,5 +287,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1780763310.3059797
+  "_saved_at": 1780763950.4486458
 }
