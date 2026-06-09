@@ -1,0 +1,104 @@
+Add backend support for a 7-day alerts history list.
+
+Context:
+The real-time alert popup system is working and now dedupes correctly. We now need a manual alerts button on the frontend that opens a list of all alerts from the past 7 days with date/time stamps.
+
+Goal:
+Expose a backend alerts history endpoint that returns all alert events from the past 7 days for the current user, including acknowledged and dismissed alerts, so the frontend can show an alert history drawer/modal.
+
+Do not change alert generation logic.
+Do not change SSE behavior.
+Do not change dedupe/cooldown behavior.
+Do not add provider calls.
+Do not fetch chart/news for the list view.
+This endpoint should only read from `ticker_alert_events`.
+
+Add or update endpoint:
+`GET /api/alerts/history`
+
+Query params:
+
+* `days=7` default 7, max 30
+* `limit=100` default 100, max 500
+* `offset=0` default 0
+* `ticker=` optional
+* `alert_lane=` optional
+* `severity=` optional
+* `include_acknowledged=true` default true
+* `include_dismissed=true` default true
+
+Behavior:
+
+1. Return alerts created within the last `days` days.
+2. Default should include acknowledged and dismissed alerts.
+3. Order by `created_at DESC`.
+4. Do not return chart/news payloads in this list endpoint.
+5. Return enough metadata for the frontend list:
+
+   * id
+   * ticker
+   * alert_type
+   * alert_lane
+   * short_label
+   * title
+   * severity
+   * coverage_label
+   * score
+   * summary
+   * source_tags
+   * created_at
+   * acknowledged_at
+   * dismissed_at
+   * is_acknowledged
+   * is_dismissed
+6. Keep `/api/alerts/{id}/detail` as the endpoint for opening a specific alert and loading full details/chart/news.
+7. Make sure the endpoint is user-scoped if auth/user separation exists.
+8. Use parameterized SQL.
+9. Keep provider_calls at 0.
+
+Suggested response shape:
+{
+"items": [
+{
+"id": 59,
+"ticker": "WULF",
+"alert_type": "flow_surge",
+"alert_lane": "cross_confirmed",
+"short_label": "Flow Surge",
+"title": "WULF Flow Surge",
+"severity": "high",
+"coverage_label": "Cross-confirmed signal",
+"score": 88,
+"summary": "Price, VolX, volume/market-cap, and options activity are all unusually elevated.",
+"source_tags": ["Watchlist", "Options Flow"],
+"created_at": "2026-06-09T14:54:29+00:00",
+"acknowledged_at": "2026-06-09T14:56:01+00:00",
+"dismissed_at": null,
+"is_acknowledged": true,
+"is_dismissed": false
+}
+],
+"limit": 100,
+"offset": 0,
+"days": 7,
+"has_more": false
+}
+
+Diagnostics:
+Update `/api/alerts/diagnostics` if useful to include:
+
+* history_count_7d
+* history_count_24h
+* dismissed_count_7d
+* acknowledged_count_7d
+
+Validation checklist:
+
+* `GET /api/alerts/history` returns alerts from past 7 days.
+* Includes acknowledged and dismissed alerts by default.
+* Supports limit/offset pagination.
+* Supports optional ticker/severity/lane filters.
+* Does not call providers.
+* Does not affect popup dedupe.
+* Does not affect SSE stream.
+* Existing alert endpoints still work.

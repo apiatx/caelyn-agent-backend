@@ -334,6 +334,122 @@ def _get_alert_by_id_sync(alert_id: int) -> dict | None:
         put(conn)
 
 
+def _get_alert_history_sync(
+    user_id: str,
+    days: int = 7,
+    limit: int = 100,
+    offset: int = 0,
+    ticker: Optional[str] = None,
+    alert_lane: Optional[str] = None,
+    severity: Optional[str] = None,
+    include_acknowledged: bool = True,
+    include_dismissed: bool = True,
+) -> list[dict]:
+    """
+    Read-only history query from ticker_alert_events.
+    No provider calls.  Returns only list-view fields (no chart/news payload).
+    """
+    conn, put = _pg()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        days  = max(1, min(days, 30))
+        limit = max(1, min(limit, 500))
+        offset = max(0, offset)
+
+        conditions = ["user_id = %s", "created_at >= NOW() - (%s || ' days')::interval"]
+        params: list = [user_id, str(days)]
+
+        if not include_acknowledged:
+            conditions.append("acknowledged_at IS NULL")
+        if not include_dismissed:
+            conditions.append("dismissed_at IS NULL")
+        if ticker:
+            conditions.append("ticker = %s")
+            params.append(ticker.upper().strip())
+        if alert_lane:
+            conditions.append("alert_lane = %s")
+            params.append(alert_lane.strip())
+        if severity:
+            conditions.append("severity = %s")
+            params.append(severity.strip().lower())
+
+        where = " AND ".join(conditions)
+        params += [limit, offset]
+
+        cur.execute(f"""
+            SELECT id, ticker, alert_type, alert_lane, severity, title, short_label,
+                   coverage_label, summary, score, source_tags,
+                   created_at, acknowledged_at, dismissed_at
+            FROM public.ticker_alert_events
+            WHERE {where}
+            ORDER BY created_at DESC
+            LIMIT %s OFFSET %s
+        """, params)
+
+        cols = [
+            "id", "ticker", "alert_type", "alert_lane", "severity", "title", "short_label",
+            "coverage_label", "summary", "score", "source_tags",
+            "created_at", "acknowledged_at", "dismissed_at",
+        ]
+        rows = []
+        for r in cur.fetchall():
+            row = dict(zip(cols, r))
+            row["is_acknowledged"] = row["acknowledged_at"] is not None
+            row["is_dismissed"]    = row["dismissed_at"] is not None
+            for tf in ("created_at", "acknowledged_at", "dismissed_at"):
+                if row[tf] is not None:
+                    row[tf] = row[tf].isoformat()
+            if isinstance(row["source_tags"], str):
+                try:
+                    row["source_tags"] = json.loads(row["source_tags"])
+                except Exception:
+                    row["source_tags"] = []
+            rows.append(row)
+        cur.close()
+        return rows
+    except Exception as exc:
+        print(f"[ALERT_BUS] get_alert_history error: {exc}")
+        return []
+    finally:
+        put(conn)
+
+
+def _get_history_counts_sync(user_id: str) -> dict:
+    """Return history_count_7d, history_count_24h, dismissed_count_7d, acknowledged_count_7d."""
+    conn, put = _pg()
+    if conn is None:
+        return {}
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                COUNT(*)                                                         AS total_7d,
+                COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '1 day')  AS total_24h,
+                COUNT(*) FILTER (WHERE dismissed_at IS NOT NULL)                 AS dismissed_7d,
+                COUNT(*) FILTER (WHERE acknowledged_at IS NOT NULL)              AS acknowledged_7d
+            FROM public.ticker_alert_events
+            WHERE user_id = %s
+              AND created_at >= NOW() - INTERVAL '7 days'
+        """, (user_id,))
+        row = cur.fetchone()
+        cur.close()
+        if row:
+            return {
+                "history_count_7d":      int(row[0]),
+                "history_count_24h":     int(row[1]),
+                "dismissed_count_7d":    int(row[2]),
+                "acknowledged_count_7d": int(row[3]),
+            }
+        return {}
+    except Exception as exc:
+        print(f"[ALERT_BUS] get_history_counts error: {exc}")
+        return {}
+    finally:
+        put(conn)
+
+
 def _update_alert_field_sync(alert_id: int, user_id: str, field: str) -> bool:
     """Generic SET {field} = NOW() for ack/dismiss."""
     conn, put = _pg()
@@ -1049,6 +1165,29 @@ async def ack_alert(alert_id: int, user_id: str) -> bool:
 
 async def dismiss_alert(alert_id: int, user_id: str) -> bool:
     return await asyncio.to_thread(_update_alert_field_sync, alert_id, user_id, "dismissed_at")
+
+
+async def get_alert_history(
+    user_id: str,
+    days: int = 7,
+    limit: int = 100,
+    offset: int = 0,
+    ticker: Optional[str] = None,
+    alert_lane: Optional[str] = None,
+    severity: Optional[str] = None,
+    include_acknowledged: bool = True,
+    include_dismissed: bool = True,
+) -> list[dict]:
+    return await asyncio.to_thread(
+        _get_alert_history_sync,
+        user_id, days, limit, offset,
+        ticker, alert_lane, severity,
+        include_acknowledged, include_dismissed,
+    )
+
+
+async def get_history_counts(user_id: str) -> dict:
+    return await asyncio.to_thread(_get_history_counts_sync, user_id)
 
 
 async def run_retention_cleanup() -> dict:

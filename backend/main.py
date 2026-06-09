@@ -14664,17 +14664,16 @@ async def alerts_diagnostics(
     """
     Diagnostic view for the Alert Signal Bus.
 
-    Returns:
-      - snapshots recorded by source
-      - alerts fired by lane
-      - top suppressed candidates (last 20) with reasons
-      - last alert time per ticker/type
-      - provider_calls (should always be 0)
-      - active cooldown count
-      - SSE subscriber count
+    Returns in-memory bus state plus DB-sourced 7-day history counts:
+      - snapshots_by_source, alerts_by_lane, suppressed candidates
+      - active cooldowns with remaining time and last severity
+      - last SSE emit (alert_id + timestamp)
+      - provider_calls (always 0)
+      - history_count_7d, history_count_24h, dismissed_count_7d, acknowledged_count_7d
     """
-    from services.alert_signal_bus import get_diagnostics as _gd
-    return _gd()
+    from services.alert_signal_bus import get_diagnostics as _gd, get_history_counts as _ghc
+    diag, counts = await asyncio.gather(_ghc("default"), asyncio.to_thread(_gd))
+    return {**counts, **diag}
 
 
 @app.get("/api/alerts/recent")
@@ -14719,6 +14718,71 @@ async def alerts_recent(
         include_dismissed=include_dismissed,
     )
     return {"alerts": alerts, "count": len(alerts), "user_id": user_id}
+
+
+@app.get("/api/alerts/history")
+@limiter.limit("60/minute")
+async def alerts_history(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    days: int = 7,
+    limit: int = 100,
+    offset: int = 0,
+    ticker: str = None,
+    alert_lane: str = None,
+    severity: str = None,
+    include_acknowledged: bool = True,
+    include_dismissed: bool = True,
+):
+    """
+    7-day (default) alert history for the current user, read from ticker_alert_events.
+
+    Query params:
+      days                 Look-back window in days (1-30, default 7).
+      limit                Max results per page (1-500, default 100).
+      offset               Pagination offset (default 0).
+      ticker               Filter to a single ticker (case-insensitive).
+      alert_lane           Filter by alert_lane value.
+      severity             Filter by severity (medium / high / critical).
+      include_acknowledged Include acked alerts (default true).
+      include_dismissed    Include dismissed alerts (default true).
+
+    Both acknowledged and dismissed alerts are included by default (unlike
+    /api/alerts/recent which excludes dismissed by default).
+
+    Response:
+      items     — list of alert rows (no chart/news data — use /{id}/detail for that)
+      limit     — effective limit used
+      offset    — effective offset used
+      days      — effective look-back days used
+      has_more  — true when there may be additional pages
+
+    Does not trigger any provider calls.  Does not affect SSE, cooldowns, or deduplication.
+    """
+    from services.alert_signal_bus import get_alert_history as _gah
+    user_id = "default"
+    days    = max(1, min(days, 30))
+    limit   = max(1, min(limit, 500))
+    offset  = max(0, offset)
+
+    items = await _gah(
+        user_id,
+        days=days,
+        limit=limit,
+        offset=offset,
+        ticker=ticker,
+        alert_lane=alert_lane,
+        severity=severity,
+        include_acknowledged=include_acknowledged,
+        include_dismissed=include_dismissed,
+    )
+    return {
+        "items":    items,
+        "limit":    limit,
+        "offset":   offset,
+        "days":     days,
+        "has_more": len(items) == limit,
+    }
 
 
 @app.get("/api/alerts/{alert_id}/detail")
