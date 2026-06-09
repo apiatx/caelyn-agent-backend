@@ -162,6 +162,7 @@ _SEED_NAMES: list[tuple[str, str]] = [
     ("VIVO", "Vivo Power PLC"),
     ("Q",    "Qnity Electronics, Inc."),
     ("ALMU", "Aeluma, Inc."),
+    ("DGXX", "Digi Power X Inc"),
 ]
 
 
