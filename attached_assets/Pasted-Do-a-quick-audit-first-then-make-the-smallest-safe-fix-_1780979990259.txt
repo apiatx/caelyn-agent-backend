@@ -1,0 +1,72 @@
+Do a quick audit first, then make the smallest safe fix for the FMP ETF holdings issue.
+
+Context:
+The FMP usage screenshot shows heavy calls to /stable/etf/holdings with 0% success and high bad-request rate. My FMP Starter plan does NOT include ETF & Fund Holdings or ETF Asset Exposure. It does include ETF/fund info, ETF country allocation, and ETF sector weighting. Do not assume the current architecture. Audit the actual code paths before changing anything.
+
+Critical guardrails:
+- Do NOT break or refactor Tradier price data, Tradier quotes, Tradier options flow, volume, relative volume, VolX, or portfolio/watchlist pricing logic.
+- Do NOT replace existing working data paths with invented new ones.
+- Do NOT change frontend contracts unless absolutely necessary and documented.
+- Do NOT remove existing Neon-backed theme/watchlist/portfolio logic.
+- Do NOT add new external API calls unless the audit proves the current code already has a safe fallback/provider pattern.
+- Keep changes narrow and reversible.
+
+Audit first:
+1. Search the backend for every reference to:
+   - /stable/etf/holdings
+   - etf holdings
+   - ETF holdings
+   - fund holdings
+   - asset exposure
+   - theme ETF
+   - theme universe
+   - FMP ETF endpoints
+2. Identify exactly:
+   - which files call FMP ETF holdings
+   - which page/API endpoint triggers them
+   - whether they run on page load, background jobs, cache warmers, or user actions
+   - whether failures are retried
+   - whether calls are cached in Neon or memory
+   - whether these calls affect theme universe, watchlist, portfolio, agent context, or alerts
+3. Separately audit Tradier-related paths and confirm whether any FMP ETF holdings changes would touch:
+   - quotes
+   - options flow
+   - price data
+   - volume
+   - relative volume
+   - VolX
+   - watchlist/portfolio pricing
+   Do not edit these Tradier paths unless there is a direct bug caused by the ETF holdings issue.
+
+Fix only after audit:
+1. Add a provider-level or service-level guard that prevents unsupported FMP ETF holdings/asset exposure endpoints from making real HTTP calls.
+   At minimum block:
+   - /stable/etf/holdings
+   - ETF/Fund Holdings endpoints currently used in code
+   - ETF Asset Exposure endpoints currently used in code
+2. When blocked, return a controlled response instead of throwing:
+   - holdings: []
+   - source: "disabled_fmp_plan"
+   - reason: "FMP Starter plan does not include ETF holdings/asset exposure"
+   - stale: true or unavailable: true
+3. Preserve whatever existing theme universe/ticker mapping logic already works.
+4. If theme pages currently depend on ETF holdings, make them fall back to the existing saved theme universe / Neon mappings / existing ticker groups rather than failing.
+5. If there is already an existing cache/provider abstraction for ETF holdings, use it. If there is not, do not invent a large new architecture. Add only the minimal safe stub/guard needed to stop bad FMP calls.
+6. Do not change Tradier provider code, Tradier endpoints, or shared quote/price calculation code unless your audit proves the ETF holdings code directly calls it incorrectly.
+7. Add lightweight logging so we can verify unsupported FMP ETF holdings calls are blocked locally before hitting FMP.
+8. Add or update a diagnostic response if there is already a diagnostics endpoint, showing:
+   - blocked_fmp_unsupported_endpoint_count
+   - blocked endpoint names
+   - last blocked timestamp
+   - whether ETF holdings are disabled by plan
+
+Acceptance checks:
+- FMP /stable/etf/holdings is no longer called externally.
+- Theme-related endpoints/pages still return usable data.
+- Watchlist price data still works.
+- Portfolio price data still works.
+- Options flow still works.
+- Tradier calls are untouched unless explicitly proven necessary.
+- No new retry loop is introduced.
+- Backend logs clearly show blocked unsupported FMP ETF holdings calls.
+- Provide a short summary of exactly what files were audited, what files were changed, and confirm Tradier paths were not modified.

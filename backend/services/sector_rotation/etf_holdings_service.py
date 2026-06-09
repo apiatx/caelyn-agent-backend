@@ -15,7 +15,7 @@ Storage:
 
 Data sources (priority order):
   1. Finnhub  GET /etf/holdings?symbol=...
-  2. FMP      GET /stable/etf/holdings?symbol=...
+  2. FMP      GET /stable/etf/holdings?symbol=...   ← DISABLED: not in FMP Starter plan
   3. Stale disk cache  (if both APIs fail)
 """
 from __future__ import annotations
@@ -38,6 +38,19 @@ _MEM_CACHE_TTL    = _FRESH_TTL        # mirror fresh TTL in memory cache
 _RETRY_BACKOFF    = 6 * 3600          # 6 hours — min gap between failed refresh attempts
 
 _DISK_DIR = Path(__file__).parent.parent.parent / "data" / "etf_holdings"
+
+# ── FMP plan guard ─────────────────────────────────────────────────────────────
+# FMP Starter plan does NOT include /stable/etf/holdings or ETF Asset Exposure.
+# This flag short-circuits _fetch_from_fmp() before any HTTP call is made.
+# Set to False only if the plan is upgraded to include ETF & Fund Holdings.
+_FMP_ETF_HOLDINGS_DISABLED: bool = True
+_FMP_BLOCKED_ENDPOINTS: list[str] = [
+    "https://financialmodelingprep.com/stable/etf/holdings",
+]
+
+# Diagnostic counters (in-process, reset on restart)
+_fmp_blocked_count: int = 0
+_fmp_blocked_last_ts: Optional[float] = None
 
 # Tracks in-flight refresh tasks so we don't double-fetch the same symbol
 _refreshing: set[str] = set()
@@ -158,7 +171,20 @@ async def _fetch_from_fmp(symbol: str) -> Optional[dict]:
     Fetch ETF holdings from FMP stable API.
     Endpoint: GET /stable/etf/holdings?symbol={symbol}
     Response fields: asset (ticker), name, weightPercentage, updatedAt
+
+    NOTE: Disabled for FMP Starter plan — /stable/etf/holdings is not included.
+    Returns None immediately without making any HTTP call when _FMP_ETF_HOLDINGS_DISABLED=True.
     """
+    global _fmp_blocked_count, _fmp_blocked_last_ts
+    if _FMP_ETF_HOLDINGS_DISABLED:
+        _fmp_blocked_count += 1
+        _fmp_blocked_last_ts = time.time()
+        print(
+            f"[ETF_HOLDINGS][FMP] BLOCKED {symbol} — /stable/etf/holdings not in FMP Starter plan "
+            f"(blocked_total={_fmp_blocked_count})"
+        )
+        return None
+
     key = _fmp_key()
     if not key:
         return None
@@ -327,4 +353,31 @@ async def get_etf_holdings(symbol: str) -> dict:
         "top_holdings":  [],
         "updated_at":    None,
         "error":         "Holdings unavailable — API failed and no cache exists",
+    }
+
+
+# ── Public diagnostics ─────────────────────────────────────────────────────────
+
+def get_etf_holdings_diagnostics() -> dict:
+    """
+    Return FMP plan-guard diagnostics. Exposed via /api/sector-rotation/etf-holdings/diagnostics.
+    Zero external calls — reads only in-process counters.
+    """
+    last_ts = _fmp_blocked_last_ts
+    return {
+        "etf_holdings_disabled_by_plan": _FMP_ETF_HOLDINGS_DISABLED,
+        "blocked_fmp_unsupported_endpoint_count": _fmp_blocked_count,
+        "blocked_endpoint_names": _FMP_BLOCKED_ENDPOINTS if _FMP_ETF_HOLDINGS_DISABLED else [],
+        "last_blocked_timestamp": (
+            datetime.fromtimestamp(last_ts, tz=timezone.utc).isoformat(timespec="seconds")
+            if last_ts else None
+        ),
+        "reason": (
+            "FMP Starter plan does not include ETF & Fund Holdings (/stable/etf/holdings). "
+            "Live source falls back to Finnhub only; disk cache used when Finnhub is also unavailable."
+            if _FMP_ETF_HOLDINGS_DISABLED else "FMP ETF holdings enabled"
+        ),
+        "live_source_fallback_order": ["finnhub", "disk_cache"],
+        "disk_cache_dir": str(_DISK_DIR),
+        "cache_ttl_days": {"fresh": _FRESH_TTL // 86400, "stale": _STALE_TTL // 86400},
     }

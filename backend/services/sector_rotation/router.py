@@ -119,6 +119,21 @@ async def refresh_analysis_endpoint(request: Request, _sub: None = Depends(requi
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/etf-holdings/diagnostics")
+async def etf_holdings_diagnostics_endpoint():
+    """
+    FMP plan-guard diagnostics for ETF holdings.
+
+    Returns in-process counters showing how many times /stable/etf/holdings
+    was blocked (because FMP Starter plan does not include this endpoint),
+    the blocked endpoint names, and the last blocked timestamp.
+
+    No external calls are made — reads only in-process state.
+    """
+    from services.sector_rotation.etf_holdings_service import get_etf_holdings_diagnostics
+    return get_etf_holdings_diagnostics()
+
+
 # ── /api/sectors/* — Sectors page endpoints ──────────────────────────────────
 
 sectors_router = APIRouter(prefix="/api/sectors", tags=["sectors"])
