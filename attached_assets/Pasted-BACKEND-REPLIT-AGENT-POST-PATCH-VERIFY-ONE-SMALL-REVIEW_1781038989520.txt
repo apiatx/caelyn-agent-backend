@@ -1,0 +1,91 @@
+BACKEND REPLIT AGENT — POST-PATCH VERIFY + ONE SMALL REVIEW
+
+Great work. The patch direction is correct: existing context path repaired, no duplicate context hub, no new endpoints, no new FMP/Tradier calls.
+
+Before we call this complete, please verify two things:
+
+1. Review _USER_CTX_HARD_EXCLUDED
+   You listed portfolio_review as hard-excluded from user context.
+
+Please verify whether portfolio_review gets richer portfolio context somewhere else through DataRouter or another existing path.
+
+If portfolio_review does NOT already receive portfolio holdings/context elsewhere, remove portfolio_review from _USER_CTX_HARD_EXCLUDED.
+
+Reason:
+Portfolio review should almost always receive lightweight user context:
+
+* user_portfolio_count
+* user_portfolio_tickers
+* user_portfolio_exposure
+* user_watchlist_count/watchlist chunks if useful
+
+This is not expensive and should not trigger FMP/Tradier calls.
+
+Also sanity-check whether social_momentum and screener categories should really be hard-excluded. The agent may need user_watchlist_tickers in those categories to answer:
+
+* “Which of these are already on my watchlist?”
+* “Which social momentum names am I missing?”
+* “Which screener names should I add?”
+
+Preferred rule:
+Only hard-exclude user context where it is clearly harmful or irrelevant. Lightweight watchlist/portfolio ticker context is usually safe.
+
+2. Run true end-to-end validation
+   The direct unit validation passed, but the POST /api/query test hit 402 subscription blocking.
+
+Please validate through one authenticated/subscribed path or through the live app UI:
+
+Test A:
+From Watchlist page popup, ask:
+“Can you see my watchlist?”
+
+Expected:
+
+* agent says yes
+* includes user_watchlist_count = 302 or examples from actual watchlist
+* does not say it lacks account/watchlist access
+
+Test B:
+From Watchlist page popup, ask:
+“What new stocks should I add to my watchlist?”
+
+Expected:
+
+* agent uses all user_watchlist_tickers_* chunks
+* excludes already-watchlisted tickers
+* if it mentions an existing ticker, it explicitly says it is already on the watchlist and is not a new addition
+
+Test C:
+Follow-up turn:
+“Are any of those already on my watchlist?”
+
+Expected:
+
+* follow-up still has _user_context
+* agent can compare against watchlist chunks
+
+Test D:
+Terminal/main agent, same questions.
+
+Expected:
+
+* same behavior because both popup and terminal use POST /api/query
+
+3. Add temporary debug log if needed
+   If live validation is hard because market_data is internal, add a temporary safe debug log before the LLM call showing:
+
+* category
+* is_followup
+* whether _user_context exists
+* user_watchlist_count
+* number of user_watchlist_tickers_* chunks
+* user_portfolio_count
+
+Do not log full tickers permanently if you consider it noisy. Remove or guard behind DEBUG after validation.
+
+Return:
+
+* whether portfolio_review has separate portfolio context
+* whether you changed _USER_CTX_HARD_EXCLUDED
+* live UI validation results for popup and terminal
+* confirmation that the agent no longer says it lacks watchlist access when _user_context is present

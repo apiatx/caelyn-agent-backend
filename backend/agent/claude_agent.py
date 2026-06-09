@@ -1085,24 +1085,22 @@ class TradingAgent:
                 print(f"[CONTEXT_BROKER] Overlay skipped (non-fatal): {_sc_err}")
 
         # ── User context overlay (portfolio + watchlist, failure-safe) ──────────
-        # These categories explicitly manage their own user context or have no
-        # meaningful use for it — skip injection to avoid noise.
+        # Hard-exclude ONLY categories where user watchlist/portfolio context is
+        # clearly irrelevant — e.g. prediction_markets is about political/sports
+        # betting events, not personal investment accounts.
+        #
+        # Intentionally NOT excluded (user context is useful in all of these):
+        #   "chat", "followup"              — conversational watchlist/portfolio Q&A
+        #   "portfolio_review"              — DataRouter only extracts query tickers;
+        #                                     it does NOT inject portfolio file context
+        #   "ticker_analysis", "crypto"     — user may ask "is this on my watchlist?"
+        #   "social_momentum"               — "which of these am I missing?"
+        #   "custom_screen", "deterministic_screener" — "which should I add?"
+        #   "x_trader_consensus", "x_select_trader_consensus" — social picks vs watchlist
+        #   "earnings_catalyst"             — "which earnings plays am I already watching?"
         _USER_CTX_HARD_EXCLUDED = frozenset({
-            "portfolio_review",       # already has full portfolio data via its own arm
-            "prediction_markets",     # irrelevant — event-driven markets, not personal
-            "earnings_catalyst",      # irrelevant
-            "social_momentum",        # irrelevant
-            "x_trader_consensus",     # irrelevant
-            "x_select_trader_consensus",
-            "custom_screen",          # screener results are its own context
-            "deterministic_screener",
+            "prediction_markets",   # event-driven betting markets — no personal account relevance
         })
-        # Note: "chat" and "followup" are intentionally NOT excluded here.
-        # get_watchlist_slice / get_portfolio_slice are free (file/DB reads, no API
-        # calls) and are exactly what prevents the agent from saying "I can't see
-        # your watchlist" on conversational or follow-up turns.
-        # "crypto" and "ticker_analysis" are also not excluded — the user's watchlist
-        # is relevant context even when asking about a specific ticker.
         _should_inject_user_ctx = (
             market_data is not None
             and isinstance(market_data, dict)
@@ -1133,6 +1131,18 @@ class TradingAgent:
                           f"keys={[k for k in _wl if k != 'user_watchlist_count']}")
             except Exception as _wl_err:
                 print(f"[USER_CONTEXT] Watchlist skipped (non-fatal): {_wl_err}")
+
+        # ── Debug summary (always-on, single line — remove after validation confirmed) ──
+        if isinstance(market_data, dict):
+            _uc_dbg = market_data.get("_user_context") or {}
+            _wl_chunks = [k for k in _uc_dbg if k.startswith("user_watchlist_tickers_")]
+            print(
+                f"[USER_CTX_SUMMARY] category={category!r} is_followup={is_followup} "
+                f"has_user_ctx={bool(_uc_dbg)} "
+                f"watchlist_count={_uc_dbg.get('user_watchlist_count', 'N/A')} "
+                f"wl_chunks={len(_wl_chunks)} "
+                f"portfolio_count={_uc_dbg.get('user_portfolio_count', 'N/A')}"
+            )
 
         # ── Screen context injection — agent sees what the user sees ──────────
         if screen_context and isinstance(screen_context, dict) and isinstance(market_data, dict):
