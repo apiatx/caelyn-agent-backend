@@ -1409,22 +1409,20 @@ RULES:
 
 X_SELECT_TRADER_CONSENSUS_CONTRACT = """X SELECT TRADER CONSENSUS OUTPUT CONTRACT (MANDATORY for x_select_trader_consensus scans):
 
-TASK: Search the last 20 posts from EACH of the EXACT accounts listed below on X (Twitter).
+TASK: Search X/Twitter posts from the LAST 7 DAYS from EACH of the EXACT accounts listed below.
 Extract the highest-signal stock/asset mentions. Identify 5–10 consensus tickers across these accounts.
 For each ticker, provide the thesis from the accounts that mentioned it and explain why it's worth watching.
 Flag any ticker that has RECENTLY started being talked about as a potential new/fresh trade with a good entry.
 
-NOTE ON @KobeissiLetter: This account focuses on MACRO/REGIME analysis (Fed policy, rates, risk sentiment, market structure). Use their posts for the market_pulse section, NOT for individual ticker picks. The other 24 accounts are for ticker-level signal.
+NOTE ON @KobeissiLetter: This account focuses on MACRO/REGIME analysis (Fed policy, rates, risk sentiment, market structure). Use their posts for the market_pulse section, NOT for individual ticker picks. The other 15 accounts are for ticker-level signal.
 
-ACCOUNTS TO ANALYZE (search ONLY these 25 selected accounts — no others):
-@aleabitoreddit, @KobeissiLetter, @HyperTechInvest, @crux_capital_, @SJCapitalInvest,
-@BlackPantherCap, @Kaizen_Investor, @Venu_7_, @DrJebaim, @CKCapitalxx,
-@TheTape_TNM, @equitydd, @Speculator_io, @StonkValue, @stamatoudism,
-@yianisz, @sunxliao, @futurist_lens, @Thomas_james_1, @DeepValueBagger,
-@ConnorJBates_, @BussinBiotech, @BambroughKevin, @AlexfromBabylon, @UncleAlpha007
+ACCOUNTS TO ANALYZE (search ONLY these 16 selected accounts — no others):
+@KobeissiLetter, @aleabitoreddit, @PepInvestStocks, @Kaizen_Investor, @yianisz,
+@FinnStockinger, @UncleAlpha007, @Mike10947310, @crux_capital_, @HyperTechInvest,
+@ThematicTrader, @JonkooTrades, @Ren_aramb, @napoleon21st, @TheStockDon, @equitydd
 
 INSTRUCTIONS:
-1. Search the last 20 posts for each of the 25 accounts above.
+1. Search posts from the last 7 days for each of the 16 accounts above.
 2. Extract the highest signal — tickers being discussed, catalysts, thesis, conviction.
 3. Cross-reference across accounts to find 5–10 tickers with the strongest consensus.
 4. For each ticker, compile the thesis from the accounts that mentioned it.
@@ -1496,13 +1494,13 @@ RETURN ONLY valid JSON (no markdown, no backticks, no extra text) matching this 
     }
   ],
   "portfolio_bias": "1–2 sentence actionable positioning call based on collective trader consensus — cite specific evidence from posts, not generic commentary",
-  "accounts_analyzed": ["@aleabitoreddit","@KobeissiLetter","@HyperTechInvest","@crux_capital_","@SJCapitalInvest","@BlackPantherCap","@Kaizen_Investor","@Venu_7_","@DrJebaim","@CKCapitalxx","@TheTape_TNM","@equitydd","@Speculator_io","@StonkValue","@stamatoudism","@yianisz","@sunxliao","@futurist_lens","@Thomas_james_1","@DeepValueBagger","@ConnorJBates_","@BussinBiotech","@BambroughKevin","@AlexfromBabylon","@UncleAlpha007"]
+  "accounts_analyzed": ["@KobeissiLetter","@aleabitoreddit","@PepInvestStocks","@Kaizen_Investor","@yianisz","@FinnStockinger","@UncleAlpha007","@Mike10947310","@crux_capital_","@HyperTechInvest","@ThematicTrader","@JonkooTrades","@Ren_aramb","@napoleon21st","@TheStockDon","@equitydd"]
 }
 
 RULES:
 1. consensus_picks MUST be sorted by rank (rank 1 = highest consensus). Include 5–10 tickers.
 2. hype_score is 0–100 composite (cross-account agreement + conviction + recency + thesis quality). This is NOT a price move score — it measures how much social alpha signal exists.
-3. trader_count is the number of the 25 selected accounts that mentioned this ticker.
+3. trader_count is the number of the 16 selected accounts that mentioned this ticker.
 4. trader_theses MUST include the actual thesis/reasoning from each account that mentioned the ticker — not generic summaries. Quote or closely paraphrase their actual posts.
 5. tradingview_symbol must be a valid TradingView symbol format (e.g., "NASDAQ:AAPL", "NYSE:GM", "AMEX:USO").
 6. fresh_trades: any ticker that has RECENTLY started being discussed by these accounts (new name, not a long-running position). If none, return empty array.

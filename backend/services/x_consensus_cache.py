@@ -825,7 +825,7 @@ async def _run_refresh(data_service) -> Optional[dict]:
     )
 
     from datetime import datetime, timedelta, timezone as _tz
-    since_date = (datetime.now(_tz.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+    since_date = (datetime.now(_tz.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
 
     # ── Phase 1: concurrent focused batch calls ────────────────────────────
     semaphore = asyncio.Semaphore(_PHASE1_CONCURRENCY)

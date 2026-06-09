@@ -3028,8 +3028,10 @@ async def social_grok_query(
 
         async def _fetch_batch(handles: list[str], batch_num: int) -> str:
             """Fetch raw post data for a batch of handles."""
+            import datetime as _dt
+            _since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).strftime("%Y-%m-%d")
             batch_prompt = (
-                f"Search the last 20 posts from EACH of these accounts: "
+                f"Search X/Twitter posts from the last 7 days from EACH of these accounts: "
                 + ", ".join(f"@{h}" for h in handles)
                 + ". For each account, list the tickers/assets they mention with bullish/bearish context, "
                 "their thesis, conviction level, and any catalysts they cite. "
@@ -3041,7 +3043,7 @@ async def social_grok_query(
                 raw_mode=True,
                 use_deep_model=False,
                 timeout=60.0,
-                x_search_config={"allowed_x_handles": handles},
+                x_search_config={"allowed_x_handles": handles, "from_date": _since},
             )
             text = ""
             if isinstance(result, dict):
@@ -3075,7 +3077,7 @@ async def social_grok_query(
             print(f"[SOCIAL_GROK] Synthesis phase: {len(combined_text):,} chars from {len(combined_data)} batches")
 
             synthesis_prompt = (
-                "Below is raw data from X/Twitter posts by 25 select trader accounts. "
+                f"Below is raw data from X/Twitter posts (last 7 days) by {len(_X_SELECT_HANDLES)} select trader accounts. "
                 "Analyze ALL of this data and produce the consensus JSON output per your schema.\n\n"
                 "RAW X DATA:\n" + combined_text + "\n\n"
                 "Now synthesize this into the exact JSON schema from your system instructions. "
