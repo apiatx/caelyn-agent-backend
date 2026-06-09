@@ -1,0 +1,364 @@
+Build a centralized backend unusual-activity alert system.
+
+Goal:
+Create a backend Alert Signal Bus that detects unusual ticker activity across the app and sends alert events to the frontend. The alerts should use data already being fetched for the Home page, Watchlist page, Portfolio page, Options Flow page, and Hyperliquid page.
+
+Critical constraints:
+
+* Do not create new recurring FMP or Tradier polling.
+* Do not duplicate existing page API calls.
+* Do not replace existing working endpoint paths.
+* Do not move market intelligence to the frontend.
+* Do not force every ticker to have every metric.
+* Do not treat missing metrics as zero.
+* Alert generation should use existing backend page payloads/signals and Neon snapshots only.
+* Additional chart/news calls are allowed only when the user clicks an alert detail view, and even then use cached data first.
+
+Important current data reality:
+
+* Watchlist and Portfolio already calculate stock activity metrics such as relative volume, VolX, volume, market cap, and volume/market-cap.
+* Options Flow, Home unusual options, and Portfolio options scans return Tradier-detected high-options-signal tickers.
+* Options-detected tickers are not limited to Watchlist/Portfolio.
+* Therefore, many options-detected tickers will not have VolX, relative volume, or Vol/market-cap.
+* This means the alert system needs source-aware scoring, not one universal scoring model.
+
+Architecture:
+Create one backend Alert Signal Bus:
+
+existing backend page services
+→ normalized signal snapshots
+→ Neon snapshot history
+→ anomaly scoring
+→ alert event records
+→ SSE or WebSocket alert stream
+→ frontend global alert UI
+
+Backend modules:
+
+1. Add a backend module/service named something like:
+   `services/alert_signal_bus.py`
+   or follow the existing project structure if there is a better convention.
+
+2. Add a normalized ingestion function:
+   `record_signal_snapshot(source, user_id, ticker, metrics, raw=None)`
+
+3. Add thin instrumentation hooks inside existing backend services that power:
+
+   * Home page / Market Snapshot / unusual options modules
+   * Watchlist page
+   * Portfolio page
+   * Options Flow page
+   * Hyperliquid page
+
+4. The hooks should run only after the existing service has already built/fetched its normal response payload.
+
+5. The hooks should pass already-available metrics into the Alert Signal Bus.
+
+6. Do not add provider calls inside these hooks.
+
+7. Preserve all existing endpoint paths and page response behavior.
+
+Neon tables:
+Create these tables if they do not already exist.
+
+Table: `ticker_signal_snapshots`
+
+Fields:
+
+* `id BIGSERIAL PRIMARY KEY`
+* `user_id TEXT`
+* `ticker TEXT NOT NULL`
+* `source TEXT NOT NULL`
+* `ts TIMESTAMPTZ NOT NULL DEFAULT now()`
+* `price NUMERIC`
+* `price_change_pct NUMERIC`
+* `volume BIGINT`
+* `rel_volume NUMERIC`
+* `volx NUMERIC`
+* `market_cap NUMERIC`
+* `vol_marketcap NUMERIC`
+* `options_score NUMERIC`
+* `options_rank INTEGER`
+* `previous_options_rank INTEGER`
+* `rank_delta INTEGER`
+* `call_put_bias TEXT`
+* `call_volume NUMERIC`
+* `put_volume NUMERIC`
+* `call_put_ratio NUMERIC`
+* `iv NUMERIC`
+* `expected_move NUMERIC`
+* `hyperliquid_trade_usd NUMERIC`
+* `hyperliquid_liq_usd NUMERIC`
+* `hyperliquid_funding NUMERIC`
+* `hyperliquid_oi NUMERIC`
+* `metric_coverage JSONB`
+* `raw JSONB`
+
+Indexes:
+
+* `(ticker, ts DESC)`
+* `(user_id, ts DESC)`
+* `(source, ts DESC)`
+
+Table: `ticker_alert_events`
+
+Fields:
+
+* `id BIGSERIAL PRIMARY KEY`
+* `user_id TEXT`
+* `ticker TEXT NOT NULL`
+* `alert_type TEXT NOT NULL`
+* `alert_lane TEXT NOT NULL`
+* `severity TEXT NOT NULL`
+* `title TEXT NOT NULL`
+* `short_label TEXT NOT NULL`
+* `coverage_label TEXT NOT NULL`
+* `summary TEXT`
+* `score NUMERIC`
+* `reasons JSONB`
+* `source_metrics JSONB`
+* `source_tags JSONB`
+* `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`
+* `acknowledged_at TIMESTAMPTZ`
+* `dismissed_at TIMESTAMPTZ`
+
+Indexes:
+
+* `(user_id, created_at DESC)`
+* `(ticker, created_at DESC)`
+* `(alert_lane, created_at DESC)`
+
+Retention:
+
+* Keep granular signal snapshots for 7 days.
+* Keep alert events for 30-90 days.
+* Add cleanup using the project’s existing lightweight background-task/maintenance pattern if one already exists.
+* Do not introduce a heavy scheduler if the app does not already use one.
+
+Metric coverage:
+Every snapshot should include `metric_coverage`.
+
+Example for Watchlist/Portfolio:
+
+{
+"price": true,
+"volume": true,
+"rel_volume": true,
+"volx": true,
+"vol_marketcap": true,
+"options": false,
+"hyperliquid": false,
+"news": false
+}
+
+Example for Options Flow/Home unusual options:
+
+{
+"price": true,
+"volume": false,
+"rel_volume": false,
+"volx": false,
+"vol_marketcap": false,
+"options": true,
+"hyperliquid": false,
+"news": false
+}
+
+Alert lanes:
+Implement three main alert lanes.
+
+1. `options_first`
+
+Used for tickers from:
+
+* Options Flow
+* Home unusual options
+* Portfolio options scans
+
+Score only available options/quote fields:
+
+* options_score
+* options_rank
+* rank_delta versus prior snapshot
+* call_put_bias
+* call_put_ratio
+* call_volume / put_volume if present
+* IV / expected move if present
+* repeated appearance in top options lists
+* appearance in both Home unusual options and Options Flow inside the same recent window
+
+Rules:
+
+* Do not require VolX, relative volume, or Vol/market-cap.
+* Do not penalize missing stock-volume metrics.
+* Options-only tickers can still produce strong alerts.
+
+2. `full_activity`
+
+Used for:
+
+* Watchlist tickers
+* Portfolio tickers
+* Any ticker where price/volume/VolX/VolMC are already calculated
+
+Score:
+
+* sudden price move
+* volume increase
+* relative volume / VolX jump
+* volume / market-cap jump
+* rolling percentile or z-score versus prior Neon snapshots
+* optional options confirmation if the ticker also appears in Options Flow/Home
+
+3. `cross_confirmed`
+
+Used when the same ticker appears across multiple sources inside a recent window, especially:
+
+* Options Flow or Home unusual options
+  plus
+* Watchlist or Portfolio full-activity metrics
+
+Rules:
+
+* Cross-confirmed alerts should receive higher severity.
+* If ticker is in the user’s Portfolio, add a larger relevance boost.
+* If ticker is in the user’s Watchlist, add a smaller relevance boost.
+* This should be the highest-quality alert type because options activity is confirmed by price/volume activity or user relevance.
+
+Optional 4th lane:
+If Hyperliquid data is already being streamed/processed, support:
+
+* `hyperliquid`
+  For crypto/perp-specific alerts:
+* liquidation burst
+* perp volume surge
+* funding spike
+* open-interest jump
+* trade USD spike
+
+Scoring rules:
+
+* Score only available metrics.
+* Never treat null VolX, null rel volume, or null Vol/MC as zero.
+* Do not suppress an options-first alert because stock-volume metrics are missing.
+* Default firing threshold: score >= 75.
+* Require at least 2 independent unusual signals unless one signal is extreme.
+* Add dedupe/cooldown:
+  same user + ticker + alert_type should not fire again within 15 minutes unless severity meaningfully increases.
+* Add microcap/illiquidity guardrails where data exists to avoid noise from tiny dollar-volume tickers.
+* Do not hard-block when market cap or dollar volume is missing, but avoid obvious false positives.
+
+Alert labels:
+Use short 2-3 word labels:
+
+* `Price Spike`
+* `Vol Surge`
+* `VolX Spike`
+* `Flow Surge`
+* `Calls Hot`
+* `Puts Hot`
+* `Options Spike`
+* `Unusual Flow`
+* `Perp Surge`
+* `Liq Wave`
+* `Cross Confirmed`
+
+Coverage labels:
+Return one of:
+
+* `Options-only signal`
+* `Full activity signal`
+* `Cross-confirmed signal`
+* `Hyperliquid signal`
+
+Alert payload shape:
+Return alert records like this:
+
+{
+"id": "...",
+"ticker": "WULF",
+"alert_type": "flow_surge",
+"alert_lane": "cross_confirmed",
+"short_label": "Flow Surge",
+"title": "WULF Flow Surge",
+"severity": "high",
+"coverage_label": "Cross-confirmed signal",
+"score": 88,
+"summary": "Price, VolX, volume/market-cap, and options activity are all unusually elevated.",
+"reasons": [
+{"label": "Price", "value": "+6.2%", "why": "above recent baseline"},
+{"label": "VolX", "value": "5.1x", "why": "sharp jump from prior snapshot"},
+{"label": "Vol/MC", "value": "98th percentile", "why": "unusual dollar flow"},
+{"label": "Options", "value": "Bullish", "why": "appeared in options scan"}
+],
+"source_tags": ["Watchlist", "Options Flow"]
+}
+
+Backend endpoints:
+Add these endpoints without breaking existing routes:
+
+1. `GET /api/alerts/stream`
+
+* SSE preferred unless the project already uses WebSockets.
+* Streams new alert events for the authenticated user.
+
+2. `GET /api/alerts/recent?limit=25`
+
+* Returns recent non-dismissed alerts.
+
+3. `GET /api/alerts/{alert_id}`
+
+* Returns alert metadata.
+
+4. `GET /api/alerts/{alert_id}/detail`
+
+* Returns:
+
+  * alert metadata
+  * reasons
+  * source tags
+  * coverage label
+  * chart data if cached
+  * related news if cached or safely fetched on click
+
+5. `POST /api/alerts/{alert_id}/ack`
+
+* Marks alert acknowledged.
+
+6. `POST /api/alerts/{alert_id}/dismiss`
+
+* Marks alert dismissed.
+
+Alert detail enrichment:
+
+* Do not fetch chart/news during alert generation.
+* On alert detail click only, use existing cached chart/news paths first.
+* If cache is stale/missing, use fresh provider calls only behind existing rate-limit/budget guards.
+* Do not add aggressive chart/news polling.
+* If ticker is options-only and not in Watchlist/Portfolio, return copy explaining:
+  “This alert is based on options activity from the Options Flow/Home scan. Full VolX and Vol/MC tracking is only available for Watchlist/Portfolio tickers.”
+
+Diagnostics:
+Add a diagnostic endpoint or extend existing diagnostics to show:
+
+* snapshots recorded by source
+* alerts fired by lane
+* top alert candidates that were suppressed and why
+* last alert time per ticker/type
+* provider calls made by alert generation, which should be zero
+* confirmation that existing Home, Watchlist, Portfolio, Options Flow, and Hyperliquid endpoints still work
+
+Validation checklist:
+
+* Existing Home page endpoint still works.
+* Existing Watchlist endpoint still works.
+* Existing Portfolio endpoint still works.
+* Existing Options Flow endpoint still works.
+* Existing Hyperliquid endpoint still works.
+* Alert generation makes zero new recurring FMP/Tradier calls.
+* Options-only tickers can fire alerts without VolX/VolMC.
+* Watchlist/Portfolio tickers can fire richer full-activity alerts.
+* Cross-confirmed tickers get boosted severity.
+* Same ticker/type does not spam repeatedly.
+* Alerts are persisted to Neon.
+* Alert stream sends events to frontend.

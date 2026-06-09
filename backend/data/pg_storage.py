@@ -545,6 +545,102 @@ def init_tables():
             ON public.ticker_name_overrides (user_id)
         """)
 
+        # ── Alert Signal Bus: ticker_signal_snapshots ─────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.ticker_signal_snapshots (
+                id                     BIGSERIAL PRIMARY KEY,
+                user_id                TEXT,
+                ticker                 TEXT NOT NULL,
+                source                 TEXT NOT NULL,
+                ts                     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                price                  NUMERIC,
+                price_change_pct       NUMERIC,
+                volume                 BIGINT,
+                rel_volume             NUMERIC,
+                volx                   NUMERIC,
+                market_cap             NUMERIC,
+                vol_marketcap          NUMERIC,
+                options_score          NUMERIC,
+                options_rank           INTEGER,
+                previous_options_rank  INTEGER,
+                rank_delta             INTEGER,
+                call_put_bias          TEXT,
+                call_volume            NUMERIC,
+                put_volume             NUMERIC,
+                call_put_ratio         NUMERIC,
+                iv                     NUMERIC,
+                expected_move          NUMERIC,
+                hyperliquid_trade_usd  NUMERIC,
+                hyperliquid_liq_usd    NUMERIC,
+                hyperliquid_funding    NUMERIC,
+                hyperliquid_oi         NUMERIC,
+                metric_coverage        JSONB,
+                raw                    JSONB
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tss_ticker_ts
+            ON public.ticker_signal_snapshots (ticker, ts DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tss_user_ts
+            ON public.ticker_signal_snapshots (user_id, ts DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tss_source_ts
+            ON public.ticker_signal_snapshots (source, ts DESC)
+        """)
+
+        # ── Alert Signal Bus: ticker_alert_events ─────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.ticker_alert_events (
+                id               BIGSERIAL PRIMARY KEY,
+                user_id          TEXT,
+                ticker           TEXT NOT NULL,
+                alert_type       TEXT NOT NULL,
+                alert_lane       TEXT NOT NULL,
+                severity         TEXT NOT NULL,
+                title            TEXT NOT NULL,
+                short_label      TEXT NOT NULL,
+                coverage_label   TEXT NOT NULL,
+                summary          TEXT,
+                score            NUMERIC,
+                reasons          JSONB,
+                source_metrics   JSONB,
+                source_tags      JSONB,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                acknowledged_at  TIMESTAMPTZ,
+                dismissed_at     TIMESTAMPTZ
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tae_user_created
+            ON public.ticker_alert_events (user_id, created_at DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tae_ticker_created
+            ON public.ticker_alert_events (ticker, created_at DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tae_lane_created
+            ON public.ticker_alert_events (alert_lane, created_at DESC)
+        """)
+
+        # Seed retention rules for alert tables (idempotent)
+        _alert_retention = [
+            ("public.ticker_signal_snapshots", "ts",         7,  True,
+             "Alert signal snapshots — 7-day rolling window"),
+            ("public.ticker_alert_events",     "created_at", 90, True,
+             "Alert event records — 90-day rolling window"),
+        ]
+        for (tbl, ts_col, days, enabled, desc) in _alert_retention:
+            cur.execute("""
+                INSERT INTO public.data_retention_rules
+                    (table_name, timestamp_column, retention_days, enabled, description)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (table_name) DO NOTHING
+            """, (tbl, ts_col, days, enabled, desc))
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")

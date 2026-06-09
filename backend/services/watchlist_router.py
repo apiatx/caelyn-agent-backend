@@ -1846,6 +1846,7 @@ async def get_by_id_endpoint(watchlist_id: str):
     are preserved.  Quote data is served from a 10-minute in-memory cache;
     a background refresh is triggered automatically when the TTL expires.
     """
+    import asyncio as _aio
     store = load_watchlist(watchlist_id)
     if store is None:
         return {"empty": True}
@@ -1853,6 +1854,41 @@ async def get_by_id_endpoint(watchlist_id: str):
         store = await _enrich_store_with_quotes(store)
     except Exception as _enrich_err:
         print(f"[WATCHLIST] Quote enrichment failed (returning raw): {_enrich_err}")
+
+    # ── Alert bus hook: watchlist full-activity metrics ───────────────────────
+    # Fire-and-forget; runs after response is already built. No provider calls.
+    async def _watchlist_alert_hook(store_snap: dict) -> None:
+        try:
+            from services.alert_signal_bus import record_signal_snapshot as _rs
+            for _sec in store_snap.get("sections") or []:
+                for _row in _sec.get("tickers") or []:
+                    _sym = (_row.get("ticker") or _row.get("symbol") or "").upper().strip()
+                    if not _sym:
+                        continue
+                    _chg = _row.get("change_pct_1d") or _row.get("price_change_pct")
+                    _relvol = _row.get("relative_volume")
+                    _mc = _row.get("market_cap")
+                    _price = _row.get("price")
+                    _vol = _row.get("volume")
+                    _vol_mc_pct = _row.get("vol_mc_pct")
+                    # Only record if we have at least one activity metric
+                    if _chg is None and _relvol is None and _vol_mc_pct is None:
+                        continue
+                    await _rs(
+                        "watchlist", "default", _sym,
+                        {
+                            "price":            _price,
+                            "price_change_pct": _chg,
+                            "volume":           _vol,
+                            "rel_volume":       _relvol,
+                            "market_cap":       _mc,
+                            "vol_marketcap":    (_vol_mc_pct / 100.0) if _vol_mc_pct is not None else None,
+                        }
+                    )
+        except Exception:
+            pass
+
+    _aio.create_task(_watchlist_alert_hook(store))
     return store
 
 

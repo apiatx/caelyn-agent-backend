@@ -137,6 +137,22 @@ def _jwt_or_key(request: Request, api_key) -> bool:
     """Auth disabled — always allow. Re-enable when login page is ready."""
     return True
 
+
+async def _alert_bus_fire(
+    source: str, user_id: str, ticker: str, metrics: dict, raw: dict | None = None
+):
+    """
+    Thin fire-and-forget wrapper around alert_signal_bus.record_signal_snapshot.
+    Called via asyncio.create_task() so it never blocks the caller.
+    Never raises — all errors are silently swallowed.
+    Zero provider calls guaranteed by the bus itself.
+    """
+    try:
+        from services.alert_signal_bus import record_signal_snapshot as _rs
+        await _rs(source, user_id, ticker, metrics, raw)
+    except Exception:
+        pass
+
 # ── Auth middleware (pure ASGI — no BaseHTTPMiddleware) ──────────
 # BaseHTTPMiddleware is known to break StreamingResponse by buffering the
 # body through an internal pipe. This pure ASGI implementation passes the
@@ -370,6 +386,18 @@ async def lifespan(app):
     except Exception as _e:
         print(f"[STARTUP] Bittensor refresh task error: {_e}")
     asyncio.create_task(_x_consensus_loop())
+    # Alert Signal Bus: periodic retention cleanup (every 12 h)
+    async def _alert_bus_retention_loop():
+        import asyncio as _aio
+        while True:
+            await _aio.sleep(12 * 3600)
+            try:
+                from services.alert_signal_bus import run_retention_cleanup as _arc
+                result = await _arc()
+                print(f"[ALERT_BUS] Retention cleanup: {result}")
+            except Exception as _arc_e:
+                print(f"[ALERT_BUS] Retention cleanup error (non-fatal): {_arc_e}")
+    asyncio.create_task(_alert_bus_retention_loop())
     # Thematic context warmup: load LKG from disk immediately, then rebuild from caches.
     # Runs after a 5s delay so sector rotation loop has a head start.
     # No LLM calls, no API calls — pure cache/disk reads + static registry.
@@ -8293,6 +8321,20 @@ async def portfolio_relative_volume(
     _now_ts = _time_mod.time()
     _cache.set(_ck, result, 60)
     _cache.set(_lkg_ck, {"data": result, "ts": _now_ts}, _lkg_ttl)
+
+    # ── Alert bus hook: portfolio relative-volume ─────────────────────────────
+    for _rv_sym, _rv_data in result.items():
+        _vx = _rv_data.get("vol_x")
+        if _vx is None:
+            continue  # only record when vol_x is actually available
+        asyncio.create_task(_alert_bus_fire(
+            "portfolio_relvol", "default", _rv_sym,
+            {
+                "volx":   _vx,
+                "volume": _rv_data.get("volume"),
+            }
+        ))
+
     return {"tickers": result, "from_cache": False, "data_status": "live"}
 
 
@@ -11039,6 +11081,25 @@ async def _home_options_fast_loop():
                     f"(top {_HOME_OPTIONS_FAST_TOP_N} of {len(_HOME_OPTIONS_FAST_SEEDS)} seeds). "
                     f"Next in {_HOME_OPTIONS_FAST_LOOP_INTERVAL}s."
                 )
+                # ── Alert bus hook: home unusual options ──────────────────────
+                for _i, _ht in enumerate(tickers):
+                    _hsym = (_ht.get("ticker") or "").upper()
+                    if not _hsym:
+                        continue
+                    asyncio.create_task(_alert_bus_fire(
+                        "home_unusual_options", "default", _hsym,
+                        {
+                            "options_score":   _ht.get("composite_score"),
+                            "options_rank":    _i + 1,
+                            "call_put_bias":   _ht.get("side_bias"),
+                            "call_put_ratio":  _ht.get("call_put_premium_ratio"),
+                            "price":           _ht.get("underlying_price"),
+                            "iv":              _ht.get("implied_volatility"),
+                            "call_volume":     _ht.get("call_flow_pct"),
+                            "put_volume":      _ht.get("put_flow_pct"),
+                            "expected_move":   _ht.get("expected_move_pct"),
+                        }
+                    ))
 
             except Exception as exc:
                 _tb.print_exc()
@@ -11268,6 +11329,28 @@ async def _master_screener_loop():
             cache.set(_OPTIONS_MASTER_CACHE_KEY, full_result, _OPTIONS_PRECOMPUTE_CACHE_TTL)
             cache.set(_OPTIONS_MASTER_LKG_KEY,   full_result, _OPTIONS_LKG_CACHE_TTL)
             _save_master_lkg_to_disk(full_result)
+
+            # ── Alert bus hook: master options screener ───────────────────────
+            _ms_tickers = screener_data.get("tickers", [])
+            for _mi, _mt in enumerate(_ms_tickers):
+                _msym = (_mt.get("ticker") or "").upper()
+                if not _msym:
+                    continue
+                asyncio.create_task(_alert_bus_fire(
+                    "options_flow", "default", _msym,
+                    {
+                        "options_score":   _mt.get("composite_score"),
+                        "options_rank":    _mi + 1,
+                        "call_put_bias":   _mt.get("side_bias"),
+                        "call_put_ratio":  _mt.get("call_put_premium_ratio"),
+                        "price":           _mt.get("underlying_price"),
+                        "iv":              _mt.get("implied_volatility"),
+                        "call_volume":     _mt.get("call_flow_pct"),
+                        "put_volume":      _mt.get("put_flow_pct"),
+                        "expected_move":   _mt.get("expected_move_pct"),
+                        "volume":          _mt.get("total_volume"),
+                    }
+                ))
 
             n_tickers   = len(screener_data.get("tickers", []))
             n_contracts = len(screener_data.get("all_contracts", []))
@@ -14520,3 +14603,160 @@ async def strategy_ten_year_spx(
     except Exception as exc:
         import traceback; traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Alert Signal Bus Endpoints
+# Order matters: literal-path routes must precede /{alert_id} param routes.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/alerts/stream")
+async def alerts_stream(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    SSE stream — pushes new alert events to the client as they are generated.
+    Sends a keepalive comment every 20 s to prevent proxy/firewall timeouts.
+    """
+    import json as _j
+    from services.alert_signal_bus import subscribe_alerts as _sub, unsubscribe_alerts as _unsub
+
+    user_id = "default"
+    q = await _sub(user_id)
+
+    async def _event_gen():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=20.0)
+                    yield f"data: {_j.dumps(event, default=str)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            await _unsub(user_id, q)
+
+    from fastapi.responses import StreamingResponse as _SR
+    return _SR(
+        _event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/alerts/diagnostics")
+async def alerts_diagnostics(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Diagnostic view for the Alert Signal Bus.
+
+    Returns:
+      - snapshots recorded by source
+      - alerts fired by lane
+      - top suppressed candidates (last 20) with reasons
+      - last alert time per ticker/type
+      - provider_calls (should always be 0)
+      - active cooldown count
+      - SSE subscriber count
+    """
+    from services.alert_signal_bus import get_diagnostics as _gd
+    return _gd()
+
+
+@app.get("/api/alerts/recent")
+@limiter.limit("60/minute")
+async def alerts_recent(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    limit: int = 25,
+):
+    """Return recent non-dismissed alert events for the current user."""
+    from services.alert_signal_bus import get_recent_alerts as _gra
+    user_id = "default"
+    limit = max(1, min(limit, 100))
+    alerts = await _gra(user_id, limit)
+    return {"alerts": alerts, "count": len(alerts), "user_id": user_id}
+
+
+@app.get("/api/alerts/{alert_id}/detail")
+@limiter.limit("60/minute")
+async def alert_detail(
+    request: Request,
+    alert_id: int,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Return full alert detail with reasons, source tags, coverage label, and
+    pointers to cached chart/news paths.
+
+    No new provider calls are made here — chart and news data is served from
+    existing cached endpoints.  An explanatory note is returned for options-only
+    tickers that lack full VolX / Vol-MC tracking.
+    """
+    from services.alert_signal_bus import get_alert_by_id as _gabi
+    record = await _gabi(alert_id)
+    if record is None:
+        return JSONResponse(status_code=404, content={"error": "alert_not_found"})
+
+    ticker = record.get("ticker", "")
+    coverage = record.get("coverage_label", "")
+    chart_note = None
+    if "Options-only" in coverage:
+        chart_note = (
+            "This alert is based on options activity from the Options Flow / Home scan. "
+            "Full VolX and Vol/MC tracking is only available for Watchlist and Portfolio tickers."
+        )
+
+    return {
+        **record,
+        "chart_note":       chart_note,
+        "chart_cache_path": f"/api/chart/{ticker}" if ticker else None,
+        "news_cache_path":  f"/api/watchlist/news?tickers={ticker}" if ticker else None,
+    }
+
+
+@app.get("/api/alerts/{alert_id}")
+@limiter.limit("60/minute")
+async def alert_get(
+    request: Request,
+    alert_id: int,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Return alert metadata by ID."""
+    from services.alert_signal_bus import get_alert_by_id as _gabi
+    record = await _gabi(alert_id)
+    if record is None:
+        return JSONResponse(status_code=404, content={"error": "alert_not_found"})
+    return record
+
+
+@app.post("/api/alerts/{alert_id}/ack")
+@limiter.limit("60/minute")
+async def alert_ack(
+    request: Request,
+    alert_id: int,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Mark an alert as acknowledged (read)."""
+    from services.alert_signal_bus import ack_alert as _aa
+    user_id = "default"
+    ok = await _aa(alert_id, user_id)
+    return {"ok": ok, "alert_id": alert_id}
+
+
+@app.post("/api/alerts/{alert_id}/dismiss")
+@limiter.limit("60/minute")
+async def alert_dismiss(
+    request: Request,
+    alert_id: int,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Dismiss an alert so it no longer appears in /api/alerts/recent."""
+    from services.alert_signal_bus import dismiss_alert as _da
+    user_id = "default"
+    ok = await _da(alert_id, user_id)
+    return {"ok": ok, "alert_id": alert_id}
