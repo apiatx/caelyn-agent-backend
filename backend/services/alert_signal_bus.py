@@ -53,7 +53,15 @@ _diag: Dict[str, Any] = {
     "last_alert_ts_by_key": {},
     "provider_calls": 0,
 }
-_MAX_SUPPRESSED = 50
+_MAX_SUPPRESSED = 200
+
+# Severity escalation: tracks last-fired severity per cooldown key so a
+# medium→high or high→critical signal can bypass the 15-min cooldown.
+_cooldown_severity: Dict[Tuple, str] = {}
+_SEVERITY_ORDER: Dict[str, int] = {"medium": 0, "high": 1, "critical": 2}
+
+# Tracks last SSE alert emitted (for diagnostics)
+_last_sse_emit: Dict[str, Any] = {"alert_id": None, "ts": None}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,10 +175,11 @@ def _fetch_recent_snapshots_sync(ticker: str, limit: int = 20) -> list[dict]:
         put(conn)
 
 
-def _write_alert_sync(record: dict) -> int | None:
+def _write_alert_sync(record: dict) -> Tuple[Optional[int], Optional[str]]:
+    """Returns (id, created_at_iso) from DB, or (None, None) on failure."""
     conn, put = _pg()
     if conn is None:
-        return None
+        return None, None
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -182,7 +191,7 @@ def _write_alert_sync(record: dict) -> int | None:
                 (%(user_id)s, %(ticker)s, %(alert_type)s, %(alert_lane)s, %(severity)s,
                  %(title)s, %(short_label)s, %(coverage_label)s, %(summary)s, %(score)s,
                  %(reasons)s::jsonb, %(source_metrics)s::jsonb, %(source_tags)s::jsonb)
-            RETURNING id
+            RETURNING id, created_at
         """, {
             "user_id":        record["user_id"],
             "ticker":         record["ticker"],
@@ -201,33 +210,58 @@ def _write_alert_sync(record: dict) -> int | None:
         row = cur.fetchone()
         conn.commit()
         cur.close()
-        return row[0] if row else None
+        if row:
+            alert_id   = row[0]
+            created_at = row[1].isoformat() if row[1] else None
+            return alert_id, created_at
+        return None, None
     except Exception as exc:
         print(f"[ALERT_BUS] alert write error: {exc}")
         try:
             conn.rollback()
         except Exception:
             pass
-        return None
+        return None, None
     finally:
         put(conn)
 
 
-def _get_recent_alerts_sync(user_id: str, limit: int) -> list[dict]:
+def _get_recent_alerts_sync(
+    user_id: str,
+    limit: int,
+    since: Optional[str] = None,
+    include_acknowledged: bool = True,
+    include_dismissed: bool = False,
+) -> list[dict]:
     conn, put = _pg()
     if conn is None:
         return []
     try:
         cur = conn.cursor()
-        cur.execute("""
+        # Build WHERE dynamically — all conditions are either static or parameterized
+        conditions = ["user_id = %s"]
+        params: list = [user_id]
+
+        if not include_dismissed:
+            conditions.append("dismissed_at IS NULL")
+        if not include_acknowledged:
+            conditions.append("acknowledged_at IS NULL")
+        if since:
+            conditions.append("created_at > %s::timestamptz")
+            params.append(since)
+
+        where = " AND ".join(conditions)
+        params.append(limit)
+
+        cur.execute(f"""
             SELECT id, ticker, alert_type, alert_lane, severity, title, short_label,
                    coverage_label, summary, score, reasons, source_metrics, source_tags,
                    created_at, acknowledged_at, dismissed_at
             FROM public.ticker_alert_events
-            WHERE user_id = %s AND dismissed_at IS NULL
+            WHERE {where}
             ORDER BY created_at DESC
             LIMIT %s
-        """, (user_id, limit))
+        """, params)
         cols = [
             "id", "ticker", "alert_type", "alert_lane", "severity", "title", "short_label",
             "coverage_label", "summary", "score", "reasons", "source_metrics", "source_tags",
@@ -236,6 +270,9 @@ def _get_recent_alerts_sync(user_id: str, limit: int) -> list[dict]:
         rows = []
         for r in cur.fetchall():
             row = dict(zip(cols, r))
+            # Boolean helpers — compute before isoformat conversion
+            row["is_acknowledged"] = row["acknowledged_at"] is not None
+            row["is_dismissed"]    = row["dismissed_at"] is not None
             for tf in ("created_at", "acknowledged_at", "dismissed_at"):
                 if row[tf] is not None:
                     row[tf] = row[tf].isoformat()
@@ -278,6 +315,8 @@ def _get_alert_by_id_sync(alert_id: int) -> dict | None:
         if not row:
             return None
         record = dict(zip(cols, row))
+        record["is_acknowledged"] = record["acknowledged_at"] is not None
+        record["is_dismissed"]    = record["dismissed_at"] is not None
         for tf in ("created_at", "acknowledged_at", "dismissed_at"):
             if record[tf] is not None:
                 record[tf] = record[tf].isoformat()
@@ -750,14 +789,27 @@ def _in_cooldown(user_id: str, ticker: str, alert_type: str) -> bool:
     return last is not None and (time.time() - last) < _COOLDOWN_SECS
 
 
-def _set_cooldown(user_id: str, ticker: str, alert_type: str):
-    _cooldown_map[(user_id, ticker, alert_type)] = time.time()
+def _set_cooldown(user_id: str, ticker: str, alert_type: str, severity: str = "medium"):
+    key = (user_id, ticker, alert_type)
+    _cooldown_map[key]     = time.time()
+    _cooldown_severity[key] = severity
 
 
-def _log_suppressed(ticker: str, lane: str, score: float, reason: str):
+def _log_suppressed(
+    ticker: str, lane: str, score: float, reason: str,
+    alert_type: str = "",
+    cooldown_remaining: float = 0.0,
+    last_alert_id: Optional[int] = None,
+):
     entry = {
-        "ticker": ticker, "lane": lane, "score": score,
-        "reason": reason, "ts": time.time(),
+        "ticker":                ticker,
+        "lane":                  lane,
+        "alert_type":            alert_type,
+        "score":                 score,
+        "reason":                reason,
+        "cooldown_remaining_secs": round(cooldown_remaining, 0),
+        "last_alert_id":         last_alert_id,
+        "ts":                    time.time(),
     }
     _diag["suppressed"].append(entry)
     if len(_diag["suppressed"]) > _MAX_SUPPRESSED:
@@ -912,24 +964,48 @@ async def record_signal_snapshot(
 
     # ── Alert type → cooldown key ────────────────────────────────────────────
     alert_type, _ = _alert_type_and_label(lane, reasons)
+    new_severity   = _severity(lane, score)
 
     if _in_cooldown(user_id, ticker, alert_type):
-        _log_suppressed(ticker, lane, score, f"cooldown active (15 min)")
-        return
+        ck = (user_id, ticker, alert_type)
+        last_sev = _cooldown_severity.get(ck, "medium")
+        if _SEVERITY_ORDER.get(new_severity, 0) > _SEVERITY_ORDER.get(last_sev, 0):
+            # Severity escalated (e.g. medium → high/critical) — bypass cooldown
+            print(
+                f"[ALERT_BUS] Severity escalation bypass: {ticker} "
+                f"{last_sev}→{new_severity} (score={score})"
+            )
+        else:
+            last_ts   = _cooldown_map.get(ck, 0)
+            remaining = max(0.0, _COOLDOWN_SECS - (now - last_ts))
+            _log_suppressed(
+                ticker, lane, score,
+                f"cooldown active ({remaining:.0f}s remaining)",
+                alert_type=alert_type,
+                cooldown_remaining=remaining,
+            )
+            return
 
     # ── Build, persist, push ─────────────────────────────────────────────────
     record = _build_alert_record(user_id, ticker, lane, score, reasons, source_tags, metrics)
 
-    alert_id = await asyncio.to_thread(_write_alert_sync, record)
+    alert_id, created_at_iso = await asyncio.to_thread(_write_alert_sync, record)
     if alert_id:
-        record["id"] = alert_id
-        _set_cooldown(user_id, ticker, alert_type)
+        record["id"]              = alert_id
+        record["created_at"]      = created_at_iso
+        record["acknowledged_at"] = None
+        record["dismissed_at"]    = None
+        record["is_acknowledged"] = False
+        record["is_dismissed"]    = False
+        _set_cooldown(user_id, ticker, alert_type, severity=new_severity)
         _diag["alerts_by_lane"][lane] += 1
         _diag["last_alert_ts_by_key"][f"{ticker}:{alert_type}"] = now
+        _last_sse_emit["alert_id"] = alert_id
+        _last_sse_emit["ts"]       = now
         await _push_to_queues(user_id, record)
         print(
             f"[ALERT_BUS] FIRED ticker={ticker} lane={lane} "
-            f"score={score} severity={record['severity']} type={alert_type}"
+            f"score={score} severity={new_severity} type={alert_type} id={alert_id}"
         )
 
 
@@ -950,8 +1026,17 @@ def _source_label(source: str) -> str:
 # Async public helpers (called from endpoints)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def get_recent_alerts(user_id: str, limit: int = 25) -> list[dict]:
-    return await asyncio.to_thread(_get_recent_alerts_sync, user_id, limit)
+async def get_recent_alerts(
+    user_id: str,
+    limit: int = 25,
+    since: Optional[str] = None,
+    include_acknowledged: bool = True,
+    include_dismissed: bool = False,
+) -> list[dict]:
+    return await asyncio.to_thread(
+        _get_recent_alerts_sync,
+        user_id, limit, since, include_acknowledged, include_dismissed,
+    )
 
 
 async def get_alert_by_id(alert_id: int) -> dict | None:
@@ -971,25 +1056,56 @@ async def run_retention_cleanup() -> dict:
 
 
 def get_diagnostics() -> dict:
+    from datetime import datetime, timezone as _tz
     now = time.time()
+
     # Prune stale cooldowns from memory
-    stale_keys = [k for k, ts in _cooldown_map.items() if now - ts > _COOLDOWN_SECS]
+    stale_keys = [k for k, ts in list(_cooldown_map.items()) if now - ts > _COOLDOWN_SECS]
     for k in stale_keys:
-        del _cooldown_map[k]
+        _cooldown_map.pop(k, None)
+        _cooldown_severity.pop(k, None)
 
     # Prune stale cross-window entries
     for d in (_recent_options_ts, _recent_activity_ts):
-        stale = [k for k, ts in d.items() if now - ts > _CROSS_WINDOW_SECS * 2]
+        stale = [k for k, ts in list(d.items()) if now - ts > _CROSS_WINDOW_SECS * 2]
         for k in stale:
-            del d[k]
+            d.pop(k, None)
 
+    one_hour_ago = now - 3600
+    suppressed_last_hour = sum(
+        1 for s in _diag["suppressed"] if s.get("ts", 0) >= one_hour_ago
+    )
+
+    active_cooldown_details = []
+    for (uid, ticker, atype), ts in list(_cooldown_map.items()):
+        remaining = _COOLDOWN_SECS - (now - ts)
+        if remaining > 0:
+            active_cooldown_details.append({
+                "ticker":                  ticker,
+                "alert_type":              atype,
+                "cooldown_remaining_secs": round(remaining),
+                "last_severity":           _cooldown_severity.get((uid, ticker, atype), "unknown"),
+            })
+    active_cooldown_details.sort(key=lambda x: x["cooldown_remaining_secs"], reverse=True)
+
+    last_emit = _last_sse_emit
+    last_emit_ts = last_emit.get("ts")
     return {
         "snapshots_by_source":      dict(_diag["snapshots_by_source"]),
         "alerts_by_lane":           dict(_diag["alerts_by_lane"]),
         "suppressed_candidates":    _diag["suppressed"][-20:],
+        "suppressed_last_hour":     suppressed_last_hour,
         "last_alert_ts_by_key":     dict(_diag["last_alert_ts_by_key"]),
         "provider_calls":           _diag["provider_calls"],
         "active_cooldowns":         len(_cooldown_map),
+        "active_cooldown_details":  active_cooldown_details[:25],
+        "last_sse_emit": {
+            "alert_id": last_emit.get("alert_id"),
+            "ts": (
+                datetime.fromtimestamp(last_emit_ts, tz=_tz.utc).isoformat(timespec="seconds")
+                if last_emit_ts else None
+            ),
+        },
         "recent_options_tickers":   len(_recent_options_ts),
         "recent_activity_tickers":  len(_recent_activity_ts),
         "sse_subscribers":          {uid: len(qs) for uid, qs in _alert_queues.items() if qs},

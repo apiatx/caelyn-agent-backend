@@ -14616,10 +14616,18 @@ async def alerts_stream(
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     """
-    SSE stream — pushes new alert events to the client as they are generated.
-    Sends a keepalive comment every 20 s to prevent proxy/firewall timeouts.
+    SSE stream — emits newly-created alert events after the client connects.
+
+    Event types:
+      event: alert      — new alert payload (only fired after connection time)
+      event: keepalive  — sent every 20 s; data contains server timestamp only
+
+    Does NOT replay existing DB rows on reconnect.  If the frontend needs
+    previously-created alerts, it should call GET /api/alerts/recent with a
+    `since` timestamp.
     """
     import json as _j
+    from datetime import datetime, timezone as _tz
     from services.alert_signal_bus import subscribe_alerts as _sub, unsubscribe_alerts as _unsub
 
     user_id = "default"
@@ -14632,9 +14640,11 @@ async def alerts_stream(
                     break
                 try:
                     event = await asyncio.wait_for(q.get(), timeout=20.0)
-                    yield f"data: {_j.dumps(event, default=str)}\n\n"
+                    payload = _j.dumps(event, default=str)
+                    yield f"event: alert\ndata: {payload}\n\n"
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    ts = datetime.now(tz=_tz.utc).isoformat(timespec="seconds")
+                    yield f"event: keepalive\ndata: {_j.dumps({'ts': ts})}\n\n"
         finally:
             await _unsub(user_id, q)
 
@@ -14673,12 +14683,41 @@ async def alerts_recent(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
     limit: int = 25,
+    since: str = None,
+    include_acknowledged: bool = True,
+    include_dismissed: bool = False,
+    popup_only: bool = False,
 ):
-    """Return recent non-dismissed alert events for the current user."""
+    """
+    Return recent alert events for the current user.
+
+    Query params:
+      limit                  Max results (1-100, default 25).
+      since                  ISO 8601 timestamp — only return alerts created after this time.
+                             Use the `created_at` of the last known alert to poll for new ones.
+      include_acknowledged   Include alerts that have been acked (default true).
+      include_dismissed      Include dismissed alerts (default false).
+      popup_only             Shortcut: excludes both dismissed AND acknowledged alerts.
+                             Ideal for toast/popup candidates.
+
+    Alert payload always includes:
+      id, ticker, alert_type, alert_lane, short_label, title, severity,
+      coverage_label, score, summary, reasons, source_tags,
+      created_at, acknowledged_at, dismissed_at, is_acknowledged, is_dismissed
+    """
     from services.alert_signal_bus import get_recent_alerts as _gra
     user_id = "default"
-    limit = max(1, min(limit, 100))
-    alerts = await _gra(user_id, limit)
+    limit   = max(1, min(limit, 100))
+    # popup_only is a convenience shortcut
+    if popup_only:
+        include_dismissed    = False
+        include_acknowledged = False
+    alerts = await _gra(
+        user_id, limit,
+        since=since,
+        include_acknowledged=include_acknowledged,
+        include_dismissed=include_dismissed,
+    )
     return {"alerts": alerts, "count": len(alerts), "user_id": user_id}
 
 

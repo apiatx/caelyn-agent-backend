@@ -1,9 +1,5 @@
 [
   {
-    "scan_ts": "TEST",
-    "test": true
-  },
-  {
     "scan_ts": "2026-01-01T08:00:00+00:00",
     "cache_write_status": "aborted_empty_phase1",
     "sections_missing": [
@@ -564,6 +560,26 @@
     "lkg_sections_used": [],
     "ticker_count": 50,
     "mention_records": 16,
+    "consensus_picks": 10,
+    "top_tickers": 10,
+    "cache_write_status": "written_clean",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-06-09T14:52:02.788325+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 50,
+    "mention_records": 14,
     "consensus_picks": 10,
     "top_tickers": 10,
     "cache_write_status": "written_clean",

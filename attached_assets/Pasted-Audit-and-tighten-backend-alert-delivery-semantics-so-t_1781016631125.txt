@@ -1,0 +1,116 @@
+Audit and tighten backend alert delivery semantics so the frontend does not receive the same alert as a “new” alert repeatedly.
+
+Current issue:
+The frontend is seeing the same alerts repeatedly, likely because `/api/alerts/recent` keeps returning old non-dismissed alerts and/or the SSE stream may replay existing rows on reconnect. Alerts should only reappear if the alert signal engine creates a new alert event with a new ID.
+
+Goal:
+Backend should distinguish between:
+
+* a new alert event
+* a recent existing alert
+* an acknowledged alert
+* a dismissed alert
+
+Rules:
+
+1. Alert events must have stable unique IDs.
+2. The same signal should not create duplicate rows inside the cooldown window.
+3. SSE stream should only emit newly-created alert events after the client connects, not replay the same old rows repeatedly unless explicitly designed as a replay feature.
+4. `/api/alerts/recent` should support filters so frontend can avoid re-showing old alerts.
+5. Acknowledged/dismissed alerts should not be returned as popup candidates by default.
+6. New signal engine trigger later should create a new alert row with a new ID only if it passes cooldown/severity rules.
+
+Backend endpoint improvements:
+
+1. Update `GET /api/alerts/recent` to support query params:
+
+   * `limit=25`
+   * `since=<ISO timestamp>`
+   * `include_acknowledged=false`
+   * `include_dismissed=false`
+   * `popup_only=true`
+2. Default behavior should exclude dismissed alerts.
+3. For popup usage, return only alerts that are:
+
+   * not dismissed
+   * optionally not acknowledged
+   * created after `since` if provided
+4. Return `created_at`, `acknowledged_at`, and `dismissed_at` on all alert payloads.
+5. Add `is_acknowledged` and `is_dismissed` booleans if useful for frontend.
+
+SSE behavior:
+
+1. Ensure `/api/alerts/stream` sends only new alert events created after the connection starts.
+2. Keep the 20-second keepalive.
+3. Keepalive events should be clearly typed and should not look like alert events.
+4. If SSE currently replays recent alerts on connect, either stop replaying or mark replayed alerts with `event: replay` so frontend does not toast them as new.
+5. Preferred:
+
+   * `event: alert`
+   * data: alert payload only for newly created alerts
+   * `event: keepalive`
+   * data: timestamp/health only
+
+Cooldown/dedupe audit:
+
+1. Confirm 15-minute cooldown per `user_id + ticker + alert_type`.
+2. Confirm same alert signal does not create new DB rows every scan cycle.
+3. If same ticker/type score changes but does not cross a meaningful severity increase, update existing alert metadata or suppress rather than inserting a new row.
+4. Only create a new alert row inside cooldown if severity meaningfully increases, for example medium to high/critical.
+5. Add diagnostics for suppressed duplicate alerts:
+
+   * ticker
+   * alert_type
+   * last_alert_id
+   * suppression reason
+   * cooldown remaining
+
+Ack/dismiss behavior:
+
+1. `POST /api/alerts/{id}/ack` should set `acknowledged_at`.
+2. `POST /api/alerts/{id}/dismiss` should set `dismissed_at`.
+3. `/api/alerts/recent?popup_only=true` should not return dismissed alerts.
+4. Consider excluding acknowledged alerts from popup candidates by default, while still allowing history views to include them when requested.
+
+Alert payload:
+Make sure every alert includes:
+{
+"id": "...",
+"ticker": "...",
+"alert_type": "...",
+"alert_lane": "...",
+"short_label": "...",
+"title": "...",
+"severity": "...",
+"coverage_label": "...",
+"score": 88,
+"summary": "...",
+"reasons": [...],
+"source_tags": [...],
+"created_at": "...",
+"acknowledged_at": null,
+"dismissed_at": null,
+"is_acknowledged": false,
+"is_dismissed": false
+}
+
+Diagnostics:
+Update `/api/alerts/diagnostics` to include:
+
+* duplicate alerts suppressed in last hour
+* active cooldown keys
+* last emitted SSE alert ID/timestamp
+* recent alerts by status: active, acknowledged, dismissed
+* provider_calls still 0
+
+Validation checklist:
+
+* Same ticker/type does not create repeated DB alert rows every scan.
+* `/api/alerts/recent?popup_only=true` does not return dismissed alerts.
+* `/api/alerts/recent?since=<timestamp>&popup_only=true` returns only newer alerts.
+* SSE keepalive does not produce popup alerts.
+* SSE reconnect does not replay the same old alert as new.
+* Acked alerts have `acknowledged_at`.
+* Dismissed alerts have `dismissed_at`.
+* New real signal event later can still create a new alert with a new ID.
+* Provider calls from alert generation remain 0.
