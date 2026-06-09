@@ -1,0 +1,92 @@
+Update the alert architecture so it supports separate signal lanes based on available data coverage.
+
+Important context:
+
+* Watchlist and Portfolio already calculate rel volume / VolX / Vol/market-cap.
+* Options Flow page, Home unusual options module, and Portfolio options scan return the highest options-signal tickers detected through Tradier.
+* The Options Flow/Home options tickers are not limited to Watchlist/Portfolio tickers.
+* Therefore, many options-detected tickers will not have rel volume, VolX, or Vol/market-cap available.
+* Do not force missing metrics or make new provider calls just to fill them.
+* Alert generation should reuse existing data only.
+
+Required architecture:
+
+1. Implement two primary alert lanes:
+   A. `options_first`
+
+   * For tickers detected by Options Flow, Home unusual options, or portfolio options scans.
+   * Score based only on available options fields and any quote/price fields already returned by those services.
+   * Do not require rel_volume, volx, or vol_marketcap.
+     B. `full_activity`
+   * For tickers from Watchlist/Portfolio or any existing service where rel_volume, volx, volume, market_cap, and vol_marketcap are already calculated.
+   * Score based on price, volume, rel_volume, volx, vol_marketcap, and optional options confirmation if available.
+2. Add a third derived alert class:
+   C. `cross_confirmed`
+
+   * If the same ticker appears across multiple sources within a recent time window, especially Options Flow/Home + Watchlist/Portfolio.
+   * This should raise severity because options activity is confirmed by price/volume activity or user ownership/watchlist relevance.
+3. Add `metric_coverage` to each normalized snapshot:
+   {
+   "price": true/false,
+   "volume": true/false,
+   "rel_volume": true/false,
+   "volx": true/false,
+   "vol_marketcap": true/false,
+   "options": true/false,
+   "hyperliquid": true/false,
+   "news": true/false
+   }
+4. Update anomaly scoring so missing metrics do not penalize a ticker.
+
+   * Score only available metrics.
+   * Never treat null VolX/VolMC as zero.
+   * Never suppress an options-first alert because volume metrics are missing.
+5. Options-first alert scoring:
+
+   * options_score
+   * options rank
+   * rank movement versus prior snapshot
+   * call/put bias
+   * call/put ratio
+   * option volume, if present
+   * expected move / IV, if present
+   * repeated appearances in top options lists
+   * appearance in both Home unusual options and Options Flow within the same recent window
+6. Full-activity alert scoring:
+
+   * sudden price increase
+   * volume increase
+   * relative volume / VolX jump
+   * volume / market cap jump
+   * rolling percentile versus previous Neon snapshots
+   * optional options confirmation if the ticker also appears in Options Flow/Home
+7. Cross-confirmation:
+
+   * If ticker appears in Options Flow/Home and Watchlist/Portfolio snapshots within 15 minutes, boost severity.
+   * If ticker is in the user's Portfolio, add a relevance boost.
+   * If ticker is in Watchlist, add a smaller relevance boost.
+8. Add alert labels:
+
+   * `Calls Hot`
+   * `Puts Hot`
+   * `Options Spike`
+   * `Price Spike`
+   * `Vol Surge`
+   * `VolX Spike`
+   * `Flow Surge`
+   * `Unusual Flow`
+   * `Cross Confirmed`
+9. Alert detail endpoint should explain data coverage:
+
+   * If options-only, return: `coverage_label: "Options-only signal"`
+   * If full activity, return: `coverage_label: "Full activity signal"`
+   * If cross-confirmed, return: `coverage_label: "Cross-confirmed signal"`
+10. Do not create new recurring FMP/Tradier calls.
+11. Chart/news enrichment should happen only when user clicks alert detail, and should prefer existing cached chart/news data first.
+12. Preserve all existing endpoint paths and page behavior.
+13. Add diagnostics:
+
+* count snapshots by source
+* count alerts by lane
+* list top suppressed candidates and why suppressed
+* verify no new provider calls are made by alert generation
