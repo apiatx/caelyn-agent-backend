@@ -59,6 +59,7 @@ _TTL_QUOTE:              int = 30 * 60       # 30 min
 # → use fmp_hist_ttl() from data.fmp_utils (single source of truth)
 _TTL_FUNDAMENTALS:       int = 7 * 24 * 3600 # 7 days — FMP fundamental data
 _TTL_FUND_CACHE:         int = 7 * 24 * 3600 # 7 days — fs_payload compiled payload
+_TTL_SOCIAL_CACHE:       int = 30 * 60       # 30 min — social_payload compiled rows
 
 _FMP_BASE = "https://financialmodelingprep.com/stable"
 
@@ -1562,6 +1563,16 @@ async def build_screeners(
 
         key = fmp_api_key or os.getenv("FMP_API_KEY", "")
 
+        # ── Compiled social-screener cache check ─────────────────────────────
+        # Social enrichment (83 symbols × Tradier batch + FMP profiles) is
+        # expensive.  We cache the compiled social_screener payload for 30 min
+        # (_TTL_SOCIAL_CACHE) to avoid re-running Tradier / FMP calls on every
+        # x-dashboard request.  Cache is invalidated naturally on TTL expiry.
+        _cached_ss = cache.get("social_screener:social_payload")
+        _social_cache_valid = bool(
+            _cached_ss and isinstance(_cached_ss, dict) and _cached_ss.get("rows")
+        )
+
         # ── Fundamental cache check ───────────────────────────────────────────
         # Fundamentals are expensive (50 tickers × 6 FMP calls).  We cache the
         # compiled payload for 7 days (_TTL_FUND_CACHE) so most calls skip all
@@ -1569,6 +1580,24 @@ async def build_screeners(
         _cached_fs = cache.get("social_screener:fs_payload")
         _fund_cache_valid = bool(_cached_fs and isinstance(_cached_fs, dict)
                                  and _cached_fs.get("rows"))
+
+        # Fast-path: both compiled caches are warm — no FMP/Tradier calls needed.
+        if _social_cache_valid and _fund_cache_valid:
+            _mkt = _is_us_market_open()
+            _ss_cached = {
+                **_cached_ss,
+                "meta": {**(_cached_ss.get("meta") or {}), "market_hours_open": _mkt},
+            }
+            _fs_cached = {
+                **_cached_fs,
+                "meta": {**(_cached_fs.get("meta") or {}), "market_hours_open": _mkt},
+            }
+            print(
+                f"[SOCIAL_SCREENER] build_screeners: served BOTH screeners from cache "
+                f"social_rows={len(_cached_ss.get('rows', []))} "
+                f"fund_rows={len(_cached_fs.get('rows', []))}"
+            )
+            return _ss_cached, _fs_cached
 
         # Fund symbols to enrich inline:
         #   - skip if cache is still valid (< 7 days)
@@ -1591,6 +1620,14 @@ async def build_screeners(
             social_enrichment, enrich_status,
             market_hours_open=mkt_open,
         )
+
+        # Cache the compiled social screener for 30 min
+        if social_screener.get("rows"):
+            cache.set("social_screener:social_payload", social_screener, _TTL_SOCIAL_CACHE)
+            print(
+                f"[SOCIAL_SCREENER] build_screeners: cached social_screener "
+                f"rows={len(social_screener.get('rows', []))} ttl={_TTL_SOCIAL_CACHE}s"
+            )
 
         # ── Resolve fundamental screener ──────────────────────────────────────
         if fund_enrichment:
