@@ -1,0 +1,270 @@
+BACKEND REPLIT AGENT — AUDIT ONLY FIRST
+
+You are working in the CaelynAI backend repo.
+
+Goal:
+Audit why the main agent / chatbox popup / terminal agent does not have access to the user's saved Watchlist page context, Portfolio context, Home signals, Options Flow signals, Hyperliquid signals, Themes, Macro snapshot, and other already-computed backend page signals.
+
+Important:
+Do not rebuild a new agent context hub yet.
+Do not create a parallel replacement context system.
+Do not invent new endpoints until the existing architecture is audited.
+The goal is to find the existing context/memory/tool/page-context system that was already attempted and determine why it is not being used or not working.
+
+Problem evidence:
+The user asked the in-app agent:
+“What new stocks should I look to add to my existing watchlist?”
+
+The agent responded as if it knew the 302-ticker watchlist, but then recommended tickers already on the watchlist. When challenged, it said:
+“I don't have access to your personal watchlist page or any saved account data — I can only see what's in our current conversation.”
+
+That is a failure. The agent should have access to authenticated user watchlist/account/page context if those systems were already built.
+
+Audit requirements:
+
+1. Find every agent/chat entry point
+   Search for all backend routes/services related to:
+
+* chat
+* agent
+* terminal
+* popup
+* assistant
+* LLM
+* OpenAI
+* Anthropic
+* xAI
+* tools
+* memory
+* context
+* page_context
+* app_context
+* watchlist context
+* portfolio context
+
+Identify:
+
+* route path
+* file path
+* request schema
+* response schema
+* model used
+* whether it is streaming or non-streaming
+* whether popup chat and terminal chat use the same route or separate routes
+* whether either route hydrates user context before calling the model
+
+2. Find existing context/memory/tooling code
+   Search for existing code related to:
+
+* context service
+* agent context
+* memory service
+* user profile memory
+* tool registry
+* function calling
+* RAG
+* retrieval
+* page state
+* session context
+* conversation history
+* Neon-backed agent memory
+* watchlist lookup tools
+* portfolio lookup tools
+* signal tools
+
+For each file found, report:
+
+* what it does
+* whether it is currently imported/used by live chat routes
+* whether it is dead code
+* whether it has tests
+* whether it has obvious auth/user-id assumptions
+
+3. Audit watchlist access path
+   Find the real backend source of truth for the user's saved watchlist.
+
+Report:
+
+* watchlist route(s)
+* watchlist service(s)
+* Neon table/model/query used
+* how active watchlist is selected
+* whether user_id/auth is required
+* whether the 302-ticker watchlist is available from backend
+* whether the chat agent can currently call this same logic
+* if not, exactly why not
+
+Do not add a new watchlist query if an existing service already exists. The agent should reuse the canonical watchlist service.
+
+4. Audit portfolio access path
+   Find the backend source of truth for portfolio holdings.
+
+Report:
+
+* portfolio route(s)
+* portfolio service(s)
+* Neon table/model/query used
+* whether user_id/auth is required
+* whether chat agent can currently call this logic
+* if not, exactly why not
+
+5. Audit existing page-signal sources
+   Find existing backend services/endpoints for:
+
+* Watchlist enriched rows/signals
+* Home market snapshot
+* Home unusual options / curated options signals
+* Options page signals
+* Portfolio signals
+* Hyperliquid Trade Radar / Signal Lab signals
+* Theme universe / theme mappings
+* Macro/risk intelligence
+* News major developments
+* Alerts/recent/history, if relevant
+
+For each:
+
+* file path
+* route path
+* cache strategy
+* whether it calls FMP/Tradier/Hyperliquid live or reads cache/Neon
+* whether it can be safely reused by the agent
+* whether it already exposes compact summaries suitable for LLM context
+
+6. Audit frontend-to-backend request payload assumptions from backend side
+   Inspect what the backend chat routes expect from frontend:
+
+* message only?
+* conversation id?
+* page route?
+* selected ticker?
+* visible tickers?
+* user id?
+* auth token/cookie?
+* session id?
+* app_context/page_context?
+
+Report whether backend currently accepts page/app context, and whether it ignores it.
+
+7. Audit auth/session issue
+   This is likely the bug, so be very explicit.
+
+Report:
+
+* how normal page APIs resolve authenticated user
+* how chat agent APIs resolve authenticated user
+* whether chat routes are missing the auth dependency used by watchlist/portfolio APIs
+* whether popup chat requests include cookies/credentials
+* whether terminal chat requests include cookies/credentials
+* whether agent fallback behavior causes it to say it lacks account access when user_id is missing
+
+8. Audit prompt/tool instructions
+   Find the system prompt or agent instructions.
+
+Report:
+
+* does the prompt tell the model it has access to user/page context?
+* does the prompt tell the model to call tools before recommending watchlist additions?
+* does the prompt include any stale line like “you do not have access to personal account data”?
+* does the prompt have tool-use requirements?
+* does the agent have actual callable tools, or only static prompt context?
+
+9. Reproduce the failure locally
+   Use existing dev/test methods if available.
+
+Test these cases:
+
+* Call the agent route from a watchlist-authenticated session asking: “Can you see my watchlist?”
+* Call the agent route asking: “What new stocks should I add to my watchlist?”
+* Verify whether the backend model payload includes watchlist tickers/count/context
+* Verify whether the model has a tool available to fetch watchlist data
+* Verify whether the backend logs show user_id resolved or missing
+
+10. Output an audit report before making code changes
+    Do not edit code yet.
+
+Return an audit report with this exact structure:
+
+A) Executive diagnosis
+
+* one paragraph explaining most likely failure
+
+B) Live agent route map
+Table:
+
+* route
+* file
+* used by popup?
+* used by terminal?
+* auth present?
+* context hydration present?
+* tools present?
+
+C) Existing context/memory/tooling inventory
+Table:
+
+* file
+* purpose
+* live or dead
+* currently used by agent?
+* notes
+
+D) Watchlist access path
+
+* canonical route/service/db path
+* whether agent uses it
+* failure point
+
+E) Portfolio access path
+
+* canonical route/service/db path
+* whether agent uses it
+* failure point
+
+F) Page signal inventory
+Table:
+
+* page/signal
+* endpoint/service
+* cache/source
+* safe for agent reuse?
+* notes
+
+G) Auth/session findings
+
+* normal page auth path
+* chat route auth path
+* mismatch
+
+H) Prompt/tooling findings
+
+* current system prompt issue
+* current tool registry issue
+* required behavior changes
+
+I) Minimal fix plan
+Do not write code yet.
+Give the smallest patch plan that reuses existing files/services.
+Rank fixes:
+
+1. must fix now
+2. should fix next
+3. optional later
+
+J) Files likely needing changes
+List exact files and why.
+
+K) Risk notes
+Include:
+
+* do not create duplicate agent context system
+* do not add new FMP/Tradier calls if existing page data/cache can be reused
+* do not stuff all raw page data into prompts unnecessarily
+* do not break popup and terminal if they use different routes
+
+Acceptance criteria for the audit:
+
+* We know exactly why the agent said it had no watchlist access.
+* We know whether an existing context hub/memory/tool system exists.
+* We know whether the bug is frontend payload, backend auth, missing tool wiring, dead code, prompt issue, or some combination.
+* We have a minimal patch plan that preserves existing architecture.
