@@ -1084,16 +1084,31 @@ class TradingAgent:
             except Exception as _sc_err:
                 print(f"[CONTEXT_BROKER] Overlay skipped (non-fatal): {_sc_err}")
 
-        # ── User context overlay (portfolio, failure-safe) ────────────────────
-        _USER_CTX_EXCLUDED = frozenset({
-            "crypto", "portfolio_review", "prediction_markets",
-            "earnings_catalyst", "followup", "chat",
-            "ticker_analysis", "social_momentum", "x_trader_consensus",
-            "x_select_trader_consensus", "custom_screen", "deterministic_screener",
+        # ── User context overlay (portfolio + watchlist, failure-safe) ──────────
+        # These categories explicitly manage their own user context or have no
+        # meaningful use for it — skip injection to avoid noise.
+        _USER_CTX_HARD_EXCLUDED = frozenset({
+            "portfolio_review",       # already has full portfolio data via its own arm
+            "prediction_markets",     # irrelevant — event-driven markets, not personal
+            "earnings_catalyst",      # irrelevant
+            "social_momentum",        # irrelevant
+            "x_trader_consensus",     # irrelevant
+            "x_select_trader_consensus",
+            "custom_screen",          # screener results are its own context
+            "deterministic_screener",
         })
-        if not is_followup and market_data and isinstance(market_data, dict) \
-                and "_user_context" not in market_data \
-                and category not in _USER_CTX_EXCLUDED:
+        # Note: "chat" and "followup" are intentionally NOT excluded here.
+        # get_watchlist_slice / get_portfolio_slice are free (file/DB reads, no API
+        # calls) and are exactly what prevents the agent from saying "I can't see
+        # your watchlist" on conversational or follow-up turns.
+        # "crypto" and "ticker_analysis" are also not excluded — the user's watchlist
+        # is relevant context even when asking about a specific ticker.
+        _should_inject_user_ctx = (
+            market_data is not None
+            and isinstance(market_data, dict)
+            and category not in _USER_CTX_HARD_EXCLUDED
+        )
+        if _should_inject_user_ctx and "_user_context" not in market_data:
             try:
                 from services.user_context_service import get_portfolio_slice
                 _uc = get_portfolio_slice(user_id)
@@ -1101,11 +1116,10 @@ class TradingAgent:
                     market_data["_user_context"] = _uc
                     print(f"[USER_CONTEXT] Portfolio injected for user={user_id!r}: {list(_uc.keys())}")
             except Exception as _uc_err:
-                print(f"[USER_CONTEXT] Skipped (non-fatal): {_uc_err}")
+                print(f"[USER_CONTEXT] Portfolio skipped (non-fatal): {_uc_err}")
 
-        # ── Watchlist ambient context (companion to portfolio exposure) ────────
-        if not is_followup and market_data and isinstance(market_data, dict) \
-                and category not in _USER_CTX_EXCLUDED:
+        # ── Watchlist ambient context (runs on every turn — cheap, prevents hallucination) ──
+        if _should_inject_user_ctx:
             try:
                 from services.user_context_service import get_watchlist_slice
                 _wl = get_watchlist_slice(user_id)
@@ -1114,7 +1128,9 @@ class TradingAgent:
                         market_data["_user_context"].update(_wl)
                     else:
                         market_data["_user_context"] = _wl
-                    print(f"[USER_CONTEXT] Watchlist ambient: {_wl.get('user_watchlist_tickers', '')[:60]}")
+                    _wl_count = _wl.get("user_watchlist_count", "?")
+                    print(f"[USER_CONTEXT] Watchlist injected: {_wl_count} tickers, "
+                          f"keys={[k for k in _wl if k != 'user_watchlist_count']}")
             except Exception as _wl_err:
                 print(f"[USER_CONTEXT] Watchlist skipped (non-fatal): {_wl_err}")
 

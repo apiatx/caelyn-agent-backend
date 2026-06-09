@@ -1,0 +1,144 @@
+BACKEND REPLIT AGENT — PATCH EXISTING AGENT CONTEXT, DO NOT REBUILD
+
+Use the completed audit as source of truth.
+
+Goal:
+Fix the existing agent context path so the popup chatbox and terminal/main agent can access the user’s saved watchlist and portfolio context during normal chat-style questions, especially questions like:
+“What new stocks should I add to my watchlist?”
+
+Important:
+Do not build a new context hub.
+Do not create new endpoints unless absolutely required.
+Do not create a parallel context/memory system.
+Do not add new FMP/Tradier calls.
+Reuse the existing files:
+
+* backend/agent/claude_agent.py
+* backend/services/user_context_service.py
+* backend/agent/prompts.py
+* existing context_broker.py where appropriate
+
+Audit-confirmed root cause:
+
+* get_watchlist_slice() and get_portfolio_slice() already exist.
+* They are injected into market_data["_user_context"] only conditionally.
+* A watchlist recommendation query is classified as "chat".
+* "chat" is inside _USER_CTX_EXCLUDED.
+* Therefore watchlist/portfolio context is skipped.
+* Follow-up turns also skip user context because of the is_followup guard.
+* get_watchlist_slice() only returns first 20 tickers, which is not enough for the user's 302-ticker watchlist.
+* The system prompt does not instruct Claude how to use user_watchlist_tickers or user_portfolio_exposure.
+
+Patch requirements:
+
+1. Fix user-context injection gating in backend/agent/claude_agent.py
+   The lightweight user context must be injected even when category == "chat".
+
+Do not confuse this with expensive market/shared context.
+It is okay for context_broker/shared market overlays to continue excluding chat/followup if needed.
+But _user_context from get_watchlist_slice() and get_portfolio_slice() should be allowed for chat questions because it is a cheap DB/file read and avoids hallucinated account-access failures.
+
+Change logic so:
+
+* get_watchlist_slice(user_id) can run for chat queries
+* get_portfolio_slice(user_id) can run for chat queries
+* user context can run on follow-up turns too
+* only expensive full market data gathering remains excluded for chat/followup
+
+2. Fix follow-up behavior
+   Remove or relax the not is_followup guard specifically for lightweight user context.
+
+Expected behavior:
+
+* If the user asks a watchlist question as turn 2+ in a conversation, the model still receives current user_watchlist_tickers/user_watchlist_count.
+* Do not necessarily re-run expensive market context on every follow-up.
+
+3. Fix watchlist truncation in backend/services/user_context_service.py
+   Current behavior returns only the first 20 tickers.
+   That is not enough.
+
+Update get_watchlist_slice() so it returns:
+
+* user_watchlist_count
+* all watchlist tickers in a compression-safe structure
+
+Preferred structure:
+{
+"user_watchlist_count": 302,
+"user_watchlist_tickers": ["AAOI", "NVDA", "MU", "..."]
+}
+
+If the downstream data_compressor truncates arrays/strings, use chunked keys:
+{
+"user_watchlist_count": 302,
+"user_watchlist_tickers_1": "AAOI, NVDA, MU, ...",
+"user_watchlist_tickers_2": "WULF, IREN, BTDR, ...",
+"user_watchlist_tickers_3": "..."
+}
+
+Important:
+Do not send full enriched watchlist rows into the prompt.
+Only send tickers and count for this patch.
+The goal is exclusion/deduping, not full analysis.
+
+4. Fix portfolio context shape if easy
+   Keep current portfolio context, but add:
+
+* user_portfolio_count
+* user_portfolio_tickers
+
+Do not add expensive P&L/risk calculations in this patch unless already available from existing lightweight store.
+
+5. Add prompt instructions in backend/agent/prompts.py
+   Add clear instruction to SYSTEM_PROMPT:
+
+When _user_context is present:
+
+* user_watchlist_tickers means tickers already saved in the user’s watchlist.
+* user_portfolio_tickers/user_portfolio_exposure means tickers already owned or tracked in portfolio.
+* Before recommending new watchlist additions, compare candidates against user_watchlist_tickers and exclude already-present tickers.
+* Before saying you cannot access the user’s watchlist or portfolio, check whether _user_context is present.
+* If _user_context is present, never say you lack account/watchlist access.
+* If _user_context is missing, say “I could not load your saved watchlist context for this request” rather than claiming the platform has no access.
+
+6. Optional but recommended: classifier prompt tweak
+   In QUERY_CLASSIFIER_PROMPT, do not treat watchlist/account-aware investing questions as generic "chat" if that causes context loss.
+
+Examples that should preserve user context:
+
+* "What new stocks should I add to my watchlist?"
+* "What am I missing from my watchlist?"
+* "Compare this to my portfolio"
+* "Which of my watchlist names look strongest?"
+* "Do I already have this ticker?"
+
+Do not overbuild a new category unless needed.
+The main fix is context injection independent of category.
+
+7. Add targeted validation
+   Add or run a minimal test/log verification:
+
+* Call POST /api/query with prompt: "Can you see my watchlist?"
+* Verify backend payload includes _user_context.
+* Verify _user_context includes user_watchlist_count > 0.
+* Verify more than the first 20 watchlist tickers are available.
+* Call POST /api/query with prompt: "What new stocks should I add to my watchlist?"
+* Verify response does not recommend tickers that are already in user_watchlist_tickers unless it explicitly says they are already present.
+
+8. Report back
+   Return:
+
+* files changed
+* exact logic changed
+* whether popup and terminal both benefit from same POST /api/query path
+* validation results
+* any remaining frontend dependency
+
+Acceptance criteria:
+
+* The in-app agent no longer says it has no watchlist access when _user_context is present.
+* Chat-style questions can still receive user watchlist/portfolio context.
+* Follow-up turns preserve user watchlist/portfolio context.
+* 302-ticker watchlist is not truncated to first 20.
+* No duplicate context hub was created.
+* No new FMP/Tradier calls were added.
