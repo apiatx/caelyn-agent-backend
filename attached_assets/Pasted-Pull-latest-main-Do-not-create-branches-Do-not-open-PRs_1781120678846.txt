@@ -1,0 +1,199 @@
+Pull latest main.
+
+Do not create branches.
+Do not open PRs.
+Do not worry about git commits.
+
+Backend only.
+Do not touch frontend.
+Do not modify code unless the audit finds a tiny logging/status bug that blocks diagnosis.
+
+IMPORTANT FMP COST GUARDRAIL:
+Do not call FMP.
+Do not run admin rebuilds.
+Do not trigger scheduled jobs.
+Do not warm caches.
+Do not force refresh anything.
+Do not call FMP Stock Screener.
+Do not call FMP historical endpoints.
+Use code inspection, cache reads, DB reads, endpoint reads, and logs only.
+
+Goal:
+Full backend audit of the Screener Hub Thematic tab because it appears stale/stuck.
+
+Observed product issues:
+1. Thematic defaults to Semiconductors every visit.
+2. Semiconductors shows the same exact tickers every day despite saying “Updated today.”
+3. Other theme dropdown selections either do not work, load incomplete data, or appear stale.
+4. The screener should default to the hottest/best current theme, not hardcoded Semiconductors.
+5. The user needs configurable constraints like market cap range before triggering a new search.
+6. API usage is constrained, so theme changes must not trigger live FMP calls.
+
+Part 1 — Audit Thematic data freshness
+
+Inspect the backend path for:
+
+GET /api/screener-hub?tab=thematic&theme=<theme>
+
+For the Semiconductors theme, report:
+- where the rows come from
+- source table/file
+- snapshot key
+- snapshot created_at / updated_at
+- universe_snapshot generated_at if available
+- whether “Updated today” is response time, quote cache time, fund cache time, or actual universe rebuild time
+- whether rows are from FMP screener snapshot, ETF/LKG fallback, stale disk cache, or hardcoded static seed
+- number of rows before filters
+- number of rows after filters
+- top 25 symbols
+- source breakdown for those symbols
+- whether FMP screener candidates are present
+- whether ETF/LKG rows are dominating
+- whether any stale snapshot is being reused forever
+
+Important:
+Distinguish between:
+- response served_at
+- quote_updated_at
+- options_updated_at
+- fund_updated_at
+- universe_built_at
+- fmp_screener_snapshot_at
+
+Part 2 — Audit theme dropdown behavior
+
+For every theme returned by /api/screener-hub/themes, without calling FMP, check cache/snapshot availability.
+
+Return table:
+- theme_key
+- display_name
+- has_mapping
+- has_snapshot
+- snapshot_updated_at
+- row_count
+- cache_status: fresh / stale / empty / fallback_only / missing
+- source: fmp_screener_snapshot / ETF / LKG / static fallback / none
+- would_page_load_call_fmp: expected false
+- expected endpoint status if selected
+
+Do not call FMP.
+Do not rebuild.
+
+Part 3 — Audit default theme logic
+
+Find where frontend/backend default theme is determined.
+
+Report:
+- is Semiconductors hardcoded as default?
+- does backend provide a recommended/default theme?
+- does /api/screener-hub/themes include momentum/rank/score metadata?
+- is there any “hottest theme” calculation currently available?
+- if not, what cached data can be used to rank themes without FMP calls?
+
+Desired future behavior:
+Default should be selected from cached data:
+- strongest 1D/7D momentum if available
+- volume/accumulation/options activity across theme rows
+- recent theme RS state
+- breakout/improving themes
+- upcoming catalysts/tailwinds if cached
+
+But this audit should not implement that yet unless trivial. Report the best path.
+
+Part 4 — Audit market cap filtering/customization
+
+Current Thematic appears fixed to $50M–$10B.
+
+Report:
+- where min_market_cap and max_market_cap are enforced
+- whether frontend can pass market cap filters today
+- whether backend accepts marketCapMin / marketCapMax query params today
+- whether filtering happens from cached rows only or triggers rebuild
+- whether changing max cap can be cache-only
+- whether larger cap ranges would require new FMP screener snapshot
+
+Desired future behavior:
+User should be able to choose:
+- market cap preset: Micro/Small/Mid/Large/All
+- custom min/max
+- volume min
+- maybe exchange
+Then click Apply/Run.
+
+Theme dropdown changes and filter changes should NOT call FMP live.
+They should filter existing cached snapshots first.
+If snapshot missing/stale, backend returns stale/partial status and message, not live FMP.
+
+Part 5 — Audit performance/loading issue
+
+Investigate why Thematic takes forever to load.
+
+Report:
+- endpoint response time by tab/theme from cache-read only requests
+- whether page load triggers Tradier options background enrichment
+- whether options enrichment delays response or is non-blocking
+- whether quote enrichment delays response
+- whether bottlenecks/social/watchlist tabs are preloading when Thematic tab loads
+- whether frontend fetches all tabs on initial load
+- whether backend computes any expensive data during GET
+- whether theme dropdown selection triggers multiple requests
+
+Do not call FMP.
+
+Part 6 — Audit stale ticker issue
+
+For Semiconductors, compare current displayed symbols against:
+- latest cached FMP screener metadata
+- ETF/LKG source symbols
+- snapshot metadata
+- current date/updated_at
+
+Report why these exact names are still appearing:
+- because snapshot has not rebuilt
+- because selected filter reduces to same 25
+- because FMP screener candidates are not being merged
+- because max cap filter removes new names
+- because ETF/LKG fallback dominates
+- because frontend is not refetching on theme change
+- because backend cache key ignores theme/filter
+- because stale data is marked fresh incorrectly
+
+Part 7 — No-code recommendation
+
+Return a precise implementation plan, but do not build it yet.
+
+Plan should cover:
+1. Dynamic default theme
+2. Apply button / controlled search behavior
+3. Market cap filter query params
+4. Cache-only filtering
+5. Snapshot freshness metadata
+6. Better empty/stale states for themes
+7. Performance fix if loading is due to options/quote enrichment
+8. How to avoid FMP calls on dropdown/filter changes
+
+Part 8 — Validation
+
+Allowed:
+- code inspection
+- DB/cache reads
+- GET endpoints that are confirmed cache-only
+- logs
+
+Not allowed:
+- FMP calls
+- admin rebuilds
+- force refresh
+- scheduled jobs
+
+Final report:
+- root cause of stale Semiconductors
+- root cause of theme dropdown failures
+- root cause of slow load
+- whether Semiconductors default is hardcoded
+- whether “updated today” means actual universe rebuild
+- theme cache coverage table
+- market cap filter status
+- recommended backend changes
+- recommended frontend changes
+- confirmation no FMP calls were made
