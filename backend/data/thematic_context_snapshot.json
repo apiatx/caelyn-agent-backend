@@ -6,7 +6,7 @@
       "score": 72.8,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (73/100) vs theme universe. Outperforming SPY +0.1%, QQQ +0.4%. Breadth 20%."
+        "Top-percentile RS (73/100) vs theme universe. Outperforming SPY +0.2%, QQQ +0.6%. Breadth 20%."
       ],
       "related_etfs": [
         "XLV",
@@ -21,7 +21,7 @@
     },
     {
       "name": "Energy",
-      "score": 71.3,
+      "score": 71.0,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (71/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +3.2%, QQQ +3."
@@ -42,7 +42,7 @@
       "score": 71.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (71/100) vs theme universe. Outperforming SPY +1.4%, QQQ +1.7%. Breadth 54%."
+        "Top-percentile RS (71/100) vs theme universe. Outperforming SPY +1.5%, QQQ +1.9%. Breadth 54%."
       ],
       "related_etfs": [
         "KRE",
@@ -57,10 +57,10 @@
     },
     {
       "name": "AI Networking",
-      "score": 71.3,
+      "score": 70.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (71/100) vs theme universe. Outperforming SPY +0.3%, QQQ +0.6%. Breadth N/A.",
+        "Top-percentile RS (70/100) vs theme universe. Outperforming SPY +0.2%, QQQ +0.6%. Breadth N/A.",
         "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
@@ -75,7 +75,7 @@
   "emerging_themes": [
     {
       "name": "Travel & Transportation",
-      "score": 69.4,
+      "score": 69.3,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -92,73 +92,70 @@
       ]
     },
     {
-      "name": "Oil & Gas",
-      "score": 66.0,
+      "name": "Quantum Computing",
+      "score": 65.9,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "XOP",
-        "XLE",
-        "OIH"
-      ],
-      "related_tickers": [
-        "SM",
-        "APA",
-        "MUR"
-      ]
-    },
-    {
-      "name": "Quantum Computing",
-      "score": 65.4,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "QTUM"
       ],
       "related_tickers": [
         "TSEM",
-        "QUBT",
-        "IONQ"
-      ]
-    },
-    {
-      "name": "Memory & Storage",
-      "score": 65.3,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
-        "X consensus: 1 ticker mentioned"
-      ],
-      "related_etfs": [
-        "DRAM",
-        "SMH",
-        "SOXX"
-      ],
-      "related_tickers": [
-        "SNDK",
-        "KLAC",
-        "INTC"
+        "IONQ",
+        "QUBT"
       ]
     },
     {
       "name": "Insurance",
-      "score": 65.2,
+      "score": 65.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "KIE",
         "IAK"
       ],
       "related_tickers": [
-        "LMND",
         "PLMR",
+        "LMND",
         "UNM"
+      ]
+    },
+    {
+      "name": "Banks",
+      "score": 65.5,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "KBE",
+        "XLF"
+      ],
+      "related_tickers": [
+        "FLG",
+        "ZION",
+        "BK"
+      ]
+    },
+    {
+      "name": "Tech Equal-Weight",
+      "score": 64.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "RYT",
+        "QQEW"
+      ],
+      "related_tickers": [
+        "SNDK",
+        "DELL",
+        "INTC"
       ]
     }
   ],
@@ -168,7 +165,7 @@
       "score": 13.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta -2.1%, QQQ delta -1.8%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (14/100) vs 60-theme universe. SPY delta -2.3%, QQQ delta -1.9%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "URA",
@@ -182,11 +179,23 @@
       ]
     },
     {
-      "name": "Silver",
-      "score": 21.9,
+      "name": "Pre-IPO",
+      "score": 20.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -2.3%, QQQ delta -2.0%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (20/100) vs 60-theme universe. SPY delta -8.6%, QQQ delta -8.2%. Breadth N/A \u2014 minimal buying pressur"
+      ],
+      "related_etfs": [
+        "VCX"
+      ],
+      "related_tickers": []
+    },
+    {
+      "name": "Silver",
+      "score": 21.8,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -2.4%, QQQ delta -2.0%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "SLV",
@@ -200,23 +209,11 @@
       ]
     },
     {
-      "name": "Pre-IPO",
-      "score": 22.1,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -8.0%, QQQ delta -7.6%. Breadth N/A \u2014 minimal buying pressur"
-      ],
-      "related_etfs": [
-        "VCX"
-      ],
-      "related_tickers": []
-    },
-    {
       "name": "Fintech",
       "score": 25.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (26/100) vs 60-theme universe. SPY delta -0.1%, QQQ delta +0.2%. Breadth 13% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (26/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta +0.5%. Breadth 7% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "FINX",
@@ -226,7 +223,7 @@
       "related_tickers": [
         "HOOD",
         "COIN",
-        "PLTR"
+        "SSNC"
       ]
     },
     {
@@ -245,7 +242,7 @@
       "related_tickers": [
         "GOLD",
         "PAAS",
-        "NEM"
+        "AEM"
       ]
     }
   ],
@@ -259,13 +256,13 @@
     {
       "sector": "Energy",
       "ticker": "XLE",
-      "score": 71.3,
+      "score": 71.0,
       "posture": "leading"
     },
     {
       "sector": "Financials",
       "ticker": "XLF",
-      "score": 59.9,
+      "score": 60.5,
       "posture": "improving"
     },
     {
@@ -283,7 +280,7 @@
   ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-06-10T18:29:46.285805+00:00",
+  "last_updated": "2026-06-10T18:46:51.482834+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -294,5 +291,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1781116186.2858632
+  "_saved_at": 1781117211.4828916
 }
