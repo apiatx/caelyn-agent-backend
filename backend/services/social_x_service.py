@@ -1438,6 +1438,13 @@ def build_x_dashboard() -> dict:
     else:
         cache_status = "ok"
 
+    # ── Ask Livermore signal — additive pass-through from snapshot ────────────
+    # Falls back to fallback shape if not present (e.g. pre-feature snapshot).
+    from services.x_consensus_cache import _ASKLIVERMORE_FALLBACK
+    _al_signal = (current_snap or {}).get("ask_livermore_signal")
+    if not isinstance(_al_signal, dict):
+        _al_signal = dict(_ASKLIVERMORE_FALLBACK)
+
     return {
         **home_payload,
         "market_pulse":   cur_raw.get("market_pulse"),
@@ -1447,6 +1454,7 @@ def build_x_dashboard() -> dict:
         "freshest_alpha":         freshest_alpha_data,
         "theme_leadership":       theme_leadership_data,
         "sentiment_acceleration": sentiment_acceleration_data,
+        "ask_livermore_signal":   _al_signal,
         "metadata":               _build_metadata(current_snap),
         "section_status":         section_status,
         "cache_status":           cache_status,

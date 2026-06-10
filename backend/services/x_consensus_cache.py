@@ -113,6 +113,29 @@ _SECTION_MIN_TOP_TICKERS:     int = 1   # items in top_tickers
 _SCAN_DIAGNOSTICS_PATH = Path(__file__).parent.parent / "data" / "social_scan_diagnostics.json"
 _SCAN_DIAGNOSTICS_MAX  = 30  # keep last N entries
 
+# ── Ask Livermore signal — valid stance values ────────────────────────────
+_ASKLIVERMORE_VALID_STANCES = frozenset({
+    "buying", "taking_profits", "selling", "waiting",
+    "warning_drawdown", "risk_on", "risk_off", "unclear",
+})
+
+# Safe fallback used whenever Grok omits or malforms ask_livermore_signal.
+# Also returned when the LKG cache has no prior value.
+_ASKLIVERMORE_FALLBACK: dict = {
+    "handle":                 "@asklivermore",
+    "stance":                 "unclear",
+    "signal_label":           "No clear recent signal",
+    "confidence":             0,
+    "timeframe":              None,
+    "summary":                "No reliable recent Ask Livermore signal was available from the latest run.",
+    "evidence":               [],
+    "tickers_mentioned":      [],
+    "market_levels_mentioned": [],
+    "updated_at":             None,
+    "source_window":          None,
+    "stale":                  True,
+}
+
 # Module-level lock so only one background refresh runs at a time across the
 # whole process, regardless of how many Home requests land simultaneously.
 _REFRESH_LOCK = asyncio.Lock()
@@ -248,6 +271,65 @@ def load_ticker_history() -> dict:
     except Exception as e:
         print(f"[X_CONSENSUS] Ticker history read error: {e}")
         return {}
+
+
+def _sanitize_ask_livermore_signal(raw: Any, *, lkg: Optional[dict] = None) -> dict:
+    """Validate and sanitize the ask_livermore_signal from Grok synthesis.
+
+    Rules:
+    - If raw is None / not a dict → return LKG or fallback.
+    - Coerce stance to a valid enum value (default 'unclear').
+    - Clamp confidence to 0–100 int.
+    - Ensure list fields are lists of strings.
+    - Mark stale=True if no updated_at or stance is 'unclear'.
+    - Never raises — returns a safe object in all cases.
+    """
+    if not isinstance(raw, dict):
+        if lkg and isinstance(lkg, dict):
+            print("[X_CONSENSUS][ASK_LIVERMORE] Grok omitted ask_livermore_signal — using LKG")
+            return {**lkg, "stale": True}
+        print("[X_CONSENSUS][ASK_LIVERMORE] Grok omitted ask_livermore_signal — using fallback")
+        return dict(_ASKLIVERMORE_FALLBACK)
+
+    try:
+        stance = str(raw.get("stance") or "unclear").lower().strip()
+        if stance not in _ASKLIVERMORE_VALID_STANCES:
+            print(f"[X_CONSENSUS][ASK_LIVERMORE] Unknown stance '{stance}' — coercing to 'unclear'")
+            stance = "unclear"
+
+        conf_raw = raw.get("confidence")
+        try:
+            confidence = max(0, min(100, int(float(conf_raw)))) if conf_raw is not None else 0
+        except (ValueError, TypeError):
+            confidence = 0
+
+        def _to_str_list(v: Any) -> list:
+            if isinstance(v, list):
+                return [str(x) for x in v if x]
+            return []
+
+        updated_at = raw.get("updated_at") or None
+        is_stale = (stance == "unclear") or (updated_at is None)
+
+        return {
+            "handle":                  "@asklivermore",
+            "stance":                  stance,
+            "signal_label":            str(raw.get("signal_label") or "").strip() or "No clear recent signal",
+            "confidence":              confidence,
+            "timeframe":               raw.get("timeframe") or None,
+            "summary":                 str(raw.get("summary") or "").strip(),
+            "evidence":                _to_str_list(raw.get("evidence")),
+            "tickers_mentioned":       _to_str_list(raw.get("tickers_mentioned")),
+            "market_levels_mentioned": _to_str_list(raw.get("market_levels_mentioned")),
+            "updated_at":              updated_at,
+            "source_window":           raw.get("source_window") or "last 7 days",
+            "stale":                   is_stale,
+        }
+    except Exception as e:
+        print(f"[X_CONSENSUS][ASK_LIVERMORE] Sanitizer exception: {e} — using fallback")
+        if lkg and isinstance(lkg, dict):
+            return {**lkg, "stale": True}
+        return dict(_ASKLIVERMORE_FALLBACK)
 
 
 def _validate_snapshot_sections(snapshot: dict) -> dict[str, bool]:
@@ -1007,6 +1089,21 @@ async def _run_refresh(data_service) -> Optional[dict]:
     _section_ok    = _validate_snapshot_sections(snapshot)
     _lkg_merged    = _merge_lkg_sections(snapshot, _pre_write_lkg, _section_ok)
     snapshot["_lkg_sections_used"] = _lkg_merged
+
+    # ── Ask Livermore signal — additive, isolated from existing sections ───────
+    # Extract from Phase-2 synthesis result, sanitize, and fall back to the
+    # prior cached value if Grok omitted or malformed this section.  A bad
+    # ask_livermore_signal NEVER prevents the snapshot from being written.
+    _lkg_al = (_pre_write_lkg or {}).get("ask_livermore_signal")
+    snapshot["ask_livermore_signal"] = _sanitize_ask_livermore_signal(
+        result.get("ask_livermore_signal") if isinstance(result, dict) else None,
+        lkg=_lkg_al,
+    )
+    print(
+        f"[X_CONSENSUS][ASK_LIVERMORE] stance={snapshot['ask_livermore_signal']['stance']!r} "
+        f"confidence={snapshot['ask_livermore_signal']['confidence']} "
+        f"stale={snapshot['ask_livermore_signal']['stale']}"
+    )
 
     _sections_ok_names   = [k for k, v in _section_ok.items() if v]
     _sections_fail_names = [k for k, v in _section_ok.items() if not v]

@@ -1553,7 +1553,21 @@ RETURN ONLY valid JSON (no markdown, no backticks, no extra text) matching this 
     }
   ],
   "portfolio_bias": "1–2 sentence actionable positioning call based on collective trader consensus — cite specific evidence from posts, not generic commentary",
-  "accounts_analyzed": ["@KobeissiLetter","@aleabitoreddit","@PepInvestStocks","@Kaizen_Investor","@yianisz","@FinnStockinger","@UncleAlpha007","@Mike10947310","@crux_capital_","@HyperTechInvest","@ThematicTrader","@JonkooTrades","@Ren_aramb","@napoleon21st","@TheStockDon","@equitydd"]
+  "accounts_analyzed": ["@KobeissiLetter","@aleabitoreddit","@PepInvestStocks","@Kaizen_Investor","@yianisz","@FinnStockinger","@UncleAlpha007","@Mike10947310","@crux_capital_","@HyperTechInvest","@ThematicTrader","@JonkooTrades","@Ren_aramb","@napoleon21st","@TheStockDon","@equitydd"],
+  "ask_livermore_signal": {
+    "handle": "@asklivermore",
+    "stance": "buying | taking_profits | selling | waiting | warning_drawdown | risk_on | risk_off | unclear",
+    "signal_label": "Short human-readable label for the stance, e.g. 'Risk-On: Buying Dips' or 'Waiting for Pullback'",
+    "confidence": 72,
+    "timeframe": "short-term | medium-term | long-term | null if not stated",
+    "summary": "2–3 sentences describing @asklivermore's current market posture based on their actual recent posts. Cite the specific theme or thesis they are expressing. Do NOT invent or paraphrase beyond what their posts support.",
+    "evidence": ["Direct quote or close paraphrase from post 1", "Direct quote or close paraphrase from post 2"],
+    "tickers_mentioned": ["TICKER1", "TICKER2"],
+    "market_levels_mentioned": ["SPX 5400", "QQQ 460"],
+    "updated_at": "ISO-8601 timestamp of the most recent @asklivermore post you found, or null if none found",
+    "source_window": "last 7 days",
+    "stale": false
+  }
 }
 
 RULES:
@@ -1567,7 +1581,8 @@ RULES:
 8. hype_radar: 2–4 dominant themes/narratives these traders are collectively posting about. This is the "what sectors/themes are hot" view.
 9. spotlight: the 4 signal highlights. Most hyped = volume of mentions. Highest conviction = quality of thesis. Freshest alpha = newest name. Contrarian = the non-obvious play.
 10. Do NOT include tickers only mentioned bearishly or neutrally.
-11. Return ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON."""
+11. Return ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON.
+12. ask_livermore_signal: Search @asklivermore's recent posts (last 7 days) during this same synthesis. Answer: Is he buying? Taking profits? Selling? Waiting for a crash/drawdown? Warning about risk? Saying it is time to buy? What is his current market posture and timeframe? Classify stance as exactly one of: buying, taking_profits, selling, waiting, warning_drawdown, risk_on, risk_off, unclear. Rules: (a) Do NOT invent posts or quote unsupported claims — only summarize what their actual posts state. (b) If posts are mixed, ambiguous, or not found, set stance="unclear" and stale=true. (c) This is a signal interpretation, not financial advice — do not frame it as a trade recommendation. (d) Do not let this section override or affect the broader consensus_picks ranking. (e) confidence is 0–100 based on how clearly and recently his posts express the stance."""
 
 
 # ═══════════════════════════════════════════════════════════════════

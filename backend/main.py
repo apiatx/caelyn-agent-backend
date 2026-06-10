@@ -3430,11 +3430,27 @@ async def social_diagnostics(
             "fs_payload_updated_at":    _fs.get("generated_at") if isinstance(_fs, dict) else None,
         }
 
+        # Ask Livermore signal status
+        _al = (raw or {}).get("ask_livermore_signal") if raw else None
+        ask_livermore_info: dict = {
+            "exists":     isinstance(_al, dict),
+            "stance":     _al.get("stance") if isinstance(_al, dict) else None,
+            "confidence": _al.get("confidence") if isinstance(_al, dict) else None,
+            "signal_label": _al.get("signal_label") if isinstance(_al, dict) else None,
+            "updated_at": _al.get("updated_at") if isinstance(_al, dict) else None,
+            "stale":      _al.get("stale", True) if isinstance(_al, dict) else True,
+            "summary_snippet": (
+                (_al.get("summary") or "")[:120]
+                if isinstance(_al, dict) else None
+            ),
+        }
+
         return JSONResponse(content={
-            "diagnostics":   entries,
-            "summary":       summary,
-            "cache_info":    cache_info,
-            "screener_info": screener_info,
+            "diagnostics":         entries,
+            "summary":             summary,
+            "cache_info":          cache_info,
+            "screener_info":       screener_info,
+            "ask_livermore_info":  ask_livermore_info,
         })
     except Exception as exc:
         print(f"[SOCIAL_DIAGNOSTICS] Error: {exc}")
