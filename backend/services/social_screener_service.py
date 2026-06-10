@@ -1467,34 +1467,67 @@ async def _bg_warm_fundamentals(
     all_symbols: list[str],
     fund_targets: list[str],
     fmp_api_key: str,
+    snapshot: Optional[dict] = None,
+    x_consensus_rows: Optional[list] = None,
+    sentiment_accel_rows: Optional[list] = None,
+    freshest_alpha: Optional[dict] = None,
+    theme_leadership: Optional[dict] = None,
 ) -> None:
-    """Background task: populate the 7-day fundamental cache without blocking.
+    """Background task: populate both screener caches without blocking.
 
-    Fired by x-dashboard on cold start (cache empty).  Subsequent x-dashboard
-    calls serve from the populated cache — no further FMP calls for 7 days.
+    Warms social_screener:social_payload (30-min TTL) AND
+    social_screener:fs_payload (7-day TTL) so neither deadlocks after restart.
     """
     global _fund_bg_running
     if _fund_bg_running:
         return
     _fund_bg_running = True
     try:
-        print("[SOCIAL_SCREENER] BG-FUND: starting fundamental cache warmup …")
-        _, fund_enrichment, _, fund_status, mkt_open = await fetch_enrichment_for_symbols(
-            all_symbols, fmp_api_key,
-            fundamental_symbols=fund_targets,
-            allow_live_fmp=True,
+        print("[SOCIAL_SCREENER] BG-FUND: starting screener cache warmup (social + fund) …")
+        social_enrichment, fund_enrichment, enrich_status, fund_status, mkt_open = (
+            await fetch_enrichment_for_symbols(
+                all_symbols, fmp_api_key,
+                fundamental_symbols=fund_targets,
+                allow_live_fmp=True,
+            )
         )
+
+        # Warm social screener cache (prevents the deadlock where social_payload
+        # was never written because build_screeners was gated on both caches warm)
+        if social_enrichment and snapshot is not None:
+            try:
+                ss = build_social_screener(
+                    snapshot,
+                    x_consensus_rows or [],
+                    sentiment_accel_rows or [],
+                    freshest_alpha or {},
+                    theme_leadership or {},
+                    social_enrichment,
+                    enrich_status,
+                    market_hours_open=mkt_open,
+                )
+                if ss.get("rows"):
+                    cache.set("social_screener:social_payload", ss, _TTL_SOCIAL_CACHE)
+                    print(
+                        f"[SOCIAL_SCREENER] BG-FUND: social_payload warmed "
+                        f"rows={len(ss.get('rows', []))} ttl={_TTL_SOCIAL_CACHE}s"
+                    )
+                else:
+                    print("[SOCIAL_SCREENER] BG-FUND: social_screener returned 0 rows — social_payload not cached")
+            except Exception as _ss_exc:
+                print(f"[SOCIAL_SCREENER] BG-FUND: social screener build error: {_ss_exc}")
+
         if fund_enrichment:
             fs = build_fundamental_screener(
                 fund_enrichment, fund_status, market_hours_open=mkt_open,
             )
             cache.set("social_screener:fs_payload", fs, _TTL_FUND_CACHE)
             print(
-                f"[SOCIAL_SCREENER] BG-FUND: cache warmed "
+                f"[SOCIAL_SCREENER] BG-FUND: fs_payload warmed "
                 f"rows={len(fs.get('rows', []))} ttl={_TTL_FUND_CACHE}s"
             )
         else:
-            print("[SOCIAL_SCREENER] BG-FUND: got 0 enrichment rows — cache not updated")
+            print("[SOCIAL_SCREENER] BG-FUND: got 0 fund enrichment rows — fs_payload not updated")
     except Exception as exc:
         print(f"[SOCIAL_SCREENER] BG-FUND: warmup failed: {exc}")
     finally:

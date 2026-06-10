@@ -1,0 +1,136 @@
+We need a light audit and targeted fix for the existing Social Screener. Do not rebuild it, do not create a replacement endpoint, and do not invent a new schema unless absolutely required.
+
+Context:
+The Social page used to work. Now the top Social Screener table shows “0 rows” and “Social screener unavailable from latest run,” but other social dashboard widgets on the same page still display usable social data: X Consensus, Fresh, Leading Themes, Sentiment Acceleration, tickers like AAOI, NBIS, MU, NVDA, MRVL, etc.
+
+Goal:
+Restore the existing Social Screener table so it presents the fields it was already presenting:
+- ticker
+- company/name if available
+- social mention count / number of mentions
+- consensus / social score / conviction fields already used
+- freshness / recency fields already used
+- acceleration fields already used
+- Tradier-backed market data fields it already had, such as price, percent change, volume, relative volume, etc.
+- fundamentals toggle data should remain untouched unless directly impacted
+
+Important constraints:
+- Do not add new FMP calls for this fix.
+- Tradier is available and should remain the primary source for live quote/price-style fields where the existing implementation already used it.
+- FMP Starter paid plan allows 300 calls/minute and good fundamentals/news/reference access, but this issue should not require extra FMP usage.
+- Tradier market data limit is 120 requests/minute, so preserve batching/caching/rate guards if they already exist.
+- XAI/Grok may have changed output shape, so audit normalization/parsing before blaming data availability.
+- Preserve existing endpoint paths used by the frontend.
+- Preserve existing DB tables/cache paths if they exist.
+- No schema migration unless the current table truly cannot store the required fields.
+- Add diagnostics, not a rewrite.
+
+Audit steps:
+1. Find all backend endpoints used by the Social page / Social Screener.
+   Search for routes like:
+   - /api/social
+   - /api/social-screener
+   - /api/social/latest
+   - /api/social/fundamentals
+   - /api/social/warming
+   - any endpoint the frontend Social page calls.
+
+2. For each endpoint, document:
+   - route path
+   - service/function called
+   - expected response shape
+   - whether it reads from DB/cache/latest run
+   - whether it enriches tickers with Tradier quotes
+   - whether it depends on XAI/Grok output
+
+3. Find the latest social run persistence logic:
+   - where social runs are stored
+   - how “latest run” is selected
+   - whether latest run exists but has empty `rows`
+   - whether latest run has data under a different key
+   - whether rows are filtered out because required fields are missing
+
+4. Check the XAI/Grok normalization layer:
+   - Compare the expected old schema against the actual current parsed Grok response.
+   - Look for renamed/missing keys like:
+     mentions vs mention_count
+     ticker_mentions vs tickers
+     consensus_score vs conviction
+     sentiment_acceleration vs acceleration
+     symbols vs tickers
+     theme_name vs theme
+   - Add backward-compatible normalization so both old and new shapes map into the existing canonical row shape.
+
+5. Check Tradier enrichment:
+   - Verify the screener does not drop social rows just because Tradier quote data is missing for one or more tickers.
+   - If Tradier fails or returns partial data, preserve the social row and set quote fields to null / “—”.
+   - Do not let quote enrichment failure cause 0 rows.
+   - Make quote enrichment best-effort and log failures clearly.
+
+6. Check frontend-facing response:
+   The endpoint should always return a stable structure, for example:
+   {
+     "rows": [...],
+     "count": number,
+     "updated_at": "...",
+     "source": "...",
+     "diagnostics": {...}
+   }
+   But preserve the exact existing keys the frontend already expects. If the backend currently returns a different wrapper, do not break it.
+
+7. Add or improve a lightweight diagnostic endpoint if one already exists, or add one only if needed:
+   Suggested path:
+   GET /api/social/diagnostics
+   It should return:
+   - latest_run_found: true/false
+   - latest_run_timestamp
+   - raw_social_items_count
+   - normalized_rows_count
+   - rows_after_filter_count
+   - tradier_enriched_count
+   - tradier_failed_count
+   - first_5_tickers
+   - empty_reason if rows are 0
+   This is for debugging only.
+
+Likely bug patterns to check:
+- latest run query sorting wrong after timestamp format change
+- frontend table expects `data.rows` but backend now returns `data.social_screener.rows`
+- XAI/Grok output is valid but nested differently
+- strict filtering removes rows when Tradier price/volume is missing
+- ticker extraction strips `$` incorrectly or rejects tickers with lowercase
+- social table only reads `latest_run.screener_rows` but current pipeline writes to `latest_run.cards` or `latest_run.consensus`
+- backend returns rows but with `symbol`, while frontend expects `ticker`
+- table count uses one field but rows live in another
+- stale cache marked unavailable even though older valid run exists
+
+Deliverables:
+1. Audit summary before code changes:
+   - exact route(s)
+   - exact backend service(s)
+   - exact frontend expected response shape if visible from backend logs/tests
+   - exact failure point
+
+2. Minimal backend fix:
+   - normalize Grok/XAI response into existing canonical rows
+   - make Tradier enrichment non-fatal
+   - preserve rows when quote data is missing
+   - preserve existing endpoint paths
+   - return stable non-empty rows when social data exists
+
+3. Add logs/diagnostics:
+   - log latest run timestamp
+   - log raw item count
+   - log normalized count
+   - log filtered count
+   - log Tradier enrich success/failure count
+
+4. Test with real endpoint calls:
+   - call the Social Screener endpoint
+   - call diagnostics
+   - prove rows > 0 if latest social data exists
+   - verify at least these ticker examples appear if present in latest data: AAOI, NBIS, MU, NVDA, MRVL
+
+Do not touch unrelated pages.
+Do not change the Fundamentals toggle unless the audit proves it shares the broken response mapping.
+Do not create a new Social Screener component or endpoint unless the existing one is unrecoverable.
