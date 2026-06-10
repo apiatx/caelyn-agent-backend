@@ -1054,29 +1054,62 @@ def _theme_metadata() -> dict:
     except Exception as e:
         print(f"[SCREENER_HUB] themes_rs_lkg load error: {e}")
 
-    # ── 3. Snapshot sym-counts from DB (single batch query) ───────────────────
-    snap_counts: dict[str, int] = {}
+    # ── 3. Snapshot sym-counts + fundamentals coverage from DB ────────────────
+    # Single combined query returns per theme:
+    #   total_syms       — snapshot symbol count (replaces old snap_counts)
+    #   fund_covered     — symbols present in screener_fundamentals_cache
+    #   small_mid_fund   — covered symbols whose market_cap is in the
+    #                      $50M–$10B thematic display window; used to gate
+    #                      default_theme so mega-cap-only themes aren't picked.
+    _MIN_ELIGIBLE_PCT   = 20.0   # minimum small-mid-cap fund coverage % for default
+    snap_counts:   dict[str, int]   = {}
+    fund_coverage: dict[str, float] = {}   # theme_key → fund_covered / total_syms
+    eligible_pct:  dict[str, float] = {}   # theme_key → small_mid_fund / total_syms
     try:
         from data.screener_hub_store import _get_conn, _put_conn
         _conn = _get_conn()
         _cur  = _conn.cursor()
         _cur.execute("""
-            SELECT DISTINCT ON (theme_key)
-                   theme_key,
-                   CASE WHEN symbols_json IS NOT NULL
-                        THEN jsonb_array_length(symbols_json::jsonb) ELSE 0 END
-            FROM public.screener_universe_snapshots
-            WHERE universe_type = 'thematic' AND theme_key IS NOT NULL
-            ORDER BY theme_key, generated_at DESC
+            WITH latest_snaps AS (
+                SELECT DISTINCT ON (theme_key)
+                       theme_key, symbols_json
+                FROM public.screener_universe_snapshots
+                WHERE universe_type = 'thematic' AND theme_key IS NOT NULL
+                  AND symbols_json IS NOT NULL
+                ORDER BY theme_key, generated_at DESC
+            ),
+            snap_syms AS (
+                SELECT ls.theme_key,
+                       jsonb_array_elements_text(ls.symbols_json::jsonb) AS sym
+                FROM latest_snaps ls
+            ),
+            coverage AS (
+                SELECT ss.theme_key,
+                       COUNT(*) AS total_syms,
+                       COUNT(fc.symbol) AS fund_covered,
+                       COUNT(
+                           CASE WHEN fc.market_cap IS NOT NULL
+                                 AND fc.market_cap BETWEEN 50000000 AND 10000000000
+                               THEN 1 END
+                       ) AS small_mid_fund
+                FROM snap_syms ss
+                LEFT JOIN public.screener_fundamentals_cache fc ON fc.symbol = ss.sym
+                GROUP BY ss.theme_key
+            )
+            SELECT theme_key, total_syms, fund_covered, small_mid_fund
+            FROM coverage
         """)
         for _row in _cur.fetchall():
-            snap_counts[_row[0]] = _row[1] or 0
+            _tk, _total, _fund, _sm = _row
+            snap_counts[_tk]   = int(_total) if _total else 0
+            fund_coverage[_tk] = round(_fund  / _total * 100, 1) if _total else 0.0
+            eligible_pct[_tk]  = round(_sm    / _total * 100, 1) if _total else 0.0
         _cur.close()
         _put_conn(_conn)
     except Exception as e:
-        print(f"[SCREENER_HUB] snapshot sym_count query error: {e}")
+        print(f"[SCREENER_HUB] snapshot coverage query error: {e}")
 
-    # ── 4. Merge RS + sym_count into theme entries ────────────────────────────
+    # ── 4. Merge RS + coverage into theme entries ─────────────────────────────
     for t in out:
         key = t["theme_key"]
         rs_row = rs_by_id.get(key)
@@ -1090,28 +1123,47 @@ def _theme_metadata() -> dict:
             t["return_pct"]      = rs_row.get("return_pct")
             t["breadth_pct"]     = rs_row.get("breadth_pct")
             t["trend_accel_20d"] = rs_row.get("trend_accel_20d")
-        t["snapshot_row_count"] = snap_counts.get(key)
+        t["snapshot_row_count"]       = snap_counts.get(key)
+        t["fund_coverage_pct"]        = fund_coverage.get(key)
+        t["eligible_fund_coverage_pct"] = eligible_pct.get(key)
+        # Warn if the theme's visible rows would mostly lack metadata.
+        # eligible_fund_coverage_pct < _MIN_ELIGIBLE_PCT means almost none of
+        # the snapshot symbols sit in the $50M–$10B display window with known
+        # market_cap — rows will appear with blank sector/industry/beta/exchange.
+        t["low_metadata_coverage"] = (
+            (eligible_pct.get(key) or 0.0) < _MIN_ELIGIBLE_PCT
+        )
 
     # ── 5. Pick default_theme ─────────────────────────────────────────────────
+    # Gate 1: must have RS score + ≥ _MIN_SNAP_ROWS snapshot symbols
+    # Gate 2: must have ≥ _MIN_ELIGIBLE_PCT of snapshot symbols with market_cap
+    #         in the $50M–$10B thematic display window — prevents mega-cap-heavy
+    #         themes (healthcare, energy, equal_weight_sp500, tech_mega_caps …)
+    #         from being selected when their rows would show blank metadata.
     default_theme: Optional[str] = None
     default_theme_reason: str    = "fallback"
     ranked = [
         t for t in out
         if t.get("rs_score") is not None
         and (t.get("snapshot_row_count") or 0) >= _MIN_SNAP_ROWS
+        and not t.get("low_metadata_coverage", True)
     ]
     if ranked:
         best = max(ranked, key=lambda r: (r["rs_score"] or 0))
         default_theme        = best["theme_key"]
+        ep = eligible_pct.get(best["theme_key"], 0.0)
         default_theme_reason = (
             f"Highest RS score ({best['rs_score']}) "
-            f"among themes with \u2265{_MIN_SNAP_ROWS} snapshot rows"
+            f"among themes with \u2265{_MIN_SNAP_ROWS} snapshot rows "
+            f"and \u2265{_MIN_ELIGIBLE_PCT:.0f}% metadata coverage "
+            f"(eligible_pct={ep:.1f}%)"
         )
     else:
+        # Fallback: any theme with snap rows, ignoring coverage gate
         for t in out:
-            if (t.get("snapshot_row_count") or 0) > 0:
+            if (t.get("snapshot_row_count") or 0) >= _MIN_SNAP_ROWS:
                 default_theme        = t["theme_key"]
-                default_theme_reason = "first available theme (no RS data)"
+                default_theme_reason = "first available theme (no RS data or coverage gate unmet)"
                 break
 
     return {
@@ -2558,8 +2610,21 @@ async def get_screener_hub(
     #   last_annual_dividend, exchange …) as the Thematic tab.
     #   Pure DB read — no FMP calls.
     if tab == "thematic":
-        screener_meta_by_symbol: dict[str, dict] = (
+        _snap_scr_meta: dict[str, dict] = (
             thematic_breakdown.get("screener_meta_by_symbol") or {}
+        )
+        # warm_job snapshots (source="warm_job") don't run the FMP screener and
+        # therefore write an empty screener_meta_by_symbol.  When the snapshot
+        # meta is empty, fall back to the merged global screener meta — which
+        # picks the most recent thematic_rebuild snapshot *per theme* that has
+        # non-empty screener_meta_by_symbol (fixed in get_all_thematic_screener_meta).
+        # This gives ETF-sourced themes the same sector/industry/beta/exchange
+        # enrichment as themes that did have FMP screener results, without any
+        # FMP call.  Note: mega-caps that have never been in FMP screener results
+        # will still show null metadata — screener_fundamentals_cache is the
+        # only other source, and it is populated only by the Sunday warm job.
+        screener_meta_by_symbol: dict[str, dict] = (
+            _snap_scr_meta if _snap_scr_meta else _load_global_screener_meta()
         )
     else:
         screener_meta_by_symbol = _load_global_screener_meta()
@@ -3083,6 +3148,67 @@ async def get_screener_hub(
             payload["theme_state"]        = theme_state_meta.get("state")
             payload["theme_state_reason"] = theme_state_meta.get("state_reason")
             payload["theme_rs_score"]     = theme_state_meta.get("rs_score")
+
+        # ── Metadata coverage warning (thematic tab only) ─────────────────────
+        # Exposes per-theme fundamentals coverage so the frontend can warn when
+        # the selected theme's rows will mostly have blank market_cap/sector/
+        # industry/beta/exchange (e.g. healthcare: XLV/IYH hold mega-caps that
+        # have never been in FMP screener results and aren't in fundamentals cache).
+        # Single targeted DB query; ~5–20ms; non-fatal.
+        _MIN_ELIG = 20.0  # % of snapshot symbols with market_cap in $50M–$10B
+        if theme:
+            try:
+                from data.screener_hub_store import _get_conn as _cov_get, _put_conn as _cov_put
+                _cov_conn = _cov_get()
+                _cov_cur  = _cov_conn.cursor()
+                _cov_cur.execute("""
+                    WITH latest_snap AS (
+                        SELECT DISTINCT ON (theme_key)
+                               symbols_json
+                        FROM public.screener_universe_snapshots
+                        WHERE universe_type = 'thematic' AND theme_key = %s
+                          AND symbols_json IS NOT NULL
+                        ORDER BY theme_key, generated_at DESC
+                        LIMIT 1
+                    ),
+                    snap_syms AS (
+                        SELECT jsonb_array_elements_text(symbols_json::jsonb) AS sym
+                        FROM latest_snap
+                    ),
+                    cov AS (
+                        SELECT COUNT(*)                                               AS total,
+                               COUNT(fc.symbol)                                       AS fund_covered,
+                               COUNT(CASE WHEN fc.market_cap IS NOT NULL
+                                           AND fc.market_cap BETWEEN 50000000
+                                                                  AND 10000000000
+                                         THEN 1 END)                                 AS sm_fund
+                        FROM snap_syms ss
+                        LEFT JOIN public.screener_fundamentals_cache fc
+                               ON fc.symbol = ss.sym
+                    )
+                    SELECT total, fund_covered, sm_fund FROM cov
+                """, (theme,))
+                _cov_row = _cov_cur.fetchone()
+                _cov_cur.close()
+                _cov_put(_cov_conn)
+                if _cov_row:
+                    _cov_total, _cov_fund, _cov_sm = _cov_row
+                    _fund_pct = round(_cov_fund / _cov_total * 100, 1) if _cov_total else 0.0
+                    _elig_pct = round(_cov_sm   / _cov_total * 100, 1) if _cov_total else 0.0
+                    payload["fund_coverage_pct"]          = _fund_pct
+                    payload["eligible_fund_coverage_pct"] = _elig_pct
+                    payload["low_metadata_coverage"]      = _elig_pct < _MIN_ELIG
+                    if _elig_pct < _MIN_ELIG:
+                        payload["metadata_coverage_warning"] = (
+                            f"Theme '{theme}' snapshot contains mostly large-cap "
+                            f"symbols outside the $50M\u2013$10B metadata window "
+                            f"(eligible_pct={_elig_pct:.1f}%). "
+                            "Rows will show blank market_cap/sector/industry/beta/"
+                            "exchange until the Sunday warm_fundamentals job runs "
+                            "for these symbols."
+                        )
+            except Exception as _cov_e:
+                print(f"[SCREENER_HUB] theme coverage warning non-fatal: {_cov_e}")
 
     # ── Bottlenecks tab metadata ────────────────────────────────────────────────
     if tab == "bottlenecks" and bottlenecks_meta:

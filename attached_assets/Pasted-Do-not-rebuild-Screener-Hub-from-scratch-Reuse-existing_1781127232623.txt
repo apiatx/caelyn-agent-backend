@@ -1,0 +1,196 @@
+Do not rebuild Screener Hub from scratch.
+Reuse existing services, snapshots, caches, tables, and helpers wherever possible.
+
+IMPORTANT COST GUARDRAIL:
+Do not call FMP during implementation or validation.
+Do not run admin rebuilds.
+Do not trigger scheduled jobs.
+Do not warm caches.
+Do not force refresh anything.
+Do not call FMP Stock Screener.
+Do not call FMP historical endpoints.
+Do not call /stable/historical-price-eod/full.
+Use code inspection, DB/cache reads, and cache-read-only GET endpoints only.
+
+Goal:
+Audit and fix why Healthcare/default theme rows have missing market_cap/sector/industry/beta/exchange while Semiconductors rows work correctly.
+
+Important:
+Do NOT assume the market-cap filter is globally broken. It worked for Semiconductors. The likely issue is source/data-quality mismatch by theme.
+
+Observed issue:
+- Frontend now correctly uses backend default_theme.
+- Backend selected Healthcare due to top RS score.
+- Healthcare rows display large-cap names like HCA, UNH, LLY, MRK, ABT.
+- Many Healthcare rows have blank market_cap, sector, industry, beta, exchange.
+- UI says MCap <= $10B, but those rows appear because market_cap is missing.
+- Semiconductors had market_cap populated and filtering worked.
+
+Part 1 — Compare Semiconductors vs Healthcare row data source
+
+Run cache-read-only inspection for:
+
+GET /api/screener-hub?tab=thematic&theme=semiconductors&marketCapMax=10000000000
+GET /api/screener-hub?tab=thematic&theme=healthcare&marketCapMax=10000000000
+
+Do not call FMP.
+
+For both themes, report:
+- row count before filters
+- row count after filters
+- snapshot source
+- universe_built_at
+- source breakdown:
+  - ETF holdings
+  - LKG
+  - FMP screener
+  - static seed
+  - social/options overlap tags if relevant
+- top 25 symbols
+- for top 25 symbols, coverage counts:
+  - market_cap present
+  - sector present
+  - industry present
+  - beta present
+  - exchange present
+  - screener_meta present
+  - fundamentals cache row present
+  - quote cache row present
+  - options cache row present
+
+Part 2 — Find why Healthcare metadata is missing
+
+For Healthcare symbols like:
+- HCA
+- UNH
+- DGX
+- LLY
+- EW
+- ABT
+- ZBH
+- MRK
+- WST
+
+Check cache-only sources:
+- screener_universe_snapshots metadata_json
+- screener_fundamentals_cache
+- fmp_cache_service.get_screener_metadata_cached(symbol)
+- quote cache
+- any provider in-memory cache if available
+
+Do not call FMP.
+
+Report for each:
+- does screener_meta exist?
+- does fundamentals cache exist?
+- does market_cap exist anywhere?
+- does sector/industry exist anywhere?
+- does beta exist anywhere?
+- does exchange exist anywhere?
+- which hydration step failed?
+
+Part 3 — Compare with working Semiconductors symbols
+
+For Semiconductors symbols like:
+- NVEC
+- MXL
+- SLAB
+- CEVA
+- AOSL
+- KLIC
+- NVTS
+- AMBA
+
+Check the same cache-only sources.
+
+Report exactly why these rows have market_cap populated but Healthcare rows do not.
+
+Part 4 — Audit warm_job snapshot behavior
+
+Previous audit said:
+- all 60 snapshots are source=warm_job
+- current snapshots have FMP screener candidates = 0
+- ETF/LKG dominates
+- warm_job may be writing universe snapshots
+
+Audit:
+- where warm_job writes screener_universe_snapshots
+- whether warm_job writes per-symbol metadata
+- whether warm_job overwrites richer thematic_rebuild snapshots
+- whether warm_job only writes symbols and not full metadata
+- whether this explains missing Healthcare metadata
+
+Do not run warm jobs.
+Do not rebuild.
+
+Part 5 — Minimal fix if clear
+
+Only implement a fix if the root cause is clear and the fix is cache-only.
+
+Acceptable fixes:
+1. Make row hydration use existing screener_fundamentals_cache/fmp_cache_service for Healthcare the same way it does for Semiconductors.
+2. Ensure snapshot metadata is read consistently across all themes.
+3. Prevent warm_job from overwriting richer snapshots with weaker metadata-empty snapshots.
+4. Add data-quality gating so default_theme does not pick a theme whose rows lack market_cap/sector/industry coverage.
+5. Add response metadata warning if selected theme has low metadata coverage.
+
+Do NOT:
+- call FMP
+- rebuild snapshots
+- rewrite the screener
+- remove columns
+- globally change market cap filtering unless proven necessary
+
+Part 6 — Market cap filter policy
+
+Do not change this yet unless needed.
+
+Report whether Healthcare rows pass MCap <= $10B because:
+- market_cap is null and current filter allows nulls
+- market_cap exists but is incorrectly parsed
+- frontend label is applied but backend filter was not sent
+- backend ignored marketCapMax
+- rows are stale from prior request
+
+If market_cap is null:
+- recommend whether rows with unknown market_cap should be excluded only when marketCap filter is active.
+- But do not implement unless root cause cannot be fixed via hydration.
+
+Part 7 — 1D percent sanity check
+
+Audit cached quote fields for Healthcare:
+- raw quote change value
+- raw percent change value
+- backend change_percent_1d output
+
+Explain why HCA/UNH/LLY show impossible values like -42%, -135%, -73%.
+
+If this is a formatting/normalization bug, implement the smallest safe fix:
+- backend should output percentage points, e.g. -1.35 means -1.35%
+- frontend should not multiply again
+
+No provider calls.
+
+Part 8 — Validation without provider calls
+
+Allowed:
+- code inspection
+- DB/cache reads
+- cache-read-only GETs
+
+Validate:
+1. Semiconductors still has populated market_cap and filtering works.
+2. Healthcare root cause is identified.
+3. If cache-only hydration fix was implemented, Healthcare coverage improves.
+4. If default theme gating was implemented, backend default_theme avoids themes with poor metadata coverage.
+5. No FMP calls were made.
+
+Final report:
+- root cause of Healthcare missing market_cap/sector/industry/beta/exchange
+- why Semiconductors worked but Healthcare did not
+- whether marketCapMax was actually sent/applied
+- whether null market_cap policy is the issue or only a symptom
+- warm_job snapshot behavior finding
+- any minimal fix implemented
+- validation results
+- remaining limitations

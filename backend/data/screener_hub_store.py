@@ -552,6 +552,9 @@ def get_all_thematic_screener_meta() -> dict[str, dict]:
               AND theme_key IS NOT NULL
               AND status = 'ok'
               AND metadata_json IS NOT NULL
+              AND metadata_json::jsonb ? 'screener_meta_by_symbol'
+              AND metadata_json::jsonb->'screener_meta_by_symbol' IS DISTINCT FROM 'null'::jsonb
+              AND metadata_json::jsonb->'screener_meta_by_symbol' IS DISTINCT FROM '{}'::jsonb
             ORDER BY theme_key, generated_at DESC
             """
         )
