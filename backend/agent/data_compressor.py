@@ -149,6 +149,9 @@ PROTECTED_KEYS = {
     "perps_gainers", "perps_losers", "funding_lookup",
     "top_coins", "dominance", "derivatives",
     "watchlist_social_momentum", "grok_analysis",
+    # User/account context — must survive _aggressive_truncate; losing these causes
+    # the LLM to claim it has no watchlist/portfolio access even when data is present.
+    "_user_context", "_shared_context", "_screen_context",
 }
 
 
@@ -181,8 +184,15 @@ def compress_for_claude(market_data: dict, category: str) -> dict:
     raw_size = len(json.dumps(market_data, default=str))
 
     # Passthrough keys that must survive compression unchanged.
-    # _compress_generic skips _-prefixed keys; we preserve them explicitly.
-    _passthrough_keys = ("_screen_context",)
+    # _compress_generic, _compress_trending, and _compress_cross_asset_trending all
+    # skip _-prefixed keys — so we save these before compression and restore after.
+    # _user_context and _shared_context are injected after data gathering and must
+    # reach the LLM intact; stripping them causes silent watchlist/portfolio blindness.
+    _passthrough_keys = (
+        "_screen_context",
+        "_user_context",    # watchlist + portfolio — injected by user_context_service
+        "_shared_context",  # context_broker overlay — injected after data gather
+    )
     _saved_passthrough = {k: market_data[k] for k in _passthrough_keys if k in market_data}
 
     compressors = {

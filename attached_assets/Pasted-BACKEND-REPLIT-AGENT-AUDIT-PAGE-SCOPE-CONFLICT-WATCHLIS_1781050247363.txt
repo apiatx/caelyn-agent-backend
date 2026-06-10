@@ -1,0 +1,182 @@
+BACKEND REPLIT AGENT — AUDIT PAGE-SCOPE CONFLICT + WATCHLIST DEDUPE FAILURE
+
+Context:
+We already patched the existing user context injection path:
+
+* chat and followup now receive _user_context
+* watchlist count is 302
+* watchlist tickers are chunked into user_watchlist_tickers_1.._11
+* most categories now receive user context
+* only prediction_markets is hard-excluded
+
+New issue:
+After the patch, the in-app popup agent still recommended 3 stocks that are already on the user's watchlist. The user may have been on the Hyperliquid page. There may be older custom wiring/rules that restrict the popup agent to only the current page context. That is too narrow.
+
+Desired behavior:
+The agent should default to the page the user is currently visiting, but it must be allowed to use context from other pages when the prompt requires it.
+
+Examples:
+
+* If user is on Hyperliquid page and asks “What stocks should I add to my watchlist?”, the agent must use watchlist context, theme context, market/home context, and any relevant stock signals. Hyperliquid page context is secondary.
+* If user is on Watchlist page and asks “What crypto setups look strongest?”, the agent can use Hyperliquid context.
+* If user is on Portfolio page and asks “What am I missing from my watchlist?”, the agent can use watchlist + themes + macro + relevant signal context.
+
+Do not rebuild the context hub.
+Do not create a new parallel context system.
+Audit existing routing/page-scope logic first.
+Preserve existing context_broker.py and user_context_service.py paths.
+
+Audit tasks:
+
+1. Find page-scope restrictions
+   Search for all logic related to:
+
+* screen_context
+* page_context
+* app_context
+* current_page
+* route
+* pathname
+* page
+* chatbox_mode
+* popup
+* context_scope
+* page_only
+* visible_symbols
+* allowed_context
+* current route
+* preset prompts
+* prompt buttons
+* suggested prompts
+
+Report every place that:
+
+* limits agent context to current page
+* tells the model to answer only using current page
+* filters context sources based on current page
+* routes current page to one data arm only
+* ignores global user context when a page is present
+
+2. Audit final model payload after the latest patch
+   For a chatbox request from Hyperliquid page asking:
+   “What new stocks should I add to my watchlist?”
+
+Log or inspect the final payload before LLM call:
+
+* category
+* current page / route
+* screen_context
+* has _user_context
+* user_watchlist_count
+* number of user_watchlist_tickers_* chunks
+* whether all chunks survive data compression
+* whether prompt/system instructions mention using all chunks
+* whether any current-page-only instruction is present
+* whether market/theme/watchlist context is included or blocked
+
+Important:
+The existing direct injection simulation is not enough. We need to inspect the real final model payload path after screen_context, compression, context_broker, and prompt assembly.
+
+3. Audit data_compressor behavior
+   Confirm that:
+
+* user_watchlist_count survives compression
+* all user_watchlist_tickers_1.._11 survive compression
+* no chunks are dropped due to max keys, nested compression, MAX_STRING_LENGTH, or token budget trimming
+* _user_context is not deleted or truncated before the LLM call
+
+If chunks are dropped, fix compression rules specifically for _user_context.
+
+4. Audit candidate dedupe behavior
+   Find whether the agent has any deterministic step that removes already-watchlisted tickers from “new watchlist additions.”
+
+Report:
+
+* Is dedupe only prompt-based?
+* Is there a final answer validation step?
+* Does the JSON response format contain structured tickers/cards that could be filtered?
+* Are ticker cards appended separately after Claude’s text, possibly ignoring dedupe?
+* Could chart/timeframe cards show existing watchlist tickers even if answer text says not to?
+
+This matters because the user saw 3 existing watchlist tickers in the recommendation.
+
+5. Patch only after audit
+   If the audit confirms page-scope conflict or dedupe failure, patch minimally:
+
+A) Page context rule
+Update backend agent instructions/context logic to:
+
+* treat current page as primary/default context
+* allow cross-page context when user intent requires it
+* never let current page block _user_context
+* never let Hyperliquid/Options/Portfolio route prevent watchlist lookups if the user asks about watchlist
+* never say the agent only has access to the current page if backend context is available
+
+Suggested language:
+“Current page context is a starting point, not a boundary. Use it to prioritize relevance, but use any available user/account/signal context needed to answer the user’s actual question.”
+
+B) Watchlist dedupe rule
+Strengthen final-answer instruction:
+
+* For watchlist-addition questions, combine all user_watchlist_tickers_* chunks into one exclusion set.
+* Exclude any ticker already in the exclusion set.
+* If an existing ticker is relevant, mention it only in an “already watching” section, not as a new addition.
+* Never present an already-watchlisted ticker as a “new add.”
+
+C) Optional deterministic guard
+If response format has structured ticker candidates/cards, add a backend-side guard:
+
+* detect watchlist-addition intent
+* parse/extract ticker symbols from recommended candidates/cards
+* remove candidates that exist in user_watchlist_tickers
+* if all candidates are removed, ask model or fallback generator for adjacent alternatives not in watchlist
+
+Do not overbuild this if response format is not structured yet. But at minimum log:
+
+* recommended_tickers
+* already_in_watchlist
+* final_new_adds
+
+6. Validation
+   Run or simulate these cases through the real final model payload path:
+
+Test A:
+Current page = Hyperliquid
+Prompt = “What new stocks should I add to my existing watchlist?”
+Expected:
+
+* _user_context present
+* watchlist count 302
+* all chunks present
+* current page does not block watchlist context
+* no already-watchlisted tickers presented as new adds
+
+Test B:
+Current page = Watchlist
+Prompt = “What new stocks should I add to my existing watchlist?”
+Expected:
+
+* same as above
+
+Test C:
+Current page = Portfolio
+Prompt = “What stocks from my watchlist should I consider adding to portfolio?”
+Expected:
+
+* uses both portfolio and watchlist context
+
+Test D:
+Follow-up:
+“Are any of those already on my watchlist?”
+Expected:
+
+* still has user context
+* can answer accurately
+
+Return report:
+
+* where page-only restriction lives, if any
+* whether _user_context survives final compression/prompt assembly
+* whether the issue was page-scope conflict, compression, prompt weakness, ticker-card append logic, or no deterministic dedupe
+* exact files changed
+* validation results
