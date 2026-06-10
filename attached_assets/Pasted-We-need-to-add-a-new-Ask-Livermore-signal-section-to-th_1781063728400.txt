@@ -1,0 +1,141 @@
+We need to add a new “Ask Livermore” signal section to the Social page, but this must start with an audit. Do not code first.
+
+Goal:
+Add a new backend field to the existing Social/X dashboard response for @asklivermore’s current market stance, without adding any extra Grok/XAI API call.
+
+Important:
+
+* Do NOT create a separate Grok/XAI call.
+* Do NOT create a new polling loop.
+* Do NOT create a new standalone /asklivermore endpoint unless absolutely necessary for diagnostics only.
+* Incorporate @asklivermore into the exact existing XAI/Grok prompt/call already used for the Social page.
+* Preserve all existing Social page sections: Market Pulse, Portfolio Bias, X Consensus, Fresh, Leading Themes, Sentiment Acceleration, Social Screener, Fundamentals.
+* Preserve existing endpoint paths.
+* Do not break the social_screener cache fix that was just completed.
+* Start with audit output before code changes.
+
+Audit steps:
+
+1. Find the existing XAI/Grok call used by the Social page.
+   Search for:
+
+   * XAI_API_KEY
+   * Grok
+   * xai
+   * @ handles
+   * x-dashboard
+   * social dashboard
+   * tracked accounts
+   * prompt construction
+   * JSON parsing / normalization
+
+2. Identify:
+
+   * exact file and function building the Grok prompt
+   * exact function making the XAI API request
+   * model name currently used
+   * whether the existing implementation does multiple searches inside one Grok call
+   * current tracked X handles
+   * current JSON schema expected from Grok
+   * current parser/normalizer
+   * where response is cached/persisted
+   * where /api/social/x-dashboard response is assembled
+
+3. Confirm how many XAI/Grok calls happen during one refresh.
+   We need to know whether “Grok has to search 3–4 times” means:
+
+   * multiple searches inside one XAI request, acceptable
+   * or multiple API requests, not acceptable
+
+4. Audit current token/schema fragility:
+
+   * Does the prompt ask for strict JSON?
+   * Does the parser tolerate missing keys?
+   * Does cache keep older valid values if one section fails?
+   * Is there a schema version field?
+   * Does adding a new section risk breaking current parser?
+
+5. Report audit findings before edits:
+
+   * current prompt file/function
+   * current API call count
+   * current response schema
+   * recommended insertion point for @asklivermore
+   * safest new backend response key
+
+Implementation plan after audit approval, unless the fix is obviously minimal:
+Add a new object to the existing Social dashboard payload:
+ask_livermore_signal: {
+handle: "@asklivermore",
+stance: "buying" | "taking_profits" | "selling" | "waiting" | "warning_drawdown" | "risk_on" | "risk_off" | "unclear",
+signal_label: string,
+confidence: 0-100,
+timeframe: string,
+summary: string,
+evidence: string[],
+tickers_mentioned: string[],
+market_levels_mentioned: string[],
+updated_at: string,
+source_window: string,
+stale: boolean
+}
+
+Prompt requirements:
+Inside the existing XAI/Grok prompt, add @asklivermore as a dedicated required section.
+
+The prompt should ask Grok to inspect recent @asklivermore posts and answer:
+
+* Is he buying?
+* Is he taking profits?
+* Is he selling?
+* Is he waiting for a crash/drawdown?
+* Is he warning about risk?
+* Is he saying it is time to buy?
+* What is his current market posture?
+* What timeframe is he focused on?
+* What evidence supports that interpretation?
+
+Important language:
+
+* Do not overstate certainty.
+* If posts are mixed or unclear, return stance="unclear" with explanation.
+* If no recent posts are found, return stale=true and preserve older cached value if available.
+* Do not convert this into financial advice.
+* Do not let this override the broader social dashboard.
+* This is a signal card, not a trade command.
+
+Schema safety:
+
+* Add ask_livermore_signal as an additive field only.
+* Existing fields must remain unchanged.
+* Parser must be backward-compatible if Grok omits ask_livermore_signal.
+* If Grok returns malformed ask_livermore_signal, set a safe fallback object rather than failing the whole Social dashboard.
+* Do not let this section failure cause social_screener rows to return 0.
+* Preserve older cached ask_livermore_signal if the newest Grok run fails that section.
+
+Caching:
+
+* Store ask_livermore_signal wherever the existing x-dashboard snapshot/payload is cached.
+* Do not add a separate expensive refresh cadence.
+* It should refresh only when the existing Social dashboard Grok refresh runs.
+* Diagnostics should show whether ask_livermore_signal exists, last updated time, stale flag, and stance.
+
+Validation:
+
+1. Run the existing Social dashboard refresh once.
+2. Confirm only the existing XAI/Grok call path was used.
+3. Confirm /api/social/x-dashboard includes ask_livermore_signal.
+4. Confirm existing sections still return:
+
+   * market_pulse
+   * portfolio_bias
+   * x_consensus
+   * fresh
+   * leading_themes
+   * sentiment_acceleration
+   * social_screener rows
+5. Confirm Social Screener still returns >0 rows.
+6. Confirm diagnostics includes ask_livermore_signal status.
+7. Provide before/after response snippets.
+
+Do not touch frontend yet unless backend response is validated.
