@@ -119,6 +119,71 @@ _ASKLIVERMORE_VALID_STANCES = frozenset({
     "warning_drawdown", "risk_on", "risk_off", "unclear",
 })
 
+# Alias map: normalise loose Grok language into canonical stance values.
+# Keys are lowercase stripped strings; values are canonical stance strings.
+_ASKLIVERMORE_STANCE_ALIASES: dict[str, str] = {
+    # buying aliases
+    "buy":               "buying",
+    "buying weakness":   "buying",
+    "buy the dip":       "buying",
+    "accumulating":      "buying",
+    "accumulate":        "buying",
+    "adding":            "buying",
+    "long":              "buying",
+    # taking_profits aliases
+    "taking profit":     "taking_profits",
+    "taking profits":    "taking_profits",
+    "trim":              "taking_profits",
+    "trimming":          "taking_profits",
+    "reducing":          "taking_profits",
+    "partial sell":      "taking_profits",
+    # selling aliases
+    "sell":              "selling",
+    "selling":           "selling",
+    "de-risk":           "selling",
+    "derisking":         "selling",
+    "de-risking":        "selling",
+    "exit":              "selling",
+    "exiting":           "selling",
+    # waiting aliases
+    "wait":              "waiting",
+    "waiting":           "waiting",
+    "cash":              "waiting",
+    "sidelines":         "waiting",
+    "on the sidelines":  "waiting",
+    "holding cash":      "waiting",
+    "patience":          "waiting",
+    "watching":          "waiting",
+    # warning_drawdown aliases
+    "drawdown":          "warning_drawdown",
+    "crash warning":     "warning_drawdown",
+    "correction":        "warning_drawdown",
+    "correction warning":"warning_drawdown",
+    "warning":           "warning_drawdown",
+    "caution":           "warning_drawdown",
+    "bearish warning":   "warning_drawdown",
+    "defensive":         "warning_drawdown",
+    # risk_on aliases
+    "risk on":           "risk_on",
+    "risk-on":           "risk_on",
+    "risk_on":           "risk_on",
+    "go long":           "risk_on",
+    "bullish":           "risk_on",
+    # risk_off aliases
+    "risk off":          "risk_off",
+    "risk-off":          "risk_off",
+    "risk_off":          "risk_off",
+    "bearish":           "risk_off",
+    "go short":          "risk_off",
+    # unclear aliases
+    "mixed":             "unclear",
+    "neutral":           "unclear",
+    "unknown":           "unclear",
+    "no signal":         "unclear",
+    "no posts":          "unclear",
+    "not found":         "unclear",
+}
+
 # Safe fallback used whenever Grok omits or malforms ask_livermore_signal.
 # Also returned when the LKG cache has no prior value.
 _ASKLIVERMORE_FALLBACK: dict = {
@@ -277,28 +342,55 @@ def _sanitize_ask_livermore_signal(raw: Any, *, lkg: Optional[dict] = None) -> d
     """Validate and sanitize the ask_livermore_signal from Grok synthesis.
 
     Rules:
-    - If raw is None / not a dict → return LKG or fallback.
-    - Coerce stance to a valid enum value (default 'unclear').
-    - Clamp confidence to 0–100 int.
+    - If raw is None / not a dict → use LKG (marked stale) or fallback.
+    - Normalise stance through alias map first, then valid-stance set.
+    - Clamp confidence to 0–100 int; handle "70%" strings.
     - Ensure list fields are lists of strings.
-    - Mark stale=True if no updated_at or stance is 'unclear'.
+    - stale=True only when stance is 'unclear' (genuine no-signal).
+      A real stance with missing updated_at is NOT forced stale — useful
+      partial signals are preserved.
+    - Adds fallback_reason field for diagnostics.
     - Never raises — returns a safe object in all cases.
     """
+    # ── Omitted / wrong type ──────────────────────────────────────────────
     if not isinstance(raw, dict):
+        if lkg and isinstance(lkg, dict) and lkg.get("stance") != "unclear":
+            print("[X_CONSENSUS][ASK_LIVERMORE] Grok omitted signal — using non-stale LKG")
+            return {**lkg, "stale": True, "fallback_reason": "grok_omitted_field"}
         if lkg and isinstance(lkg, dict):
-            print("[X_CONSENSUS][ASK_LIVERMORE] Grok omitted ask_livermore_signal — using LKG")
-            return {**lkg, "stale": True}
-        print("[X_CONSENSUS][ASK_LIVERMORE] Grok omitted ask_livermore_signal — using fallback")
-        return dict(_ASKLIVERMORE_FALLBACK)
+            print("[X_CONSENSUS][ASK_LIVERMORE] Grok omitted signal — using LKG (was unclear)")
+            return {**lkg, "stale": True, "fallback_reason": "grok_omitted_field"}
+        print("[X_CONSENSUS][ASK_LIVERMORE] Grok omitted signal — using hardcoded fallback")
+        return {**_ASKLIVERMORE_FALLBACK, "fallback_reason": "grok_omitted_field"}
+
+    # ── Log raw Grok output for debugging ────────────────────────────────
+    print(
+        f"[X_CONSENSUS][ASK_LIVERMORE] Raw from Grok: "
+        f"stance={raw.get('stance')!r} confidence={raw.get('confidence')!r} "
+        f"updated_at={raw.get('updated_at')!r} "
+        f"summary={str(raw.get('summary') or '')[:80]!r}"
+    )
 
     try:
-        stance = str(raw.get("stance") or "unclear").lower().strip()
+        # ── Stance: alias normalisation then enum check ───────────────────
+        raw_stance = str(raw.get("stance") or "unclear").lower().strip()
+        stance = _ASKLIVERMORE_STANCE_ALIASES.get(raw_stance, raw_stance)
         if stance not in _ASKLIVERMORE_VALID_STANCES:
-            print(f"[X_CONSENSUS][ASK_LIVERMORE] Unknown stance '{stance}' — coercing to 'unclear'")
+            print(
+                f"[X_CONSENSUS][ASK_LIVERMORE] Unknown stance {raw_stance!r} "
+                f"(aliased={stance!r}) — coercing to 'unclear'"
+            )
             stance = "unclear"
+        elif stance != raw_stance:
+            print(
+                f"[X_CONSENSUS][ASK_LIVERMORE] Stance alias: {raw_stance!r} → {stance!r}"
+            )
 
+        # ── Confidence: handle "70%", 70.5, "high", etc. ─────────────────
         conf_raw = raw.get("confidence")
         try:
+            if isinstance(conf_raw, str):
+                conf_raw = conf_raw.strip().rstrip("%")
             confidence = max(0, min(100, int(float(conf_raw)))) if conf_raw is not None else 0
         except (ValueError, TypeError):
             confidence = 0
@@ -309,7 +401,21 @@ def _sanitize_ask_livermore_signal(raw: Any, *, lkg: Optional[dict] = None) -> d
             return []
 
         updated_at = raw.get("updated_at") or None
-        is_stale = (stance == "unclear") or (updated_at is None)
+
+        # ── Stale: only force stale when stance is 'unclear' ─────────────
+        # A real stance (e.g. "buying") with missing updated_at is still
+        # a useful signal — do not suppress it.
+        is_stale = (stance == "unclear")
+
+        # ── Detect no-posts-found pattern for diagnostics ─────────────────
+        summary_text = str(raw.get("summary") or "").strip()
+        _no_posts_keywords = ("no posts", "no recent posts", "not found", "no posts found")
+        _looks_like_no_posts = any(kw in summary_text.lower() for kw in _no_posts_keywords)
+        fallback_reason: Optional[str] = None
+        if _looks_like_no_posts:
+            fallback_reason = "grok_no_posts_found"
+        elif stance == "unclear" and confidence == 0:
+            fallback_reason = "grok_unclear_signal"
 
         return {
             "handle":                  "@asklivermore",
@@ -317,19 +423,21 @@ def _sanitize_ask_livermore_signal(raw: Any, *, lkg: Optional[dict] = None) -> d
             "signal_label":            str(raw.get("signal_label") or "").strip() or "No clear recent signal",
             "confidence":              confidence,
             "timeframe":               raw.get("timeframe") or None,
-            "summary":                 str(raw.get("summary") or "").strip(),
+            "summary":                 summary_text,
             "evidence":                _to_str_list(raw.get("evidence")),
             "tickers_mentioned":       _to_str_list(raw.get("tickers_mentioned")),
             "market_levels_mentioned": _to_str_list(raw.get("market_levels_mentioned")),
             "updated_at":              updated_at,
-            "source_window":           raw.get("source_window") or "last 7 days",
+            "source_window":           raw.get("source_window") or "last 14 days",
             "stale":                   is_stale,
+            "fallback_reason":         fallback_reason,
         }
     except Exception as e:
         print(f"[X_CONSENSUS][ASK_LIVERMORE] Sanitizer exception: {e} — using fallback")
+        reason = f"sanitizer_exception:{type(e).__name__}"
         if lkg and isinstance(lkg, dict):
-            return {**lkg, "stale": True}
-        return dict(_ASKLIVERMORE_FALLBACK)
+            return {**lkg, "stale": True, "fallback_reason": reason}
+        return {**_ASKLIVERMORE_FALLBACK, "fallback_reason": reason}
 
 
 def _validate_snapshot_sections(snapshot: dict) -> dict[str, bool]:
@@ -1030,9 +1138,9 @@ async def _run_refresh(data_service) -> Optional[dict]:
             prompt=synthesis_prompt,
             raw_mode=False,
             use_deep_model=True,
-            timeout=90.0,
+            timeout=120.0,
             system_text=X_SELECT_TRADER_CONSENSUS_CONTRACT,
-            max_output_tokens=4000,
+            max_output_tokens=6000,
         )
     except Exception as e:
         print(f"[X_CONSENSUS] Synthesis exception: {e}")

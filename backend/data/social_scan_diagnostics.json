@@ -1,39 +1,5 @@
 [
   {
-    "scan_ts": "2026-01-02T08:00:00+00:00",
-    "cache_write_status": "written_clean",
-    "sections_ok": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "sections_missing": [],
-    "lkg_sections_used": [],
-    "ticker_count": 15,
-    "mention_records": 14,
-    "error": null
-  },
-  {
-    "scan_ts": "2026-01-03T08:00:00+00:00",
-    "cache_write_status": "written_lkg_partial",
-    "sections_ok": [
-      "_mention_data",
-      "top_tickers"
-    ],
-    "sections_missing": [
-      "_backend_ranked",
-      "consensus_picks"
-    ],
-    "lkg_sections_used": [
-      "_backend_ranked",
-      "consensus_picks"
-    ],
-    "ticker_count": 11,
-    "mention_records": 5,
-    "error": null
-  },
-  {
     "scan_ts": "2026-05-12T17:01:03.838322+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -590,6 +556,46 @@
     "mention_records": 15,
     "consensus_picks": 8,
     "top_tickers": 8,
+    "cache_write_status": "written_clean",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-06-10T15:18:50.274831+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 41,
+    "mention_records": 12,
+    "consensus_picks": 10,
+    "top_tickers": 10,
+    "cache_write_status": "written_clean",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-06-10T18:30:51.418233+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 41,
+    "mention_records": 13,
+    "consensus_picks": 10,
+    "top_tickers": 10,
     "cache_write_status": "written_clean",
     "error": null
   }

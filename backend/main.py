@@ -3433,14 +3433,15 @@ async def social_diagnostics(
         # Ask Livermore signal status
         _al = (raw or {}).get("ask_livermore_signal") if raw else None
         ask_livermore_info: dict = {
-            "exists":     isinstance(_al, dict),
-            "stance":     _al.get("stance") if isinstance(_al, dict) else None,
-            "confidence": _al.get("confidence") if isinstance(_al, dict) else None,
-            "signal_label": _al.get("signal_label") if isinstance(_al, dict) else None,
-            "updated_at": _al.get("updated_at") if isinstance(_al, dict) else None,
-            "stale":      _al.get("stale", True) if isinstance(_al, dict) else True,
+            "exists":          isinstance(_al, dict),
+            "stance":          _al.get("stance")        if isinstance(_al, dict) else None,
+            "confidence":      _al.get("confidence")    if isinstance(_al, dict) else None,
+            "signal_label":    _al.get("signal_label")  if isinstance(_al, dict) else None,
+            "updated_at":      _al.get("updated_at")    if isinstance(_al, dict) else None,
+            "stale":           _al.get("stale", True)   if isinstance(_al, dict) else True,
+            "fallback_reason": _al.get("fallback_reason") if isinstance(_al, dict) else "no_snapshot",
             "summary_snippet": (
-                (_al.get("summary") or "")[:120]
+                (_al.get("summary") or "")[:160]
                 if isinstance(_al, dict) else None
             ),
         }

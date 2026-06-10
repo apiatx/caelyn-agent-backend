@@ -1,0 +1,116 @@
+We need a targeted audit/fix for Ask Livermore signal still showing stale/fallback after the XAI refresh ran ~3 hours ago.
+
+Current UI state:
+Ask Livermore card displays:
+- signal_label: "No clear recent signal"
+- stale: true / OLDER SIGNAL
+- confidence: 0%
+- summary: "No reliable recent Ask Livermore signal was available from the latest run."
+
+Expected:
+After the XAI refresh, ask_livermore_signal should be populated from the Phase 2 synthesis if Grok found recent @asklivermore posts. If Grok genuinely found no recent signal, diagnostics should prove that clearly. Right now it looks like fallback is still being served.
+
+Important constraints:
+- Do NOT add a new XAI/Grok API call.
+- Do NOT add @asklivermore to Phase 1 tracked handles.
+- Do NOT create a new endpoint for production.
+- Do NOT touch Social Screener cache logic.
+- Do NOT break existing x-dashboard sections.
+- Audit first, then fix only the exact issue.
+
+Audit steps:
+1. Confirm whether the refresh that ran after the code change actually used the updated prompt contract.
+   Check logs/timestamps for:
+   - app restart after prompt edit
+   - /api/social/x-dashboard/refresh called after restart
+   - Phase 2 synthesis call executed after the new contract was loaded
+   - snapshot write timestamp after the refresh
+
+2. Inspect the current disk snapshot:
+   backend/data/x_consensus_weekly.json
+
+   Confirm:
+   - Does root key ask_livermore_signal exist?
+   - If yes, what exact object is stored?
+   - Is stale=true?
+   - Is it the fallback object?
+   - What is snapshot updated_at / generated_at timestamp?
+   - Does the timestamp match the refresh from 3 hours ago?
+
+3. Inspect /api/social/diagnostics:
+   Confirm:
+   - ask_livermore_info.exists
+   - stance
+   - confidence
+   - stale
+   - updated_at
+   - summary_snippet
+
+4. Inspect the raw Phase 2 Grok result before sanitizer.
+   Add temporary debug logging only if needed, then remove or gate behind dev mode.
+   Need to know whether:
+   - result contains ask_livermore_signal
+   - result omits ask_livermore_signal
+   - result includes malformed field name
+   - result nests it somewhere unexpected
+   - result includes refusal/no-data language
+   - sanitizer is rejecting a valid result accidentally
+
+5. Audit sanitizer/LKG behavior:
+   Confirm _sanitize_ask_livermore_signal() does not convert valid data into fallback.
+   Watch for these bugs:
+   - confidence string like "70%" rejected/clamped to 0
+   - stance label like "warning drawdown" rejected instead of normalized to warning_drawdown
+   - field name mismatch: signal vs signal_label
+   - summary/evidence missing causes full fallback
+   - prior fallback LKG overwrites a partial but useful new signal
+   - updated_at not set, causing stale=true forever
+
+6. Audit prompt contract:
+   Confirm ask_livermore_signal is included in the exact Phase 2 system contract sent to XAI, not just in an unused constant.
+   Confirm the prompt explicitly requires root-level ask_livermore_signal.
+   Confirm it says to use @asklivermore recent posts during the same Phase 2 x_search.
+
+7. If needed, trigger one manual refresh after confirming the app has loaded the new prompt.
+   Then validate the saved snapshot again.
+
+Fix requirements:
+- Keep ask_livermore_signal root-level in the snapshot and /api/social/x-dashboard response.
+- If Grok returns a partial but useful Ask Livermore signal, preserve it and fill missing fields instead of replacing the whole object with fallback.
+- If Grok uses reasonable alternate stance words, normalize them:
+  - "buy", "buying weakness", "accumulating" → buying
+  - "taking profit", "trim", "trimming" → taking_profits
+  - "sell", "de-risk", "derisking" → selling or risk_off
+  - "wait", "cash", "sidelines" → waiting
+  - "drawdown", "crash warning", "correction warning" → warning_drawdown
+  - "risk on" → risk_on
+  - "risk off" → risk_off
+- If no recent posts are found, stale=true is acceptable, but diagnostics must show the reason clearly.
+- Do not allow this section to break or modify any other Social dashboard section.
+
+Validation required:
+1. After refresh, /api/social/x-dashboard returns ask_livermore_signal.
+2. It is not the fallback unless Grok truly found no recent usable posts.
+3. If fallback remains, provide the raw reason:
+   - Grok omitted the field
+   - Grok found no recent posts
+   - sanitizer rejected the output
+   - snapshot did not update
+   - wrong prompt contract loaded
+4. /api/social/diagnostics shows ask_livermore_info with:
+   - exists=true if snapshot has the key
+   - stance
+   - confidence
+   - stale
+   - updated_at
+   - summary_snippet
+   - empty_reason or fallback_reason if stale=true
+5. Confirm existing sections still present:
+   - market_pulse
+   - portfolio_bias
+   - x_consensus
+   - fresh_trades / freshest alpha
+   - leading themes
+   - sentiment_acceleration
+   - social_screener rows > 0
+6. Confirm XAI call count did not increase.
