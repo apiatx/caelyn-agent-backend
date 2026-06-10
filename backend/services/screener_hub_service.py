@@ -994,27 +994,133 @@ def _theme_keys() -> list[str]:
         return []
 
 
-def _theme_metadata() -> list[dict]:
-    """All themes with display name + classification, for /api/screener-hub/themes."""
+def _theme_metadata() -> dict:
+    """All themes with display name, classification, and RS metadata.
+
+    Returns a dict with keys:
+      themes             — list of theme dicts (sorted)
+      default_theme      — highest-RS theme with ≥15 snapshot rows
+      default_theme_reason
+      theme_rs_updated_at
+      count
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    _MIN_SNAP_ROWS = 15
+
+    # ── 1. Base registry ──────────────────────────────────────────────────────
     out: list[dict] = []
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
         for key, meta in THEME_RS_UNIVERSE.items():
             label = meta.get("display_name") or key
             out.append({
-                "theme_key":      key,
-                "display_name":   label,
-                # Aliases expected by the ScreenerHub frontend component
-                "id":             key,
-                "label":          label,
-                "classification": meta.get("classification") or "theme",
-                "parent_sector":  meta.get("parent_sector"),
-                "proxy_symbols":  list(meta.get("proxy_symbols") or [])[:5],
+                "theme_key":         key,
+                "display_name":      label,
+                "id":                key,
+                "label":             label,
+                "classification":    meta.get("classification") or "theme",
+                "parent_sector":     meta.get("parent_sector"),
+                "proxy_symbols":     list(meta.get("proxy_symbols") or [])[:5],
+                "rs_score":          None,
+                "momentum_rank":     None,
+                "state":             None,
+                "state_reason":      None,
+                "stage":             None,
+                "stage_label":       None,
+                "return_pct":        None,
+                "breadth_pct":       None,
+                "trend_accel_20d":   None,
+                "snapshot_row_count": None,
             })
     except Exception as e:
         print(f"[SCREENER_HUB] theme registry load error: {e}")
     out.sort(key=lambda r: (r.get("classification") or "", r.get("display_name") or ""))
-    return out
+
+    # ── 2. RS scores from themes_rs_lkg.json ─────────────────────────────────
+    rs_by_id: dict = {}
+    theme_rs_updated_at: Optional[str] = None
+    try:
+        lkg_path = _Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
+        if lkg_path.exists():
+            lkg_data = _json.loads(lkg_path.read_text())
+            for row in lkg_data.get("rows", []):
+                tid = row.get("theme_id")
+                if tid:
+                    rs_by_id[tid] = row
+                    if theme_rs_updated_at is None and row.get("last_updated"):
+                        theme_rs_updated_at = row["last_updated"]
+    except Exception as e:
+        print(f"[SCREENER_HUB] themes_rs_lkg load error: {e}")
+
+    # ── 3. Snapshot sym-counts from DB (single batch query) ───────────────────
+    snap_counts: dict[str, int] = {}
+    try:
+        from data.screener_hub_store import _get_conn, _put_conn
+        _conn = _get_conn()
+        _cur  = _conn.cursor()
+        _cur.execute("""
+            SELECT DISTINCT ON (theme_key)
+                   theme_key,
+                   CASE WHEN symbols_json IS NOT NULL
+                        THEN jsonb_array_length(symbols_json::jsonb) ELSE 0 END
+            FROM public.screener_universe_snapshots
+            WHERE universe_type = 'thematic' AND theme_key IS NOT NULL
+            ORDER BY theme_key, generated_at DESC
+        """)
+        for _row in _cur.fetchall():
+            snap_counts[_row[0]] = _row[1] or 0
+        _cur.close()
+        _put_conn(_conn)
+    except Exception as e:
+        print(f"[SCREENER_HUB] snapshot sym_count query error: {e}")
+
+    # ── 4. Merge RS + sym_count into theme entries ────────────────────────────
+    for t in out:
+        key = t["theme_key"]
+        rs_row = rs_by_id.get(key)
+        if rs_row:
+            t["rs_score"]        = rs_row.get("rs_score")
+            t["momentum_rank"]   = rs_row.get("momentum_rank")
+            t["state"]           = rs_row.get("state")
+            t["state_reason"]    = rs_row.get("state_reason")
+            t["stage"]           = rs_row.get("stage")
+            t["stage_label"]     = rs_row.get("stage_label")
+            t["return_pct"]      = rs_row.get("return_pct")
+            t["breadth_pct"]     = rs_row.get("breadth_pct")
+            t["trend_accel_20d"] = rs_row.get("trend_accel_20d")
+        t["snapshot_row_count"] = snap_counts.get(key)
+
+    # ── 5. Pick default_theme ─────────────────────────────────────────────────
+    default_theme: Optional[str] = None
+    default_theme_reason: str    = "fallback"
+    ranked = [
+        t for t in out
+        if t.get("rs_score") is not None
+        and (t.get("snapshot_row_count") or 0) >= _MIN_SNAP_ROWS
+    ]
+    if ranked:
+        best = max(ranked, key=lambda r: (r["rs_score"] or 0))
+        default_theme        = best["theme_key"]
+        default_theme_reason = (
+            f"Highest RS score ({best['rs_score']}) "
+            f"among themes with \u2265{_MIN_SNAP_ROWS} snapshot rows"
+        )
+    else:
+        for t in out:
+            if (t.get("snapshot_row_count") or 0) > 0:
+                default_theme        = t["theme_key"]
+                default_theme_reason = "first available theme (no RS data)"
+                break
+
+    return {
+        "themes":               out,
+        "default_theme":        default_theme,
+        "default_theme_reason": default_theme_reason,
+        "theme_rs_updated_at":  theme_rs_updated_at,
+        "count":                len(out),
+    }
 
 
 def _load_industry_map_config() -> dict:
@@ -2223,6 +2329,26 @@ def _row_passes_filters(row: dict, *, category_filter: Optional[str],
 
 # ── Main page query ───────────────────────────────────────────────────────────
 
+def _next_sunday_rebuild_et() -> str:
+    """ISO timestamp of the next thematic universe rebuild (Sun 00:30 US/Eastern)."""
+    try:
+        import datetime as _dt
+        try:
+            import zoneinfo as _zi
+            _ET = _zi.ZoneInfo("America/New_York")
+        except ImportError:
+            import pytz as _pytz
+            _ET = _pytz.timezone("America/New_York")
+        _now  = _dt.datetime.now(tz=_ET)
+        _days = (6 - _now.weekday()) % 7          # 0 = today is Sunday
+        if _days == 0 and (_now.hour > 0 or _now.minute >= 30):
+            _days = 7                               # already past 00:30 ET today
+        _date = _now.date() + _dt.timedelta(days=_days)
+        return _dt.datetime(_date.year, _date.month, _date.day, 0, 30, tzinfo=_ET).isoformat()
+    except Exception:
+        return "Sunday 00:30 ET"
+
+
 async def get_screener_hub(
     *,
     tab: str,
@@ -2230,6 +2356,10 @@ async def get_screener_hub(
     category: Optional[str] = None,
     score_mode: bool = False,
     coc_filter: bool = False,
+    market_cap_min: Optional[float] = None,
+    market_cap_max: Optional[float] = None,
+    min_volume: Optional[float] = None,
+    exchange: Optional[str] = None,
 ) -> dict:
     """Build the response payload for /api/screener-hub.
 
@@ -2263,6 +2393,19 @@ async def get_screener_hub(
     thematic_breakdown: dict = {}
     bottlenecks_meta: dict = {}
 
+    # Snapshot freshness tracking (populated when a DB snapshot is loaded)
+    snap_generated_at: Optional[str] = None
+    snap_expires_at:   Optional[str] = None
+    snap_db_source:    Optional[str] = None
+
+    # Post-build filter tracking
+    rows_before_filters: int = 0
+    rows_after_filters:  int = 0
+    filters_applied:     dict = {}
+
+    # Quote-refresh tracking
+    quote_refresh_started: bool = False
+
     # ── Load overlap sets (fast disk reads; used for per-row tagging) ──────────
     # These are loaded once per request and passed through to row building.
     social_overlap:     set[str]        = _load_social_overlap()
@@ -2281,6 +2424,11 @@ async def get_screener_hub(
         if theme:
             snap = get_latest_universe("thematic", theme)
             if snap and snap.get("symbols"):
+                # Capture real snapshot freshness metadata before anything else
+                snap_generated_at = str(snap.get("generated_at") or "") or None
+                snap_expires_at   = str(snap.get("expires_at")   or "") or None
+                snap_db_source    = snap.get("source") or "unknown"
+
                 raw_syms = list(snap.get("symbols") or [])
                 # If snapshot is ETF-only (built before the dynamic universe fix),
                 # discard it and rebuild live so stocks appear immediately.
@@ -2448,11 +2596,35 @@ async def get_screener_hub(
     returns_cache: dict[str, dict] = get_returns(symbols) if symbols else {}
     returns_cached_count = sum(1 for r in returns_cache.values() if r.get("return_4w") is not None)
 
-    # ── Refresh page-aware quotes ──
+    # ── Quotes: serve cache immediately, refresh stale symbols in background ──
+    # This eliminates the ~8–12s Tradier block on cold quote caches.
+    # The next request receives fresh quotes; this request serves whatever is cached.
     quote_cache_status = "skipped"
     if symbols:
-        quote_summary = await refresh_quotes_for_page(symbols)
-        quote_cache_status = quote_summary.get("status", "unknown")
+        _qt_ttl    = _QUOTE_TTL_OPEN_S if _is_market_open() else _QUOTE_TTL_CLOSED_S
+        _now_ts    = time.time()
+        _cached_qs = get_quotes(symbols)
+        _stale_syms: list[str] = []
+        for _s in symbols:
+            _qrow = _cached_qs.get(_s)
+            if not _qrow or not _qrow.get("fetched_at"):
+                _stale_syms.append(_s)
+                continue
+            try:
+                _fa = datetime.fromisoformat(str(_qrow["fetched_at"]).replace("Z", "+00:00"))
+                if _now_ts - _fa.timestamp() > _qt_ttl:
+                    _stale_syms.append(_s)
+            except Exception:
+                _stale_syms.append(_s)
+        if _stale_syms:
+            asyncio.create_task(refresh_quotes_for_page(symbols))
+            quote_refresh_started = True
+        _fresh_count = len(symbols) - len(_stale_syms)
+        quote_cache_status = (
+            "fresh"   if not _stale_syms else
+            "partial" if _fresh_count > 0 else
+            "cold"
+        )
 
     # ── Read fundamentals + quotes from cache ──
     fundamentals = get_fundamentals(symbols) if symbols else {}
@@ -2753,6 +2925,35 @@ async def get_screener_hub(
             continue
         rows.append(row)
 
+    # ── Post-build cache-only filters (no FMP, no rebuild) ────────────────────
+    rows_before_filters = len(rows)
+    if market_cap_min is not None:
+        rows = [
+            r for r in rows
+            if r.get("market_cap") is None or (r.get("market_cap") or 0) >= market_cap_min
+        ]
+        filters_applied["market_cap_min"] = market_cap_min
+    if market_cap_max is not None:
+        rows = [
+            r for r in rows
+            if r.get("market_cap") is None or (r.get("market_cap") or 0) <= market_cap_max
+        ]
+        filters_applied["market_cap_max"] = market_cap_max
+    if min_volume is not None:
+        rows = [
+            r for r in rows
+            if r.get("volume") is None or (r.get("volume") or 0) >= min_volume
+        ]
+        filters_applied["min_volume"] = min_volume
+    if exchange:
+        _exch = exchange.upper()
+        rows = [
+            r for r in rows
+            if r.get("exchange") is None or (r.get("exchange") or "").upper() == _exch
+        ]
+        filters_applied["exchange"] = _exch
+    rows_after_filters = len(rows)
+
     # ── Sort bottlenecks by final_score → bottleneck_score → hidden_gem_score ──
     if tab == "bottlenecks" and cr_details:
         rows.sort(
@@ -2772,18 +2973,44 @@ async def get_screener_hub(
     except Exception as _opt_exc:
         print(f"[SCREENER_HUB] options enrichment non-fatal error: {_opt_exc}")
 
+    _served_at = _now_iso()
+
     payload: dict[str, Any] = {
         "status": "ok",
         "tab": tab,
         "theme": theme,
-        "generated_at": _now_iso(),
+        # backward-compat: keep generated_at = request time
+        "generated_at":              _served_at,
+        "served_at":                 _served_at,
         "fundamentals_cache_status": fundamentals_cache_status,
         "quote_cache_status":        quote_cache_status,
+        "quote_refresh_mode":        "cache_first_background",
+        "quote_refresh_started":     quote_refresh_started,
         "universe_source":           universe_source,
         "universe_status":           snap_status,
         "row_count":                 len(rows),
         "rows": rows,
     }
+
+    # ── Real snapshot freshness fields ───────────────────────────────────────
+    if snap_generated_at:
+        payload["universe_built_at"] = snap_generated_at
+        try:
+            _snap_dt  = datetime.fromisoformat(snap_generated_at.replace("Z", "+00:00"))
+            _age_h    = (datetime.now(timezone.utc) - _snap_dt).total_seconds() / 3600
+            payload["universe_age_hours"] = round(_age_h, 2)
+        except Exception:
+            pass
+    if snap_expires_at:
+        payload["universe_expires_at"] = snap_expires_at
+    if snap_db_source:
+        payload["universe_db_source"] = snap_db_source
+    payload["next_rebuild_at"] = _next_sunday_rebuild_et()
+
+    # ── Post-build filter metadata ───────────────────────────────────────────
+    payload["filters_applied"]     = filters_applied
+    payload["rows_before_filters"] = rows_before_filters
+    payload["rows_after_filters"]  = rows_after_filters
 
     # ── Thematic tab metadata ───────────────────────────────────────────────────
     if tab == "thematic":

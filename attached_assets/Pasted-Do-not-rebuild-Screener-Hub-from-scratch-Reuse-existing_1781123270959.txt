@@ -1,0 +1,174 @@
+Do not rebuild Screener Hub from scratch.
+Reuse existing services, tables, snapshots, caches, and helpers wherever possible.
+
+IMPORTANT COST GUARDRAIL:
+Do not call FMP during implementation or validation.
+Do not run admin rebuilds.
+Do not trigger scheduled jobs.
+Do not warm caches.
+Do not force refresh anything.
+Do not call FMP Stock Screener.
+Do not call FMP historical endpoints.
+Do not call /stable/historical-price-eod/full.
+Use code inspection and cache-read-only endpoint checks only.
+
+Goal:
+Fix Screener Hub backend behavior using the existing architecture so the frontend can show the right default theme, real snapshot freshness, cache-only filters, and faster responses.
+
+Current audit findings to respect:
+- GET /api/screener-hub?tab=thematic&theme=semiconductors reads from screener_universe_snapshots in Neon.
+- Semiconductors snapshot is from warm_job, generated_at 2026-06-07, but response generated_at is current request time.
+- Response “Updated” is misleading because actual universe_built_at is not exposed.
+- All 60 themes have snapshots from the same warm_job and none have FMP screener candidates in the current snapshot.
+- themes_rs_lkg.json already contains fresh rs_score, momentum_rank, state, stage, return_pct, breadth_pct, trend_accel_20d for all themes.
+- Backend /api/screener-hub/themes currently exposes no default_theme or rank metadata.
+- refresh_quotes_for_page(symbols) is awaited synchronously and makes cached GETs take ~8–12 seconds on cold quote cache.
+- Market cap range is baked into snapshot build. GET endpoint has no marketCapMin/marketCapMax/minVolume/exchange query params.
+- GET paths should remain cache-only and must not call FMP.
+
+Part 1 — Expose dynamic theme metadata from existing themes_rs_lkg.json
+
+Modify /api/screener-hub/themes response to include existing cached theme RS metadata.
+
+Use existing backend/data/themes_rs_lkg.json.
+Do not create a new ranking engine.
+Do not call FMP.
+
+For each theme, include if available:
+- rs_score
+- momentum_rank
+- state
+- state_reason
+- stage
+- stage_label
+- return_pct
+- breadth_pct
+- trend_accel_20d
+- snapshot row count if available from existing snapshots
+
+Add top-level:
+- default_theme
+- default_theme_reason
+- themes_ranked_at or theme_rs_updated_at
+
+Default theme logic:
+- Pick highest rs_score from themes_rs_lkg.json.
+- Exclude very thin themes with snapshot row count under 10 or 15.
+- Exclude themes with missing snapshot if any.
+- If no ranked theme is available, fallback to existing first theme behavior.
+- Do not hardcode Semiconductors.
+
+Part 2 — Add real snapshot freshness metadata to Screener Hub responses
+
+Keep generated_at for backward compatibility if needed, but add separate fields:
+- served_at: current request time
+- universe_built_at: actual screener_universe_snapshots.generated_at
+- universe_source: snapshot source, e.g. warm_job / thematic_rebuild / fallback
+- universe_age_hours
+- universe_expires_at
+- universe_status: fresh / stale / partial / empty
+- next_rebuild_at if easily available from existing scheduler config
+
+Do not pretend request time is universe update time.
+
+Part 3 — Add cache-only filter query params
+
+Extend GET /api/screener-hub to accept:
+- marketCapMin
+- marketCapMax
+- minVolume
+- exchange
+
+Also accept snake_case aliases if easier:
+- market_cap_min
+- market_cap_max
+- min_volume
+
+Apply filters after rows are built from cached snapshot/enrichment.
+
+Rules:
+- This must be cache-only.
+- Do not call FMP.
+- Do not rebuild universe.
+- Do not mutate snapshots.
+- If a row lacks market_cap or volume, only drop it if the corresponding filter requires that field.
+- Prefer cached screener metadata/fundamentals metadata to populate market_cap and volume before filtering.
+- Return filter metadata:
+  - filters_applied
+  - rows_before_filters
+  - rows_after_filters
+
+Part 4 — Fix slow response from blocking quote refresh
+
+Do not remove quote enrichment.
+
+Change Screener Hub GET path to prefer stale cached quotes and refresh quotes in background.
+
+Current bottleneck:
+refresh_quotes_for_page(symbols) is awaited synchronously.
+
+Desired:
+- Read existing cached quotes immediately.
+- Fire background refresh for stale/missing quotes.
+- Return response without waiting on Tradier quote refresh.
+- Keep options enrichment non-blocking as it already is.
+- Add metadata:
+  - quote_refresh_mode: cache_first_background
+  - quote_refresh_started: true/false
+  - quote_cache_status
+
+Do not call FMP.
+Do not block response on Tradier unless an existing small TTL cache read is instant.
+
+Part 5 — Preserve current tab behavior
+
+Do not break:
+- Thematic
+- Social
+- Bottlenecks
+- Watchlist + Portfolio
+- Fundamentals tab if present
+- Options enrichment
+- Existing clean row shape
+- Existing snapshots
+- Existing FMP full historical guard
+
+Thematic must remain separate from Watchlist+Portfolio.
+Do not reintroduce watchlist overlap into Thematic.
+
+Part 6 — Validate without FMP
+
+Do not call FMP.
+Do not run admin rebuilds.
+
+Allowed validation:
+- backend import/compile
+- GET /api/screener-hub/themes
+- GET /api/screener-hub?tab=thematic&theme=<default_theme>
+- GET /api/screener-hub?tab=thematic&theme=semiconductors&marketCapMax=10000000000
+- GET /api/screener-hub?tab=thematic&theme=semiconductors&marketCapMin=1000000000&marketCapMax=10000000000&minVolume=100000
+- GET /api/screener-hub?tab=social
+- GET /api/screener-hub?tab=bottlenecks
+- GET /api/screener-hub?tab=watchlist_portfolio
+
+Confirm:
+- no FMP calls made
+- /api/screener-hub/themes includes default_theme and rs metadata
+- default_theme is not hardcoded Semiconductors unless Semiconductors is actually top-ranked
+- Screener Hub response includes universe_built_at and served_at
+- market cap / volume filters are applied cache-only
+- response time improves because quote refresh is background
+- all tabs still return JSON
+- FMP full historical remains blocked/not used
+
+Final report:
+- files changed
+- reused existing data/caches/services
+- default_theme selected and why
+- theme metadata fields added
+- freshness metadata fields added
+- filter query params added
+- quote refresh behavior changed
+- validation results
+- confirmation no FMP calls were made
+- remaining limitations

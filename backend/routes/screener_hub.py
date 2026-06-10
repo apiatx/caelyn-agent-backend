@@ -50,13 +50,16 @@ def _check_admin_key(api_key: Optional[str]) -> Optional[JSONResponse]:
 
 @router.get("/api/screener-hub/themes")
 async def screener_hub_themes(request: Request):
-    """Return the catalogue of themes available for the thematic tab."""
+    """Return the catalogue of themes with RS metadata and dynamic default."""
     try:
-        themes = _theme_metadata()
+        result = _theme_metadata()
         return JSONResponse(content={
-            "status": "ok",
-            "count": len(themes),
-            "themes": themes,
+            "status":               "ok",
+            "count":                result["count"],
+            "themes":               result["themes"],
+            "default_theme":        result["default_theme"],
+            "default_theme_reason": result["default_theme_reason"],
+            "theme_rs_updated_at":  result["theme_rs_updated_at"],
         })
     except Exception as e:
         print(f"[SCREENER_HUB] /themes error: {e}")
@@ -76,6 +79,14 @@ async def screener_hub(
     category: Optional[str] = Query(None, description="filter by category: Leading|Improving|Weakening|Lagging"),
     scoreMode: Optional[bool] = Query(None, description="enable score column"),
     cocFilter: Optional[bool] = Query(None, description="enable change-on-change filter"),
+    # Cache-only post-build filters — camelCase and snake_case both accepted
+    marketCapMin: Optional[float] = Query(None, description="min market cap in USD"),
+    marketCapMax: Optional[float] = Query(None, description="max market cap in USD"),
+    market_cap_min: Optional[float] = Query(None, description="alias for marketCapMin"),
+    market_cap_max: Optional[float] = Query(None, description="alias for marketCapMax"),
+    minVolume: Optional[float] = Query(None, description="min daily volume"),
+    min_volume: Optional[float] = Query(None, description="alias for minVolume"),
+    exchange: Optional[str] = Query(None, description="exchange filter e.g. NASDAQ, NYSE"),
 ):
     tab_norm = (tab or "").lower()
     if tab_norm not in _VALID_TABS:
@@ -84,6 +95,11 @@ async def screener_hub(
             content={"error": f"invalid tab '{tab}'. Valid: {sorted(_VALID_TABS)}"},
         )
 
+    # Merge camelCase + snake_case aliases (camelCase wins if both supplied)
+    _mcap_min = marketCapMin if marketCapMin is not None else market_cap_min
+    _mcap_max = marketCapMax if marketCapMax is not None else market_cap_max
+    _min_vol  = minVolume    if minVolume    is not None else min_volume
+
     try:
         data = await get_screener_hub(
             tab=tab_norm,
@@ -91,6 +107,10 @@ async def screener_hub(
             category=category,
             score_mode=bool(scoreMode),
             coc_filter=bool(cocFilter),
+            market_cap_min=_mcap_min,
+            market_cap_max=_mcap_max,
+            min_volume=_min_vol,
+            exchange=exchange,
         )
         return JSONResponse(content=data)
     except Exception as e:
