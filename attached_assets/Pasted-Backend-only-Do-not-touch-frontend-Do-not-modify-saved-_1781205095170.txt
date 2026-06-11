@@ -1,0 +1,131 @@
+Backend only.
+
+Do not touch frontend.
+Do not modify saved screens or daily screens.
+Do not call any LLM APIs.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not add new theme universe logic.
+
+Goal:
+Run a final regression audit after the proxy_type="custom" fix to make sure Screener Hub selected-theme behavior is correct across all theme proxy types.
+
+Context:
+The AI Networking bug was caused by proxy_type="custom" themes being treated like ETF proxy themes. Stock tickers in proxy_symbols were incorrectly sent through the ETF holdings path, then canonical candidate_symbols were later dropped by seen_dynamic.
+
+This was fixed for ai_networking. Now validate the fix generalizes.
+
+Part 1 — Audit theme proxy types
+
+From THEME_RS_UNIVERSE, produce a table of all themes with:
+
+* theme_key
+* label
+* proxy_type
+* proxy_symbols count
+* candidate_symbols count
+* has_fmp_industries
+* latest snapshot row count
+* latest snapshot static_seed_count
+* latest snapshot fmp_screener_count
+* latest snapshot etf_holdings_count
+
+Group by:
+
+* proxy_type="etf"
+* proxy_type="custom"
+* proxy_type="basket"
+* proxy_type="hybrid"
+* unknown/other
+
+Part 2 — Validate custom-proxy themes
+
+For every proxy_type="custom" theme, run:
+
+GET /api/screener-hub?tab=thematic&theme={theme_key}&scoreMode=true
+
+Confirm:
+
+* proxy_symbols are NOT treated as ETF filenames
+* candidate_symbols / custom proxy symbols are included in final candidate pool
+* static_seed_count or canonical_candidate_count reflects those symbols
+* fmp_screener candidates are merged as enrichment, not replacing canonical custom symbols
+* selected market cap filters apply after hydration
+* query cache does not serve old stale results
+
+For each custom theme, report:
+
+* rows_before_filters
+* rows_after_filters
+* top 20 symbols
+* candidate_source_breakdown
+* static/canonical symbols present true/false
+* fmp_screener_count
+* weak_dynamic_discovery true/false
+
+Part 3 — Validate ETF-proxy themes did not break
+
+For key ETF-proxy themes, validate ETF holdings still work:
+
+* semiconductors
+* clean_energy
+* biotech
+* regional_banks
+* software
+* healthcare
+
+Confirm:
+
+* proxy_type="etf" still uses ETF holdings path
+* SOXX/SMH style ETF holdings still load
+* fmp_screener enrichment still merges
+* no stock tickers are accidentally treated as ETF files
+* market cap ranges still work
+
+Part 4 — Validate market cap lenses after fix
+
+For these themes:
+
+* ai_networking
+* semiconductors
+* memory_storage
+* photonics_lasers
+* datacenter_infra
+* robotics_automation
+* quantum
+* clean_energy
+* biotech
+
+Run:
+
+1. All
+2. Custom $50M–$10B
+3. $10B–$100B
+4. $100B+
+5. Under $1B
+
+Report row counts and first 10 symbols for each.
+
+Part 5 — Cache safety
+
+Confirm cache version includes the custom-proxy fix.
+
+Confirm old cache entries from before this fix are ignored.
+
+For AI Networking:
+
+* first $100B+ request after cache clear/miss stores ANET/MRVL/AVGO
+* repeat $100B+ request is cache hit with same rows
+* stale old 0-row $100B+ responses are not served
+
+Part 6 — Final answer
+
+Return:
+
+* whether custom-proxy themes now use canonical candidate_symbols correctly
+* whether ETF-proxy themes still work
+* whether any selected theme is still seed-only or weak
+* whether any hidden <$10B discovery cap still affects full selected-theme universes
+* validation table
+* files changed, if any
+* no LLM/no full historical/no ETF quote loop confirmation
