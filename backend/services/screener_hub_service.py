@@ -278,9 +278,29 @@ _DAILY_DEFAULT: dict = {}  # {"date": "YYYY-MM-DD", "theme": str, "reason": str}
 # ── Per-theme on-demand refresh log ───────────────────────────────────────────
 # Tracks when each theme last triggered a background universe refresh.
 # Enforces a 24-hour cap so page loads can only schedule one rebuild per theme per day.
+# NOTE: this dict is in-memory only. _theme_refresh_allowed() falls back to the DB
+# snapshot timestamps when the key is missing (post-restart durability).
 _THEME_REFRESH_LOG: dict[str, str] = {}  # theme_key → ISO timestamp of last scheduled refresh
 _THEME_REFRESH_CAP_H   = 24.0   # hours between permitted on-demand background refreshes
 _THEME_REFRESH_STALE_H = 24.0   # snapshot age (hours) that triggers a background refresh
+
+# ── In-flight refresh tracking ─────────────────────────────────────────────────
+# Prevents duplicate tasks for the same theme and limits total FMP concurrency.
+_THEME_REFRESH_INFLIGHT: set[str] = set()  # themes with an active background task
+_FMP_REFRESH_MAX_CONCURRENT = 3            # max simultaneous FMP theme refresh tasks
+_FMP_REFRESH_SEM: Optional["asyncio.Semaphore"] = None  # lazy-init inside event loop
+
+
+def _get_fmp_refresh_sem() -> "asyncio.Semaphore":
+    """Return (lazily-initialised) asyncio.Semaphore for FMP theme refresh tasks.
+
+    Must be called from within a running event loop so the Semaphore is created
+    in the correct loop.
+    """
+    global _FMP_REFRESH_SEM
+    if _FMP_REFRESH_SEM is None:
+        _FMP_REFRESH_SEM = asyncio.Semaphore(_FMP_REFRESH_MAX_CONCURRENT)
+    return _FMP_REFRESH_SEM
 
 
 def _get_daily_default_theme() -> tuple[Optional[str], str]:
@@ -307,20 +327,53 @@ def _get_daily_default_theme() -> tuple[Optional[str], str]:
 def _theme_refresh_allowed(theme_key: str) -> bool:
     """Return True if at least _THEME_REFRESH_CAP_H hours have elapsed since the last
     on-demand background refresh was scheduled for this theme.
+
+    Checks the in-memory log first (fast path). On a cache miss — which happens after
+    every backend restart — falls back to the DB snapshot timestamp so the cap survives
+    restarts and prevents re-hammering FMP for all 60 themes simultaneously.
     """
     last_iso = _THEME_REFRESH_LOG.get(theme_key)
-    if not last_iso:
-        return True
+    if last_iso:
+        try:
+            last_dt = datetime.fromisoformat(last_iso)
+            return (datetime.now(timezone.utc) - last_dt).total_seconds() > _THEME_REFRESH_CAP_H * 3600
+        except Exception:
+            pass
+        return True  # malformed entry → allow
+
+    # In-memory log empty (post-restart) — check DB for most recent snapshot.
     try:
-        last_dt = datetime.fromisoformat(last_iso)
-        return (datetime.now(timezone.utc) - last_dt).total_seconds() > _THEME_REFRESH_CAP_H * 3600
+        from data.screener_hub_store import get_theme_last_refresh_ts
+        db_dt = get_theme_last_refresh_ts(theme_key)
+        if db_dt:
+            elapsed_s = (datetime.now(timezone.utc) - db_dt).total_seconds()
+            if elapsed_s < _THEME_REFRESH_CAP_H * 3600:
+                # Hydrate in-memory log from DB so subsequent calls within
+                # this process lifetime don't re-query the DB.
+                _THEME_REFRESH_LOG[theme_key] = db_dt.isoformat()
+                return False
     except Exception:
-        return True
+        pass
+    return True
 
 
 def _record_theme_refresh(theme_key: str) -> None:
-    """Log the current timestamp as the last refresh time for *theme_key*."""
+    """Log the current UTC timestamp as the last refresh time for *theme_key*."""
     _THEME_REFRESH_LOG[theme_key] = datetime.now(timezone.utc).isoformat()
+
+
+def _theme_refresh_next_allowed_iso(theme_key: str) -> Optional[str]:
+    """Return ISO-8601 timestamp of when the next refresh is permitted, or None."""
+    last_iso = _THEME_REFRESH_LOG.get(theme_key)
+    if not last_iso:
+        return None
+    try:
+        last_dt = datetime.fromisoformat(last_iso)
+        return datetime.fromtimestamp(
+            last_dt.timestamp() + _THEME_REFRESH_CAP_H * 3600, tz=timezone.utc
+        ).isoformat()
+    except Exception:
+        return None
 
 
 async def _background_refresh_theme(theme_key: str, *, reason: str = "stale") -> None:
@@ -331,39 +384,43 @@ async def _background_refresh_theme(theme_key: str, *, reason: str = "stale") ->
     exchange, beta …).  This is the primary enrichment source for thematic rows
     whose symbols haven't been seen by the FMP profile warm-job yet.
 
-    FMP screener calls are guarded by the _THEME_REFRESH_CAP_H (24h) cap in the
-    caller — this function itself does not re-check the cap.
+    Concurrency is limited to _FMP_REFRESH_MAX_CONCURRENT simultaneous tasks via
+    an asyncio.Semaphore.  In-flight dedup is handled by the caller — this function
+    just adds/removes the theme from _THEME_REFRESH_INFLIGHT and acquires the sem.
     """
+    _THEME_REFRESH_INFLIGHT.add(theme_key)
     try:
-        print(f"[SCREENER_HUB] background refresh started for theme={theme_key!r} reason={reason!r}")
-        symbols_map, breakdowns = await asyncio.wait_for(
-            _build_thematic_universe(theme_key, with_fmp_peers=False, with_fmp_screener=True),
-            timeout=_THEMATIC_BUILD_TIMEOUT_S * 2,
-        )
-        syms = symbols_map.get(theme_key, [])
-        bd   = breakdowns.get(theme_key, {})
-        if syms:
-            # Track whether the FMP screener actually produced results so
-            # callers can surface this in fmp_refresh_used metadata.
-            bd["_refresh_used_fmp_screener"] = bool(bd.get("fmp_screener_calls_used", 0) > 0)
-            bd["_refresh_reason"]            = reason
-            insert_universe_snapshot(
-                universe_type="thematic", theme_key=theme_key,
-                symbols=syms, source="on_demand_refresh",
-                status="ok", ttl_days=2,
-                metadata=bd,
+        async with _get_fmp_refresh_sem():
+            print(f"[SCREENER_HUB] background refresh started for theme={theme_key!r} reason={reason!r} inflight={len(_THEME_REFRESH_INFLIGHT)}")
+            symbols_map, breakdowns = await asyncio.wait_for(
+                _build_thematic_universe(theme_key, with_fmp_peers=False, with_fmp_screener=True),
+                timeout=_THEMATIC_BUILD_TIMEOUT_S * 2,
             )
-            print(
-                f"[SCREENER_HUB] background refresh done for {theme_key!r}: "
-                f"{len(syms)} symbols, fmp_screener_calls={bd.get('fmp_screener_calls_used', 0)}, "
-                f"screener_meta_symbols={len(bd.get('screener_meta_by_symbol') or {})}"
-            )
-        else:
-            print(f"[SCREENER_HUB] background refresh for {theme_key!r}: no symbols returned — skipping write")
+            syms = symbols_map.get(theme_key, [])
+            bd   = breakdowns.get(theme_key, {})
+            if syms:
+                bd["_refresh_used_fmp_screener"] = bool(bd.get("fmp_screener_calls_used", 0) > 0)
+                bd["_refresh_reason"]            = reason
+                insert_universe_snapshot(
+                    universe_type="thematic", theme_key=theme_key,
+                    symbols=syms, source="on_demand_refresh",
+                    status="ok", ttl_days=2,
+                    metadata=bd,
+                )
+                print(
+                    f"[SCREENER_HUB] background refresh done for {theme_key!r}: "
+                    f"{len(syms)} symbols, fmp_screener_calls={bd.get('fmp_screener_calls_used', 0)}, "
+                    f"screener_meta_symbols={len(bd.get('screener_meta_by_symbol') or {})}"
+                )
+            else:
+                print(f"[SCREENER_HUB] background refresh for {theme_key!r}: no symbols returned — skipping write")
     except asyncio.TimeoutError:
         print(f"[SCREENER_HUB] background refresh timed out for theme={theme_key!r}")
     except Exception as exc:
         print(f"[SCREENER_HUB] background refresh error for theme={theme_key!r}: {exc}")
+    finally:
+        # Always remove from in-flight set so the dedup guard resets correctly.
+        _THEME_REFRESH_INFLIGHT.discard(theme_key)
 
 
 # ── ETF holdings disk reader ───────────────────────────────────────────────────
@@ -2865,12 +2922,17 @@ async def get_screener_hub(
         # coverage, but the screener table should show stocks only.
         symbols = [s for s in symbols if s not in _ALL_PROXY_ETFS] or symbols
 
-        # ── Per-theme background refresh with 24h cap ─────────────────────────
+        # ── Per-theme background refresh with 24h durable cap ─────────────────
         # When a snapshot is stale (>_THEME_REFRESH_STALE_H hours), schedule one
         # background rebuild per day per theme.  This serves cached data immediately
         # while the refresh runs asynchronously for the next request.
-        # Background refresh now uses with_fmp_screener=True so the new snapshot
-        # contains a populated screener_meta_by_symbol for full row enrichment.
+        #
+        # Guards (applied in order):
+        #   1. In-flight dedup  — if a task is already running/queued for this theme,
+        #      do not spawn another (returns "refreshing").
+        #   2. Concurrency cap  — if _FMP_REFRESH_MAX_CONCURRENT tasks are already
+        #      active, skip this request (returns "refresh_queued"; next request retries).
+        #   3. 24h durable cap  — enforced via in-memory log + DB fallback on restart.
         theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme) if theme else None
         if tab == "thematic" and theme and snap_generated_at:
             try:
@@ -2879,7 +2941,15 @@ async def get_screener_hub(
             except Exception:
                 _snap_age_h = 0.0
             if _snap_age_h > _THEME_REFRESH_STALE_H:
-                if _theme_refresh_allowed(theme):
+                if theme in _THEME_REFRESH_INFLIGHT:
+                    # Task already in-flight for this theme — don't spawn duplicate.
+                    theme_refresh_status = "refreshing"
+                elif len(_THEME_REFRESH_INFLIGHT) >= _FMP_REFRESH_MAX_CONCURRENT:
+                    # Too many concurrent FMP refreshes — skip, next request retries.
+                    theme_refresh_status = "refresh_queued"
+                    fmp_refresh_used     = False
+                    fmp_refresh_reason   = "concurrency_cap"
+                elif _theme_refresh_allowed(theme):
                     asyncio.create_task(_background_refresh_theme(theme, reason="stale"))
                     _record_theme_refresh(theme)
                     theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme)
@@ -2888,18 +2958,11 @@ async def get_screener_hub(
                     fmp_refresh_reason      = "snapshot_stale"
                 else:
                     theme_refresh_status = "stale_cap_active"
-                    _last_iso = _THEME_REFRESH_LOG.get(theme)
-                    if _last_iso:
-                        try:
-                            _last_dt         = datetime.fromisoformat(_last_iso)
-                            _next_allowed_ts = _last_dt.timestamp() + _THEME_REFRESH_CAP_H * 3600
-                            theme_next_refresh_allowed_at = datetime.fromtimestamp(
-                                _next_allowed_ts, tz=timezone.utc
-                            ).isoformat()
-                        except Exception:
-                            pass
             else:
                 theme_refresh_status = "fresh"
+            # Always compute next-allowed timestamp from the log (post-hydration).
+            theme_next_refresh_allowed_at = _theme_refresh_next_allowed_iso(theme)
+            theme_last_refreshed_at       = _THEME_REFRESH_LOG.get(theme)
         elif tab == "thematic" and theme and not snap_generated_at:
             theme_refresh_status = "live_build"
 
@@ -3471,16 +3534,35 @@ async def get_screener_hub(
         # "fresh" (< 24h old) but fundamentals coverage is poor.  This covers
         # warm_job and on_demand_refresh snapshots built without FMP screener
         # that returned no screener_meta_by_symbol.
+        # Same three guards (in-flight dedup, concurrency cap, 24h cap) apply.
         if (
             _low_result_quality
-            and theme_refresh_status not in ("refresh_scheduled", "stale_cap_active")
-            and _theme_refresh_allowed(theme)
+            and theme_refresh_status not in ("refresh_scheduled", "stale_cap_active",
+                                             "refreshing", "refresh_queued", "weak_cache")
         ):
-            asyncio.create_task(_background_refresh_theme(theme, reason="weak_cache"))
-            _record_theme_refresh(theme)
-            theme_refresh_status = "weak_cache"
-            fmp_refresh_used     = True
-            fmp_refresh_reason   = "metadata_coverage_low"
+            if theme in _THEME_REFRESH_INFLIGHT:
+                theme_refresh_status = "refreshing"
+            elif len(_THEME_REFRESH_INFLIGHT) >= _FMP_REFRESH_MAX_CONCURRENT:
+                theme_refresh_status = "refresh_queued"
+                fmp_refresh_used     = False
+                fmp_refresh_reason   = "concurrency_cap"
+            elif _theme_refresh_allowed(theme):
+                asyncio.create_task(_background_refresh_theme(theme, reason="weak_cache"))
+                _record_theme_refresh(theme)
+                theme_refresh_status          = "weak_cache"
+                fmp_refresh_used              = True
+                fmp_refresh_reason            = "metadata_coverage_low"
+                theme_next_refresh_allowed_at = _theme_refresh_next_allowed_iso(theme)
+                theme_last_refreshed_at       = _THEME_REFRESH_LOG.get(theme)
+
+        # Post-trigger: if the DB fallback hydrated _THEME_REFRESH_LOG during
+        # this request (fresh snapshot, cap query, weak-cache check), make sure
+        # the response fields reflect it so callers see last/next timestamps.
+        if theme_last_refreshed_at is None:
+            _post_log = _THEME_REFRESH_LOG.get(theme)
+            if _post_log:
+                theme_last_refreshed_at       = _post_log
+                theme_next_refresh_allowed_at = _theme_refresh_next_allowed_iso(theme)
 
     # ── Page-aware options enrichment (Tradier, cache-first, non-blocking) ──────
     # Runs after rows are fully built and filtered so only active page symbols
@@ -3507,8 +3589,28 @@ async def get_screener_hub(
         "theme_refresh_status":         theme_refresh_status,
         "theme_last_refreshed_at":      theme_last_refreshed_at,
         "theme_next_refresh_allowed_at": theme_next_refresh_allowed_at,
+        # ── Default-screen specific refresh metadata ──────────────────────────
+        # default_last_refreshed_at = when the default theme's universe was last
+        # built (any source: warm_job, on_demand_refresh, live_build).
+        # next_default_refresh_at   = built_at + 24h (the universe is considered
+        # stale and will trigger a background FMP refresh after that point).
+        "default_last_refreshed_at": (
+            snap_generated_at if is_default_theme else None
+        ),
+        "next_default_refresh_at": (
+            (
+                lambda _dt: datetime.fromtimestamp(
+                    _dt.timestamp() + _THEME_REFRESH_STALE_H * 3600, tz=timezone.utc
+                ).isoformat()
+            )(datetime.fromisoformat(snap_generated_at.replace("Z", "+00:00")))
+            if is_default_theme and snap_generated_at else None
+        ),
+        # ── FMP refresh context ───────────────────────────────────────────────
         "fmp_refresh_used":             fmp_refresh_used,
         "fmp_refresh_reason":           fmp_refresh_reason,
+        # ── Concurrency guard metadata ────────────────────────────────────────
+        "theme_refresh_inflight_count":    len(_THEME_REFRESH_INFLIGHT),
+        "theme_refresh_concurrency_limit": _FMP_REFRESH_MAX_CONCURRENT,
         # backward-compat: keep generated_at = request time
         "generated_at":              _served_at,
         "served_at":                 _served_at,

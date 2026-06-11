@@ -603,6 +603,38 @@ def get_latest_universe(
         _put_conn(conn)
 
 
+def get_theme_last_refresh_ts(theme_key: str):
+    """Return the generated_at timestamp of the most recent snapshot for *theme_key*.
+
+    Used by _theme_refresh_allowed() as a durable fallback after a backend
+    restart empties the in-memory _THEME_REFRESH_LOG.  Returns a timezone-aware
+    datetime or None when no snapshot exists.
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT MAX(generated_at)
+            FROM public.screener_universe_snapshots
+            WHERE universe_type = 'thematic'
+              AND theme_key = %s
+            """,
+            (theme_key,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row[0] if row and row[0] else None
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] get_theme_last_refresh_ts error: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
 def universe_table_stats() -> dict:
     ensure_tables()
     conn = _get_conn()

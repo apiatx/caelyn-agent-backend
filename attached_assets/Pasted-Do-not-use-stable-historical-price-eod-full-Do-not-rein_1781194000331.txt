@@ -1,0 +1,126 @@
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not modify saved screens or daily screens unless directly needed for screener refresh metadata.
+
+Goal:
+Hardening pass for thematic Screener Hub refresh behavior after the systemic selected-theme pipeline fix.
+
+The selected-theme pipeline is now mostly correct, but we need to make sure refresh behavior is production-safe and matches product intent.
+
+Product intent:
+
+Default Thematic screen refreshes once per day.
+User-selected themes refresh on demand if stale or weak.
+Each theme can use FMP at most once per 24 hours.
+Refresh caps must survive backend restarts.
+Multiple stale theme requests must not spawn 60 simultaneous FMP refresh tasks.
+No LLM calls.
+No /stable/historical-price-eod/full.
+No ETF quote loops.
+
+Part 1 — Audit whether 24h refresh cap is durable
+
+Audit the per-theme 24h refresh cap.
+
+Report:
+
+Where theme_last_refreshed_at is stored
+Where theme_next_refresh_allowed_at is derived
+Whether the cap survives backend restart
+Whether in-flight refresh state survives restart or safely fails closed
+Whether repeated requests after restart can re-trigger FMP for the same theme inside 24h
+
+If the cap is memory-only, fix it by storing refresh metadata durably in existing snapshot metadata, Neon table, or existing screener refresh metadata store.
+
+Part 2 — Add in-flight dedupe
+
+Prevent duplicate refresh tasks for the same theme.
+
+If theme=memory_storage already has a refresh in progress:
+
+do not start another task
+return theme_refresh_status="refreshing"
+include same theme_next_refresh_allowed_at if known
+
+Track in-flight per theme safely.
+
+Part 3 — Add refresh concurrency guard
+
+The validation sweep triggered many background refresh tasks and caused resource contention.
+
+Add a safe concurrency guard for FMP theme refreshes:
+
+max 1–3 concurrent theme refreshes
+queue or skip/delay additional refreshes
+do not spawn 60 simultaneous refresh tasks
+
+Return metadata when queued/skipped:
+
+theme_refresh_status="refresh_queued" or "stale_cap_active"
+fmp_refresh_used=false for queued/skipped responses
+fmp_refresh_reason explaining why
+
+Part 4 — Confirm daily default refresh actually refreshes data once per day
+
+Audit the daily default process.
+
+Answer:
+
+Does the daily default only recompute the best theme from existing stale snapshots?
+Or does it actually refresh the default theme universe from FMP once per day?
+What updates universe_built_at for the default screen?
+What updates next_default_refresh_at / next_rebuild_at?
+
+If daily default is only recomputed from stale data, add a safe daily default refresh path:
+
+once per UTC day
+refresh selected default theme universe using same canonical theme screen pipeline
+respect FMP guardrails
+do not call FMP repeatedly
+do not call LLMs
+do not call historical full endpoint
+
+Part 5 — Response metadata
+
+Make sure responses clearly distinguish:
+
+For default screen:
+
+selected_theme
+is_default_theme=true
+universe_built_at
+default_last_refreshed_at
+next_default_refresh_at
+theme_refresh_status
+
+For selected custom theme:
+
+selected_theme
+is_default_theme=false
+theme_last_refreshed_at
+theme_next_refresh_allowed_at
+theme_refresh_status
+
+Part 6 — Validation
+
+Validate:
+
+First request to stale selected theme schedules or runs refresh.
+Second request to same selected theme inside 24h does not call FMP.
+Restart backend, request same theme again inside 24h, confirm no FMP call.
+Request multiple stale themes quickly, confirm max concurrent FMP refreshes is limited.
+Default thematic screen refreshes data once per day or clearly schedules daily refresh.
+Default no-theme response does not rely only on stale Jun 7 snapshots if daily refresh is due.
+No LLM calls.
+No /stable/historical-price-eod/full.
+No ETF quote loops.
+
+Return:
+
+files changed
+durable refresh cap design
+in-flight dedupe behavior
+concurrency guard behavior
+daily default refresh behavior
+validation results
+limitations
