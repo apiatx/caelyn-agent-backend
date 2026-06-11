@@ -1,0 +1,287 @@
+Do not call any LLM APIs: no OpenAI, Anthropic, Grok, Perplexity, etc.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not modify saved screens or daily screens unless needed to avoid saving invalid/empty custom screens.
+
+Goal:
+Fix Screener Hub thematic screening systemically across every theme in the dropdown.
+
+This is not a Memory & Storage-only issue.
+Do not patch themes one by one.
+
+Problem:
+The default theme works because it has already been enriched/hydrated. But when the user selects another theme from the dropdown, many themes return weak rows with missing market cap, sector, industry, price, volume, and exchange.
+
+The custom theme screener must work the same way as the default theme.
+
+Desired behavior:
+
+Default theme = daily recommended theme based on RS + data quality.
+Explicit user-selected theme = run/serve that exact theme through the same screener pipeline.
+Every theme in the dropdown should have consistent filtering, hydration, non-equity exclusion, and data-quality rules.
+If a selected theme is stale/missing/weak, backend should refresh that theme on demand, with a once-per-theme-per-day FMP guard.
+User clicking a different theme should not return garbage ETF placeholders or rows with missing required fields under active filters.
+No LLM calls.
+
+Part 1 — Audit current architecture for default vs selected themes
+
+Audit the full thematic path:
+
+No theme param:
+GET /api/screener-hub?tab=thematic
+Explicit theme:
+GET /api/screener-hub?tab=thematic&theme={theme_key}
+
+Find exactly where the paths diverge.
+
+Report:
+
+How default theme universe is built/enriched
+How explicit selected theme universe is built/enriched
+Whether explicit selected themes use the same:
+FMP screener/universe generation
+ETF holdings fallback
+screener_fundamentals_cache hydration
+global screener_meta fallback
+quote cache overlay
+options cache overlay
+non-equity exclusion
+market cap filter semantics
+data-quality gating
+Why non-default themes are returning rows with blank fundamentals
+Which function should become the single canonical “build selected theme screen” path
+
+Part 2 — Create one canonical theme screen pipeline
+
+Implement or refactor toward one shared function used by both default and explicit themes, conceptually:
+
+build_theme_screen(theme_key, filters, score_mode, refresh_policy)
+
+It should:
+
+Resolve and validate theme_key
+Load latest cached theme universe/snapshot
+Determine staleness/data quality
+If stale or weak and refresh allowed, refresh that theme once per 24h
+Hydrate rows from existing caches:
+screener metadata
+screener_fundamentals_cache
+quote cache
+options cache
+snapshot metadata
+Exclude non-equity junk globally
+Apply market cap, min volume, exchange filters
+Rank/score rows
+Return clean response metadata
+
+Both:
+
+default daily theme
+explicit user-selected theme
+
+must use this same path.
+
+Do not leave selected theme requests on a weaker ETF/LKG-only path.
+
+Part 3 — On-demand theme refresh policy
+
+When user explicitly selects a theme:
+GET /api/screener-hub?tab=thematic&theme={theme_key}
+
+If selected theme’s cached universe is:
+
+missing
+older than 24h
+or below minimum data quality after hydration
+
+then:
+
+trigger/run safe per-theme refresh for that theme
+cache result
+serve refreshed result if fast enough, otherwise serve current cache with refresh_scheduled metadata
+enforce one FMP refresh per theme per 24 hours
+do not call FMP repeatedly on repeated clicks
+
+Allowed:
+
+FMP stock screener/theme stock requests once per theme per day
+existing cache reads
+existing Tradier quote/options overlay schedule
+
+Not allowed:
+
+LLM calls
+historical full endpoint
+ETF quote loops
+repeated FMP refreshes on every click
+
+Add/confirm metadata:
+
+selected_theme
+selected_theme_label
+is_default_theme
+theme_refresh_status: fresh | stale_refreshed | refresh_scheduled | stale_cap_active | refresh_failed | weak_cache
+theme_last_refreshed_at
+theme_next_refresh_allowed_at
+fmp_refresh_used
+fmp_refresh_reason
+row_source_breakdown
+
+Part 4 — Required field policy for screenable stock rows
+
+For thematic stock screens, define minimum screenable row requirements.
+
+A row should not be considered screenable if it is missing critical fields after hydration.
+
+Critical fields:
+
+symbol
+price
+market_cap when market cap filter is active
+volume when min volume filter is active
+sector/industry if available from fundamentals cache, but do not hard-fail solely for sector if all other data is good
+
+When market cap filter is active:
+
+missing market_cap rows must be excluded
+unknown market cap is not “under $10B”
+
+When min volume filter is active:
+
+missing volume rows must be excluded
+unknown volume is not “above min volume”
+
+When exchange filter is active:
+
+missing exchange rows should be excluded unless there is an intentional documented policy to keep unknowns
+
+Add response metadata:
+
+rows_excluded_missing_market_cap
+rows_excluded_missing_volume
+rows_excluded_missing_exchange
+unknown_market_cap_policy
+unknown_volume_policy
+unknown_exchange_policy
+
+Part 5 — Global non-equity exclusion across all themes
+
+Apply non-equity exclusion to every theme, not just Memory.
+
+Exclude:
+
+money market funds
+currency/cash proxies
+ETFs/funds if thematic screen is supposed to show stocks
+indexes
+placeholders
+obvious invalid tickers
+
+This must be generic and applied to all themes.
+
+Add:
+
+rows_excluded_non_equity
+non_equity_policy
+
+Part 6 — Data quality gating across every theme
+
+For every selected theme response, compute:
+
+returned_rows
+rows_with_market_cap
+rows_with_price
+rows_with_volume
+rows_with_sector
+rows_with_industry
+rows_with_exchange
+metadata_coverage_pct
+
+If returned rows are weak:
+
+return low_result_quality=true
+return result_quality_warning
+do not silently pretend it is a healthy screen
+
+If returned_rows = 0:
+
+return empty rows with a clear JSON message
+do not fallback to default theme
+do not return random ETF placeholders
+
+Part 7 — Validate all dropdown themes, not just one
+
+Run a validation sweep across every theme returned by:
+
+GET /api/screener-hub/themes
+
+For each theme:
+GET /api/screener-hub?tab=thematic&theme={theme_key}&marketCapMax=10000000000
+
+Collect:
+
+selected_theme
+row_count
+rows_excluded_missing_market_cap
+rows_excluded_non_equity
+low_result_quality
+metadata_coverage_pct
+first 5 symbols
+missing critical field counts
+theme_refresh_status
+
+Report themes that are:
+
+healthy
+weak but honest warning
+empty
+broken/error
+
+Do not fix only one theme. This validation must prove consistency across the dropdown.
+
+Part 8 — Prevent “default works, selected breaks”
+
+Add a regression test or diagnostic endpoint/report if easy:
+
+default selected theme and explicit same theme should return equivalent rows
+
+Example:
+GET /api/screener-hub?tab=thematic
+if selected_theme=regional_banks
+
+Then:
+GET /api/screener-hub?tab=thematic&theme=regional_banks
+
+These should use the same pipeline and produce equivalent row quality.
+
+Part 9 — Validation cases
+
+Validate:
+
+Default thematic screen works.
+Explicit default theme works the same as no-theme default.
+Memory & Storage no longer returns non-equity placeholders.
+Semiconductors still works.
+Regional Banks still works.
+At least 10 additional random dropdown themes return either:
+clean screenable rows
+or honest low_result_quality/empty state
+but not garbage rows.
+Market cap filter excludes unknown market cap rows across every theme.
+Min volume filter excludes unknown volume rows across every theme.
+Exchange filter is consistent and documented.
+Repeated selected-theme requests do not hammer FMP inside 24h.
+No LLM calls.
+No /stable/historical-price-eod/full calls.
+No ETF quote loops.
+
+Return:
+
+root cause of default-vs-selected theme inconsistency
+files changed
+canonical pipeline implemented
+refresh policy
+FMP guardrails
+validation sweep across all dropdown themes
+examples of healthy, weak, and empty themes
+remaining limitations

@@ -1,2 +1,2 @@
 - [Chart Radar user_id pattern](chart-radar-user-id.md) — JWT middleware is disabled; parse Bearer token directly, not request.state.user_id
-- [Screener Hub theme selection](screener-hub-theme.md) — theme=None uses daily default (regional_banks); flatten-all was the bug
+- [Screener Hub thematic FMP refresh](screener-hub-thematic-refresh.md) — with_fmp_screener=True required in _background_refresh_theme; weak_cache trigger fires even for "fresh" low-coverage snapshots

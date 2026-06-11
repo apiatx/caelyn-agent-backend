@@ -187,6 +187,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _get_theme_label(theme_key: str) -> str:
+    """Return the human-readable display name for a theme key.
+
+    Falls back to the key itself (title-cased) if the registry is unavailable
+    or the theme is not found.
+    """
+    try:
+        from services.theme_rs_universe import THEME_RS_UNIVERSE
+        cfg = THEME_RS_UNIVERSE.get(theme_key) or {}
+        label = cfg.get("display_name") or cfg.get("name")
+        if label:
+            return label
+    except Exception:
+        pass
+    return theme_key.replace("_", " ").title()
+
+
 def _is_market_open() -> bool:
     """Approximate US equity hours (NYSE) — used only to pick a quote TTL."""
     try:
@@ -306,28 +323,41 @@ def _record_theme_refresh(theme_key: str) -> None:
     _THEME_REFRESH_LOG[theme_key] = datetime.now(timezone.utc).isoformat()
 
 
-async def _background_refresh_theme(theme_key: str) -> None:
+async def _background_refresh_theme(theme_key: str, *, reason: str = "stale") -> None:
     """Rebuild a theme's universe snapshot in the background.
 
-    Uses the fast path (no FMP screener, no FMP peers) to stay within the
-    cost guardrails.  A full rebuild with FMP screener is reserved for the
-    weekly admin job only.
+    Runs with_fmp_screener=True so the new snapshot contains a populated
+    screener_meta_by_symbol dict (sector, industry, market_cap, price, volume,
+    exchange, beta …).  This is the primary enrichment source for thematic rows
+    whose symbols haven't been seen by the FMP profile warm-job yet.
+
+    FMP screener calls are guarded by the _THEME_REFRESH_CAP_H (24h) cap in the
+    caller — this function itself does not re-check the cap.
     """
     try:
-        print(f"[SCREENER_HUB] background refresh started for theme={theme_key!r}")
+        print(f"[SCREENER_HUB] background refresh started for theme={theme_key!r} reason={reason!r}")
         symbols_map, breakdowns = await asyncio.wait_for(
-            _build_thematic_universe(theme_key, with_fmp_peers=False, with_fmp_screener=False),
+            _build_thematic_universe(theme_key, with_fmp_peers=False, with_fmp_screener=True),
             timeout=_THEMATIC_BUILD_TIMEOUT_S * 2,
         )
         syms = symbols_map.get(theme_key, [])
+        bd   = breakdowns.get(theme_key, {})
         if syms:
+            # Track whether the FMP screener actually produced results so
+            # callers can surface this in fmp_refresh_used metadata.
+            bd["_refresh_used_fmp_screener"] = bool(bd.get("fmp_screener_calls_used", 0) > 0)
+            bd["_refresh_reason"]            = reason
             insert_universe_snapshot(
                 universe_type="thematic", theme_key=theme_key,
                 symbols=syms, source="on_demand_refresh",
                 status="ok", ttl_days=2,
-                metadata=breakdowns.get(theme_key, {}),
+                metadata=bd,
             )
-            print(f"[SCREENER_HUB] background refresh done for {theme_key!r}: {len(syms)} symbols")
+            print(
+                f"[SCREENER_HUB] background refresh done for {theme_key!r}: "
+                f"{len(syms)} symbols, fmp_screener_calls={bd.get('fmp_screener_calls_used', 0)}, "
+                f"screener_meta_symbols={len(bd.get('screener_meta_by_symbol') or {})}"
+            )
         else:
             print(f"[SCREENER_HUB] background refresh for {theme_key!r}: no symbols returned — skipping write")
     except asyncio.TimeoutError:
@@ -2632,9 +2662,17 @@ async def get_screener_hub(
     theme_last_refreshed_at:       Optional[str]  = None
     theme_next_refresh_allowed_at: Optional[str]  = None
 
-    # Non-equity and missing market_cap exclusion counters
+    # Non-equity and missing-field exclusion counters
     rows_excluded_non_equity:          int = 0
     rows_excluded_missing_market_cap:  int = 0
+    rows_excluded_missing_volume:      int = 0
+
+    # FMP refresh tracking
+    fmp_refresh_used:   bool           = False
+    fmp_refresh_reason: Optional[str]  = None
+
+    # Row-source tally (populated during row-build loop; disclosed in response)
+    _row_source_tally: dict[str, int] = {}
 
     # ── Load overlap sets (fast disk reads; used for per-row tagging) ──────────
     # These are loaded once per request and passed through to row building.
@@ -2831,7 +2869,8 @@ async def get_screener_hub(
         # When a snapshot is stale (>_THEME_REFRESH_STALE_H hours), schedule one
         # background rebuild per day per theme.  This serves cached data immediately
         # while the refresh runs asynchronously for the next request.
-        # Cost guardrail: background refresh uses fast path (no FMP screener/peers).
+        # Background refresh now uses with_fmp_screener=True so the new snapshot
+        # contains a populated screener_meta_by_symbol for full row enrichment.
         theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme) if theme else None
         if tab == "thematic" and theme and snap_generated_at:
             try:
@@ -2841,10 +2880,12 @@ async def get_screener_hub(
                 _snap_age_h = 0.0
             if _snap_age_h > _THEME_REFRESH_STALE_H:
                 if _theme_refresh_allowed(theme):
-                    asyncio.create_task(_background_refresh_theme(theme))
+                    asyncio.create_task(_background_refresh_theme(theme, reason="stale"))
                     _record_theme_refresh(theme)
                     theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme)
                     theme_refresh_status    = "refresh_scheduled"
+                    fmp_refresh_used        = True
+                    fmp_refresh_reason      = "snapshot_stale"
                 else:
                     theme_refresh_status = "stale_cap_active"
                     _last_iso = _THEME_REFRESH_LOG.get(theme)
@@ -3049,6 +3090,15 @@ async def get_screener_hub(
             disc_src.append("watchlist_portfolio")
         if not disc_src:
             disc_src = ["unknown"]
+
+        # ── Row-source tally: bucket each row into its primary source ──────────
+        for _src_tag in disc_src:
+            _src_key = (
+                "etf_holdings" if _src_tag.startswith("etf:") else
+                "lkg_leaders"  if _src_tag.startswith("lkg:") else
+                _src_tag
+            )
+            _row_source_tally[_src_key] = _row_source_tally.get(_src_key, 0) + 1
 
         # ── Market cap: FMP cache first, screener meta fallback ──
         mcap = _to_float(f.get("market_cap") or profile.get("marketCap")
@@ -3344,10 +3394,12 @@ async def get_screener_hub(
         rows_excluded_missing_market_cap += _before - len(rows)
         filters_applied["market_cap_max"] = market_cap_max
     if min_volume is not None:
+        _before = len(rows)
         rows = [
             r for r in rows
-            if r.get("volume") is None or (r.get("volume") or 0) >= min_volume
+            if r.get("volume") is not None and (r.get("volume") or 0) >= min_volume
         ]
+        rows_excluded_missing_volume += _before - len(rows)
         filters_applied["min_volume"] = min_volume
     if exchange:
         _exch = exchange.upper()
@@ -3393,6 +3445,12 @@ async def get_screener_hub(
             "metadata_coverage_pct": _meta_cov,
         }
 
+        # Additional quality fields
+        _rw_industry  = sum(1 for r in rows if r.get("industry")  is not None)
+        _rw_exchange  = sum(1 for r in rows if r.get("exchange")  is not None)
+        _screen_quality["rows_with_industry"] = _rw_industry
+        _screen_quality["rows_with_exchange"] = _rw_exchange
+
         if _n == 0:
             _low_result_quality = True
             _result_quality_warning = (
@@ -3408,6 +3466,21 @@ async def get_screener_hub(
                 f"(metadata coverage: {_meta_cov:.0f}%). "
                 "Try a broader market cap filter or check back after the daily cache updates."
             )
+
+        # ── Weak-cache trigger: fire background refresh even when snapshot is
+        # "fresh" (< 24h old) but fundamentals coverage is poor.  This covers
+        # warm_job and on_demand_refresh snapshots built without FMP screener
+        # that returned no screener_meta_by_symbol.
+        if (
+            _low_result_quality
+            and theme_refresh_status not in ("refresh_scheduled", "stale_cap_active")
+            and _theme_refresh_allowed(theme)
+        ):
+            asyncio.create_task(_background_refresh_theme(theme, reason="weak_cache"))
+            _record_theme_refresh(theme)
+            theme_refresh_status = "weak_cache"
+            fmp_refresh_used     = True
+            fmp_refresh_reason   = "metadata_coverage_low"
 
     # ── Page-aware options enrichment (Tradier, cache-first, non-blocking) ──────
     # Runs after rows are fully built and filtered so only active page symbols
@@ -3425,12 +3498,17 @@ async def get_screener_hub(
         "theme": theme,
         # ── Theme selection metadata ──────────────────────────────────────────
         "selected_theme":            theme,
+        "selected_theme_label": (
+            _get_theme_label(theme) if theme else None
+        ),
         "is_default_theme":          is_default_theme,
         "default_theme_reason":      default_theme_reason,
         # ── Per-theme refresh status ──────────────────────────────────────────
         "theme_refresh_status":         theme_refresh_status,
         "theme_last_refreshed_at":      theme_last_refreshed_at,
         "theme_next_refresh_allowed_at": theme_next_refresh_allowed_at,
+        "fmp_refresh_used":             fmp_refresh_used,
+        "fmp_refresh_reason":           fmp_refresh_reason,
         # backward-compat: keep generated_at = request time
         "generated_at":              _served_at,
         "served_at":                 _served_at,
@@ -3448,20 +3526,29 @@ async def get_screener_hub(
                 "excluded_when_market_cap_filter_active"
                 if _mcap_filter_active else "pass_through"
             ),
-            "unknown_volume":   "pass_through",
+            "unknown_volume": (
+                "excluded_when_volume_filter_active"
+                if min_volume is not None else "pass_through"
+            ),
             "unknown_exchange": "pass_through",
             "note": (
-                "When marketCapMin or marketCapMax is active, rows with missing "
-                "market_cap are excluded — unknown market cap is not the same as "
-                "under the requested cap. "
-                "Volume and exchange filters still pass through null values."
+                "When marketCapMin/marketCapMax or minVolume is active, rows with "
+                "missing market_cap or volume are excluded — unknown values are not "
+                "'under the limit'. Exchange filter passes through unknown values."
             ),
         },
         "unknown_market_cap_policy": (
             "excluded_when_market_cap_filter_active"
             if _mcap_filter_active else "pass_through"
         ),
+        "unknown_volume_policy": (
+            "excluded_when_volume_filter_active"
+            if min_volume is not None else "pass_through"
+        ),
+        "unknown_exchange_policy": "pass_through",
         "rows_excluded_missing_market_cap": rows_excluded_missing_market_cap,
+        "rows_excluded_missing_volume":     rows_excluded_missing_volume,
+        "rows_excluded_missing_exchange":   0,
         # ── Non-equity exclusion (thematic tab) ───────────────────────────────
         "non_equity_policy":        "excluded_from_thematic_stock_screen",
         "rows_excluded_non_equity": rows_excluded_non_equity,
@@ -3469,6 +3556,8 @@ async def get_screener_hub(
         "screen_quality":        _screen_quality if _screen_quality else None,
         "low_result_quality":    _low_result_quality,
         "result_quality_warning": _result_quality_warning,
+        # ── Row-source breakdown ───────────────────────────────────────────────
+        "row_source_breakdown":  _row_source_tally if _row_source_tally else None,
         "options_columns_info": {
             "options_oi":
                 "Current total open interest contracts from cached Tradier options data for this symbol.",
