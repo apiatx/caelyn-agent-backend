@@ -725,13 +725,41 @@ async def _enrich_options_page_aware(rows: list[dict]) -> None:
             row["options_activity_score"] = db_entry.get("options_activity_score")
             row["options_updated_at"]     = db_entry.get("updated_at_iso")
             row["options_source"]         = "cache"
+            # Compute pct on-the-fly if DB stored it as null but the inputs are
+            # present (e.g. row written when prev_oi was 0 then updated, or when
+            # oi_change=0 and an old schema wrote NULL instead of 0.0).
+            _oi  = row.get("options_oi")
+            _poi = row.get("previous_options_oi")
+            if row.get("options_oi_change_pct") is None and _oi is not None:
+                if _poi is not None and _poi > 0:
+                    row["options_oi_change_pct"]    = round((_oi - _poi) / _poi * 100, 4)
+                    row["options_oi_change_status"] = "computed"
+                elif _poi is None:
+                    row["options_oi_change_status"] = "no_prior_snapshot"
+                else:
+                    row["options_oi_change_status"] = "prior_zero"
         else:
-            # Nothing in DB — use whatever LKG provided (may be None)
-            lkg_oi = row.get("options_oi")
-            row["options_updated_at"]    = None
-            row["options_source"]        = "lkg" if lkg_oi is not None else "unavailable"
-            if "options_oi_change_pct" not in row:
-                row["options_oi_change_pct"] = None
+            # Nothing in DB — use whatever LKG provided (may be None).
+            # Compute options_oi_change_pct from the LKG absolute change when
+            # previous_options_oi is known and > 0; otherwise emit a status flag
+            # so the frontend can distinguish "no prior snapshot" from "pct is 0".
+            lkg_oi  = row.get("options_oi")
+            lkg_chg = row.get("options_oi_change")
+            lkg_poi = row.get("previous_options_oi")
+            row["options_updated_at"] = None
+            row["options_source"]     = "lkg" if lkg_oi is not None else "unavailable"
+            if lkg_oi is not None and lkg_poi is not None and lkg_poi > 0 and lkg_chg is not None:
+                row["options_oi_change_pct"]    = round(lkg_chg / lkg_poi * 100, 4)
+                row["options_oi_change_status"] = "computed_lkg"
+            elif lkg_oi is not None and lkg_poi is None:
+                row["options_oi_change_pct"]    = None
+                row["options_oi_change_status"] = "no_prior_snapshot"
+            elif lkg_poi is not None and lkg_poi == 0:
+                row["options_oi_change_pct"]    = None
+                row["options_oi_change_status"] = "prior_zero"
+            else:
+                if "options_oi_change_pct" not in row:
+                    row["options_oi_change_pct"] = None
 
 
 def _load_watchlist_set() -> set[str]:
@@ -2829,6 +2857,25 @@ async def get_screener_hub(
         opts_prev_oi    = opt_detail.get("previous_options_oi")
         opts_oi_chg     = opt_detail.get("options_oi_change")
         opts_act_scr    = opt_detail.get("options_activity_score")
+        # Pre-compute pct + status from LKG data so rows beyond the
+        # _OPT_MAX_SYMS DB-enrichment cap still get correct values.
+        # _enrich_options_page_aware will override these for the first
+        # _OPT_MAX_SYMS symbols with fresher DB cache entries.
+        if (opts_oi is not None
+                and opts_prev_oi is not None
+                and opts_prev_oi > 0
+                and opts_oi_chg is not None):
+            opts_oi_chg_pct    = round(opts_oi_chg / opts_prev_oi * 100, 4)
+            opts_oi_chg_status: Optional[str] = None
+        elif opts_oi is not None and opts_prev_oi is None:
+            opts_oi_chg_pct    = None
+            opts_oi_chg_status = "no_prior_snapshot"
+        elif opts_oi is not None and opts_prev_oi == 0:
+            opts_oi_chg_pct    = None
+            opts_oi_chg_status = "prior_zero"
+        else:
+            opts_oi_chg_pct    = None
+            opts_oi_chg_status = None
 
         # ── Source confidence: computed from discovery sources + theme relevance ──
         source_conf = _get_source_confidence(disc_src, theme_relevance_score)
@@ -2885,13 +2932,14 @@ async def get_screener_hub(
             "score":               classification["score"],
             "role":                role,
             # ── Options (LKG fallback; overridden by _enrich_options_page_aware) ──
-            "options_oi":            opts_oi,
-            "previous_options_oi":   opts_prev_oi,
-            "options_oi_change":     opts_oi_chg,
-            "options_oi_change_pct": None,
-            "options_activity_score": opts_act_scr,
-            "options_updated_at":    None,
-            "options_source":        "lkg" if opts_oi is not None else "unavailable",
+            "options_oi":              opts_oi,
+            "previous_options_oi":     opts_prev_oi,
+            "options_oi_change":       opts_oi_chg,
+            "options_oi_change_pct":   opts_oi_chg_pct,
+            "options_oi_change_status": opts_oi_chg_status,
+            "options_activity_score":  opts_act_scr,
+            "options_updated_at":      None,
+            "options_source":          "lkg" if opts_oi is not None else "unavailable",
             # ── Metadata/debug ──
             "discovery_sources":     disc_src,
             "quality_flags":         quality_flags,
@@ -3055,6 +3103,19 @@ async def get_screener_hub(
         "universe_status":           snap_status,
         "row_count":                 len(rows),
         "rows": rows,
+        "options_columns_info": {
+            "options_oi":
+                "Current total open interest contracts from cached Tradier options data for this symbol.",
+            "options_oi_change_pct":
+                "Percent change in total open interest versus the previous cached options snapshot. "
+                "Percentage points: 12.5 = +12.5%, -8.2 = -8.2%. "
+                "Null when no prior snapshot exists or prior OI was zero (see options_oi_change_status).",
+            "options_activity_score":
+                "Internal score (0–10) based on cached options activity signals such as "
+                "open interest, change, and volume where available.",
+            "options_updated_at":
+                "Timestamp of the latest cached options snapshot used for this row.",
+        },
     }
 
     # ── Real snapshot freshness fields ───────────────────────────────────────

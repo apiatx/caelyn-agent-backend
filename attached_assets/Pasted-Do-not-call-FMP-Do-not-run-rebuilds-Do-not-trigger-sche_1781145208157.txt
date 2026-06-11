@@ -1,0 +1,95 @@
+Do not call FMP.
+Do not run rebuilds.
+Do not trigger scheduled jobs.
+Do not call admin refresh endpoints.
+Do not modify Screener universe logic.
+
+Goal:
+Standardize Screener Hub options fields so the frontend can display Options OI and OI Chg consistently.
+
+Current issue:
+The Screener Hub table has:
+- Options OI
+- OI Chg
+- Opt Activity
+
+Options OI is unclear to the user.
+OI Chg sometimes appears as absolute number and sometimes as percent depending on which backend field exists. We want OI Chg to always display as percent.
+
+Part 1 — Confirm current options field semantics
+
+Audit the Screener Hub options enrichment path and report:
+- options_oi definition
+- previous_options_oi definition
+- options_oi_change definition
+- options_oi_change_pct definition
+- options_activity_score definition
+- options_source definition
+- options_updated_at definition
+
+Do not change Options Flow page behavior.
+
+Part 2 — Ensure options_oi_change_pct is always available when possible
+
+For every Screener Hub row where:
+- options_oi is not null
+- previous_options_oi is not null
+- previous_options_oi > 0
+
+Return:
+- options_oi_change = options_oi - previous_options_oi
+- options_oi_change_pct = ((options_oi - previous_options_oi) / previous_options_oi) * 100
+
+Use percentage points, so:
+- 12.5 means +12.5%
+- -8.2 means -8.2%
+
+If previous_options_oi is missing or zero:
+- options_oi_change can remain absolute if currently useful
+- options_oi_change_pct should be null
+- add options_oi_change_status = "no_prior_snapshot" or "prior_zero"
+
+Part 3 — Add options metadata / definitions to Screener Hub response
+
+Add a small metadata object to GET /api/screener-hub responses:
+
+options_columns_info: {
+  options_oi: "Current total open interest contracts from cached Tradier options data for this symbol.",
+  options_oi_change_pct: "Percent change in total open interest versus the previous cached options snapshot.",
+  options_activity_score: "Internal score based on cached options activity signals such as open interest, change, and volume where available.",
+  options_updated_at: "Timestamp of the latest cached options snapshot used for this row."
+}
+
+Keep it lightweight.
+
+Part 4 — Preserve behavior
+
+Do not:
+- call Tradier synchronously
+- call FMP
+- change universe selection
+- break Thematic/Social/Bottlenecks/Watchlist+Portfolio/Fundamentals
+- change Options Flow page contracts
+
+Part 5 — Validation
+
+Use cache-read-only GETs:
+- GET /api/screener-hub?tab=thematic
+- GET /api/screener-hub?tab=social
+- GET /api/screener-hub?tab=bottlenecks
+- GET /api/screener-hub?tab=watchlist_portfolio
+
+Confirm:
+- options_oi still returns where available
+- options_oi_change_pct is present when previous_options_oi exists and > 0
+- options_oi_change_status is present when pct cannot be calculated
+- options_columns_info is present
+- no provider calls were made
+
+Final report:
+- files changed
+- options_oi definition confirmed
+- options_oi_change_pct calculation confirmed
+- sample rows with options_oi/options_oi_change_pct
+- validation result
+- any limitations
