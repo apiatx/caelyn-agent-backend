@@ -147,6 +147,60 @@ def _ddl_sql() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_screener_options_oi_updated
         ON public.screener_options_oi_cache (updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS public.screener_saved_screens (
+        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id           TEXT NOT NULL DEFAULT 'default',
+        name              TEXT NOT NULL,
+        tab               TEXT NOT NULL,
+        theme_key         TEXT NULL,
+        theme_label       TEXT NULL,
+        filters_json      JSONB NOT NULL DEFAULT '{}'::jsonb,
+        query_params_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        metadata_json     JSONB NOT NULL DEFAULT '{}'::jsonb,
+        row_count         INTEGER NOT NULL DEFAULT 0,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_saved_screens_user_created
+        ON public.screener_saved_screens (user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_saved_screens_user_tab_created
+        ON public.screener_saved_screens (user_id, tab, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS public.screener_saved_screen_rows (
+        id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        saved_screen_id        UUID NOT NULL
+            REFERENCES public.screener_saved_screens(id) ON DELETE CASCADE,
+        user_id                TEXT NOT NULL DEFAULT 'default',
+        symbol                 TEXT NOT NULL,
+        company_name           TEXT NULL,
+        market_cap             NUMERIC(24,2) NULL,
+        sector                 TEXT NULL,
+        industry               TEXT NULL,
+        beta                   NUMERIC(12,6) NULL,
+        price_at_save          NUMERIC(20,6) NULL,
+        change_percent_1d      NUMERIC(12,4) NULL,
+        volume                 NUMERIC(20,2) NULL,
+        dollar_volume          NUMERIC(20,2) NULL,
+        volume_to_market_cap   NUMERIC(16,8) NULL,
+        exchange               TEXT NULL,
+        volume_surge           NUMERIC(12,4) NULL,
+        accumulation           JSONB NULL,
+        options_oi             NUMERIC(20,2) NULL,
+        options_oi_change_pct  NUMERIC(12,4) NULL,
+        options_activity_score NUMERIC(8,4) NULL,
+        role                   TEXT NULL,
+        score                  NUMERIC(12,4) NULL,
+        hidden_gem_score       NUMERIC(12,4) NULL,
+        row_json               JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_saved_screen_rows_screen_id
+        ON public.screener_saved_screen_rows (saved_screen_id);
+    CREATE INDEX IF NOT EXISTS idx_saved_screen_rows_user_symbol
+        ON public.screener_saved_screen_rows (user_id, symbol);
+    CREATE INDEX IF NOT EXISTS idx_saved_screen_rows_symbol_created
+        ON public.screener_saved_screen_rows (symbol, created_at DESC);
     """
 
 
@@ -1188,3 +1242,596 @@ def get_screener_options_oi(symbols: list[str]) -> dict[str, dict]:
     finally:
         _put_conn(conn)
     return out
+
+
+# ── screener_saved_screens / screener_saved_screen_rows ──────────────────────
+
+import uuid as _uuid
+
+
+def _uuid4() -> str:
+    return str(_uuid.uuid4())
+
+
+def _safe_float(v) -> Optional[float]:
+    """Safely coerce a value to float, returning None on failure."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        return None if (f != f) else f  # reject NaN
+    except (TypeError, ValueError):
+        return None
+
+
+def create_saved_screen(
+    user_id: str,
+    name: str,
+    tab: str,
+    theme_key: Optional[str],
+    theme_label: Optional[str],
+    filters_json: dict,
+    query_params_json: dict,
+    metadata_json: dict,
+    rows: list,
+) -> Optional[dict]:
+    """
+    Persist a Screener Hub result snapshot.
+
+    Normalises key fields into columns on screener_saved_screen_rows and
+    preserves the full original row dict in row_json.  No provider calls.
+    Returns the created screen header dict or None on failure.
+    """
+    ensure_tables()
+    screen_id = _uuid4()
+    row_count = len(rows)
+
+    if not name or not name.strip():
+        from datetime import datetime, timezone as _tz
+        now = datetime.now(_tz.utc)
+        label = (theme_label or tab.replace("_", " ").title()).strip()
+        name = f"{label} \u2014 {now.strftime('%b %-d, %Y')}"
+
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.screener_saved_screens
+                (id, user_id, name, tab, theme_key, theme_label,
+                 filters_json, query_params_json, metadata_json, row_count)
+            VALUES (%s, %s, %s, %s, %s, %s,
+                    %s::jsonb, %s::jsonb, %s::jsonb, %s)
+            RETURNING id, name, tab, theme_key, theme_label, row_count,
+                      created_at, updated_at
+            """,
+            (
+                screen_id, user_id, name.strip(), tab,
+                theme_key or None, theme_label or None,
+                json.dumps(filters_json or {}),
+                json.dumps(query_params_json or {}),
+                json.dumps(metadata_json or {}),
+                row_count,
+            ),
+        )
+        rec = cur.fetchone()
+
+        if rows:
+            for r in rows:
+                sym = (r.get("symbol") or r.get("ticker") or "").upper()
+                if not sym:
+                    continue
+                acc = r.get("accumulation")
+                cur.execute(
+                    """
+                    INSERT INTO public.screener_saved_screen_rows
+                        (id, saved_screen_id, user_id, symbol, company_name,
+                         market_cap, sector, industry, beta, price_at_save,
+                         change_percent_1d, volume, dollar_volume,
+                         volume_to_market_cap, exchange, volume_surge,
+                         accumulation, options_oi, options_oi_change_pct,
+                         options_activity_score, role, score,
+                         hidden_gem_score, row_json)
+                    VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s,%s,
+                            %s,%s,%s,%s,%s, %s,%s,%s,%s,%s,
+                            %s,%s,%s,%s::jsonb)
+                    """,
+                    (
+                        _uuid4(), screen_id, user_id, sym,
+                        r.get("company_name") or r.get("name"),
+                        _safe_float(r.get("market_cap")),
+                        r.get("sector"),
+                        r.get("industry"),
+                        _safe_float(r.get("beta")),
+                        _safe_float(r.get("price")),
+                        _safe_float(r.get("change_percent_1d")),
+                        _safe_float(r.get("volume")),
+                        _safe_float(r.get("dollar_volume")),
+                        _safe_float(r.get("volume_to_market_cap")),
+                        r.get("exchange"),
+                        _safe_float(r.get("volume_surge")),
+                        json.dumps(acc) if acc is not None else None,
+                        _safe_float(r.get("options_oi")),
+                        _safe_float(r.get("options_oi_change_pct")),
+                        _safe_float(r.get("options_activity_score")),
+                        r.get("role"),
+                        _safe_float(r.get("score")),
+                        _safe_float(r.get("hidden_gem_score")),
+                        json.dumps(r),
+                    ),
+                )
+
+        conn.commit()
+        cur.close()
+
+        if rec:
+            return {
+                "id":          str(rec[0]),
+                "name":        rec[1],
+                "tab":         rec[2],
+                "theme_key":   rec[3],
+                "theme_label": rec[4],
+                "row_count":   rec[5],
+                "created_at":  rec[6].isoformat() if rec[6] else None,
+                "updated_at":  rec[7].isoformat() if rec[7] else None,
+            }
+        return None
+    except Exception as e:
+        print(f"[SAVED_SCREENS] create error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def list_saved_screens(
+    user_id: str,
+    tab: Optional[str] = None,
+    theme_key: Optional[str] = None,
+    limit: int = 100,
+) -> list:
+    """
+    Return saved screens for user_id, newest first.
+    Each entry includes a top_symbols_preview (first 8 symbols).
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return []
+    out: list = []
+    try:
+        cur = conn.cursor()
+        where_clauses = ["s.user_id = %s"]
+        params: list = [user_id]
+        if tab:
+            where_clauses.append("s.tab = %s")
+            params.append(tab)
+        if theme_key:
+            where_clauses.append("s.theme_key = %s")
+            params.append(theme_key)
+        where_sql = " AND ".join(where_clauses)
+
+        cur.execute(
+            f"""
+            SELECT s.id, s.name, s.tab, s.theme_key, s.theme_label,
+                   s.row_count, s.created_at, s.updated_at,
+                   s.filters_json, s.metadata_json
+            FROM public.screener_saved_screens s
+            WHERE {where_sql}
+            ORDER BY s.created_at DESC
+            LIMIT %s
+            """,
+            params + [limit],
+        )
+        rows = cur.fetchall()
+
+        screen_ids = [str(r[0]) for r in rows]
+        previews: dict[str, list] = {}
+        if screen_ids:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (saved_screen_id, symbol)
+                    saved_screen_id, symbol
+                FROM public.screener_saved_screen_rows
+                WHERE saved_screen_id = ANY(%s::uuid[])
+                ORDER BY saved_screen_id, symbol
+                """,
+                (screen_ids,),
+            )
+            for sid, sym in cur.fetchall():
+                previews.setdefault(str(sid), []).append(sym)
+
+        for r in rows:
+            sid = str(r[0])
+            all_syms = previews.get(sid, [])
+            out.append({
+                "id":                  sid,
+                "name":                r[1],
+                "tab":                 r[2],
+                "theme_key":           r[3],
+                "theme_label":         r[4],
+                "row_count":           r[5],
+                "created_at":          r[6].isoformat() if r[6] else None,
+                "updated_at":          r[7].isoformat() if r[7] else None,
+                "filters_summary":     r[8] if r[8] else {},
+                "metadata_summary":    _saved_screen_meta_summary(r[9]),
+                "top_symbols_preview": all_syms[:8],
+            })
+        cur.close()
+    except Exception as e:
+        print(f"[SAVED_SCREENS] list error: {e}")
+    finally:
+        _put_conn(conn)
+    return out
+
+
+def _saved_screen_meta_summary(meta_json) -> dict:
+    """Extract lightweight display fields from metadata_json."""
+    if not meta_json:
+        return {}
+    try:
+        m = meta_json if isinstance(meta_json, dict) else json.loads(meta_json)
+        return {k: m[k] for k in (
+            "universe_built_at", "served_at", "universe_age_hours",
+            "universe_db_source", "quote_cache_status",
+            "low_metadata_coverage", "fund_coverage_pct",
+            "eligible_fund_coverage_pct", "theme_rs",
+        ) if k in m}
+    except Exception:
+        return {}
+
+
+def get_saved_screen(user_id: str, screen_id: str) -> Optional[dict]:
+    """
+    Return saved screen header + all rows for screen_id.
+    Returns None if not found or not owned by user_id.
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, user_id, name, tab, theme_key, theme_label,
+                   filters_json, query_params_json, metadata_json,
+                   row_count, created_at, updated_at
+            FROM public.screener_saved_screens
+            WHERE id = %s::uuid AND user_id = %s
+            """,
+            (screen_id, user_id),
+        )
+        rec = cur.fetchone()
+        if not rec:
+            cur.close()
+            return None
+
+        cur.execute(
+            """
+            SELECT symbol, company_name, market_cap, sector, industry,
+                   beta, price_at_save, change_percent_1d, volume,
+                   dollar_volume, volume_to_market_cap, exchange,
+                   volume_surge, accumulation, options_oi,
+                   options_oi_change_pct, options_activity_score,
+                   role, score, hidden_gem_score, row_json, created_at
+            FROM public.screener_saved_screen_rows
+            WHERE saved_screen_id = %s::uuid
+            ORDER BY symbol
+            """,
+            (screen_id,),
+        )
+        rows = []
+        for row in cur.fetchall():
+            rows.append({
+                "symbol":                str(row[0]),
+                "company_name":          row[1],
+                "market_cap":            float(row[2])  if row[2]  is not None else None,
+                "sector":                row[3],
+                "industry":              row[4],
+                "beta":                  float(row[5])  if row[5]  is not None else None,
+                "price_at_save":         float(row[6])  if row[6]  is not None else None,
+                "change_percent_1d":     float(row[7])  if row[7]  is not None else None,
+                "volume":                float(row[8])  if row[8]  is not None else None,
+                "dollar_volume":         float(row[9])  if row[9]  is not None else None,
+                "volume_to_market_cap":  float(row[10]) if row[10] is not None else None,
+                "exchange":              row[11],
+                "volume_surge":          float(row[12]) if row[12] is not None else None,
+                "accumulation":          row[13],
+                "options_oi":            float(row[14]) if row[14] is not None else None,
+                "options_oi_change_pct": float(row[15]) if row[15] is not None else None,
+                "options_activity_score":float(row[16]) if row[16] is not None else None,
+                "role":                  row[17],
+                "score":                 float(row[18]) if row[18] is not None else None,
+                "hidden_gem_score":      float(row[19]) if row[19] is not None else None,
+                "row_json":              row[20] if isinstance(row[20], dict) else {},
+                "saved_at":              row[21].isoformat() if row[21] else None,
+            })
+
+        cur.close()
+        return {
+            "id":                str(rec[0]),
+            "user_id":           rec[1],
+            "name":              rec[2],
+            "tab":               rec[3],
+            "theme_key":         rec[4],
+            "theme_label":       rec[5],
+            "filters_json":      rec[6] if isinstance(rec[6], dict) else {},
+            "query_params_json": rec[7] if isinstance(rec[7], dict) else {},
+            "metadata_json":     rec[8] if isinstance(rec[8], dict) else {},
+            "row_count":         rec[9],
+            "created_at":        rec[10].isoformat() if rec[10] else None,
+            "updated_at":        rec[11].isoformat() if rec[11] else None,
+            "rows":              rows,
+        }
+    except Exception as e:
+        print(f"[SAVED_SCREENS] get error: {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def delete_saved_screen(user_id: str, screen_id: str) -> bool:
+    """
+    Delete a saved screen (and its rows via CASCADE).
+    Returns True if a row was deleted, False otherwise.
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM public.screener_saved_screens
+            WHERE id = %s::uuid AND user_id = %s
+            """,
+            (screen_id, user_id),
+        )
+        deleted = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        return deleted
+    except Exception as e:
+        print(f"[SAVED_SCREENS] delete error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def _get_current_prices_from_cache(symbols: list) -> dict:
+    """
+    Read current prices from screener_quote_cache (no live fetch).
+    Returns {symbol: price_float}.
+    """
+    if not symbols:
+        return {}
+    syms = sorted({s.upper() for s in symbols if s})
+    conn = _get_conn()
+    if conn is None:
+        return {}
+    out: dict = {}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT symbol, price FROM public.screener_quote_cache WHERE symbol = ANY(%s)",
+            (syms,),
+        )
+        for sym, price in cur.fetchall():
+            if price is not None:
+                out[str(sym)] = float(price)
+        cur.close()
+    except Exception as e:
+        print(f"[SAVED_SCREENS] price cache read error: {e}")
+    finally:
+        _put_conn(conn)
+    return out
+
+
+def get_saved_screen_insights(
+    user_id: str,
+    tab: Optional[str] = None,
+    theme_key: Optional[str] = None,
+    lookback_days: int = 90,
+) -> dict:
+    """
+    Compute cross-screen insights over the user's saved screens.
+
+    No provider calls — reads only screener_saved_screens,
+    screener_saved_screen_rows, and screener_quote_cache.
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return {"error": "db_unavailable"}
+    try:
+        from datetime import datetime, timedelta, timezone as _tz
+        cur = conn.cursor()
+
+        # ── 1. Load all screens + rows in window ─────────────────────────────
+        where = ["s.user_id = %s", "s.created_at >= NOW() - INTERVAL '%s days'" % int(lookback_days)]
+        params: list = [user_id]
+        if tab:
+            where.append("s.tab = %s")
+            params.append(tab)
+        if theme_key:
+            where.append("s.theme_key = %s")
+            params.append(theme_key)
+        where_sql = " AND ".join(where)
+
+        cur.execute(
+            f"""
+            SELECT s.id, s.tab, s.theme_key, s.theme_label, s.created_at,
+                   r.symbol, r.price_at_save
+            FROM public.screener_saved_screens s
+            JOIN public.screener_saved_screen_rows r ON r.saved_screen_id = s.id
+            WHERE {where_sql}
+            ORDER BY s.created_at ASC
+            """,
+            params,
+        )
+        raw = cur.fetchall()
+        cur.close()
+    except Exception as e:
+        print(f"[SAVED_SCREENS] insights load error: {e}")
+        _put_conn(conn)
+        return {"error": str(e)}
+    finally:
+        _put_conn(conn)
+
+    if not raw:
+        return {
+            "saved_screen_count": 0,
+            "date_range": None,
+            "recurring_tickers": [],
+            "newly_appearing_tickers": [],
+            "disappeared_tickers": [],
+            "tickers_by_appearance_count": {},
+            "tickers_week_over_week": [],
+            "themes_by_frequency": {},
+            "emerging_themes": [],
+            "best_performers_since_first_saved": [],
+            "worst_performers_since_first_saved": [],
+        }
+
+    # ── 2. Organise data ──────────────────────────────────────────────────────
+    screens: dict = {}   # screen_id -> {tab, theme_key, theme_label, created_at, symbols}
+    # symbol -> list of {screen_id, created_at, price_at_save}
+    sym_appearances: dict = {}
+
+    for sid, s_tab, s_tk, s_tl, s_created, symbol, price in raw:
+        sid = str(sid)
+        if sid not in screens:
+            screens[sid] = {
+                "tab": s_tab, "theme_key": s_tk, "theme_label": s_tl,
+                "created_at": s_created, "symbols": set(),
+            }
+        screens[sid]["symbols"].add(symbol)
+        sym_appearances.setdefault(symbol, []).append({
+            "screen_id": sid,
+            "created_at": s_created,
+            "price_at_save": float(price) if price is not None else None,
+        })
+
+    sorted_screens = sorted(screens.values(), key=lambda s: s["created_at"])
+    saved_screen_count = len(screens)
+
+    if sorted_screens:
+        date_range = {
+            "earliest": sorted_screens[0]["created_at"].isoformat(),
+            "latest":   sorted_screens[-1]["created_at"].isoformat(),
+        }
+    else:
+        date_range = None
+
+    # ── 3. Tickers by appearance count ───────────────────────────────────────
+    tickers_by_count = {sym: len(apps) for sym, apps in sym_appearances.items()}
+    recurring = sorted(
+        [sym for sym, cnt in tickers_by_count.items() if cnt >= 2],
+        key=lambda s: -tickers_by_count[s],
+    )
+
+    # ── 4. Newly appearing / disappeared ─────────────────────────────────────
+    newly_appearing: list = []
+    disappeared: list = []
+    if len(sorted_screens) >= 2:
+        latest_syms  = sorted_screens[-1]["symbols"]
+        prior_syms   = set().union(*[s["symbols"] for s in sorted_screens[:-1]])
+        previous_syms = sorted_screens[-2]["symbols"]
+        newly_appearing = sorted(latest_syms - prior_syms)
+        disappeared     = sorted(previous_syms - latest_syms)
+
+    # ── 5. Week-over-week tickers ─────────────────────────────────────────────
+    sym_weeks: dict = {}
+    for sym, apps in sym_appearances.items():
+        weeks = set()
+        for app in apps:
+            dt = app["created_at"]
+            iso = dt.isocalendar()
+            weeks.add((iso[0], iso[1]))
+        sym_weeks[sym] = weeks
+    tickers_wow = sorted(
+        [sym for sym, wks in sym_weeks.items() if len(wks) >= 2],
+        key=lambda s: -len(sym_weeks[s]),
+    )
+
+    # ── 6. Themes by frequency ────────────────────────────────────────────────
+    themes_by_freq: dict = {}
+    for s in sorted_screens:
+        key = s.get("theme_key") or s.get("tab") or "unknown"
+        themes_by_freq[key] = themes_by_freq.get(key, 0) + 1
+
+    # ── 7. Emerging themes ────────────────────────────────────────────────────
+    emerging: list = []
+    if len(sorted_screens) >= 2:
+        mid = len(sorted_screens) // 2
+        recent_screens = sorted_screens[mid:]
+        older_screens  = sorted_screens[:mid]
+        recent_tf: dict = {}
+        older_tf: dict = {}
+        for s in recent_screens:
+            k = s.get("theme_key") or s.get("tab") or "unknown"
+            recent_tf[k] = recent_tf.get(k, 0) + 1
+        for s in older_screens:
+            k = s.get("theme_key") or s.get("tab") or "unknown"
+            older_tf[k] = older_tf.get(k, 0) + 1
+        emerging = [k for k in recent_tf if recent_tf[k] > older_tf.get(k, 0)]
+
+    # ── 8. Performance since first saved ─────────────────────────────────────
+    # first_price per symbol = price_at_save in their earliest appearance
+    first_prices: dict = {}
+    latest_saved_prices: dict = {}
+    for sym, apps in sym_appearances.items():
+        sorted_apps = sorted(apps, key=lambda a: a["created_at"])
+        first_prices[sym]         = sorted_apps[0]["price_at_save"]
+        latest_saved_prices[sym]  = sorted_apps[-1]["price_at_save"]
+
+    syms_with_price = [s for s, p in first_prices.items() if p and p > 0]
+    current_prices  = _get_current_prices_from_cache(syms_with_price)
+
+    performances: list = []
+    for sym in syms_with_price:
+        fp = first_prices[sym]
+        cp = current_prices.get(sym) or latest_saved_prices.get(sym)
+        if cp is None or cp <= 0:
+            continue
+        pct = round((cp - fp) / fp * 100, 2)
+        performances.append({
+            "symbol":          sym,
+            "first_price":     fp,
+            "latest_price":    cp,
+            "price_source":    "quote_cache" if sym in current_prices else "last_saved",
+            "performance_pct": pct,
+        })
+
+    performances.sort(key=lambda p: p["performance_pct"], reverse=True)
+    best_performers  = performances[:10]
+    worst_performers = list(reversed(performances[-10:]))
+
+    return {
+        "saved_screen_count":            saved_screen_count,
+        "date_range":                    date_range,
+        "recurring_tickers":             recurring,
+        "newly_appearing_tickers":       newly_appearing,
+        "disappeared_tickers":           disappeared,
+        "tickers_by_appearance_count":   dict(sorted(
+            tickers_by_count.items(), key=lambda x: -x[1]
+        )),
+        "tickers_week_over_week":        tickers_wow,
+        "themes_by_frequency":           dict(sorted(
+            themes_by_freq.items(), key=lambda x: -x[1]
+        )),
+        "emerging_themes":               emerging,
+        "best_performers_since_first_saved":  best_performers,
+        "worst_performers_since_first_saved": worst_performers,
+    }

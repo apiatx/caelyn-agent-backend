@@ -1,0 +1,240 @@
+Backend only.
+Do not touch frontend.
+Do not modify current Screener Hub screen logic.
+Do not call FMP.
+Do not call Tradier live.
+Do not call options providers live.
+Do not trigger rebuilds.
+Do not run scheduled jobs.
+Do not call admin refresh endpoints.
+
+Goal:
+Add Saved Screens for Screener Hub using the rows and metadata that already exist.
+
+This feature should save the current visible Screener Hub results as a dated snapshot, let the user reopen saved screens later, and provide insights across saved screens.
+
+Important:
+Do not re-run the screener when saving or opening a saved screen.
+Do not fetch fresh provider data when saving or opening a saved screen.
+Do not call FMP or Tradier live for this feature.
+Use existing cached quote data only where needed for insights.
+Reuse existing auth/user separation patterns from Watchlist/Portfolio if available.
+
+Part 1 — Add Neon schema
+
+Add a migration for:
+
+1. screener_saved_screens
+
+Fields:
+
+* id UUID primary key
+* user_id text or UUID nullable only if the app’s auth helper does not provide a stable user id yet
+* name text not null
+* tab text not null
+* theme_key text nullable
+* theme_label text nullable
+* filters_json jsonb default '{}'
+* query_params_json jsonb default '{}'
+* metadata_json jsonb default '{}'
+* row_count integer default 0
+* created_at timestamptz default now()
+* updated_at timestamptz default now()
+
+2. screener_saved_screen_rows
+
+Fields:
+
+* id UUID primary key
+* saved_screen_id UUID references screener_saved_screens(id) on delete cascade
+* user_id text or UUID nullable/matching parent
+* symbol text not null
+* company_name text nullable
+* market_cap numeric nullable
+* sector text nullable
+* industry text nullable
+* beta numeric nullable
+* price_at_save numeric nullable
+* change_percent_1d numeric nullable
+* volume numeric nullable
+* dollar_volume numeric nullable
+* volume_to_market_cap numeric nullable
+* exchange text nullable
+* volume_surge numeric nullable
+* accumulation jsonb nullable
+* options_oi numeric nullable
+* options_oi_change_pct numeric nullable
+* options_activity_score numeric nullable
+* role text nullable
+* score numeric nullable
+* hidden_gem_score numeric nullable
+* row_json jsonb default '{}'
+* created_at timestamptz default now()
+
+Indexes:
+
+* screener_saved_screens(user_id, created_at desc)
+* screener_saved_screens(user_id, tab, created_at desc)
+* screener_saved_screen_rows(saved_screen_id)
+* screener_saved_screen_rows(user_id, symbol)
+* screener_saved_screen_rows(symbol, created_at desc)
+
+Do not include Div/Yr / last_annual_dividend as a normalized field. If present in row_json, preserving it there is fine, but it is no longer a display column.
+
+Part 2 — Endpoints
+
+Add endpoints:
+
+POST /api/screener-hub/saved-screens
+
+Body:
+{
+"name": optional string,
+"tab": "thematic" | "social" | "bottlenecks" | "watchlist_portfolio" | "fundamentals",
+"theme_key": optional string,
+"theme_label": optional string,
+"filters": object,
+"query_params": object,
+"rows": array of current visible rows,
+"metadata": object optional
+}
+
+Behavior:
+
+* Save exactly the rows provided by the frontend/current visible table.
+* Do not re-run the screener.
+* Do not call providers.
+* Normalize key fields into columns and preserve full original row_json.
+* Include current metadata such as universe_built_at, served_at, universe_age_hours, universe_db_source, quote_cache_status, low_metadata_coverage, coverage metrics, applied filters, and theme RS metadata if provided.
+* If name is missing, generate:
+  "{Theme or Tab} — {MMM D, YYYY}"
+
+GET /api/screener-hub/saved-screens
+
+Returns saved screens list:
+
+* id
+* name
+* tab
+* theme_key
+* theme_label
+* row_count
+* created_at
+* updated_at
+* filters_json summary
+* metadata_json summary
+* top_symbols_preview, first 5–10 symbols from saved rows
+
+GET /api/screener-hub/saved-screens/{id}
+
+Returns:
+
+* saved screen metadata
+* saved rows
+* no provider calls
+
+DELETE /api/screener-hub/saved-screens/{id}
+
+Deletes saved screen and rows.
+
+Important:
+Register /saved-screens/insights before /saved-screens/{id} so “insights” is not treated as an id.
+
+GET /api/screener-hub/saved-screens/insights
+
+Query params:
+
+* tab optional
+* theme_key optional
+* lookback_days optional, default 90
+
+Return:
+
+* recurring_tickers
+* newly_appearing_tickers
+* disappeared_tickers
+* tickers_by_appearance_count
+* tickers_week_over_week
+* themes_by_frequency
+* emerging_themes
+* best_performers_since_first_saved
+* worst_performers_since_first_saved
+* saved_screen_count
+* date_range
+
+Part 3 — Insight logic
+
+Recurring ticker:
+
+* symbol appears in 2+ saved screens in the lookback window
+
+Week-over-week ticker:
+
+* symbol appears in saved screens across at least 2 different calendar weeks
+
+Newly appearing:
+
+* symbol appears in the most recent saved screen but did not appear in the prior saved screen or prior N saved screens
+
+Disappeared:
+
+* symbol appeared in the previous saved screen but not the most recent saved screen
+
+Themes by frequency:
+
+* count saved screens by theme_key/theme_label
+
+Emerging themes:
+
+* theme appears more frequently in the most recent portion of the lookback window than earlier
+
+Performance since first saved:
+
+* first_price = first saved price_at_save for symbol
+* latest_price = latest existing cached quote price if safely readable from current quote cache
+* fallback latest_price = latest saved price_at_save
+* performance_pct = ((latest_price - first_price) / first_price) * 100
+* if price unavailable, performance_pct = null
+
+Do not call FMP.
+Do not call Tradier live.
+Do not refresh quotes.
+Use only existing quote cache if already available and safe.
+
+Part 4 — User separation
+
+Use the same user/account identity pattern already used by Watchlist and Portfolio storage.
+
+Do not expose one user’s saved screens to another user.
+
+If there is no stable authenticated user helper in this route yet:
+
+* use the same fallback used by Watchlist/Portfolio routes
+* document exactly what user id source was used
+
+Part 5 — Validation
+
+Do not call FMP.
+Do not call Tradier live.
+Do not run rebuilds.
+
+Validate with local/sample rows only:
+
+1. POST saved screen with 3 fake/sample rows.
+2. GET saved screens list.
+3. GET saved screen detail.
+4. GET insights.
+5. DELETE test saved screen.
+6. Confirm the deleted screen is gone.
+7. Confirm no provider calls occurred.
+
+Return:
+
+* files changed
+* migration path
+* endpoint contracts
+* auth/user separation approach
+* normalized fields saved
+* insight fields returned
+* validation result
+* any limitations

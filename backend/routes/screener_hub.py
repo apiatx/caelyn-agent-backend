@@ -711,3 +711,183 @@ async def bottlenecks_current(
         response["selected_from_universe_count"] = result["selected_from_universe_count"]
 
     return JSONResponse(content=response)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Saved Screens — Parts 1–5
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from typing import Any, Dict, List
+from pydantic import BaseModel, Field
+
+
+# ── User identity helper (same pattern as chart_radar_router._get_user_id) ───
+def _get_user_id(request: Request) -> str:
+    """
+    Resolve user_id for the request.
+
+    Priority:
+      1. request.state.user_id (middleware, if ever re-enabled)
+      2. Authorization: Bearer <JWT> → payload["sub"]
+      3. "default" — unauthenticated / local-dev fallback
+
+    Matches the pattern in services/chart_radar_router.py.
+    """
+    uid = getattr(request.state, "user_id", None)
+    if uid:
+        return str(uid)
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        try:
+            from auth import verify_token
+            payload = verify_token(token)
+            sub = payload.get("sub")
+            if sub:
+                return str(sub)
+        except Exception:
+            pass
+    return "default"
+
+
+# ── Pydantic model for POST body ─────────────────────────────────────────────
+
+class SaveScreenRequest(BaseModel):
+    model_config = {"extra": "allow"}
+
+    name:         Optional[str]        = None
+    tab:          str
+    theme_key:    Optional[str]        = None
+    theme_label:  Optional[str]        = None
+    filters:      Dict[str, Any]       = Field(default_factory=dict)
+    query_params: Dict[str, Any]       = Field(default_factory=dict)
+    rows:         List[Dict[str, Any]] = Field(default_factory=list)
+    metadata:     Dict[str, Any]       = Field(default_factory=dict)
+
+
+# ── POST /api/screener-hub/saved-screens ─────────────────────────────────────
+
+@router.post("/api/screener-hub/saved-screens")
+async def save_screen(request: Request, body: SaveScreenRequest):
+    """
+    Save the current visible Screener Hub results as a dated snapshot.
+    Does NOT re-run the screener or call any provider.
+    """
+    from data.screener_hub_store import create_saved_screen
+    user_id = _get_user_id(request)
+    try:
+        result = create_saved_screen(
+            user_id=user_id,
+            name=body.name or "",
+            tab=body.tab,
+            theme_key=body.theme_key,
+            theme_label=body.theme_label,
+            filters_json=body.filters,
+            query_params_json=body.query_params,
+            metadata_json=body.metadata,
+            rows=body.rows,
+        )
+        if result is None:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to save screen — check server logs"},
+            )
+        return JSONResponse(status_code=201, content={"status": "created", **result})
+    except Exception as e:
+        print(f"[SAVED_SCREENS] POST error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── GET /api/screener-hub/saved-screens ──────────────────────────────────────
+
+@router.get("/api/screener-hub/saved-screens")
+async def list_saved_screens_endpoint(
+    request: Request,
+    tab:        Optional[str] = Query(None),
+    theme_key:  Optional[str] = Query(None),
+    limit:      int           = Query(100, ge=1, le=500),
+):
+    """Return saved screens list (newest first) for the authenticated user."""
+    from data.screener_hub_store import list_saved_screens
+    user_id = _get_user_id(request)
+    try:
+        screens = list_saved_screens(
+            user_id=user_id, tab=tab, theme_key=theme_key, limit=limit,
+        )
+        return JSONResponse(content={
+            "status": "ok",
+            "count":   len(screens),
+            "screens": screens,
+        })
+    except Exception as e:
+        print(f"[SAVED_SCREENS] GET list error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── GET /api/screener-hub/saved-screens/insights ─────────────────────────────
+# IMPORTANT: registered BEFORE /{id} so "insights" is not treated as a UUID.
+
+@router.get("/api/screener-hub/saved-screens/insights")
+async def saved_screens_insights(
+    request:      Request,
+    tab:          Optional[str] = Query(None),
+    theme_key:    Optional[str] = Query(None),
+    lookback_days: int          = Query(90, ge=1, le=365),
+):
+    """
+    Cross-screen insights: recurring tickers, performance, theme frequency,
+    week-over-week persistence.  Read-only — no provider calls.
+    """
+    from data.screener_hub_store import get_saved_screen_insights
+    user_id = _get_user_id(request)
+    try:
+        insights = get_saved_screen_insights(
+            user_id=user_id,
+            tab=tab,
+            theme_key=theme_key,
+            lookback_days=lookback_days,
+        )
+        return JSONResponse(content={"status": "ok", **insights})
+    except Exception as e:
+        print(f"[SAVED_SCREENS] insights error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── GET /api/screener-hub/saved-screens/{id} ─────────────────────────────────
+
+@router.get("/api/screener-hub/saved-screens/{screen_id}")
+async def get_saved_screen_endpoint(request: Request, screen_id: str):
+    """Return a saved screen with all its rows. No provider calls."""
+    from data.screener_hub_store import get_saved_screen
+    user_id = _get_user_id(request)
+    try:
+        screen = get_saved_screen(user_id=user_id, screen_id=screen_id)
+        if screen is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Saved screen '{screen_id}' not found"},
+            )
+        return JSONResponse(content={"status": "ok", **screen})
+    except Exception as e:
+        print(f"[SAVED_SCREENS] GET detail error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ── DELETE /api/screener-hub/saved-screens/{id} ───────────────────────────────
+
+@router.delete("/api/screener-hub/saved-screens/{screen_id}")
+async def delete_saved_screen_endpoint(request: Request, screen_id: str):
+    """Delete a saved screen and all its rows (CASCADE). User-scoped."""
+    from data.screener_hub_store import delete_saved_screen
+    user_id = _get_user_id(request)
+    try:
+        deleted = delete_saved_screen(user_id=user_id, screen_id=screen_id)
+        if not deleted:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Saved screen '{screen_id}' not found"},
+            )
+        return JSONResponse(content={"status": "deleted", "id": screen_id})
+    except Exception as e:
+        print(f"[SAVED_SCREENS] DELETE error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
