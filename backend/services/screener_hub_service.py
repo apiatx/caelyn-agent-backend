@@ -118,6 +118,9 @@ def _compute_screener_cache_key(
         "min_volume":       float(min_volume)      if min_volume      is not None else None,
         "exchange":         exchange.upper()        if exchange        else None,
         "schema_version":   schema_version,
+        # Separate cache-bust version — increment when market cap units, filter
+        # logic, or universe building is corrected so old entries are ignored.
+        "cache_version":    SCREENER_QUERY_CACHE_VERSION,
     }
     # Drop None values so optional params don't change the key when absent
     params = {k: v for k, v in raw.items() if v is not None}
@@ -343,6 +346,10 @@ _INLINE_REFRESH_TIMEOUT_S = 12.0  # max seconds to wait for inline selected-them
 # the new pipeline runs immediately.  After the bypass refresh the 24h cap
 # applies normally to the fresh snapshot.
 THEMATIC_REFRESH_SCHEMA_VERSION = "v2_inline_fmp_industry_map"
+# Separate version for the query cache key — increment any time market cap
+# unit normalization, filter logic, or universe building is corrected.
+# Old cache entries with a different version hash are automatically ignored.
+SCREENER_QUERY_CACHE_VERSION    = "v2_marketcap_units_ai_networking_fix"
 _THEME_VERSION_REFRESHED: set[str] = set()  # themes that have done bypass this session
 
 # ── In-flight refresh tracking ─────────────────────────────────────────────────
@@ -1692,20 +1699,24 @@ async def _fmp_industry_screener(
                 return industry, [], True, local_fr
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
+                # Build params conditionally: omit marketCapLowerThan when
+                # market_cap_upper is None (no upper bound, allows mega-caps).
+                _fmp_screen_params: dict = {
+                    "industry":               industry,
+                    "isEtf":                  "false",
+                    "isFund":                 "false",
+                    "isActivelyTrading":      "true",
+                    "marketCapMoreThan":       str(market_cap_lower or 50_000_000),
+                    "volumeMoreThan":          str(min_volume),
+                    "includeAllShareClasses":  "false",
+                    "limit":                  screener_limit,
+                    "apikey":                 api_key,
+                }
+                if market_cap_upper is not None:
+                    _fmp_screen_params["marketCapLowerThan"] = str(market_cap_upper)
                 resp = await client.get(
                     f"{FMP_BASE}/company-screener",
-                    params={
-                        "industry":               industry,
-                        "isEtf":                  "false",
-                        "isFund":                 "false",
-                        "isActivelyTrading":      "true",
-                        "marketCapMoreThan":       str(market_cap_lower or 50_000_000),
-                        "marketCapLowerThan":      str(market_cap_upper or 10_000_000_000),
-                        "volumeMoreThan":          str(min_volume),
-                        "includeAllShareClasses":  "false",
-                        "limit":                  screener_limit,
-                        "apikey":                 api_key,
-                    },
+                    params=_fmp_screen_params,
                 )
             if _gov is not None:
                 _gov.record_call()
@@ -1872,8 +1883,23 @@ async def _build_thematic_universe(
 
     for key in keys:
         meta = (THEME_RS_UNIVERSE or {}).get(key) or {}
-        proxy_etfs:     list[str] = [s.upper() for s in (meta.get("proxy_symbols") or []) if s]
+        _proxy_type = meta.get("proxy_type") or "etf"
+        # proxy_symbols are ETF tickers only when proxy_type="etf".
+        # For proxy_type="custom" the symbols are stock tickers (e.g. ANET, AVGO)
+        # and must NOT be used as ETF filenames for disk holdings lookup.
+        # They are merged into candidate_syms instead, flowing through Source F.
+        if _proxy_type == "etf":
+            proxy_etfs: list[str] = [s.upper() for s in (meta.get("proxy_symbols") or []) if s]
+        else:
+            proxy_etfs = []
         candidate_syms: list[str] = [s.upper() for s in (meta.get("candidate_symbols") or []) if s]
+        # For custom-proxy themes, also pull in proxy_symbols as candidate anchors
+        # (proxy_symbols and candidate_symbols may overlap; dedup in Source F loop).
+        if _proxy_type != "etf":
+            for _ps in (meta.get("proxy_symbols") or []):
+                _psu = _ps.upper() if _ps else ""
+                if _psu and _psu not in candidate_syms:
+                    candidate_syms.append(_psu)
 
         etf_holdings_syms:    list[str]  = []   # Source A
         lkg_syms:             list[str]  = []   # Source B
@@ -1925,11 +1951,17 @@ async def _build_thematic_universe(
         theme_cfg  = themes_cfg.get(key) or {}
         industries = theme_cfg.get("fmp_industries") or []
         # v2 schema fields with legacy compat fallbacks
-        max_mcap = int(
-            theme_cfg.get("max_market_cap")
-            or theme_cfg.get("market_cap_upper_default")
-            or 10_000_000_000
-        )
+        # Respect explicit null in config (null → no upper cap, allows mega-caps).
+        # Themes like ai_networking set max_market_cap=null so ANET/AVGO/MRVL
+        # are not excluded by the FMP screener's default $10B ceiling.
+        if "max_market_cap" in theme_cfg and theme_cfg["max_market_cap"] is None:
+            max_mcap = None  # no upper cap
+        else:
+            max_mcap = int(
+                theme_cfg.get("max_market_cap")
+                or theme_cfg.get("market_cap_upper_default")
+                or 10_000_000_000
+            )
         min_mcap = int(
             theme_cfg.get("min_market_cap")
             or theme_cfg.get("market_cap_lower_default")
@@ -2007,10 +2039,19 @@ async def _build_thematic_universe(
                     sources_failed.append("fmp_peers")
 
         # ── Source F: candidate_symbols — static fallback ─────────────────────
+        # For ETF-proxy themes, skip symbols already discovered dynamically
+        # (ETF holdings / LKG / screener) to avoid bloating the universe.
+        # For custom-proxy themes, candidate_symbols ARE the canonical universe
+        # (e.g. ANET, AVGO, MRVL for ai_networking).  They must always appear
+        # regardless of whether the FMP screener also returned them — the
+        # screener sorts smallest-cap first and caps at SCREENER_RESERVE slots,
+        # so mega-cap canonical symbols would otherwise be silently dropped.
+        _custom_proxy = _proxy_type != "etf"
         for sym in candidate_syms:
-            if sym not in seen_dynamic:
-                static_syms.append(sym)
-                sources_by_symbol.setdefault(sym, []).append("static_seed")
+            if sym not in seen_dynamic or _custom_proxy:
+                if sym not in static_syms:  # dedupe within static_syms
+                    static_syms.append(sym)
+                    sources_by_symbol.setdefault(sym, []).append("static_seed")
 
         # ── Combine with SCREENER_RESERVE guarantee ───────────────────────────
         # ETF+LKG fill the base; screener candidates get guaranteed slots so they

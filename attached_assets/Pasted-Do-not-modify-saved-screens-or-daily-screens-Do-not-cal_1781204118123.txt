@@ -1,0 +1,188 @@
+Do not modify saved screens or daily screens.
+Do not call any LLM APIs.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not hardcode final screener results.
+Do not create a new parallel theme universe if an existing canonical theme universe already exists.
+
+Goal:
+Fix Screener Hub selected-theme behavior by using the existing canonical Theme Universe as the base source of tickers, then hydrating/filtering/ranking it correctly.
+
+Important correction:
+Do NOT build a brand-new theme universe from scratch.
+
+The app already has a Theme Universe / thematic mapping system. Screener Hub should use that as the canonical base for selected themes.
+
+FMP screener/industry data should be used to enrich, hydrate, validate, and optionally expand the canonical universe — not replace it.
+
+Current concern:
+Selected themes like AI Networking are not returning the expected stocks. The backend appears to be using a separate FMP screener path with a hidden <$10B discovery cap or old snapshot cache, while the app already has theme-universe mappings that may contain the correct tickers.
+
+Part 1 — Audit all theme universe sources
+
+Identify every theme/ticker source used in the app:
+
+canonical Theme Universe used by the Themes page
+watchlist theme/category mappings if separate
+Screener Hub thematic snapshots
+theme_rs_universe.py / theme proxy config
+theme_fmp_industry_map.json
+FMP screener candidates
+ETF holdings
+static/proxy seeds
+any cache tables/files that store theme membership
+
+For each source, report:
+
+file/table/function name
+whether it is canonical or supplemental
+whether it includes AI Networking / Memory / Datacenter / Semiconductors mappings
+sample tickers for AI Networking, Semiconductors, Memory & Storage
+whether it has market cap restrictions baked in
+
+Part 2 — Choose canonical base
+
+Use the existing app Theme Universe as the base candidate set for Screener Hub selected-theme requests.
+
+Do not replace it with FMP-only results.
+
+Expected pipeline:
+
+Resolve selected theme_key.
+Load canonical theme universe tickers for that theme.
+Merge optional supplemental candidates from:
+FMP screener/industry mapping
+ETF holdings
+existing watchlist/theme overlap
+static/proxy seeds
+Deduplicate.
+Hydrate with fundamentals/market cap/sector/industry/price/volume/exchange/options.
+Exclude non-equity junk.
+Apply market cap/min volume/exchange filters.
+Score/rank using existing Screener Hub logic.
+Return rows.
+
+Part 3 — Seeds/proxies are not final results
+
+Static/proxy tickers are allowed only as supplemental candidates and sanity-check anchors.
+
+Do not make hardcoded final results.
+
+If a theme has canonical universe tickers, those should dominate the candidate pool over seed/proxy-only rows.
+
+Add response/debug metadata:
+
+canonical_theme_universe_count
+fmp_dynamic_candidate_count
+etf_holdings_candidate_count
+seed_or_proxy_count
+final_candidate_count_before_filters
+final_row_count_after_filters
+candidate_source_breakdown
+
+Part 4 — Remove hidden discovery-time market cap ceilings
+
+Market cap ranges should be post-hydration filters only.
+
+Search for and audit:
+
+marketCapLowerThan=10000000000
+market_cap_max=10000000000
+max_market_cap=10000000000
+mcap > 10B filters
+any <$10B cap used before user filters
+
+If a <$10B cap exists only for the Hidden Gem/default lens, that is fine.
+If it limits the full selected-theme candidate universe, remove it or move it to post-hydration filtering.
+
+The default Custom market cap range remains:
+
+marketCapMin=50000000
+marketCapMax=10000000000
+
+But that should be applied after the full candidate universe is built and hydrated.
+
+Part 5 — AI Networking acceptance
+
+For AI Networking, prove whether the canonical Theme Universe contains:
+
+ANET
+MRVL
+AVGO
+CSCO/ORCL or other relevant large caps if present
+smaller networking/optical/datacenter networking names if present
+
+Then validate:
+
+All:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&scoreMode=true
+
+$100B+:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=100000000000&scoreMode=true
+
+Custom $50M–$10B:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=50000000&marketCapMax=10000000000&scoreMode=true
+
+Expected:
+
+All should include the broad canonical + dynamic candidate pool.
+$100B+ should include relevant mega-cap leaders if they exist in canonical/dynamic sources and pass hydration.
+Custom should show smaller candidates if present.
+Results should not be limited to only FMP <$10B screener candidates.
+Results should not be only hardcoded seed tickers.
+
+Part 6 — Validate more themes
+
+Validate the canonical-universe-first pipeline across:
+
+ai_networking
+semiconductors
+memory_storage
+photonics_lasers
+datacenter_infra
+robotics_automation
+quantum
+clean_energy
+biotech
+
+For each, report:
+
+canonical_theme_universe_count
+fmp_dynamic_candidate_count
+seed_or_proxy_count
+final_row_count
+top 20 symbols
+candidate source breakdown
+market cap distribution:
+under_1b
+1b_10b
+10b_100b
+100b_plus
+
+Part 7 — Cache correctness
+
+The 7-day query cache must include a build/cache version reflecting this canonical-universe-first logic.
+
+Increment query cache version so old FMP-only/small-cap-only cached responses are ignored.
+
+Do not cache weak results if:
+
+canonical_theme_universe_count > 0 but final rows are seed-only
+dynamic/canonical candidate count is zero
+rows_after_filters = 0 due to missing hydration
+refresh_schema_version is stale
+
+Part 8 — Final report
+
+Return:
+
+whether Screener Hub was using canonical Theme Universe or a separate FMP/proxy path
+root cause of selected themes missing expected tickers
+files changed
+canonical source chosen
+how FMP is now used: enrich/expand, not replace
+whether any hidden <$10B discovery caps remain
+AI Networking All / $100B+ / Custom results
+validation table across listed themes
+cache version/invalidation change
+no LLM/no full historical/no ETF quote loop confirmation

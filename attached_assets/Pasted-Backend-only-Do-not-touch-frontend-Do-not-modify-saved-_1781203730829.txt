@@ -1,0 +1,214 @@
+Backend only.
+
+Do not touch frontend.
+Do not modify saved screens or daily screens.
+Do not call any LLM APIs.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+
+Goal:
+Fix/verify AI Networking $100B+ market cap filtering and prevent the 7-day query cache from preserving incorrect screener results.
+
+Problem:
+The backend validation said:
+“100B+ yields 0 rows for ai_networking because all symbols are <$100B.”
+
+That conclusion appears wrong. AI Networking should include mega-cap names like:
+
+* ANET
+* MRVL
+* AVGO
+* possibly CSCO / ORCL / etc depending on mapping
+
+ANET and MRVL are clearly not <$100B in a normal market-cap sense. So either the current ai_networking universe is missing them, their market_cap is missing/wrong, the filter is wrong, or the new 7-day query cache is serving stale/bad results.
+
+Part 1 — Hard audit exact AI Networking rows before filters
+
+Run this endpoint with cache bypassed or after temporarily deleting/ignoring the query cache for this exact key:
+
+GET /api/screener-hub?tab=thematic&theme=ai_networking&scoreMode=true
+
+Dump the full row pool before market cap filtering:
+
+* symbol
+* company_name
+* market_cap raw value
+* formatted market cap if available
+* price
+* volume
+* exchange
+* row source
+* fmp_screener source yes/no
+* screener_meta present yes/no
+* fundamentals cache present yes/no
+* quote cache present yes/no
+
+Specifically answer:
+
+* Is ANET present before filters?
+* Is MRVL present before filters?
+* Is AVGO present before filters?
+* What are their exact raw market_cap values?
+* Are those raw values in dollars or millions/billions?
+* Are any market caps null?
+
+Part 2 — Hard audit $100B+ filter
+
+Run with cache bypassed or after deleting the exact query cache key:
+
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=100000000000&scoreMode=true
+
+Report:
+
+* request URL
+* parsed marketCapMin
+* rows_before_filters
+* rows_after_filters
+* first 20 rows before filters with market_cap
+* first 20 rows after filters with market_cap
+* rows_excluded_missing_market_cap
+* rows_excluded_by_marketCapMin
+* rows_excluded_by_marketCapMax if applicable
+
+Specifically answer:
+
+* Why did ANET not appear?
+* Why did MRVL not appear?
+* Were they absent before filtering or excluded by filtering?
+* If excluded, what exact condition excluded them?
+
+Part 3 — Fix market cap unit/field bugs if found
+
+If market_cap is stored in millions/billions in any path, normalize it to dollars before filters.
+
+If different fields are used inconsistently:
+
+* market_cap
+* marketCap
+* market_capitalization
+* mktCap
+
+standardize the row builder so market_cap is always numeric dollars.
+
+Then filters should use only normalized market_cap.
+
+Part 4 — Fix AI Networking FMP screener mapping if mega-caps are missing
+
+If ANET/MRVL/AVGO are absent from the post-refresh AI Networking universe:
+
+* find why
+* check fmp_industries
+* check max_market_cap / min_market_cap constraints
+* check sector/industry filters
+* check whether FMP screener endpoint is capped or paginated
+* check whether only small/mid caps were requested
+* check whether static seed names were replaced instead of merged
+
+Fix so AI Networking universe includes both:
+
+* large/mega-cap leaders like ANET, AVGO, MRVL, CSCO/ORCL if returned by mapping
+* smaller names from FMP where available
+
+Do not hardcode only those symbols unless they already exist as seed/proxy names. Prefer fixing the mapping/pipeline.
+
+Part 5 — Query cache safety fix
+
+The new 7-day query cache can preserve wrong results.
+
+Add a way to bypass or invalidate the query cache when:
+
+* refresh_schema_version changes
+* market cap normalization logic changes
+* fmp_industries mapping changes
+* build_pipeline_version changes
+* query_cache response is missing expected metadata
+* a previous empty/miss_not_stored_empty validation was based on stale/bad pre-fix data
+
+Increment the cache/build version now, because market cap filtering and AI Networking universe logic are being corrected.
+
+Example:
+SCREENER_QUERY_CACHE_VERSION = "v2_marketcap_units_ai_networking_fix"
+
+Include this version in the cache key and response metadata.
+
+Part 6 — Do not cache bad/weak/empty query results
+
+Confirm:
+
+* empty results are not cached
+* low_result_quality results are not cached unless explicitly allowed
+* results with rows_after_filters=0 are not cached
+* results missing critical metadata for active filters are not cached
+
+If needed, update cache write rules:
+Only cache if:
+
+* rows_after_filters > 0
+* low_result_quality is false OR row_count >= a reasonable threshold
+* refresh_schema_version current
+* selected_theme present
+* market cap fields normalized
+
+Part 7 — Validation
+
+Run these with query cache bypassed first, then again with cache enabled.
+
+A. AI Networking — All:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&scoreMode=true
+
+Expected:
+
+* ANET and/or MRVL/AVGO present if in universe
+* raw market_cap values shown and correct
+* fmp_screener rows present
+
+B. AI Networking — $100B+:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=100000000000&scoreMode=true
+
+Expected:
+
+* ANET/MRVL/AVGO or other >$100B names appear if present in All
+* rows_after_filters > 0 unless proven no >$100B names exist in the refreshed universe
+* no “all symbols <$100B” claim unless raw market cap dump proves it
+
+C. AI Networking — $10B–$100B:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=10000000000&marketCapMax=100000000000&scoreMode=true
+
+Expected:
+
+* CRDO/ALAB or similar mid/large names if present
+
+D. AI Networking — Custom $50M–$10B:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=50000000&marketCapMax=10000000000&scoreMode=true
+
+Expected:
+
+* smaller names if FMP returned them
+* if zero, prove with raw market caps
+
+E. Repeat B immediately:
+Expected:
+
+* query_cache_status hit only after the correct result was stored
+* same >$100B rows return from cache
+* no FMP call on hit
+
+F. Expire/invalidate cache:
+Expected:
+
+* cache version mismatch forces rebuild
+* old bad cache is ignored
+
+Part 8 — Final report
+
+Return:
+
+* whether ANET/MRVL/AVGO were present before filtering
+* their exact raw market_cap values
+* why $100B+ previously returned 0
+* whether it was cache, units, stale universe, FMP mapping, or filter logic
+* files changed
+* cache version change
+* AI Networking All / $100B+ / $10B–$100B / Custom row counts
+* first 20 symbols for each range
+* confirmation no LLM/no full historical/no ETF quote loops

@@ -8,6 +8,36 @@
   },
   "notes": "Config-driven theme → FMP company-screener industry mappings. One FMP call per industry during scheduled/admin rebuilds only. fmp_industries = union(core + adjacent + weak_adjacent). Quality filters (min_market_cap=$50M, min_volume=100k) enforced client-side since FMP ignores those params.",
   "themes": {
+    "ai_networking": {
+      "fmp_industries": [
+        "Communication Equipment",
+        "Telecom Services",
+        "Computer Networks"
+      ],
+      "core_industries": [
+        "Communication Equipment"
+      ],
+      "adjacent_industries": [
+        "Telecom Services"
+      ],
+      "weak_adjacent_industries": [
+        "Computer Networks"
+      ],
+      "positive_keywords": [
+        "networking", "switches", "routers", "optical", "transceiver",
+        "silicon photonics", "interconnect", "data center network",
+        "AI networking", "ethernet", "infiniband", "DSP", "PAM4"
+      ],
+      "negative_keywords": [
+        "blank check", "acquisition corp", "spac", "shell company",
+        "wireless carrier", "telecom operator", "cable provider"
+      ],
+      "min_market_cap": 500000000,
+      "max_market_cap": null,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["mid", "large", "mega"],
+      "notes": "AI networking infrastructure: switches, optical interconnects, networking silicon. No upper market cap — ANET ($193B), AVGO ($2.28T), MRVL ($172B) are core names. Mega-caps enter via static seed (candidate_symbols), large-caps via FMP Communication Equipment screener."
+    },
     "semiconductors": {
       "fmp_industries": [
         "Semiconductors",
