@@ -1,0 +1,198 @@
+Backend only.
+Do not touch frontend.
+Do not call any LLM APIs: no OpenAI, Anthropic, Grok, Perplexity, etc.
+Do not modify unrelated pages or services.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops that were removed.
+
+Goal:
+Make Screener Hub a real cached screener, not a static default screen.
+
+The intended behavior:
+
+* Backend recommends the best default Thematic screen once per day based on RS + metadata quality.
+* User can select a different theme, market cap range, min volume, exchange, and score mode.
+* Apply should return the selected cached slice.
+* If a selected theme’s screener universe is stale, backend may refresh that theme from FMP once per day, cache it, and then return updated results.
+* Tradier quote/options overlays should keep using the existing page-aware/cache refresh schedule.
+* No LLM calls.
+
+Part 1 — Audit current control behavior
+
+Audit GET /api/screener-hub for these params:
+
+* tab
+* theme
+* marketCapMin / market_cap_min
+* marketCapMax / market_cap_max
+* minVolume / min_volume
+* exchange
+* scoreMode / score_mode
+
+Run cache-safe checks for:
+
+1. thematic default with no theme param
+2. thematic theme=semiconductors
+3. thematic theme=regional_banks
+4. thematic theme=healthcare
+5. thematic theme=semiconductors&marketCapMin=50000000&marketCapMax=1000000000
+6. thematic theme=semiconductors&minVolume=1000000
+7. thematic theme=semiconductors&exchange=NASDAQ
+
+Report:
+
+* Does backend receive each param?
+* Does backend apply each param?
+* Do row counts and top symbols change?
+* Does default_theme override requested theme incorrectly?
+* Are rows cleared/rebuilt per request?
+* Are filters applied before or after score/rank?
+* Are filters reflected in filters_applied, rows_before_filters, rows_after_filters?
+
+Do not change code until this audit is complete.
+
+Part 2 — Fix selected theme behavior if broken
+
+If user requests:
+GET /api/screener-hub?tab=thematic&theme=semiconductors
+
+Backend must return the Semiconductors cached universe, not the default theme.
+
+Default theme should only be used when theme param is missing.
+
+Rules:
+
+* Missing theme param → use daily default_theme
+* Explicit theme param → use requested theme
+* Invalid theme param → return a clear JSON error or fallback with warning, but do not silently return unrelated default rows
+
+Part 3 — Fix filters if broken
+
+Market cap filters:
+
+* Apply marketCapMin/marketCapMax to selected theme’s cached rows.
+* If market cap is missing and a market cap filter is active, either:
+
+  * exclude row and report rows_excluded_missing_market_cap
+  * or keep row only if current behavior intentionally allows unknowns, but response must clearly state unknown_market_cap_policy.
+* Do not call FMP just to fill missing fields during normal GET.
+
+Min volume:
+
+* Apply minVolume to selected rows using cached/current quote volume.
+* Report in filters_applied.
+
+Exchange:
+
+* Apply exchange filter using cached metadata.
+* Report in filters_applied.
+
+Score mode:
+
+* Confirm current scoreMode behavior.
+* If scoreMode is not implemented, return score_mode_status: "not_implemented" rather than pretending it changed ranking.
+* If implemented, make sure row order changes appropriately.
+
+Part 4 — Daily default screener refresh
+
+Add or update a daily refresh path so the default Thematic screen is recalculated once per day.
+
+Daily refresh should:
+
+* rebuild/refresh theme screener universes using FMP only once per day per theme or per configured daily batch
+* recompute theme RS/default_theme using latest available RS data
+* apply metadata quality gating
+* update default_theme and theme list
+* update universe_built_at / next_rebuild_at clearly
+
+Do not wait a full week if the selected RS/default logic is daily-sensitive.
+If RS/default selection uses 1D or recent quote/return inputs, daily refresh is required.
+If some longer-window RS fields are 7D/30D, those can still be computed daily from cached/ranged historical data.
+
+Important:
+Use ranged historical endpoints only if historical data is needed.
+Do not use /stable/historical-price-eod/full.
+
+Part 5 — Per-theme on-demand refresh with daily cap
+
+When user explicitly requests a theme via GET /api/screener-hub?tab=thematic&theme={theme_key}, backend should check staleness.
+
+If that theme’s screener universe is older than 24 hours:
+
+* refresh that theme from FMP once
+* cache the result
+* overlay existing Tradier quote/options cache/refresh path
+* return the refreshed or refreshing result depending on implementation
+
+If that theme was already refreshed within the last 24 hours:
+
+* serve cached universe
+* do not call FMP again
+
+Add metadata:
+
+* theme_refresh_status: "fresh" | "stale_refreshed" | "refreshing" | "cached_recent" | "refresh_failed"
+* theme_last_refreshed_at
+* theme_next_refresh_allowed_at
+* fmp_refresh_used: true/false
+* fmp_refresh_reason
+
+This prevents repeated user clicks from hammering FMP.
+
+Part 6 — Cost guards
+
+Add hard guards:
+
+* max one FMP screener/universe refresh per theme per 24 hours unless admin force flag is used
+* no FMP refresh in saved-screen mode
+* no FMP refresh from list/detail/insights endpoints
+* no LLM calls anywhere in this flow
+* no /stable/historical-price-eod/full
+
+Part 7 — Response metadata cleanup
+
+Make response metadata easier for frontend:
+
+* universe_built_at = when selected theme universe was built/refreshed
+* served_at = response time
+* quote_cache_status = quote freshness
+* default_theme = daily default when applicable
+* selected_theme = actual theme being served
+* selected_theme_label
+* is_default_theme: boolean
+* next_rebuild_at or next_default_refresh_at
+* theme_refresh_status
+* theme_last_refreshed_at
+* theme_next_refresh_allowed_at
+
+Part 8 — Validation
+
+Validate without LLM calls.
+
+Run:
+
+1. GET thematic default → returns daily default theme
+2. GET thematic semiconductors → returns semiconductor rows, not default rows
+3. GET thematic regional_banks → returns regional bank rows
+4. GET thematic healthcare → returns healthcare rows or warning, not default rows
+5. Apply marketCap filters → row counts change correctly
+6. Apply minVolume filter → row counts change correctly
+7. Apply exchange filter → row counts change correctly
+8. Confirm response includes selected_theme and is_default_theme
+9. Confirm user selecting a stale theme triggers at most one FMP refresh in 24h
+10. Confirm repeated requests for same theme do not call FMP again within 24h
+11. Confirm Tradier quote/options overlay behavior unchanged
+12. Confirm no LLM calls
+13. Confirm no /stable/historical-price-eod/full calls
+
+Return:
+
+* audit findings
+* files changed
+* exact param behavior
+* refresh policy implemented
+* daily default refresh behavior
+* per-theme on-demand refresh behavior
+* FMP guardrails
+* validation results
+* limitations

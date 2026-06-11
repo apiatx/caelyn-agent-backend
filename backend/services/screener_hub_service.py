@@ -32,7 +32,7 @@ import asyncio
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -195,6 +195,89 @@ def _get_theme_state_from_lkg(theme_key: str) -> dict:
     except Exception as e:
         print(f"[SCREENER_HUB] _get_theme_state_from_lkg {theme_key} error: {e}")
     return {}
+
+
+# ── Daily default theme cache ──────────────────────────────────────────────────
+# Caches the daily default theme to avoid mid-day RS-score drift.
+# Resets automatically when the UTC calendar date changes.
+_DAILY_DEFAULT: dict = {}  # {"date": "YYYY-MM-DD", "theme": str, "reason": str}
+
+# ── Per-theme on-demand refresh log ───────────────────────────────────────────
+# Tracks when each theme last triggered a background universe refresh.
+# Enforces a 24-hour cap so page loads can only schedule one rebuild per theme per day.
+_THEME_REFRESH_LOG: dict[str, str] = {}  # theme_key → ISO timestamp of last scheduled refresh
+_THEME_REFRESH_CAP_H   = 24.0   # hours between permitted on-demand background refreshes
+_THEME_REFRESH_STALE_H = 24.0   # snapshot age (hours) that triggers a background refresh
+
+
+def _get_daily_default_theme() -> tuple[Optional[str], str]:
+    """Return (theme_key, reason) for today's default theme, cached for the calendar day.
+
+    Calls _theme_metadata() on cache miss (first call of the day).  All subsequent
+    calls within the same UTC day return the cached value so the selected theme stays
+    stable across requests even if RS scores update mid-day.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _DAILY_DEFAULT.get("date") == today and _DAILY_DEFAULT.get("theme"):
+        return _DAILY_DEFAULT["theme"], _DAILY_DEFAULT.get("reason", "daily_cache")
+    try:
+        meta = _theme_metadata()
+        dt   = meta.get("default_theme")
+        rsn  = meta.get("default_theme_reason") or "computed"
+        _DAILY_DEFAULT.update({"date": today, "theme": dt, "reason": rsn})
+        return dt, rsn
+    except Exception as e:
+        print(f"[SCREENER_HUB] daily default theme compute error: {e}")
+        return None, "error"
+
+
+def _theme_refresh_allowed(theme_key: str) -> bool:
+    """Return True if at least _THEME_REFRESH_CAP_H hours have elapsed since the last
+    on-demand background refresh was scheduled for this theme.
+    """
+    last_iso = _THEME_REFRESH_LOG.get(theme_key)
+    if not last_iso:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last_iso)
+        return (datetime.now(timezone.utc) - last_dt).total_seconds() > _THEME_REFRESH_CAP_H * 3600
+    except Exception:
+        return True
+
+
+def _record_theme_refresh(theme_key: str) -> None:
+    """Log the current timestamp as the last refresh time for *theme_key*."""
+    _THEME_REFRESH_LOG[theme_key] = datetime.now(timezone.utc).isoformat()
+
+
+async def _background_refresh_theme(theme_key: str) -> None:
+    """Rebuild a theme's universe snapshot in the background.
+
+    Uses the fast path (no FMP screener, no FMP peers) to stay within the
+    cost guardrails.  A full rebuild with FMP screener is reserved for the
+    weekly admin job only.
+    """
+    try:
+        print(f"[SCREENER_HUB] background refresh started for theme={theme_key!r}")
+        symbols_map, breakdowns = await asyncio.wait_for(
+            _build_thematic_universe(theme_key, with_fmp_peers=False, with_fmp_screener=False),
+            timeout=_THEMATIC_BUILD_TIMEOUT_S * 2,
+        )
+        syms = symbols_map.get(theme_key, [])
+        if syms:
+            insert_universe_snapshot(
+                universe_type="thematic", theme_key=theme_key,
+                symbols=syms, source="on_demand_refresh",
+                status="ok", ttl_days=2,
+                metadata=breakdowns.get(theme_key, {}),
+            )
+            print(f"[SCREENER_HUB] background refresh done for {theme_key!r}: {len(syms)} symbols")
+        else:
+            print(f"[SCREENER_HUB] background refresh for {theme_key!r}: no symbols returned — skipping write")
+    except asyncio.TimeoutError:
+        print(f"[SCREENER_HUB] background refresh timed out for theme={theme_key!r}")
+    except Exception as exc:
+        print(f"[SCREENER_HUB] background refresh error for theme={theme_key!r}: {exc}")
 
 
 # ── ETF holdings disk reader ───────────────────────────────────────────────────
@@ -2486,6 +2569,13 @@ async def get_screener_hub(
     # Quote-refresh tracking
     quote_refresh_started: bool = False
 
+    # Theme selection tracking
+    is_default_theme:              bool           = False
+    default_theme_reason:          Optional[str]  = None
+    theme_refresh_status:          str            = "not_applicable"
+    theme_last_refreshed_at:       Optional[str]  = None
+    theme_next_refresh_allowed_at: Optional[str]  = None
+
     # ── Load overlap sets (fast disk reads; used for per-row tagging) ──────────
     # These are loaded once per request and passed through to row building.
     social_overlap:     set[str]        = _load_social_overlap()
@@ -2497,6 +2587,31 @@ async def get_screener_hub(
 
     # ── Resolve universe ──
     if tab == "thematic":
+        # ── Validate theme against known registry ─────────────────────────────
+        if theme:
+            try:
+                from services.theme_rs_universe import THEME_RS_UNIVERSE as _TRU
+                if theme not in _TRU:
+                    return {
+                        "status":              "error",
+                        "error_code":          "UNKNOWN_THEME",
+                        "error":               (
+                            f"Unknown theme '{theme}'. "
+                            "See GET /api/screener-hub/themes for valid keys."
+                        ),
+                        "tab":                 tab,
+                        "theme":               theme,
+                        "selected_theme":      theme,
+                        "is_default_theme":    False,
+                        "generated_at":        _now_iso(),
+                        "rows":                [],
+                        "filters_applied":     {},
+                        "rows_before_filters": 0,
+                        "rows_after_filters":  0,
+                    }
+            except Exception:
+                pass  # registry load error — proceed and let snapshot lookup be the gate
+
         # Pull theme state from Themes page LKG (reuse, don't duplicate).
         if theme:
             theme_state_meta = _get_theme_state_from_lkg(theme)
@@ -2578,22 +2693,114 @@ async def get_screener_hub(
                         metadata=thematic_breakdown,
                     )
         else:
-            # No theme → flatten symbols across all themes (de-dupe).
-            # with_fmp_peers=False to avoid 55 × peer API calls.
-            symbols_map, breakdowns = await _build_thematic_universe(None, with_fmp_peers=False)
-            seen: set[str] = set()
-            for syms in symbols_map.values():
-                for s in syms:
-                    if s not in seen:
-                        seen.add(s)
-                        symbols.append(s)
-            snap_status = "live_aggregated"
-            universe_source = "live"
+            # No theme → select today's daily default theme.
+            # Never flatten all themes: that produces 200+ unrelated symbols and
+            # is not a useful screener view.
+            _def_theme, _def_reason = _get_daily_default_theme()
+            if _def_theme:
+                theme = _def_theme
+                is_default_theme    = True
+                default_theme_reason = _def_reason
+                # Re-load LKG theme state for the resolved default
+                theme_state_meta = _get_theme_state_from_lkg(theme)
+                # Load the default theme's snapshot (same path as explicit theme)
+                snap = get_latest_universe("thematic", theme)
+                if snap and snap.get("symbols"):
+                    snap_generated_at = str(snap.get("generated_at") or "") or None
+                    snap_expires_at   = str(snap.get("expires_at")   or "") or None
+                    snap_db_source    = snap.get("source") or "unknown"
+                    raw_syms   = list(snap.get("symbols") or [])
+                    stock_syms = [s for s in raw_syms if s not in _ALL_PROXY_ETFS]
+                    if stock_syms:
+                        symbols = raw_syms
+                        snap_meta = snap.get("metadata") or {}
+                        thematic_breakdown = snap_meta if isinstance(snap_meta, dict) else {}
+                    else:
+                        # ETF-only snapshot — rebuild live (fast path, no FMP)
+                        print(f"[SCREENER_HUB] default theme {theme!r} snapshot is ETF-only — rebuilding live")
+                        try:
+                            symbols_map, breakdowns = await asyncio.wait_for(
+                                _build_thematic_universe(theme, with_fmp_peers=False),
+                                timeout=_THEMATIC_BUILD_TIMEOUT_S,
+                            )
+                        except asyncio.TimeoutError:
+                            symbols_map, breakdowns = {}, {}
+                        symbols = symbols_map.get(theme, [])
+                        thematic_breakdown = breakdowns.get(theme, {})
+                        snap_status    = "live_fallback"
+                        universe_source = "live"
+                else:
+                    # No snapshot for default theme — build live
+                    try:
+                        symbols_map, breakdowns = await asyncio.wait_for(
+                            _build_thematic_universe(theme, with_fmp_peers=False),
+                            timeout=_THEMATIC_BUILD_TIMEOUT_S,
+                        )
+                    except asyncio.TimeoutError:
+                        symbols_map, breakdowns = {}, {}
+                    symbols = symbols_map.get(theme, [])
+                    thematic_breakdown = breakdowns.get(theme, {})
+                    snap_status    = "live_fallback"
+                    universe_source = "live"
+            else:
+                # No default theme available (empty registry or all snapshots cold)
+                return {
+                    "status":              "empty",
+                    "error_code":          "NO_DEFAULT_THEME",
+                    "message": (
+                        "No default theme could be selected. "
+                        "Theme snapshots may be cold — run an admin rebuild to populate them."
+                    ),
+                    "tab":                 tab,
+                    "theme":               None,
+                    "selected_theme":      None,
+                    "is_default_theme":    False,
+                    "generated_at":        _now_iso(),
+                    "rows":                [],
+                    "filters_applied":     {},
+                    "rows_before_filters": 0,
+                    "rows_after_filters":  0,
+                }
 
         # Strip ETF proxies from the final rows list for thematic tab.
         # They may remain in the cached universe for fundamentals warm-job
         # coverage, but the screener table should show stocks only.
         symbols = [s for s in symbols if s not in _ALL_PROXY_ETFS] or symbols
+
+        # ── Per-theme background refresh with 24h cap ─────────────────────────
+        # When a snapshot is stale (>_THEME_REFRESH_STALE_H hours), schedule one
+        # background rebuild per day per theme.  This serves cached data immediately
+        # while the refresh runs asynchronously for the next request.
+        # Cost guardrail: background refresh uses fast path (no FMP screener/peers).
+        theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme) if theme else None
+        if tab == "thematic" and theme and snap_generated_at:
+            try:
+                _snap_dt    = datetime.fromisoformat(snap_generated_at.replace("Z", "+00:00"))
+                _snap_age_h = (datetime.now(timezone.utc) - _snap_dt).total_seconds() / 3600
+            except Exception:
+                _snap_age_h = 0.0
+            if _snap_age_h > _THEME_REFRESH_STALE_H:
+                if _theme_refresh_allowed(theme):
+                    asyncio.create_task(_background_refresh_theme(theme))
+                    _record_theme_refresh(theme)
+                    theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme)
+                    theme_refresh_status    = "refresh_scheduled"
+                else:
+                    theme_refresh_status = "stale_cap_active"
+                    _last_iso = _THEME_REFRESH_LOG.get(theme)
+                    if _last_iso:
+                        try:
+                            _last_dt         = datetime.fromisoformat(_last_iso)
+                            _next_allowed_ts = _last_dt.timestamp() + _THEME_REFRESH_CAP_H * 3600
+                            theme_next_refresh_allowed_at = datetime.fromtimestamp(
+                                _next_allowed_ts, tz=timezone.utc
+                            ).isoformat()
+                        except Exception:
+                            pass
+            else:
+                theme_refresh_status = "fresh"
+        elif tab == "thematic" and theme and not snap_generated_at:
+            theme_refresh_status = "live_build"
 
     elif tab == "social":
         snap = get_latest_universe("social")
@@ -3092,6 +3299,14 @@ async def get_screener_hub(
         "status": "ok",
         "tab": tab,
         "theme": theme,
+        # ── Theme selection metadata ──────────────────────────────────────────
+        "selected_theme":            theme,
+        "is_default_theme":          is_default_theme,
+        "default_theme_reason":      default_theme_reason,
+        # ── Per-theme refresh status ──────────────────────────────────────────
+        "theme_refresh_status":         theme_refresh_status,
+        "theme_last_refreshed_at":      theme_last_refreshed_at,
+        "theme_next_refresh_allowed_at": theme_next_refresh_allowed_at,
         # backward-compat: keep generated_at = request time
         "generated_at":              _served_at,
         "served_at":                 _served_at,
@@ -3103,6 +3318,16 @@ async def get_screener_hub(
         "universe_status":           snap_status,
         "row_count":                 len(rows),
         "rows": rows,
+        # ── Filter policy ─────────────────────────────────────────────────────
+        "filter_policy": {
+            "unknown_market_cap": "pass_through",
+            "unknown_volume":     "pass_through",
+            "unknown_exchange":   "pass_through",
+            "note": (
+                "Rows with null/unknown filter fields always pass through — "
+                "they are not excluded so un-enriched but valid symbols remain visible."
+            ),
+        },
         "options_columns_info": {
             "options_oi":
                 "Current total open interest contracts from cached Tradier options data for this symbol.",

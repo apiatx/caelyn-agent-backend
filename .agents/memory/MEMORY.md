@@ -1,1 +1,2 @@
 - [Chart Radar user_id pattern](chart-radar-user-id.md) — JWT middleware is disabled; parse Bearer token directly, not request.state.user_id
+- [Screener Hub theme selection](screener-hub-theme.md) — theme=None uses daily default (regional_banks); flatten-all was the bug
