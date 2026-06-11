@@ -29,6 +29,8 @@ Guardrails enforced here (see CLAUDE.md):
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json as _json_mod
 import os
 import re
 import time
@@ -58,6 +60,8 @@ from data.screener_hub_store import (
     get_all_thematic_screener_meta,
     upsert_screener_options_oi,
     get_screener_options_oi,
+    get_query_cache,
+    set_query_cache,
 )
 
 
@@ -81,6 +85,44 @@ _MIN_DYN_BEFORE_PEERS = 8
 # Max seconds for a live thematic universe build during a page-load request.
 # If exceeded, return a safe 200 partial/empty instead of letting the proxy 502.
 _THEMATIC_BUILD_TIMEOUT_S = 18.0
+
+# ── Query-cache helpers ───────────────────────────────────────────────────────
+
+def _compute_screener_cache_key(
+    tab: str,
+    theme: Optional[str],
+    category: Optional[str],
+    score_mode: bool,
+    coc_filter: bool,
+    market_cap_min: Optional[float],
+    market_cap_max: Optional[float],
+    min_volume: Optional[float],
+    exchange: Optional[str],
+    schema_version: str,
+) -> str:
+    """
+    Deterministic SHA-256 cache key for a live screener query.
+
+    Null/empty values are omitted so that
+    theme=ai_networking (no minVolume) and theme=ai_networking&minVolume=0
+    produce the same key when minVolume=0 is semantically equivalent to absent.
+    """
+    raw: dict = {
+        "tab":              tab,
+        "theme":            (theme or "").lower() or None,
+        "category":         (category or "").lower() or None,
+        "score_mode":       bool(score_mode),
+        "coc_filter":       bool(coc_filter),
+        "market_cap_min":   float(market_cap_min) if market_cap_min is not None else None,
+        "market_cap_max":   float(market_cap_max) if market_cap_max is not None else None,
+        "min_volume":       float(min_volume)      if min_volume      is not None else None,
+        "exchange":         exchange.upper()        if exchange        else None,
+        "schema_version":   schema_version,
+    }
+    # Drop None values so optional params don't change the key when absent
+    params = {k: v for k, v in raw.items() if v is not None}
+    canonical = _json_mod.dumps(params, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 # Path to the config-driven theme → FMP industry mapping.
 # Loaded lazily by _load_industry_map_config().
@@ -2705,6 +2747,11 @@ async def get_screener_hub(
     Fundamentals come from screener_fundamentals_cache (no live FMP fetch).
     Quotes come from screener_quote_cache; we refresh stale rows for *just*
     the active page before returning.
+
+    Quote freshness policy for query cache hits:
+      Full response is cached for 7 days as-is (hit_static_7d).
+      Price/volume fields may be up to 7 days stale on a cache hit.
+      This avoids a complex overlay rewrite and keeps the cache layer thin.
     """
     ensure_tables()
 
@@ -2719,6 +2766,36 @@ async def get_screener_hub(
             "generated_at": _now_iso(),
             "rows": [],
         }
+
+    # ── Query cache read (thematic tab + selected theme only) ────────────────
+    _qcache_key: Optional[str] = None
+    _qcache_status = "not_applicable"
+    if tab == "thematic" and theme:
+        _qcache_key = _compute_screener_cache_key(
+            tab=tab, theme=theme, category=category,
+            score_mode=score_mode, coc_filter=coc_filter,
+            market_cap_min=market_cap_min, market_cap_max=market_cap_max,
+            min_volume=min_volume, exchange=exchange,
+            schema_version=THEMATIC_REFRESH_SCHEMA_VERSION,
+        )
+        try:
+            _hit = get_query_cache(_qcache_key, schema_version=THEMATIC_REFRESH_SCHEMA_VERSION)
+            if _hit:
+                _cached_resp = dict(_hit["response_json"])
+                _cached_resp["query_cache_status"]     = "hit"
+                _cached_resp["query_cache_key"]        = _qcache_key
+                _cached_resp["query_cache_expires_at"] = _hit.get("expires_at")
+                _cached_resp["query_cache_created_at"] = _hit.get("created_at")
+                _cached_resp["served_at"]              = _now_iso()
+                print(
+                    f"[SCREENER_QUERY_CACHE] HIT theme={theme!r} "
+                    f"rows={_hit.get('row_count')} "
+                    f"expires={_hit.get('expires_at')}"
+                )
+                return _cached_resp
+        except Exception as _qe:
+            print(f"[SCREENER_QUERY_CACHE] read error (non-fatal): {_qe}")
+        _qcache_status = "miss"
 
     symbols: list[str] = []
     snap_status = "fresh"
@@ -3960,6 +4037,62 @@ async def get_screener_hub(
             payload["dynamic_rows_count"] = bottlenecks_meta["dynamic_rows_count"]
         if bottlenecks_meta.get("week_start"):
             payload["chain_reaction_week_start"] = bottlenecks_meta["week_start"]
+
+    # ── Query cache write (thematic tab + selected theme + non-empty result) ─
+    if _qcache_key and tab == "thematic" and theme and payload.get("rows_after_filters", 0) > 0:
+        try:
+            _filters_snapshot = {
+                k: payload.get(k) for k in (
+                    "market_cap_min", "market_cap_max", "min_volume", "exchange",
+                    "category", "coc_filter",
+                )
+                if payload.get(k) is not None
+            }
+            _ok, _exp = set_query_cache(
+                cache_key=_qcache_key,
+                tab=tab,
+                theme_key=theme,
+                filters_json=_filters_snapshot,
+                query_params_json={
+                    "score_mode":       score_mode,
+                    "market_cap_min":   market_cap_min,
+                    "market_cap_max":   market_cap_max,
+                    "min_volume":       min_volume,
+                    "exchange":         exchange,
+                    "category":         category,
+                    "coc_filter":       coc_filter,
+                },
+                response_json=payload,
+                row_count=int(payload.get("rows_after_filters", 0)),
+                refresh_schema_version=THEMATIC_REFRESH_SCHEMA_VERSION,
+                metadata_json={
+                    "universe_built_at": payload.get("universe_built_at"),
+                    "theme_refresh_status": payload.get("theme_refresh_status"),
+                    "fmp_screener_used": payload.get("fmp_screener_used"),
+                },
+                ttl_days=7,
+            )
+            if _ok:
+                payload["query_cache_status"]     = "miss_stored"
+                payload["query_cache_key"]        = _qcache_key
+                payload["query_cache_expires_at"] = _exp
+                print(
+                    f"[SCREENER_QUERY_CACHE] STORED theme={theme!r} "
+                    f"rows={payload.get('rows_after_filters')} "
+                    f"expires={_exp}"
+                )
+            else:
+                payload["query_cache_status"] = "miss_store_failed"
+                payload["query_cache_key"]    = _qcache_key
+        except Exception as _qwe:
+            print(f"[SCREENER_QUERY_CACHE] write error (non-fatal): {_qwe}")
+            payload["query_cache_status"] = "miss_store_error"
+    elif _qcache_key and tab == "thematic" and theme:
+        # Ran the pipeline but result was empty — don't cache empty results
+        payload["query_cache_status"] = "miss_not_stored_empty"
+        payload["query_cache_key"]    = _qcache_key
+    else:
+        payload["query_cache_status"] = _qcache_status
 
     return payload
 
