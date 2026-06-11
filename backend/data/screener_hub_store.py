@@ -201,6 +201,28 @@ def _ddl_sql() -> str:
         ON public.screener_saved_screen_rows (user_id, symbol);
     CREATE INDEX IF NOT EXISTS idx_saved_screen_rows_symbol_created
         ON public.screener_saved_screen_rows (symbol, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS public.screener_query_cache (
+        id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        cache_key              TEXT UNIQUE NOT NULL,
+        tab                    TEXT NOT NULL,
+        theme_key              TEXT NULL,
+        filters_json           JSONB NOT NULL DEFAULT '{}'::jsonb,
+        query_params_json      JSONB NOT NULL DEFAULT '{}'::jsonb,
+        response_json          JSONB NOT NULL DEFAULT '{}'::jsonb,
+        row_count              INTEGER NOT NULL DEFAULT 0,
+        refresh_schema_version TEXT NULL,
+        created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at             TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days'),
+        metadata_json          JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+    CREATE INDEX IF NOT EXISTS idx_screener_query_cache_key
+        ON public.screener_query_cache (cache_key);
+    CREATE INDEX IF NOT EXISTS idx_screener_query_cache_tab_theme
+        ON public.screener_query_cache (tab, theme_key, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_screener_query_cache_expires
+        ON public.screener_query_cache (expires_at);
     """
 
 
@@ -2258,6 +2280,203 @@ def cleanup_expired_saved_screens(user_id: Optional[str] = None) -> int:
         return deleted
     except Exception as e:
         print(f"[SAVED_SCREENS] cleanup error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        _put_conn(conn)
+
+
+# ── screener_query_cache CRUD ─────────────────────────────────────────────────
+
+def get_query_cache(
+    cache_key: str,
+    schema_version: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Look up a cached screener query response.
+
+    Returns the cache row dict if:
+      - a row with cache_key exists
+      - expires_at > NOW()
+      - schema_version matches (when provided and stored version is not None)
+
+    Returns None on miss, expiry, version mismatch, or any DB error.
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT cache_key, tab, theme_key,
+                   filters_json, query_params_json,
+                   response_json, row_count,
+                   refresh_schema_version,
+                   created_at, updated_at, expires_at,
+                   metadata_json
+            FROM public.screener_query_cache
+            WHERE cache_key = %s
+              AND expires_at > NOW()
+            LIMIT 1
+            """,
+            (cache_key,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            _put_conn(conn)
+            return None
+        (
+            _key, _tab, _theme,
+            _filters, _qp,
+            _resp, _rc,
+            _sv,
+            _created, _updated, _expires,
+            _meta,
+        ) = row
+        _put_conn(conn)
+        # Version mismatch — treat as miss (schema upgrade invalidates cache)
+        if schema_version and _sv and _sv != schema_version:
+            return None
+        def _parse(v: Any) -> Any:
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    return json.loads(v)
+                except Exception:
+                    return {}
+            return v or {}
+        return {
+            "cache_key":              _key,
+            "tab":                    _tab,
+            "theme_key":              _theme,
+            "filters_json":           _parse(_filters),
+            "query_params_json":      _parse(_qp),
+            "response_json":          _parse(_resp),
+            "row_count":              _rc,
+            "refresh_schema_version": _sv,
+            "created_at":             _created.isoformat() if _created else None,
+            "updated_at":             _updated.isoformat() if _updated else None,
+            "expires_at":             _expires.isoformat() if _expires else None,
+            "metadata_json":          _parse(_meta),
+        }
+    except Exception as e:
+        print(f"[SCREENER_QUERY_CACHE] get error key={cache_key!r}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _put_conn(conn)
+        return None
+
+
+def set_query_cache(
+    *,
+    cache_key: str,
+    tab: str,
+    theme_key: Optional[str],
+    filters_json: dict,
+    query_params_json: dict,
+    response_json: dict,
+    row_count: int,
+    refresh_schema_version: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+    ttl_days: int = 7,
+) -> tuple:
+    """
+    Upsert a cached screener query response.
+
+    Returns (ok: bool, expires_at_iso: str).
+    Runs opportunistic expired-row cleanup on every upsert (single DELETE,
+    indexed on expires_at — cheap).
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return (False, "")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.screener_query_cache
+                (cache_key, tab, theme_key,
+                 filters_json, query_params_json,
+                 response_json, row_count,
+                 refresh_schema_version,
+                 created_at, updated_at, expires_at,
+                 metadata_json)
+            VALUES
+                (%s, %s, %s,
+                 %s::jsonb, %s::jsonb,
+                 %s::jsonb, %s,
+                 %s,
+                 NOW(), NOW(), NOW() + (%s || ' days')::interval,
+                 %s::jsonb)
+            ON CONFLICT (cache_key)
+            DO UPDATE SET
+                response_json          = EXCLUDED.response_json,
+                row_count              = EXCLUDED.row_count,
+                refresh_schema_version = EXCLUDED.refresh_schema_version,
+                filters_json           = EXCLUDED.filters_json,
+                query_params_json      = EXCLUDED.query_params_json,
+                metadata_json          = EXCLUDED.metadata_json,
+                updated_at             = NOW(),
+                expires_at             = NOW() + (%s || ' days')::interval
+            RETURNING expires_at
+            """,
+            (
+                cache_key, tab, theme_key,
+                _jsonb(filters_json), _jsonb(query_params_json),
+                _jsonb(response_json), int(row_count),
+                refresh_schema_version,
+                str(int(ttl_days)),
+                _jsonb(metadata_json or {}),
+                str(int(ttl_days)),
+            ),
+        )
+        result_row = cur.fetchone()
+        expires_at_iso = result_row[0].isoformat() if (result_row and result_row[0]) else ""
+        # Opportunistic cleanup: one indexed DELETE, no scan
+        cur.execute(
+            "DELETE FROM public.screener_query_cache WHERE expires_at < NOW()"
+        )
+        conn.commit()
+        cur.close()
+        return (True, expires_at_iso)
+    except Exception as e:
+        print(f"[SCREENER_QUERY_CACHE] set error key={cache_key!r}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return (False, "")
+    finally:
+        _put_conn(conn)
+
+
+def cleanup_expired_query_cache() -> int:
+    """Delete all expired rows from screener_query_cache. Returns count deleted."""
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM public.screener_query_cache WHERE expires_at < NOW()")
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        if deleted:
+            print(f"[SCREENER_QUERY_CACHE] cleanup: deleted {deleted} expired row(s)")
+        return deleted
+    except Exception as e:
+        print(f"[SCREENER_QUERY_CACHE] cleanup error: {e}")
         try:
             conn.rollback()
         except Exception:

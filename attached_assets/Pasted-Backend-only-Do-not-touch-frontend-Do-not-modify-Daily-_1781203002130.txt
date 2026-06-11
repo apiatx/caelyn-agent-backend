@@ -1,0 +1,268 @@
+Backend only.
+
+Do not touch frontend.
+Do not modify Daily Screens / saved screen history unless needed to avoid conflict.
+Do not call any LLM APIs.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not remove current FMP guardrails, concurrency limits, in-flight dedupe, or schema-version logic.
+
+Goal:
+Add a 7-day server-side cache for user-run Screener Hub queries.
+
+Current behavior:
+Selected themes now refresh and hydrate correctly. But if a user runs a custom screener query, for example:
+
+* theme=ai_networking
+* marketCapMin=50000000
+* marketCapMax=10000000000
+* minVolume=1000000
+* exchange=NASDAQ
+* scoreMode=true
+
+that exact screen should be cached so the user can come back to it without rebuilding/refetching every time.
+
+Desired behavior:
+
+* Every unique live Screener Hub query is cached by normalized query parameters.
+* Same exact query within 7 days returns the cached screen result quickly.
+* Same exact query after 7 days runs fresh again, using the normal refresh/hydration/FMP/Tradier guardrails.
+* Cache is server-side, durable in Neon, not just in memory.
+* This is separate from Daily Screens history.
+* This is separate from manual saved screens.
+* This should apply to live Screener Hub GET requests, especially thematic selected-theme queries.
+
+Part 1 — Define cache key
+
+Create a deterministic cache key for live screener results.
+
+Include:
+
+* tab
+* selected theme_key, if any
+* marketCapMin
+* marketCapMax
+* minVolume
+* exchange
+* scoreMode
+* any other user-visible filters that affect result rows/ranking
+* refresh_schema_version / build_pipeline_version
+
+Normalize:
+
+* use canonical snake/camel handling
+* sort keys before hashing
+* omit null/undefined values consistently
+* theme labels should not affect the key, only theme_key
+
+Example:
+screener_cache_key = sha256(JSON.stringify(normalized_query))
+
+Part 2 — Add Neon cache table
+
+Add table if missing:
+
+screener_query_cache
+
+Fields:
+
+* id UUID primary key
+* cache_key text unique not null
+* tab text not null
+* theme_key text nullable
+* filters_json jsonb default '{}'
+* query_params_json jsonb default '{}'
+* response_json jsonb not null
+* row_count integer default 0
+* refresh_schema_version text nullable
+* created_at timestamptz default now()
+* updated_at timestamptz default now()
+* expires_at timestamptz not null
+* metadata_json jsonb default '{}'
+
+Indexes:
+
+* screener_query_cache(cache_key)
+* screener_query_cache(tab, theme_key, updated_at desc)
+* screener_query_cache(expires_at)
+
+TTL:
+
+* expires_at = updated_at + interval '7 days'
+
+Part 3 — Read cache before running expensive selected-theme screen
+
+For GET /api/screener-hub live requests:
+
+If query is cacheable:
+
+* compute cache key
+* check screener_query_cache
+* if exists and expires_at > now and refresh_schema_version matches current:
+
+  * return response_json
+  * update/append response metadata:
+
+    * query_cache_status = "hit"
+    * query_cache_key
+    * query_cache_expires_at
+    * served_at = now
+  * do not run FMP refresh
+  * do not run expensive rebuild
+  * do not call providers
+
+If cache missing/expired/version mismatch:
+
+* run the normal current Screener Hub pipeline
+* store full JSON response in screener_query_cache
+* return response with:
+
+  * query_cache_status = "miss_stored" or "expired_refreshed"
+  * query_cache_key
+  * query_cache_expires_at
+
+Part 4 — What is cacheable
+
+Cache:
+
+* live GET /api/screener-hub thematic requests
+* selected theme requests
+* default theme request after it resolves selected_theme
+* filtered market cap/min volume/exchange/score mode combinations
+
+Do not cache:
+
+* saved screen list/detail/insights endpoints
+* admin refresh endpoints
+* health/debug endpoints
+
+For tabs other than thematic:
+
+* either skip initially and return query_cache_status = "not_applicable"
+* or cache safely if the response is deterministic and low-risk
+* document the decision
+
+Part 5 — Freshness rules
+
+Within 7 days:
+
+* same exact screen should be returned from query cache
+* quote freshness can still be tricky
+
+Important:
+If the response includes quote/price fields that should stay fresh, choose one of these policies and document it:
+
+Preferred policy:
+
+* cache the universe/rows and metadata for 7 days
+* still overlay fresh quote/options cache when serving cached query if existing cheap overlay helpers make this safe
+* do not call providers live just because query cache hit
+
+Acceptable simpler policy:
+
+* cache the full response exactly as-is for 7 days
+* label query_cache_status="hit_static_7d"
+* but this means price/volume may be stale
+
+Choose the best option based on existing architecture. Do not invent a giant rewrite.
+
+Part 6 — Cache invalidation
+
+Invalidate/ignore cache if:
+
+* refresh_schema_version changes
+* build_pipeline_version changes
+* requested filters differ
+* theme_key differs
+* scoreMode differs
+* cache is older than 7 days
+
+Add cleanup helper:
+
+* delete expired rows where expires_at < now
+* run opportunistically after storing a new cache entry or on cache lookup
+* keep cleanup cheap
+
+Part 7 — Preserve existing selected-theme refresh behavior
+
+Do not break:
+
+* inline refresh for weak/stale selected themes
+* bad snapshot bypass
+* 24h FMP guard
+* durable cap
+* in-flight dedupe
+* max 3 concurrency
+* non-equity exclusion
+* market cap missing-row exclusion
+* min volume missing-row exclusion
+* default daily theme logic
+* Daily Screens auto-save
+
+Part 8 — Validation
+
+Validate:
+
+1. First request:
+   GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=50000000&marketCapMax=10000000000&scoreMode=true
+
+Expected:
+
+* query_cache_status = "miss_stored" or equivalent
+* cache row created
+* row_count stored
+* expires_at roughly 7 days out
+
+2. Repeat same request immediately:
+   Expected:
+
+* query_cache_status = "hit"
+* same rows
+* no FMP call
+* faster response
+
+3. Change market cap range:
+   theme=ai_networking&marketCapMin=100000000000
+
+Expected:
+
+* different cache key
+* cache miss then store
+* different rows
+
+4. Change theme:
+   theme=semiconductors with same filters
+
+Expected:
+
+* different cache key
+* cache miss then store
+
+5. Expire test:
+   Manually set expires_at in past or simulate old cache.
+   Same request should refresh/rebuild and update cache.
+
+6. Version mismatch test:
+   Change or simulate refresh_schema_version mismatch.
+   Same request should ignore old cache and store new one.
+
+7. Saved screens:
+   Confirm Daily Screens / saved screens endpoints do not use or mutate query cache.
+
+8. Guardrails:
+   Confirm:
+
+* no LLM calls
+* no /stable/historical-price-eod/full
+* no ETF quote loops
+* repeated cache hit does not trigger FMP
+
+Return:
+
+* files changed
+* cache key design
+* cache table schema
+* cache hit/miss behavior
+* quote freshness policy chosen
+* validation results
+* limitations
