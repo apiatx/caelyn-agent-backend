@@ -484,6 +484,16 @@ async def _background_refresh_theme(theme_key: str, *, reason: str = "stale") ->
                     status="ok", ttl_days=2,
                     metadata=bd,
                 )
+                # Invalidate all query-cache entries for this theme so that
+                # responses written against the old (smaller) snapshot are not
+                # served after the universe has been upgraded.  E.g. an "All"
+                # entry written against a 5-symbol live-build snapshot must not
+                # be served now that the snapshot has 30 symbols.
+                try:
+                    from data.screener_hub_store import expire_theme_query_cache
+                    expire_theme_query_cache(theme_key)
+                except Exception as _exp_err:
+                    print(f"[SCREENER_HUB] expire_theme_query_cache error (non-fatal): {_exp_err}")
                 print(
                     f"[SCREENER_HUB] background refresh done for {theme_key!r}: "
                     f"{len(syms)} symbols, fmp_screener_calls={bd.get('fmp_screener_calls_used', 0)}, "

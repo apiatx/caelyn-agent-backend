@@ -2460,6 +2460,45 @@ def set_query_cache(
         _put_conn(conn)
 
 
+def expire_theme_query_cache(theme_key: str) -> int:
+    """
+    Immediately expire all query-cache entries for a theme.
+
+    Called after a background snapshot rebuild so that stale cached responses
+    (e.g. an "All" result written against a 5-symbol snapshot) are not served
+    after the snapshot has been upgraded to a broader universe.
+
+    Returns the number of rows expired (0 on error or nothing to expire).
+    """
+    ensure_tables()
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE public.screener_query_cache "
+            "SET expires_at = NOW() - INTERVAL '1 second' "
+            "WHERE theme_key = %s AND expires_at > NOW()",
+            (theme_key,),
+        )
+        expired = cur.rowcount
+        conn.commit()
+        cur.close()
+        if expired:
+            print(f"[SCREENER_QUERY_CACHE] expired {expired} stale entry(ies) for theme={theme_key!r} after snapshot upgrade")
+        return expired
+    except Exception as e:
+        print(f"[SCREENER_QUERY_CACHE] expire_theme error theme={theme_key!r}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        _put_conn(conn)
+
+
 def cleanup_expired_query_cache() -> int:
     """Delete all expired rows from screener_query_cache. Returns count deleted."""
     ensure_tables()
