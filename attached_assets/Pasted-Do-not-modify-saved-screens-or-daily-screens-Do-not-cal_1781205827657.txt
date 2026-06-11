@@ -1,0 +1,103 @@
+Do not modify saved screens or daily screens.
+Do not call any LLM APIs.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not add new theme universe logic.
+
+Goal:
+Resolve the inconsistency in the final regression report for AI Networking market-cap lenses.
+
+Issue:
+The report showed:
+
+AI Networking:
+
+All = 5
+$50M–$10B = 25 FMP
+$10B–$100B = 2
+$100B+ = 3
+Under $1B = 17
+
+This is logically impossible if “All” means no market cap filter. All should include the broadest candidate pool and should be greater than or equal to every filtered lens.
+
+Part 1 — Re-run AI Networking market-cap tests with query cache bypassed
+
+Temporarily bypass or delete query cache entries for AI Networking, then run:
+
+A. All:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&scoreMode=true
+
+B. Custom $50M–$10B:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=50000000&marketCapMax=10000000000&scoreMode=true
+
+C. Under $1B:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=50000000&marketCapMax=1000000000&scoreMode=true
+
+D. $10B–$100B:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=10000000000&marketCapMax=100000000000&scoreMode=true
+
+E. $100B+:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=100000000000&scoreMode=true
+
+For each, report:
+
+request URL
+parsed marketCapMin
+parsed marketCapMax
+query_cache_status
+rows_before_filters
+rows_after_filters
+candidate_source_breakdown
+first 30 symbols after filters with market_cap
+whether query cache was bypassed or hit
+
+Part 2 — Verify All behavior
+
+Confirm that the All request omits both marketCapMin and marketCapMax.
+
+Expected:
+
+All rows_after_filters should be >= every filtered lens rows_after_filters, unless another non-market-cap filter is being applied.
+All should include both canonical custom symbols and FMP enrichment rows.
+All should not be limited to only static_seed/canonical symbols.
+
+If All is only returning the 5 canonical symbols, find why:
+
+stale query cache?
+scoreMode path?
+All path skipping FMP enrichment?
+row cap applied before filters?
+different request params?
+response served from old cache key?
+selected theme snapshot mismatch?
+
+Part 3 — Fix if needed
+
+If the All path is stale or wrong:
+
+fix cache key/version or invalidate stale All cache
+make sure All uses the same combined candidate pool as filtered requests
+do not hardcode tickers
+do not change frontend
+do not create new universe logic
+
+Part 4 — Cache validation
+
+After fixing or confirming:
+
+Cold All request should store the correct broad result.
+Warm All request should hit cache with the same broad result.
+$100B+ request should hit/store a different cache key.
+Custom $50M–$10B should hit/store a different cache key.
+No stale All=5 response should be served if broader filtered lenses have more rows.
+
+Part 5 — Final report
+
+Return:
+
+why the prior report showed All=5 while filtered lenses had more rows
+corrected AI Networking row counts for All / Custom / Under $1B / $10B–$100B / $100B+
+first 30 symbols for All
+whether cache was the issue
+files changed, if any
+confirmation no LLM/no full historical/no ETF quote loop
