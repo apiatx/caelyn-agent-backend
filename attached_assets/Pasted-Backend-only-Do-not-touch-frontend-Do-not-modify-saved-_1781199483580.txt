@@ -1,0 +1,250 @@
+Backend only.
+
+Do not touch frontend.
+Do not modify saved screens or daily screens.
+Do not call any LLM APIs: no OpenAI, Anthropic, Grok, Perplexity, etc.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not remove the 24h FMP guard generally.
+Do not refresh all themes because one theme was selected.
+
+Goal:
+One-shot fix the remaining selected-theme screener failure.
+
+Current user-facing problem:
+The default theme works, but when the user selects another theme, many screens still return no results or weak results.
+
+Example:
+AI Networking with the default Custom market cap range ($50M–$10B) returns no rows.
+Backend previously found AI Networking currently only has 5 symbols:
+ANET, AVGO, MRVL, CRDO, ALAB.
+All are >$10B, so the default Custom range excludes them.
+
+The user expects selecting a theme to trigger/serve a real FMP-built theme universe, not just the old static/proxy seed list.
+
+Most likely cause:
+The 24h refresh cap is preserving old/bad snapshots created before the latest fixes:
+
+* before ai_networking had fmp_industries
+* before hardcoded $10B prefilter was removed
+* before inline selected-theme refresh was added
+* before selected themes used the same pipeline as default
+
+The cap is technically working, but it is blocking the rebuild needed to fix bad old data.
+
+Part 1 — Prove whether this is a stale/bad snapshot cap issue
+
+Audit exact live requests:
+
+A. AI Networking default Custom range:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=50000000&marketCapMax=10000000000&scoreMode=true
+
+B. AI Networking All market caps:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&scoreMode=true
+
+C. AI Networking $10B+:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=10000000000&scoreMode=true
+
+For each, report:
+
+* selected_theme
+* selected_theme_label
+* universe_built_at
+* theme_last_refreshed_at
+* theme_next_refresh_allowed_at
+* theme_refresh_status
+* fmp_refresh_used
+* fmp_refresh_reason
+* row_source_breakdown
+* rows_before_filters
+* rows_after_filters
+* first 20 symbols before filters
+* first 20 symbols after filters
+* market cap range applied
+* rows_excluded_missing_market_cap
+* rows_excluded_non_equity
+* low_result_quality
+* result_quality_warning
+
+Answer directly:
+
+* Is AI Networking being blocked by the 24h refresh cap?
+* Was the current AI Networking snapshot created before the new fmp_industries mapping?
+* Does the current AI Networking snapshot only contain static/proxy seed names?
+* Is the backend actually making a fresh FMP screener/theme request when the user selects AI Networking?
+* Is Tradier quote/price hydration running after the selected theme universe is loaded?
+
+Part 2 — Add refresh schema/config versioning
+
+Add a refresh/pipeline version marker for thematic universe snapshots.
+
+Example:
+THEMATIC_REFRESH_SCHEMA_VERSION = "theme_screener_v2_inline_fmp_industry_map"
+
+When building or refreshing a theme universe, write into snapshot metadata:
+
+* refresh_schema_version
+* fmp_industries_used
+* fmp_screener_used: true/false
+* refresh_reason
+* build_pipeline_version
+
+When serving a selected theme, compare the latest snapshot metadata to the current version.
+
+If latest selected-theme snapshot is missing the current refresh_schema_version or was built with an old version:
+
+* treat it as stale/invalid for selected-theme use
+* allow exactly one immediate inline refresh even if generated_at is within 24h
+* then store the new version metadata so future clicks obey the 24h cap again
+
+This solves the issue where the 24h cap preserves bad snapshots created before code/config fixes.
+
+Part 3 — Add bad-snapshot bypass criteria
+
+For explicit selected theme requests only, allow one inline refresh despite 24h cap if the cached universe is clearly bad/incomplete.
+
+Bad snapshot criteria:
+
+* row_source_breakdown is mostly static_seed/proxy/etf_holdings and no fmp_screener rows
+* screener_meta_by_symbol is empty
+* fmp_industries are now configured for the theme but were not used in the latest snapshot
+* rows_before_filters < 10 for a broad "All" request
+* metadata_coverage_pct < 50%
+* selected theme has known fmp_industries but latest snapshot has fmp_screener_used=false
+* default Custom range returns zero rows because the universe only contains mega-cap seed names, while FMP industries should produce broader candidates
+
+This bypass must be safe:
+
+* only for explicit selected theme requests
+* only once per theme per refresh_schema_version
+* do not refresh all themes
+* do not bypass repeatedly every click
+* do not call LLMs
+* do not use historical full endpoint
+
+Set metadata:
+
+* theme_refresh_status = "refreshed_inline"
+* fmp_refresh_used = true
+* fmp_refresh_reason = "snapshot_version_invalid" or "bad_snapshot_bypass"
+* refresh_schema_version
+
+Part 4 — Confirm FMP industry mapping coverage for all dropdown themes
+
+Audit /api/screener-hub/themes.
+
+For every dropdown theme, report:
+
+* theme_key
+* label
+* has_fmp_industries
+* fmp_industries list count
+* proxy symbols count
+* latest snapshot symbol count
+* latest snapshot fmp_screener count
+* latest snapshot refresh_schema_version
+* metadata coverage
+* status:
+
+  * ready
+  * needs_fmp_mapping
+  * stale_old_version
+  * weak_static_only
+
+Do not patch one theme at a time silently.
+Return the full coverage table.
+
+If many themes have no fmp_industries, report the list. Do not invent mappings blindly. But for critical themes already in the app, use existing theme/category mappings if available.
+
+Part 5 — AI Networking acceptance tests
+
+After implementing version/bad-snapshot bypass, validate:
+
+A. First AI Networking request after fix:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&scoreMode=true
+
+Expected:
+
+* fmp_refresh_used=true if old snapshot was invalid
+* fmp_refresh_reason = snapshot_version_invalid or bad_snapshot_bypass
+* fmp_screener_used=true in snapshot metadata
+* rows_before_filters should expand beyond the 5 static seed names if FMP returns candidates
+* row_source_breakdown includes fmp_screener
+
+B. AI Networking default Custom:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=50000000&marketCapMax=10000000000&scoreMode=true
+
+Expected:
+
+* rows if FMP returns $50M–$10B candidates
+* if zero, prove after fresh FMP that no candidates met filters
+
+C. AI Networking $10B+:
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=10000000000&scoreMode=true
+
+Expected:
+
+* ANET, AVGO, MRVL, CRDO, ALAB or other mega-cap rows
+
+D. Repeat AI Networking request:
+Expected:
+
+* fmp_refresh_used=false
+* 24h cap now applies to the new versioned snapshot
+* same refreshed universe served from cache
+
+Part 6 — Validate more than AI Networking
+
+Validate at least:
+
+* ai_networking
+* semiconductors
+* regional_banks
+* quantum
+* memory_storage
+* photonics_lasers
+* datacenter_infra
+* robotics_automation
+* clean_energy
+* biotech
+
+For each:
+
+* All
+* default Custom $50M–$10B
+* $10B+
+* Under $1B
+
+Report:
+
+* row counts
+* fmp_refresh_used on first request
+* fmp_screener rows present or not
+* whether output is healthy/weak/empty
+* whether any theme is blocked by missing FMP mapping
+
+Part 7 — Provider call verification
+
+For selected-theme request after bad-snapshot bypass, prove:
+
+* FMP screener/theme stock calls actually happened when expected
+* Tradier quote hydration happened or cache overlay was applied
+* no LLM calls happened
+* no /stable/historical-price-eod/full happened
+* no ETF quote loop happened
+* repeat request does not call FMP again within 24h
+
+Part 8 — Final report
+
+Return:
+
+* root cause of why non-default themes still returned no rows
+* whether it was stale old snapshots, missing FMP mapping, cap blocking rebuild, frontend params, or actual lack of stocks
+* files changed
+* refresh_schema_version design
+* bad-snapshot bypass behavior
+* AI Networking before/after row counts and first 20 symbols
+* full dropdown theme mapping/coverage audit
+* validation results across the listed themes
+* remaining themes that need FMP industry mapping
+* remaining limitations

@@ -293,6 +293,16 @@ _THEME_REFRESH_CAP_H   = 24.0   # hours between permitted on-demand background r
 _THEME_REFRESH_STALE_H = 24.0   # snapshot age (hours) that triggers a background refresh
 _INLINE_REFRESH_TIMEOUT_S = 12.0  # max seconds to wait for inline selected-theme refresh
 
+# ── Snapshot schema versioning ─────────────────────────────────────────────────
+# Bump this string whenever the build pipeline changes in a way that invalidates
+# old snapshots (e.g. new fmp_industries added, pre-filter removed, etc.).
+# Selected-theme requests whose cached snapshot has a different (or missing)
+# schema version AND zero fmp_screener rows get ONE bypass of the 24h cap so
+# the new pipeline runs immediately.  After the bypass refresh the 24h cap
+# applies normally to the fresh snapshot.
+THEMATIC_REFRESH_SCHEMA_VERSION = "v2_inline_fmp_industry_map"
+_THEME_VERSION_REFRESHED: set[str] = set()  # themes that have done bypass this session
+
 # ── In-flight refresh tracking ─────────────────────────────────────────────────
 # Prevents duplicate tasks for the same theme and limits total FMP concurrency.
 _THEME_REFRESH_INFLIGHT: set[str] = set()  # themes with an active background task
@@ -403,13 +413,22 @@ async def _background_refresh_theme(theme_key: str, *, reason: str = "stale") ->
             print(f"[SCREENER_HUB] background refresh started for theme={theme_key!r} reason={reason!r} inflight={len(_THEME_REFRESH_INFLIGHT)}")
             symbols_map, breakdowns = await asyncio.wait_for(
                 _build_thematic_universe(theme_key, with_fmp_peers=False, with_fmp_screener=True),
-                timeout=_THEMATIC_BUILD_TIMEOUT_S * 2,
+                timeout=120.0,  # generous background-task timeout; no user waiting on this
             )
             syms = symbols_map.get(theme_key, [])
             bd   = breakdowns.get(theme_key, {})
             if syms:
-                bd["_refresh_used_fmp_screener"] = bool(bd.get("fmp_screener_calls_used", 0) > 0)
-                bd["_refresh_reason"]            = reason
+                bd["_refresh_used_fmp_screener"]  = bool(bd.get("fmp_screener_calls_used", 0) > 0)
+                bd["_refresh_reason"]             = reason
+                bd["refresh_schema_version"]      = THEMATIC_REFRESH_SCHEMA_VERSION
+                bd["build_pipeline_version"]      = THEMATIC_REFRESH_SCHEMA_VERSION
+                bd["fmp_screener_used"]           = bool(bd.get("fmp_screener_calls_used", 0) > 0)
+                bd["fmp_industries_used"]         = (
+                    _load_industry_map_config()
+                    .get("themes", {})
+                    .get(theme_key, {})
+                    .get("fmp_industries") or []
+                )
                 insert_universe_snapshot(
                     universe_type="thematic", theme_key=theme_key,
                     symbols=syms, source="on_demand_refresh",
@@ -2949,6 +2968,25 @@ async def get_screener_hub(
         _snap_is_weak    = not bool(thematic_breakdown.get("screener_meta_by_symbol"))
         _inline_eligible = not is_default_theme   # explicit selected theme
         theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme) if theme else None
+
+        # ── Bad-snapshot / schema-version bypass ──────────────────────────────
+        # Fires ONCE per theme per session for explicit selected-theme requests
+        # when the cached snapshot was built with an old pipeline version OR has
+        # zero fmp_screener rows while the theme has fmp_industries configured.
+        # This lets the first click after a code/config fix get a real FMP build
+        # even if the 24h cap would normally block it.  After the bypass the cap
+        # applies normally to the refreshed snapshot.
+        _snap_schema         = thematic_breakdown.get("refresh_schema_version", "")
+        _snap_fmp_count      = int(thematic_breakdown.get("fmp_screener_count", 0) or 0)
+        _fmp_map_themes_cfg  = _load_industry_map_config().get("themes", {})
+        _theme_has_fmp       = bool(_fmp_map_themes_cfg.get(theme or "", {}).get("fmp_industries"))
+        _snap_needs_version_upgrade = (
+            _inline_eligible
+            and theme not in _THEME_VERSION_REFRESHED
+            and _theme_has_fmp
+            and (_snap_schema != THEMATIC_REFRESH_SCHEMA_VERSION or _snap_fmp_count == 0)
+        )
+
         if tab == "thematic" and theme and snap_generated_at:
             try:
                 _snap_dt    = datetime.fromisoformat(snap_generated_at.replace("Z", "+00:00"))
@@ -2956,32 +2994,56 @@ async def get_screener_hub(
             except Exception:
                 _snap_age_h = 0.0
             _needs_refresh = _snap_age_h > _THEME_REFRESH_STALE_H or _snap_is_weak
-            if _needs_refresh:
+            if _needs_refresh or _snap_needs_version_upgrade:
                 if theme in _THEME_REFRESH_INFLIGHT:
                     theme_refresh_status = "refreshing"
                 elif len(_THEME_REFRESH_INFLIGHT) >= _FMP_REFRESH_MAX_CONCURRENT:
                     theme_refresh_status = "refresh_queued"
                     fmp_refresh_used     = False
                     fmp_refresh_reason   = "concurrency_cap"
-                elif _theme_refresh_allowed(theme):
+                elif _theme_refresh_allowed(theme) or _snap_needs_version_upgrade:
                     _refresh_reason = (
-                        "explicit_theme_weak"  if (_snap_is_weak and _inline_eligible) else
-                        "explicit_theme_stale" if _inline_eligible else
-                        "weak_cache"           if _snap_is_weak else
+                        "snapshot_version_invalid"
+                            if (_snap_needs_version_upgrade
+                                and _snap_schema != THEMATIC_REFRESH_SCHEMA_VERSION) else
+                        "bad_snapshot_bypass"
+                            if _snap_needs_version_upgrade else
+                        "explicit_theme_weak"
+                            if (_snap_is_weak and _inline_eligible) else
+                        "explicit_theme_stale"
+                            if _inline_eligible else
+                        "weak_cache"
+                            if _snap_is_weak else
                         "stale"
                     )
+                    # Mark version-upgrade bypass consumed BEFORE the refresh so
+                    # concurrent requests don't also bypass the cap.
+                    if _snap_needs_version_upgrade:
+                        _THEME_VERSION_REFRESHED.add(theme)
+                        print(
+                            f"[SCREENER_HUB] bad-snapshot bypass for theme={theme!r} "
+                            f"schema={_snap_schema!r} fmp_count={_snap_fmp_count} "
+                            f"reason={_refresh_reason!r}"
+                        )
                     if _inline_eligible:
                         # Explicit selected theme: run refresh synchronously so
                         # this response contains hydrated rows, not stale shells.
+                        # asyncio.shield keeps the task alive if we hit the timeout,
+                        # so the snapshot IS eventually written to DB even when we
+                        # fall back to cached data after the 12s window.
                         _THEME_REFRESH_INFLIGHT.add(theme)
+                        _refresh_task = asyncio.ensure_future(
+                            _background_refresh_theme(theme, reason=_refresh_reason)
+                        )
                         try:
                             await asyncio.wait_for(
-                                _background_refresh_theme(theme, reason=_refresh_reason),
+                                asyncio.shield(_refresh_task),
                                 timeout=_INLINE_REFRESH_TIMEOUT_S,
                             )
                         except asyncio.TimeoutError:
                             print(f"[SCREENER_HUB] inline refresh timed out for "
-                                  f"theme={theme!r} — serving cached data")
+                                  f"theme={theme!r} — serving cached data, "
+                                  f"background task still running")
                         except Exception as _ire:
                             print(f"[SCREENER_HUB] inline refresh error for "
                                   f"theme={theme!r}: {_ire}")
@@ -3802,6 +3864,13 @@ async def get_screener_hub(
                 "watchlist_portfolio_overlap": len(watchlist_set),
                 "static_seed": snap_bd.get("static_seed_count", 0),
             }
+        # Schema version + FMP screener metadata — always present for thematic tab
+        payload["refresh_schema_version"] = thematic_breakdown.get("refresh_schema_version", "none")
+        payload["fmp_screener_used"]      = bool(
+            thematic_breakdown.get("fmp_screener_used")
+            or (thematic_breakdown.get("fmp_screener_calls_used", 0) or 0) > 0
+        )
+        payload["fmp_industries_used"]    = thematic_breakdown.get("fmp_industries_used", [])
 
         # For empty/thin themes, add informational error_code + message
         if not rows and tab == "thematic":

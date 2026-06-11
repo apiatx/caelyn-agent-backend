@@ -1564,6 +1564,182 @@
       "market_cap_upper_default": 5000000000,
       "market_cap_lower_default": 50000000,
       "notes": "High-growth disruptive tech, ARK-style names, AI/ML plays."
+    },
+    "photonics_lasers": {
+      "fmp_industries": [
+        "Scientific & Technical Instruments",
+        "Electronic Components",
+        "Semiconductors",
+        "Electrical Equipment & Parts",
+        "Hardware, Equipment & Parts"
+      ],
+      "core_industries": [
+        "Scientific & Technical Instruments",
+        "Electronic Components"
+      ],
+      "adjacent_industries": [
+        "Semiconductors",
+        "Electrical Equipment & Parts"
+      ],
+      "weak_adjacent_industries": [
+        "Hardware, Equipment & Parts"
+      ],
+      "positive_keywords": [
+        "photon", "photonic", "laser", "lidar", "optical", "fiber optic",
+        "infrared", "UV laser", "diode laser", "semiconductor laser",
+        "optical coherence", "LiDAR", "silicon photonics", "waveguide",
+        "optoelectronic", "VCSEL", "photodetector", "optical transceiver"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Photonics, lasers, lidar, optical components, silicon photonics."
+    },
+    "power_cooling": {
+      "fmp_industries": [
+        "Electrical Equipment & Parts",
+        "Industrial - Machinery",
+        "Electronic Components",
+        "Scientific & Technical Instruments",
+        "Specialty Industrial Machinery"
+      ],
+      "core_industries": [
+        "Electrical Equipment & Parts",
+        "Specialty Industrial Machinery"
+      ],
+      "adjacent_industries": [
+        "Industrial - Machinery",
+        "Electronic Components"
+      ],
+      "weak_adjacent_industries": [
+        "Scientific & Technical Instruments"
+      ],
+      "positive_keywords": [
+        "power management", "UPS", "power supply", "cooling", "thermal",
+        "liquid cooling", "heat exchanger", "power conversion", "inverter",
+        "voltage regulator", "PDU", "data center power", "HVAC",
+        "chiller", "immersion cooling", "direct liquid cooling"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 15000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 15000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Power management, UPS, cooling systems, thermal management for data centers and industrial."
+    },
+    "substrates_packaging": {
+      "fmp_industries": [
+        "Electronic Components",
+        "Electrical Equipment & Parts",
+        "Semiconductors",
+        "Specialty Chemicals",
+        "Hardware, Equipment & Parts"
+      ],
+      "core_industries": [
+        "Electronic Components",
+        "Semiconductors"
+      ],
+      "adjacent_industries": [
+        "Electrical Equipment & Parts",
+        "Specialty Chemicals"
+      ],
+      "weak_adjacent_industries": [
+        "Hardware, Equipment & Parts"
+      ],
+      "positive_keywords": [
+        "substrate", "PCB", "printed circuit board", "packaging",
+        "advanced packaging", "chiplet", "interposer", "flip chip",
+        "wafer-level packaging", "2.5D", "3D IC", "fan-out",
+        "BGA", "laminate substrate", "IC packaging", "copper foil"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Semiconductor substrates, advanced packaging, PCB, chiplet interconnects."
+    },
+    "technology": {
+      "fmp_industries": [
+        "Software - Application",
+        "Software - Infrastructure",
+        "Computer Hardware",
+        "Semiconductors",
+        "Communication Equipment",
+        "Electronic Components",
+        "Scientific & Technical Instruments",
+        "Information Technology Services"
+      ],
+      "core_industries": [
+        "Software - Application",
+        "Software - Infrastructure",
+        "Computer Hardware"
+      ],
+      "adjacent_industries": [
+        "Semiconductors",
+        "Communication Equipment"
+      ],
+      "weak_adjacent_industries": [
+        "Electronic Components",
+        "Scientific & Technical Instruments",
+        "Information Technology Services"
+      ],
+      "positive_keywords": [
+        "technology", "tech", "software", "hardware", "computing",
+        "platform", "digital", "AI", "cloud", "data", "infrastructure"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Broad technology sector — software, hardware, semis, networking."
+    },
+    "financials": {
+      "fmp_industries": [
+        "Banks - Regional",
+        "Banks - Diversified",
+        "Capital Markets",
+        "Insurance - Property & Casualty",
+        "Insurance - Diversified",
+        "Financial - Credit Services",
+        "Financial - Mortgages"
+      ],
+      "core_industries": [
+        "Banks - Regional",
+        "Banks - Diversified",
+        "Capital Markets"
+      ],
+      "adjacent_industries": [
+        "Insurance - Property & Casualty",
+        "Financial - Credit Services"
+      ],
+      "weak_adjacent_industries": [
+        "Insurance - Diversified",
+        "Financial - Mortgages"
+      ],
+      "positive_keywords": [
+        "bank", "financial", "insurance", "capital markets", "lending",
+        "credit", "investment", "wealth management", "brokerage", "asset management"
+      ],
+      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "min_market_cap": 50000000,
+      "max_market_cap": 10000000000,
+      "min_volume": 100000,
+      "preferred_market_cap_buckets": ["small", "mid"],
+      "market_cap_upper_default": 10000000000,
+      "market_cap_lower_default": 50000000,
+      "notes": "Broad financials — banks, insurance, capital markets, lending."
     }
   }
 }
