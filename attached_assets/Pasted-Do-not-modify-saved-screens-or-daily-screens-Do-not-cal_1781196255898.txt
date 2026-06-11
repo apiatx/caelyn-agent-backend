@@ -1,0 +1,314 @@
+Do not modify saved screens or daily screens.
+Do not call any LLM APIs: no OpenAI, Anthropic, Grok, Perplexity, etc.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not remove the existing 24h per-theme FMP refresh cap.
+Do not remove the concurrency guard.
+Do not remove in-flight dedupe.
+
+Goal:
+One-shot fix Screener Hub selected-theme behavior.
+
+Current user-facing failure:
+The default theme works, but when the user selects another theme from the dropdown, the screener often returns empty/weak results.
+
+Example from UI:
+
+Theme: AI Networking
+Market Cap: $10B+
+Screen says: Universe fresh, Quotes fresh, Partial data
+Showing: AI Networking · Custom screen · MCap: $10B+
+Result: No rows / limited screenable results
+
+This is unacceptable. If the user explicitly selects a theme, that selected theme must run through the same full screener pipeline as the default theme and return real hydrated rows if available.
+
+This is not a frontend issue anymore. Frontend is sending the selected theme. Backend must make selected themes first-class screens.
+
+Core product behavior required:
+
+No theme param → use daily default theme.
+Explicit theme param → serve that exact selected theme.
+If selected theme cache is stale, missing, weak, or under-hydrated, refresh/hydrate it on demand before returning results, when allowed by the 24h cap.
+Hydrate fundamentals/market cap/sector/industry/price/volume/options before applying user filters.
+Then apply Market Cap, Min Volume, Exchange, Score Mode.
+Return clean screenable rows, not stale shells.
+Only show limited/empty results after refresh was attempted or blocked by cap/concurrency/failure.
+No repeated FMP hammering.
+
+Important:
+The old behavior of scheduling a background refresh and immediately returning a weak cached result is not acceptable for explicit user-selected themes. For explicit selected themes, if refresh is allowed, refresh inline before response.
+
+Part 1 — Reproduce and explain the exact AI Networking failure
+
+Run and inspect:
+
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=10000000000&scoreMode=true
+
+If the actual key is different, find it from /api/screener-hub/themes and use the exact AI Networking theme_key.
+
+Report:
+
+exact request URL
+selected_theme
+selected_theme_label
+is_default_theme
+marketCapMin received
+marketCapMax received
+rows_before_filters
+rows_after_filters
+first 20 symbols before filters
+first 20 symbols after filters
+rows_excluded_missing_market_cap
+rows_excluded_missing_volume
+rows_excluded_non_equity
+row_source_breakdown
+screen_quality
+metadata_coverage_pct
+low_result_quality
+result_quality_warning
+theme_refresh_status
+fmp_refresh_used
+fmp_refresh_reason
+theme_last_refreshed_at
+theme_next_refresh_allowed_at
+
+Answer directly:
+
+Did the backend actually refresh AI Networking before returning?
+Or did it return stale/weak cache and only schedule refresh?
+Did Market Cap $10B+ eliminate rows because market_cap was missing before hydration?
+Are there actually $10B+ AI Networking names after refresh/hydration?
+Which symbols should have appeared?
+
+Part 2 — Identify the pipeline split and remove second-class selected-theme behavior
+
+Audit the default theme path and explicit selected theme path.
+
+Find exactly where these diverge:
+
+default daily theme
+explicit user-selected theme
+
+The fix must ensure both paths use one canonical pipeline.
+
+Implement/refactor toward one shared flow:
+
+build_theme_screen(
+theme_key,
+filters,
+score_mode,
+request_context,
+refresh_policy
+)
+
+This canonical flow must:
+
+Resolve valid theme_key.
+Load latest cached universe/snapshot.
+Assess staleness and hydration quality.
+If explicit selected theme is stale/weak/missing and refresh allowed, run selected-theme refresh inline before returning.
+Reload refreshed snapshot/cache.
+Hydrate rows from:
+FMP screener/theme stock results if refresh ran
+screener_fundamentals_cache
+global screener_meta
+snapshot metadata
+quote cache
+options cache
+Exclude non-equity junk.
+Apply Market Cap / Min Volume / Exchange filters.
+Rank/score rows.
+Return clean response metadata.
+
+Do not leave selected themes on an ETF/LKG-only path.
+
+Part 3 — Inline refresh for explicit selected themes
+
+For explicit theme requests:
+
+GET /api/screener-hub?tab=thematic&theme={theme_key}
+
+If the theme is:
+
+missing cached universe
+older than 24h
+weak cache
+low metadata coverage
+mostly missing market_cap/price/volume before filters
+returns zero rows after filters because hydration is missing
+
+Then if FMP refresh is allowed:
+
+run the safe per-theme refresh inline/synchronously before returning
+use a reasonable timeout, 8–15 seconds
+reload refreshed data
+hydrate rows
+apply filters
+return the refreshed result
+
+Set:
+
+theme_refresh_status = "refreshed_inline" or "stale_refreshed"
+fmp_refresh_used = true
+fmp_refresh_reason = "explicit_theme_stale_or_weak"
+theme_last_refreshed_at
+theme_next_refresh_allowed_at
+
+If refresh is blocked by 24h cap:
+
+do not call FMP
+return theme_refresh_status = "stale_cap_active"
+return honest warning
+
+If refresh is already in-flight:
+
+wait briefly if possible
+otherwise return theme_refresh_status = "refreshing"
+
+If concurrency cap is full:
+
+return theme_refresh_status = "refresh_queued"
+do not spawn unlimited tasks
+
+Part 4 — FMP usage rules for selected theme refresh
+
+Allowed for explicit selected theme refresh:
+
+FMP screener/theme stock requests needed to build that selected theme
+once per theme per 24 hours
+only when selected theme is stale/weak/missing or explicitly needs hydration
+existing safe/ranged historical calls only if already part of current safe pipeline
+
+Not allowed:
+
+any LLM call
+/stable/historical-price-eod/full
+ETF quote loops
+repeated FMP calls on every click
+refreshing all 60 themes because one theme was selected
+
+The user has FMP room now, but the guardrails still matter.
+
+Part 5 — Hydrate before applying filters
+
+This is critical.
+
+For explicit selected themes:
+
+Refresh/hydrate the selected universe first.
+Then apply filters.
+
+Market Cap $10B+ should not return zero just because market_cap was missing before hydration.
+
+Filter policy:
+
+If market cap filter active and market_cap is still missing after hydration, exclude row and count it.
+If min volume filter active and volume is still missing after hydration, exclude row and count it.
+If exchange filter active, apply the documented exchange policy consistently.
+
+Part 6 — Selected theme should never silently fallback to default
+
+Rules:
+
+No theme param → use daily default.
+Explicit theme param → use requested theme.
+Invalid theme → UNKNOWN_THEME JSON error.
+Weak selected theme → selected theme response with warning, not default rows.
+Empty selected theme after refresh attempt → empty response with clear message, not default rows.
+
+Part 7 — Validation: exact acceptance tests
+
+Run these tests and provide before/after counts.
+
+A. AI Networking $10B+
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMin=10000000000&scoreMode=true
+
+Expected:
+
+selected_theme = ai_networking or exact equivalent key
+selected_theme_label = AI Networking
+is_default_theme = false
+if refresh allowed, fmp_refresh_used = true on first request
+rows are hydrated before market cap filter
+meaningful $10B+ rows if available
+if zero rows, prove refresh happened or was blocked and explain why
+no stale-cache-only response
+
+B. AI Networking Under $10B
+GET /api/screener-hub?tab=thematic&theme=ai_networking&marketCapMax=10000000000&scoreMode=true
+
+Expected:
+
+selected theme is AI Networking
+rows returned if available
+missing market_cap rows excluded only after hydration attempt
+
+C. Semiconductors Under $10B
+Expected:
+
+still strong
+no regression
+
+D. Regional Banks Under $10B
+Expected:
+
+still strong
+no regression
+
+E. Quantum Under $10B
+Expected:
+
+still works
+no regression
+
+F. Memory & Storage Under $10B
+Expected:
+
+no FGXXX/TWD
+refreshed/hydrated rows if available
+honest warning only if truly weak after refresh attempt
+
+G. Repeat AI Networking request inside 24h
+Expected:
+
+no second FMP refresh
+fmp_refresh_used=false
+theme_refresh_status=fresh/cached_recent/stale_cap_active as appropriate
+same or better rows from cache
+
+H. Restart-safety
+After backend restart, repeat AI Networking inside 24h:
+
+no FMP re-hammer
+durable cap still blocks repeat refresh
+
+I. Multi-theme safety
+Request several stale themes quickly:
+
+max concurrency respected
+no 60-theme stampede
+no ETF quote loop
+
+J. Static safety checks:
+
+no LLM calls
+no /stable/historical-price-eod/full
+no ETF quote loops
+saved screens/list/insights do not trigger refresh
+
+Part 8 — Final report required
+
+Return:
+
+root cause of AI Networking no-results behavior
+whether it was refresh scheduling, filter-before-hydration, missing metadata, cache weakness, or real lack of stocks
+files changed
+canonical pipeline changes
+inline selected-theme refresh behavior
+FMP guardrails
+before/after AI Networking $10B+ row counts and first 10 symbols
+before/after AI Networking Under $10B row counts and first 10 symbols
+repeat-click 24h cap validation
+restart-safe cap validation
+no LLM/no full historical/no ETF quote loop validation
+remaining limitations

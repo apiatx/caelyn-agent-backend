@@ -1124,6 +1124,44 @@
       "market_cap_lower_default": 50000000,
       "notes": "Broad materials sector — metals, mining, specialty chemicals."
     },
+    "ai_networking": {
+      "fmp_industries": [
+        "Communication Equipment",
+        "Telecom Services",
+        "Telephone and Telegraph Apparatus",
+        "Computer Hardware",
+        "Semiconductors",
+        "Electronic Components"
+      ],
+      "core_industries": [
+        "Communication Equipment",
+        "Telecom Services",
+        "Telephone and Telegraph Apparatus"
+      ],
+      "adjacent_industries": [
+        "Computer Hardware",
+        "Electronic Components"
+      ],
+      "weak_adjacent_industries": [
+        "Semiconductors"
+      ],
+      "positive_keywords": [
+        "networking", "network", "switch", "router", "ethernet", "optical",
+        "photonic", "interconnect", "silicon photonics", "data center networking",
+        "wireless", "telecom", "communication", "AI networking", "inference"
+      ],
+      "negative_keywords": [
+        "blank check", "acquisition corp", "spac", "shell company",
+        "blank check company", "warrant"
+      ],
+      "min_market_cap": 100000000,
+      "max_market_cap": 5000000000000,
+      "min_volume": 50000,
+      "preferred_market_cap_buckets": ["small", "mid", "large", "mega"],
+      "market_cap_upper_default": 5000000000000,
+      "market_cap_lower_default": 100000000,
+      "notes": "AI networking — switches, optical interconnects, networking chips, telecom infrastructure. Includes large-caps (CSCO, ANET) and small/mid (CIEN, INFN, CRDO)."
+    },
     "banks": {
       "fmp_industries": [
         "Banks - Regional",

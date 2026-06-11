@@ -222,13 +222,21 @@ def _is_market_open() -> bool:
 # Built once at import time; used to exclude ETFs from thematic screener rows.
 
 def _build_all_proxy_etfs() -> frozenset[str]:
+    """Return the set of actual ETF ticker symbols used as theme proxies.
+
+    Only includes proxy_symbols from themes whose proxy_type is "etf".
+    Themes that set proxy_type="custom" use stock tickers (e.g. ANET, AVGO)
+    as proxies — those must NOT be treated as ETFs or they will be stripped
+    from the screener universe as if they were fund wrappers.
+    """
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
         s: set[str] = set()
         for meta in THEME_RS_UNIVERSE.values():
-            for sym in (meta.get("proxy_symbols") or []):
-                if sym:
-                    s.add(sym.upper())
+            if (meta.get("proxy_type") or "etf") == "etf":
+                for sym in (meta.get("proxy_symbols") or []):
+                    if sym:
+                        s.add(sym.upper())
         return frozenset(s)
     except Exception:
         return frozenset()
@@ -283,6 +291,7 @@ _DAILY_DEFAULT: dict = {}  # {"date": "YYYY-MM-DD", "theme": str, "reason": str}
 _THEME_REFRESH_LOG: dict[str, str] = {}  # theme_key → ISO timestamp of last scheduled refresh
 _THEME_REFRESH_CAP_H   = 24.0   # hours between permitted on-demand background refreshes
 _THEME_REFRESH_STALE_H = 24.0   # snapshot age (hours) that triggers a background refresh
+_INLINE_REFRESH_TIMEOUT_S = 12.0  # max seconds to wait for inline selected-theme refresh
 
 # ── In-flight refresh tracking ─────────────────────────────────────────────────
 # Prevents duplicate tasks for the same theme and limits total FMP concurrency.
@@ -2922,17 +2931,23 @@ async def get_screener_hub(
         # coverage, but the screener table should show stocks only.
         symbols = [s for s in symbols if s not in _ALL_PROXY_ETFS] or symbols
 
-        # ── Per-theme background refresh with 24h durable cap ─────────────────
-        # When a snapshot is stale (>_THEME_REFRESH_STALE_H hours), schedule one
-        # background rebuild per day per theme.  This serves cached data immediately
-        # while the refresh runs asynchronously for the next request.
+        # ── Per-theme refresh with 24h durable cap ─────────────────────────────
+        # For EXPLICIT user-selected themes (not is_default_theme): refresh runs
+        # INLINE (await) so rows are hydrated before this response is returned.
+        # For the DEFAULT theme: background refresh only (create_task) — serving
+        # cached data immediately is acceptable since the default is pre-warmed.
+        #
+        # Weak-snapshot detection: screener_meta_by_symbol is empty when the snapshot
+        # was built by an ETF/static-only path that did not run the FMP screener.
+        # A weak-but-fresh snapshot for an explicit selected theme warrants an inline
+        # refresh just as much as a stale snapshot does.
         #
         # Guards (applied in order):
-        #   1. In-flight dedup  — if a task is already running/queued for this theme,
-        #      do not spawn another (returns "refreshing").
-        #   2. Concurrency cap  — if _FMP_REFRESH_MAX_CONCURRENT tasks are already
-        #      active, skip this request (returns "refresh_queued"; next request retries).
-        #   3. 24h durable cap  — enforced via in-memory log + DB fallback on restart.
+        #   1. In-flight dedup  — if a task is already running/queued, skip.
+        #   2. Concurrency cap  — max _FMP_REFRESH_MAX_CONCURRENT simultaneous tasks.
+        #   3. 24h durable cap  — in-memory log + DB fallback on restart.
+        _snap_is_weak    = not bool(thematic_breakdown.get("screener_meta_by_symbol"))
+        _inline_eligible = not is_default_theme   # explicit selected theme
         theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme) if theme else None
         if tab == "thematic" and theme and snap_generated_at:
             try:
@@ -2940,24 +2955,70 @@ async def get_screener_hub(
                 _snap_age_h = (datetime.now(timezone.utc) - _snap_dt).total_seconds() / 3600
             except Exception:
                 _snap_age_h = 0.0
-            if _snap_age_h > _THEME_REFRESH_STALE_H:
+            _needs_refresh = _snap_age_h > _THEME_REFRESH_STALE_H or _snap_is_weak
+            if _needs_refresh:
                 if theme in _THEME_REFRESH_INFLIGHT:
-                    # Task already in-flight for this theme — don't spawn duplicate.
                     theme_refresh_status = "refreshing"
                 elif len(_THEME_REFRESH_INFLIGHT) >= _FMP_REFRESH_MAX_CONCURRENT:
-                    # Too many concurrent FMP refreshes — skip, next request retries.
                     theme_refresh_status = "refresh_queued"
                     fmp_refresh_used     = False
                     fmp_refresh_reason   = "concurrency_cap"
                 elif _theme_refresh_allowed(theme):
-                    asyncio.create_task(_background_refresh_theme(theme, reason="stale"))
-                    _record_theme_refresh(theme)
-                    theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme)
-                    theme_refresh_status    = "refresh_scheduled"
-                    fmp_refresh_used        = True
-                    fmp_refresh_reason      = "snapshot_stale"
+                    _refresh_reason = (
+                        "explicit_theme_weak"  if (_snap_is_weak and _inline_eligible) else
+                        "explicit_theme_stale" if _inline_eligible else
+                        "weak_cache"           if _snap_is_weak else
+                        "stale"
+                    )
+                    if _inline_eligible:
+                        # Explicit selected theme: run refresh synchronously so
+                        # this response contains hydrated rows, not stale shells.
+                        _THEME_REFRESH_INFLIGHT.add(theme)
+                        try:
+                            await asyncio.wait_for(
+                                _background_refresh_theme(theme, reason=_refresh_reason),
+                                timeout=_INLINE_REFRESH_TIMEOUT_S,
+                            )
+                        except asyncio.TimeoutError:
+                            print(f"[SCREENER_HUB] inline refresh timed out for "
+                                  f"theme={theme!r} — serving cached data")
+                        except Exception as _ire:
+                            print(f"[SCREENER_HUB] inline refresh error for "
+                                  f"theme={theme!r}: {_ire}")
+                        finally:
+                            _THEME_REFRESH_INFLIGHT.discard(theme)
+                        _record_theme_refresh(theme)
+                        # Reload the refreshed snapshot so rows use updated data.
+                        _ref_snap = get_latest_universe("thematic", theme)
+                        if _ref_snap and _ref_snap.get("symbols"):
+                            _ref_raw   = list(_ref_snap.get("symbols") or [])
+                            _ref_stock = [s for s in _ref_raw if s not in _ALL_PROXY_ETFS]
+                            symbols    = (_ref_stock if _ref_stock else _ref_raw)
+                            _ref_meta  = _ref_snap.get("metadata") or {}
+                            if isinstance(_ref_meta, dict):
+                                thematic_breakdown = _ref_meta
+                            snap_generated_at = (
+                                str(_ref_snap.get("generated_at") or "") or snap_generated_at
+                            )
+                        theme_refresh_status = "refreshed_inline"
+                        fmp_refresh_used     = True
+                        fmp_refresh_reason   = _refresh_reason
+                    else:
+                        # Default theme: background refresh, serve cache immediately.
+                        asyncio.create_task(
+                            _background_refresh_theme(theme, reason=_refresh_reason)
+                        )
+                        _record_theme_refresh(theme)
+                        theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme)
+                        theme_refresh_status    = "refresh_scheduled"
+                        fmp_refresh_used        = True
+                        fmp_refresh_reason      = _refresh_reason
                 else:
-                    theme_refresh_status = "stale_cap_active"
+                    theme_refresh_status = (
+                        "stale_cap_active"
+                        if _snap_age_h > _THEME_REFRESH_STALE_H
+                        else "fresh"
+                    )
             else:
                 theme_refresh_status = "fresh"
             # Always compute next-allowed timestamp from the log (post-hydration).
@@ -3404,14 +3465,6 @@ async def get_screener_hub(
         # so we don't over-filter un-enriched but legitimate symbols.
         if tab == "thematic" and _thematic_allowed_industries and row_industry:
             if row_industry not in _thematic_allowed_industries:
-                continue
-
-        # ── Thematic-only: market cap range filter (Part 3) ───────────────────
-        # Default: $50M–$10B for hidden-gem discovery. Mega-caps (NVDA, AVGO …)
-        # and sub-$50M shells are excluded. Rows without a known market cap
-        # (fundamentals cache cold) pass through.
-        if tab == "thematic" and mcap is not None:
-            if mcap < 50_000_000 or mcap > 10_000_000_000:
                 continue
 
         if not _row_passes_filters(row, category_filter=category, coc_filter=coc_filter):
