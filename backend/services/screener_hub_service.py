@@ -106,6 +106,62 @@ _OPT_MAX_SYMS        = int(os.getenv("OPTIONS_ACTIVE_PAGE_MAX_SYMBOLS",        "
 _OPT_TIMEOUT         = float(os.getenv("OPTIONS_ACTIVE_PAGE_TIMEOUT_SECONDS",  "8"))
 _OPT_CONCURRENCY     = int(os.getenv("OPTIONS_ACTIVE_PAGE_CONCURRENCY",        "3"))
 
+# ── Non-equity / placeholder ticker detection ──────────────────────────────────
+# Used to exclude money market funds, currency proxies, and zero-enriched ETF
+# holding placeholders from the thematic stock screener.
+
+# Money market fund tickers typically end in 2+ X's (FGXXX, VMFXX, SPAXX, etc.)
+_MONEY_MARKET_TICKER_RE = re.compile(r"^[A-Z]{2,6}XX+$", re.IGNORECASE)
+
+# ISO 4217 currency / FX codes that occasionally appear as tickers in ETF holdings
+_KNOWN_FX_TICKERS: frozenset[str] = frozenset({
+    "USD", "EUR", "GBP", "JPY", "CNY", "HKD", "KRW", "TWD", "AUD", "CAD",
+    "CHF", "SGD", "MXN", "BRL", "INR", "RUB", "ZAR", "SEK", "NOK", "DKK",
+    "NZD", "THB", "PHP", "IDR", "MYR", "VND", "CZK", "HUF", "PLN", "TRY",
+    "ILS", "AED", "SAR", "QAR", "CLP", "PEN", "COP", "ARS", "EGP",
+})
+
+
+def _is_non_equity_row(row: dict) -> bool:
+    """Return True if a row is a non-equity / placeholder instrument.
+
+    Catches: ETF/mutual fund flags, money market fund tickers (end in XX+),
+    ISO FX currency codes used as tickers, and zero-enriched ETF holding cash
+    proxies (no market_cap, price, sector, or exchange and sourced from etf:*).
+
+    Never over-filters: requires at least one hard signal before excluding.
+    Valid ADRs with fundamentals data always pass through.
+    """
+    sym  = (row.get("symbol") or "").upper().strip()
+    srcs = row.get("discovery_sources") or []
+
+    # 1. Explicit ETF / fund flags from screener metadata
+    if row.get("is_etf") or row.get("is_fund"):
+        return True
+
+    # 2. Money market fund ticker pattern (FGXXX, VMFXX, SPAXX, VMMXX …)
+    if _MONEY_MARKET_TICKER_RE.match(sym):
+        return True
+
+    # 3. Known ISO 4217 FX / currency codes used as placeholder tickers (TWD, EUR …)
+    if sym in _KNOWN_FX_TICKERS:
+        return True
+
+    # 4. Zero-enrichment + ETF-holding source = cash / currency proxy in ETF file
+    # Valid stocks always have at least one of: market_cap, price, sector, exchange.
+    _from_etf   = any(s.startswith("etf:") for s in srcs)
+    _zero_enr   = (
+        row.get("market_cap") is None
+        and row.get("price")      is None
+        and row.get("sector")     is None
+        and row.get("exchange")   is None
+    )
+    if _from_etf and _zero_enr:
+        return True
+
+    return False
+
+
 # ── Security junk / warrant / rights / SPAC detection ─────────────────────────
 # Catches rights offerings, warrant stubs, unit offerings, blank-check SPACs.
 # Applied client-side after FMP screener returns raw results.
@@ -2576,6 +2632,10 @@ async def get_screener_hub(
     theme_last_refreshed_at:       Optional[str]  = None
     theme_next_refresh_allowed_at: Optional[str]  = None
 
+    # Non-equity and missing market_cap exclusion counters
+    rows_excluded_non_equity:          int = 0
+    rows_excluded_missing_market_cap:  int = 0
+
     # ── Load overlap sets (fast disk reads; used for per-row tagging) ──────────
     # These are loaded once per request and passed through to row building.
     social_overlap:     set[str]        = _load_social_overlap()
@@ -3245,19 +3305,43 @@ async def get_screener_hub(
             continue
         rows.append(row)
 
+    # ── Thematic: non-equity exclusion (Part 3) ───────────────────────────────
+    # Remove money market funds, FX/currency proxies, and zero-enriched ETF cash
+    # placeholders before exposing rows to user-specified filters.
+    # Applied only to the thematic tab; other tabs can contain ETF rows legitimately.
+    if tab == "thematic":
+        _pre_ne = len(rows)
+        rows    = [r for r in rows if not _is_non_equity_row(r)]
+        rows_excluded_non_equity = _pre_ne - len(rows)
+        if rows_excluded_non_equity:
+            print(
+                f"[SCREENER_HUB] non_equity exclusion: removed {rows_excluded_non_equity} "
+                f"placeholder rows for theme={theme!r}"
+            )
+
     # ── Post-build cache-only filters (no FMP, no rebuild) ────────────────────
     rows_before_filters = len(rows)
+
+    # Part 2: when a market cap filter is active, null market_cap rows are EXCLUDED.
+    # "Unknown market cap" is not the same as "under $10B" — do not let placeholder
+    # instruments pass through a user's market cap filter.
+    _mcap_filter_active = (market_cap_min is not None or market_cap_max is not None)
+
     if market_cap_min is not None:
+        _before = len(rows)
         rows = [
             r for r in rows
-            if r.get("market_cap") is None or (r.get("market_cap") or 0) >= market_cap_min
+            if r.get("market_cap") is not None and (r.get("market_cap") or 0) >= market_cap_min
         ]
+        rows_excluded_missing_market_cap += _before - len(rows)
         filters_applied["market_cap_min"] = market_cap_min
     if market_cap_max is not None:
+        _before = len(rows)
         rows = [
             r for r in rows
-            if r.get("market_cap") is None or (r.get("market_cap") or 0) <= market_cap_max
+            if r.get("market_cap") is not None and (r.get("market_cap") or 0) <= market_cap_max
         ]
+        rows_excluded_missing_market_cap += _before - len(rows)
         filters_applied["market_cap_max"] = market_cap_max
     if min_volume is not None:
         rows = [
@@ -3284,6 +3368,46 @@ async def get_screener_hub(
             ),
             reverse=True,
         )
+
+    # ── Screen quality check (Part 4) ─────────────────────────────────────────
+    # Compute per-field coverage so the frontend can show an appropriate warning
+    # when the active theme/filter combination yields too few screenable rows.
+    _screen_quality: dict[str, Any] = {}
+    _low_result_quality = False
+    _result_quality_warning: Optional[str] = None
+
+    if tab == "thematic":
+        _n = len(rows)
+        _rw_mcap   = sum(1 for r in rows if r.get("market_cap") is not None)
+        _rw_price  = sum(1 for r in rows if r.get("price")      is not None)
+        _rw_sector = sum(1 for r in rows if r.get("sector")     is not None)
+        _rw_vol    = sum(1 for r in rows if r.get("volume")     is not None)
+        _meta_cov  = round(_rw_mcap / max(_n, 1) * 100, 1)
+
+        _screen_quality = {
+            "returned_rows":      _n,
+            "rows_with_market_cap": _rw_mcap,
+            "rows_with_price":    _rw_price,
+            "rows_with_sector":   _rw_sector,
+            "rows_with_volume":   _rw_vol,
+            "metadata_coverage_pct": _meta_cov,
+        }
+
+        if _n == 0:
+            _low_result_quality = True
+            _result_quality_warning = (
+                "No screenable rows found for this theme under the active filters. "
+                "Try a broader market cap range or remove filters. "
+                "A background refresh has been scheduled if the 24-hour cap allows it."
+            )
+        elif _n < 10 or _meta_cov < 50.0:
+            _low_result_quality = True
+            _result_quality_warning = (
+                f"This theme has only {_n} screenable cached "
+                f"{'stock' if _n == 1 else 'stocks'} under the active filters "
+                f"(metadata coverage: {_meta_cov:.0f}%). "
+                "Try a broader market cap filter or check back after the daily cache updates."
+            )
 
     # ── Page-aware options enrichment (Tradier, cache-first, non-blocking) ──────
     # Runs after rows are fully built and filtered so only active page symbols
@@ -3320,14 +3444,31 @@ async def get_screener_hub(
         "rows": rows,
         # ── Filter policy ─────────────────────────────────────────────────────
         "filter_policy": {
-            "unknown_market_cap": "pass_through",
-            "unknown_volume":     "pass_through",
-            "unknown_exchange":   "pass_through",
+            "unknown_market_cap": (
+                "excluded_when_market_cap_filter_active"
+                if _mcap_filter_active else "pass_through"
+            ),
+            "unknown_volume":   "pass_through",
+            "unknown_exchange": "pass_through",
             "note": (
-                "Rows with null/unknown filter fields always pass through — "
-                "they are not excluded so un-enriched but valid symbols remain visible."
+                "When marketCapMin or marketCapMax is active, rows with missing "
+                "market_cap are excluded — unknown market cap is not the same as "
+                "under the requested cap. "
+                "Volume and exchange filters still pass through null values."
             ),
         },
+        "unknown_market_cap_policy": (
+            "excluded_when_market_cap_filter_active"
+            if _mcap_filter_active else "pass_through"
+        ),
+        "rows_excluded_missing_market_cap": rows_excluded_missing_market_cap,
+        # ── Non-equity exclusion (thematic tab) ───────────────────────────────
+        "non_equity_policy":        "excluded_from_thematic_stock_screen",
+        "rows_excluded_non_equity": rows_excluded_non_equity,
+        # ── Screen quality (thematic tab) ─────────────────────────────────────
+        "screen_quality":        _screen_quality if _screen_quality else None,
+        "low_result_quality":    _low_result_quality,
+        "result_quality_warning": _result_quality_warning,
         "options_columns_info": {
             "options_oi":
                 "Current total open interest contracts from cached Tradier options data for this symbol.",

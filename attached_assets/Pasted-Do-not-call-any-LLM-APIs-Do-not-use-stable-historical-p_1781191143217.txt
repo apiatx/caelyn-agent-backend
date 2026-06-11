@@ -1,0 +1,213 @@
+Do not call any LLM APIs.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not modify saved screens or daily screens unless needed only to avoid saving bad empty custom screens.
+
+Goal:
+Fix weak/garbage theme results in Screener Hub when the user selects a non-default theme like Memory & Storage.
+
+Observed issue:
+User selected Memory & Storage from the Theme dropdown. The frontend correctly requested the custom theme and showed:
+
+Showing: memory_storage · Custom screen
+MCap: Under $10B
+
+But backend returned only 3 weak rows:
+
+FGXXX
+TWD
+SIMO
+
+Most fields were blank:
+
+sector
+industry
+market_cap
+price
+1D %
+volume
+dollar volume
+
+This is confusing and violates the visible screener filter because rows with unknown market cap are being shown under “Under $10B.”
+
+Important product rule:
+If the active screen says MCap Under $10B, rows with missing market_cap should not pass the filter. Unknown market cap is not the same as under $10B.
+
+Part 1 — Audit Memory & Storage data path
+
+Audit GET /api/screener-hub?tab=thematic&theme=memory_storage&marketCapMax=10000000000
+
+Report:
+
+requested theme key
+resolved selected_theme
+selected_theme_label
+snapshot source
+universe_built_at
+rows_before_filters
+rows_after_filters
+top 25 symbols before filters
+top 25 symbols after filters
+for each returned symbol:
+market_cap
+sector
+industry
+exchange
+price
+volume
+dollar_volume
+is_etf / is_fund / asset_type if available
+row source: fmp_screener / thematic_rebuild / warm_job / etf_holding / lkg / static_seed / quote_cache
+
+Specifically explain why FGXXX and TWD are appearing in Memory & Storage.
+
+Part 2 — Fix market cap filter semantics
+
+When any market cap filter is active:
+
+marketCapMin
+marketCapMax
+market_cap_min
+market_cap_max
+
+Then rows with market_cap null/missing/non-numeric should be excluded.
+
+Add response metadata:
+
+rows_excluded_missing_market_cap
+unknown_market_cap_policy: "excluded_when_market_cap_filter_active"
+
+Do not show unknown market cap rows under Under $10B.
+
+Part 3 — Exclude non-screenable instruments from thematic stock screens
+
+Thematic Screener should prioritize stocks/equities, not funds/cash proxies/bad symbols.
+
+For tab=thematic:
+Exclude rows if clearly identified as:
+
+ETF
+mutual fund
+fund
+index
+currency/cash proxy
+non-equity placeholder
+invalid ticker
+
+Use existing metadata fields where available:
+
+is_etf
+is_fund
+asset_type
+type
+exchange
+company_name
+symbol patterns if already used elsewhere
+
+Do not over-filter valid ADRs unless existing app policy already excludes them.
+
+Add metadata:
+
+rows_excluded_non_equity
+non_equity_policy: "excluded_from_thematic_stock_screen"
+
+Part 4 — Enforce minimum screen quality for selected theme results
+
+For a selected theme, after filters are applied, compute:
+
+returned_rows
+rows_with_market_cap
+rows_with_price
+rows_with_sector
+rows_with_volume
+metadata_coverage_pct
+
+If returned_rows < 10 OR metadata_coverage_pct is very low:
+
+do not silently show a garbage screen as if it is valid.
+return a clear warning:
+low_result_quality: true
+result_quality_warning: "This theme has limited screenable cached stocks under the active filters. Try a broader market cap filter or refresh this theme after the daily cache updates."
+
+If returned_rows = 0:
+
+return an empty result with clear JSON message, not fallback Regional Banks and not random weak symbols.
+
+Part 5 — Theme refresh policy for weak selected themes
+
+If user explicitly selects a theme and that theme has weak cached coverage:
+
+check the 24h theme refresh cap
+if refresh is allowed, schedule or run the safe per-theme refresh path already added
+do not call FMP repeatedly
+do not call LLMs
+do not call historical full endpoint
+do not reintroduce ETF quote loops
+
+Response should say:
+
+theme_refresh_status: "refresh_scheduled" or "stale_cap_active" or "refresh_failed"
+theme_last_refreshed_at
+theme_next_refresh_allowed_at
+selected_theme
+
+If refresh cannot happen because cap is active, return the weak/empty screen with warning metadata instead of pretending it is high quality.
+
+Part 6 — Fix default vs selected behavior stays intact
+
+Keep:
+
+no theme param → backend daily default theme
+explicit theme param → requested theme
+invalid theme → UNKNOWN_THEME JSON error
+
+Do not let default Regional Banks override explicit Memory & Storage.
+But also do not return junk rows that fail active filters.
+
+Part 7 — Validate exact cases
+
+Validate:
+
+GET /api/screener-hub?tab=thematic
+Expected:
+selected_theme = daily default
+is_default_theme = true
+GET /api/screener-hub?tab=thematic&theme=memory_storage&marketCapMax=10000000000
+Expected:
+selected_theme = memory_storage
+is_default_theme = false
+no rows with missing market_cap when marketCapMax is active
+no obvious funds/currency proxies like FGXXX/TWD unless proven valid equities with metadata
+rows_excluded_missing_market_cap populated if applicable
+low_result_quality warning if few rows remain
+GET /api/screener-hub?tab=thematic&theme=memory_storage without market cap filter
+Expected:
+can show broader rows if available
+still excludes obvious non-equity instruments
+low_result_quality warning if metadata is weak
+GET /api/screener-hub?tab=thematic&theme=semiconductors&marketCapMax=10000000000
+Expected:
+still returns strong semiconductor rows
+no regression
+GET /api/screener-hub?tab=thematic&theme=regional_banks&marketCapMax=10000000000
+Expected:
+still returns strong regional bank rows
+no regression
+Repeat Memory request twice
+Expected:
+at most one per-theme refresh attempt within 24h
+no FMP hammering
+Confirm no LLM calls
+Confirm no /stable/historical-price-eod/full calls
+Confirm no ETF quote loops
+
+Return:
+
+root cause for Memory & Storage weak result
+why FGXXX/TWD appeared
+files changed
+filter policy changes
+non-equity exclusion policy
+refresh behavior
+validation results
+limitations
