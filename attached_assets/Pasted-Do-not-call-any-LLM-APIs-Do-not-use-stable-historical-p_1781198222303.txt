@@ -1,0 +1,130 @@
+Do not call any LLM APIs.
+Do not use /stable/historical-price-eod/full.
+Do not reintroduce ETF quote loops.
+Do not modify saved screens or daily screens.
+
+Goal:
+Standardize Screener Hub market cap range filtering so the frontend can use clean market cap presets across every theme.
+
+Current issue:
+The Market Cap dropdown options are not ideal. We need these user-facing ranges:
+
+Under $1B
+$1B–$10B
+$10B–$100B
+$100B+
+Custom
+All
+
+Important hidden behavior:
+“Under $1B” should actually mean $50M–$1B.
+Do not show “$50M” in the UI, but backend should enforce the $50M minimum so tiny illiquid microcaps below $50M are excluded.
+
+Default behavior:
+The default market cap preset should be Custom, with:
+
+marketCapMin = 50000000
+marketCapMax = 10000000000
+
+This preserves the current default behavior: roughly $50M–$10B.
+
+Part 1 — Audit existing backend market cap params
+
+Audit GET /api/screener-hub for:
+
+marketCapMin
+marketCapMax
+market_cap_min
+market_cap_max
+
+Confirm:
+
+params are parsed correctly
+filters apply after hydration
+missing market cap rows are excluded when market cap filter is active
+filters work for default theme and explicit selected themes
+
+Part 2 — Ensure these ranges work exactly
+
+Validate backend accepts and applies:
+
+All:
+no marketCapMin
+no marketCapMax
+Expected: no market cap filtering, except existing non-equity/junk filters still apply.
+Under $1B:
+marketCapMin=50000000
+marketCapMax=1000000000
+Expected: includes $50M–$1B only.
+$1B–$10B:
+marketCapMin=1000000000
+marketCapMax=10000000000
+$10B–$100B:
+marketCapMin=10000000000
+marketCapMax=100000000000
+$100B+:
+marketCapMin=100000000000
+no marketCapMax
+Default Custom:
+marketCapMin=50000000
+marketCapMax=10000000000
+
+Part 3 — Response metadata
+
+Make sure response includes clear filter metadata:
+
+filters_applied.marketCapMin
+filters_applied.marketCapMax
+rows_before_filters
+rows_after_filters
+rows_excluded_missing_market_cap
+unknown_market_cap_policy = "excluded_when_market_cap_filter_active" when any market cap filter is active
+
+Part 4 — Validate across themes
+
+Run validation for at least these themes:
+
+default theme
+ai_networking
+semiconductors
+regional_banks
+quantum
+memory_storage
+
+For each theme, test:
+
+All
+Under $1B
+$1B–$10B
+$10B–$100B
+$100B+
+Default Custom $50M–$10B
+
+Report row counts for each range.
+
+Part 5 — Guardrails
+
+Do not call FMP just to validate filters if cached data is already available.
+Do not call providers from saved screens/list/insights.
+Do not change theme refresh policy.
+Do not change quote/options refresh policy.
+
+Validation:
+
+Each market cap range returns rows that actually fit the range.
+Missing market cap rows are excluded when a range is active.
+“All” does not apply market cap filtering.
+Default Custom still behaves like current $50M–$10B.
+Explicit selected themes behave the same as default theme.
+No LLM calls.
+No /stable/historical-price-eod/full.
+No ETF quote loops.
+
+Return:
+
+files changed, if any
+whether backend changes were needed
+exact params for each range
+row counts by theme/range
+validation results
+limitations

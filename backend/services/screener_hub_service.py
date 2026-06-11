@@ -3500,7 +3500,7 @@ async def get_screener_hub(
             if r.get("market_cap") is not None and (r.get("market_cap") or 0) >= market_cap_min
         ]
         rows_excluded_missing_market_cap += _before - len(rows)
-        filters_applied["market_cap_min"] = market_cap_min
+        filters_applied["marketCapMin"] = market_cap_min
     if market_cap_max is not None:
         _before = len(rows)
         rows = [
@@ -3508,7 +3508,7 @@ async def get_screener_hub(
             if r.get("market_cap") is not None and (r.get("market_cap") or 0) <= market_cap_max
         ]
         rows_excluded_missing_market_cap += _before - len(rows)
-        filters_applied["market_cap_max"] = market_cap_max
+        filters_applied["marketCapMax"] = market_cap_max
     if min_volume is not None:
         _before = len(rows)
         rows = [
