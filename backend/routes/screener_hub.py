@@ -765,6 +765,19 @@ class SaveScreenRequest(BaseModel):
     metadata:     Dict[str, Any]       = Field(default_factory=dict)
 
 
+class DailyAutoSaveRequest(BaseModel):
+    model_config = {"extra": "allow"}
+
+    tab:           str
+    theme_key:     Optional[str]        = None
+    theme_label:   Optional[str]        = None
+    filters:       Dict[str, Any]       = Field(default_factory=dict)
+    query_params:  Dict[str, Any]       = Field(default_factory=dict)
+    rows:          List[Dict[str, Any]] = Field(default_factory=list)
+    metadata:      Dict[str, Any]       = Field(default_factory=dict)
+    snapshot_date: Optional[str]        = None  # YYYY-MM-DD; defaults to today
+
+
 # ── POST /api/screener-hub/saved-screens ─────────────────────────────────────
 
 @router.post("/api/screener-hub/saved-screens")
@@ -786,6 +799,7 @@ async def save_screen(request: Request, body: SaveScreenRequest):
             query_params_json=body.query_params,
             metadata_json=body.metadata,
             rows=body.rows,
+            save_type="manual",
         )
         if result is None:
             return JSONResponse(
@@ -798,21 +812,79 @@ async def save_screen(request: Request, body: SaveScreenRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+# ── POST /api/screener-hub/saved-screens/daily-auto ──────────────────────────
+# Registered BEFORE /{screen_id} (and before GET list) so FastAPI resolves
+# "daily-auto" as a fixed path, not as a screen UUID.
+
+@router.post("/api/screener-hub/saved-screens/daily-auto")
+async def daily_auto_save(request: Request, body: DailyAutoSaveRequest):
+    """
+    Upsert a daily automatic snapshot for user/tab/theme_key/date.
+
+    Rules:
+      • save_type = 'daily_auto'
+      • snapshot_date defaults to today (server date UTC)
+      • expires_at = snapshot_date + 60 days
+      • If a daily_auto screen already exists for same user+tab+theme_key+date:
+          delete its rows, update header, re-insert rows  (no duplicate)
+      • After successful upsert, runs retention cleanup (delete > 60 day old
+        daily_auto screens for this user) — no provider calls.
+    """
+    from data.screener_hub_store import upsert_daily_auto_screen, cleanup_expired_saved_screens
+    user_id = _get_user_id(request)
+    try:
+        result = upsert_daily_auto_screen(
+            user_id=user_id,
+            tab=body.tab,
+            theme_key=body.theme_key,
+            theme_label=body.theme_label,
+            filters_json=body.filters,
+            query_params_json=body.query_params,
+            metadata_json=body.metadata,
+            rows=body.rows,
+            snapshot_date_str=body.snapshot_date,
+        )
+        if result is None:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "Failed to upsert daily-auto screen — check server logs"},
+            )
+        # Retention cleanup — fire-and-forget style, don't fail the response
+        try:
+            cleanup_expired_saved_screens(user_id=user_id)
+        except Exception as ce:
+            print(f"[SAVED_SCREENS] retention cleanup warning: {ce}")
+        return JSONResponse(
+            status_code=200 if result.get("action") == "updated" else 201,
+            content={"status": result["action"], **result},
+        )
+    except Exception as e:
+        print(f"[SAVED_SCREENS] POST daily-auto error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 # ── GET /api/screener-hub/saved-screens ──────────────────────────────────────
 
 @router.get("/api/screener-hub/saved-screens")
 async def list_saved_screens_endpoint(
-    request: Request,
-    tab:        Optional[str] = Query(None),
-    theme_key:  Optional[str] = Query(None),
-    limit:      int           = Query(100, ge=1, le=500),
+    request:       Request,
+    tab:           Optional[str] = Query(None),
+    theme_key:     Optional[str] = Query(None),
+    save_type:     Optional[str] = Query(None, description="'manual' | 'daily_auto' | omit for all"),
+    lookback_days: Optional[int] = Query(None, ge=1, le=365, description="Restrict to last N days; default 60 when save_type=daily_auto"),
+    limit:         int           = Query(100, ge=1, le=500),
 ):
     """Return saved screens list (newest first) for the authenticated user."""
     from data.screener_hub_store import list_saved_screens
     user_id = _get_user_id(request)
     try:
         screens = list_saved_screens(
-            user_id=user_id, tab=tab, theme_key=theme_key, limit=limit,
+            user_id=user_id,
+            tab=tab,
+            theme_key=theme_key,
+            save_type=save_type,
+            lookback_days=lookback_days,
+            limit=limit,
         )
         return JSONResponse(content={
             "status": "ok",
@@ -829,23 +901,31 @@ async def list_saved_screens_endpoint(
 
 @router.get("/api/screener-hub/saved-screens/insights")
 async def saved_screens_insights(
-    request:      Request,
-    tab:          Optional[str] = Query(None),
-    theme_key:    Optional[str] = Query(None),
-    lookback_days: int          = Query(90, ge=1, le=365),
+    request:       Request,
+    tab:           Optional[str] = Query(None),
+    theme_key:     Optional[str] = Query(None),
+    save_type:     Optional[str] = Query(None, description="'manual' | 'daily_auto' | omit for all"),
+    lookback_days: Optional[int] = Query(None, ge=1, le=365, description="Default: 60 for daily_auto, 90 otherwise"),
 ):
     """
     Cross-screen insights: recurring tickers, performance, theme frequency,
     week-over-week persistence.  Read-only — no provider calls.
+
+    When save_type=daily_auto, lookback_days defaults to 60.
     """
     from data.screener_hub_store import get_saved_screen_insights
     user_id = _get_user_id(request)
+    # Resolve effective lookback: 60 for daily_auto, 90 for manual/all
+    effective_lookback = lookback_days
+    if effective_lookback is None:
+        effective_lookback = 60 if save_type == "daily_auto" else 90
     try:
         insights = get_saved_screen_insights(
             user_id=user_id,
             tab=tab,
             theme_key=theme_key,
-            lookback_days=lookback_days,
+            save_type=save_type,
+            lookback_days=effective_lookback,
         )
         return JSONResponse(content={"status": "ok", **insights})
     except Exception as e:

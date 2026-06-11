@@ -230,6 +230,68 @@ def ensure_tables() -> bool:
         _put_conn(conn)
 
 
+# ── Schema V2 upgrade: save_type / snapshot_date / expires_at ────────────────
+
+_DDL_V2_APPLIED = False
+
+
+def _ensure_saved_screens_v2() -> bool:
+    """
+    Idempotently add new columns and indexes to screener_saved_screens.
+
+    Columns added (all safe to call repeatedly via IF NOT EXISTS):
+      save_type     TEXT DEFAULT 'manual'  — 'manual' | 'daily_auto'
+      snapshot_date DATE NULL              — calendar date of the snapshot
+      expires_at    TIMESTAMPTZ NULL       — when daily_auto rows may be purged
+
+    Also creates three new indexes and a partial unique index that prevents
+    duplicate daily_auto screens per user/tab/theme_key/date.
+    """
+    global _DDL_V2_APPLIED
+    if _DDL_V2_APPLIED:
+        return True
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            ALTER TABLE public.screener_saved_screens
+                ADD COLUMN IF NOT EXISTS save_type
+                    TEXT NOT NULL DEFAULT 'manual',
+                ADD COLUMN IF NOT EXISTS snapshot_date
+                    DATE NULL,
+                ADD COLUMN IF NOT EXISTS expires_at
+                    TIMESTAMPTZ NULL;
+
+            CREATE INDEX IF NOT EXISTS idx_saved_screens_user_savetype_date
+                ON public.screener_saved_screens
+                (user_id, save_type, snapshot_date DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_saved_screens_user_savetype_tab_theme
+                ON public.screener_saved_screens
+                (user_id, save_type, tab, theme_key, snapshot_date DESC);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_screens_daily_auto_unique
+                ON public.screener_saved_screens
+                (user_id, tab, COALESCE(theme_key, ''), snapshot_date)
+                WHERE save_type = 'daily_auto' AND snapshot_date IS NOT NULL;
+        """)
+        conn.commit()
+        cur.close()
+        _DDL_V2_APPLIED = True
+        return True
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] _ensure_saved_screens_v2 error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
 def _jsonb(value: Any) -> str:
     """Serialize a value for a ::jsonb cast."""
     try:
@@ -1274,6 +1336,9 @@ def create_saved_screen(
     query_params_json: dict,
     metadata_json: dict,
     rows: list,
+    save_type: str = "manual",
+    snapshot_date=None,
+    expires_at=None,
 ) -> Optional[dict]:
     """
     Persist a Screener Hub result snapshot.
@@ -1283,6 +1348,7 @@ def create_saved_screen(
     Returns the created screen header dict or None on failure.
     """
     ensure_tables()
+    _ensure_saved_screens_v2()
     screen_id = _uuid4()
     row_count = len(rows)
 
@@ -1301,11 +1367,13 @@ def create_saved_screen(
             """
             INSERT INTO public.screener_saved_screens
                 (id, user_id, name, tab, theme_key, theme_label,
-                 filters_json, query_params_json, metadata_json, row_count)
+                 filters_json, query_params_json, metadata_json, row_count,
+                 save_type, snapshot_date, expires_at)
             VALUES (%s, %s, %s, %s, %s, %s,
-                    %s::jsonb, %s::jsonb, %s::jsonb, %s)
+                    %s::jsonb, %s::jsonb, %s::jsonb, %s,
+                    %s, %s, %s)
             RETURNING id, name, tab, theme_key, theme_label, row_count,
-                      created_at, updated_at
+                      created_at, updated_at, save_type, snapshot_date, expires_at
             """,
             (
                 screen_id, user_id, name.strip(), tab,
@@ -1314,6 +1382,9 @@ def create_saved_screen(
                 json.dumps(query_params_json or {}),
                 json.dumps(metadata_json or {}),
                 row_count,
+                save_type,
+                snapshot_date,
+                expires_at,
             ),
         )
         rec = cur.fetchone()
@@ -1368,14 +1439,17 @@ def create_saved_screen(
 
         if rec:
             return {
-                "id":          str(rec[0]),
-                "name":        rec[1],
-                "tab":         rec[2],
-                "theme_key":   rec[3],
-                "theme_label": rec[4],
-                "row_count":   rec[5],
-                "created_at":  rec[6].isoformat() if rec[6] else None,
-                "updated_at":  rec[7].isoformat() if rec[7] else None,
+                "id":            str(rec[0]),
+                "name":          rec[1],
+                "tab":           rec[2],
+                "theme_key":     rec[3],
+                "theme_label":   rec[4],
+                "row_count":     rec[5],
+                "created_at":    rec[6].isoformat() if rec[6] else None,
+                "updated_at":    rec[7].isoformat() if rec[7] else None,
+                "save_type":     rec[8],
+                "snapshot_date": rec[9].isoformat() if rec[9] else None,
+                "expires_at":    rec[10].isoformat() if rec[10] else None,
             }
         return None
     except Exception as e:
@@ -1393,13 +1467,20 @@ def list_saved_screens(
     user_id: str,
     tab: Optional[str] = None,
     theme_key: Optional[str] = None,
+    save_type: Optional[str] = None,
+    lookback_days: Optional[int] = None,
     limit: int = 100,
 ) -> list:
     """
     Return saved screens for user_id, newest first.
     Each entry includes a top_symbols_preview (first 8 symbols).
+
+    save_type   — filter to 'manual' or 'daily_auto'; None = all
+    lookback_days — restrict to screens created in the last N days;
+                    when save_type='daily_auto', defaults to 60 if not set
     """
     ensure_tables()
+    _ensure_saved_screens_v2()
     conn = _get_conn()
     if conn is None:
         return []
@@ -1414,13 +1495,25 @@ def list_saved_screens(
         if theme_key:
             where_clauses.append("s.theme_key = %s")
             params.append(theme_key)
+        if save_type:
+            where_clauses.append("s.save_type = %s")
+            params.append(save_type)
+        # Resolve effective lookback
+        effective_lookback = lookback_days
+        if effective_lookback is None and save_type == "daily_auto":
+            effective_lookback = 60
+        if effective_lookback is not None:
+            where_clauses.append(
+                "s.created_at >= NOW() - INTERVAL '%s days'" % int(effective_lookback)
+            )
         where_sql = " AND ".join(where_clauses)
 
         cur.execute(
             f"""
             SELECT s.id, s.name, s.tab, s.theme_key, s.theme_label,
                    s.row_count, s.created_at, s.updated_at,
-                   s.filters_json, s.metadata_json
+                   s.filters_json, s.metadata_json,
+                   s.save_type, s.snapshot_date, s.expires_at
             FROM public.screener_saved_screens s
             WHERE {where_sql}
             ORDER BY s.created_at DESC
@@ -1461,6 +1554,9 @@ def list_saved_screens(
                 "filters_summary":     r[8] if r[8] else {},
                 "metadata_summary":    _saved_screen_meta_summary(r[9]),
                 "top_symbols_preview": all_syms[:8],
+                "save_type":           r[10] if r[10] else "manual",
+                "snapshot_date":       r[11].isoformat() if r[11] else None,
+                "expires_at":          r[12].isoformat() if r[12] else None,
             })
         cur.close()
     except Exception as e:
@@ -1492,6 +1588,7 @@ def get_saved_screen(user_id: str, screen_id: str) -> Optional[dict]:
     Returns None if not found or not owned by user_id.
     """
     ensure_tables()
+    _ensure_saved_screens_v2()
     conn = _get_conn()
     if conn is None:
         return None
@@ -1501,7 +1598,8 @@ def get_saved_screen(user_id: str, screen_id: str) -> Optional[dict]:
             """
             SELECT id, user_id, name, tab, theme_key, theme_label,
                    filters_json, query_params_json, metadata_json,
-                   row_count, created_at, updated_at
+                   row_count, created_at, updated_at,
+                   save_type, snapshot_date, expires_at
             FROM public.screener_saved_screens
             WHERE id = %s::uuid AND user_id = %s
             """,
@@ -1567,6 +1665,9 @@ def get_saved_screen(user_id: str, screen_id: str) -> Optional[dict]:
             "row_count":         rec[9],
             "created_at":        rec[10].isoformat() if rec[10] else None,
             "updated_at":        rec[11].isoformat() if rec[11] else None,
+            "save_type":         rec[12] if rec[12] else "manual",
+            "snapshot_date":     rec[13].isoformat() if rec[13] else None,
+            "expires_at":        rec[14].isoformat() if rec[14] else None,
             "rows":              rows,
         }
     except Exception as e:
@@ -1642,6 +1743,7 @@ def get_saved_screen_insights(
     user_id: str,
     tab: Optional[str] = None,
     theme_key: Optional[str] = None,
+    save_type: Optional[str] = None,
     lookback_days: int = 90,
 ) -> dict:
     """
@@ -1649,8 +1751,11 @@ def get_saved_screen_insights(
 
     No provider calls — reads only screener_saved_screens,
     screener_saved_screen_rows, and screener_quote_cache.
+
+    save_type — filter to 'manual' or 'daily_auto'; None = all screens.
     """
     ensure_tables()
+    _ensure_saved_screens_v2()
     conn = _get_conn()
     if conn is None:
         return {"error": "db_unavailable"}
@@ -1667,6 +1772,9 @@ def get_saved_screen_insights(
         if theme_key:
             where.append("s.theme_key = %s")
             params.append(theme_key)
+        if save_type:
+            where.append("s.save_type = %s")
+            params.append(save_type)
         where_sql = " AND ".join(where)
 
         cur.execute(
@@ -1835,3 +1943,293 @@ def get_saved_screen_insights(
         "best_performers_since_first_saved":  best_performers,
         "worst_performers_since_first_saved": worst_performers,
     }
+
+
+# ── Daily Auto-Save helpers ───────────────────────────────────────────────────
+
+def _insert_rows_for_screen(cur, screen_id: str, user_id: str, rows: list) -> None:
+    """Insert screener_saved_screen_rows for screen_id (shared by create + upsert)."""
+    for r in rows:
+        sym = (r.get("symbol") or r.get("ticker") or "").upper()
+        if not sym:
+            continue
+        acc = r.get("accumulation")
+        cur.execute(
+            """
+            INSERT INTO public.screener_saved_screen_rows
+                (id, saved_screen_id, user_id, symbol, company_name,
+                 market_cap, sector, industry, beta, price_at_save,
+                 change_percent_1d, volume, dollar_volume,
+                 volume_to_market_cap, exchange, volume_surge,
+                 accumulation, options_oi, options_oi_change_pct,
+                 options_activity_score, role, score,
+                 hidden_gem_score, row_json)
+            VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s, %s,%s,%s,%s,%s,
+                    %s,%s,%s,%s::jsonb)
+            """,
+            (
+                _uuid4(), screen_id, user_id, sym,
+                r.get("company_name") or r.get("name"),
+                _safe_float(r.get("market_cap")),
+                r.get("sector"),
+                r.get("industry"),
+                _safe_float(r.get("beta")),
+                _safe_float(r.get("price")),
+                _safe_float(r.get("change_percent_1d")),
+                _safe_float(r.get("volume")),
+                _safe_float(r.get("dollar_volume")),
+                _safe_float(r.get("volume_to_market_cap")),
+                r.get("exchange"),
+                _safe_float(r.get("volume_surge")),
+                json.dumps(acc) if acc is not None else None,
+                _safe_float(r.get("options_oi")),
+                _safe_float(r.get("options_oi_change_pct")),
+                _safe_float(r.get("options_activity_score")),
+                r.get("role"),
+                _safe_float(r.get("score")),
+                _safe_float(r.get("hidden_gem_score")),
+                json.dumps(r),
+            ),
+        )
+
+
+def upsert_daily_auto_screen(
+    user_id: str,
+    tab: str,
+    theme_key: Optional[str],
+    theme_label: Optional[str],
+    filters_json: dict,
+    query_params_json: dict,
+    metadata_json: dict,
+    rows: list,
+    snapshot_date_str: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Upsert a daily_auto saved screen.
+
+    Upsert key: (user_id, tab, COALESCE(theme_key,''), snapshot_date).
+
+    If an existing daily_auto screen matches:
+      • delete all its current rows
+      • update the header (name, row_count, updated_at, etc.)
+      • insert the new rows
+      • action = 'updated'
+    Else:
+      • insert new screen + rows
+      • action = 'created'
+
+    expires_at = snapshot_date + 60 days.
+    No provider calls.  Returns the header dict with 'action' key.
+    """
+    ensure_tables()
+    _ensure_saved_screens_v2()
+
+    from datetime import date, timedelta, timezone as _tz, datetime as _dt
+
+    if snapshot_date_str:
+        try:
+            snap_date = date.fromisoformat(snapshot_date_str)
+        except ValueError:
+            snap_date = date.today()
+    else:
+        snap_date = date.today()
+
+    expires_at = _dt.combine(
+        snap_date + timedelta(days=60),
+        _dt.min.time(),
+        tzinfo=_tz.utc,
+    )
+
+    label = (theme_label or tab.replace("_", " ").title()).strip()
+    name = f"Daily {label} \u2014 {snap_date.strftime('%b %-d, %Y')}"
+    row_count = len(rows)
+    tk_norm = theme_key or None  # keep None for DB NULL
+
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+
+        # 1. Check for existing daily_auto screen matching the upsert key
+        cur.execute(
+            """
+            SELECT id FROM public.screener_saved_screens
+            WHERE user_id = %s
+              AND tab = %s
+              AND COALESCE(theme_key, '') = COALESCE(%s, '')
+              AND snapshot_date = %s
+              AND save_type = 'daily_auto'
+            LIMIT 1
+            """,
+            (user_id, tab, tk_norm, snap_date),
+        )
+        existing = cur.fetchone()
+
+        if existing:
+            # UPDATE path: replace rows, update header
+            existing_id = str(existing[0])
+
+            # Delete old rows (cascade would also work, but explicit is safer)
+            cur.execute(
+                "DELETE FROM public.screener_saved_screen_rows WHERE saved_screen_id = %s::uuid",
+                (existing_id,),
+            )
+
+            # Update header
+            cur.execute(
+                """
+                UPDATE public.screener_saved_screens SET
+                    name              = %s,
+                    theme_label       = %s,
+                    filters_json      = %s::jsonb,
+                    query_params_json = %s::jsonb,
+                    metadata_json     = %s::jsonb,
+                    row_count         = %s,
+                    expires_at        = %s,
+                    updated_at        = NOW()
+                WHERE id = %s::uuid
+                RETURNING id, name, tab, theme_key, theme_label, row_count,
+                          created_at, updated_at, save_type, snapshot_date, expires_at
+                """,
+                (
+                    name, theme_label,
+                    json.dumps(filters_json or {}),
+                    json.dumps(query_params_json or {}),
+                    json.dumps(metadata_json or {}),
+                    row_count,
+                    expires_at,
+                    existing_id,
+                ),
+            )
+            rec = cur.fetchone()
+            _insert_rows_for_screen(cur, existing_id, user_id, rows)
+            conn.commit()
+            cur.close()
+            if rec:
+                return {
+                    "action":        "updated",
+                    "id":            str(rec[0]),
+                    "name":          rec[1],
+                    "tab":           rec[2],
+                    "theme_key":     rec[3],
+                    "theme_label":   rec[4],
+                    "row_count":     rec[5],
+                    "created_at":    rec[6].isoformat() if rec[6] else None,
+                    "updated_at":    rec[7].isoformat() if rec[7] else None,
+                    "save_type":     rec[8],
+                    "snapshot_date": rec[9].isoformat() if rec[9] else None,
+                    "expires_at":    rec[10].isoformat() if rec[10] else None,
+                }
+            return None
+
+        else:
+            # INSERT path: new screen + rows
+            new_id = _uuid4()
+            cur.execute(
+                """
+                INSERT INTO public.screener_saved_screens
+                    (id, user_id, name, tab, theme_key, theme_label,
+                     filters_json, query_params_json, metadata_json,
+                     row_count, save_type, snapshot_date, expires_at)
+                VALUES (%s, %s, %s, %s, %s, %s,
+                        %s::jsonb, %s::jsonb, %s::jsonb,
+                        %s, 'daily_auto', %s, %s)
+                RETURNING id, name, tab, theme_key, theme_label, row_count,
+                          created_at, updated_at, save_type, snapshot_date, expires_at
+                """,
+                (
+                    new_id, user_id, name, tab, tk_norm, theme_label,
+                    json.dumps(filters_json or {}),
+                    json.dumps(query_params_json or {}),
+                    json.dumps(metadata_json or {}),
+                    row_count,
+                    snap_date,
+                    expires_at,
+                ),
+            )
+            rec = cur.fetchone()
+            _insert_rows_for_screen(cur, new_id, user_id, rows)
+            conn.commit()
+            cur.close()
+            if rec:
+                return {
+                    "action":        "created",
+                    "id":            str(rec[0]),
+                    "name":          rec[1],
+                    "tab":           rec[2],
+                    "theme_key":     rec[3],
+                    "theme_label":   rec[4],
+                    "row_count":     rec[5],
+                    "created_at":    rec[6].isoformat() if rec[6] else None,
+                    "updated_at":    rec[7].isoformat() if rec[7] else None,
+                    "save_type":     rec[8],
+                    "snapshot_date": rec[9].isoformat() if rec[9] else None,
+                    "expires_at":    rec[10].isoformat() if rec[10] else None,
+                }
+            return None
+
+    except Exception as e:
+        print(f"[SAVED_SCREENS] upsert_daily_auto error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def cleanup_expired_saved_screens(user_id: Optional[str] = None) -> int:
+    """
+    Delete daily_auto saved screens whose snapshot_date is older than 60 days.
+    Rows cascade automatically.
+
+    Manual saved screens (save_type != 'daily_auto') are NEVER deleted.
+
+    user_id — when provided, only clean up that user's screens.
+               When None, clean up all users (suitable for a global background job).
+
+    Returns the number of screens deleted.
+    """
+    ensure_tables()
+    _ensure_saved_screens_v2()
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    try:
+        cur = conn.cursor()
+        if user_id:
+            cur.execute(
+                """
+                DELETE FROM public.screener_saved_screens
+                WHERE save_type = 'daily_auto'
+                  AND snapshot_date < CURRENT_DATE - INTERVAL '60 days'
+                  AND user_id = %s
+                """,
+                (user_id,),
+            )
+        else:
+            cur.execute(
+                """
+                DELETE FROM public.screener_saved_screens
+                WHERE save_type = 'daily_auto'
+                  AND snapshot_date < CURRENT_DATE - INTERVAL '60 days'
+                """
+            )
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        if deleted:
+            print(f"[SAVED_SCREENS] retention cleanup: deleted {deleted} expired daily_auto screen(s)")
+        return deleted
+    except Exception as e:
+        print(f"[SAVED_SCREENS] cleanup error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        _put_conn(conn)

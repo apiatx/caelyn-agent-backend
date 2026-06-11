@@ -1,0 +1,177 @@
+Backend only.
+Do not touch frontend.
+Do not modify current Screener Hub screen logic.
+Do not call FMP.
+Do not call Tradier live.
+Do not call options providers live.
+Do not trigger screener rebuilds.
+Do not run scheduled jobs.
+Do not call admin refresh endpoints.
+
+Goal:
+Extend Saved Screens into Daily Screener History with 60-day retention.
+
+Current backend already has:
+
+* screener_saved_screens
+* screener_saved_screen_rows
+* POST /api/screener-hub/saved-screens
+* GET /api/screener-hub/saved-screens
+* GET /api/screener-hub/saved-screens/{id}
+* DELETE /api/screener-hub/saved-screens/{id}
+* GET /api/screener-hub/saved-screens/insights
+
+New behavior:
+The app should automatically keep one daily saved screener snapshot per user/tab/theme/date, retain only the last 60 days, and delete older daily snapshots/rows from Neon.
+
+Manual saved screens should still work and should not be deleted by daily retention cleanup.
+
+Part 1 — Extend schema
+
+Add fields to screener_saved_screens if missing:
+
+* save_type text default 'manual'
+  allowed values: 'manual', 'daily_auto'
+* snapshot_date date nullable
+* expires_at timestamptz nullable
+
+If this backend uses ensure_tables(), add safe ALTER TABLE IF NOT EXISTS logic.
+If there is a migration pattern, use the existing migration pattern.
+
+Add indexes:
+
+* screener_saved_screens(user_id, save_type, snapshot_date desc)
+* screener_saved_screens(user_id, save_type, tab, theme_key, snapshot_date desc)
+
+If safe, add uniqueness for daily auto snapshots:
+
+* one daily_auto screen per user_id + tab + theme_key + snapshot_date
+
+Part 2 — Add daily auto-save endpoint
+
+Add:
+
+POST /api/screener-hub/saved-screens/daily-auto
+
+Body:
+{
+"tab": "thematic",
+"theme_key": optional string,
+"theme_label": optional string,
+"filters": object,
+"query_params": object,
+"rows": array,
+"metadata": object optional,
+"snapshot_date": optional YYYY-MM-DD
+}
+
+Behavior:
+
+* Save exactly the rows provided by the frontend.
+* Do not re-run the screener.
+* Do not call providers.
+* If a daily_auto screen already exists for same user_id + tab + theme_key + snapshot_date:
+
+  * replace/update that saved screen and rows, do not create a duplicate.
+* Set save_type = 'daily_auto'
+* Set snapshot_date to provided date or current server date.
+* Set expires_at = snapshot_date + 60 days.
+* Generate name:
+  “Daily {Theme or Tab} — {MMM D, YYYY}”
+
+Part 3 — Add retention cleanup
+
+Add helper:
+cleanup_expired_saved_screens(user_id optional)
+
+Behavior:
+
+* delete saved screens where save_type='daily_auto' and snapshot_date < current_date - 60 days
+* rows delete via cascade
+* do not delete manual saved screens
+
+Run cleanup safely:
+
+* after successful daily-auto save
+* optionally on daily-auto list/insights if cheap
+
+Part 4 — Update list endpoint
+
+GET /api/screener-hub/saved-screens should support:
+
+* save_type optional: manual | daily_auto
+* limit optional
+* lookback_days optional, default 60 for daily_auto
+
+Return:
+
+* id
+* save_type
+* snapshot_date
+* expires_at
+* name
+* row_count
+* tab
+* theme_key
+* theme_label
+* created_at
+* top_symbols_preview
+
+Part 5 — Update insights endpoint
+
+GET /api/screener-hub/saved-screens/insights should support:
+
+* save_type optional
+* lookback_days default 60 when save_type=daily_auto, otherwise 90
+
+Insights should continue returning:
+
+* recurring_tickers
+* newly_appearing_tickers
+* disappeared_tickers
+* tickers_by_appearance_count
+* tickers_week_over_week
+* themes_by_frequency
+* emerging_themes
+* best_performers_since_first_saved
+* worst_performers_since_first_saved
+* saved_screen_count
+* date_range
+
+Use existing quote cache only for current price.
+Do not call FMP.
+Do not call Tradier live.
+Do not refresh quotes.
+
+Part 6 — Preserve manual saves
+
+Do not break:
+
+* POST /api/screener-hub/saved-screens
+* GET saved screen list
+* GET saved screen detail
+* DELETE saved screen
+* insights for manual/all saved screens
+
+Part 7 — Validation
+
+Validate without provider calls:
+
+1. POST daily-auto screen with sample rows for today.
+2. POST same daily-auto screen again with changed rows and confirm it updates/replaces, not duplicates.
+3. GET /api/screener-hub/saved-screens?save_type=daily_auto returns one screen for today.
+4. GET detail works.
+5. GET /api/screener-hub/saved-screens/insights?save_type=daily_auto works.
+6. Insert or simulate an expired daily_auto screen older than 60 days, run cleanup, confirm it is deleted and rows cascade.
+7. Confirm manual saved screens are not deleted by daily cleanup.
+8. Confirm no FMP/Tradier/provider calls.
+
+Return:
+
+* files changed
+* schema changes
+* endpoint contract
+* upsert behavior
+* retention behavior
+* validation results
+* limitations
