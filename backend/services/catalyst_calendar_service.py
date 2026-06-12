@@ -499,6 +499,24 @@ def _score_importance(
     return "low"
 
 
+# Generic placeholder strings that must never appear as display_title.
+# If the resolution chain produces one of these, we escalate to richer fields.
+_GENERIC_DISPLAY_TITLES: frozenset[str] = frozenset({
+    "macro",
+    "m",
+    "economic release",
+    "economic releases",
+    "treasury / macro",
+    "treasury/macro",
+    "category",
+    "indicator",
+    "event",
+    "release",
+    "n/a",
+    "",
+})
+
+
 def _build_event(**kw) -> dict:
     """Build a normalized event dict with all schema fields."""
     _title = kw.get("title", "")
@@ -509,6 +527,19 @@ def _build_event(**kw) -> dict:
         or kw.get("companyName")
         or ""
     )
+    # Safety hardening: if the resolved display_title is a generic placeholder,
+    # escalate through richer fields before giving up.  The priority is:
+    #   indicatorName → indicator_name → event_name → eventName → companyName
+    # Only falls back to the original value if nothing better exists.
+    if _display_title.strip().lower() in _GENERIC_DISPLAY_TITLES:
+        _display_title = (
+            kw.get("indicatorName")
+            or kw.get("indicator_name")
+            or kw.get("event_name")
+            or kw.get("eventName")
+            or kw.get("companyName")
+            or _display_title
+        )
     return {
         "id":                 kw.get("id", ""),
         "symbol":             kw.get("symbol"),
