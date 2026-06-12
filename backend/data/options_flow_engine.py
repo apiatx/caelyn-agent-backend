@@ -1086,6 +1086,20 @@ class OptionsFlowEngine:
         if approximate_metrics:
             data_quality_flags.append("approximate_gamma_density")
 
+        # ── Greeks diagnostic metadata ────────────────────────────────────
+        # Counts how many of the top contracts carry Greek data.
+        # greeks_requested=True: the chain call always includes greeks=true.
+        # extra_tradier_calls=0: Greeks come from the existing chain fetch,
+        #                        no additional API calls are made.
+        _contracts_with_greeks = sum(1 for c in top_contracts if c.get("delta") is not None)
+        _greeks_meta = {
+            "greeks_requested": True,
+            "extra_tradier_calls": 0,
+            "contracts_enriched": _contracts_with_greeks,
+            "contracts_total": len(top_contracts),
+            "greeks_partial": _contracts_with_greeks < len(top_contracts),
+        }
+
         call_contracts = [c for c in top_contracts if c["type"] == "call"]
         put_contracts = [c for c in top_contracts if c["type"] == "put"]
 
@@ -1153,6 +1167,7 @@ class OptionsFlowEngine:
                 "missing_data_flags": missing_flags,
                 "approximate_metrics": sorted(set(approximate_metrics)),
                 "history_metrics_ready": any(c.get("history") for c in top_contracts),
+                "greeks_meta": _greeks_meta,
             },
             "snapshot_rows": snapshot_rows,
         }

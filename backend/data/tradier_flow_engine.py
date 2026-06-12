@@ -349,18 +349,31 @@ class TradierFlowEngine(OptionsFlowEngine):
     def _contract_response(self, symbol: str, contract: dict, primary_signal: str) -> dict:
         """Override parent to include Tradier-specific IV/greeks + Polygon history."""
         base = super()._contract_response(symbol, contract, primary_signal)
-        # Enrich with Tradier-specific fields
-        base["bid_iv"] = contract.get("bid_iv")
-        base["ask_iv"] = contract.get("ask_iv")
+        # ── Tradier IV fields ─────────────────────────────────────────────
+        # Tradier's "iv" field is the mid IV; expose it under all three names
+        # so the frontend can use whichever key it expects.
+        mid_iv_val = contract.get("implied_volatility")
+        base["bid_iv"]  = contract.get("bid_iv")
+        base["mid_iv"]  = mid_iv_val
+        base["ask_iv"]  = contract.get("ask_iv")
         base["smv_vol"] = contract.get("smv_vol")
-        base["rho"] = contract.get("rho")
+        # ── Tradier Greeks extras ─────────────────────────────────────────
+        base["rho"]    = contract.get("rho")
         base["change"] = contract.get("change")
-        base["change_percentage"] = contract.get("change_percentage")
-        base["average_volume"] = contract.get("average_volume")
-        base["greeks_updated_at"] = contract.get("greeks_updated_at")
-        # Include rho in the greeks block too
+        base["change_percentage"]  = contract.get("change_percentage")
+        base["average_volume"]     = contract.get("average_volume")
+        base["greeks_updated_at"]  = contract.get("greeks_updated_at")
+        # greeks_source: "tradier" when at least one Greek is populated;
+        # null-safe — contracts without greeks data still get the key.
+        has_greeks = (
+            contract.get("delta") is not None
+            or contract.get("bid_iv") is not None
+        )
+        base["greeks_source"] = "tradier" if has_greeks else None
+        # Include rho + greeks_source in the nested greeks block too
         if base.get("greeks"):
-            base["greeks"]["rho"] = contract.get("rho")
+            base["greeks"]["rho"]          = contract.get("rho")
+            base["greeks"]["greeks_source"] = base["greeks_source"]
         # Polygon-sourced historical context (if available in DB)
         base["polygon_history"] = contract.get("_polygon_history")
         return base

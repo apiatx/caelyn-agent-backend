@@ -1,0 +1,82 @@
+Audit and, if safe, add Tradier Greeks support to the existing Options Flow backend without increasing API calls unless absolutely necessary.
+
+Important:
+- Do not invent a new options pipeline.
+- Do not replace the existing Options Flow service/router/provider structure.
+- Preserve existing endpoints and response shapes.
+- Add fields in a backward-compatible way with optional/null values.
+- Do not add FMP calls.
+- Do not add a broad per-ticker options chain scan.
+- Tradier is the source for options flow data.
+
+Audit first:
+1. Find the current Options Flow endpoint(s), service(s), and Tradier provider/client methods.
+2. Determine whether the current flow already calls:
+   - Tradier /markets/options/chains, or
+   - Tradier /markets/quotes for option contract symbols, or
+   - another Tradier option endpoint.
+3. Determine whether current screener rows already include option contract symbols.
+4. Report whether Greeks can be added by simply passing `greeks=true` to an existing Tradier request, or whether additional calls would be required.
+
+Implementation rules:
+- If the existing code already calls Tradier option chains for the displayed contracts:
+  - Add `greeks=true` to the existing chain request.
+  - Parse and attach:
+    - delta
+    - gamma
+    - theta
+    - vega
+    - rho
+    - bid_iv
+    - mid_iv
+    - ask_iv
+    - smv_vol
+    - greeks_updated_at
+  - Keep all fields optional/null-safe.
+
+- If the existing code already calls Tradier quotes for option contract symbols:
+  - Add `greeks=true` to that existing quotes request.
+  - Parse the same Greek/IV fields.
+  - Do not create an additional request.
+
+- If current rows have contract symbols but no existing contract quote call:
+  - Add at most one batched Tradier quote request per Options Flow response for the visible/returned contracts only.
+  - Include `greeks=true`.
+  - Cache the Greek payload in Neon or the existing cache layer with a short TTL, preferably 5–15 minutes.
+  - Do not run this enrichment for unlimited rows.
+  - Add a safe max limit such as top 25 or whatever matches the existing screener response size.
+
+- If current rows do not have contract symbols:
+  - Do not add broad chain fetching.
+  - Return an audit note explaining that Greeks require contract-level option symbols.
+  - Do not degrade performance or API usage.
+
+Response shape:
+Add optional fields to each option flow row where available:
+{
+  "delta": number | null,
+  "gamma": number | null,
+  "theta": number | null,
+  "vega": number | null,
+  "rho": number | null,
+  "bid_iv": number | null,
+  "mid_iv": number | null,
+  "ask_iv": number | null,
+  "smv_vol": number | null,
+  "greeks_updated_at": string | null,
+  "greeks_source": "tradier" | null
+}
+
+Diagnostics:
+- Add lightweight logging or diagnostic metadata showing:
+  - whether Greeks were requested
+  - whether Greeks came from cache or live Tradier
+  - number of contracts enriched
+  - number of extra Tradier calls, if any
+
+Validation:
+1. Confirm existing Options Flow endpoint still works.
+2. Confirm Greeks appear for contracts when Tradier returns them.
+3. Confirm rows without Greeks do not crash frontend.
+4. Confirm API call count does not increase if Greeks were added to an existing Tradier request.
+5. Confirm any new enrichment path is capped and cached.
