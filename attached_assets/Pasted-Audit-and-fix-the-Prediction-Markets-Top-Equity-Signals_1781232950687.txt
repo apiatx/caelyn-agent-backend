@@ -1,0 +1,82 @@
+Audit and fix the Prediction Markets → Top Equity Signals backend wiring. Do not invent a replacement pipeline. Preserve the existing endpoint paths, existing services, existing cache/storage patterns, and current frontend response shape where possible. First inspect the current prediction markets/equity-signal files and identify the exact endpoint(s) powering the “Top Equity Signals” cards.
+
+Problem:
+The UI currently groups broad categories like “Geopolitics / War / Trade / Sanctions” and displays “Odds rising — 24h: +19.0pp, 7d: +9.0pp” without exposing exactly which market/outcome those odds refer to. This is confusing and may be directionally wrong. Example: the card shows supporting markets such as peace deal / ceasefire / nuclear deal questions, while the bullish sectors shown are Defense/Energy/Gold. If the tracked outcome is peace/de-escalation YES, that should generally be risk-on, not defense-war-premium bullish. Unless the system is tracking the inverse/NO side, this may be polarity-crossed.
+
+Required audit:
+1. Find the backend endpoint that returns Top Equity Signals for the Prediction Markets page.
+2. Trace each card from raw Polymarket/Kalshi market data to:
+   - category/group label
+   - displayed odds trend
+   - confidence label
+   - bullish sectors
+   - bearish sectors
+   - bullish tickers
+   - bearish tickers
+   - supporting markets list
+3. Confirm whether the displayed odds movement is:
+   - aggregate average across multiple markets,
+   - top driver market only,
+   - max delta market,
+   - weighted score,
+   - or something else.
+4. Confirm whether each market uses YES odds, NO odds, midpoint odds, or inverted odds.
+5. Confirm whether the sector/ticker mapping uses the same side as the displayed odds.
+6. Add diagnostics to the response so we can inspect this in the browser/network tab without guessing.
+
+Required backend response additions:
+Keep the existing fields, but add these fields to each Top Equity Signal card:
+
+- primary_driver_market:
+  - id
+  - source: "polymarket" | "kalshi"
+  - question/title
+  - outcome_label being tracked, e.g. "Yes", "No", "Trump wins", etc.
+  - current_probability
+  - probability_24h_ago
+  - probability_7d_ago
+  - delta_24h_pp
+  - delta_7d_pp
+  - direction: "rising" | "falling" | "mixed"
+  - semantic_event_type, e.g. "war_escalation", "peace_deal", "tariff_escalation", "rate_cut", "inflation_hot", etc.
+  - equity_regime_read, e.g. "risk_off", "risk_on", "inflationary", "growth_positive", "growth_negative"
+  - polarity: "direct" | "inverted"
+  - why_this_drives_signal: one short sentence
+
+- driver_markets:
+  Array of all markets contributing to the card, each with:
+  - id
+  - source
+  - question/title
+  - outcome_label
+  - current_probability
+  - delta_24h_pp
+  - delta_7d_pp
+  - semantic_event_type
+  - equity_regime_read
+  - polarity
+  - contribution_score
+  - mapped_bullish_sectors
+  - mapped_bearish_sectors
+
+- confidence_explanation:
+  Short string explaining what “confidence” means. Example:
+  “Confidence reflects mapping/data agreement across contributing markets, not trade certainty.”
+
+- signal_integrity:
+  - has_mixed_semantics: boolean
+  - has_polarity_conflict: boolean
+  - warning: nullable string
+
+Important logic correction:
+Do not aggregate peace/de-escalation markets and war/escalation markets into one directional card unless the card explicitly says “mixed.” If contributing markets have conflicting semantic_event_type or equity_regime_read, mark has_mixed_semantics=true and do not show a clean bullish/bearish sector call as if it is one signal.
+
+Specific expected mappings:
+- peace deal / ceasefire / nuclear deal progress odds rising = de-escalation / risk-on. Generally bullish: airlines, consumer discretionary, financials, broad beta. Generally bearish/less bullish: defense, oil, gold.
+- war escalation / sanctions escalation / trade war escalation odds rising = risk-off or supply-shock. Generally bullish: defense, energy/oil, gold/miners, cybersecurity. Generally bearish: airlines, transports, consumer discretionary, industrial cyclicals.
+- tariffs/trade war odds rising = inflationary/supply-chain risk. Generally bullish may include domestic reshoring/selected industrials; bearish may include import-heavy retail, semis with Taiwan/China exposure depending on event.
+- rate cut odds rising = usually bullish long-duration growth/tech/REITs unless caused by recession panic. Must distinguish “dovish growth-supportive” vs “recession risk.”
+- inflation hot odds rising = bearish long-duration growth; bullish energy/materials/gold depending context.
+
+Output:
+Before making code changes, summarize the current wiring and whether it is crossed or just unclear. Then make the smallest safe changes needed to expose exact driver market/outcome/polarity diagnostics and prevent misleading aggregation.

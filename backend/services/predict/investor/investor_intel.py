@@ -28,7 +28,7 @@ from services.predict.scoring import score_markets
 from services.predict.investor.classifier import classify_markets, filter_equity_relevant
 from services.predict.investor.clustering import build_theme_clusters
 from services.predict.investor.impact_engine import (
-    get_theme_impact, SECTOR_STOCKS, THEME_BASKETS, ThemeImpact,
+    get_theme_impact, SECTOR_STOCKS, THEME_BASKETS, ThemeImpact, THEME_IMPACTS,
 )
 from services.predict.investor.regime import compute_regime_scoreboard
 from services.predict.investor.themes import THEME_BY_ID
@@ -276,6 +276,22 @@ def _compute_cluster_impacts(clusters: list[dict]) -> dict[str, ThemeImpact]:
     return impacts
 
 
+def _sector_mapping_for_driver(dm: dict, theme_id: str) -> tuple[list[str], list[str]]:
+    """
+    Return (mapped_bullish_sectors, mapped_bearish_sectors) for a single driver market.
+
+    Uses the market's polarity to decide which theme impact to pull:
+      - "direct"   → theme's "rising"  impact sectors
+      - "inverted" → theme's "falling" impact sectors (de-escalation, rate-cut, etc.)
+    """
+    polarity = dm.get("polarity", "direct")
+    lookup_dir = "falling" if polarity == "inverted" else "rising"
+    imp = THEME_IMPACTS.get((theme_id, lookup_dir))
+    if imp is None:
+        return [], []
+    return imp.bullish_sectors[:3], imp.bearish_sectors[:3]
+
+
 def _build_top_equity_signals(
     clusters: list[dict],
     impacts: dict[str, ThemeImpact],
@@ -286,6 +302,12 @@ def _build_top_equity_signals(
 
     Rank clusters by:
       confidence_score * regime_signal_strength * market_count
+
+    Each signal now includes diagnostic fields:
+      primary_driver_market  — the single highest-contribution market with full attribution
+      driver_markets         — all contributing markets with per-market sector mappings
+      confidence_explanation — plain-English definition of the confidence score
+      signal_integrity       — polarity/semantic conflict flags and warning text
     """
     scored_clusters = sorted(
         clusters,
@@ -300,58 +322,98 @@ def _build_top_equity_signals(
     signals = []
     for cl in scored_clusters:
         tid = cl["theme_id"]
-        impact = impacts.get(tid)
         theme_def = THEME_BY_ID.get(tid)
 
         direction = cl.get("summary_direction", "mixed")
         shift_24h = cl.get("weighted_odds_shift_24h", 0)
-        shift_7d = cl.get("weighted_odds_shift_7d", 0)
+        shift_7d  = cl.get("weighted_odds_shift_7d", 0)
+
+        # ── Polarity conflict handling ─────────────────────────────────────
+        # If the cluster contains markets with opposing equity polarities
+        # (e.g. war-escalation and peace-deal both inside geopolitics_war_trade),
+        # force the impact lookup to "mixed" so we don't present a clean
+        # directional bullish/bearish call that is potentially backwards.
+        has_conflict = cl.get("has_polarity_conflict", False)
+        effective_direction = "mixed" if has_conflict else direction
+        impact = get_theme_impact(tid, effective_direction)
 
         odds_summary = _odds_move_summary(shift_24h, shift_7d, direction)
 
         if impact:
-            bullish_stocks = impact.bullish_stocks[:5]
-            bearish_stocks = impact.bearish_stocks[:5]
+            bullish_stocks  = impact.bullish_stocks[:5]
+            bearish_stocks  = impact.bearish_stocks[:5]
             bullish_sectors = impact.bullish_sectors
             bearish_sectors = impact.bearish_sectors
-            regime_impact = impact.regime_implications
-            narrative = impact.narrative
+            regime_impact   = impact.regime_implications
+            narrative       = impact.narrative
         else:
-            bullish_stocks = []
-            bearish_stocks = []
+            bullish_stocks  = []
+            bearish_stocks  = []
             bullish_sectors = theme_def.bullish_bias_sectors if theme_def else []
             bearish_sectors = theme_def.bearish_bias_sectors if theme_def else []
-            regime_impact = []
-            narrative = ""
+            regime_impact   = []
+            narrative       = ""
 
         conf_score = cl.get("confidence_score", 0)
         confidence_label = (
-            "high" if conf_score >= 60 else
+            "high"   if conf_score >= 60 else
             "medium" if conf_score >= 35 else
             "low"
         )
 
         why_it_matters = _why_it_matters(tid, direction, cl)
 
+        # ── Diagnostic: primary driver market ─────────────────────────────
+        raw_primary = cl.get("primary_driver_market") or {}
+        bull_s, bear_s = _sector_mapping_for_driver(raw_primary, tid)
+        primary_driver_market = {
+            **raw_primary,
+            "mapped_bullish_sectors": bull_s,
+            "mapped_bearish_sectors": bear_s,
+        } if raw_primary else None
+
+        # ── Diagnostic: all driver markets with per-market sector mappings ─
+        driver_markets: list[dict] = []
+        for dm in cl.get("supporting_markets", []):
+            b_s, r_s = _sector_mapping_for_driver(dm, tid)
+            driver_markets.append({**dm, "mapped_bullish_sectors": b_s, "mapped_bearish_sectors": r_s})
+
+        # ── Diagnostic: signal integrity ──────────────────────────────────
+        signal_integrity = {
+            "has_mixed_semantics":  cl.get("has_mixed_semantics", False),
+            "has_polarity_conflict": has_conflict,
+            "warning": cl.get("signal_integrity_warning"),
+        }
+
         signals.append({
-            "theme_id": tid,
-            "title": f"{cl.get('theme_emoji', '')} {cl['theme_name']}",
-            "summary": cl.get("description", ""),
-            "why_it_matters": why_it_matters,
+            # ── existing fields (unchanged) ───────────────────────────────
+            "theme_id":        tid,
+            "title":           f"{cl.get('theme_emoji', '')} {cl['theme_name']}",
+            "summary":         cl.get("description", ""),
+            "why_it_matters":  why_it_matters,
             "supporting_markets": cl.get("supporting_markets", [])[:4],
-            "market_count": cl.get("market_count", 0),
+            "market_count":    cl.get("market_count", 0),
             "odds_move_summary": odds_summary,
             "summary_direction": direction,
             "bullish_sectors": bullish_sectors,
             "bearish_sectors": bearish_sectors,
-            "bullish_stocks": bullish_stocks,
-            "bearish_stocks": bearish_stocks,
-            "asset_baskets": THEME_BASKETS.get(tid, []),
-            "regime_impact": regime_impact,
-            "confidence": confidence_label,
+            "bullish_stocks":  bullish_stocks,
+            "bearish_stocks":  bearish_stocks,
+            "asset_baskets":   THEME_BASKETS.get(tid, []),
+            "regime_impact":   regime_impact,
+            "confidence":      confidence_label,
             "confidence_score": conf_score,
-            "narrative": _narrative_with_qualifier(narrative, confidence_label, direction),
+            "narrative":       _narrative_with_qualifier(narrative, confidence_label, effective_direction),
             "watchlist_priority": "high" if conf_score >= 60 else "medium" if conf_score >= 35 else "watch",
+            # ── new diagnostic fields ─────────────────────────────────────
+            "primary_driver_market": primary_driver_market,
+            "driver_markets":        driver_markets,
+            "confidence_explanation": (
+                "Confidence reflects how many markets agree directionally, "
+                "how equity-relevant they are, and how consistently they move. "
+                "It does not reflect trade certainty or signal precision."
+            ),
+            "signal_integrity": signal_integrity,
         })
 
     return signals
