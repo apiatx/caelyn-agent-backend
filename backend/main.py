@@ -13320,6 +13320,53 @@ async def home_risk_intelligence(
         )
 
 
+# ── GET /api/home/top-catalysts ──────────────────────────────────────
+# Compact Top Catalysts feed for the Home page.
+# Reuses Calendar Top Catalysts source data; applies macro grouping + limits.
+# Zero new external API calls.
+
+@app.get("/api/home/top-catalysts")
+@limiter.limit("60/minute")
+async def home_top_catalysts(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Home compact Top Catalysts feed.
+
+    Reuses the same underlying data as Calendar → Top Catalysts This Week
+    (top_catalysts_service + calendar snapshot cache).
+
+    Returns 6–8 cards max:
+      • Macro events grouped by category (inflation / fed-rates / labor /
+        growth / treasury / consumer / housing) — max 3 macro groups
+      • Top earnings by options-flow + watchlist score — max 3 cards
+      • High-signal IPOs / splits — max 2 cards
+
+    Macro duplicates (CPI YoY, CPI MoM, Core CPI …) are consolidated into
+    a single "Inflation Data" card with a subtitle listing the releases.
+
+    Pure read across already-cached services. No FMP / Tradier / LLM calls.
+    """
+    await _wait_for_init()
+    try:
+        from services.home_top_catalysts import build_home_top_catalysts
+        result = build_home_top_catalysts()
+        return JSONResponse(content=result)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "view":     "home_compact",
+                "source":   "calendar_top_catalysts",
+                "error":    str(exc),
+                "catalysts": [],
+            },
+        )
+
+
 # ── GET /api/macro/dashboard ─────────────────────────────────────────
 
 @app.get("/api/macro/dashboard")

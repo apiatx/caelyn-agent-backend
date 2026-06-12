@@ -1,0 +1,246 @@
+Backend task: create a Home-specific compact Top Catalysts feed.
+
+Important scope:
+
+* Do not change the Calendar page.
+* Do not change the existing Calendar “Top Catalysts This Week” tab behavior.
+* Do not change Earnings logic.
+* Do not create new FMP/Tradier/LLM calls.
+* Reuse the same existing backend data/source that powers Calendar → Top Catalysts This Week.
+
+Goal:
+The Home page currently has an “Economic Events” section that pulls from Economic Releases and Treasury / Macro calendar tabs. Replace that concept with a compact “Top Catalysts This Week” feed that summarizes the most market-relevant catalysts across:
+
+* priority earnings
+* major IPOs
+* important macro/economic releases
+* treasury/rate events
+* meaningful dividends/splits only if actually relevant
+
+The Calendar Top Catalysts tab can remain broad. The Home version should be a short, high-signal quick-glance view.
+
+Implementation guidance:
+
+1. Audit existing catalyst backend structure.
+   Find:
+
+* the route/service used by Calendar → Top Catalysts This Week
+* the route/service currently used by Home → Economic Events
+* the data shape returned to the Home page today
+* whether Calendar top catalysts are computed server-side or frontend-side
+
+2. Preserve existing Calendar behavior.
+   Do not modify the existing top catalysts route in a way that changes the Calendar page.
+
+Preferred approach:
+
+* Add a new backend route or response mode specifically for Home, such as:
+
+  * `/api/home/top-catalysts`
+  * or `/api/catalysts/top-this-week?view=home_compact`
+    Use whichever matches existing route conventions best.
+
+3. Source data from existing catalyst aggregation.
+   The Home compact feed should reuse the same underlying data as Calendar → Top Catalysts This Week.
+
+Do not call each tab independently from Home.
+Do not introduce duplicate aggregation logic if there is already a central catalyst service.
+Do not add new provider calls.
+
+4. Add macro/economic consolidation logic.
+   Problem:
+   The current top catalysts feed can show too many similar macro items, such as CPI YoY, CPI MoM, Core CPI, Inflation Rate YoY, Inflation Rate MoM, etc. These should not become separate urgent Home cards every day.
+
+Create a normalization/grouping layer for macro and treasury events.
+
+Examples:
+
+Inflation group:
+
+* CPI YoY
+* CPI MoM
+* Core CPI
+* PPI
+* PCE Price Index
+* Inflation Rate YoY
+* Inflation Rate MoM
+
+Home card title:
+
+* “Inflation Data”
+
+Subtitle/detail:
+
+* “Tue–Thu: CPI, Core CPI, PPI”
+* include count, date range, and highest impact if available
+
+Rates/Fed group:
+
+* FOMC
+* Fed interest rate decision
+* Fed minutes
+* Powell speech
+* Fed speakers
+* rate decision
+
+Home card title:
+
+* “Fed / Rates”
+
+Jobs group:
+
+* Nonfarm Payrolls
+* unemployment rate
+* jobless claims
+* JOLTS
+* ADP employment
+
+Home card title:
+
+* “Labor Market Data”
+
+Growth group:
+
+* GDP
+* retail sales
+* ISM
+* PMI
+* industrial production
+* durable goods
+
+Home card title:
+
+* “Growth / Demand Data”
+
+Treasury group:
+
+* 2Y Treasury Rate
+* 10Y Treasury Rate
+* 30Y Treasury Rate
+* Treasury auctions
+* yield curve data
+
+Home card title:
+
+* “Treasury / Yields”
+
+Consumer group:
+
+* consumer sentiment
+* consumer confidence
+* inflation expectations
+
+Home card title:
+
+* “Consumer Sentiment”
+
+Housing group:
+
+* building permits
+* housing starts
+* existing home sales
+* new home sales
+
+Home card title:
+
+* “Housing Data”
+
+5. Deduping rules.
+   For Home compact mode:
+
+* dedupe exact duplicate titles
+* dedupe repeated same-category macro events
+* group related macro releases into one card per category
+* keep first release date and last release date
+* preserve the underlying event list in `children` or `events` so the frontend can expand/show details if needed
+* keep urgency/high-impact based on the highest-impact child event
+
+6. Ranking rules.
+   Home should show the highest market relevance first.
+
+Suggested ranking priority:
+
+1. Major market-moving macro groups: CPI/PCE/FOMC/NFP/jobs/GDP/PMI
+2. Priority earnings from important tickers/watchlist/portfolio/hot themes
+3. Major IPOs
+4. Major treasury/rate events
+5. Major splits
+6. Dividends only if unusually meaningful or from important tickers
+
+Avoid filling the Home section with low-value dividends, tiny IPOs, or repetitive daily macro rows.
+
+7. Limit size.
+   Return a compact list.
+
+Suggested default:
+
+* max 6 to 8 cards total
+* max 3 macro/economic groups
+* max 1 treasury/yields group unless there is a Fed/rate event
+* max 3 earnings cards
+* IPO/split/dividend only if high relevance
+
+Include metadata:
+
+* `total_source_events`
+* `total_grouped_events`
+* `hidden_count`
+* `source = calendar_top_catalysts`
+* `view = home_compact`
+* `window_start`
+* `window_end`
+
+8. Response shape.
+   Each returned Home catalyst should include:
+
+* `id`
+* `type`
+* `category`
+* `title`
+* `subtitle`
+* `date_label`
+* `start_date`
+* `end_date`
+* `impact`
+* `urgency`
+* `reason`
+* `source`
+* `children` or `events` for grouped items
+* `hidden_count` if applicable
+
+Example grouped macro response:
+
+{
+"id": "macro_inflation_2026-06-08_2026-06-12",
+"type": "macro_group",
+"category": "inflation",
+"title": "Inflation Data",
+"subtitle": "Tue–Thu: CPI, Core CPI, PPI",
+"date_label": "Tue–Thu",
+"start_date": "2026-06-09",
+"end_date": "2026-06-11",
+"impact": "high",
+"urgency": "important",
+"reason": "Multiple inflation releases can move yields, rate-cut expectations, and high-duration growth stocks.",
+"source": "calendar_top_catalysts",
+"children": [...]
+}
+
+9. Validation.
+   Run backend locally and prove:
+
+* existing Calendar Top Catalysts endpoint/page behavior is unchanged
+* new Home compact endpoint returns only the current week
+* macro duplicates are grouped
+* CPI YoY/MoM/Core CPI-type events do not appear as separate urgent Home cards every day
+* response includes earnings/IPOs/macro/treasury if they are present in the source data
+* no new provider/API calls are introduced
+* no LLM calls are introduced
+
+Acceptance criteria:
+
+* Home can replace “Economic Events” with “Top Catalysts This Week”
+* Home data comes from Calendar Top Catalysts source, not separate tab-by-tab fetches
+* Calendar page remains unchanged
+* Home feed is compact, deduped, grouped, and useful at a glance
+* Economic/macro clutter is summarized into event categories
