@@ -1,0 +1,97 @@
+Audit and lightly adjust the Prediction Markets Top Equity Signals backend response. Do not change endpoint paths. Preserve existing /api/predict/investor/overview behavior and existing fields, but add/adjust fields to support clearer frontend rendering.
+
+Current status:
+The polarity diagnostic fix is working. However, the frontend warning text is too backend-oriented, and mixed/polarity-conflict cards still visually show cluster-level bullish/bearish sectors that can contradict the primary driver.
+
+Required changes:
+
+1. Increase Top Equity Signals count
+Find where /api/predict/investor/overview limits Top Equity Signals. Increase the default/top returned count from 5 to 7 for the Prediction Markets page response.
+
+If there is an explicit limit param already supported, preserve it. Otherwise return 7 by default.
+
+2. Add clean user-facing quality label fields
+For each top equity signal, add:
+
+signal_quality_label:
+- "High" when clean/non-conflicted and strong data agreement
+- "Moderate" when usable but less strong
+- "Mixed" when signal_integrity.has_polarity_conflict or signal_integrity.has_mixed_semantics is true
+- "Low" only if weak/insufficient
+
+signal_quality_explanation:
+Plain-English string. Examples:
+- "Strong data agreement and clear equity-impact direction. This is not trade certainty."
+- "Some data agreement, but the equity read is less clean."
+- "Markets in this group point to different equity regimes, so this is not one clean sector signal."
+
+Do not use “mapping” as the user-facing concept unless kept only for backwards compatibility.
+
+3. Add user-facing warning copy
+Currently warning copy exposes backend terms like arrays, direct/inverted, semantic labels. Keep those detailed diagnostics if useful, but add:
+
+signal_integrity.user_warning
+
+For mixed/polarity conflict, use plain language:
+"Mixed drivers: some markets imply escalation/risk-off, while others imply de-escalation/risk-on. Treat the sector call as mixed, not a clean trade signal."
+
+For peace/de-escalation primary driver inside geopolitics:
+"De-escalation odds are rising. That usually weakens war-premium trades like defense/energy and can support risk-on areas like airlines/consumer."
+
+4. Add primary-driver sector impact fields
+For primary_driver_market, ensure these fields exist and are correctly polarity-adjusted:
+- mapped_bullish_sectors
+- mapped_bearish_sectors
+- mapped_bullish_tickers if available
+- mapped_bearish_tickers if available
+
+These should reflect the primary driver’s true equity read, not the broad cluster direction.
+
+5. Add display impact mode
+For each signal, add:
+
+display_impact_mode:
+- "primary_driver" when primary driver should drive the headline sector boxes
+- "cluster" when the cluster is clean and cluster-level sectors are safe
+- "mixed" when polarity conflict/mixed semantics exists
+
+Rule:
+If signal_integrity.has_polarity_conflict or has_mixed_semantics is true:
+display_impact_mode = "mixed"
+
+6. Add headline impact fields
+For each signal, add:
+headline_bullish_sectors
+headline_bearish_sectors
+headline_bullish_tickers
+headline_bearish_tickers
+headline_impact_note
+
+Rules:
+- If clean cluster: headline fields can use existing cluster-level bullish/bearish sectors/tickers.
+- If mixed/polarity conflict: headline fields should either use the primary_driver_market mapped sectors/tickers OR be empty with headline_impact_note explaining mixed signal.
+Preferred: use primary driver mapped sectors/tickers and clearly label the note:
+"Headline impact reflects the primary driver only; cluster contains conflicting markets."
+
+This prevents a peace-deal driver from displaying Defense/Energy as the main bullish read.
+
+7. Preserve diagnostics
+Keep existing fields:
+primary_driver_market
+driver_markets
+confidence_explanation
+signal_integrity.has_mixed_semantics
+signal_integrity.has_polarity_conflict
+polarity
+semantic_event_type
+equity_regime_read
+
+But add the cleaner user-facing fields above so frontend does not have to render backend diagnostic strings.
+
+8. Validate
+After changes, call /api/predict/investor/overview and verify:
+- Top Equity Signals returns 7 items or supports 7.
+- Geopolitics peace/deal primary driver does not headline Defense/Energy as clean bullish if the signal is mixed.
+- signal_quality_label is "Mixed" for polarity conflict.
+- signal_integrity.user_warning is plain English.
+- headline_* fields are populated safely.

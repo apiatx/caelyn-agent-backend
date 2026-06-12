@@ -6,7 +6,7 @@
       "score": 80.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (80/100) vs theme universe. Outperforming SPY +10.4%, QQQ +9.6%. Breadth 54%."
+        "Top-percentile RS (80/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +6.7%, QQQ +5."
       ],
       "related_etfs": [
         "DRAM",
@@ -14,9 +14,9 @@
         "SOXX"
       ],
       "related_tickers": [
-        "285A.T",
-        "MU",
-        "SNDK"
+        "SNDK",
+        "KLAC",
+        "MU"
       ]
     },
     {
@@ -24,15 +24,15 @@
       "score": 78.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (78/100) vs theme universe. Outperforming SPY +8.2%, QQQ +7.4%. Breadth 57%."
+        "Top-percentile RS (78/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +5.9%, QQQ +4."
       ],
       "related_etfs": [
         "SOXX",
         "SMH"
       ],
       "related_tickers": [
-        "MU",
-        "AMAT",
+        "KLAC",
+        "ONTO",
         "LRCX"
       ]
     },
@@ -41,7 +41,7 @@
       "score": 76.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (77/100) vs theme universe with broad participation (80% advancing). Outperforming SPY +9.1%, QQQ +8.3"
+        "Top-percentile RS (77/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +2.1%, QQQ +0."
       ],
       "related_etfs": [
         "IYT",
@@ -49,9 +49,9 @@
         "XTN"
       ],
       "related_tickers": [
-        "ODFL",
         "UAL",
-        "DAL"
+        "DAL",
+        "FDX"
       ]
     },
     {
@@ -59,7 +59,7 @@
       "score": 76.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (76/100) vs theme universe. Outperforming SPY +5.3%, QQQ +4.5%. Breadth 46%.",
+        "Top-percentile RS (76/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +6.2%, QQQ +4.",
         "X consensus: 2 tickers mentioned"
       ],
       "related_etfs": [
@@ -69,9 +69,9 @@
         "PSI"
       ],
       "related_tickers": [
-        "MU",
-        "AMAT",
-        "LRCX"
+        "KLAC",
+        "LRCX",
+        "MU"
       ]
     },
     {
@@ -79,7 +79,7 @@
       "score": 74.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (74/100) vs theme universe. Outperforming SPY +26.1%, QQQ +25.4%. Breadth N/A."
+        "Top-percentile RS (74/100) vs theme universe. Outperforming SPY +9.4%, QQQ +7.7%. Breadth N/A."
       ],
       "related_etfs": [
         "ANET",
@@ -94,16 +94,16 @@
       "score": 73.8,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (74/100) vs theme universe. Outperforming SPY +5.2%, QQQ +4.5%. Breadth 50%."
+        "Top-percentile RS (74/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +4.1%, QQQ +2."
       ],
       "related_etfs": [
         "XAR",
         "ITA"
       ],
       "related_tickers": [
-        "CRS",
-        "ATI",
-        "AVAV"
+        "RCAT",
+        "RKLB",
+        "ATI"
       ]
     },
     {
@@ -111,7 +111,7 @@
       "score": 70.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (71/100) vs theme universe with broad participation (91% advancing). Outperforming SPY +5.8%, QQQ +5.0"
+        "Top-percentile RS (71/100) vs theme universe with broad participation (100% advancing). Outperforming SPY -0.6%, QQQ -2."
       ],
       "related_etfs": [
         "KRE",
@@ -119,9 +119,9 @@
         "IAT"
       ],
       "related_tickers": [
-        "ZION",
-        "BPOP",
-        "VLY"
+        "CFG",
+        "VLY",
+        "BPOP"
       ]
     }
   ],
@@ -137,9 +137,9 @@
         "QTUM"
       ],
       "related_tickers": [
-        "STM",
+        "ONTO",
         "MU",
-        "IBM"
+        "TSEM"
       ]
     },
     {
@@ -155,9 +155,9 @@
         "PPA"
       ],
       "related_tickers": [
-        "GE",
-        "AVAV",
-        "LMT"
+        "RKLB",
+        "KTOS",
+        "AVAV"
       ]
     },
     {
@@ -172,9 +172,9 @@
         "XHB"
       ],
       "related_tickers": [
-        "NVR",
+        "TOL",
         "LEN",
-        "TOL"
+        "DHI"
       ]
     },
     {
@@ -190,9 +190,9 @@
         "IYH"
       ],
       "related_tickers": [
-        "LLY",
-        "ABBV",
-        "ABT"
+        "AMGN",
+        "GILD",
+        "LLY"
       ]
     },
     {
@@ -208,7 +208,6 @@
       ],
       "related_tickers": [
         "ASX",
-        "IBIDF",
         "UMICF"
       ]
     }
@@ -219,7 +218,7 @@
       "score": 15.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (15/100) vs 60-theme universe. SPY delta -55.5%, QQQ delta -56.2%. Breadth N/A \u2014 minimal buying press"
+        "Bottom-quartile RS (15/100) vs 60-theme universe. SPY delta -14.3%, QQQ delta -16.0%. Breadth N/A \u2014 minimal buying press"
       ],
       "related_etfs": [
         "VCX"
@@ -231,7 +230,7 @@
       "score": 18.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta -20.2%, QQQ delta -20.9%. Breadth 0% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (19/100) vs 60-theme universe. SPY delta +3.8%, QQQ delta +2.1%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
         "URA",
@@ -239,9 +238,9 @@
         "NLR"
       ],
       "related_tickers": [
-        "BWXT",
-        "U-U.TO",
-        "KAP.IL"
+        "UEC",
+        "LEU",
+        "OKLO"
       ]
     },
     {
@@ -249,7 +248,7 @@
       "score": 24.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta -15.6%, QQQ delta -16.3%. Breadth 25% \u2014 minimal buying press"
+        "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta +2.5%, QQQ delta +0.8%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
         "GLD",
@@ -259,8 +258,8 @@
       ],
       "related_tickers": [
         "GOLD",
-        "NEM",
-        "AEM"
+        "PAAS",
+        "NEM"
       ]
     },
     {
@@ -268,7 +267,7 @@
       "score": 24.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta -7.0%, QQQ delta -7.8%. Breadth 40% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta +1.3%, QQQ delta -0.4%. Breadth 80% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "FINX",
@@ -276,9 +275,9 @@
         "IPAY"
       ],
       "related_tickers": [
+        "AMD",
         "HOOD",
-        "SHOP",
-        "AMD"
+        "AFRM"
       ]
     },
     {
@@ -286,7 +285,7 @@
       "score": 24.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (25/100) vs 60-theme universe. SPY delta -21.8%, QQQ delta -22.6%. Breadth 0% \u2014 minimal buying pressu"
+        "Bottom-quartile RS (25/100) vs 60-theme universe. SPY delta +4.8%, QQQ delta +3.1%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
         "SLV",
@@ -294,7 +293,7 @@
         "SILJ"
       ],
       "related_tickers": [
-        "KGH.WA",
+        "AG",
         "CDE",
         "PAAS"
       ]
@@ -322,7 +321,7 @@
   ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-06-12T03:02:54.725507+00:00",
+  "last_updated": "2026-06-12T03:39:01.694250+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -333,5 +332,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1781233374.7256079
+  "_saved_at": 1781235541.6943147
 }

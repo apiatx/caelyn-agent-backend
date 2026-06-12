@@ -276,26 +276,103 @@ def _compute_cluster_impacts(clusters: list[dict]) -> dict[str, ThemeImpact]:
     return impacts
 
 
-def _sector_mapping_for_driver(dm: dict, theme_id: str) -> tuple[list[str], list[str]]:
+def _sector_mapping_for_driver(dm: dict, theme_id: str) -> tuple[list[str], list[str], list[str], list[str]]:
     """
-    Return (mapped_bullish_sectors, mapped_bearish_sectors) for a single driver market.
+    Return (bullish_sectors, bearish_sectors, bullish_tickers, bearish_tickers)
+    for a single driver market, polarity-adjusted.
 
-    Uses the market's polarity to decide which theme impact to pull:
-      - "direct"   → theme's "rising"  impact sectors
-      - "inverted" → theme's "falling" impact sectors (de-escalation, rate-cut, etc.)
+      polarity "direct"   → theme's "rising"  impact
+      polarity "inverted" → theme's "falling" impact (de-escalation, rate-cut, etc.)
     """
     polarity = dm.get("polarity", "direct")
     lookup_dir = "falling" if polarity == "inverted" else "rising"
     imp = THEME_IMPACTS.get((theme_id, lookup_dir))
     if imp is None:
-        return [], []
-    return imp.bullish_sectors[:3], imp.bearish_sectors[:3]
+        return [], [], [], []
+    return (
+        imp.bullish_sectors[:3],
+        imp.bearish_sectors[:3],
+        imp.bullish_stocks[:5],
+        imp.bearish_stocks[:5],
+    )
+
+
+def _signal_quality(conf_score: float, has_conflict: bool, has_mixed: bool) -> tuple[str, str]:
+    """
+    Return (signal_quality_label, signal_quality_explanation) for a signal card.
+
+    Labels are designed for non-technical users; they do not imply trade certainty.
+    """
+    if has_conflict or has_mixed:
+        return (
+            "Mixed",
+            "Markets in this group point to different equity regimes, "
+            "so this is not one clean sector signal.",
+        )
+    if conf_score >= 60:
+        return (
+            "High",
+            "Strong data agreement and clear equity-impact direction. "
+            "This is not trade certainty.",
+        )
+    if conf_score >= 35:
+        return (
+            "Moderate",
+            "Some data agreement, but the equity read is less clean.",
+        )
+    return (
+        "Low",
+        "Limited market data or weak agreement — treat as an early-stage signal only.",
+    )
+
+
+def _user_warning(
+    has_conflict: bool,
+    has_mixed: bool,
+    primary_driver: dict,
+    theme_id: str,
+) -> Optional[str]:
+    """
+    Return a plain-English user_warning string, or None if the signal is clean.
+
+    Avoids backend jargon like "direct/inverted", "semantic labels", etc.
+    """
+    if not has_conflict and not has_mixed:
+        return None
+
+    pdm_event   = (primary_driver or {}).get("semantic_event_type", "general")
+    pdm_polarity = (primary_driver or {}).get("polarity", "direct")
+
+    # Specific plain-English read for de-escalation inside geopolitics theme
+    if (
+        theme_id == "geopolitics_war_trade"
+        and pdm_polarity == "inverted"
+        and pdm_event in ("peace_deal", "nuclear_deal", "de_escalation")
+    ):
+        return (
+            "De-escalation odds are rising. That usually weakens war-premium trades "
+            "like defense/energy and can support risk-on areas like airlines/consumer."
+        )
+
+    # Generic polarity-conflict warning
+    if has_conflict:
+        return (
+            "Mixed drivers: some markets imply escalation/risk-off, while others "
+            "imply de-escalation/risk-on. Treat the sector call as mixed, "
+            "not a clean trade signal."
+        )
+
+    # Mixed semantics without polarity conflict
+    return (
+        "This theme groups markets with different economic event types. "
+        "Headline sector impact reflects the strongest signal only."
+    )
 
 
 def _build_top_equity_signals(
     clusters: list[dict],
     impacts: dict[str, ThemeImpact],
-    max_signals: int = 5,
+    max_signals: int = 7,
 ) -> list[dict]:
     """
     Build the top N equity signals for the Investor tab hero section.
@@ -303,11 +380,14 @@ def _build_top_equity_signals(
     Rank clusters by:
       confidence_score * regime_signal_strength * market_count
 
-    Each signal now includes diagnostic fields:
-      primary_driver_market  — the single highest-contribution market with full attribution
-      driver_markets         — all contributing markets with per-market sector mappings
-      confidence_explanation — plain-English definition of the confidence score
-      signal_integrity       — polarity/semantic conflict flags and warning text
+    Each signal includes both legacy fields (unchanged) and new user-facing fields:
+      signal_quality_label/explanation  — plain-English quality tier
+      display_impact_mode               — "cluster" | "mixed"
+      headline_*                        — safe headline sectors/tickers for frontend
+      primary_driver_market             — highest-contribution market with full attribution
+      driver_markets                    — all contributing markets with per-market sectors
+      confidence_explanation            — plain-English confidence definition
+      signal_integrity                  — conflict flags + backend warning + user_warning
     """
     scored_clusters = sorted(
         clusters,
@@ -328,13 +408,14 @@ def _build_top_equity_signals(
         shift_24h = cl.get("weighted_odds_shift_24h", 0)
         shift_7d  = cl.get("weighted_odds_shift_7d", 0)
 
-        # ── Polarity conflict handling ─────────────────────────────────────
-        # If the cluster contains markets with opposing equity polarities
-        # (e.g. war-escalation and peace-deal both inside geopolitics_war_trade),
-        # force the impact lookup to "mixed" so we don't present a clean
-        # directional bullish/bearish call that is potentially backwards.
+        # ── Polarity / semantic conflict ───────────────────────────────────
         has_conflict = cl.get("has_polarity_conflict", False)
-        effective_direction = "mixed" if has_conflict else direction
+        has_mixed    = cl.get("has_mixed_semantics",  False)
+        is_conflicted = has_conflict or has_mixed
+
+        # When conflicted, fall back to "mixed" impact so we never present a
+        # clean directional sector call that may be backwards for half the markets.
+        effective_direction = "mixed" if is_conflicted else direction
         impact = get_theme_impact(tid, effective_direction)
 
         odds_summary = _odds_move_summary(shift_24h, shift_7d, direction)
@@ -363,30 +444,67 @@ def _build_top_equity_signals(
 
         why_it_matters = _why_it_matters(tid, direction, cl)
 
-        # ── Diagnostic: primary driver market ─────────────────────────────
+        # ── Primary driver market (polarity-adjusted sectors + tickers) ────
         raw_primary = cl.get("primary_driver_market") or {}
-        bull_s, bear_s = _sector_mapping_for_driver(raw_primary, tid)
+        pdm_bull_s, pdm_bear_s, pdm_bull_t, pdm_bear_t = _sector_mapping_for_driver(raw_primary, tid)
         primary_driver_market = {
             **raw_primary,
-            "mapped_bullish_sectors": bull_s,
-            "mapped_bearish_sectors": bear_s,
+            "mapped_bullish_sectors": pdm_bull_s,
+            "mapped_bearish_sectors": pdm_bear_s,
+            "mapped_bullish_tickers": pdm_bull_t,
+            "mapped_bearish_tickers": pdm_bear_t,
         } if raw_primary else None
 
-        # ── Diagnostic: all driver markets with per-market sector mappings ─
+        # ── All driver markets with per-market sector + ticker mappings ────
         driver_markets: list[dict] = []
         for dm in cl.get("supporting_markets", []):
-            b_s, r_s = _sector_mapping_for_driver(dm, tid)
-            driver_markets.append({**dm, "mapped_bullish_sectors": b_s, "mapped_bearish_sectors": r_s})
+            b_s, r_s, b_t, r_t = _sector_mapping_for_driver(dm, tid)
+            driver_markets.append({
+                **dm,
+                "mapped_bullish_sectors": b_s,
+                "mapped_bearish_sectors": r_s,
+                "mapped_bullish_tickers": b_t,
+                "mapped_bearish_tickers": r_t,
+            })
 
-        # ── Diagnostic: signal integrity ──────────────────────────────────
+        # ── User-facing quality fields ─────────────────────────────────────
+        quality_label, quality_explanation = _signal_quality(conf_score, has_conflict, has_mixed)
+
+        # ── Display impact mode ────────────────────────────────────────────
+        # "mixed"   → frontend should NOT render a clean bullish/bearish sector box
+        # "cluster" → cluster-level sectors are safe to headline
+        display_impact_mode = "mixed" if is_conflicted else "cluster"
+
+        # ── Headline impact fields ─────────────────────────────────────────
+        # For mixed/conflicted signals: headline uses primary driver's polarity-adjusted
+        # sectors/tickers so we never show Defense/Energy as bullish for a peace-deal driver.
+        # For clean signals: headline uses cluster-level sectors/tickers.
+        if is_conflicted and primary_driver_market:
+            headline_bullish_sectors = pdm_bull_s
+            headline_bearish_sectors = pdm_bear_s
+            headline_bullish_tickers = pdm_bull_t
+            headline_bearish_tickers = pdm_bear_t
+            headline_impact_note = (
+                "Headline impact reflects the primary driver only; "
+                "cluster contains conflicting markets."
+            )
+        else:
+            headline_bullish_sectors = bullish_sectors
+            headline_bearish_sectors = bearish_sectors
+            headline_bullish_tickers = bullish_stocks
+            headline_bearish_tickers = bearish_stocks
+            headline_impact_note = None
+
+        # ── Signal integrity (diagnostic + user-facing warning) ────────────
         signal_integrity = {
-            "has_mixed_semantics":  cl.get("has_mixed_semantics", False),
+            "has_mixed_semantics":   has_mixed,
             "has_polarity_conflict": has_conflict,
-            "warning": cl.get("signal_integrity_warning"),
+            "warning":               cl.get("signal_integrity_warning"),   # backend detail
+            "user_warning":          _user_warning(has_conflict, has_mixed, raw_primary, tid),
         }
 
         signals.append({
-            # ── existing fields (unchanged) ───────────────────────────────
+            # ── existing fields (unchanged keys) ──────────────────────────
             "theme_id":        tid,
             "title":           f"{cl.get('theme_emoji', '')} {cl['theme_name']}",
             "summary":         cl.get("description", ""),
@@ -405,7 +523,17 @@ def _build_top_equity_signals(
             "confidence_score": conf_score,
             "narrative":       _narrative_with_qualifier(narrative, confidence_label, effective_direction),
             "watchlist_priority": "high" if conf_score >= 60 else "medium" if conf_score >= 35 else "watch",
-            # ── new diagnostic fields ─────────────────────────────────────
+            # ── user-facing quality fields (new) ─────────────────────────
+            "signal_quality_label":       quality_label,
+            "signal_quality_explanation": quality_explanation,
+            # ── display mode + headline fields (new) ──────────────────────
+            "display_impact_mode":     display_impact_mode,
+            "headline_bullish_sectors": headline_bullish_sectors,
+            "headline_bearish_sectors": headline_bearish_sectors,
+            "headline_bullish_tickers": headline_bullish_tickers,
+            "headline_bearish_tickers": headline_bearish_tickers,
+            "headline_impact_note":     headline_impact_note,
+            # ── diagnostic fields (preserved + extended) ──────────────────
             "primary_driver_market": primary_driver_market,
             "driver_markets":        driver_markets,
             "confidence_explanation": (
