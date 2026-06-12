@@ -205,15 +205,13 @@ def get_snapshot(tab: str) -> dict:
     last_updated = meta.get("last_updated")
     stored_window = meta.get("window") or {}
 
-    # Compute current ET week window for staleness and diagnostics
+    # Compute current ET Mon–Fri window for staleness and diagnostics.
+    # ALL tabs (including economic_releases and treasury_macro) use the
+    # same Mon–Fri window. Wider lookback belongs only in Recent view.
     monday = _et_week_monday()
     friday = monday + timedelta(days=4)
-    if tab in ("economic_releases", "treasury_macro"):
-        req_from = monday - timedelta(days=7)
-        req_to   = friday + timedelta(days=14)
-    else:
-        req_from = monday
-        req_to   = friday
+    req_from = monday
+    req_to   = friday
     req_from_str = req_from.strftime("%Y-%m-%d")
     req_to_str   = req_to.strftime("%Y-%m-%d")
 
@@ -350,10 +348,8 @@ def _snapshot_is_stale(slot: Optional[dict], tab: str) -> bool:
 
     Rules:
     • No slot or empty current_week → always stale.
-    • For economic_releases / treasury_macro: expected window starts on
-      (ET Monday - 7 days); stale if stored_from is before that date.
-    • For all other tabs: expected start is ET Monday; stale if stored_from
-      is before that date.
+    • For ALL tabs: expected window starts on ET Monday (the current
+      Mon–Fri calendar week). Stale if stored_from is before that date.
     Do NOT compare against last_updated / snapshot date — compare only
     against the window.from date that was recorded when the data was fetched.
     """
@@ -368,10 +364,7 @@ def _snapshot_is_stale(slot: Optional[dict], tab: str) -> bool:
     if not stored_from:
         return True
     monday = _et_week_monday()
-    if tab in ("economic_releases", "treasury_macro"):
-        expected_from = monday - timedelta(days=7)
-    else:
-        expected_from = monday
+    expected_from = monday
     return stored_from < expected_from.strftime("%Y-%m-%d")
 
 
@@ -379,16 +372,14 @@ def _week_window_for(tab: str) -> tuple[str, str]:
     """
     Date range for a single week's worth of fresh data for the given tab.
     Uses America/New_York timezone and a Monday–Friday window.
+
+    ALL tabs (including economic_releases and treasury_macro) use the
+    current ET Mon–Fri window. Wider lookback for "Recent" view is handled
+    separately by _previous_week_window_for.
     """
     monday = _et_week_monday()
     friday = monday + timedelta(days=4)
-    if tab in ("economic_releases", "treasury_macro"):
-        start = monday - timedelta(days=7)
-        end   = friday + timedelta(days=14)
-    else:
-        start = monday
-        end   = friday
-    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    return monday.strftime("%Y-%m-%d"), friday.strftime("%Y-%m-%d")
 
 
 def _previous_week_window_for(tab: str) -> tuple[str, str]:

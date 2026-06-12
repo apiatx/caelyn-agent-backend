@@ -1,0 +1,49 @@
+Before frontend starts, I need one final backend validation/fix pass on the calendar week-window logic.
+
+Do not touch Earnings or Top Catalysts.
+
+Concern:
+Your summary says the week helper now resolves Jun 12 to Jun 8–12, but validation still shows:
+
+* economic_releases: stored_from=2026-06-01, requested_from=2026-06-01
+* treasury_macro: stored_from=2026-06-01, requested_from=2026-06-01
+
+That is not acceptable for `timeframe=week` if current ET date is Jun 11/12. Current week should be Monday Jun 8 through Friday Jun 12.
+
+Please re-audit and fix this specifically:
+
+1. For `timeframe=week`, every non-earnings calendar tab must use the current ET Monday–Friday window.
+
+   * If current ET date is 2026-06-12, expected:
+
+     * window.requested_from = 2026-06-08
+     * window.requested_to = 2026-06-12, or 2026-06-13 if using exclusive end
+   * Do not allow `2026-06-01` to be considered fresh for current week.
+
+2. If Economic Releases or Treasury / Macro intentionally need a wider lookback, that belongs only under `Recent`, not `Week`.
+
+   * `Week` must match the visible calendar week columns.
+
+3. Re-run endpoint validation with explicit output for each tab:
+
+   * requested_from
+   * requested_to
+   * stored_from
+   * stored_to
+   * is_stale
+   * event_count
+   * min_event_date
+   * max_event_date
+   * first 10 display_title values
+
+4. Acceptance criteria:
+
+   * economic_releases week requested_from is 2026-06-08, not 2026-06-01.
+   * treasury_macro week requested_from is 2026-06-08, not 2026-06-01.
+   * IPOs, Dividends, Splits remain 2026-06-08 for week.
+   * No events outside the requested week are returned for Week view unless explicitly marked stale/fallback.
+   * Economic Releases do not return 1000 broad events for a single week unless every event is inside the requested week and intentionally included.
+   * `display_title` is populated with real event names and never generic `Macro` when a real event name exists.
+   * Earnings remains unchanged.
+
+Please print before/after samples from the actual `/api/catalysts/events` endpoint with the required X-API-Key header.
