@@ -641,12 +641,150 @@ def init_tables():
                 ON CONFLICT (table_name) DO NOTHING
             """, (tbl, ts_col, days, enabled, desc))
 
+        # ── Watchlist favorites ───────────────────────────────────────────────
+        # Pure user metadata — no market-data columns, no provider calls.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.watchlist_favorites (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id     TEXT NOT NULL,
+                ticker      TEXT NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, ticker)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wf_user_id
+            ON public.watchlist_favorites (user_id)
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
         return True
     except Exception as e:
         print(f"[PG_STORAGE] Table creation error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        _put_conn(conn)
+
+
+# ── Watchlist favorites CRUD ──────────────────────────────────────────────────
+
+def _ensure_wf_table() -> None:
+    """
+    Idempotent self-heal: create watchlist_favorites table if init_tables
+    missed it (e.g. the app was already running when the column was added).
+    Safe to call on every request — short-circuits via an in-process flag.
+    """
+    global _wf_table_ensured
+    if _wf_table_ensured:
+        return
+    conn = _get_conn()
+    if conn is None:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.watchlist_favorites (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id     TEXT NOT NULL,
+                ticker      TEXT NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, ticker)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wf_user_id
+            ON public.watchlist_favorites (user_id)
+        """)
+        conn.commit()
+        cur.close()
+        _wf_table_ensured = True
+    except Exception as e:
+        print(f"[WF] _ensure_wf_table error: {e}")
+        conn.rollback()
+    finally:
+        _put_conn(conn)
+
+_wf_table_ensured: bool = False
+
+
+def list_watchlist_favorites(user_id: str) -> list[str]:
+    """Return list of uppercase ticker strings favorited by user. [] on DB error."""
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT ticker FROM public.watchlist_favorites WHERE user_id = %s ORDER BY created_at ASC",
+            (user_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return [r[0] for r in rows]
+    except Exception as e:
+        print(f"[WF] list_watchlist_favorites error: {e}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def add_watchlist_favorite(user_id: str, ticker: str) -> bool:
+    """
+    Idempotently add ticker to favorites for user_id.
+    Ticker is normalised to uppercase before insert.
+    Returns True on success, False on DB error.
+    """
+    ticker = ticker.strip().upper()
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.watchlist_favorites (user_id, ticker)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id, ticker) DO UPDATE SET updated_at = NOW()
+            """,
+            (user_id, ticker),
+        )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[WF] add_watchlist_favorite error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def remove_watchlist_favorite(user_id: str, ticker: str) -> bool:
+    """
+    Idempotently remove ticker from favorites for user_id.
+    Ticker is normalised to uppercase.
+    Returns True on success (including when ticker was not favorited), False on DB error.
+    """
+    ticker = ticker.strip().upper()
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM public.watchlist_favorites WHERE user_id = %s AND ticker = %s",
+            (user_id, ticker),
+        )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[WF] remove_watchlist_favorite error: {e}")
         conn.rollback()
         return False
     finally:

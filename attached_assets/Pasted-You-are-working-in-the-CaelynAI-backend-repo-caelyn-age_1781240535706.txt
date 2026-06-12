@@ -1,0 +1,83 @@
+You are working in the CaelynAI backend repo: caelyn-agent-backend.
+
+Task: Add persistent user-specific Watchlist Favorites support for the frontend Watchlist page.
+
+Important constraints:
+- Do NOT add any new FMP, Tradier, Grok, OpenAI, or other market-data/API calls.
+- Favorites are pure user metadata.
+- Preserve all existing watchlist data paths, refresh logic, cache logic, and route behavior.
+- Do not rename or replace existing watchlist endpoints.
+- Do not create a separate market-data pipeline for favorites.
+- The frontend will use favorites only to render a new filtered “Close Watch” tab.
+
+Implementation requirements:
+1. Audit the existing auth/session/user identification pattern first.
+   - Reuse the same user/account identity pattern already used elsewhere in the app.
+   - Do not invent a new auth model.
+   - If the current app only supports a single authenticated user/admin pattern, use the existing stable user identifier pattern already used by other user-specific features.
+
+2. Add a small Neon/Postgres table for favorites if one does not already exist.
+   Suggested table shape:
+   - id UUID primary key default gen_random_uuid() or equivalent existing pattern
+   - user_id TEXT NOT NULL
+   - ticker TEXT NOT NULL
+   - created_at TIMESTAMPTZ DEFAULT now()
+   - updated_at TIMESTAMPTZ DEFAULT now()
+   - unique(user_id, ticker)
+
+   Normalize ticker to uppercase before insert.
+
+3. Add backend functions/service helpers:
+   - list_watchlist_favorites(user_id) -> list[str]
+   - add_watchlist_favorite(user_id, ticker) -> record/result
+   - remove_watchlist_favorite(user_id, ticker) -> success result
+   - set_watchlist_favorite(user_id, ticker, is_favorite) -> result, if cleaner
+
+4. Add API endpoints under the existing watchlist API namespace if possible:
+   - GET /api/watchlist/favorites
+     Returns:
+     {
+       "favorites": ["CRWV", "NBIS", "IREN"],
+       "count": 3
+     }
+
+   - POST /api/watchlist/favorites
+     Body:
+     {
+       "ticker": "CRWV"
+     }
+     Behavior:
+     Add favorite idempotently.
+     Return:
+     {
+       "ticker": "CRWV",
+       "is_favorite": true,
+       "favorites": [...]
+     }
+
+   - DELETE /api/watchlist/favorites/{ticker}
+     Behavior:
+     Remove favorite idempotently.
+     Return:
+     {
+       "ticker": "CRWV",
+       "is_favorite": false,
+       "favorites": [...]
+     }
+
+5. Validation:
+   - Ticker must be present and uppercase-normalized.
+   - Reject empty or invalid ticker strings.
+   - Keep the endpoint idempotent: adding an already-starred ticker should not error; deleting a non-starred ticker should not error.
+   - Return safe JSON errors if DB is unavailable.
+
+6. Diagnostics/testing:
+   - Add lightweight tests or manual validation commands for:
+     a) GET empty favorites
+     b) POST ticker
+     c) GET includes ticker
+     d) DELETE ticker
+     e) GET no longer includes ticker
+   - Confirm no market-data provider functions are called by these endpoints.
+
+7. Do not push to git. Just implement and report files changed plus validation results.

@@ -57,6 +57,34 @@ _news_bg_building: set[str] = set()
 _NEWS_LKG_SERVE_TTL = 20 * 60      # 20 min — after this, serve stale + bg-refresh
 
 
+# ── User identity helper (same pattern as routes/screener_hub._get_user_id) ──
+
+def _get_user_id(request: Request) -> str:
+    """
+    Resolve user_id for the request.
+
+    Priority:
+      1. request.state.user_id (middleware, if ever re-enabled)
+      2. Authorization: Bearer <JWT> → payload["sub"]
+      3. "default" — unauthenticated / local-dev fallback
+    """
+    uid = getattr(request.state, "user_id", None)
+    if uid:
+        return str(uid)
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        try:
+            from auth import verify_token
+            payload = verify_token(token)
+            sub = payload.get("sub")
+            if sub:
+                return str(sub)
+        except Exception:
+            pass
+    return "default"
+
+
 def _news_response(
     enriched_map: dict,
     major_summary: dict,
@@ -1810,6 +1838,66 @@ async def bulk_categories_endpoint(request: Request, body: dict):
         "upserted": count,
         "user_id": user_id,
     }
+
+
+# ── Watchlist favorites ───────────────────────────────────────────────────────
+# Pure user metadata — no market-data/provider calls.
+# Endpoints must be defined BEFORE /{watchlist_id} catch-all routes.
+
+class _AddFavoriteBody(BaseModel):
+    ticker: str
+
+
+@router.get("/favorites")
+async def get_favorites(request: Request):
+    """
+    GET /api/watchlist/favorites
+    Returns the current user's favorited tickers.
+    """
+    from data.pg_storage import list_watchlist_favorites, _ensure_wf_table
+    _ensure_wf_table()
+    user_id = _get_user_id(request)
+    favorites = list_watchlist_favorites(user_id)
+    return {"favorites": favorites, "count": len(favorites)}
+
+
+@router.post("/favorites")
+async def add_favorite(request: Request, body: _AddFavoriteBody):
+    """
+    POST /api/watchlist/favorites
+    Body: {"ticker": "CRWV"}
+    Idempotently adds ticker to favorites. Returns updated list.
+    """
+    from data.pg_storage import add_watchlist_favorite, list_watchlist_favorites, _ensure_wf_table
+    _ensure_wf_table()
+    raw = body.ticker.strip().upper()
+    if not raw:
+        raise HTTPException(status_code=422, detail="ticker must be a non-empty string")
+    user_id = _get_user_id(request)
+    ok = add_watchlist_favorite(user_id, raw)
+    if not ok:
+        raise HTTPException(status_code=503, detail="Database unavailable — could not save favorite")
+    favorites = list_watchlist_favorites(user_id)
+    return {"ticker": raw, "is_favorite": True, "favorites": favorites}
+
+
+@router.delete("/favorites/{ticker}")
+async def remove_favorite(request: Request, ticker: str):
+    """
+    DELETE /api/watchlist/favorites/{ticker}
+    Idempotently removes ticker from favorites. Returns updated list.
+    """
+    from data.pg_storage import remove_watchlist_favorite, list_watchlist_favorites, _ensure_wf_table
+    _ensure_wf_table()
+    raw = ticker.strip().upper()
+    if not raw:
+        raise HTTPException(status_code=422, detail="ticker must be a non-empty string")
+    user_id = _get_user_id(request)
+    ok = remove_watchlist_favorite(user_id, raw)
+    if not ok:
+        raise HTTPException(status_code=503, detail="Database unavailable — could not remove favorite")
+    favorites = list_watchlist_favorites(user_id)
+    return {"ticker": raw, "is_favorite": False, "favorites": favorites}
 
 
 # ── Parameterized endpoints (MUST be after static paths) ────────────────────
