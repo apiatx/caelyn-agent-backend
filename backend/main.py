@@ -436,10 +436,16 @@ async def lifespan(app):
         print(f"[STARTUP] Earnings curated precompute init error: {_e}")
     # Weekly calendar snapshots (Dividends, IPOs, Splits, Economic, Treasury).
     # Reads only from disk on request; refreshes Sunday in ET per per-tab hour.
+    # Also runs a startup staleness check (45s delay) so restarts mid-week
+    # immediately refresh stale snapshots without waiting for Sunday.
     try:
-        from services.calendar_snapshot_service import weekly_scheduler_loop as _calendar_snap_loop
+        from services.calendar_snapshot_service import (
+            weekly_scheduler_loop as _calendar_snap_loop,
+            check_and_refresh_stale as _cal_stale_check,
+        )
         from config import FMP_API_KEY as _fmp_key_for_snap
         asyncio.create_task(_calendar_snap_loop(lambda: _fmp_key_for_snap))
+        asyncio.create_task(_cal_stale_check(_fmp_key_for_snap or ""))
     except Exception as _e:
         print(f"[STARTUP] calendar snapshot scheduler init error: {_e}")
     # ── Screener Hub scheduler ──────────────────────────────────────────────

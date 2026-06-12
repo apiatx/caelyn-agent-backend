@@ -501,6 +501,14 @@ def _score_importance(
 
 def _build_event(**kw) -> dict:
     """Build a normalized event dict with all schema fields."""
+    _title = kw.get("title", "")
+    _display_title = (
+        kw.get("display_title")
+        or _title
+        or kw.get("eventName")
+        or kw.get("companyName")
+        or ""
+    )
     return {
         "id":                 kw.get("id", ""),
         "symbol":             kw.get("symbol"),
@@ -508,7 +516,8 @@ def _build_event(**kw) -> dict:
         "eventType":          kw.get("eventType", ""),
         "eventLabel":         kw.get("eventLabel"),
         "eventCategory":      kw.get("eventCategory", "upcoming"),
-        "title":              kw.get("title", ""),
+        "display_title":      _display_title,
+        "title":              _title,
         "subtitle":           kw.get("subtitle"),
         "keyDetails":         kw.get("keyDetails"),
         "date":               kw.get("date", ""),

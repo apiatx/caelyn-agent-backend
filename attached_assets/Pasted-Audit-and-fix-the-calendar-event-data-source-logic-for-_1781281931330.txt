@@ -1,0 +1,114 @@
+Audit and fix the calendar/event data source logic for the calendar page.
+
+Scope:
+
+Fix these tabs only:
+Economic Releases
+Treasury / Macro
+IPOs
+Stock Splits
+Dividends
+Do not modify the Earnings tab logic.
+Do not modify Top Catalysts This Week.
+Preserve existing backend routes and response contracts wherever possible. Do not invent replacement routes unless absolutely required.
+
+Current bug:
+
+Economic Releases week view is showing Jun 1–5 instead of the current week.
+Treasury / Macro week view is showing Apr 27–May 1, extremely stale.
+IPOs, Stock Splits, and Dividends are also showing the prior week as “current week.”
+Calendar cards receive generic titles like Macro, even though the popup/modal has the real event name.
+The UI shows “STALE SNAPSHOT” with old updated_at, so cache/date-window logic is likely serving old snapshots.
+
+Tasks:
+
+Audit the existing backend calendar/event services and endpoints used by the calendar page.
+Find the service/provider functions for Economic Releases, Treasury / Macro, IPOs, Stock Splits, Dividends, and Earnings.
+Confirm which endpoints the frontend calls for each tab.
+Confirm how Recent, Day, Week, and Month date windows are computed.
+Confirm how cache keys are built.
+Confirm where stale snapshots are read/written.
+Implement one shared canonical date-window helper for calendar tabs.
+Use America/New_York / ET market-calendar assumptions.
+day: current ET date.
+week: current ET week shown by the UI, Monday through Friday.
+month: current ET calendar month.
+recent: preserve existing semantics if already defined, but make sure it is based on current ET date, not snapshot date.
+Do not derive the requested window from updated_at, last snapshot date, or cached event dates.
+Fix cache keys.
+Cache keys must include:
+tab/category
+timeframe
+start date
+end date
+timezone/version if applicable
+A cached result for Jun 1–5 must never satisfy a Jun 8–12 request.
+A cached Treasury/Macro result from April must never satisfy the current week.
+If stale data is returned as fallback, mark it clearly as stale and include the stale source window, but do not pretend it is the requested current week.
+
+Normalize event titles.
+Every event returned by backend should include a reliable display field:
+
+display_title
+title
+event_name if available
+date
+time if available
+category
+source
+impact if available
+actual, estimate, previous when available
+raw source payload preserved if current code already does this
+
+For Economic Releases:
+
+Use the actual release name, for example CPI, PPI, Initial Jobless Claims, FOMC, Consumer Sentiment, Retail Sales, etc.
+Never collapse all cards to generic Macro when a real event name exists.
+
+For Treasury / Macro:
+
+Use the actual macro/treasury label, for example Treasury auction, 2Y yield, 10Y yield, Fed balance sheet, Treasury rate, economic indicator name, etc.
+If the source only gives an indicator key, compose a useful title from the indicator name and date.
+Do not return six cards all titled Macro.
+Use existing FMP provider/client paths.
+Do not create a duplicate FMP client.
+Use the existing API guard/rate-limit/cache conventions.
+FMP access is available for IPOs Calendar, Dividends Calendar, Stock Splits Calendar, Treasury Rates, Economics Indicators, Market Risk Premium, and limited Economic Data Releases Calendar.
+Do not add LLM calls for calendar events.
+Add or improve diagnostics for these tabs.
+The diagnostics response should include, per tab:
+requested timeframe
+requested start date
+requested end date
+cache hit/miss
+cache age
+source updated_at
+stale true/false
+event count
+min event date
+max event date
+first 5 event display titles
+Validation:
+Start the backend server.
+Hit the existing calendar endpoints for:
+economic releases week
+treasury/macro week
+IPOs week
+dividends week
+stock splits week
+earnings week
+Prove that all fixed tabs return events inside the requested current week window.
+Prove that Treasury / Macro is no longer returning April for current week.
+Prove that Economic Releases cards have meaningful display_title values.
+Prove that Earnings response is unchanged.
+Print before/after endpoint samples.
+
+Acceptance criteria:
+
+Economic Releases current week returns the actual current ET week, not Jun 1–5.
+Treasury / Macro current week returns the actual current ET week, not April.
+IPOs, Stock Splits, and Dividends no longer treat last week as current.
+Economic/Macro event objects expose useful event titles.
+No changes to Earnings behavior.
+No changes to Top Catalysts behavior.
+Existing API paths are preserved.

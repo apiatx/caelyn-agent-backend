@@ -214,6 +214,19 @@ async def catalyst_events(
             snap = _curate_envelope(
                 tab, snap, cap=_CURATION_CAP, watchlist=wl, portfolio=pf,
             )
+
+        # If the snapshot is stale (wrong week), trigger a background refresh
+        # so the NEXT request gets current data. This handles restarts that
+        # land on Mon–Sat before the weekly_scheduler fires its stale check.
+        if snap.get("is_stale") and FMP_API_KEY:
+            try:
+                import asyncio as _aio
+                from services.calendar_snapshot_service import refresh_tab as _rt
+                _aio.create_task(_rt(tab, FMP_API_KEY))
+                print(f"[catalyst] request-time stale refresh triggered tab={tab}")
+            except Exception as _rte:
+                print(f"[catalyst] request-time stale refresh error tab={tab}: {_rte}")
+
         return JSONResponse(content={
             "tab":           tab,
             "mode":          mode,
@@ -221,6 +234,9 @@ async def catalyst_events(
             "previous_week": snap["previous_week"],
             "last_updated":  snap["last_updated"],
             "status":        snap["status"],
+            "is_stale":      snap.get("is_stale", False),
+            "window":        snap.get("window"),
+            "diagnostics":   snap.get("diagnostics"),
         })
 
     # Parse comma-separated symbols

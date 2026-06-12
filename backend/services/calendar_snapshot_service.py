@@ -185,44 +185,100 @@ def get_snapshot(tab: str) -> dict:
     """
     Return the response envelope for a target tab. Never triggers FMP.
     Reads Neon first; falls back to disk JSON if Neon is unavailable.
+
+    Envelope includes:
+      current_week, previous_week, last_updated, status (existing fields)
+      is_stale   — True if the stored window does not cover the current ET week
+      window     — requested vs. stored date ranges
+      diagnostics — per-tab metrics for debugging
     """
     slot: Optional[dict] = _neon_read(tab)
     source = "neon"
     if slot is None:
-        # Neon unreachable or row missing — try disk emergency fallback.
         store = _read_disk()
         slot = _normalize_slot(store.get(tab))
         source = "disk"
 
     cw = slot.get("current_week") or []
     pw = slot.get("previous_week") or []
-    last_updated = (slot.get("meta") or {}).get("last_updated")
+    meta = (slot.get("meta") or {})
+    last_updated = meta.get("last_updated")
+    stored_window = meta.get("window") or {}
+
+    # Compute current ET week window for staleness and diagnostics
+    monday = _et_week_monday()
+    friday = monday + timedelta(days=4)
+    if tab in ("economic_releases", "treasury_macro"):
+        req_from = monday - timedelta(days=7)
+        req_to   = friday + timedelta(days=14)
+    else:
+        req_from = monday
+        req_to   = friday
+    req_from_str = req_from.strftime("%Y-%m-%d")
+    req_to_str   = req_to.strftime("%Y-%m-%d")
+
+    is_stale = _snapshot_is_stale(slot, tab)
+
+    # Cache age in hours
+    cache_age_hours: Optional[float] = None
+    if last_updated:
+        try:
+            lu_dt = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+            cache_age_hours = round((datetime.now(timezone.utc) - lu_dt).total_seconds() / 3600, 1)
+        except Exception:
+            pass
 
     if cw:
-        envelope = {
-            "current_week":  cw,
-            "previous_week": pw,
-            "last_updated":  last_updated,
-            "status":        "ready",
-        }
+        status = "ready"
     elif pw:
-        envelope = {
-            "current_week":  pw,
-            "previous_week": pw,
-            "last_updated":  last_updated,
-            "status":        "stale",
-        }
+        status = "stale"
+        cw = pw   # serve previous as current for backward compat
     else:
-        envelope = {
-            "current_week":  [],
-            "previous_week": [],
-            "last_updated":  last_updated,
-            "status":        "empty",
-        }
+        status = "empty"
+
+    # Build diagnostics block
+    diag_cw = cw  # the list being served
+    sample_titles = []
+    for ev in diag_cw[:5]:
+        t = (ev.get("display_title") or ev.get("title") or
+             ev.get("eventName") or ev.get("companyName") or "")
+        if t:
+            sample_titles.append(t)
+
+    diagnostics = {
+        "requested_from":    req_from_str,
+        "requested_to":      req_to_str,
+        "stored_from":       stored_window.get("from"),
+        "stored_to":         stored_window.get("to"),
+        "is_stale":          is_stale,
+        "source":            source,
+        "cache_age_hours":   cache_age_hours,
+        "cache_hit":         True,          # snapshot read = always a cache hit
+        "event_count":       len(diag_cw),
+        "min_event_date":    min((e.get("date", "") for e in diag_cw), default=None) or None,
+        "max_event_date":    max((e.get("date", "") for e in diag_cw), default=None) or None,
+        "sample_titles":     sample_titles,
+    }
+
+    envelope = {
+        "current_week":  diag_cw,
+        "previous_week": pw if not (status == "stale") else pw,
+        "last_updated":  last_updated,
+        "status":        status,
+        "is_stale":      is_stale,
+        "window": {
+            "requested_from": req_from_str,
+            "requested_to":   req_to_str,
+            "stored_from":    stored_window.get("from"),
+            "stored_to":      stored_window.get("to"),
+        },
+        "diagnostics": diagnostics,
+    }
     print(
         f"[calendar_snapshot] get_snapshot tab={tab} source={source} "
-        f"status={envelope['status']} current_week={len(envelope['current_week'])} "
-        f"previous_week={len(envelope['previous_week'])}"
+        f"status={status} is_stale={is_stale} "
+        f"current_week={len(diag_cw)} "
+        f"stored_from={stored_window.get('from')!r} req_from={req_from_str!r}"
     )
     return envelope
 
@@ -283,20 +339,55 @@ def get_read_source(tab: str) -> dict:
 
 # ── Refresh / write path ────────────────────────────────────────────────────
 
+def _et_week_monday() -> "date":
+    """Return Monday of the current week in America/New_York timezone."""
+    return _et_now().date() - timedelta(days=_et_now().date().weekday())
+
+
+def _snapshot_is_stale(slot: Optional[dict], tab: str) -> bool:
+    """
+    Return True if the slot's stored window does not cover the current ET week.
+
+    Rules:
+    • No slot or empty current_week → always stale.
+    • For economic_releases / treasury_macro: expected window starts on
+      (ET Monday - 7 days); stale if stored_from is before that date.
+    • For all other tabs: expected start is ET Monday; stale if stored_from
+      is before that date.
+    Do NOT compare against last_updated / snapshot date — compare only
+    against the window.from date that was recorded when the data was fetched.
+    """
+    if not slot:
+        return True
+    cw = slot.get("current_week") or []
+    if not cw:
+        return True
+    meta = slot.get("meta") or {}
+    window = meta.get("window") or {}
+    stored_from = window.get("from", "")
+    if not stored_from:
+        return True
+    monday = _et_week_monday()
+    if tab in ("economic_releases", "treasury_macro"):
+        expected_from = monday - timedelta(days=7)
+    else:
+        expected_from = monday
+    return stored_from < expected_from.strftime("%Y-%m-%d")
+
+
 def _week_window_for(tab: str) -> tuple[str, str]:
     """
     Date range for a single week's worth of fresh data for the given tab.
+    Uses America/New_York timezone and a Monday–Friday window.
     """
-    today = datetime.now(timezone.utc).date()
-    days_since_sunday = (today.weekday() + 1) % 7  # Sun=0 in this scheme
-    sunday = today - timedelta(days=days_since_sunday)
-    saturday = sunday + timedelta(days=6)
+    monday = _et_week_monday()
+    friday = monday + timedelta(days=4)
     if tab in ("economic_releases", "treasury_macro"):
-        start = sunday - timedelta(days=7)
-        end   = saturday + timedelta(days=14)
+        start = monday - timedelta(days=7)
+        end   = friday + timedelta(days=14)
     else:
-        start = sunday
-        end   = saturday
+        start = monday
+        end   = friday
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
@@ -305,21 +396,19 @@ def _previous_week_window_for(tab: str) -> tuple[str, str]:
     Date range for the prior week (Recent view seed). Used by refresh_tab to
     seed previous_week directly when there is no prior snapshot to promote.
 
-    Securities tabs (dividends/ipos/splits): Sun..Sat one week before the
+    Securities tabs (dividends/ipos/splits): Mon–Fri one week before the
     current week. Economic releases: a 7-day backward window relative to last
-    Sunday. Treasury_macro is excluded — its FMP feed is point-in-time.
+    Monday. Treasury_macro is excluded — its FMP feed is point-in-time.
     """
-    today = datetime.now(timezone.utc).date()
-    days_since_sunday = (today.weekday() + 1) % 7
-    this_sunday = today - timedelta(days=days_since_sunday)
-    last_sunday = this_sunday - timedelta(days=7)
-    last_saturday = this_sunday - timedelta(days=1)
+    monday = _et_week_monday()
+    last_monday   = monday - timedelta(days=7)
+    last_friday   = monday - timedelta(days=3)
     if tab == "economic_releases":
-        start = last_sunday - timedelta(days=7)
-        end   = last_saturday
+        start = last_monday - timedelta(days=7)
+        end   = last_friday
     else:
-        start = last_sunday
-        end   = last_saturday
+        start = last_monday
+        end   = last_friday
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
@@ -498,10 +587,53 @@ def _set_last_run_marker(tab: str, week_marker: str) -> None:
         pass
 
 
+async def check_and_refresh_stale(fmp_key: str, delay_secs: int = 45) -> None:
+    """
+    Startup task: wait `delay_secs` then refresh any tab whose snapshot is
+    stale (stored window doesn't cover the current ET week).  Safe to run
+    concurrently with weekly_scheduler_loop — the async lock in refresh_tab
+    prevents duplicate writes.
+
+    Call as `asyncio.create_task(check_and_refresh_stale(fmp_key))` from
+    the application lifespan hook.
+    """
+    if not fmp_key:
+        print("[calendar_snapshot] check_and_refresh_stale: no FMP key, skipping")
+        return
+    await asyncio.sleep(delay_secs)
+    print(f"[calendar_snapshot] startup stale-check: et_monday={_et_week_monday()}")
+    for tab in TARGET_TABS:
+        try:
+            slot = _neon_read(tab)
+            if slot is None:
+                store = _read_disk()
+                slot = _normalize_slot(store.get(tab))
+            if _snapshot_is_stale(slot, tab):
+                stored_from = ((slot.get("meta") or {}).get("window") or {}).get("from", "N/A")
+                print(
+                    f"[calendar_snapshot] startup stale-check: tab={tab} STALE "
+                    f"(stored_from={stored_from!r}) — refreshing now"
+                )
+                await refresh_tab(tab, fmp_key)
+            else:
+                stored_from = ((slot.get("meta") or {}).get("window") or {}).get("from", "N/A")
+                print(f"[calendar_snapshot] startup stale-check: tab={tab} current (stored_from={stored_from!r})")
+        except Exception as e:
+            print(f"[calendar_snapshot] startup stale-check error tab={tab}: {e}")
+
+
 async def weekly_scheduler_loop(fmp_key_provider) -> None:
     """
     Background loop. Pass a callable returning the FMP key (so a missing key
     at startup can still recover later without restart).
+
+    Two firing modes:
+    1. Sunday scheduled refresh (existing): fires each tab at its configured
+       ET hour once per ISO week (last_run_week marker prevents re-runs).
+    2. Daily stale-check (new): Mon–Sat, every 60 minutes, refreshes any tab
+       whose stored window doesn't cover the current ET week.  Uses a
+       "stale:<week>" marker so each tab is refreshed at most once per week
+       outside the Sunday window.
     """
     print(f"[calendar_snapshot] scheduler loop started; tabs={TARGET_TABS}")
 
@@ -509,6 +641,8 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
         try:
             now_et = _et_now()
             week_marker = _iso_year_week(now_et)
+
+            # ── Sunday: scheduled full refresh ────────────────────────────────
             if now_et.weekday() == 6:
                 for tab, hour, minute in _SCHEDULE:
                     if now_et.hour != hour:
@@ -527,13 +661,44 @@ async def weekly_scheduler_loop(fmp_key_provider) -> None:
                         _set_last_run_marker(tab, week_marker)
                     except Exception as e:
                         print(f"[calendar_snapshot] scheduler error tab={tab}: {e}")
+
+            # ── Mon–Sat: stale-tab check (hourly cadence via sleep below) ────
+            else:
+                stale_marker = f"stale:{week_marker}"
+                for tab in TARGET_TABS:
+                    if _last_run_marker(tab) in (week_marker, stale_marker):
+                        continue  # already refreshed this week (Sunday run or prior stale check)
+                    try:
+                        slot = _neon_read(tab)
+                        if slot is None:
+                            store = _read_disk()
+                            slot = _normalize_slot(store.get(tab))
+                        if _snapshot_is_stale(slot, tab):
+                            fmp_key = fmp_key_provider() if callable(fmp_key_provider) else fmp_key_provider
+                            if not fmp_key:
+                                continue
+                            stored_from = ((slot.get("meta") or {}).get("window") or {}).get("from", "N/A")
+                            print(
+                                f"[calendar_snapshot] stale-check (daily) firing "
+                                f"tab={tab} stored_from={stored_from!r} "
+                                f"et={now_et.isoformat()}"
+                            )
+                            await refresh_tab(tab, fmp_key)
+                            _set_last_run_marker(tab, stale_marker)
+                    except Exception as e:
+                        print(f"[calendar_snapshot] stale-check error tab={tab}: {e}")
+
         except Exception as e:
             print(f"[calendar_snapshot] scheduler loop error: {e}")
 
+        # Sleep ~60 minutes Mon–Sat, ~1 min on Sunday (to hit hourly slots).
         try:
             now_et = _et_now()
-            secs_to_next_min = 60 - now_et.second
-            await asyncio.sleep(max(5, secs_to_next_min))
+            if now_et.weekday() == 6:
+                secs_to_next_min = 60 - now_et.second
+                await asyncio.sleep(max(5, secs_to_next_min))
+            else:
+                await asyncio.sleep(3600)
         except Exception:
             await asyncio.sleep(60)
 
