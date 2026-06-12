@@ -441,6 +441,21 @@ async def refresh_tab(tab: str, fmp_key: str) -> dict:
         events, err = [], str(e)
 
     ms = int((time.monotonic() - t0) * 1000)
+
+    # Post-filter to the requested window. Some fetchers (e.g. treasury_macro)
+    # ignore date params and return historical rows beyond the requested range;
+    # those belong in previous_week (Recent view), not current_week (Week view).
+    before_filter = len(events)
+    events = [
+        e for e in events
+        if from_date <= (e.get("date") or "") <= to_date
+    ]
+    if len(events) != before_filter:
+        print(
+            f"[calendar_snapshot] refresh tab={tab} date-filter: "
+            f"{before_filter} → {len(events)} (dropped {before_filter - len(events)} outside {from_date}→{to_date})"
+        )
+
     print(
         f"[calendar_snapshot] refresh tab={tab} window={from_date}→{to_date} "
         f"events={len(events)} err={err} ms={ms}"
