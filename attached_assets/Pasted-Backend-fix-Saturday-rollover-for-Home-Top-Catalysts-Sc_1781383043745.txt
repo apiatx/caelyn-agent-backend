@@ -1,0 +1,91 @@
+Backend fix: Saturday rollover for Home Top Catalysts.
+
+Scope:
+
+* Fix only the Home compact catalysts backend route/service:
+
+  * `GET /api/home/top-catalysts`
+  * likely `backend/services/home_top_catalysts.py`
+* Do not change Calendar Economic Releases tab behavior.
+* Do not change Calendar Treasury / Macro tab behavior.
+* Do not change Earnings behavior.
+* Do not change date-window logic inside `calendar_snapshot_service.py` unless absolutely required, and if required, only add a separate helper for Top Catalysts planning windows.
+* Do not add LLM calls.
+* Do not add new provider calls beyond the existing cached catalyst/snapshot refresh paths.
+
+Bug:
+Today is Saturday. Home → “Top Catalysts This Week” is still showing last week’s catalysts. Once it is Saturday in America/New_York time, this Home section should show the coming Monday–Friday week so the user can plan ahead.
+
+Required behavior:
+Create/use a Home Top Catalysts planning-window helper:
+
+* Monday through Friday ET:
+
+  * target week = current Monday through current Friday
+* Saturday and Sunday ET:
+
+  * target week = next Monday through next Friday
+
+Examples:
+
+* If ET date is Saturday 2026-06-13:
+
+  * window_start = 2026-06-15
+  * window_end = 2026-06-19
+* If ET date is Sunday 2026-06-14:
+
+  * window_start = 2026-06-15
+  * window_end = 2026-06-19
+* If ET date is Wednesday 2026-06-17:
+
+  * window_start = 2026-06-15
+  * window_end = 2026-06-19
+
+Implementation:
+
+1. Audit `home_top_catalysts.py`.
+2. Find where the current week/window is computed.
+3. Replace that with the Saturday rollover planning-window logic.
+4. Ensure the route response includes clear metadata:
+
+   * `window_start`
+   * `window_end`
+   * `window_mode`: `"current_week"` or `"next_week_planning"`
+   * `generated_at`
+   * `source`
+5. If the service reads cached economic/treasury snapshots, make sure it does not accidentally reuse prior-week snapshots for Saturday/Sunday next-week planning.
+
+   * If target window does not match stored snapshot window, refresh or read the correct weekly slot according to existing cache conventions.
+   * Do not pretend last week is fresh for a next-week planning window.
+6. Keep the compact grouping logic:
+
+   * Fed / Rates
+   * Inflation Data
+   * Labor Market Data
+   * Growth / Demand
+   * Treasury / Yields
+   * Consumer Sentiment
+   * Housing Data
+7. Keep the 6–8 card limit.
+
+Validation:
+Run backend locally and test `/api/home/top-catalysts`.
+
+Print validation for simulated or actual ET dates:
+
+* Friday
+* Saturday
+* Sunday
+* Monday
+
+If there is no date override helper, add a testable internal helper and unit-style print validation.
+
+Acceptance criteria:
+
+* On Saturday ET, `/api/home/top-catalysts` returns next week, not last week.
+* On Sunday ET, it returns next week.
+* On Monday–Friday ET, it returns the active week.
+* Response metadata clearly shows the selected window.
+* No Calendar Economic Releases/Treasury tab regressions.
+* No Earnings regressions.
+* No new LLM calls.

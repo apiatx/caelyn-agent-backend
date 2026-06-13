@@ -143,13 +143,37 @@ _MAX_TOTAL         = 8
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _et_week_monday() -> date:
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        from backports.zoneinfo import ZoneInfo  # type: ignore
-    now = datetime.now(ZoneInfo("America/New_York"))
-    return now.date() - timedelta(days=now.date().weekday())
+def _planning_window(
+    today_et: Optional[date] = None,
+) -> tuple[date, date, str]:
+    """
+    Return (monday, friday, window_mode) for the Home Top Catalysts feed.
+
+    Planning rules (all in America/New_York):
+      Mon–Fri  → current week's Mon–Fri   window_mode="current_week"
+      Sat–Sun  → *next* week's Mon–Fri    window_mode="next_week_planning"
+
+    `today_et` is accepted for unit-test overrides; defaults to the real ET date.
+    """
+    if today_et is None:
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore
+        today_et = datetime.now(ZoneInfo("America/New_York")).date()
+
+    wd = today_et.weekday()   # 0=Mon … 6=Sun
+    if wd >= 5:               # Saturday (5) or Sunday (6)
+        # Advance to next Monday
+        days_to_monday = 7 - wd
+        monday = today_et + timedelta(days=days_to_monday)
+        mode = "next_week_planning"
+    else:                     # Monday–Friday
+        monday = today_et - timedelta(days=wd)
+        mode = "current_week"
+
+    friday = monday + timedelta(days=4)
+    return monday, friday, mode
 
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
@@ -348,29 +372,44 @@ def _build_other_card(ev: dict) -> dict:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def build_home_top_catalysts() -> dict:
+def build_home_top_catalysts(
+    today_override: Optional[date] = None,
+) -> dict:
     """
     Build the compact Home Top Catalysts feed.
 
     Pure read across already-cached services. Zero new external API calls.
     Returns a response with at most 6–8 cards, macro events grouped by
     category (inflation/fed-rates/labor/growth/treasury/consumer/housing).
+
+    `today_override` (date in ET) is for testing/validation only.
+
+    Weekend rollover (planning-window rules):
+      Mon–Fri → current week   (window_mode="current_week")
+      Sat–Sun → next week      (window_mode="next_week_planning")
     """
     from services.top_catalysts_service import get_top_catalysts
     from services.calendar_snapshot_service import get_snapshot as _get_snapshot
 
-    monday = _et_week_monday()
-    friday = monday + timedelta(days=4)
-    week_start = monday.isoformat()
-    week_end   = friday.isoformat()
+    monday, friday, window_mode = _planning_window(today_override)
+    week_start   = monday.isoformat()
+    week_end     = friday.isoformat()
+    generated_at = datetime.now(tz=__import__("datetime").timezone.utc).isoformat()
 
     # ── 1. Base aggregation (earnings + other) from existing service ─────────
+    # get_top_catalysts() always builds against the current Mon–Fri window via
+    # its own _week_bounds(). We then RE-FILTER by our planning window so that
+    # on Sat/Sun (next-week mode) we do NOT surface last-week earnings.
     base = get_top_catalysts()
     days = base.get("days") or []
 
     earnings_flat: list[dict] = []
     other_flat: list[dict]    = []
     for day in days:
+        day_date = _parse_date(day.get("date"))
+        if day_date is None or not (monday <= day_date <= friday):
+            # Outside our planning window — skip entirely on weekend rollover
+            continue
         earnings_flat.extend(day.get("earnings") or [])
         other_flat.extend(day.get("other") or [])
 
@@ -378,6 +417,9 @@ def build_home_top_catalysts() -> dict:
     earnings_flat.sort(key=lambda e: -float(e.get("rankScore") or 0))
 
     # ── 2. Full macro pool from snapshots (same source, broader than whitelist)
+    # On Sat/Sun the snapshots still hold the prior week's current_week data;
+    # the date-filter below ensures only events that fall in monday…friday are
+    # kept, so stale prior-week events are automatically excluded.
     macro_raw: list[dict] = []
     for tab in ("economic_releases", "treasury_macro"):
         try:
@@ -447,7 +489,7 @@ def build_home_top_catalysts() -> dict:
     hidden = max(0, total_source - len(final))
 
     print(
-        f"[home_top_catalysts] week={week_start}/{week_end} "
+        f"[home_top_catalysts] mode={window_mode} week={week_start}/{week_end} "
         f"macro_groups={len(selected_macro)} earnings={len(earnings_cards)} "
         f"other={len(other_cards)} total_cards={len(final)} "
         f"source_events={total_source} hidden={hidden}"
@@ -458,6 +500,8 @@ def build_home_top_catalysts() -> dict:
         "source":               "calendar_top_catalysts",
         "window_start":         week_start,
         "window_end":           week_end,
+        "window_mode":          window_mode,
+        "generated_at":         generated_at,
         "catalysts":            final,
         "total_source_events":  total_source,
         "total_grouped_events": len(selected_macro),
