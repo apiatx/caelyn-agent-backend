@@ -125,10 +125,10 @@
   "emerging_themes": [
     {
       "name": "Regional Banks",
-      "score": 69.8,
+      "score": 69.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "KRE",
@@ -156,6 +156,23 @@
         "AXTI",
         "CIFR",
         "PRAX"
+      ]
+    },
+    {
+      "name": "Tech Equal-Weight",
+      "score": 64.0,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "RYT",
+        "QQEW"
+      ],
+      "related_tickers": [
+        "STX",
+        "INTC",
+        "WDC"
       ]
     },
     {
@@ -193,23 +210,6 @@
         "AEIS",
         "TTMI"
       ]
-    },
-    {
-      "name": "Homebuilders",
-      "score": 62.3,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (62/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
-      ],
-      "related_etfs": [
-        "ITB",
-        "XHB"
-      ],
-      "related_tickers": [
-        "HD",
-        "BLD",
-        "SHW"
-      ]
     }
   ],
   "dead_zones": [
@@ -227,10 +227,10 @@
     },
     {
       "name": "Uranium & Nuclear Energy",
-      "score": 23.4,
+      "score": 22.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (23/100) vs 60-theme universe. SPY delta +0.3%, QQQ delta +0.2%. Breadth 67% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta +0.3%, QQQ delta +0.2%. Breadth 67% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "URA",
@@ -245,7 +245,7 @@
     },
     {
       "name": "Agribusiness",
-      "score": 24.4,
+      "score": 23.6,
       "source": "theme_rs_service",
       "evidence": [
         "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta +0.3%, QQQ delta +0.3%. Breadth 89% \u2014 minimal buying pressur"
@@ -263,10 +263,10 @@
     },
     {
       "name": "Communication Services",
-      "score": 25.4,
+      "score": 24.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (25/100) vs 60-theme universe. SPY delta -0.7%, QQQ delta -0.8%. Breadth 62% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta -0.7%, QQQ delta -0.8%. Breadth 62% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "XLC",
@@ -279,21 +279,22 @@
       ]
     },
     {
-      "name": "Fintech",
-      "score": 26.2,
+      "name": "Gold",
+      "score": 25.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (26/100) vs 60-theme universe. SPY delta +0.2%, QQQ delta +0.1%. Breadth 40% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (26/100) vs 60-theme universe. SPY delta +1.0%, QQQ delta +0.9%. Breadth 100% \u2014 minimal buying pressu"
       ],
       "related_etfs": [
-        "FINX",
-        "ARKF",
-        "IPAY"
+        "GLD",
+        "IAU",
+        "GDX",
+        "GDXJ"
       ],
       "related_tickers": [
-        "AMD",
-        "GPN",
-        "FIS"
+        "PAAS",
+        "AEM",
+        "NEM"
       ]
     }
   ],
@@ -309,12 +310,12 @@
     {
       "sector": "Communication Services",
       "ticker": "XLC",
-      "score": 25.4,
+      "score": 24.2,
       "posture": "lagging"
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-12T22:11:52.050721+00:00",
+  "last_updated": "2026-06-13T15:37:17.390044+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -325,5 +326,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1781302312.0508144
+  "_saved_at": 1781365037.3903327
 }
