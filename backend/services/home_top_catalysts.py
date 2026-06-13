@@ -1,17 +1,27 @@
 """
 Home Compact Top Catalysts feed — GET /api/home/top-catalysts.
 
-Reuses existing cached data sources only (zero new external API calls):
+Reuses existing cached data sources only (zero new external API calls during
+normal Mon–Fri operation):
   • top_catalysts_service.get_top_catalysts() — earnings + other (IPO/split/div)
   • calendar_snapshot_service.get_snapshot()  — full macro pool for grouping
+
+Weekend planning-window behavior (Sat/Sun):
+  On Saturday/Sunday ET the planning window advances to the NEXT Mon–Fri week.
+  Snapshot data in Neon still holds the previous week, so we fetch next-week
+  macro events directly from FMP using _fetch_tab (same function the snapshot
+  service uses), cache them in process-local memory for 23 h, and return them
+  without touching the Neon snapshot slots that Calendar uses.
 
 The Calendar page's existing /api/catalysts/top endpoint is NOT modified.
 This module applies its own grouping/ranking/limiting layer on top.
 """
 from __future__ import annotations
 
+import asyncio
 import re
-from datetime import date, datetime, timedelta
+import time as _time
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 
@@ -140,8 +150,19 @@ _MAX_EARNINGS      = 3
 _MAX_OTHER         = 2
 _MAX_TOTAL         = 8
 
+# Tabs fetched for next-week planning (in-memory only, not written to Neon)
+_PLANNING_TABS = ("economic_releases", "treasury_macro")
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# In-memory cache for planning-window data (Sat/Sun next-week fetch).
+# Keyed by "{tab}:{monday_iso}:{friday_iso}". NOT shared with calendar snapshots.
+_planning_cache: dict[str, dict] = {}
+_planning_locks: dict[str, asyncio.Lock] = {}
+
+# 23 h — survives from Saturday morning through Sunday evening.
+_PLANNING_CACHE_TTL = 23 * 3600
+
+
+# ── Planning window helper ────────────────────────────────────────────────────
 
 def _planning_window(
     today_et: Optional[date] = None,
@@ -164,7 +185,6 @@ def _planning_window(
 
     wd = today_et.weekday()   # 0=Mon … 6=Sun
     if wd >= 5:               # Saturday (5) or Sunday (6)
-        # Advance to next Monday
         days_to_monday = 7 - wd
         monday = today_et + timedelta(days=days_to_monday)
         mode = "next_week_planning"
@@ -175,6 +195,8 @@ def _planning_window(
     friday = monday + timedelta(days=4)
     return monday, friday, mode
 
+
+# ── General helpers ───────────────────────────────────────────────────────────
 
 def _parse_date(s: Optional[str]) -> Optional[date]:
     if not s:
@@ -233,12 +255,177 @@ def _classify_macro(ev: dict) -> Optional[str]:
     return None
 
 
+# ── Planning-window in-memory fetch (Sat/Sun only) ───────────────────────────
+
+def _get_planning_lock(key: str) -> asyncio.Lock:
+    """Return (creating if absent) the per-key asyncio Lock."""
+    if key not in _planning_locks:
+        _planning_locks[key] = asyncio.Lock()
+    return _planning_locks[key]
+
+
+async def _fetch_planning_tab(
+    tab: str,
+    monday: date,
+    friday: date,
+    fmp_key: str,
+) -> tuple[list[dict], str]:
+    """
+    Fetch events for one tab for the planning window (next Mon–Fri).
+
+    Results are stored in the process-local `_planning_cache` only — they are
+    NOT written to Neon and do NOT touch the calendar snapshot slots that the
+    Calendar page reads.
+
+    Returns (events, cache_status) where cache_status ∈
+      {"hit", "miss_fetched", "miss_fetch_error", "no_fmp_key"}.
+    """
+    cache_key = f"{tab}:{monday.isoformat()}:{friday.isoformat()}"
+
+    # Check in-memory cache (outside lock — fast path)
+    cached = _planning_cache.get(cache_key)
+    if cached and (_time.monotonic() - cached["fetched_at"]) < _PLANNING_CACHE_TTL:
+        print(
+            f"[home_top_catalysts] planning cache HIT  tab={tab} "
+            f"events={len(cached['events'])} key={cache_key}"
+        )
+        return cached["events"], "hit"
+
+    if not fmp_key:
+        print(f"[home_top_catalysts] planning fetch SKIP tab={tab}: no FMP key")
+        return [], "no_fmp_key"
+
+    # Acquire per-key lock to prevent concurrent duplicate fetches
+    lock = _get_planning_lock(cache_key)
+    async with lock:
+        # Double-check after acquiring lock
+        cached = _planning_cache.get(cache_key)
+        if cached and (_time.monotonic() - cached["fetched_at"]) < _PLANNING_CACHE_TTL:
+            return cached["events"], "hit"
+
+        from_date = monday.strftime("%Y-%m-%d")
+        to_date   = friday.strftime("%Y-%m-%d")
+        print(
+            f"[home_top_catalysts] planning fetch MISS tab={tab} "
+            f"window={from_date}→{to_date}"
+        )
+        try:
+            from services.catalyst_calendar_service import (
+                CatalystFMP,
+                _fetch_tab,
+                _load_watchlist_symbols,
+                _load_portfolio_symbols,
+            )
+            fmp       = CatalystFMP(fmp_key)
+            watchlist = _load_watchlist_symbols()
+            portfolio = _load_portfolio_symbols()
+
+            events, err = await _fetch_tab(
+                fmp, tab, from_date, to_date, watchlist, portfolio,
+                limit=1000, mode="upcoming",
+            )
+            if err:
+                print(f"[home_top_catalysts] planning fetch error tab={tab}: {err}")
+
+            # Restrict to exact window (some fetchers over-return)
+            events = [
+                e for e in events
+                if from_date <= (e.get("date") or "") <= to_date
+            ]
+            print(
+                f"[home_top_catalysts] planning fetch tab={tab} "
+                f"events={len(events)} err={err}"
+            )
+
+            _planning_cache[cache_key] = {
+                "events": events,
+                "fetched_at": _time.monotonic(),
+            }
+            return events, "miss_fetched"
+
+        except Exception as exc:
+            print(f"[home_top_catalysts] planning fetch exception tab={tab}: {exc}")
+            _planning_cache[cache_key] = {
+                "events": [],
+                "fetched_at": _time.monotonic(),
+            }
+            return [], "miss_fetch_error"
+
+
+async def _ensure_planning_data(
+    monday: date,
+    friday: date,
+    fmp_key: str,
+) -> tuple[list[dict], dict]:
+    """
+    For next-week planning: ensure macro events exist for [monday, friday].
+    Runs _fetch_planning_tab for each planning tab concurrently.
+    Returns (all_events, diagnostics_dict).
+    """
+    tasks = {
+        tab: asyncio.create_task(_fetch_planning_tab(tab, monday, friday, fmp_key))
+        for tab in _PLANNING_TABS
+    }
+    all_events: list[dict] = []
+    diag: dict[str, Any] = {}
+    refresh_attempted = False
+    refresh_succeeded = False
+
+    for tab, task in tasks.items():
+        events, status = await task
+        all_events.extend(events)
+        diag[tab] = {"cache_status": status, "count": len(events)}
+        if status in ("miss_fetched", "miss_fetch_error"):
+            refresh_attempted = True
+        if status == "miss_fetched":
+            refresh_succeeded = True
+
+    diag["refresh_attempted"] = refresh_attempted
+    diag["refresh_succeeded"] = refresh_succeeded
+    return all_events, diag
+
+
+# ── Proactive Saturday warmup (called by scheduler in main.py) ───────────────
+
+async def warm_planning_window() -> None:
+    """
+    Pre-warm next-week planning data on Saturday ET.
+    Safe to call concurrently — lock inside _fetch_planning_tab prevents storms.
+    Called by the home_planning_warmup_loop background task in main.py.
+    """
+    from config import FMP_API_KEY as _fmp_key
+    if not _fmp_key:
+        print("[home_top_catalysts] warm_planning_window: no FMP key, skip")
+        return
+
+    monday, friday, mode = _planning_window()
+    if mode != "next_week_planning":
+        print(
+            f"[home_top_catalysts] warm_planning_window: mode={mode!r} "
+            f"(not Sat/Sun), skip"
+        )
+        return
+
+    print(
+        f"[home_top_catalysts] warm_planning_window: "
+        f"warming {monday.isoformat()}→{friday.isoformat()}"
+    )
+    for tab in _PLANNING_TABS:
+        try:
+            events, status = await _fetch_planning_tab(tab, monday, friday, _fmp_key)
+            print(
+                f"[home_top_catalysts] warm_planning_window tab={tab} "
+                f"events={len(events)} status={status}"
+            )
+        except Exception as exc:
+            print(f"[home_top_catalysts] warm_planning_window error tab={tab}: {exc}")
+
+
 # ── Group builder ────────────────────────────────────────────────────────────
 
 def _build_macro_group(cat_id: str, events: list[dict], week_start: str) -> dict:
     cat = _CATEGORY_BY_ID[cat_id]
 
-    # Sort by date, then dedupe by (normalized_name, date)
     events_sorted = sorted(events, key=lambda e: (e.get("date") or ""))
     seen_keys: set[tuple[str, str]] = set()
     deduped: list[dict] = []
@@ -255,12 +442,10 @@ def _build_macro_group(cat_id: str, events: list[dict], week_start: str) -> dict
     end_date   = (deduped[-1].get("date") or "")[:10]
     impact     = _highest_impact(deduped)
 
-    # Build subtitle: "Mon–Thu: CPI, Core CPI, PPI"  (max 4 distinct short names)
     names_seen: set[str] = set()
     short_names: list[str] = []
     for ev in deduped:
         n = _event_name(ev)
-        # Strip trailing parenthetical like "(May)" or "(Q1)" for brevity
         n_short = re.sub(r"\s*\([^)]{1,10}\)\s*$", "", n).strip() or n
         if n_short.lower() not in names_seen and len(short_names) < 4:
             names_seen.add(n_short.lower())
@@ -372,19 +557,19 @@ def _build_other_card(ev: dict) -> dict:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def build_home_top_catalysts(
+async def build_home_top_catalysts(
     today_override: Optional[date] = None,
 ) -> dict:
     """
     Build the compact Home Top Catalysts feed.
 
-    Pure read across already-cached services. Zero new external API calls.
-    Returns a response with at most 6–8 cards, macro events grouped by
-    category (inflation/fed-rates/labor/growth/treasury/consumer/housing).
+    Zero new external API calls during Mon–Fri (pure cache reads).
+    On Sat/Sun, fetches next-week macro events from FMP on-demand and caches
+    them in process memory for 23 h — does NOT touch Neon or Calendar snapshots.
 
-    `today_override` (date in ET) is for testing/validation only.
+    `today_override` (ET date) is for testing/validation only.
 
-    Weekend rollover (planning-window rules):
+    Weekend planning-window rules (America/New_York):
       Mon–Fri → current week   (window_mode="current_week")
       Sat–Sun → next week      (window_mode="next_week_planning")
     """
@@ -394,12 +579,17 @@ def build_home_top_catalysts(
     monday, friday, window_mode = _planning_window(today_override)
     week_start   = monday.isoformat()
     week_end     = friday.isoformat()
-    generated_at = datetime.now(tz=__import__("datetime").timezone.utc).isoformat()
+    generated_at = datetime.now(tz=timezone.utc).isoformat()
+
+    refresh_attempted = False
+    refresh_succeeded = False
+    cache_statuses: dict = {}
+    empty_reason: Optional[str] = None
 
     # ── 1. Base aggregation (earnings + other) from existing service ─────────
-    # get_top_catalysts() always builds against the current Mon–Fri window via
-    # its own _week_bounds(). We then RE-FILTER by our planning window so that
-    # on Sat/Sun (next-week mode) we do NOT surface last-week earnings.
+    # get_top_catalysts() builds against the current ET Mon–Fri window.
+    # We re-filter by our planning window so that on Sat/Sun (next-week mode)
+    # last-week earnings/other days are excluded.
     base = get_top_catalysts()
     days = base.get("days") or []
 
@@ -408,30 +598,68 @@ def build_home_top_catalysts(
     for day in days:
         day_date = _parse_date(day.get("date"))
         if day_date is None or not (monday <= day_date <= friday):
-            # Outside our planning window — skip entirely on weekend rollover
             continue
         earnings_flat.extend(day.get("earnings") or [])
         other_flat.extend(day.get("other") or [])
 
-    # Sort earnings by rankScore (already within-day sorted, but flatten globally)
     earnings_flat.sort(key=lambda e: -float(e.get("rankScore") or 0))
 
-    # ── 2. Full macro pool from snapshots (same source, broader than whitelist)
-    # On Sat/Sun the snapshots still hold the prior week's current_week data;
-    # the date-filter below ensures only events that fall in monday…friday are
-    # kept, so stale prior-week events are automatically excluded.
+    # ── 2. Macro pool ────────────────────────────────────────────────────────
+    # Mon–Fri: read from existing Neon-backed calendar snapshots (zero API call).
+    # Sat/Sun: snapshots hold prior-week data → fetch next-week data on-demand
+    #          into process-local memory (does NOT overwrite Neon slots).
     macro_raw: list[dict] = []
-    for tab in ("economic_releases", "treasury_macro"):
+    snapshot_source_windows: dict[str, str] = {}
+
+    # First try snapshots (may already have next-week data if warmup ran)
+    for tab in _PLANNING_TABS:
         try:
             env = _get_snapshot(tab) or {}
+            found = []
             for ev in (env.get("current_week") or []):
                 if not isinstance(ev, dict):
                     continue
                 d = _parse_date(ev.get("date"))
                 if d and monday <= d <= friday:
-                    macro_raw.append(ev)
+                    found.append(ev)
+            macro_raw.extend(found)
+            stored = (env.get("window") or {})
+            snapshot_source_windows[tab] = (
+                f"{stored.get('stored_from','?')}→{stored.get('stored_to','?')}"
+            )
         except Exception as exc:
             print(f"[home_top_catalysts] snapshot read failed tab={tab}: {exc}")
+
+    # On Sat/Sun with empty macro: fetch next-week data on-demand
+    if window_mode == "next_week_planning" and not macro_raw:
+        try:
+            from config import FMP_API_KEY as _fmp_key
+        except Exception:
+            _fmp_key = None
+
+        if _fmp_key:
+            print(
+                f"[home_top_catalysts] next_week_planning: snapshots empty for "
+                f"{week_start}→{week_end}, fetching on-demand"
+            )
+            planning_events, planning_diag = await _ensure_planning_data(
+                monday, friday, _fmp_key,
+            )
+            macro_raw = planning_events
+            refresh_attempted = planning_diag.get("refresh_attempted", False)
+            refresh_succeeded = planning_diag.get("refresh_succeeded", False)
+            cache_statuses    = planning_diag
+            if not macro_raw:
+                empty_reason = "planning_fetch_returned_no_events"
+        else:
+            empty_reason = "next_week_planning_no_fmp_key"
+
+    elif window_mode == "next_week_planning" and macro_raw:
+        # Snapshot already had next-week data (e.g. warmup ran earlier)
+        cache_statuses = {tab: {"cache_status": "snapshot_hit"} for tab in _PLANNING_TABS}
+
+    if not macro_raw and window_mode == "current_week":
+        empty_reason = "current_week_snapshots_empty"
 
     total_source = len(earnings_flat) + len(macro_raw) + len(other_flat)
 
@@ -442,7 +670,6 @@ def build_home_top_catalysts(
         if cat_id:
             events_by_cat.setdefault(cat_id, []).append(ev)
 
-    # Build group cards, sorted by category priority (descending)
     all_macro_cards: list[dict] = []
     for cat in sorted(_MACRO_CATEGORIES, key=lambda c: -c["priority"]):
         evs = events_by_cat.get(cat["id"])
@@ -452,7 +679,6 @@ def build_home_top_catalysts(
         if card:
             all_macro_cards.append(card)
 
-    # Apply macro limits: max 3 groups, treasury only once unless Fed event present
     has_fed = any(c["category"] == "fed_rates" for c in all_macro_cards)
     selected_macro: list[dict] = []
     treasury_used = 0
@@ -463,20 +689,17 @@ def build_home_top_catalysts(
             if treasury_used == 0:
                 selected_macro.append(card)
                 treasury_used += 1
-            # Allow a second treasury slot if there's a Fed event and we have room
             elif has_fed and len(selected_macro) < _MAX_MACRO_GROUPS:
                 selected_macro.append(card)
                 treasury_used += 1
         else:
             selected_macro.append(card)
 
-    # ── 4. Build earnings cards (top 3 by rank score) ────────────────────────
+    # ── 4. Earnings + other cards ─────────────────────────────────────────────
     earnings_cards = [_build_earnings_card(ev) for ev in earnings_flat[:_MAX_EARNINGS]]
+    other_cards    = [_build_other_card(ev)    for ev in other_flat[:_MAX_OTHER]]
 
-    # ── 5. Build other cards (top 2 from existing service output) ────────────
-    other_cards = [_build_other_card(ev) for ev in other_flat[:_MAX_OTHER]]
-
-    # ── 6. Assemble final list: macro → earnings → other, cap at 8 ───────────
+    # ── 5. Assemble final list ────────────────────────────────────────────────
     final: list[dict] = []
     final.extend(selected_macro)
 
@@ -508,4 +731,10 @@ def build_home_top_catalysts(
         "hidden_count":         hidden,
         "last_updated":         base.get("last_updated"),
         "status":               base.get("status") or "ready",
+        # Diagnostics
+        "refresh_attempted":    refresh_attempted,
+        "refresh_succeeded":    refresh_succeeded,
+        "cache_status":         cache_statuses,
+        "source_windows":       snapshot_source_windows,
+        "empty_reason":         empty_reason,
     }
