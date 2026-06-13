@@ -1,0 +1,112 @@
+Backend follow-up: Fix Home Top Catalysts Saturday planning so it actually populates next-week catalysts.
+
+The previous change only fixed the window metadata. It now returns:
+
+window_mode = "next_week_planning"
+window_start = next Monday
+window_end = next Friday
+catalysts = []
+
+That is not acceptable for the product behavior. The user needs Saturday/Sunday to show the coming week’s catalysts so they can plan before Monday.
+
+Scope:
+
+* Work only on Home Top Catalysts backend behavior and any scheduler/cache refresh needed to support it.
+* Primary file is likely `backend/services/home_top_catalysts.py`.
+* You may use the existing calendar snapshot refresh services if needed.
+* Do not change Calendar Economic Releases tab behavior.
+* Do not change Calendar Treasury / Macro tab behavior.
+* Do not change Earnings behavior.
+* Do not add LLM calls.
+* Do not create duplicate FMP clients.
+* Do not add a separate provider path if an existing snapshot refresh path already exists.
+
+Bug:
+On Saturday/Sunday, `/api/home/top-catalysts` correctly selects the next-week planning window, but returns empty because next week’s snapshots have not been generated yet. The agent summary says “When Monday’s scheduler runs… cards will populate automatically,” but that defeats the whole purpose of Saturday planning.
+
+Required behavior:
+On Saturday/Sunday ET:
+
+1. Determine next Monday–Friday planning window.
+2. Check whether catalyst source data exists for that exact window.
+3. If missing/stale, build or refresh the required next-week data immediately using existing cache/snapshot refresh functions.
+4. Return populated next-week catalysts if the provider/source returns events.
+5. Return empty only if the refresh succeeds and there truly are no catalysts for that next-week window.
+
+Implementation guidance:
+
+1. Audit existing calendar snapshot refresh functions.
+   Find how these are refreshed for a specific `from_date` / `to_date`:
+
+   * earnings / top catalysts source
+   * economic_releases
+   * treasury_macro
+   * ipos
+   * dividends
+   * splits
+
+2. Add a helper in `home_top_catalysts.py` or nearby:
+
+   * `ensure_home_top_catalysts_window(window_start, window_end)`
+   * or similar
+
+   It should:
+
+   * verify cached/source window matches requested planning window
+   * trigger refresh for missing source snapshots for that window
+   * avoid repeated refresh storms by using existing cache freshness conventions or an in-process cooldown
+
+3. Saturday/Sunday route behavior:
+
+   * If target window is next week and source snapshots are missing, refresh them now.
+   * Do not wait for Monday scheduler.
+   * Do not serve last-week data as a fallback.
+   * Do not return empty without attempting a refresh.
+
+4. Scheduler behavior:
+   Add or adjust scheduler so next-week Home Top Catalysts source data warms on Saturday ET.
+
+   Suggested:
+
+   * Saturday morning or midday ET: warm/build next week Top Catalysts planning data.
+   * Sunday: optionally re-check/refresh.
+   * Monday–Friday: current-week behavior remains unchanged.
+
+   Use existing scheduler conventions.
+
+5. Response metadata:
+   Keep:
+
+   * `window_start`
+   * `window_end`
+   * `window_mode`
+   * `generated_at`
+
+   Add diagnostics if practical:
+
+   * `source_windows`
+   * `refresh_attempted`
+   * `refresh_succeeded`
+   * `empty_reason`
+   * `cache_status`
+
+6. Validation:
+   Simulate Saturday ET with an override/test helper.
+
+   Prove:
+
+   * selected window is next Mon–Fri
+   * refresh is attempted when next-week source data is missing
+   * route does not return stale previous-week catalysts
+   * route does not return empty merely because Monday scheduler has not run
+   * if provider returns next-week events, those appear in grouped Home Top Catalysts cards
+
+7. Acceptance criteria:
+
+   * On Saturday ET, `/api/home/top-catalysts` shows coming-week catalysts, not last week.
+   * On Sunday ET, it shows coming-week catalysts.
+   * It does not wait until Monday to populate.
+   * It returns empty only after a real refresh attempt confirms no events.
+   * No Calendar tab regressions.
+   * No Earnings regressions.
+   * No new LLM calls.
