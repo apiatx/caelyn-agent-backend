@@ -776,18 +776,38 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
                 }
                 out[sym] = row
                 cache.set(f"{_LKG_PFX}{sym}", row, _LKG_TTL)
+                cache.set(f"quote:lkg:{sym}", row, _LKG_TTL)   # shared canonical LKG
             print(f"[HOME] Tradier live: {len(out)} of {len(us_tickers)} covered")
         except Exception as exc:
             print(f"[HOME] batch_quotes Tradier error (non-fatal): {exc}")
     elif _tradier_saturated:
-        print(f"[HOME_PERF] batch_quotes=skipped_saturated tickers={len(us_tickers)} → LKG fallback")
+        # Tradier rate-limiter is saturated — check the shared per-symbol cache
+        # (tradier:quote:sym:{SYM}, 60s TTL) before falling back to LKG.
+        # Another page (Portfolio, screener) may have recently refreshed these.
+        print(
+            f"[HOME_PERF] batch_quotes=skipped_saturated tickers={len(us_tickers)} "
+            f"→ per-sym cache then LKG fallback"
+        )
+        for sym in us_tickers:
+            sym_upper = sym.upper()
+            raw = cache.get(f"tradier:quote:sym:{sym_upper}")
+            if raw and raw.get("last"):
+                out[sym_upper] = {
+                    **raw,
+                    "quote_source":          raw.get("quote_source", "tradier"),
+                    "quote_cached_at":       _now_ts,
+                    "quote_is_stale":        False,
+                    "quote_fallback_reason": "per_sym_cache_saturated",
+                }
 
     # ── Step 2: LKG Tradier for tickers Tradier missed ────────────────────
+    _SHARED_LKG_PFX = "quote:lkg:"
     for sym in us_tickers:
         sym_upper = sym.upper()
         if sym_upper in out:
             continue
-        lkg = cache.get(f"{_LKG_PFX}{sym_upper}")
+        # Try path-specific LKG first, then shared canonical LKG
+        lkg = cache.get(f"{_LKG_PFX}{sym_upper}") or cache.get(f"{_SHARED_LKG_PFX}{sym_upper}")
         if lkg and lkg.get("last"):
             out[sym_upper] = {
                 **lkg,

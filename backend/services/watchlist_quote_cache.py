@@ -87,6 +87,55 @@ def _normalise(symbol: str, q: dict, now_str: str) -> dict:
     }
 
 
+def _overlay_canonical_per_symbol(symbols: list[str]) -> None:
+    """
+    Overlay the module-level _quote_cache with any fresher data from the shared
+    per-symbol Tradier cache (tradier:quote:sym:{SYM}, 60s TTL).
+
+    This is called when get_watchlist_quotes() serves from the 10-minute module
+    cache.  If Portfolio, the screener, or the Home dashboard has called Tradier
+    more recently, those fresher quotes are surfaced here without waiting for the
+    next full module-cache refresh.
+    """
+    try:
+        from data.cache import cache as _c
+    except Exception:
+        return
+
+    now_str = datetime.now(timezone.utc).isoformat() + "Z"
+    updated = 0
+    for sym in symbols:
+        sym_upper = sym.upper()
+        if sym_upper not in _quote_cache:
+            continue
+        raw = _c.get(f"tradier:quote:sym:{sym_upper}")
+        if not raw:
+            continue
+        price = _safe_float(raw.get("last"))
+        if price is None:
+            continue
+        change_pct = _safe_float(raw.get("change_percentage"))
+        vol        = _safe_float(raw.get("volume"))
+        avg_vol    = _safe_float(raw.get("average_volume"))
+        rel_vol    = None
+        if vol is not None and avg_vol and avg_vol > 0:
+            rel_vol = round(vol / avg_vol, 4)
+        existing = _quote_cache[sym_upper]
+        _quote_cache[sym_upper] = {
+            **existing,
+            "price":           price,
+            "change_pct_1d":   change_pct,
+            "volume":          vol,
+            "average_volume":  avg_vol,
+            "relative_volume": rel_vol if rel_vol is not None else existing.get("relative_volume"),
+            "quote_source":    raw.get("quote_source", "tradier") or "tradier",
+            "quote_updated_at": now_str,
+        }
+        updated += 1
+    if updated:
+        print(f"[WQ_CACHE] Overlaid {updated} canonical per-symbol quotes onto module cache")
+
+
 async def _fetch_via_home_service(symbols: list[str]) -> dict[str, dict]:
     """
     Reuse home_service._batch_quotes (Tradier live → Tradier LKG → FMP fallback).
@@ -276,8 +325,14 @@ async def get_watchlist_quotes(
         lock = _get_lock()
         if not lock.locked():
             asyncio.create_task(_locked_refresh(symbols))
+        # Serve stale module cache overlaid with any per-symbol canonical data
+        _overlay_canonical_per_symbol(symbols)
     else:
         print(f"[WQ_CACHE] Cache hit ({len(_quote_cache)} symbols, age={age:.0f}s)")
+        # Even on a fresh module-cache hit, overlay with canonical per-symbol data
+        # so data from Portfolio or Home (refreshed within the last 60s) propagates
+        # to the Watchlist without waiting for the 10-minute module-cache refresh.
+        _overlay_canonical_per_symbol(symbols)
 
     return _quote_cache
 

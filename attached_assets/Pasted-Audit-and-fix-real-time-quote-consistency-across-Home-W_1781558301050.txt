@@ -1,0 +1,64 @@
+Audit and fix real-time quote consistency across Home, Watchlist, and Portfolio.
+
+Problem:
+The same ticker is showing different price/% change/volume across Home watchlist snapshot, Watchlist page, and Portfolio page. Home appears stale. Watchlist live news is also not loading.
+
+Goal:
+There must be one canonical Tradier quote pipeline/cache for all equity tickers. Watchlist, Portfolio, Home watchlist snapshot, alerts, and any downstream page modules must consume the same normalized quote object for a ticker instead of using separate fetch/cache/enrichment paths.
+
+Do not create a new quote provider or duplicate endpoint. Preserve existing working paths. Audit first.
+
+Backend audit requirements:
+1. Find every route/service that fetches or returns quote/price/% change/volume data for:
+   - Watchlist page
+   - Home watchlist snapshot section
+   - Portfolio page
+   - Alerts
+   - Watchlist live news, if it depends on ticker scope or quote scope
+
+2. Identify all direct Tradier quote calls and all quote cache readers/writers.
+   Specifically look for separate cache keys, stale Neon snapshots, disk caches, in-memory caches, or fallback FMP quote paths being used by Home or Portfolio.
+
+3. Confirm whether Home is reading an old watchlist snapshot instead of the live watchlist quote cache.
+
+4. Confirm whether Portfolio has its own quote enrichment path instead of reading the shared quote cache.
+
+5. Create or restore a single canonical normalized quote service:
+   - Input: symbols[]
+   - Dedupes symbols
+   - Uses existing Tradier quote fetch logic
+   - Respects existing chunking/rate-limit patterns
+   - Writes/updates one shared quote cache keyed by symbol
+   - Returns the same normalized fields everywhere:
+     symbol, price, change, changePct, volume, avgVolume, relVolume, dollarVolume, bid, ask, open, high, low, previousClose, lastUpdated, source, stale
+
+6. Make Home watchlist snapshot consume the same watchlist quote payload as the Watchlist page.
+   It should not maintain a separate stale snapshot for price/% change/volume.
+
+7. Make Portfolio ticker data consume the same canonical quote payload by symbol.
+   Portfolio-specific fields like shares, cost basis, P/L can remain portfolio-specific, but live price/% change/volume must come from the canonical quote cache.
+
+8. Fix Watchlist live news:
+   - Audit the live news route and frontend contract.
+   - Ensure it receives the active watchlist ticker set.
+   - Normal watchlist should pass all active watchlist tickers.
+   - Favorites/Close Watch should pass only favorited tickers.
+   - If no news returns, backend should include a clear reason/debug field, not silently fail.
+
+9. Add diagnostics:
+   Add a temporary/debug endpoint or log output that compares one symbol across:
+   - canonical quote cache
+   - watchlist response
+   - home watchlist snapshot response
+   - portfolio response
+
+Validation:
+Use 3 overlapping tickers that appear on Watchlist, Home snapshot, and Portfolio.
+For each ticker, price, changePct, volume, source, and lastUpdated must match exactly across all three page responses.
+
+Also validate:
+- Home no longer shows stale quote data after Watchlist refreshes.
+- Portfolio no longer has different prices than Watchlist for the same ticker.
+- Watchlist live news loads for active watchlist tickers.
+- Favorites live news loads only for favorite tickers.
+- No new FMP quote path is introduced for real-time stock quotes unless Tradier fails and stale/fallback is clearly marked.

@@ -1487,6 +1487,99 @@ async def fmp_cost_status(request: Request):
     }
 
 
+@app.get("/api/debug/quote-consistency/{symbol}")
+async def debug_quote_consistency(symbol: str):
+    """
+    Inspect every quote cache layer for a single symbol.
+
+    Returns the live state of:
+      - tradier:quote:sym:{SYM}          — shared 60s per-symbol canonical cache
+      - home:wl_tradier_lkg:{SYM}        — Home/Watchlist 72h LKG
+      - quote:lkg:{SYM}                  — shared canonical LKG (written by all paths)
+      - portfolio:tradier_lkg:{SYM}      — Portfolio 72h LKG
+      - watchlist_quote_cache._quote_cache[SYM] — Watchlist 10-min module cache
+
+    Use this endpoint to diagnose price discrepancies across pages.
+    """
+    from data.cache import cache as _c
+    import time as _t
+    import services.watchlist_quote_cache as _wqc
+
+    sym = symbol.upper()
+
+    per_sym   = _c.get(f"tradier:quote:sym:{sym}")
+    home_lkg  = _c.get(f"home:wl_tradier_lkg:{sym}")
+    shared_lkg = _c.get(f"quote:lkg:{sym}")
+    port_lkg  = _c.get(f"portfolio:tradier_lkg:{sym}")
+
+    wq_entry  = _wqc._quote_cache.get(sym)
+    wq_age_s  = round(_t.monotonic() - _wqc._cache_ts, 1) if _wqc._cache_ts > 0 else None
+
+    def _price(d, *keys):
+        for k in keys:
+            v = (d or {}).get(k)
+            if v is not None:
+                try:
+                    return float(v)
+                except Exception:
+                    pass
+        return None
+
+    return {
+        "symbol": sym,
+        "per_symbol_cache": {
+            "key":      f"tradier:quote:sym:{sym}",
+            "price":    _price(per_sym, "last"),
+            "change_pct": _price(per_sym, "change_percentage"),
+            "volume":   _price(per_sym, "volume"),
+            "source":   (per_sym or {}).get("quote_source"),
+            "has_data": per_sym is not None,
+        },
+        "home_lkg": {
+            "key":      f"home:wl_tradier_lkg:{sym}",
+            "price":    _price(home_lkg, "last"),
+            "change_pct": _price(home_lkg, "change_percentage"),
+            "has_data": home_lkg is not None,
+        },
+        "shared_lkg": {
+            "key":      f"quote:lkg:{sym}",
+            "price":    _price(shared_lkg, "last", "price"),
+            "change_pct": _price(shared_lkg, "change_percentage", "change_pct"),
+            "has_data": shared_lkg is not None,
+        },
+        "portfolio_lkg": {
+            "key":      f"portfolio:tradier_lkg:{sym}",
+            "price":    _price(port_lkg, "price", "last"),
+            "change_pct": _price(port_lkg, "change_pct", "change_percentage"),
+            "has_data": port_lkg is not None,
+        },
+        "watchlist_module_cache": {
+            "price":          _price(wq_entry, "price"),
+            "change_pct_1d":  _price(wq_entry, "change_pct_1d"),
+            "volume":         _price(wq_entry, "volume"),
+            "quote_source":   (wq_entry or {}).get("quote_source"),
+            "has_data":       wq_entry is not None,
+            "module_cache_age_s": wq_age_s,
+        },
+        "summary": {
+            "prices": {
+                "per_symbol": _price(per_sym, "last"),
+                "watchlist":  _price(wq_entry, "price"),
+                "home_lkg":   _price(home_lkg, "last"),
+                "shared_lkg": _price(shared_lkg, "last", "price"),
+                "portfolio_lkg": _price(port_lkg, "price", "last"),
+            },
+            "consistent": len({
+                v for v in [
+                    _price(per_sym, "last"),
+                    _price(wq_entry, "price"),
+                ]
+                if v is not None
+            }) <= 1,
+        },
+    }
+
+
 @app.get("/api/presets")
 async def list_presets(request: Request):
     """List all available preset_intent values the backend supports.
@@ -7672,10 +7765,12 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                 if pd:
                     stock_profiles[sym] = pd
 
-            # LKG Tradier helpers
+            # LKG Tradier helpers — write to both path-specific and shared canonical LKG
             def _tradier_lkg_key(sym): return f"portfolio:tradier_lkg:{sym}"
+            _SHARED_LKG_PFX = "quote:lkg:"
             def _tradier_lkg_save(sym, row):
                 _cache.set(_tradier_lkg_key(sym), row, 3 * 24 * 3600)
+                _cache.set(f"{_SHARED_LKG_PFX}{sym}", row, 3 * 24 * 3600)
 
             # ── Step 1: Tradier batch (real-time — includes volume + bid/ask) ─
             tradier_covered: set = set()
@@ -7722,13 +7817,17 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             # ── Step 2: LKG Tradier for tickers Tradier missed ────────────────
             tradier_missed = [t for t in stock_tickers if t not in tradier_covered]
             for sym in tradier_missed:
-                lkg = _cache.get(_tradier_lkg_key(sym))
-                if lkg and lkg.get("price"):
+                # Try portfolio-specific LKG first, then shared canonical LKG written
+                # by Home/Watchlist — this eliminates separate-LKG divergence.
+                lkg = _cache.get(_tradier_lkg_key(sym)) or _cache.get(f"{_SHARED_LKG_PFX}{sym}")
+                if lkg and (lkg.get("price") or lkg.get("last")):
+                    price = lkg.get("price") or lkg.get("last")
                     quotes[sym] = {
                         **lkg,
-                        "quote_is_stale": True,
+                        "price":               price,
+                        "quote_is_stale":      True,
                         "quote_fallback_reason": "tradier_lkg",
-                        "quote_cached_at": _quote_ts,
+                        "quote_cached_at":     _quote_ts,
                     }
 
             # ── Step 3: Finnhub quote for tickers still not covered ───────────

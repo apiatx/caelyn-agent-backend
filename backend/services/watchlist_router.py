@@ -90,15 +90,17 @@ def _news_response(
     major_summary: dict,
     ts: float,
     is_building: bool = False,
+    debug_reason: str | None = None,
 ) -> dict:
     """Build the standardised Live News response."""
     age = round(_time.time() - ts)
     cached_at = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return {
+    top_articles = major_summary.get("major_developments", [])
+    resp = {
         # Original per-ticker map — preserved for any existing consumer
         "articles":         enriched_map,
         # Pre-ranked high-signal articles — use this for the Live News panel
-        "top_articles":     major_summary.get("major_developments", []),
+        "top_articles":     top_articles,
         "high_signal_count": major_summary.get("high_signal_count", 0),
         "by_catalyst_type":  major_summary.get("by_catalyst_type", {}),
         "news_signal_meta":  major_summary.get("news_signal_meta", {}),
@@ -107,6 +109,11 @@ def _news_response(
         "cache_age_s":      age,
         "is_building":      is_building,
     }
+    if debug_reason:
+        resp["debug_reason"] = debug_reason
+    elif not top_articles and not enriched_map:
+        resp["debug_reason"] = "no_articles_returned"
+    return resp
 
 
 async def _bg_refresh_news(watchlist_id: str, tickers: list[str]) -> None:
@@ -155,14 +162,21 @@ async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict
 
     # Cold start — build synchronously (only happens once per process restart)
     print(f"[NEWS_LKG] cold build  wl={watchlist_id}  tickers={len(tickers)}")
-    raw_map = await fetch_news_for_tickers(tickers)
+    cold_error: str | None = None
     try:
-        enriched_map, major_summary = _build_major(raw_map)
-    except Exception as _e:
-        print(f"[NEWS_LKG] major build error (non-fatal): {_e}")
-        enriched_map, major_summary = raw_map, {}
+        raw_map = await fetch_news_for_tickers(tickers)
+        try:
+            enriched_map, major_summary = _build_major(raw_map)
+        except Exception as _e:
+            print(f"[NEWS_LKG] major build error (non-fatal): {_e}")
+            enriched_map, major_summary = raw_map, {}
+    except Exception as exc:
+        print(f"[NEWS_LKG] cold build fetch error wl={watchlist_id}: {exc}")
+        enriched_map, major_summary = {}, {}
+        cold_error = f"fetch_error: {type(exc).__name__}"
     ts   = _time.time()
-    data = _news_response(enriched_map, major_summary, ts)
+    data = _news_response(enriched_map, major_summary, ts,
+                          debug_reason=cold_error)
     _news_lkg[watchlist_id] = {"data": data, "ts": ts}
     return data
 
