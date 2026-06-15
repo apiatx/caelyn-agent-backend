@@ -131,6 +131,14 @@ def _overlay_canonical_per_symbol(symbols: list[str]) -> None:
             "quote_source":    raw.get("quote_source", "tradier") or "tradier",
             "quote_updated_at": now_str,
         }
+        # Propagate fresh per-symbol data to shared canonical LKG so Home and
+        # Portfolio can fall back to the same Tradier quote when rate-limited.
+        _c.set(f"quote:lkg:{sym_upper}", {
+            **raw,
+            "quote_source":    raw.get("quote_source", "tradier") or "tradier",
+            "quote_is_stale":  False,
+            "quote_fallback_reason": None,
+        }, 72 * 3600)
         updated += 1
     if updated:
         print(f"[WQ_CACHE] Overlaid {updated} canonical per-symbol quotes onto module cache")

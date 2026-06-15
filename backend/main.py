@@ -1525,57 +1525,111 @@ async def debug_quote_consistency(symbol: str):
                     pass
         return None
 
+    def _str(d, *keys):
+        for k in keys:
+            v = (d or {}).get(k)
+            if v is not None:
+                return v
+        return None
+
     return {
         "symbol": sym,
+        # ── Canonical 60s per-symbol cache (all Tradier callers share this) ──
         "per_symbol_cache": {
-            "key":      f"tradier:quote:sym:{sym}",
-            "price":    _price(per_sym, "last"),
-            "change_pct": _price(per_sym, "change_percentage"),
-            "volume":   _price(per_sym, "volume"),
-            "source":   (per_sym or {}).get("quote_source"),
-            "has_data": per_sym is not None,
+            "key":         f"tradier:quote:sym:{sym}",
+            "price":       _price(per_sym, "last"),
+            "change":      _price(per_sym, "change"),
+            "change_pct":  _price(per_sym, "change_percentage"),
+            "volume":      _price(per_sym, "volume"),
+            "avg_volume":  _price(per_sym, "average_volume"),
+            "prev_close":  _price(per_sym, "prevclose"),
+            "high":        _price(per_sym, "high"),
+            "low":         _price(per_sym, "low"),
+            "bid":         _price(per_sym, "bid"),
+            "ask":         _price(per_sym, "ask"),
+            "source":      "tradier",          # implied by key namespace
+            "has_data":    per_sym is not None,
+            "note":        "60s TTL; refreshed by any Tradier caller (Home, Portfolio, screener)",
         },
+        # ── Last-known-good caches (fallback only, written on live Tradier hit) ─
         "home_lkg": {
-            "key":      f"home:wl_tradier_lkg:{sym}",
-            "price":    _price(home_lkg, "last"),
+            "key":        f"home:wl_tradier_lkg:{sym}",
+            "price":      _price(home_lkg, "last"),
+            "change":     _price(home_lkg, "change"),
             "change_pct": _price(home_lkg, "change_percentage"),
-            "has_data": home_lkg is not None,
+            "prev_close": _price(home_lkg, "prevclose"),
+            "source":     _str(home_lkg, "quote_source"),
+            "stale_flag": True,   # all LKG entries are served as stale=True
+            "has_data":   home_lkg is not None,
+            "ttl":        "72h",
         },
         "shared_lkg": {
-            "key":      f"quote:lkg:{sym}",
-            "price":    _price(shared_lkg, "last", "price"),
+            "key":        f"quote:lkg:{sym}",
+            "price":      _price(shared_lkg, "last", "price"),
+            "change":     _price(shared_lkg, "change"),
             "change_pct": _price(shared_lkg, "change_percentage", "change_pct"),
-            "has_data": shared_lkg is not None,
+            "prev_close": _price(shared_lkg, "prevclose"),
+            "source":     _str(shared_lkg, "quote_source"),
+            "stale_flag": True,
+            "has_data":   shared_lkg is not None,
+            "ttl":        "72h",
+            "note":       "written by ALL live Tradier paths (Home, Portfolio, screener)",
         },
         "portfolio_lkg": {
-            "key":      f"portfolio:tradier_lkg:{sym}",
-            "price":    _price(port_lkg, "price", "last"),
+            "key":        f"portfolio:tradier_lkg:{sym}",
+            "price":      _price(port_lkg, "price", "last"),
+            "change":     _price(port_lkg, "change"),
             "change_pct": _price(port_lkg, "change_pct", "change_percentage"),
-            "has_data": port_lkg is not None,
+            "prev_close": _price(port_lkg, "prevclose"),
+            "source":     _str(port_lkg, "quote_source"),
+            "stale_flag": True,
+            "has_data":   port_lkg is not None,
+            "ttl":        "72h",
         },
+        # ── Watchlist 10-min module cache (overlaid with per-symbol on every read) ─
         "watchlist_module_cache": {
             "price":          _price(wq_entry, "price"),
             "change_pct_1d":  _price(wq_entry, "change_pct_1d"),
             "volume":         _price(wq_entry, "volume"),
+            "avg_volume":     _price(wq_entry, "average_volume"),
+            "relative_volume": _price(wq_entry, "relative_volume"),
             "quote_source":   (wq_entry or {}).get("quote_source"),
+            "quote_updated_at": (wq_entry or {}).get("quote_updated_at"),
             "has_data":       wq_entry is not None,
             "module_cache_age_s": wq_age_s,
+            "note":           "Overlay runs on every read: per_symbol_cache wins if fresh",
         },
+        # ── Cross-page consistency summary ────────────────────────────────────
         "summary": {
             "prices": {
-                "per_symbol": _price(per_sym, "last"),
-                "watchlist":  _price(wq_entry, "price"),
-                "home_lkg":   _price(home_lkg, "last"),
-                "shared_lkg": _price(shared_lkg, "last", "price"),
-                "portfolio_lkg": _price(port_lkg, "price", "last"),
+                "per_symbol_cache": _price(per_sym, "last"),
+                "watchlist_module":  _price(wq_entry, "price"),
+                "home_lkg":          _price(home_lkg, "last"),
+                "shared_lkg":        _price(shared_lkg, "last", "price"),
+                "portfolio_lkg":     _price(port_lkg, "price", "last"),
+            },
+            "change_pcts": {
+                "per_symbol_cache": _price(per_sym, "change_percentage"),
+                "watchlist_module":  _price(wq_entry, "change_pct_1d"),
+                "shared_lkg":        _price(shared_lkg, "change_percentage", "change_pct"),
+                "portfolio_lkg":     _price(port_lkg, "change_pct", "change_percentage"),
             },
             "consistent": len({
                 v for v in [
                     _price(per_sym, "last"),
                     _price(wq_entry, "price"),
+                    _price(shared_lkg, "last", "price"),
+                    _price(port_lkg, "price", "last"),
                 ]
                 if v is not None
             }) <= 1,
+            "prev_close_available": per_sym is not None and per_sym.get("prevclose") is not None,
+            "notes": [
+                "per_symbol_cache wins over all LKG if present (60s TTL)",
+                "shared_lkg is written by every live Tradier hit (Home, Portfolio, screener)",
+                "LKG entries are served as stale=True / quote_is_stale=True",
+                "Watchlist overlay applies per_symbol_cache on every module-cache read",
+            ],
         },
     }
 
@@ -7822,9 +7876,22 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
                 lkg = _cache.get(_tradier_lkg_key(sym)) or _cache.get(f"{_SHARED_LKG_PFX}{sym}")
                 if lkg and (lkg.get("price") or lkg.get("last")):
                     price = lkg.get("price") or lkg.get("last")
+                    # Normalise field names: shared quote:lkg entries (written by
+                    # home_service) use Tradier raw names (last, change_percentage,
+                    # average_volume); portfolio shape uses price, change_pct, avg_volume.
+                    chg_pct = (
+                        lkg.get("change_pct")
+                        or lkg.get("change_percentage")
+                    )
+                    avg_vol = (
+                        lkg.get("avg_volume")
+                        or lkg.get("average_volume")
+                    )
                     quotes[sym] = {
                         **lkg,
                         "price":               price,
+                        "change_pct":          chg_pct,
+                        "avg_volume":          avg_vol,
                         "quote_is_stale":      True,
                         "quote_fallback_reason": "tradier_lkg",
                         "quote_cached_at":     _quote_ts,

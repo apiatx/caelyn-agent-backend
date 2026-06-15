@@ -792,13 +792,17 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
             sym_upper = sym.upper()
             raw = cache.get(f"tradier:quote:sym:{sym_upper}")
             if raw and raw.get("last"):
-                out[sym_upper] = {
+                row = {
                     **raw,
                     "quote_source":          raw.get("quote_source", "tradier"),
                     "quote_cached_at":       _now_ts,
                     "quote_is_stale":        False,
                     "quote_fallback_reason": "per_sym_cache_saturated",
                 }
+                out[sym_upper] = row
+                # Propagate to shared canonical LKG so Portfolio and Watchlist
+                # can fall back to this data when their own Tradier calls miss.
+                cache.set(f"quote:lkg:{sym_upper}", row, _LKG_TTL)
 
     # ── Step 2: LKG Tradier for tickers Tradier missed ────────────────────
     _SHARED_LKG_PFX = "quote:lkg:"
