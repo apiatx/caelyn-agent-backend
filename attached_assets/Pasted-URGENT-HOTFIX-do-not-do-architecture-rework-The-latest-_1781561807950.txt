@@ -1,0 +1,68 @@
+URGENT HOTFIX — do not do architecture rework.
+
+The latest quote consistency changes broke the Home page Watchlist Snapshot display. On the Home page, the Watchlist Snapshot section now shows blank values under price, volX, and 1D% next to each ticker.
+
+Important:
+- Do NOT add a new Tradier budgeting system.
+- Do NOT rewrite the quote service.
+- Do NOT create a new quote endpoint.
+- Preserve the existing Tradier budgeting/rate-limit system.
+- Preserve existing page response contracts.
+
+Root suspicion:
+The backend quote consistency fix normalized quote fields into shared/cache fields like price/change_pct/change_pct_1d/avg_volume/relative_volume, but the Home Watchlist Snapshot frontend expects the legacy Home fields:
+- current_price
+- change_1d_pct
+- volume_vs_avg
+
+The prior audit even found that Home snapshot uses current_price/change_1d_pct/volume_vs_avg. If those aliases disappeared or became None, the Home UI renders blanks even though quote data exists internally.
+
+Tasks:
+1. Inspect the actual Home dashboard / Home watchlist snapshot API response after the latest backend changes.
+2. Compare the response shape before/expected vs current for ticker rows.
+3. Find the exact Home snapshot row builder that returns tickers to the frontend.
+4. Ensure every Home snapshot ticker row still emits these fields:
+   - current_price
+   - change_1d_pct
+   - volume_vs_avg
+   - volume
+   - symbol
+   - source
+   - stale
+   - last_updated / lastUpdated if already used
+
+5. Map canonical quote data into Home aliases without removing canonical fields:
+   - current_price = quote.price
+   - change_1d_pct = quote.change_pct OR quote.changePct OR quote.change_percentage
+   - volume_vs_avg = quote.rel_volume OR quote.relative_volume OR volume / avg_volume
+   - volume = quote.volume
+
+6. Do not make the frontend change if the backend previously promised current_price/change_1d_pct/volume_vs_avg. Fix the backend response contract first.
+
+7. Make sure quote:lkg values are normalized before being inserted into Home rows. Raw Tradier fields like change_percentage and average_volume must be converted into the Home fields above.
+
+8. Validate with the actual Home endpoint, not only debug cache endpoints.
+   For 5 tickers in the Home Watchlist Snapshot, print the actual JSON row and confirm:
+   - current_price is not null
+   - change_1d_pct is not null
+   - volume_vs_avg is not null
+   - source is tradier or tradier_lkg
+   - stale is accurate
+
+9. Then validate consistency across all quote-consuming pages/modules, not only Home/Watchlist/Portfolio:
+   - Home Watchlist Snapshot
+   - Watchlist page ticker table
+   - Portfolio page holdings/ticker rows
+   - Alerts
+   - Agent app_context quote payload
+   - Screener Hub watchlist/portfolio tab if it displays live quote fields
+   - Options Flow pages/sections that reuse Tradier equity quotes
+   - Live news ticker scoping if it depends on active symbols
+
+10. Keep the debug endpoint, but do not treat debug endpoint PASS as UI PASS. Validate actual API payloads consumed by the frontend.
+
+Acceptance criteria:
+- Home Watchlist Snapshot price, volX, and 1D% columns are visible again.
+- Same ticker has matching quote values across Home, Watchlist, Portfolio, Alerts/app_context where applicable.
+- No new Tradier calls are introduced.
+- Existing Tradier budget/rate-limit system remains untouched except for bug fixes if something is bypassing it.

@@ -812,7 +812,8 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
             continue
         # Try path-specific LKG first, then shared canonical LKG
         lkg = cache.get(f"{_LKG_PFX}{sym_upper}") or cache.get(f"{_SHARED_LKG_PFX}{sym_upper}")
-        if lkg and lkg.get("last"):
+        # Accept both raw Tradier shape ("last") and portfolio-normalized shape ("price")
+        if lkg and (lkg.get("last") or lkg.get("price")):
             out[sym_upper] = {
                 **lkg,
                 "quote_is_stale": True,
@@ -866,11 +867,17 @@ def _snapshot_row(
     asset_type: str | None = None,
     csv_row: dict | None = None,
 ) -> dict:
-    last = quote.get("last")
-    chg_pct = quote.get("change_percentage")
-    vol = quote.get("volume")
-    avg_vol = quote.get("average_volume")
-    vol_ratio = round(vol / avg_vol, 2) if vol and avg_vol and avg_vol > 0 else None
+    # Accept both raw Tradier field names (last/change_percentage/average_volume)
+    # and portfolio-normalised names (price/change_pct/avg_volume) so that any
+    # quote:lkg entry — regardless of which page wrote it — renders correctly.
+    last    = quote.get("last") or quote.get("price")
+    chg_pct = quote.get("change_percentage") or quote.get("change_pct")
+    vol     = quote.get("volume")
+    avg_vol = quote.get("average_volume") or quote.get("avg_volume")
+    vol_ratio = (
+        round(vol / avg_vol, 2) if vol and avg_vol and avg_vol > 0
+        else quote.get("relative_volume") or quote.get("rel_volume")
+    )
     opts = options_index.get(symbol.upper(), {})
 
     # RSI from watchlist csv_data (watchlist rows only); rel_vol starts from live quote.
