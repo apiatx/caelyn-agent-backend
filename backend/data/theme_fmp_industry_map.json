@@ -109,11 +109,11 @@
         "AIOT",
         "ADTN",
         "AMPG",
-        "FEIM"
+        "FEIM",
+        "VISN"
       ],
       "require_name_keyword_match": true,
       "required_any_keywords": [
-        "network",
         "ethernet",
         "optical transceiver",
         "silicon photon",
@@ -127,7 +127,14 @@
         "coherent optical",
         "network asic",
         "network processor",
-        "network chip"
+        "network chip",
+        "switch",
+        "router",
+        "optical networking",
+        "transceiver",
+        "data center networking",
+        "dsp",
+        "packet processor"
       ],
       "exclude_keywords": [
         "security software",
@@ -136,7 +143,12 @@
         "insurance",
         "financial",
         "bank",
-        "retail"
+        "retail",
+        "marine",
+        "boat",
+        "recreational vehicle",
+        "electric boat",
+        "electric marine"
       ]
     },
     "semiconductors": {
