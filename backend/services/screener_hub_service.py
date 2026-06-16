@@ -2347,6 +2347,7 @@ async def _build_thematic_universe(
                     )
                     cand["candidate_tier_override"] = _sc_result["candidate_tier"]
                     cand["membership_confidence_override"] = _sc_result["membership_confidence"]
+                    cand["membership_reason"] = _sc_result.get("membership_reason") or ""
                     if cand["_weak_only"]:
                         _weak_kw_downgrade_count += 1
                     if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
@@ -2408,6 +2409,7 @@ async def _build_thematic_universe(
                     )
                     cand["candidate_tier_override"] = _adj_sc["candidate_tier"]
                     cand["membership_confidence_override"] = _adj_sc["membership_confidence"]
+                    cand["membership_reason"] = _adj_sc.get("membership_reason") or ""
                     cand["_is_adjacent"]            = True
                     if cand["_weak_only"]:
                         _weak_kw_downgrade_count += 1
@@ -2458,9 +2460,10 @@ async def _build_thematic_universe(
                         ):
                             _p_sc = score_theme_candidate(theme_cfg, _pcand, [_p_src_tag])
                             if _p_sc["candidate_tier"] in ("verified_discovery", "adjacent_discovery"):
-                                _existing["candidate_tier_override"]      = _p_sc["candidate_tier"]
+                                _existing["candidate_tier_override"]        = _p_sc["candidate_tier"]
                                 _existing["membership_confidence_override"] = _p_sc["membership_confidence"]
-                                _existing["_all_matched_kws"]             = _p_sc["matched_keywords"]
+                                _existing["membership_reason"]              = _p_sc.get("membership_reason") or ""
+                                _existing["_all_matched_kws"]               = _p_sc["matched_keywords"]
                                 _existing["_kw_proof"]                    = (
                                     _p_sc["matched_keywords"] or [""]
                                 )[0]
@@ -2480,8 +2483,9 @@ async def _build_thematic_universe(
                         _p_sc["candidate_tier"] == "watch_candidate"
                         and _p_sc["membership_confidence"] == "low"
                     )
-                    _pcand["candidate_tier_override"]      = _p_sc["candidate_tier"]
+                    _pcand["candidate_tier_override"]        = _p_sc["candidate_tier"]
                     _pcand["membership_confidence_override"] = _p_sc["membership_confidence"]
+                    _pcand["membership_reason"]              = _p_sc.get("membership_reason") or ""
                     _pcand["theme_relevance_score"]        = _p_sc["semantic_score"]
                     _pcand["industry_tier"]                = _p_sc["industry_tier"]
                     _pcand["_is_adjacent"]                 = (
@@ -4509,6 +4513,7 @@ async def get_screener_hub(
             "performance_30d":       None,
             "performance_ytd":       None,
             "performance_1y":        None,
+            "semantic_score":         theme_relevance_score,
             "theme_relevance_score": theme_relevance_score,
             "industry_tier":         industry_tier,
             "liquidity_status":      liq_status,

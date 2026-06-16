@@ -324,18 +324,31 @@ async def screener_hub_audit(
                 )
             )
 
+            _matched_kws = scr_meta.get("_all_matched_kws") or []
+            _stored_reason = scr_meta.get("membership_reason") or ""
+            _derived_reason = (
+                _stored_reason          if _stored_reason else
+                "seed ticker"           if mem_src == "seed" else
+                "ETF-holding member"    if mem_src == "etf_holding" else
+                (f"FMP screener: {_matched_kws[0]}" if _matched_kws else
+                 f"FMP screener: {scr_meta.get('industry_tier','industry match')}")
+                                        if mem_src == "fmp_screener" else
+                "LKG leaders"           if mem_src == "lkg" else
+                ""
+            )
             audit_rows.append({
                 "symbol":                sym,
                 "company_name":          scr_meta.get("company_name") or "",
                 "candidate_tier":        candidate_tier,
                 "theme_relevance_score": scr_meta.get("theme_relevance_score"),
                 "membership_source":     mem_src,
+                "membership_reason":     _derived_reason,
                 "membership_confidence": scr_meta.get("membership_confidence_override") or (
                     "high" if mem_src == "seed" else
                     "low"  if is_weak else
                     "medium"
                 ),
-                "matched_keywords":      scr_meta.get("_all_matched_kws") or [],
+                "matched_keywords":      _matched_kws,
                 "industry_tier":         scr_meta.get("industry_tier") or "unknown",
                 "theme_role":            (
                     "core"       if mem_src == "seed" else
