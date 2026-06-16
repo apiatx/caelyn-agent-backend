@@ -1,0 +1,110 @@
+We need to fix Screener Hub theme membership quality across all precise themes, not only memory_storage.
+
+Problem:
+The Screener dropdown has many precise themes — AI Networking, Memory & Storage, Semiconductor Equipment, Substrates / Packaging, Data Center Infrastructure, Power / Cooling, Photonics / Lasers, Quantum Computing, etc. FMP categories are too coarse, so the current system is mixing tickers across themes. FMP should not be the final classifier for these subthemes.
+
+Do not add broad LLM classification.
+Do not rewrite Screener Hub.
+Do not change the live quote overlay / Tradier cache work.
+Do not create new quote calls.
+Do not rely on FMP industry/category as final theme membership.
+
+Goal:
+Create a generalized deterministic theme membership rules engine using the Memory theme as the prototype.
+
+Correct architecture:
+- FMP = candidate generator and static metadata source
+- Internal theme rules = final membership authority
+- LKG/RS/options/social = ranking/discovery context only, not semantic membership
+- Live quote engine remains separate and already fixed
+
+Audit first:
+1. List every theme returned by /api/screener-hub/themes.
+2. Identify which themes currently rely too heavily on FMP sector/industry.
+3. Identify AI/infra/semiconductor-adjacent themes that are bleeding into each other:
+   - memory_storage
+   - ai_networking
+   - semiconductors
+   - semiconductor_equipment
+   - substrates_packaging
+   - data_center_infrastructure
+   - power_cooling
+   - photonics_lasers
+   - quantum_computing
+   - cloud_software
+   - cybersecurity
+   - robotics_automation
+   - drones
+   - defense
+4. Produce a table:
+   theme_key, row_count, top discovery_sources, obvious bad examples, proposed rulepack status.
+
+Implementation:
+1. Add/extend a theme rules config for every precise subtheme.
+2. Each theme config should support:
+   - seed_tickers
+   - manual_include
+   - manual_exclude
+   - include_keywords
+   - exclude_keywords
+   - required_any_keywords
+   - allowed_fmp_sectors
+   - allowed_fmp_industries
+   - excluded_fmp_industries
+   - role_rules
+   - theme_type: pure_subtheme | parent_rollup | macro_sector
+
+3. Membership rules:
+   - manual_include always wins
+   - seed_tickers are strong semantic membership
+   - theme-specific ETF/source can count if relevant
+   - keyword/profile match can qualify
+   - FMP industry can only prefilter or support, not final-classify precise subthemes
+   - lkg_leaders/options/social/watchlist can boost/rank only after ticker passes semantic membership rules
+   - lkg_leaders must never override seed/theme-specific membership_source
+
+4. Every row must expose:
+   - membership_source
+   - membership_reason
+   - membership_confidence
+   - discovery_sources
+   - theme_role
+
+5. Add priority-based membership derivation:
+   Priority:
+   a) manual_include
+   b) static_seed
+   c) theme-specific ETF/source
+   d) keyword/profile match
+   e) FMP industry only if theme-specific enough
+   f) lkg/options/social only as discovery/ranking context, not standalone semantic membership for precise themes
+
+6. Add cross-theme disambiguation:
+   For pure subthemes, exclude generic names unless they match that subtheme’s required keywords or seed list.
+   Example:
+   - AI Networking should not include random semis.
+   - Memory should not include generic semis.
+   - Semiconductor Equipment should not include chip designers.
+   - Substrates / Packaging should not include generic semis.
+   - Data Center Infrastructure should not include chip designers unless explicitly seeded.
+   - Power / Cooling should not include generic utilities unless direct data-center power/cooling exposure is explicit.
+
+7. Keep parent themes separate:
+   If a theme is a parent_rollup like Semiconductors or Technology, it can include broader names.
+   If a theme is pure_subtheme like Memory or AI Networking, it must be strict.
+
+Validation:
+1. Rebuild snapshots for the AI/infra/semiconductor themes.
+2. Expire query cache after rebuild.
+3. For each theme, return:
+   - row_count
+   - bad_examples_removed
+   - seeds_present
+   - membership_source distribution
+   - top 10 rows with membership_reason
+4. Verify Memory remains clean.
+5. Verify AI Networking no longer contains unrelated chip/software names.
+6. Verify Semiconductor Equipment contains equipment/process/test names, not chip designers.
+7. Verify Substrates / Packaging contains packaging/substrate/OSAT/materials names.
+8. Verify Data Center Infrastructure and Power / Cooling are not polluted by chip names.
+9. Do not use LLM except possibly a future weekly ambiguous-candidate audit.

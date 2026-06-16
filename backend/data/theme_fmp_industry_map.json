@@ -4,39 +4,140 @@
     "min_market_cap": 50000000,
     "max_market_cap": 10000000000,
     "min_volume": 100000,
-    "preferred_market_cap_buckets": ["micro", "small", "mid"]
+    "preferred_market_cap_buckets": [
+      "micro",
+      "small",
+      "mid"
+    ]
   },
-  "notes": "Config-driven theme → FMP company-screener industry mappings. One FMP call per industry during scheduled/admin rebuilds only. fmp_industries = union(core + adjacent + weak_adjacent). Quality filters (min_market_cap=$50M, min_volume=100k) enforced client-side since FMP ignores those params.",
+  "notes": "Config-driven theme \u2192 FMP company-screener industry mappings. One FMP call per industry during scheduled/admin rebuilds only. fmp_industries = union(core + adjacent + weak_adjacent). Quality filters (min_market_cap=$50M, min_volume=100k) enforced client-side since FMP ignores those params.",
   "themes": {
     "ai_networking": {
       "fmp_industries": [
-        "Communication Equipment",
-        "Telecom Services",
-        "Computer Networks"
-      ],
-      "core_industries": [
         "Communication Equipment"
       ],
+      "core_industries": [
+        "Communication Equipment",
+        "Telecom Services",
+        "Telephone and Telegraph Apparatus"
+      ],
       "adjacent_industries": [
-        "Telecom Services"
+        "Computer Hardware",
+        "Electronic Components"
       ],
       "weak_adjacent_industries": [
-        "Computer Networks"
+        "Semiconductors"
       ],
       "positive_keywords": [
-        "networking", "switches", "routers", "optical", "transceiver",
-        "silicon photonics", "interconnect", "data center network",
-        "AI networking", "ethernet", "infiniband", "DSP", "PAM4"
+        "network switch",
+        "ethernet switch",
+        "optical interconnect",
+        "silicon photonics",
+        "InfiniBand",
+        "data center fabric",
+        "400G",
+        "800G",
+        "optical transceiver",
+        "network ASIC",
+        "network processor",
+        "network chip",
+        "AI networking",
+        "data center network",
+        "packet switching",
+        "network fabric",
+        "coherent optical",
+        "high-speed interconnect",
+        "data center switch",
+        "networking silicon"
       ],
       "negative_keywords": [
-        "blank check", "acquisition corp", "spac", "shell company",
-        "wireless carrier", "telecom operator", "cable provider"
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company",
+        "blank check company",
+        "warrant"
       ],
-      "min_market_cap": 500000000,
+      "min_market_cap": 100000000,
       "max_market_cap": null,
-      "min_volume": 100000,
-      "preferred_market_cap_buckets": ["mid", "large", "mega"],
-      "notes": "AI networking infrastructure: switches, optical interconnects, networking silicon. No upper market cap — ANET ($193B), AVGO ($2.28T), MRVL ($172B) are core names. Mega-caps enter via static seed (candidate_symbols), large-caps via FMP Communication Equipment screener."
+      "min_volume": 50000,
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid",
+        "large",
+        "mega"
+      ],
+      "market_cap_upper_default": 5000000000000,
+      "market_cap_lower_default": 100000000,
+      "notes": "AI networking: switches, optical interconnects, networking silicon. seed_tickers always included. FMP results require keyword match. lkg/options = discovery context only.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "ANET",
+        "AVGO",
+        "MRVL",
+        "CRDO",
+        "ALAB",
+        "CSCO",
+        "JNPR",
+        "EXTR",
+        "CIEN",
+        "INFN",
+        "CALX",
+        "AAOI",
+        "FN",
+        "VIAV",
+        "COHR",
+        "LITE"
+      ],
+      "exclude_tickers": [
+        "KVHI",
+        "INSG",
+        "AUDC",
+        "AVNW",
+        "BKTI",
+        "NTGR",
+        "TSAT",
+        "GILT",
+        "ITRN",
+        "HLIT",
+        "DGII",
+        "OCC",
+        "SILC",
+        "CRNT",
+        "LTRX",
+        "CLFD",
+        "AIOT",
+        "ADTN",
+        "AMPG",
+        "FEIM"
+      ],
+      "require_name_keyword_match": true,
+      "required_any_keywords": [
+        "network",
+        "ethernet",
+        "optical transceiver",
+        "silicon photon",
+        "infiniband",
+        "interconnect",
+        "switching",
+        "routing",
+        "packet",
+        "high-speed",
+        "data center network",
+        "coherent optical",
+        "network asic",
+        "network processor",
+        "network chip"
+      ],
+      "exclude_keywords": [
+        "security software",
+        "antivirus",
+        "endpoint security",
+        "insurance",
+        "financial",
+        "bank",
+        "retail"
+      ]
     },
     "semiconductors": {
       "fmp_industries": [
@@ -64,28 +165,57 @@
         "Technology Distributors"
       ],
       "positive_keywords": [
-        "semiconductor", "chip", "chipmaker", "wafer", "fab", "foundry",
-        "lithography", "photomask", "silicon", "SiC", "GaN",
-        "gallium nitride", "silicon carbide", "MEMS", "IC design", "EDA"
+        "semiconductor",
+        "chip",
+        "chipmaker",
+        "wafer",
+        "fab",
+        "foundry",
+        "lithography",
+        "photomask",
+        "silicon",
+        "SiC",
+        "GaN",
+        "gallium nitride",
+        "silicon carbide",
+        "MEMS",
+        "IC design",
+        "EDA"
       ],
       "negative_keywords": [
-        "blank check", "acquisition corp", "spac", "shell company"
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Small/mid-cap semis + supply chain. Core=chip designers/equipment. Adjacent=components/hw. Weak=distributors."
+      "notes": "Parent rollup \u2014 broad semiconductor coverage: designers, equipment, materials. No keyword gate (intentionally broad).",
+      "theme_type": "parent_rollup",
+      "seed_tickers": [
+        "NVDA",
+        "TSM",
+        "AVGO",
+        "AMD",
+        "INTC",
+        "QCOM",
+        "ASML",
+        "AMAT",
+        "TXN",
+        "ADI"
+      ],
+      "required_any_keywords": []
     },
     "semicap_equipment": {
       "fmp_industries": [
-        "Semiconductor Equipment & Materials",
-        "Electronic Components",
-        "Electrical Equipment & Parts",
-        "Hardware, Equipment & Parts",
-        "Industrial - Machinery"
+        "Semiconductor Equipment & Materials"
       ],
       "core_industries": [
         "Semiconductor Equipment & Materials"
@@ -99,17 +229,115 @@
         "Industrial - Machinery"
       ],
       "positive_keywords": [
-        "etch", "deposition", "CVD", "ALD", "CMP", "photolithography",
-        "inspection", "metrology", "wafer", "fab equipment"
+        "semiconductor equipment",
+        "etch",
+        "deposition",
+        "CVD",
+        "ALD",
+        "CMP",
+        "photolithography",
+        "inspection",
+        "metrology",
+        "wafer",
+        "fab equipment",
+        "plasma etch",
+        "ion implant",
+        "epitaxy",
+        "diffusion furnace",
+        "probe station",
+        "burn-in",
+        "thermal process",
+        "chemical vapor",
+        "atomic layer deposition",
+        "process control",
+        "lithography system",
+        "chemical mechanical",
+        "slurry",
+        "photomask",
+        "reticle",
+        "pellicle",
+        "semiconductor test",
+        "wafer inspection",
+        "yield management",
+        "defect review",
+        "critical dimension"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
-      "max_market_cap": 10000000000,
+      "max_market_cap": null,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Semicap equipment: etch, deposition, inspection, materials."
+      "notes": "Pure semiconductor equipment/process/test. FMP restricted to Semiconductor Equipment & Materials only. Chip designers excluded. Electrical Equipment & Parts removed (was pulling wrong companies).",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "ASML",
+        "AMAT",
+        "LRCX",
+        "KLAC",
+        "TER",
+        "ACLS",
+        "ONTO",
+        "AEHR",
+        "FORM",
+        "CAMT",
+        "UCTT",
+        "MKSI",
+        "ENTG",
+        "COHU",
+        "ACMR",
+        "AZTA"
+      ],
+      "exclude_tickers": [
+        "NVDA",
+        "TSM",
+        "AVGO",
+        "AMD",
+        "INTC",
+        "QCOM",
+        "MU",
+        "WDC",
+        "STX",
+        "SNDK",
+        "SIMO",
+        "RMBS",
+        "MRVL",
+        "TXN",
+        "ADI",
+        "MCHP",
+        "ON",
+        "MPWR",
+        "NXPI",
+        "STM"
+      ],
+      "require_name_keyword_match": true,
+      "required_any_keywords": [
+        "semiconductor equipment",
+        "semiconductor equipment & materials",
+        "wafer",
+        "etch",
+        "deposition",
+        "lithography",
+        "metrology",
+        "inspection",
+        "fab",
+        "ion implant",
+        "epitaxy",
+        "process control",
+        "chemical vapor",
+        "atomic layer",
+        "semiconductor test"
+      ],
+      "exclude_keywords": []
     },
     "memory_storage": {
       "fmp_industries": [
@@ -129,30 +357,106 @@
         "Hardware, Equipment & Parts"
       ],
       "positive_keywords": [
-        "DRAM", "NAND", "flash", "memory", "storage", "SSD", "controller",
-        "NVMe", "HBM", "high bandwidth memory", "MRAM", "ReRAM", "EEPROM",
-        "CXL", "storage interface", "memory interface"
+        "DRAM",
+        "NAND",
+        "flash",
+        "memory",
+        "storage",
+        "SSD",
+        "controller",
+        "NVMe",
+        "HBM",
+        "high bandwidth memory",
+        "MRAM",
+        "ReRAM",
+        "EEPROM",
+        "CXL",
+        "storage interface",
+        "memory interface"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "seed_tickers": [
-        "MU",   "WDC",  "STX",  "SNDK", "SIMO",
-        "RMBS", "NVEC", "MRAM", "FORM", "AEHR",
-        "PSTG", "NTAP"
+        "MU",
+        "WDC",
+        "STX",
+        "SNDK",
+        "SIMO",
+        "RMBS",
+        "NVEC",
+        "MRAM",
+        "FORM",
+        "AEHR",
+        "PSTG",
+        "NTAP"
       ],
       "exclude_tickers": [
-        "NVDA", "TSM",  "AVGO", "AMD",  "INTC", "QCOM",
-        "AMAT", "KLAC", "LRCX", "ASML", "MRVL", "TER",
-        "MPWR", "ON",   "TXN",  "ADI",  "MCHP", "COHR",
-        "ONTO", "ENTG", "ACLS", "CAMT", "UCTT", "MKSI"
+        "NVDA",
+        "TSM",
+        "AVGO",
+        "AMD",
+        "INTC",
+        "QCOM",
+        "AMAT",
+        "KLAC",
+        "LRCX",
+        "ASML",
+        "MRVL",
+        "TER",
+        "MPWR",
+        "ON",
+        "TXN",
+        "ADI",
+        "MCHP",
+        "COHR",
+        "ONTO",
+        "ENTG",
+        "ACLS",
+        "CAMT",
+        "UCTT",
+        "MKSI"
       ],
       "require_name_keyword_match": true,
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "DRAM, NAND, storage controllers. seed_tickers always included. exclude_tickers blocks generic semis that bleed in from SMH/SOXX ETF holdings. require_name_keyword_match=true ensures FMP screener only admits companies with proven memory exposure in their name."
+      "notes": "DRAM, NAND, storage controllers. seed_tickers always included. exclude_tickers blocks generic semis that bleed in from SMH/SOXX ETF holdings. require_name_keyword_match=true ensures FMP screener only admits companies with proven memory exposure in their name.",
+      "theme_type": "curated_seed_core",
+      "required_any_keywords": [
+        "memory",
+        "nand",
+        "dram",
+        "flash",
+        "storage controller",
+        "solid state",
+        "hard drive",
+        "non-volatile",
+        "hdd",
+        "ssd",
+        "data storage",
+        "magnetic storage",
+        "memory controller"
+      ],
+      "exclude_keywords": [
+        "display",
+        "sensor",
+        "image sensor",
+        "cmos",
+        "logic",
+        "networking",
+        "router",
+        "switch"
+      ]
     },
     "clean_energy": {
       "fmp_industries": [
@@ -180,17 +484,35 @@
         "Industrial - Pollution & Treatment Controls"
       ],
       "positive_keywords": [
-        "solar", "wind", "renewable", "clean energy", "energy storage",
-        "battery", "grid", "photovoltaic", "inverter", "EV charger",
-        "hydrogen", "electrolyzer", "offshore wind"
+        "solar",
+        "wind",
+        "renewable",
+        "clean energy",
+        "energy storage",
+        "battery",
+        "grid",
+        "photovoltaic",
+        "inverter",
+        "EV charger",
+        "hydrogen",
+        "electrolyzer",
+        "offshore wind"
       ],
       "negative_keywords": [
-        "coal", "fossil fuel", "blank check", "acquisition corp", "spac"
+        "coal",
+        "fossil fuel",
+        "blank check",
+        "acquisition corp",
+        "spac"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Solar, wind, hydro, storage, grid infrastructure."
@@ -212,17 +534,32 @@
       ],
       "weak_adjacent_industries": [],
       "positive_keywords": [
-        "solar", "photovoltaic", "PV", "panel", "inverter", "module",
-        "tracker", "rooftop solar", "utility-scale solar"
+        "solar",
+        "photovoltaic",
+        "PV",
+        "panel",
+        "inverter",
+        "module",
+        "tracker",
+        "rooftop solar",
+        "utility-scale solar"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Pure solar play — panels, inverters, installers, project devs."
+      "notes": "Pure solar play \u2014 panels, inverters, installers, project devs."
     },
     "drones": {
       "fmp_industries": [
@@ -248,21 +585,93 @@
         "Software - Infrastructure"
       ],
       "positive_keywords": [
-        "drone", "UAV", "UAS", "unmanned", "autonomous", "autonomy",
-        "counter-drone", "anti-drone", "VTOL", "eVTOL", "air mobility",
-        "remote sensing", "aerial", "quadcopter"
+        "drone",
+        "UAV",
+        "UAS",
+        "unmanned",
+        "autonomous",
+        "autonomy",
+        "counter-drone",
+        "anti-drone",
+        "VTOL",
+        "eVTOL",
+        "air mobility",
+        "remote sensing",
+        "aerial",
+        "quadcopter"
       ],
       "negative_keywords": [
-        "manned aircraft", "commercial airline", "blank check",
-        "acquisition corp", "spac"
+        "manned aircraft",
+        "commercial airline",
+        "blank check",
+        "acquisition corp",
+        "spac"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "UAV hardware, autonomy software, defense drones, counter-drone systems."
+      "notes": "Drones and autonomous aerial vehicles: defense UAV, eVTOL, commercial drones. Already clean, seed-based.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "AVAV",
+        "KTOS",
+        "RCAT",
+        "JOBY",
+        "ACHR",
+        "EH"
+      ],
+      "exclude_tickers": [
+        "ATI",
+        "BWXT",
+        "MNTS",
+        "GPUS",
+        "PEW",
+        "PESI",
+        "ACHR"
+      ],
+      "required_any_keywords": [
+        "drone",
+        "unmanned",
+        "uav",
+        "uas",
+        "evtol",
+        "aerial vehicle",
+        "counter-drone",
+        "anti-drone",
+        "multirotor",
+        "quadcopter",
+        "delivery drone",
+        "autonomous air",
+        "air taxi",
+        "urban air mobility",
+        "airborne",
+        "uncrewed",
+        "remotely piloted"
+      ],
+      "exclude_keywords": [
+        "nuclear",
+        "electric utility",
+        "utilities",
+        "coal",
+        "financial",
+        "bank",
+        "insurance",
+        "food",
+        "beverage",
+        "pharmaceutical",
+        "retail",
+        "semiconductor equipment",
+        "mining",
+        "oil",
+        "gas"
+      ]
     },
     "defense": {
       "fmp_industries": [
@@ -288,18 +697,73 @@
         "Hardware, Equipment & Parts"
       ],
       "positive_keywords": [
-        "defense", "military", "DoD", "Navy", "Army", "Air Force",
-        "missile", "munition", "radar", "surveillance", "NATO",
-        "combat", "weapon", "ordinance", "countermeasure"
+        "defense",
+        "military",
+        "DoD",
+        "Navy",
+        "Army",
+        "Air Force",
+        "missile",
+        "munition",
+        "radar",
+        "surveillance",
+        "NATO",
+        "combat",
+        "weapon",
+        "ordinance",
+        "countermeasure"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 15000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid", "large"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid",
+        "large"
+      ],
       "market_cap_upper_default": 15000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Defense primes and tier-2 suppliers. Slightly higher cap ceiling for primes."
+      "notes": "Defense prime contractors + specialist defense tech. ETF-based (ITA/PPA/XAR) for broader coverage. seed_tickers anchor canonical primes.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "LMT",
+        "RTX",
+        "NOC",
+        "GD",
+        "HII",
+        "KTOS",
+        "AVAV",
+        "AXON",
+        "LDOS",
+        "BAH",
+        "SAIC",
+        "CACI"
+      ],
+      "required_any_keywords": [
+        "aerospace",
+        "defense",
+        "aerospace & defense",
+        "military",
+        "armament",
+        "weapon",
+        "missile",
+        "satellite",
+        "space defense",
+        "tactical",
+        "cyber defense",
+        "electronic warfare",
+        "government services",
+        "national security",
+        "intelligence",
+        "surveillance",
+        "reconnaissance"
+      ],
+      "exclude_keywords": []
     },
     "uranium_nuclear": {
       "fmp_industries": [
@@ -325,18 +789,38 @@
         "Industrial - Machinery"
       ],
       "positive_keywords": [
-        "uranium", "nuclear", "reactor", "SMR", "small modular reactor",
-        "enrichment", "fission", "fuel rod", "thorium", "tritium",
-        "nuclear fuel", "HALEU", "nuclear energy"
+        "uranium",
+        "nuclear",
+        "reactor",
+        "SMR",
+        "small modular reactor",
+        "enrichment",
+        "fission",
+        "fuel rod",
+        "thorium",
+        "tritium",
+        "nuclear fuel",
+        "HALEU",
+        "nuclear energy"
       ],
       "negative_keywords": [
-        "oil", "gas", "coal", "solar", "wind",
-        "blank check", "acquisition corp", "spac"
+        "oil",
+        "gas",
+        "coal",
+        "solar",
+        "wind",
+        "blank check",
+        "acquisition corp",
+        "spac"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Uranium miners, enrichers, nuclear utilities, SMR developers."
@@ -363,16 +847,37 @@
         "Copper"
       ],
       "positive_keywords": [
-        "rare earth", "REE", "neodymium", "dysprosium", "lithium",
-        "cobalt", "manganese", "magnet", "critical mineral", "tungsten",
-        "praseodymium", "terbium", "lanthanum", "cerium", "scandium",
-        "graphite", "antimony"
+        "rare earth",
+        "REE",
+        "neodymium",
+        "dysprosium",
+        "lithium",
+        "cobalt",
+        "manganese",
+        "magnet",
+        "critical mineral",
+        "tungsten",
+        "praseodymium",
+        "terbium",
+        "lanthanum",
+        "cerium",
+        "scandium",
+        "graphite",
+        "antimony"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "REE miners, processors, magnet manufacturers, critical minerals."
@@ -395,17 +900,31 @@
         "Financial - Credit Services"
       ],
       "positive_keywords": [
-        "bank", "bancorp", "savings", "financial", "community bank",
-        "thrift", "banshares", "bankshares"
+        "bank",
+        "bancorp",
+        "savings",
+        "financial",
+        "community bank",
+        "thrift",
+        "banshares",
+        "bankshares"
       ],
       "negative_keywords": [
-        "investment bank", "hedge fund", "private equity",
-        "blank check", "acquisition corp", "spac"
+        "investment bank",
+        "hedge fund",
+        "private equity",
+        "blank check",
+        "acquisition corp",
+        "spac"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Community and regional banks, S&Ls, mortgage banks."
@@ -430,30 +949,45 @@
         "Electronic Components"
       ],
       "positive_keywords": [
-        "bitcoin", "crypto", "blockchain", "digital asset", "mining",
-        "BTC", "ETH", "stablecoin", "decentralized", "DeFi", "NFT",
-        "Web3", "hashrate", "miner", "ASIC", "proof of work"
+        "bitcoin",
+        "crypto",
+        "blockchain",
+        "digital asset",
+        "mining",
+        "BTC",
+        "ETH",
+        "stablecoin",
+        "decentralized",
+        "DeFi",
+        "NFT",
+        "Web3",
+        "hashrate",
+        "miner",
+        "ASIC",
+        "proof of work"
       ],
       "negative_keywords": [
-        "traditional bank", "blank check", "acquisition corp", "spac"
+        "traditional bank",
+        "blank check",
+        "acquisition corp",
+        "spac"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Bitcoin miners, crypto exchanges, blockchain infrastructure."
     },
     "datacenter_infra": {
       "fmp_industries": [
-        "Computer Hardware",
         "REIT - Specialty",
-        "Electrical Equipment & Parts",
-        "Communication Equipment",
-        "Electronic Components",
-        "Semiconductors",
-        "Hardware, Equipment & Parts"
+        "Computer Hardware"
       ],
       "core_industries": [
         "Computer Hardware",
@@ -469,21 +1003,102 @@
         "Hardware, Equipment & Parts"
       ],
       "positive_keywords": [
-        "data center", "datacenter", "server", "GPU", "AI infrastructure",
-        "cloud", "hyperscaler", "cooling", "liquid cooling", "UPS",
-        "power management", "interconnect", "rack", "colocation",
-        "edge computing", "network switch", "optical transceiver"
+        "data center",
+        "datacenter",
+        "colocation",
+        "server",
+        "hyperscale",
+        "cloud infrastructure",
+        "data hall",
+        "computing infrastructure",
+        "network infrastructure",
+        "colo",
+        "cloud computing facility",
+        "data storage infrastructure",
+        "carrier-neutral",
+        "internet exchange",
+        "managed hosting",
+        "bare metal"
       ],
       "negative_keywords": [
-        "residential", "retail REIT", "blank check", "acquisition corp", "spac"
+        "residential",
+        "retail REIT",
+        "blank check",
+        "acquisition corp",
+        "spac"
       ],
       "min_market_cap": 50000000,
-      "max_market_cap": 15000000000,
+      "max_market_cap": null,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid", "large"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid",
+        "large"
+      ],
       "market_cap_upper_default": 15000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Data center REITs, power systems, cooling, networking hardware, AI infra."
+      "notes": "Data center infrastructure: colocation REITs, servers, networking. Uranium/nuclear/unrelated tickers excluded. FMP restricted to REIT-Specialty and Computer Hardware.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "EQIX",
+        "DLR",
+        "AMT",
+        "SBAC",
+        "CCI",
+        "SMCI",
+        "IRM",
+        "GDS",
+        "DBRG",
+        "NBIS"
+      ],
+      "exclude_tickers": [
+        "UEC",
+        "LEU",
+        "EU",
+        "NNE",
+        "LTBR",
+        "BWXT",
+        "CW",
+        "UNIT",
+        "PWR",
+        "CEG",
+        "URG",
+        "D",
+        "VST",
+        "IHS"
+      ],
+      "require_name_keyword_match": true,
+      "required_any_keywords": [
+        "data center",
+        "datacenter",
+        "colocation",
+        "colo",
+        "hyperscale",
+        "data hall",
+        "server",
+        "cloud infrastructure",
+        "carrier-neutral",
+        "managed hosting",
+        "internet exchange",
+        "bare metal",
+        "data storage infrastructure",
+        "computing infrastructure"
+      ],
+      "exclude_keywords": [
+        "nuclear",
+        "uranium",
+        "rare earth",
+        "mining",
+        "oil",
+        "gas",
+        "coal",
+        "solar",
+        "wind",
+        "electric utility",
+        "telecom tower",
+        "cell tower",
+        "wireless tower"
+      ]
     },
     "cybersecurity": {
       "fmp_industries": [
@@ -503,18 +1118,79 @@
         "Scientific & Technical Instruments"
       ],
       "positive_keywords": [
-        "cybersecurity", "security", "firewall", "endpoint", "SIEM",
-        "zero trust", "identity", "IAM", "threat detection", "EDR",
-        "XDR", "SOAR", "network security", "encryption"
+        "cybersecurity",
+        "security",
+        "firewall",
+        "endpoint",
+        "SIEM",
+        "zero trust",
+        "identity",
+        "IAM",
+        "threat detection",
+        "EDR",
+        "XDR",
+        "SOAR",
+        "network security",
+        "encryption"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Network security, identity, endpoint, SIEM, zero-trust."
+      "notes": "Cybersecurity: endpoint, network security, identity. ETF-based (CIBR) with seed anchors. Canonical names always included.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "PANW",
+        "CRWD",
+        "FTNT",
+        "ZS",
+        "CYBR",
+        "OKTA",
+        "S",
+        "CHKP",
+        "NET",
+        "DDOG",
+        "RBRK"
+      ],
+      "required_any_keywords": [
+        "security",
+        "cybersecurity",
+        "cyber",
+        "endpoint",
+        "firewall",
+        "threat",
+        "zero trust",
+        "identity",
+        "encryption",
+        "antivirus",
+        "ransomware",
+        "intrusion",
+        "siem",
+        "vulnerability",
+        "penetration",
+        "data protection",
+        "network security",
+        "cloud security",
+        "access management"
+      ],
+      "exclude_keywords": [
+        "physical security",
+        "security guard",
+        "alarm system",
+        "lock",
+        "safe"
+      ]
     },
     "robotics_automation": {
       "fmp_industries": [
@@ -540,18 +1216,68 @@
         "Hardware, Equipment & Parts"
       ],
       "positive_keywords": [
-        "robot", "robotic", "automation", "autonomous", "cobot",
-        "AMR", "AGV", "machine vision", "motion control", "servo",
-        "actuator", "manipulator", "humanoid"
+        "robot",
+        "robotic",
+        "automation",
+        "autonomous",
+        "cobot",
+        "AMR",
+        "AGV",
+        "machine vision",
+        "motion control",
+        "servo",
+        "actuator",
+        "manipulator",
+        "humanoid"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Industrial robots, cobots, AMRs, machine vision, motion control."
+      "notes": "Robotics and automation: industrial robots, surgical robots, AI automation. ETF-based (BOTZ/ROBO). seed_tickers anchor canonical names.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "ISRG",
+        "SYM",
+        "CGNX",
+        "PATH",
+        "ROK",
+        "ZBRA",
+        "AZTA",
+        "PRCT",
+        "SOUN"
+      ],
+      "required_any_keywords": [
+        "robot",
+        "robotic",
+        "automation",
+        "autonomous",
+        "cobot",
+        "industrial automation",
+        "machine vision",
+        "computer vision",
+        "actuator",
+        "servo",
+        "motion control",
+        "cnc",
+        "warehouse automation",
+        "factory automation",
+        "collaborative robot",
+        "autonomous mobile",
+        "amr"
+      ],
+      "exclude_keywords": []
     },
     "industrials": {
       "fmp_industries": [
@@ -575,14 +1301,27 @@
         "Business Equipment & Supplies"
       ],
       "positive_keywords": [
-        "industrial", "manufacturing", "machinery", "automation",
-        "engineering", "construction", "infrastructure"
+        "industrial",
+        "manufacturing",
+        "machinery",
+        "automation",
+        "engineering",
+        "construction",
+        "infrastructure"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Broad industrial machinery and automation."
@@ -605,14 +1344,31 @@
         "Medical - Devices"
       ],
       "positive_keywords": [
-        "biotech", "biologic", "gene therapy", "mRNA", "CRISPR",
-        "oncology", "clinical", "IND", "FDA", "therapeutic", "antibody"
+        "biotech",
+        "biologic",
+        "gene therapy",
+        "mRNA",
+        "CRISPR",
+        "oncology",
+        "clinical",
+        "IND",
+        "FDA",
+        "therapeutic",
+        "antibody"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 5000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 5000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Small/mid-cap biotech. Lower cap ceiling to surface clinical-stage names."
@@ -635,14 +1391,29 @@
         "Scientific & Technical Instruments"
       ],
       "positive_keywords": [
-        "medical device", "surgical", "implant", "diagnostic", "imaging",
-        "catheter", "orthopedic", "wearable", "biosensor"
+        "medical device",
+        "surgical",
+        "implant",
+        "diagnostic",
+        "imaging",
+        "catheter",
+        "orthopedic",
+        "wearable",
+        "biosensor"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Medtech devices, diagnostics, imaging."
@@ -665,15 +1436,31 @@
         "Electronic Components"
       ],
       "positive_keywords": [
-        "lithium", "battery", "cathode", "anode", "electrolyte",
-        "energy storage", "solid state battery", "EV battery",
-        "gigafactory", "cell manufacturing", "BMS"
+        "lithium",
+        "battery",
+        "cathode",
+        "anode",
+        "electrolyte",
+        "energy storage",
+        "solid state battery",
+        "EV battery",
+        "gigafactory",
+        "cell manufacturing",
+        "BMS"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Lithium miners, battery materials, cell manufacturers."
@@ -696,14 +1483,27 @@
         "Silver"
       ],
       "positive_keywords": [
-        "copper", "base metal", "porphyry", "mining", "miner",
-        "exploration", "development stage"
+        "copper",
+        "base metal",
+        "porphyry",
+        "mining",
+        "miner",
+        "exploration",
+        "development stage"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Copper miners and base metals."
@@ -723,14 +1523,29 @@
       ],
       "weak_adjacent_industries": [],
       "positive_keywords": [
-        "gold", "silver", "precious metal", "royalty", "streaming",
-        "exploration", "junior miner", "moz", "grade"
+        "gold",
+        "silver",
+        "precious metal",
+        "royalty",
+        "streaming",
+        "exploration",
+        "junior miner",
+        "moz",
+        "grade"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Gold miners, explorers, royalty companies."
@@ -755,28 +1570,38 @@
         "Insurance - Diversified"
       ],
       "positive_keywords": [
-        "fintech", "payments", "lending", "insurtech", "neobank",
-        "wealth tech", "trading platform", "digital banking",
-        "payment processing", "remittance", "buy now pay later"
+        "fintech",
+        "payments",
+        "lending",
+        "insurtech",
+        "neobank",
+        "wealth tech",
+        "trading platform",
+        "digital banking",
+        "payment processing",
+        "remittance",
+        "buy now pay later"
       ],
       "negative_keywords": [
-        "blank check", "acquisition corp", "spac"
+        "blank check",
+        "acquisition corp",
+        "spac"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Payments, lending, insurtech, neobanks, wealth tech."
     },
     "quantum": {
       "fmp_industries": [
-        "Scientific & Technical Instruments",
-        "Computer Hardware",
-        "Semiconductors",
-        "Software - Infrastructure",
-        "Electronic Components"
+        "Scientific & Technical Instruments"
       ],
       "core_industries": [
         "Scientific & Technical Instruments"
@@ -790,17 +1615,104 @@
         "Electronic Components"
       ],
       "positive_keywords": [
-        "quantum", "qubit", "quantum computing", "quantum error correction",
-        "cryogenic", "photonic", "ion trap", "superconducting"
+        "quantum",
+        "qubit",
+        "quantum computing",
+        "quantum processor",
+        "quantum error",
+        "quantum hardware",
+        "quantum network",
+        "quantum key",
+        "quantum annealing",
+        "quantum software",
+        "quantum simulation",
+        "cryogenic control",
+        "quantum sensor",
+        "quantum cryptography",
+        "quantum communication",
+        "quantum advantage",
+        "trapped ion",
+        "superconducting qubit",
+        "photonic quantum"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
-      "min_market_cap": 50000000,
-      "max_market_cap": 10000000000,
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
+      "min_market_cap": 10000000,
+      "max_market_cap": null,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Quantum computing hardware, software, error correction."
+      "notes": "Quantum computing pure-plays. seed_tickers = canonical companies (bypass keyword match). QTUM proxy changed to custom (too broad, held generic semis). FMP restricted to Scientific & Technical Instruments + keyword gate.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "IONQ",
+        "RGTI",
+        "QUBT",
+        "QBTS",
+        "ARQQ",
+        "IBM"
+      ],
+      "exclude_tickers": [
+        "INTC",
+        "AMD",
+        "MU",
+        "ON",
+        "TXN",
+        "LRCX",
+        "ARM",
+        "ONTO",
+        "TSEM",
+        "TER",
+        "MRVL",
+        "LSCC",
+        "STM",
+        "ADI",
+        "AMAT",
+        "KLAC",
+        "ASML",
+        "AVGO",
+        "NVDA",
+        "QCOM",
+        "NXPI",
+        "MCHP"
+      ],
+      "require_name_keyword_match": true,
+      "required_any_keywords": [
+        "quantum",
+        "qubit",
+        "quantum computing",
+        "trapped ion",
+        "superconducting",
+        "cryogenic control",
+        "photonic quantum",
+        "quantum processor",
+        "quantum network",
+        "quantum key",
+        "quantum sensor",
+        "quantum cryptography",
+        "quantum communication"
+      ],
+      "exclude_keywords": [
+        "semiconductor equipment",
+        "etch",
+        "deposition",
+        "lithography",
+        "inspection",
+        "metrology",
+        "medical",
+        "pharmaceutical",
+        "financial",
+        "insurance",
+        "bank",
+        "retail"
+      ]
     },
     "space": {
       "fmp_industries": [
@@ -820,14 +1732,31 @@
         "Hardware, Equipment & Parts"
       ],
       "positive_keywords": [
-        "space", "satellite", "launch", "rocket", "orbit", "LEO",
-        "GEO", "spacecraft", "propulsion", "re-entry", "space tourism"
+        "space",
+        "satellite",
+        "launch",
+        "rocket",
+        "orbit",
+        "LEO",
+        "GEO",
+        "spacecraft",
+        "propulsion",
+        "re-entry",
+        "space tourism"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Launch, satellite, ground systems, space services."
@@ -849,14 +1778,28 @@
       ],
       "weak_adjacent_industries": [],
       "positive_keywords": [
-        "agriculture", "agri", "crop", "seed", "fertilizer", "pesticide",
-        "ag tech", "precision agriculture", "irrigation"
+        "agriculture",
+        "agri",
+        "crop",
+        "seed",
+        "fertilizer",
+        "pesticide",
+        "ag tech",
+        "precision agriculture",
+        "irrigation"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Seeds, fertilizers, ag equipment, crop processing."
@@ -879,14 +1822,27 @@
         "Oil & Gas Integrated"
       ],
       "positive_keywords": [
-        "LNG", "liquefied natural gas", "natural gas", "pipeline",
-        "midstream", "gas storage", "export terminal"
+        "LNG",
+        "liquefied natural gas",
+        "natural gas",
+        "pipeline",
+        "midstream",
+        "gas storage",
+        "export terminal"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 20000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid", "large"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid",
+        "large"
+      ],
       "market_cap_upper_default": 20000000000,
       "market_cap_lower_default": 50000000,
       "notes": "LNG exporters, natural gas pipelines, storage."
@@ -909,14 +1865,26 @@
         "Lumber & Wood Production"
       ],
       "positive_keywords": [
-        "homebuilder", "home builder", "residential", "housing",
-        "construction", "building materials", "lumber"
+        "homebuilder",
+        "home builder",
+        "residential",
+        "housing",
+        "construction",
+        "building materials",
+        "lumber"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Homebuilders, building materials, lumber."
@@ -941,14 +1909,28 @@
         "Coal"
       ],
       "positive_keywords": [
-        "steel", "aluminum", "metal", "mining", "miner",
-        "specialty metals", "alloy", "smelting"
+        "steel",
+        "aluminum",
+        "metal",
+        "mining",
+        "miner",
+        "specialty metals",
+        "alloy",
+        "smelting"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Steel, aluminum, specialty metals, miners."
@@ -968,14 +1950,28 @@
       ],
       "weak_adjacent_industries": [],
       "positive_keywords": [
-        "oil", "gas", "E&P", "exploration", "production",
-        "upstream", "refinery", "barrel", "boe"
+        "oil",
+        "gas",
+        "E&P",
+        "exploration",
+        "production",
+        "upstream",
+        "refinery",
+        "barrel",
+        "boe"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 20000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 20000000000,
       "market_cap_lower_default": 50000000,
       "notes": "E&P, refiners, integrateds."
@@ -995,14 +1991,28 @@
       ],
       "weak_adjacent_industries": [],
       "positive_keywords": [
-        "oilfield services", "drilling", "well services", "completion",
-        "subsea", "offshore", "fracking", "wireline"
+        "oilfield services",
+        "drilling",
+        "well services",
+        "completion",
+        "subsea",
+        "offshore",
+        "fracking",
+        "wireline"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Oilfield services and equipment."
@@ -1022,19 +2032,62 @@
       ],
       "weak_adjacent_industries": [],
       "positive_keywords": [
-        "SaaS", "cloud", "software-as-a-service", "platform",
-        "API", "subscription software", "enterprise software"
+        "SaaS",
+        "cloud",
+        "software-as-a-service",
+        "platform",
+        "API",
+        "subscription software",
+        "enterprise software"
       ],
       "negative_keywords": [
-        "hardware", "semiconductor", "blank check", "acquisition corp", "spac"
+        "hardware",
+        "semiconductor",
+        "blank check",
+        "acquisition corp",
+        "spac"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 5000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 5000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "SaaS and cloud-native software, smaller names."
+      "notes": "Cloud software: SaaS, PaaS, cloud platforms. ETF-based (SKYY/CLOU) for broader coverage. seed_tickers anchor canonical names.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "SNOW",
+        "DDOG",
+        "MDB",
+        "NET",
+        "AMZN",
+        "MSFT",
+        "GOOGL",
+        "ORCL",
+        "NTNX",
+        "CRM",
+        "ADBE",
+        "TEAM",
+        "DOCN"
+      ],
+      "required_any_keywords": [
+        "cloud",
+        "saas",
+        "software as a service",
+        "software-as-a-service",
+        "platform",
+        "enterprise software",
+        "software",
+        "application software",
+        "infrastructure software",
+        "business software",
+        "subscription software"
+      ],
+      "exclude_keywords": []
     },
     "software": {
       "fmp_industries": [
@@ -1048,13 +2101,26 @@
       "adjacent_industries": [],
       "weak_adjacent_industries": [],
       "positive_keywords": [
-        "software", "SaaS", "platform", "enterprise", "developer tools"
+        "software",
+        "SaaS",
+        "platform",
+        "enterprise",
+        "developer tools"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 5000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 5000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Broad enterprise and consumer software, smaller names."
@@ -1079,14 +2145,31 @@
         "Oil & Gas Equipment & Services"
       ],
       "positive_keywords": [
-        "oil", "gas", "energy", "E&P", "exploration", "production",
-        "pipeline", "midstream", "refinery", "upstream", "downstream"
+        "oil",
+        "gas",
+        "energy",
+        "E&P",
+        "exploration",
+        "production",
+        "pipeline",
+        "midstream",
+        "refinery",
+        "upstream",
+        "downstream"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Oil & gas E&P, midstream, and services. Excludes majors via cap ceiling."
@@ -1117,17 +2200,34 @@
         "Medical - Hospitals"
       ],
       "positive_keywords": [
-        "health", "pharma", "biotech", "medical", "therapeutic",
-        "clinical", "diagnostics", "drug", "device", "healthcare"
+        "health",
+        "pharma",
+        "biotech",
+        "medical",
+        "therapeutic",
+        "clinical",
+        "diagnostics",
+        "drug",
+        "device",
+        "healthcare"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Broad healthcare — biotech, pharma, medtech, diagnostics, health plans."
+      "notes": "Broad healthcare \u2014 biotech, pharma, medtech, diagnostics, health plans."
     },
     "materials": {
       "fmp_industries": [
@@ -1155,55 +2255,33 @@
         "Agricultural Inputs"
       ],
       "positive_keywords": [
-        "materials", "chemicals", "metals", "mining", "steel",
-        "aluminum", "specialty chemical", "polymer", "alloy"
+        "materials",
+        "chemicals",
+        "metals",
+        "mining",
+        "steel",
+        "aluminum",
+        "specialty chemical",
+        "polymer",
+        "alloy"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Broad materials sector — metals, mining, specialty chemicals."
-    },
-    "ai_networking": {
-      "fmp_industries": [
-        "Communication Equipment",
-        "Telecom Services",
-        "Telephone and Telegraph Apparatus",
-        "Computer Hardware",
-        "Semiconductors",
-        "Electronic Components"
-      ],
-      "core_industries": [
-        "Communication Equipment",
-        "Telecom Services",
-        "Telephone and Telegraph Apparatus"
-      ],
-      "adjacent_industries": [
-        "Computer Hardware",
-        "Electronic Components"
-      ],
-      "weak_adjacent_industries": [
-        "Semiconductors"
-      ],
-      "positive_keywords": [
-        "networking", "network", "switch", "router", "ethernet", "optical",
-        "photonic", "interconnect", "silicon photonics", "data center networking",
-        "wireless", "telecom", "communication", "AI networking", "inference"
-      ],
-      "negative_keywords": [
-        "blank check", "acquisition corp", "spac", "shell company",
-        "blank check company", "warrant"
-      ],
-      "min_market_cap": 100000000,
-      "max_market_cap": 5000000000000,
-      "min_volume": 50000,
-      "preferred_market_cap_buckets": ["small", "mid", "large", "mega"],
-      "market_cap_upper_default": 5000000000000,
-      "market_cap_lower_default": 100000000,
-      "notes": "AI networking — switches, optical interconnects, networking chips, telecom infrastructure. Includes large-caps (CSCO, ANET) and small/mid (CIEN, INFN, CRDO)."
+      "notes": "Broad materials sector \u2014 metals, mining, specialty chemicals."
     },
     "banks": {
       "fmp_industries": [
@@ -1223,17 +2301,31 @@
         "Financial - Credit Services"
       ],
       "positive_keywords": [
-        "bank", "bancorp", "savings", "financial", "community bank",
-        "thrift", "banshares", "bankshares"
+        "bank",
+        "bancorp",
+        "savings",
+        "financial",
+        "community bank",
+        "thrift",
+        "banshares",
+        "bankshares"
       ],
       "negative_keywords": [
-        "investment bank", "hedge fund", "blank check", "acquisition corp",
-        "spac", "shell company"
+        "investment bank",
+        "hedge fund",
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
       ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Regional and community banks. Superset of regional_banks."
@@ -1254,14 +2346,29 @@
         "Other Industrial Metals & Mining"
       ],
       "positive_keywords": [
-        "chemical", "specialty chemical", "polymer", "resin",
-        "adhesive", "coatings", "fertilizer", "materials science"
+        "chemical",
+        "specialty chemical",
+        "polymer",
+        "resin",
+        "adhesive",
+        "coatings",
+        "fertilizer",
+        "materials science"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Specialty and advanced chemicals, materials science."
@@ -1290,17 +2397,31 @@
         "Auto & Truck Dealerships"
       ],
       "positive_keywords": [
-        "retail", "restaurant", "consumer", "store", "apparel",
-        "food service", "e-commerce", "direct-to-consumer"
+        "retail",
+        "restaurant",
+        "consumer",
+        "store",
+        "apparel",
+        "food service",
+        "e-commerce",
+        "direct-to-consumer"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Consumer retail — specialty, restaurants, grocery, apparel."
+      "notes": "Consumer retail \u2014 specialty, restaurants, grocery, apparel."
     },
     "insurance": {
       "fmp_industries": [
@@ -1320,14 +2441,28 @@
         "Insurance - Life"
       ],
       "positive_keywords": [
-        "insurance", "insurer", "underwriter", "reinsurance",
-        "casualty", "property", "liability", "surety"
+        "insurance",
+        "insurer",
+        "underwriter",
+        "reinsurance",
+        "casualty",
+        "property",
+        "liability",
+        "surety"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "P&C, specialty, and life insurance carriers and reinsurers."
@@ -1350,14 +2485,28 @@
         "Other Industrial Metals & Mining"
       ],
       "positive_keywords": [
-        "silver", "precious metal", "royalty", "streaming",
-        "miner", "exploration", "junior miner"
+        "silver",
+        "precious metal",
+        "royalty",
+        "streaming",
+        "miner",
+        "exploration",
+        "junior miner"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Silver and precious metals miners, royalty companies."
@@ -1384,14 +2533,30 @@
         "Airports & Air Services"
       ],
       "positive_keywords": [
-        "travel", "airline", "shipping", "freight", "logistics",
-        "trucking", "rail", "cruise", "transport", "cargo"
+        "travel",
+        "airline",
+        "shipping",
+        "freight",
+        "logistics",
+        "trucking",
+        "rail",
+        "cruise",
+        "transport",
+        "cargo"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 15000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 15000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Airlines, trucking, rail, maritime, freight and logistics."
@@ -1416,14 +2581,29 @@
         "Broadcasting"
       ],
       "positive_keywords": [
-        "telecom", "communication", "media", "streaming",
-        "broadband", "wireless", "5G", "content", "digital media"
+        "telecom",
+        "communication",
+        "media",
+        "streaming",
+        "broadband",
+        "wireless",
+        "5G",
+        "content",
+        "digital media"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Telecom carriers, internet content, entertainment, media."
@@ -1450,14 +2630,29 @@
         "Independent Power Producers"
       ],
       "positive_keywords": [
-        "utility", "electric", "power", "grid", "regulated",
-        "renewable", "generation", "transmission", "distribution"
+        "utility",
+        "electric",
+        "power",
+        "grid",
+        "regulated",
+        "renewable",
+        "generation",
+        "transmission",
+        "distribution"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Regulated electric, gas, water utilities and independent power producers."
@@ -1490,14 +2685,28 @@
         "Real Estate Services"
       ],
       "positive_keywords": [
-        "REIT", "real estate", "property", "realty", "trust",
-        "residential", "commercial", "industrial property"
+        "REIT",
+        "real estate",
+        "property",
+        "realty",
+        "trust",
+        "residential",
+        "commercial",
+        "industrial property"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Residential, industrial, office, retail, and specialty REITs."
@@ -1526,14 +2735,28 @@
         "Tobacco"
       ],
       "positive_keywords": [
-        "food", "beverage", "consumer goods", "household",
-        "personal care", "grocery", "packaged", "staples"
+        "food",
+        "beverage",
+        "consumer goods",
+        "household",
+        "personal care",
+        "grocery",
+        "packaged",
+        "staples"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Packaged foods, beverages, household products, grocery."
@@ -1564,14 +2787,29 @@
         "Furnishings, Fixtures & Appliances"
       ],
       "positive_keywords": [
-        "consumer", "retail", "auto", "restaurant", "leisure",
-        "luxury", "apparel", "discretionary", "entertainment"
+        "consumer",
+        "retail",
+        "auto",
+        "restaurant",
+        "leisure",
+        "luxury",
+        "apparel",
+        "discretionary",
+        "entertainment"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
       "notes": "Autos, specialty retail, restaurants, leisure, apparel."
@@ -1596,25 +2834,36 @@
         "Scientific & Technical Instruments"
       ],
       "positive_keywords": [
-        "AI", "machine learning", "autonomous", "platform",
-        "next-gen", "disruptive", "innovation", "deep tech"
+        "AI",
+        "machine learning",
+        "autonomous",
+        "platform",
+        "next-gen",
+        "disruptive",
+        "innovation",
+        "deep tech"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 5000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 5000000000,
       "market_cap_lower_default": 50000000,
       "notes": "High-growth disruptive tech, ARK-style names, AI/ML plays."
     },
     "photonics_lasers": {
       "fmp_industries": [
-        "Scientific & Technical Instruments",
-        "Electronic Components",
-        "Semiconductors",
-        "Electrical Equipment & Parts",
-        "Hardware, Equipment & Parts"
+        "Scientific & Technical Instruments"
       ],
       "core_industries": [
         "Scientific & Technical Instruments",
@@ -1628,26 +2877,131 @@
         "Hardware, Equipment & Parts"
       ],
       "positive_keywords": [
-        "photon", "photonic", "laser", "lidar", "optical", "fiber optic",
-        "infrared", "UV laser", "diode laser", "semiconductor laser",
-        "optical coherence", "LiDAR", "silicon photonics", "waveguide",
-        "optoelectronic", "VCSEL", "photodetector", "optical transceiver"
+        "photon",
+        "photonic",
+        "laser",
+        "optical",
+        "optoelectron",
+        "lidar",
+        "LiDAR",
+        "fiber optic",
+        "light-emitting",
+        "LED",
+        "OLED",
+        "infrared",
+        "ultraviolet",
+        "spectroscopy",
+        "photovoltaic",
+        "diode laser",
+        "fiber laser",
+        "solid state laser",
+        "silicon photonics",
+        "optical amplifier",
+        "wavelength",
+        "coherent light",
+        "optical transceiver",
+        "photomask",
+        "laser system",
+        "laser processing",
+        "laser cutting",
+        "optical sensor",
+        "optical test",
+        "photonic integrated",
+        "optical communications",
+        "light detection"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
-      "max_market_cap": 10000000000,
+      "max_market_cap": null,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Photonics, lasers, lidar, optical components, silicon photonics."
+      "notes": "Photonics and laser companies. FMP restricted to Scientific & Technical Instruments only. Semiconductors and Electrical Equipment removed (pulled wrong companies).",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "IPGP",
+        "COHR",
+        "LITE",
+        "AAOI",
+        "VIAV",
+        "FN",
+        "LPTH",
+        "MKSI"
+      ],
+      "exclude_tickers": [
+        "IPWR",
+        "CBAT",
+        "NEOV",
+        "NVX",
+        "ARBE",
+        "SKYX",
+        "TGEN",
+        "STI",
+        "EAF",
+        "LTBR",
+        "ELVA",
+        "MVST",
+        "GCTS",
+        "BZAI",
+        "INTT",
+        "ATOM",
+        "ASYS",
+        "ALMU",
+        "XPER",
+        "QUIK",
+        "LAES",
+        "NVEC",
+        "MRAM",
+        "SIVEF",
+        "TRT",
+        "NA",
+        "MX",
+        "GSIT",
+        "VLN"
+      ],
+      "require_name_keyword_match": true,
+      "required_any_keywords": [
+        "photon",
+        "photonic",
+        "laser",
+        "optical",
+        "lidar",
+        "fiber optic",
+        "oled",
+        "coherent",
+        "wavelength",
+        "optoelectron",
+        "infrared",
+        "fiber laser",
+        "silicon photon",
+        "optical transceiver",
+        "photomask"
+      ],
+      "exclude_keywords": [
+        "software",
+        "financial",
+        "bank",
+        "insurance",
+        "food",
+        "retail",
+        "pharmaceutical",
+        "medical device",
+        "communication tower",
+        "wireless tower"
+      ]
     },
     "power_cooling": {
       "fmp_industries": [
-        "Electrical Equipment & Parts",
-        "Industrial - Machinery",
-        "Electronic Components",
-        "Scientific & Technical Instruments",
         "Specialty Industrial Machinery"
       ],
       "core_industries": [
@@ -1662,27 +3016,124 @@
         "Scientific & Technical Instruments"
       ],
       "positive_keywords": [
-        "power management", "UPS", "power supply", "cooling", "thermal",
-        "liquid cooling", "heat exchanger", "power conversion", "inverter",
-        "voltage regulator", "PDU", "data center power", "HVAC",
-        "chiller", "immersion cooling", "direct liquid cooling"
+        "cooling",
+        "thermal management",
+        "HVAC",
+        "power distribution",
+        "UPS",
+        "uninterruptible power",
+        "generator",
+        "backup power",
+        "heat exchanger",
+        "liquid cooling",
+        "immersion cooling",
+        "data center power",
+        "power management",
+        "chiller",
+        "cooling tower",
+        "power conditioning",
+        "PDU",
+        "data center cooling",
+        "rack cooling",
+        "thermal solution",
+        "critical power",
+        "power supply",
+        "electrical distribution",
+        "switchgear",
+        "power conversion"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
-      "max_market_cap": 15000000000,
+      "max_market_cap": null,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 15000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Power management, UPS, cooling systems, thermal management for data centers and industrial."
+      "notes": "Data center power/cooling: UPS, thermal management, critical power. FMP restricted to Specialty Industrial Machinery. Explicit exclude list for companies historically bleeding in from Electrical Equipment & Parts.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "VRT",
+        "ETN",
+        "GEV",
+        "TT",
+        "IR",
+        "NVT",
+        "GNRC",
+        "HUBB",
+        "BE"
+      ],
+      "exclude_tickers": [
+        "IPWR",
+        "CBAT",
+        "NEOV",
+        "NVX",
+        "SKYX",
+        "TGEN",
+        "STI",
+        "EAF",
+        "LTBR",
+        "ELVA",
+        "MVST",
+        "SLDP",
+        "FCEL",
+        "ENVX",
+        "EOSE",
+        "AMPX",
+        "ATKR",
+        "WRAP",
+        "CPSH",
+        "MVIS",
+        "RFIL",
+        "SLNH",
+        "MPTI",
+        "USBC",
+        "ENR"
+      ],
+      "require_name_keyword_match": true,
+      "required_any_keywords": [
+        "cooling",
+        "thermal",
+        "hvac",
+        "chiller",
+        "heat exchanger",
+        "liquid cooling",
+        "immersion cooling",
+        "uninterruptible",
+        "switchgear",
+        "power conditioning",
+        "critical power",
+        "data center power",
+        "rack cooling",
+        "cooling tower",
+        "refrigeration",
+        "thermal management"
+      ],
+      "exclude_keywords": [
+        "aerospace & defense",
+        "aerospace and defense",
+        "electric utilities",
+        "electric utility",
+        "utilities",
+        "nuclear",
+        "oil",
+        "gas",
+        "coal",
+        "solar panel",
+        "wind turbine",
+        "defense contractor"
+      ]
     },
     "substrates_packaging": {
       "fmp_industries": [
-        "Electronic Components",
-        "Electrical Equipment & Parts",
-        "Semiconductors",
-        "Specialty Chemicals",
-        "Hardware, Equipment & Parts"
+        "Electronic Components"
       ],
       "core_industries": [
         "Electronic Components",
@@ -1696,19 +3147,125 @@
         "Hardware, Equipment & Parts"
       ],
       "positive_keywords": [
-        "substrate", "PCB", "printed circuit board", "packaging",
-        "advanced packaging", "chiplet", "interposer", "flip chip",
-        "wafer-level packaging", "2.5D", "3D IC", "fan-out",
-        "BGA", "laminate substrate", "IC packaging", "copper foil"
+        "substrate",
+        "packaging",
+        "OSAT",
+        "advanced packaging",
+        "flip chip",
+        "wire bond",
+        "wafer-level",
+        "CoWoS",
+        "fan-out",
+        "interposer",
+        "bumping",
+        "laminate substrate",
+        "IC packaging",
+        "test and assembly",
+        "outsourced semiconductor",
+        "leadframe",
+        "encapsulation",
+        "module assembly",
+        "PCB substrate",
+        "build-up substrate",
+        "chiplet",
+        "2.5D",
+        "3D IC",
+        "HBM stack",
+        "through-silicon via",
+        "TSV",
+        "copper pillar",
+        "die attach",
+        "mold compound",
+        "underfill"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
-      "max_market_cap": 10000000000,
+      "max_market_cap": null,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Semiconductor substrates, advanced packaging, PCB, chiplet interconnects."
+      "notes": "OSAT / advanced packaging / substrate suppliers. FMP:Semiconductors removed (pulled generic chip designers). Keyword gate required for all FMP additions.",
+      "theme_type": "pure_subtheme",
+      "seed_tickers": [
+        "AMKR",
+        "ASX",
+        "IBIDF",
+        "UMICF",
+        "KLIC",
+        "BESI",
+        "ONTO",
+        "ASMVF"
+      ],
+      "exclude_tickers": [
+        "NVDA",
+        "TSM",
+        "AVGO",
+        "AMD",
+        "INTC",
+        "QCOM",
+        "MU",
+        "WDC",
+        "STX",
+        "ASML",
+        "AMAT",
+        "LRCX",
+        "KLAC",
+        "TER",
+        "ACLS",
+        "NVEC",
+        "MRAM",
+        "ARBE",
+        "GCTS",
+        "BZAI",
+        "XPER",
+        "QUIK",
+        "LAES"
+      ],
+      "require_name_keyword_match": true,
+      "required_any_keywords": [
+        "packaging",
+        "substrate",
+        "interposer",
+        "osat",
+        "flip chip",
+        "wire bond",
+        "chiplet",
+        "encapsul",
+        "leadframe",
+        "laminate",
+        "advanced packaging",
+        "semiconductor packaging",
+        "assembly",
+        "bumping",
+        "underfill",
+        "mold compound",
+        "heterogeneous integration",
+        "ball grid",
+        "chip-on-wafer",
+        "panel fan-out"
+      ],
+      "exclude_keywords": [
+        "software",
+        "services",
+        "financial",
+        "bank",
+        "insurance",
+        "retail",
+        "pharmaceutical",
+        "electric vehicle",
+        "automobile",
+        "auto"
+      ]
     },
     "technology": {
       "fmp_industries": [
@@ -1736,17 +3293,35 @@
         "Information Technology Services"
       ],
       "positive_keywords": [
-        "technology", "tech", "software", "hardware", "computing",
-        "platform", "digital", "AI", "cloud", "data", "infrastructure"
+        "technology",
+        "tech",
+        "software",
+        "hardware",
+        "computing",
+        "platform",
+        "digital",
+        "AI",
+        "cloud",
+        "data",
+        "infrastructure"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["micro", "small", "mid"],
+      "preferred_market_cap_buckets": [
+        "micro",
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Broad technology sector — software, hardware, semis, networking."
+      "notes": "Broad technology sector \u2014 software, hardware, semis, networking."
     },
     "financials": {
       "fmp_industries": [
@@ -1772,17 +3347,33 @@
         "Financial - Mortgages"
       ],
       "positive_keywords": [
-        "bank", "financial", "insurance", "capital markets", "lending",
-        "credit", "investment", "wealth management", "brokerage", "asset management"
+        "bank",
+        "financial",
+        "insurance",
+        "capital markets",
+        "lending",
+        "credit",
+        "investment",
+        "wealth management",
+        "brokerage",
+        "asset management"
       ],
-      "negative_keywords": ["blank check", "acquisition corp", "spac", "shell company"],
+      "negative_keywords": [
+        "blank check",
+        "acquisition corp",
+        "spac",
+        "shell company"
+      ],
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
-      "preferred_market_cap_buckets": ["small", "mid"],
+      "preferred_market_cap_buckets": [
+        "small",
+        "mid"
+      ],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "Broad financials — banks, insurance, capital markets, lending."
+      "notes": "Broad financials \u2014 banks, insurance, capital markets, lending."
     }
   }
 }

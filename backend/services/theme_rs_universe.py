@@ -55,7 +55,24 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "display_name": "AI Networking",
         "proxy_type": "custom",
         "proxy_symbols": ["ANET", "AVGO", "MRVL", "CRDO", "ALAB"],
-        "candidate_symbols": ["ANET", "AVGO", "MRVL", "CRDO", "ALAB"],
+        "candidate_symbols": [
+            "ANET",  # Arista Networks — AI data center switches
+            "AVGO",  # Broadcom — custom networking ASICs, optical DSPs
+            "MRVL",  # Marvell Technology — custom silicon, optical DSPs
+            "CRDO",  # Credo Technology — SerDes for high-speed links
+            "ALAB",  # Astera Labs — PCIe/CXL retimers for AI clusters
+            "CSCO",  # Cisco Systems — enterprise & DC networking
+            "JNPR",  # Juniper Networks — AI-native networking
+            "EXTR",  # Extreme Networks — data center fabrics
+            "CIEN",  # Ciena — optical networking / 400G-800G coherent
+            "INFN",  # Infinera — open optical networking
+            "CALX",  # Calix — access/edge networking
+            "AAOI",  # Applied Optoelectronics — high-speed transceivers
+            "FN",    # Fabrinet — precision optical/networking manufacturing
+            "VIAV",  # Viavi Solutions — optical test & measurement
+            "COHR",  # Coherent — optical transceivers & components
+            "LITE",  # Lumentum — optical components for networking
+        ],
         "sector_tags": ["Technology"],
         "keywords": ["AI networking", "data center networking", "optical interconnects", "switches", "silicon photonics"],
         "macro_sensitivities": ["AI capex", "data center buildout", "hyperscaler spending"],
@@ -228,10 +245,22 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "display_name": "Data Center Infrastructure",
         "proxy_type": "etf",
         # SRVR = Pacer Data & Infrastructure Real Estate ETF (primary)
+        # Uranium/nuclear tickers excluded via exclude_tickers in theme_fmp_industry_map.json
         "proxy_symbols": ["SRVR", "VPN", "DTCR"],
-        "candidate_symbols": ["EQIX", "DLR", "VRT", "ETN", "PWR", "CEG", "NBIS"],
+        "candidate_symbols": [
+            "EQIX",  # Equinix — global colocation, carrier-neutral data centers
+            "DLR",   # Digital Realty — wholesale & colocation data centers
+            "AMT",   # American Tower — data center REITs / tower infrastructure
+            "SBAC",  # SBA Communications — tower + edge infra
+            "CCI",   # Crown Castle — towers, small cells, fiber
+            "SMCI",  # Super Micro Computer — high-density AI servers
+            "IRM",   # Iron Mountain — data center colocation + storage
+            "GDS",   # GDS Holdings — China data center operator
+            "DBRG",  # DigitalBridge — data center-focused REIT/PE
+            "NBIS",  # Nebius Group — AI-optimized data center infrastructure
+        ],
         "sector_tags": ["Technology", "Utilities", "Real Estate"],
-        "keywords": ["data center", "REIT", "power", "colocation", "hyperscaler infrastructure"],
+        "keywords": ["data center", "REIT", "colocation", "hyperscaler infrastructure", "server infrastructure"],
         "macro_sensitivities": ["AI capex", "power demand", "interest rates", "cloud growth"],
         "aliases": ["datacenter_infrastructure", "data_center"],
     },
@@ -547,10 +576,19 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "parent_sector":  "technology",
         "display_name": "Photonics / Lasers",
         "proxy_type": "custom",
-        "proxy_symbols": ["COHR", "LITE", "AAOI", "FN"],
-        "candidate_symbols": ["COHR", "LITE", "AAOI", "FN", "SIVEF"],
+        "proxy_symbols": ["IPGP", "COHR", "LITE", "AAOI"],
+        "candidate_symbols": [
+            "IPGP",  # IPG Photonics — fiber lasers, leader in industrial/medical lasers
+            "COHR",  # Coherent Corp — lasers + optical components (merged II-VI)
+            "LITE",  # Lumentum — laser chips, photonic components, 3D sensing
+            "AAOI",  # Applied Optoelectronics — transceivers, optical components
+            "VIAV",  # Viavi Solutions — optical test instruments
+            "FN",    # Fabrinet — precision photonics manufacturing
+            "LPTH",  # Light Path Technologies — optical components
+            "MKSI",  # MKS Instruments — laser power supplies, photonics tools
+        ],
         "sector_tags": ["Technology"],
-        "keywords": ["photonics", "lasers", "optical components", "silicon photonics", "datacom optics", "fiber"],
+        "keywords": ["photonics", "lasers", "optical components", "silicon photonics", "datacom optics", "fiber laser", "LiDAR"],
         "macro_sensitivities": ["AI data center buildout", "telecom capex", "defense optics spending"],
     },
 
@@ -559,10 +597,20 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "parent_sector":  "industrials",
         "display_name": "Power / Cooling",
         "proxy_type": "custom",
-        "proxy_symbols": ["VRT", "ETN", "GEV", "TT", "BE"],
-        "candidate_symbols": ["VRT", "ETN", "GEV", "TT", "BE"],
+        "proxy_symbols": ["VRT", "ETN", "GEV", "TT"],
+        "candidate_symbols": [
+            "VRT",   # Vertiv Holdings — DC power, thermal management, critical infrastructure
+            "ETN",   # Eaton Corp — power distribution, PDUs, UPS, switchgear
+            "GEV",   # GE Vernova — power systems, grid solutions
+            "TT",    # Trane Technologies — HVAC, cooling systems
+            "IR",    # Ingersoll Rand — compressed air, industrial cooling
+            "NVT",   # nVent Electric — enclosures, power distribution
+            "GNRC",  # Generac — backup generators, standby power
+            "HUBB",  # Hubbell — electrical infrastructure, wiring devices
+            "BE",    # Bloom Energy — fuel cells for clean data center power
+        ],
         "sector_tags": ["Industrials", "Technology"],
-        "keywords": ["power", "cooling", "data center power", "thermal management", "UPS", "generators", "HVAC"],
+        "keywords": ["power", "cooling", "data center power", "thermal management", "UPS", "generators", "HVAC", "liquid cooling"],
         "macro_sensitivities": ["AI data center buildout", "power grid demand", "industrial capex"],
     },
 
@@ -583,12 +631,20 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "sub_theme",
         "parent_sector":  "technology",
         "display_name": "Quantum Computing",
-        "proxy_type": "etf",
-        # QTUM = Defiance Quantum ETF (only liquid ETF proxy for quantum + quantum-adjacent)
-        "proxy_symbols": ["QTUM"],
-        "candidate_symbols": ["IONQ", "RGTI", "QUBT", "QBTS", "IBM"],
+        # proxy_type="custom" intentionally — QTUM ETF was too broad (held INTC, AMD, MU etc.)
+        # Use pure-play quantum stocks as proxy anchors for RS tracking instead.
+        "proxy_type": "custom",
+        "proxy_symbols": ["IONQ", "RGTI", "QUBT"],
+        "candidate_symbols": [
+            "IONQ",  # IonQ — trapped-ion quantum computers
+            "RGTI",  # Rigetti Computing — superconducting QPUs
+            "QUBT",  # Quantum Computing Inc — photonic / annealing QC
+            "QBTS",  # D-Wave Quantum — quantum annealing systems
+            "ARQQ",  # ArQit Quantum — quantum encryption / QKD
+            "IBM",   # IBM — IBM Quantum (superconducting, Qiskit ecosystem)
+        ],
         "sector_tags": ["Technology"],
-        "keywords": ["quantum computing", "quantum hardware", "quantum software", "qubit"],
+        "keywords": ["quantum computing", "quantum hardware", "quantum software", "qubit", "quantum error correction"],
         "macro_sensitivities": ["R&D spending", "government grants", "AI adjacency"],
         "aliases": ["quantum_computing"],
     },
@@ -649,13 +705,32 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "classification": "sub_theme",
         "parent_sector":  "technology",
         "display_name": "Semiconductor Equipment",
-        "proxy_type": "etf",
-        # SOXX has ~20% weight in equipment makers (AMAT, LRCX, KLAC, ASML via ADR)
-        # SMH is more fab-weighted; SOXX is closer to equipment.
+        "proxy_type": "custom",
+        # custom proxy: candidate_symbols ARE the canonical universe so all 16 seeds
+        # enter static_syms unconditionally regardless of ETF file availability.
+        # SOXX/SMH still listed as proxy_symbols for reference; ETF holdings provide
+        # supplemental coverage if the files are on disk.
         "proxy_symbols": ["SOXX", "SMH"],
-        "candidate_symbols": ["ASML", "AMAT", "LRCX", "KLAC", "TER", "ACLS", "ONTO", "AEHR"],
+        "candidate_symbols": [
+            "ASML",  # ASML Holding — EUV/DUV lithography monopoly
+            "AMAT",  # Applied Materials — CVD, PVD, etch, CMP leader
+            "LRCX",  # Lam Research — etch & deposition systems
+            "KLAC",  # KLA Corp — process control, inspection, metrology
+            "TER",   # Teradyne — semiconductor test systems
+            "ACLS",  # Axcelis Technologies — ion implant systems
+            "ONTO",  # Onto Innovation — metrology, inspection
+            "AEHR",  # Aehr Test Systems — wafer-level burn-in
+            "FORM",  # FormFactor — probe cards for wafer testing
+            "CAMT",  # Camtek — optical inspection, metrology
+            "UCTT",  # Ultra Clean Holdings — process components
+            "MKSI",  # MKS Instruments — process control instruments
+            "ENTG",  # Entegris — advanced materials / process chemicals
+            "COHU",  # Cohu — test handlers, contactors
+            "ACMR",  # ACM Research — wet-clean / surface preparation equipment
+            "AZTA",  # Azenta (fka Brooks Automation) — semiconductor handling & cryogenics
+        ],
         "sector_tags": ["Technology"],
-        "keywords": ["semiconductor equipment", "lithography", "etch", "deposition", "ASML", "AMAT"],
+        "keywords": ["semiconductor equipment", "lithography", "etch", "deposition", "ASML", "AMAT", "metrology", "inspection"],
         "macro_sensitivities": ["fab capex cycles", "leading-edge node ramp", "China restrictions"],
         "aliases": ["semicap", "semiconductor_equipment"],
     },
@@ -710,13 +785,22 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["enterprise IT budgets", "AI adoption", "interest rates (multiples)"],
     },
 
-    "substrates_packaging": {
+    "substrates_packaging": {  # OSAT / advanced packaging / substrate suppliers
         "classification": "sub_theme",
         "parent_sector":  "technology",
         "display_name": "Substrates / Packaging",
         "proxy_type": "custom",
-        "proxy_symbols": ["TSM", "AMKR"],
-        "candidate_symbols": ["TSM", "AMKR", "ASX", "IBIDF", "UMICF"],
+        "proxy_symbols": ["AMKR", "ASX"],
+        "candidate_symbols": [
+            "AMKR",   # Amkor Technology — largest US-listed OSAT
+            "ASX",    # ASE Technology — largest global OSAT (SiC/advanced pkg)
+            "IBIDF",  # Ibiden — ABF buildup substrate supplier for Intel/TSMC
+            "UMICF",  # Unimicron Technology — ABF/PCB substrate supplier
+            "KLIC",   # Kulicke & Soffa — wire bonding + advanced bonding equipment
+            "BESI",   # BE Semiconductor — die-attach, flip-chip bonding
+            "ONTO",   # Onto Innovation — advanced packaging metrology/inspection
+            "ASMVF",  # ASM Pacific Technology — back-end assembly equipment
+        ],
         "sector_tags": ["Technology", "Semiconductors"],
         "keywords": ["advanced packaging", "chiplets", "CoWoS", "HBM substrate", "ABF substrate", "OSAT", "interposers"],
         "macro_sensitivities": ["AI chip demand", "fab capex cycles", "leading-edge packaging ramp"],

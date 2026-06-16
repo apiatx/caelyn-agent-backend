@@ -1955,10 +1955,54 @@ async def _build_thematic_universe(
         _exclude_set: set[str] = {
             s.upper() for s in (theme_cfg.get("exclude_tickers") or []) if s
         }
-        _require_kwmatch: bool = bool(theme_cfg.get("require_name_keyword_match"))
+        _theme_type: str = (theme_cfg.get("theme_type") or "pure_subtheme").lower()
+        # required_any_keywords: checked against company name + FMP sector + FMP industry
+        # combined.  Falls back to legacy positive_keywords for backward compat.
         _pos_kws_lower: list[str] = [
-            k.lower() for k in (theme_cfg.get("positive_keywords") or [])
+            k.lower() for k in (
+                theme_cfg.get("required_any_keywords")
+                or theme_cfg.get("positive_keywords")
+                or []
+            )
         ]
+        # Semantic proof gate active for all non-parent_rollup themes that define
+        # required_any_keywords.  Legacy require_name_keyword_match also activates it.
+        _require_kwmatch: bool = (
+            bool(theme_cfg.get("require_name_keyword_match"))
+            or (_theme_type != "parent_rollup" and bool(_pos_kws_lower))
+        )
+        # exclude_keywords: if ANY appear in name+sector+industry, reject FMP candidate.
+        # Blocks cross-contamination (e.g. defense companies in power/cooling themes).
+        _excl_kws_lower: list[str] = [
+            k.lower() for k in (
+                theme_cfg.get("exclude_keywords")
+                or theme_cfg.get("negative_keywords")
+                or []
+            )
+        ]
+        # manual_exclude: explicit per-theme symbol block list (applies to all sources
+        # in addition to exclude_tickers; useful for naming false-positive exceptions).
+        _manual_exclude_syms: set[str] = {
+            s.upper() for s in (theme_cfg.get("manual_exclude") or []) if s
+        }
+        if _manual_exclude_syms:
+            _exclude_set = _exclude_set | _manual_exclude_syms
+
+        # ── Source E: manual_include — always-in, highest-priority tickers ────
+        # These bypass ALL keyword/exclude gates and are pre-tagged in
+        # sources_by_symbol as "manual_include" so the priority scan in the row
+        # loop can assign them membership_source="manual_include" (rank #1).
+        # They are also prepended into _seed_tickers so they enter combined[]
+        # unconditionally, and they are removed from _exclude_set so an
+        # accidental overlap never silences them.
+        _manual_include: list[str] = [
+            s.upper() for s in (theme_cfg.get("manual_include") or []) if s
+        ]
+        if _manual_include:
+            _exclude_set -= set(_manual_include)
+            for _mi in _manual_include:
+                sources_by_symbol[_mi] = ["manual_include"]
+            _seed_tickers = list(dict.fromkeys(list(_manual_include) + list(_seed_tickers)))
 
         # ── Source A: ETF holdings (disk read, fast) ──────────────────────────
         for etf in proxy_etfs:
@@ -2056,13 +2100,37 @@ async def _build_thematic_universe(
                     sym = cand["symbol"]
                     if sym in _exclude_set:
                         continue
-                    # When the theme requires keyword proof in the company name,
-                    # skip candidates whose name doesn't contain any positive keyword.
-                    # This prevents generic semis from entering memory_storage via
-                    # the broad "Semiconductors" FMP industry bucket.
+                    # Semantic proof gate for FMP candidates.
+                    # Checks company_name + FMP sector + FMP industry combined —
+                    # not company name alone.  This lets industry strings like
+                    # "Semiconductor Equipment & Materials" serve as proof for
+                    # semicap_equipment even when the company name is opaque
+                    # (e.g. "Ultra Clean Holdings").  For pure_subtheme themes
+                    # every FMP candidate must pass this gate; parent_rollup themes
+                    # skip it (FMP industry match is considered sufficient proof).
                     if _require_kwmatch and _pos_kws_lower:
-                        cname_l = (cand.get("company_name") or "").lower()
-                        if not any(kw in cname_l for kw in _pos_kws_lower):
+                        _srch = " ".join(filter(None, [
+                            (cand.get("company_name") or "").lower(),
+                            (cand.get("sector")       or "").lower(),
+                            (cand.get("industry")     or "").lower(),
+                        ]))
+                        _matched_kw = next(
+                            (kw for kw in _pos_kws_lower if kw in _srch), None
+                        )
+                        if _matched_kw is None:
+                            continue
+                        cand["_kw_proof"] = _matched_kw  # stored for membership_reason
+                    # Exclude gate: reject FMP candidate when any exclude_keyword
+                    # appears in name+sector+industry.  Prevents defense/energy
+                    # companies from bleeding into niche sub-themes via broad FMP
+                    # industry buckets (e.g. BA/LMT in "Specialty Industrial Machinery").
+                    if _excl_kws_lower:
+                        _excl_srch = " ".join(filter(None, [
+                            (cand.get("company_name") or "").lower(),
+                            (cand.get("sector")       or "").lower(),
+                            (cand.get("industry")     or "").lower(),
+                        ]))
+                        if any(kw in _excl_srch for kw in _excl_kws_lower):
                             continue
                     if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
                         seen_dynamic.add(sym)
@@ -2168,6 +2236,9 @@ async def _build_thematic_universe(
             "membership_seed_count":               len(_seed_tickers),
             "membership_exclude_count":            len(_exclude_set),
             "membership_require_kw_match":         _require_kwmatch,
+            "membership_theme_type":               _theme_type,
+            "membership_fmp_semantic_gate":        "name+sector+industry" if _require_kwmatch else "none",
+            "membership_excl_keywords_count":      len(_excl_kws_lower),
             "etf_files_found":                     etf_files_found,
             "sources_by_symbol":                   sources_by_symbol,
             "screener_meta_by_symbol":             screener_meta_by_symbol,
@@ -3425,26 +3496,36 @@ async def get_screener_hub(
         #   1. In-flight dedup  — if a task is already running/queued, skip.
         #   2. Concurrency cap  — max _FMP_REFRESH_MAX_CONCURRENT simultaneous tasks.
         #   3. 24h durable cap  — in-memory log + DB fallback on restart.
-        _snap_is_weak    = not bool(thematic_breakdown.get("screener_meta_by_symbol"))
+        # A snapshot is "weak" only when it has no FMP metadata AND no seeds.
+        # Seed-only themes (semicap_equipment, photonics_lasers, quantum, etc.)
+        # legitimately have screener_meta_by_symbol={} — they must not be treated
+        # as weak, or they would trigger an infinite inline-refresh loop that times
+        # out and permanently returns 0 rows.
+        _snap_seed_count = int(thematic_breakdown.get("membership_seed_count", 0) or 0)
+        _snap_is_weak    = (
+            not bool(thematic_breakdown.get("screener_meta_by_symbol"))
+            and _snap_seed_count == 0          # ← only weak when seeds are also absent
+        )
         _inline_eligible = not is_default_theme   # explicit selected theme
         theme_last_refreshed_at = _THEME_REFRESH_LOG.get(theme) if theme else None
 
         # ── Bad-snapshot / schema-version bypass ──────────────────────────────
         # Fires ONCE per theme per session for explicit selected-theme requests
-        # when the cached snapshot was built with an old pipeline version OR has
-        # zero fmp_screener rows while the theme has fmp_industries configured.
-        # This lets the first click after a code/config fix get a real FMP build
-        # even if the 24h cap would normally block it.  After the bypass the cap
-        # applies normally to the refreshed snapshot.
+        # when the cached snapshot was built with an old pipeline version OR is
+        # genuinely empty (no FMP rows AND no seed rows).
+        # Seed-only themes legitimately have fmp_screener_count=0 and must NOT
+        # trigger the bypass — otherwise they loop-refresh on every request and
+        # always serve stale/empty data.
         _snap_schema         = thematic_breakdown.get("refresh_schema_version", "")
         _snap_fmp_count      = int(thematic_breakdown.get("fmp_screener_count", 0) or 0)
         _fmp_map_themes_cfg  = _load_industry_map_config().get("themes", {})
         _theme_has_fmp       = bool(_fmp_map_themes_cfg.get(theme or "", {}).get("fmp_industries"))
+        _snap_truly_empty    = (_snap_fmp_count == 0 and _snap_seed_count == 0)
         _snap_needs_version_upgrade = (
             _inline_eligible
             and theme not in _THEME_VERSION_REFRESHED
             and _theme_has_fmp
-            and (_snap_schema != THEMATIC_REFRESH_SCHEMA_VERSION or _snap_fmp_count == 0)
+            and (_snap_schema != THEMATIC_REFRESH_SCHEMA_VERSION or _snap_truly_empty)
         )
 
         if tab == "thematic" and theme and snap_generated_at:
@@ -3784,10 +3865,15 @@ async def get_screener_hub(
             membership_reason = f"{_chosen_src.split(':',1)[1]} ETF holding"
         elif _chosen_src.startswith("fmp_screener:"):
             membership_source = "fmp_screener"
-            membership_reason = f"FMP screener ({_chosen_src.split(':',1)[1]})"
+            _ind_name  = _chosen_src.split(":", 1)[1]
+            _kw_proof  = (scr_meta.get("_kw_proof") or "").strip()
+            membership_reason = (
+                f"FMP:{_ind_name}"
+                + (f" | proof: '{_kw_proof}' in name/sector/industry" if _kw_proof else "")
+            )
         elif _chosen_src == "fmp_peers":
             membership_source = "fmp_screener"
-            membership_reason = "FMP screener match"
+            membership_reason = "FMP peer match"
         elif _chosen_src == "lkg_leaders":
             membership_source = "lkg"
             membership_reason = "LKG momentum leader"
@@ -3977,6 +4063,16 @@ async def get_screener_hub(
             "discovery_sources":     disc_src,
             "membership_source":     membership_source,
             "membership_reason":     membership_reason,
+            "membership_confidence": (
+                "high"   if membership_source in ("seed", "manual_include") else
+                "medium" if membership_source in ("etf_holding", "fmp_screener") else
+                "low"
+            ),
+            "theme_role": (
+                "core"       if membership_source in ("seed", "manual_include") else
+                "supporting" if membership_source in ("etf_holding", "fmp_screener") else
+                "emerging"
+            ),
             "quality_flags":         quality_flags,
             "source_confidence":     source_conf,
             "rs_data_status":        rs_status,
@@ -4055,10 +4151,27 @@ async def get_screener_hub(
 
         # ── Thematic-only: wrong-theme industry leakage filter (Part 2) ──────
         # Exclude rows whose known industry is outside this theme's allowed set.
-        # Rows with no industry (fundamentals cache cold / ETF-sourced) pass through
-        # so we don't over-filter un-enriched but legitimate symbols.
-        if tab == "thematic" and _thematic_allowed_industries and row_industry:
-            if row_industry not in _thematic_allowed_industries:
+        #
+        # Important: FMP uses TWO different industry taxonomies:
+        #   • Screener API  → "Semiconductor Equipment & Materials"
+        #   • Profile/fundamentals API → "Semiconductors"  (broader bucket)
+        # _thematic_allowed_industries is built from the screener taxonomy (fmp_industries
+        # in config).  row_industry comes from the fundamentals cache (profile taxonomy),
+        # so they MISMATCH for many valid tickers.  scr_meta.get("industry") uses the
+        # screener taxonomy and should be preferred when available.
+        #
+        # Seeds and manual_include tickers are TRUSTED — they must never be filtered
+        # here, regardless of what FMP's fundamentals API says their industry is.
+        #
+        # Rows with no industry at all (cache cold) pass through unchanged.
+        _filter_industry = scr_meta.get("industry") or row_industry
+        if (
+            tab == "thematic"
+            and _thematic_allowed_industries
+            and _filter_industry
+            and membership_source not in ("seed", "manual_include")
+        ):
+            if _filter_industry not in _thematic_allowed_industries:
                 continue
 
         if not _row_passes_filters(row, category_filter=category, coc_filter=coc_filter):
