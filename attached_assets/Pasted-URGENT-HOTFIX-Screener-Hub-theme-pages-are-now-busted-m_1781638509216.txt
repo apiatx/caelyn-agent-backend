@@ -1,0 +1,81 @@
+URGENT HOTFIX: Screener Hub theme pages are now busted — most categories show only 0–2 stocks after the strict theme-rule changes.
+
+Do not touch live quote/Tradier logic.
+Do not touch the canonical quote overlay.
+Do not add LLM.
+Do not rebuild architecture.
+This is a row-count restoration hotfix.
+
+Problem:
+The recent weak/strong keyword gate and LKG membership gate over-filtered theme universes. Precise themes now collapse to seed-only or near-empty results. The screener is supposed to be a discovery engine, not only a hardcoded seed list.
+
+Goal:
+Restore usable row counts while keeping obvious false-positive protections like VISN exclusion.
+
+Audit first:
+1. For every Screener Hub theme, print:
+   - theme_key
+   - snapshot_symbols_count before filters
+   - rows_after_filters
+   - seed_count
+   - etf_count
+   - fmp_candidate_count
+   - fmp_rows_dropped_by_weak_keyword_gate
+   - rows_dropped_by_industry_leakage_filter
+   - rows_dropped_by_lkg_gate
+2. Identify exactly which filter caused each theme to drop to 0–2 rows.
+3. Do not guess. Show the numbers.
+
+Hotfix behavior:
+1. Keep manual_exclude hard blocks.
+   Example: VISN must stay excluded from ai_networking.
+
+2. Keep seed/manual_include trusted.
+   Seeds must always appear unless non-equity/inactive.
+
+3. Keep ETF-source candidates where the ETF/source is mapped to the theme.
+
+4. Change weak/strong keyword gate from hard-drop to confidence downgrade for FMP candidates.
+   Current bad behavior:
+   - weak-only FMP candidate gets dropped
+   New hotfix behavior:
+   - weak-only FMP candidate may remain as membership_source="fmp_candidate"
+   - membership_confidence="low"
+   - membership_reason explains weak proof
+   - but explicit exclude_keywords/manual_exclude still remove it
+
+5. LKG leaders must still NOT create membership by themselves for pure_subtheme themes.
+   But do not let the LKG gate remove rows that already came from FMP/ETF/seed/manual sources.
+   LKG should only be ranking/discovery context.
+
+6. Add a minimum row-count guard:
+   If a theme has snapshot_symbols_count >= 10 but rows_after_filters < 5, do not return an empty/near-empty result silently.
+   Either:
+   - loosen only the weak-keyword gate for that theme response, or
+   - return FMP candidates as low-confidence candidates,
+   while logging:
+     pass_reason="row_floor_rescue"
+     rescued_count=N
+
+7. Preserve explainability:
+   Every row should still have:
+   - membership_source
+   - membership_reason
+   - membership_confidence
+   - discovery_sources
+   - theme_role
+
+8. Expire query cache after the fix and rebuild affected themes.
+
+Validation:
+For every theme in the dropdown, verify:
+- row_count is not 0–2 unless the theme is intentionally tiny
+- VISN absent from ai_networking
+- seeds present
+- FMP candidates can appear as low-confidence candidates instead of being hard-dropped
+- no quote/Tradier changes
+- actual API response used by frontend returns restored row counts
+
+Acceptance:
+Screener theme pages must again show usable ticker lists.
+The fix should be surgical: relax destructive filtering, not rollback the entire theme engine.

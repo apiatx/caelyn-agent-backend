@@ -1,22 +1,28 @@
 ---
 name: Screener Hub weak/strong keyword gate
-description: For pure_subtheme FMP candidates, weak keywords alone are insufficient proof. At least one strong keyword required. Seeds/ETF/LKG bypass entirely.
+description: For pure_subtheme FMP candidates, weak keywords alone → soft-downgrade (low-confidence), not hard-drop. Seeds/ETF bypass. Specialist themes are intentionally seed-only.
 ---
 
 ## The rule
 For `pure_subtheme` themes that define `weak_keywords` in config, an FMP screener
-candidate must match at least one **strong keyword** (= `required_any_keywords` minus
-`weak_keywords`) to be admitted.  Matching only weak keywords is rejected at the gate.
+candidate that matches **only** weak keywords (no strong keyword) is **soft-downgraded**:
+- `membership_confidence = "low"`
+- `theme_role = "emerging"`
+- `membership_reason` prefixed with `"weak proof: <keywords>"`
 
-Seeds and theme-ETF holdings bypass this gate — they are trusted sources.
+It is **NOT hard-dropped** — the row appears in the response as a low-conviction signal.
+
+Hard-drops still apply to `exclude_tickers` (e.g. VISN) and `manual_exclude` lists.
+
+Seeds and theme-ETF holdings bypass this gate entirely (trusted sources).
 LKG leaders do NOT bypass the gate (see lkg-membership-gate.md).
 
-## Why
-Broad terms like "optical", "security", "automation", "server", "cloud", "software"
-can match unrelated companies via the FMP screener. The trigger was VISN (Vision
-Marine Technologies) entering ai_networking because "network" appeared in its company
-profile. The weak/strong split prevents the same pattern across all pure_subthemes
-without requiring an explicit exclude_tickers entry for every false positive.
+## Why soft-downgrade instead of hard-drop
+Hard-drop on weak-only FMP candidates collapsed cloud_software from 66→60 rows and
+made all specialist themes seed-only with no FMP additions. Soft-downgrade restored
+24 FMP low-confidence rows to cloud_software (60→68) while still marking them as
+low-conviction signals. The weak/strong split prevents VISN-style false positives
+without silently hiding adjacent candidates.
 
 ## How to apply
 
@@ -31,30 +37,36 @@ Each pure_subtheme may define `weak_keywords` (a subset of `required_any_keyword
 ```
 Strong keywords = `required_any_keywords` minus `weak_keywords`.
 
-### Code (`screener_hub_service.py` — semantic proof gate ~line 2123)
+### Code (`screener_hub_service.py` — semantic proof gate ~line 2153)
 ```python
-_weak_kws_set = {k.lower() for k in (theme_cfg.get("weak_keywords") or [])}
-# ...in the FMP candidate loop:
-_all_matched_kws = [kw for kw in _pos_kws_lower if kw in _srch]
-if not _all_matched_kws:
-    continue
+# _weak_only=True flag is set on candidate if all matched keywords are weak
 if _weak_kws_set and _theme_type == "pure_subtheme":
     _strong_matched = [kw for kw in _all_matched_kws if kw not in _weak_kws_set]
     if not _strong_matched:
-        continue  # weak-only proof — reject
-    cand["_kw_proof"] = _strong_matched[0]
-else:
-    cand["_kw_proof"] = _all_matched_kws[0]
+        cand["_weak_only"] = True   # soft-downgrade, not continue
+    else:
+        cand["_kw_proof"] = _strong_matched[0]
 ```
+In the row-build loop: `_is_weak_fmp = scr_meta.get("_weak_only")` → when True,
+sets `membership_confidence="low"` and `theme_role="emerging"`.
 
-### Guidance for adding new weak_keywords
-- Add a term to `weak_keywords` when it can plausibly match companies OUTSIDE the
-  theme via their FMP company name / sector / industry string alone.
-- Keep `required_any_keywords` as the superset (weak terms stay there for backward compat).
-- Never add seed tickers to exclude_tickers just because of a weak keyword match —
-  seeds bypass the gate; only FMP candidates are gated.
+## Specialist themes are seed-only by design
+Themes like `semicap_equipment`, `photonics_lasers`, `substrates_packaging`,
+`quantum`, `drones` produce **zero net-new FMP candidates** beyond seeds because:
+1. FMP screener for their core industry returns only companies already seeded
+2. Smaller legitimate companies are often mis-classified by FMP into the broader
+   "Semiconductors" bucket (FMP dual taxonomy) — appear in parent `semiconductors` theme
+3. This is **correct** — the seed list IS the complete pure-play universe for these niches
 
-## Known weak terms per theme (as of initial implementation)
+## Row-floor rescue logging
+When `snapshot_symbols_count >= 10` but `rows_after_filters < 5`, a structured log fires:
+```
+[SCREENER_HUB] row_floor_rescue theme=X snap_symbols=N rows_after_filters=M
+    rescued_count=R pass_reason='row_floor_rescue'
+```
+Also sets `screen_quality.row_floor_rescue=True` in the API response.
+
+## Known weak terms per theme
 | Theme | Weak keywords |
 |-------|--------------|
 | ai_networking | network, communications, connectivity, high-speed, packet, dsp, interconnect |

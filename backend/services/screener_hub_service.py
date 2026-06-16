@@ -2079,6 +2079,7 @@ async def _build_thematic_universe(
         )
         min_vol = int(theme_cfg.get("min_volume") or 100_000)
         filtered_reasons_breakdown: dict = {}
+        _weak_kw_downgrade_count:   int  = 0  # FMP cands included at low-confidence (weak-only proof)
 
         if with_fmp_screener and industries:
             sources_attempted.append("fmp_screener")
@@ -2152,8 +2153,17 @@ async def _build_thematic_universe(
                                 if kw not in _weak_kws_set
                             ]
                             if not _strong_matched:
-                                continue  # weak-only proof — reject FMP candidate
-                            cand["_kw_proof"] = _strong_matched[0]
+                                # Soft downgrade (previously hard-drop).
+                                # The screener is a discovery engine — weak-only FMP
+                                # matches are included but flagged so analysts can judge.
+                                # Explicit exclude_keywords and manual_exclude still remove
+                                # confirmed false positives (e.g. VISN from ai_networking).
+                                cand["_kw_proof"]  = _all_matched_kws[0]
+                                cand["_weak_only"] = True
+                                _weak_kw_downgrade_count += 1
+                            else:
+                                cand["_kw_proof"]  = _strong_matched[0]
+                                cand["_weak_only"] = False
                         else:
                             cand["_kw_proof"] = _all_matched_kws[0]
                         # stored for membership_reason in row-build loop
@@ -2265,6 +2275,7 @@ async def _build_thematic_universe(
             "fmp_screener_calls_used":             fmp_screener_calls_used,
             "fmp_screener_symbols_added":          len(screener_syms),
             "fmp_screener_filtered_reasons":       filtered_reasons_breakdown,
+            "fmp_screener_weak_kw_downgraded":     _weak_kw_downgrade_count,
             "industry_map_version":                industry_map_version,
             "static_seed_count":                   n_static,
             "dynamic_symbols_count":               n_dynamic,
@@ -3904,9 +3915,10 @@ async def get_screener_hub(
             membership_source = "fmp_screener"
             _ind_name  = _chosen_src.split(":", 1)[1]
             _kw_proof  = (scr_meta.get("_kw_proof") or "").strip()
+            _kw_weak   = bool(scr_meta.get("_weak_only", False))
             membership_reason = (
                 f"FMP:{_ind_name}"
-                + (f" | proof: '{_kw_proof}' in name/sector/industry" if _kw_proof else "")
+                + (f" | {'weak ' if _kw_weak else ''}proof: '{_kw_proof}' in name/sector/industry" if _kw_proof else "")
             )
         elif _chosen_src == "fmp_peers":
             membership_source = "fmp_screener"
@@ -3929,6 +3941,13 @@ async def get_screener_hub(
         else:
             membership_source = _chosen_src
             membership_reason = _chosen_src.replace("_", " ")
+
+        # Weak-only FMP flag: candidate matched only broad/weak keywords.
+        # Used to set confidence="low" and role="emerging" instead of "medium"/"supporting".
+        _is_weak_fmp = (
+            membership_source == "fmp_screener"
+            and bool(scr_meta.get("_weak_only", False))
+        )
 
         # ── Row-source tally: bucket each row into its primary source ──────────
         for _src_tag in disc_src:
@@ -4102,11 +4121,13 @@ async def get_screener_hub(
             "membership_reason":     membership_reason,
             "membership_confidence": (
                 "high"   if membership_source in ("seed", "manual_include") else
+                "low"    if _is_weak_fmp else
                 "medium" if membership_source in ("etf_holding", "fmp_screener") else
                 "low"
             ),
             "theme_role": (
                 "core"       if membership_source in ("seed", "manual_include") else
+                "emerging"   if _is_weak_fmp else
                 "supporting" if membership_source in ("etf_holding", "fmp_screener") else
                 "emerging"
             ),
@@ -4326,6 +4347,25 @@ async def get_screener_hub(
                 f"(metadata coverage: {_meta_cov:.0f}%). "
                 "Try a broader market cap filter or check back after the daily cache updates."
             )
+
+        # ── Row-floor rescue audit log ─────────────────────────────────────
+        # When the snapshot had a meaningful universe (≥ 10 symbols) but
+        # post-filter rows collapsed to < 5, emit a structured log so ops
+        # can diagnose over-filtering.  FMP soft-downgrade candidates that
+        # survived as membership_confidence="low" count toward rescued_count.
+        _snap_count = len(raw_syms) if raw_syms is not None else 0
+        if tab == "thematic" and _snap_count >= 10 and _n < 5:
+            _rescued = sum(
+                1 for r in rows
+                if (r.get("membership_confidence") or "") == "low"
+            )
+            print(
+                f"[SCREENER_HUB] row_floor_rescue theme={theme!r} "
+                f"snap_symbols={_snap_count} rows_after_filters={_n} "
+                f"rescued_count={_rescued} pass_reason='row_floor_rescue'"
+            )
+            _screen_quality["row_floor_rescue"]               = True
+            _screen_quality["row_floor_rescue_rescued_count"] = _rescued
 
         # ── Weak-cache trigger: fire background refresh even when snapshot is
         # "fresh" (< 24h old) but fundamentals coverage is poor.  This covers
