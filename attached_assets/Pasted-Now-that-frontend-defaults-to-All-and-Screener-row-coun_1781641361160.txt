@@ -1,0 +1,70 @@
+Now that frontend defaults to All and Screener row counts are restored, fix the next architectural concern: themes cannot remain static hardcoded seed lists.
+
+Do not touch quote/Tradier logic.
+Do not add LLM.
+Do not loosen everything back to FMP category soup.
+Do not globally exclude tickers based on unverified assumptions.
+
+Goal:
+Each Screener theme should have:
+1. Core rows — seed/manual/verified ETF/theme-source
+2. Qualified Discovery rows — dynamic candidates that pass theme rules
+3. Watch / Low Confidence rows — plausible candidates with weaker proof, visibly labeled
+
+Current concern:
+Many precise themes are now clean but seed-only. That avoids false positives, but it kills discovery. Screener Hub should discover new names, not just show the same hardcoded names forever.
+
+Tasks:
+1. Audit every theme and identify which are seed-only:
+   - row_count
+   - seed_count
+   - fmp_candidate_count
+   - etf_candidate_count
+   - qualified_discovery_count
+   - low_confidence_count
+
+2. For seed-only or thin themes, expand dynamic candidate generation using existing non-LLM sources:
+   - FMP stock screener as broad candidate source
+   - FMP company profile/reference data where available
+   - existing theme_rs_universe candidates
+   - existing ETF/static holdings files if already present
+   - watchlist/theme universe overlap
+   - existing LKG/options/social only as ranking signals, not standalone membership proof
+
+3. Do not hard-drop weak candidates unless they are explicit manual_exclude.
+   Instead return:
+   - membership_confidence = low
+   - theme_role = watch_candidate or adjacent
+   - membership_reason = weak proof / needs review
+
+4. Keep hard exclusions theme-scoped only.
+   Example:
+   If a ticker does not belong in ai_networking, exclude only from ai_networking.
+   Never globally ban unless it is non-equity/inactive/broken symbol.
+
+5. Add fields:
+   - candidate_tier: core | qualified_discovery | watch_candidate
+   - membership_confidence: high | medium | low
+   - membership_reason
+   - discovery_sources
+   - theme_role
+
+6. For each precise theme, return enough rows for discovery:
+   - core seeds always included
+   - qualified candidates included below/among seeds based on score
+   - low-confidence candidates included unless user toggles them off
+
+7. Add optional frontend filter later:
+   - All
+   - Core only
+   - Discovery
+   - Watch candidates
+
+Validation:
+For each theme:
+- list top 20 rows
+- show candidate_tier and membership_reason
+- confirm seeds are present
+- confirm dynamic candidates exist where possible
+- confirm no obvious false-positive theme pollution
+- confirm no theme collapses to only hardcoded seeds unless genuinely no candidates exist
