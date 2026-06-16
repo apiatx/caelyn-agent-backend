@@ -259,6 +259,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
             "GDS",   # GDS Holdings — China data center operator
             "DBRG",  # DigitalBridge — data center-focused REIT/PE
             "NBIS",  # Nebius Group — AI-optimized data center infrastructure
+            "VNET",  # 21Vianet Group — China carrier-neutral data center operator
+            "IREN",  # Iris Energy — GPU cloud / AI data center operator
         ],
         "sector_tags": ["Technology", "Utilities", "Real Estate"],
         "keywords": ["data center", "REIT", "colocation", "hyperscaler infrastructure", "server infrastructure"],
@@ -587,6 +589,8 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
             "FN",    # Fabrinet — precision photonics manufacturing
             "LPTH",  # Light Path Technologies — optical components
             "MKSI",  # MKS Instruments — laser power supplies, photonics tools
+            "LASR",  # nLIGHT Inc — high-power fiber lasers for defense, industrial, semiconductor
+            "RKLY",  # Rockley Photonics — silicon photonics integrated circuits for health/comms
         ],
         "sector_tags": ["Technology"],
         "keywords": ["photonics", "lasers", "optical components", "silicon photonics", "datacom optics", "fiber laser", "LiDAR"],
@@ -609,6 +613,9 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
             "GNRC",  # Generac — backup generators, standby power
             "HUBB",  # Hubbell — electrical infrastructure, wiring devices
             "BE",    # Bloom Energy — fuel cells for clean data center power
+            "GTLS",  # Chart Industries — heat exchangers, cryogenic/cooling equipment for DCs
+            "AAON",  # AAON Inc — commercial HVAC rooftop units and cooling equipment
+            "SPX",   # SPX Technologies — HVAC, cooling towers, power delivery systems
         ],
         "sector_tags": ["Industrials", "Technology"],
         "keywords": ["power", "cooling", "data center power", "thermal management", "UPS", "generators", "HVAC", "liquid cooling"],
@@ -729,6 +736,9 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
             "COHU",  # Cohu — test handlers, contactors
             "ACMR",  # ACM Research — wet-clean / surface preparation equipment
             "AZTA",  # Azenta (fka Brooks Automation) — semiconductor handling & cryogenics
+            "ICHR",  # Ichor Holdings — fluid/gas delivery systems for etch & deposition fabs
+            "AEIS",  # Advanced Energy Industries — precision RF/DC power for semicap processes
+            "NVMI",  # Nova Ltd — in-line process control metrology (OCD, XRF, XPS)
         ],
         "sector_tags": ["Technology"],
         "keywords": ["semiconductor equipment", "lithography", "etch", "deposition", "ASML", "AMAT", "metrology", "inspection"],

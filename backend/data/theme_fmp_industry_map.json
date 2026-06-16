@@ -316,7 +316,10 @@
         "ENTG",
         "COHU",
         "ACMR",
-        "AZTA"
+        "AZTA",
+        "ICHR",
+        "AEIS",
+        "NVMI"
       ],
       "exclude_tickers": [
         "NVDA",
@@ -362,7 +365,8 @@
       "weak_keywords": [
         "fab",
         "inspection"
-      ]
+      ],
+      "proxy_etfs": []
     },
     "memory_storage": {
       "fmp_industries": [
@@ -486,7 +490,8 @@
         "memory",
         "storage",
         "flash"
-      ]
+      ],
+      "proxy_etfs": ["DRAM"]
     },
     "clean_energy": {
       "fmp_industries": [
@@ -663,8 +668,7 @@
         "MNTS",
         "GPUS",
         "PEW",
-        "PESI",
-        "ACHR"
+        "PESI"
       ],
       "required_any_keywords": [
         "drone",
@@ -705,7 +709,8 @@
       "weak_keywords": [
         "airborne",
         "uncrewed"
-      ]
+      ],
+      "proxy_etfs": ["ARKX"]
     },
     "defense": {
       "fmp_industries": [
@@ -1090,7 +1095,9 @@
         "IRM",
         "GDS",
         "DBRG",
-        "NBIS"
+        "NBIS",
+        "VNET",
+        "IREN"
       ],
       "exclude_tickers": [
         "UEC",
@@ -1143,7 +1150,8 @@
       "weak_keywords": [
         "server",
         "computing infrastructure"
-      ]
+      ],
+      "proxy_etfs": ["SRVR"]
     },
     "cybersecurity": {
       "fmp_industries": [
@@ -3006,7 +3014,9 @@
         "VIAV",
         "FN",
         "LPTH",
-        "MKSI"
+        "MKSI",
+        "LASR",
+        "RKLY"
       ],
       "exclude_tickers": [
         "IPWR",
@@ -3073,7 +3083,8 @@
         "optical",
         "infrared",
         "coherent"
-      ]
+      ],
+      "proxy_etfs": []
     },
     "power_cooling": {
       "fmp_industries": [
@@ -3143,7 +3154,10 @@
         "NVT",
         "GNRC",
         "HUBB",
-        "BE"
+        "BE",
+        "GTLS",
+        "AAON",
+        "SPX"
       ],
       "exclude_tickers": [
         "IPWR",
@@ -3209,7 +3223,8 @@
         "cooling",
         "thermal",
         "refrigeration"
-      ]
+      ],
+      "proxy_etfs": []
     },
     "substrates_packaging": {
       "fmp_industries": [

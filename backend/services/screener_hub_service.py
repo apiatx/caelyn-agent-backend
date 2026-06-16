@@ -2029,6 +2029,31 @@ async def _build_thematic_universe(
         if not etf_files_found and proxy_etfs:
             sources_failed.append("etf_holdings")
 
+        # ── Source A2: supplemental ETF proxy from JSON config (proxy_etfs field) ──
+        # Thin pure_subtheme themes can declare specific themed ETFs in
+        # theme_fmp_industry_map.json under "proxy_etfs": ["SRVR", "ARKX", ...].
+        # These are separate from the RS-universe proxy_symbols (used for RS charting).
+        # Holdings are read from disk cache; first access triggers background fetch.
+        for _cfg_etf in (theme_cfg.get("proxy_etfs") or []):
+            _cfg_etf_u = _cfg_etf.upper() if isinstance(_cfg_etf, str) else ""
+            if not _cfg_etf_u:
+                continue
+            if _cfg_etf_u in _ALL_PROXY_ETFS:
+                continue  # already in global proxy set — skip
+            if _cfg_etf_u in proxy_etfs:
+                continue  # already handled in Source A above
+            _cfg_holdings = _read_etf_holdings_from_disk(_cfg_etf_u)
+            if _cfg_holdings:
+                if _cfg_etf_u not in etf_files_found:
+                    etf_files_found.append(_cfg_etf_u)
+            for sym in _cfg_holdings:
+                if sym in _exclude_set:
+                    continue
+                if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
+                    seen_dynamic.add(sym)
+                    etf_holdings_syms.append(sym)
+                    sources_by_symbol.setdefault(sym, []).append(f"etf:{_cfg_etf_u}")
+
         # ── Source B: LKG leaders / laggards ──────────────────────────────────
         # Design rule (pure_subtheme themes):
         #   LKG leaders are RANKING / DISCOVERY signals only.  They are recorded in
@@ -2191,8 +2216,84 @@ async def _build_thematic_universe(
         elif with_fmp_screener and not industries:
             print(f"[SCREENER_HUB] fmp_screener: no industry mapping for theme={key!r}")
 
+        # ── Source C2: FMP adjacent-industry screener (rebuild jobs only) ───────
+        # Queries adjacent_industries from theme config with the same keyword gate
+        # as Source C. Adjacent-industry candidates receive _is_adjacent=True in their
+        # screener_meta, which causes:
+        #   candidate_tier = "watch_candidate" for weak proof
+        #   candidate_tier = "qualified_discovery" for strong proof (non-weak keyword match)
+        #   theme_role     = "adjacent"
+        #   membership_reason prefix = "adjacent FMP:<industry> | ..."
+        # Only active for pure_subtheme themes that define required_any_keywords.
+        _adj_industries: list[str] = (theme_cfg.get("adjacent_industries") or [])
+        if (with_fmp_screener
+                and _adj_industries
+                and _require_kwmatch
+                and _pos_kws_lower
+                and _theme_type == "pure_subtheme"):
+            try:
+                adj_cands, _adj_attempted, _adj_errored, _ = await _fmp_industry_screener(
+                    _adj_industries,
+                    market_cap_upper=max_mcap,
+                    market_cap_lower=min_mcap,
+                    min_volume=min_vol,
+                )
+                fmp_screener_industries_attempted += _adj_attempted
+                fmp_screener_calls_used += len(_adj_attempted)
+                _adj_added = 0
+                for cand in adj_cands:
+                    sym = cand["symbol"]
+                    if sym in _exclude_set:
+                        continue
+                    # Keyword gate: mandatory even for adjacent-industry candidates.
+                    # No keyword proof → hard reject (prevents FMP category soup).
+                    _srch = " ".join(filter(None, [
+                        (cand.get("company_name") or "").lower(),
+                        (cand.get("sector")       or "").lower(),
+                        (cand.get("industry")     or "").lower(),
+                    ]))
+                    _all_adj_matched = [kw for kw in _pos_kws_lower if kw in _srch]
+                    if not _all_adj_matched:
+                        continue
+                    # Exclude-keywords gate (same as Source C)
+                    if _excl_kws_lower:
+                        _excl_srch = " ".join(filter(None, [
+                            (cand.get("company_name") or "").lower(),
+                            (cand.get("sector")       or "").lower(),
+                            (cand.get("industry")     or "").lower(),
+                        ]))
+                        if any(kw in _excl_srch for kw in _excl_kws_lower):
+                            continue
+                    # Weak/strong gate — identical to Source C
+                    if _weak_kws_set:
+                        _strong_adj = [kw for kw in _all_adj_matched if kw not in _weak_kws_set]
+                        if not _strong_adj:
+                            cand["_weak_only"] = True
+                            _weak_kw_downgrade_count += 1
+                        else:
+                            cand["_kw_proof"] = _strong_adj[0]
+                    else:
+                        cand["_kw_proof"] = _all_adj_matched[0]
+                    # Mark as adjacent-industry so row-build can set theme_role="adjacent"
+                    cand["_is_adjacent"] = True
+                    if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
+                        seen_dynamic.add(sym)
+                        screener_syms.append(sym)
+                        screener_meta_by_symbol[sym] = cand
+                        # Source tag matches priority-scan pattern "fmp_screener:*"
+                        _adj_ind = cand.get("industry") or _adj_industries[0]
+                        sources_by_symbol.setdefault(sym, []).append(f"fmp_screener:{_adj_ind}")
+                        _adj_added += 1
+                if _adj_added:
+                    print(f"[SCREENER_HUB] fmp_screener_adjacent {key!r}: +{_adj_added} adjacent candidates")
+            except Exception as _adj_e:
+                print(f"[SCREENER_HUB] fmp_screener_adjacent {key!r} error: {_adj_e}")
+
         # ── Source D: FMP peers (thin themes, budget-guarded) ─────────────────
-        if with_fmp_peers:
+        # Skip for pure_subtheme: themes are too niche for FMP's generic peer
+        # algorithm (anchors on industry peers, not keyword-matched companies),
+        # and seed coverage is already comprehensive for these themes.
+        if with_fmp_peers and _theme_type != "pure_subtheme":
             sources_attempted.append("fmp_peers")
             if len(seen_dynamic) < _MIN_DYN_BEFORE_PEERS and candidate_syms:
                 try:
@@ -3916,8 +4017,9 @@ async def get_screener_hub(
             _ind_name  = _chosen_src.split(":", 1)[1]
             _kw_proof  = (scr_meta.get("_kw_proof") or "").strip()
             _kw_weak   = bool(scr_meta.get("_weak_only", False))
+            _is_adj_src = bool(scr_meta.get("_is_adjacent", False))
             membership_reason = (
-                f"FMP:{_ind_name}"
+                f"{'adjacent ' if _is_adj_src else ''}FMP:{_ind_name}"
                 + (f" | {'weak ' if _kw_weak else ''}proof: '{_kw_proof}' in name/sector/industry" if _kw_proof else "")
             )
         elif _chosen_src == "fmp_peers":
@@ -4128,8 +4230,16 @@ async def get_screener_hub(
             "theme_role": (
                 "core"       if membership_source in ("seed", "manual_include") else
                 "emerging"   if _is_weak_fmp else
+                "adjacent"   if scr_meta.get("_is_adjacent")                   else
                 "supporting" if membership_source in ("etf_holding", "fmp_screener") else
                 "emerging"
+            ),
+            "candidate_tier": (
+                "core"                if membership_source in ("seed", "manual_include") else
+                "qualified_discovery" if membership_source == "etf_holding"             else
+                "watch_candidate"     if _is_weak_fmp                                   else
+                "qualified_discovery" if membership_source == "fmp_screener"            else
+                "watch_candidate"
             ),
             "quality_flags":         quality_flags,
             "source_confidence":     source_conf,
