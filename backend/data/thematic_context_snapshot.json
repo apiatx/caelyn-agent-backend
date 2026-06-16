@@ -6,16 +6,16 @@
       "score": 91.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (91/100) vs theme universe with broad participation (75% advancing). Outperforming SPY -0.9%, QQQ +0.4"
+        "Top-percentile RS (91/100) vs theme universe with broad participation (67% advancing). Outperforming SPY -0.9%, QQQ +0.4"
       ],
       "related_etfs": [
         "AMKR",
         "ASX"
       ],
       "related_tickers": [
-        "ASMVF",
         "KLIC",
-        "UMICF"
+        "UMICF",
+        "ONTO"
       ]
     },
     {
@@ -301,7 +301,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-16T21:40:43.200043+00:00",
+  "last_updated": "2026-06-16T21:50:56.073852+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -312,5 +312,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1781646043.2001052
+  "_saved_at": 1781646656.0740206
 }
