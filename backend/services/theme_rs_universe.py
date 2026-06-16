@@ -72,6 +72,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
             "VIAV",  # Viavi Solutions — optical test & measurement
             "COHR",  # Coherent — optical transceivers & components
             "LITE",  # Lumentum — optical components for networking
+            "VISN",  # Vistance Networks — data center / enterprise communications infrastructure
         ],
         "sector_tags": ["Technology"],
         "keywords": ["AI networking", "data center networking", "optical interconnects", "switches", "silicon photonics"],

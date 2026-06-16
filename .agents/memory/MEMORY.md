@@ -8,3 +8,4 @@
 - [Screener Hub FMP dual industry taxonomy](screener-hub-fmp-dual-industry.md) — FMP screener API and fundamentals profile API use different industry strings; seeds must bypass the leakage filter
 - [Screener Hub weak/strong keyword gate](screener-hub-weak-strong-keywords.md) — pure_subtheme FMP candidates must match a strong keyword; weak_keywords alone are insufficient; seeds/ETF bypass; LKG does NOT bypass
 - [Screener Hub LKG membership gate](screener-hub-lkg-membership-gate.md) — lkg_leaders = ranking signal only; never grants standalone universe membership for pure_subtheme; signal still recorded in sources_by_symbol
+- [Symbol identity check before exclusion](screener-hub-symbol-identity-check.md) — verify company name via Tradier before adding to exclude_tickers; FMP profile API is broken

@@ -87,7 +87,8 @@
         "FN",
         "VIAV",
         "COHR",
-        "LITE"
+        "LITE",
+        "VISN"
       ],
       "exclude_tickers": [
         "KVHI",
@@ -109,8 +110,7 @@
         "AIOT",
         "ADTN",
         "AMPG",
-        "FEIM",
-        "VISN"
+        "FEIM"
       ],
       "require_name_keyword_match": true,
       "required_any_keywords": [
