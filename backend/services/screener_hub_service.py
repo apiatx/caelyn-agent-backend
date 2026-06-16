@@ -2851,7 +2851,11 @@ def _apply_quote_to_row(row: dict, fields: dict) -> None:
 _CANONICAL_LKG_TTL = 72 * 3600
 
 
-async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
+async def _overlay_canonical_quotes_inplace(
+    rows: list[dict],
+    *,
+    selected_theme: Optional[str] = None,
+) -> None:
     """
     Three-pass canonical quote overlay for Screener Hub rows.
 
@@ -2860,15 +2864,27 @@ async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
     Pass 2 — quote:lkg:{SYM}          (72 h TTL — written by Home Watchlist,
               Watchlist overlay, Portfolio, and Pass 3 below)
     Pass 3 — Live Tradier batch fetch  for symbols still missing after Passes 1+2.
-              Only for the active-page symbols actually passed in.
-              Only when TRADIER_LIMITER has headroom and TRADIER_API_KEY is set.
-              Results are written into both tradier:quote:sym (auto by provider)
-              and quote:lkg so every other page can reuse them immediately.
+              ONLY fires when selected_theme is a specific non-None theme string
+              (i.e. a user has explicitly selected a theme from the dropdown).
+              Skipped for watchlist_portfolio tab, all/default views, background
+              refreshes, and query-cache warmup jobs — those tickers are already
+              covered by Pass 1+2 from Home/Watchlist/Portfolio canonical cache.
+              Also skipped when TRADIER_LIMITER is saturated or no API key.
+              Results written to tradier:quote:sym (auto by provider) and
+              quote:lkg so every other page can reuse them immediately.
+
+    selected_theme — the explicit theme key the user selected (e.g.
+                     "semiconductors", "ai_networking").  Pass None for
+                     watchlist_portfolio, all/default, or non-thematic tabs.
 
     Snapshot preservation:
       snapshot_price / snapshot_change_percent_1d / snapshot_volume /
       snapshot_quote_fetched_at — set once before the first overlay so the
       frontend can show the before/after delta.
+
+    Structured log line at every exit:
+      selected_theme=<str|None> rows=<n> pass1=<n> pass2=<n>
+      pass3_fetch=<n> pass3_skipped=<reason|None>
 
     Never raises: each symbol is wrapped in its own try/except.
     """
@@ -2884,6 +2900,8 @@ async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
             row["snapshot_quote_fetched_at"]  = (row.get("_meta") or {}).get("quote_fetched_at")
 
     still_missing: list[dict] = []   # rows with no canonical hit after Pass 1+2
+    p1_hits = 0
+    p2_hits = 0
 
     for row in rows:
         sym = (row.get("symbol") or "").upper()
@@ -2899,6 +2917,7 @@ async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
                     fields["quote_source"]    = "tradier"
                     fields["quote_is_stale"]  = False
                     _apply_quote_to_row(row, fields)
+                    p1_hits += 1
                     continue
 
             # ── Pass 2: quote:lkg (shared canonical, 72 h TTL) ───────────────
@@ -2907,6 +2926,7 @@ async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
                 fields = _extract_quote_fields(lkg)
                 if fields:
                     _apply_quote_to_row(row, fields)
+                    p2_hits += 1
                     continue
 
             # No canonical data found — queue for Pass 3
@@ -2915,16 +2935,32 @@ async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
         except Exception:
             pass
 
+    def _log(pass3_fetch: int = 0, pass3_skipped: Optional[str] = None) -> None:
+        print(
+            f"[SCREENER_HUB] canonical_quote_overlay"
+            f" selected_theme={selected_theme!r}"
+            f" rows={len(rows)}"
+            f" pass1={p1_hits}"
+            f" pass2={p2_hits}"
+            f" pass3_fetch={pass3_fetch}"
+            f" pass3_skipped={pass3_skipped!r}"
+        )
+
     # ── Pass 3: targeted Tradier fetch for still-missing active-page symbols ──
     if not still_missing:
-        p1p2 = len(rows) - len(still_missing)
-        print(
-            f"[SCREENER_HUB] canonical_quote_overlay: "
-            f"{p1p2}/{len(rows)} rows from pass1/2 cache"
-        )
+        _log(pass3_fetch=0, pass3_skipped="nothing_missing")
         return
 
-    # Saturation check — skip live call if rate window is full
+    # Guard 1: Pass 3 only runs for a user-triggered specific-theme request.
+    # watchlist_portfolio tab, all/default views, background refreshes, and
+    # query-cache warmups all pass selected_theme=None and skip Pass 3 here.
+    # Their tickers are already covered by the Home/Watchlist/Portfolio
+    # canonical cache via Passes 1+2.
+    if not selected_theme:
+        _log(pass3_fetch=0, pass3_skipped="no_active_theme")
+        return
+
+    # Guard 2: Saturation check — skip live call if rate window is full
     _saturated = False
     try:
         from data.tradier_provider import TRADIER_LIMITER as _TL
@@ -2932,17 +2968,11 @@ async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
     except Exception:
         pass
 
-    api_key  = os.getenv("TRADIER_API_KEY") or ""
-    sandbox  = (os.getenv("TRADIER_SANDBOX", "false") or "false").lower() in ("1", "true", "yes")
+    api_key = os.getenv("TRADIER_API_KEY") or ""
+    sandbox = (os.getenv("TRADIER_SANDBOX", "false") or "false").lower() in ("1", "true", "yes")
 
     if _saturated or not api_key:
-        reason = "saturated" if _saturated else "no_api_key"
-        p1p2 = len(rows) - len(still_missing)
-        print(
-            f"[SCREENER_HUB] canonical_quote_overlay: "
-            f"{p1p2}/{len(rows)} from cache, "
-            f"{len(still_missing)} still missing — pass3 skipped ({reason})"
-        )
+        _log(pass3_fetch=0, pass3_skipped="saturated" if _saturated else "no_api_key")
         return
 
     # Build symbol→row map for fast lookup after fetch
@@ -2958,6 +2988,7 @@ async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
         provider = TradierProvider(api_key, sandbox=sandbox)
     except Exception as e:
         print(f"[SCREENER_HUB] canonical_quote_overlay: Tradier init error: {e}")
+        _log(pass3_fetch=0, pass3_skipped="init_error")
         return
 
     fetched = 0
@@ -3004,12 +3035,7 @@ async def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
             except Exception:
                 pass
 
-    p1p2 = len(rows) - len(still_missing)
-    print(
-        f"[SCREENER_HUB] canonical_quote_overlay: "
-        f"{p1p2}/{len(rows)} from pass1/2 cache, "
-        f"{fetched}/{len(missing_syms)} fetched via pass3 Tradier"
-    )
+    _log(pass3_fetch=fetched, pass3_skipped=None)
 
 
 async def get_screener_hub(
