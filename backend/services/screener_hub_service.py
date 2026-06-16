@@ -2123,12 +2123,26 @@ async def _build_thematic_universe(
                             (cand.get("sector")       or "").lower(),
                             (cand.get("industry")     or "").lower(),
                         ]))
-                        _matched_kw = next(
-                            (kw for kw in _pos_kws_lower if kw in _srch), None
-                        )
-                        if _matched_kw is None:
+                        _all_matched_kws = [kw for kw in _pos_kws_lower if kw in _srch]
+                        if not _all_matched_kws:
                             continue
-                        cand["_kw_proof"] = _matched_kw  # stored for membership_reason
+                        # Weak/strong gate: for pure_subtheme themes that define
+                        # weak_keywords, a candidate matching ONLY weak keywords is
+                        # rejected — broad terms like "optical", "server", "security"
+                        # or "automation" are not sufficient proof alone.  The candidate
+                        # must also match at least one strong keyword (any keyword NOT
+                        # in the weak_keywords set).  Seeds/ETF/LKG bypass this entirely.
+                        if _weak_kws_set and _theme_type == "pure_subtheme":
+                            _strong_matched = [
+                                kw for kw in _all_matched_kws
+                                if kw not in _weak_kws_set
+                            ]
+                            if not _strong_matched:
+                                continue  # weak-only proof — reject FMP candidate
+                            cand["_kw_proof"] = _strong_matched[0]
+                        else:
+                            cand["_kw_proof"] = _all_matched_kws[0]
+                        # stored for membership_reason in row-build loop
                     # Exclude gate: reject FMP candidate when any exclude_keyword
                     # appears in name+sector+industry.  Prevents defense/energy
                     # companies from bleeding into niche sub-themes via broad FMP

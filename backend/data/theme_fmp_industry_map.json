@@ -149,6 +149,15 @@
         "recreational vehicle",
         "electric boat",
         "electric marine"
+      ],
+      "weak_keywords": [
+        "network",
+        "communications",
+        "connectivity",
+        "high-speed",
+        "packet",
+        "dsp",
+        "interconnect"
       ]
     },
     "semiconductors": {
@@ -349,7 +358,11 @@
         "atomic layer",
         "semiconductor test"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "weak_keywords": [
+        "fab",
+        "inspection"
+      ]
     },
     "memory_storage": {
       "fmp_industries": [
@@ -468,6 +481,11 @@
         "networking",
         "router",
         "switch"
+      ],
+      "weak_keywords": [
+        "memory",
+        "storage",
+        "flash"
       ]
     },
     "clean_energy": {
@@ -683,6 +701,10 @@
         "mining",
         "oil",
         "gas"
+      ],
+      "weak_keywords": [
+        "airborne",
+        "uncrewed"
       ]
     },
     "defense": {
@@ -775,7 +797,14 @@
         "surveillance",
         "reconnaissance"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "weak_keywords": [
+        "aerospace",
+        "government services",
+        "intelligence",
+        "surveillance",
+        "reconnaissance"
+      ]
     },
     "uranium_nuclear": {
       "fmp_industries": [
@@ -1110,6 +1139,10 @@
         "telecom tower",
         "cell tower",
         "wireless tower"
+      ],
+      "weak_keywords": [
+        "server",
+        "computing infrastructure"
       ]
     },
     "cybersecurity": {
@@ -1202,6 +1235,13 @@
         "alarm system",
         "lock",
         "safe"
+      ],
+      "weak_keywords": [
+        "security",
+        "identity",
+        "threat",
+        "surveillance",
+        "intelligence"
       ]
     },
     "robotics_automation": {
@@ -1289,7 +1329,12 @@
         "autonomous mobile",
         "amr"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "weak_keywords": [
+        "automation",
+        "autonomous",
+        "computer vision"
+      ]
     },
     "industrials": {
       "fmp_industries": [
@@ -1724,6 +1769,9 @@
         "insurance",
         "bank",
         "retail"
+      ],
+      "weak_keywords": [
+        "quantum"
       ]
     },
     "space": {
@@ -2099,7 +2147,17 @@
         "business software",
         "subscription software"
       ],
-      "exclude_keywords": []
+      "exclude_keywords": [],
+      "weak_keywords": [
+        "cloud",
+        "platform",
+        "software",
+        "enterprise software",
+        "application software",
+        "infrastructure software",
+        "business software",
+        "subscription software"
+      ]
     },
     "software": {
       "fmp_industries": [
@@ -3010,6 +3068,11 @@
         "medical device",
         "communication tower",
         "wireless tower"
+      ],
+      "weak_keywords": [
+        "optical",
+        "infrared",
+        "coherent"
       ]
     },
     "power_cooling": {
@@ -3141,6 +3204,11 @@
         "solar panel",
         "wind turbine",
         "defense contractor"
+      ],
+      "weak_keywords": [
+        "cooling",
+        "thermal",
+        "refrigeration"
       ]
     },
     "substrates_packaging": {
@@ -3277,6 +3345,10 @@
         "electric vehicle",
         "automobile",
         "auto"
+      ],
+      "weak_keywords": [
+        "assembly",
+        "encapsul"
       ]
     },
     "technology": {
