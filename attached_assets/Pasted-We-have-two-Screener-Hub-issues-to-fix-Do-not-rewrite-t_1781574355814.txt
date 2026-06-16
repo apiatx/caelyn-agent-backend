@@ -1,0 +1,83 @@
+We have two Screener Hub issues to fix. Do not rewrite the page. Do not add broad LLM usage. Audit first, then implement surgical fixes.
+
+Issue 1: Theme membership quality
+Some themes are using FMP sector/industry as a bandaid. Example: Memory is showing random semiconductor stocks because “memory” is not a real FMP category.
+
+Goal:
+Theme membership should be deterministic and theme-specific. FMP industry is only one input, not the final classifier.
+
+Build/extend a theme membership engine with:
+1. seed tickers per theme
+2. include keywords per theme
+3. exclude keywords per theme
+4. company name/profile/description matching
+5. FMP sector/industry as coarse prefilter only
+6. manual include/exclude overrides
+7. confidence/reason fields per ticker
+
+For Memory specifically:
+Include keywords:
+- memory
+- DRAM
+- NAND
+- flash
+- HBM
+- high bandwidth memory
+- SSD controller
+- storage controller
+- memory controller
+- memory interface
+- CXL
+- MRAM
+- ReRAM
+- EEPROM
+
+Exclude generic semiconductor names unless profile/description proves memory exposure.
+
+Do not use an LLM for all tickers. If needed later, only send ambiguous/low-confidence candidates to LLM in a weekly audit job. Manual overrides always win.
+
+Output per row:
+- theme
+- ticker
+- membership_source: seed | keyword | profile | manual | fmp_industry | llm_audit
+- membership_confidence
+- membership_reason
+- role: core | supply_chain | adjacent | exclude_candidate
+
+Issue 2: Default theme selection
+The Screener page defaulted to Metals & Miners even though it was around 10th by RS in the dropdown. That means the default theme is using stale or wrong ordering.
+
+Goal:
+Default selected theme should be the current intraday highest-RS theme, updated as RS changes throughout the day.
+
+Do not rebuild all theme memberships intraday.
+Only recompute live RS scores using existing quote cache / active-theme hydration.
+
+Implement:
+1. theme membership remains cached
+2. live theme RS score is calculated from current quote data
+3. default theme endpoint/select logic chooses highest current RS score
+4. refresh default-theme ranking every 5–15 minutes, or whenever the Screener page is loaded if cache is stale
+5. use existing quote cache first; do not fetch every ticker across every theme just to rank defaults
+
+RS scoring suggestion:
+- median member 1D%
+- top 5 member 1D%
+- % constituents green
+- volume surge breadth
+- 5D momentum tie-breaker if already cached
+- require minimum valid quoted tickers
+
+Important:
+Do not let a theme win because of one illiquid outlier.
+Do not select themes with fewer than 5 valid live quote rows.
+Do not make new Tradier calls for every theme on page load.
+Use existing live quote cache and fall back to last known quote data for ranking if necessary.
+
+Acceptance:
+1. Memory theme no longer shows generic/random semiconductors.
+2. Each Memory ticker has a membership_reason proving memory exposure.
+3. Default theme matches the top live RS theme shown in the dropdown.
+4. If RS changes intraday, default theme changes after cache refresh.
+5. No broad LLM classification.
+6. No full-universe Tradier refresh.
