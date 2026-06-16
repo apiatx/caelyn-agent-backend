@@ -2130,6 +2130,17 @@ async def _build_thematic_universe(
         # _dedupe_filter removes later duplicates so each seed appears once.
         if _seed_tickers:
             combined = _seed_tickers + combined
+            # Ensure every seed ticker is tagged in sources_by_symbol regardless
+            # of whether it also appeared in candidate_syms (Source F).  A seed
+            # can be in theme_fmp_industry_map.json but absent from
+            # theme_rs_universe.py candidate_symbols — in that case it would
+            # enter combined without a sources_by_symbol entry, causing the row
+            # to display membership_source="unknown" at query time.
+            for _st in _seed_tickers:
+                if _st not in sources_by_symbol:
+                    sources_by_symbol[_st] = ["static_seed"]
+                elif "static_seed" not in sources_by_symbol[_st]:
+                    sources_by_symbol[_st].append("static_seed")
 
         cleaned = _dedupe_filter(combined)[:_PER_THEME_CAP]
 
@@ -3726,6 +3737,42 @@ async def get_screener_hub(
         if not disc_src:
             disc_src = ["unknown"]
 
+        # ── Derive membership_source / membership_reason from disc_src ─────────
+        # membership_source: canonical bucket (seed | etf_holding | lkg | fmp_screener
+        #   | social | chain_reaction | watchlist | <tag>)
+        # membership_reason: human-readable one-liner for debug/dev inspection.
+        _primary = disc_src[0]
+        if _primary.startswith("etf:"):
+            membership_source = "etf_holding"
+            membership_reason = f"{_primary.split(':',1)[1]} ETF holding"
+        elif _primary.startswith("lkg:"):
+            membership_source = "lkg"
+            membership_reason = f"LKG leader ({_primary.split(':',1)[1]})"
+        elif _primary == "lkg_leaders":
+            membership_source = "lkg"
+            membership_reason = "LKG momentum leader"
+        elif _primary == "static_seed":
+            membership_source = "seed"
+            membership_reason = "seed ticker"
+        elif _primary.startswith("fmp_screener:"):
+            membership_source = "fmp_screener"
+            membership_reason = f"FMP screener ({_primary.split(':',1)[1]})"
+        elif _primary == "fmp_peers":
+            membership_source = "fmp_screener"
+            membership_reason = "FMP screener match"
+        elif _primary == "social_consensus":
+            membership_source = "social"
+            membership_reason = "social consensus"
+        elif _primary == "chain_reaction":
+            membership_source = "chain_reaction"
+            membership_reason = "supply chain reaction"
+        elif _primary == "watchlist_portfolio":
+            membership_source = "watchlist"
+            membership_reason = "watchlist / portfolio"
+        else:
+            membership_source = _primary
+            membership_reason = _primary.replace("_", " ")
+
         # ── Row-source tally: bucket each row into its primary source ──────────
         for _src_tag in disc_src:
             _src_key = (
@@ -3894,6 +3941,8 @@ async def get_screener_hub(
             "options_source":          "lkg" if opts_oi is not None else "unavailable",
             # ── Metadata/debug ──
             "discovery_sources":     disc_src,
+            "membership_source":     membership_source,
+            "membership_reason":     membership_reason,
             "quality_flags":         quality_flags,
             "source_confidence":     source_conf,
             "rs_data_status":        rs_status,

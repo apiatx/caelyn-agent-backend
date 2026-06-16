@@ -3,4 +3,5 @@
 - [Screener Hub proxy_type=custom bug](screener-hub-proxy-etf-bug.md) — _build_all_proxy_etfs must only include proxy_type="etf" themes; stock-ticker proxies must NOT be in the ETF exclusion set
 - [Screener Hub mcap pre-filter removal](screener-hub-mcap-prefilter.md) — never add hardcoded mcap range inside row-build loop; user filters at post-hydration stage are the correct place
 - [Screener Hub inline refresh](screener-hub-inline-refresh.md) — explicit selected themes use inline await refresh (12s timeout); default theme uses background create_task; same three guards apply
-- [Home Top Catalysts planning cache](home-top-catalysts-planning-cache.md) — Sat/Sun next-week data must NOT go into Neon snapshot slots; use process-local dict; Sunday scheduler would overwrite Neon with prior-week data
+- [Screener Hub seed ticker tagging](screener-hub-seed-tagging.md) — seed_tickers (JSON config) and candidate_symbols (theme_rs_universe.py) must both be populated; seeds absent from candidate_symbols get sources_by_symbol="unknown" without the defensive tagging loop
+- [Screener Hub query cache after rebuild](screener-hub-rebuild-cache-expiry.md) — admin rebuild must call expire_theme_query_cache() after insert_universe_snapshot; background refresh already did this but rebuild_universe did not until fixed

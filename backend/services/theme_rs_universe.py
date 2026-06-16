@@ -483,6 +483,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
             "FORM",  # FormFactor: DRAM/HBM test equipment
             "AEHR",  # Aehr Test Systems: memory burn-in testing
             "PSTG",  # Pure Storage: all-flash arrays
+            "NTAP",  # NetApp: hybrid cloud storage / NVMe arrays
         ],
         "sector_tags": ["Technology", "Semiconductors"],
         "keywords": ["DRAM", "NAND", "HBM", "memory", "data storage", "flash",
