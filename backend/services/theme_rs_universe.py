@@ -471,9 +471,22 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         # DRAM (Defiance DRAM Memory, Storage, and AI ETF) is primary per spec.
         # Service tries DRAM first; if unavailable or insufficient bars, uses SMH/SOXX median.
         "proxy_symbols": ["DRAM", "SMH", "SOXX"],
-        "candidate_symbols": ["MU", "WDC", "STX", "SIMO"],
+        "candidate_symbols": [
+            "MU",    # Micron: DRAM, NAND, HBM
+            "WDC",   # Western Digital: NAND flash, SSD controllers
+            "STX",   # Seagate: HDD/SSD storage
+            "SNDK",  # SanDisk: NAND flash
+            "SIMO",  # Silicon Motion: NAND flash controllers
+            "RMBS",  # Rambus: memory interface IP / HBM IP
+            "NVEC",  # NVE Corp: MRAM / spintronic memory
+            "MRAM",  # Everspin Technologies: MRAM
+            "FORM",  # FormFactor: DRAM/HBM test equipment
+            "AEHR",  # Aehr Test Systems: memory burn-in testing
+            "PSTG",  # Pure Storage: all-flash arrays
+        ],
         "sector_tags": ["Technology", "Semiconductors"],
-        "keywords": ["DRAM", "NAND", "HBM", "memory", "data storage", "flash"],
+        "keywords": ["DRAM", "NAND", "HBM", "memory", "data storage", "flash",
+                     "MRAM", "storage controller", "memory interface"],
         "macro_sensitivities": ["AI demand", "data center capex", "PC/mobile upgrade cycle"],
     },
 

@@ -130,16 +130,29 @@
       ],
       "positive_keywords": [
         "DRAM", "NAND", "flash", "memory", "storage", "SSD", "controller",
-        "NVMe", "HBM", "high bandwidth memory"
+        "NVMe", "HBM", "high bandwidth memory", "MRAM", "ReRAM", "EEPROM",
+        "CXL", "storage interface", "memory interface"
       ],
       "negative_keywords": ["blank check", "acquisition corp", "spac"],
+      "seed_tickers": [
+        "MU",   "WDC",  "STX",  "SNDK", "SIMO",
+        "RMBS", "NVEC", "MRAM", "FORM", "AEHR",
+        "PSTG", "NTAP"
+      ],
+      "exclude_tickers": [
+        "NVDA", "TSM",  "AVGO", "AMD",  "INTC", "QCOM",
+        "AMAT", "KLAC", "LRCX", "ASML", "MRVL", "TER",
+        "MPWR", "ON",   "TXN",  "ADI",  "MCHP", "COHR",
+        "ONTO", "ENTG", "ACLS", "CAMT", "UCTT", "MKSI"
+      ],
+      "require_name_keyword_match": true,
       "min_market_cap": 50000000,
       "max_market_cap": 10000000000,
       "min_volume": 100000,
       "preferred_market_cap_buckets": ["micro", "small", "mid"],
       "market_cap_upper_default": 10000000000,
       "market_cap_lower_default": 50000000,
-      "notes": "DRAM, NAND, storage controllers."
+      "notes": "DRAM, NAND, storage controllers. seed_tickers always included. exclude_tickers blocks generic semis that bleed in from SMH/SOXX ETF holdings. require_name_keyword_match=true ensures FMP screener only admits companies with proven memory exposure in their name."
     },
     "clean_energy": {
       "fmp_industries": [

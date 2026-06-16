@@ -324,10 +324,12 @@ def _get_theme_state_from_lkg(theme_key: str) -> dict:
     return {}
 
 
-# ── Daily default theme cache ──────────────────────────────────────────────────
-# Caches the daily default theme to avoid mid-day RS-score drift.
-# Resets automatically when the UTC calendar date changes.
-_DAILY_DEFAULT: dict = {}  # {"date": "YYYY-MM-DD", "theme": str, "reason": str}
+# ── Intraday default theme cache ───────────────────────────────────────────────
+# Refreshed every _DEFAULT_THEME_TTL_S seconds so the default theme tracks live
+# intraday RS scores (updated ~60s by theme_rs_service) rather than being locked
+# to the first computation of the calendar day.
+_DAILY_DEFAULT: dict = {}  # {"expires_at": float, "theme": str, "reason": str}
+_DEFAULT_THEME_TTL_S = 600  # 10 minutes
 
 # ── Per-theme on-demand refresh log ───────────────────────────────────────────
 # Tracks when each theme last triggered a background universe refresh.
@@ -373,23 +375,24 @@ def _get_fmp_refresh_sem() -> "asyncio.Semaphore":
 
 
 def _get_daily_default_theme() -> tuple[Optional[str], str]:
-    """Return (theme_key, reason) for today's default theme, cached for the calendar day.
+    """Return (theme_key, reason) for the current default theme.
 
-    Calls _theme_metadata() on cache miss (first call of the day).  All subsequent
-    calls within the same UTC day return the cached value so the selected theme stays
-    stable across requests even if RS scores update mid-day.
+    Cached for _DEFAULT_THEME_TTL_S seconds (10 min) so the default theme
+    tracks intraday RS scores — which theme_rs_service refreshes every ~60s —
+    rather than being locked to the first computation of the calendar day.
     """
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if _DAILY_DEFAULT.get("date") == today and _DAILY_DEFAULT.get("theme"):
-        return _DAILY_DEFAULT["theme"], _DAILY_DEFAULT.get("reason", "daily_cache")
+    now_mono = time.monotonic()
+    if now_mono < _DAILY_DEFAULT.get("expires_at", 0.0) and _DAILY_DEFAULT.get("theme"):
+        return _DAILY_DEFAULT["theme"], _DAILY_DEFAULT.get("reason", "intraday_cache")
     try:
         meta = _theme_metadata()
         dt   = meta.get("default_theme")
         rsn  = meta.get("default_theme_reason") or "computed"
-        _DAILY_DEFAULT.update({"date": today, "theme": dt, "reason": rsn})
+        _DAILY_DEFAULT.update({"expires_at": now_mono + _DEFAULT_THEME_TTL_S,
+                                "theme": dt, "reason": rsn})
         return dt, rsn
     except Exception as e:
-        print(f"[SCREENER_HUB] daily default theme compute error: {e}")
+        print(f"[SCREENER_HUB] default theme compute error: {e}")
         return None, "error"
 
 
@@ -537,12 +540,17 @@ def _read_etf_holdings_from_disk(etf_sym: str) -> list[str]:
             # Skip cross-listed / non-US tickers (contain a dot with exchange suffix)
             if "." in raw:
                 continue
-            # Skip bond/cash placeholders
-            if raw in ("CASH", "USD", "EUR", "TBD", "OTHER"):
+            # Skip bond/cash/FX placeholders
+            if raw in ("CASH", "USD", "EUR", "TBD", "OTHER",
+                       "TWD", "JPY", "CNY", "KRW", "GBP", "CAD",
+                       "AUD", "CHF", "HKD", "SGD", "NZD", "INR"):
                 continue
             # Standard US equity ticker: 1–5 alpha chars, optionally followed by
             # one special char + alpha (e.g. BRK-B, BF-B).  Max 6 chars total.
             if len(raw) > 6:
+                continue
+            # Skip money-market / mutual-fund tickers (e.g. FGXXX, SPAXX)
+            if raw.endswith("XXX"):
                 continue
             result.append(raw)
         return result
@@ -1881,9 +1889,9 @@ async def _build_thematic_universe(
 
     lkg_map = _load_lkg_leaders_map()
 
-    # Load config-driven industry map once for all themes.
-    # Only needed when with_fmp_screener=True, but cheap to load always.
-    industry_map_cfg = _load_industry_map_config() if with_fmp_screener else {}
+    # Load config-driven industry map for ALL builds — seed_tickers and
+    # exclude_tickers must apply on every page load, not just scheduled rebuilds.
+    industry_map_cfg = _load_industry_map_config()
     industry_map_version = industry_map_cfg.get("industry_map_version", "none")
     themes_cfg = industry_map_cfg.get("themes") or {}
 
@@ -1932,12 +1940,34 @@ async def _build_thematic_universe(
 
         seen_dynamic: set[str] = set()
 
+        # Load theme config early so seed/exclude/keyword gates are available
+        # for ALL sources (A–F), not just Source C (FMP screener).
+        theme_cfg  = themes_cfg.get(key) or {}
+
+        # ── Theme membership overrides (from theme_fmp_industry_map.json) ─────
+        # seed_tickers:             always included, front-of-list priority
+        # exclude_tickers:          blocked from every source
+        # require_name_keyword_match: Source C (FMP screener) must match a
+        #                            positive keyword in the company name
+        _seed_tickers: list[str] = [
+            s.upper() for s in (theme_cfg.get("seed_tickers") or []) if s
+        ]
+        _exclude_set: set[str] = {
+            s.upper() for s in (theme_cfg.get("exclude_tickers") or []) if s
+        }
+        _require_kwmatch: bool = bool(theme_cfg.get("require_name_keyword_match"))
+        _pos_kws_lower: list[str] = [
+            k.lower() for k in (theme_cfg.get("positive_keywords") or [])
+        ]
+
         # ── Source A: ETF holdings (disk read, fast) ──────────────────────────
         for etf in proxy_etfs:
             holdings = _read_etf_holdings_from_disk(etf)
             if holdings:
                 etf_files_found.append(etf)
             for sym in holdings:
+                if sym in _exclude_set:
+                    continue
                 if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
                     seen_dynamic.add(sym)
                     etf_holdings_syms.append(sym)
@@ -1949,6 +1979,8 @@ async def _build_thematic_universe(
         # ── Source B: LKG leaders / laggards ──────────────────────────────────
         for sym in lkg_map.get(key) or []:
             su = sym.upper() if isinstance(sym, str) else ""
+            if su in _exclude_set:
+                continue
             if su and su not in _ALL_PROXY_ETFS and su not in seen_dynamic:
                 seen_dynamic.add(su)
                 lkg_syms.append(su)
@@ -1959,7 +1991,7 @@ async def _build_thematic_universe(
         # Quality filters: min_market_cap=$50M, min_volume=100k, no junk names/ETFs.
         # Candidates sorted by (theme_relevance DESC, market_cap ASC) after scoring.
         # They get RESERVED slots in the final cap so ETF overflow doesn't crowd them out.
-        theme_cfg  = themes_cfg.get(key) or {}
+        # theme_cfg already loaded early (before Source A) so seeds/excludes apply everywhere.
         industries = theme_cfg.get("fmp_industries") or []
         # v2 schema fields with legacy compat fallbacks
         # Respect explicit null in config (null → no upper cap, allows mega-caps).
@@ -2022,6 +2054,16 @@ async def _build_thematic_universe(
 
                 for cand in cands:
                     sym = cand["symbol"]
+                    if sym in _exclude_set:
+                        continue
+                    # When the theme requires keyword proof in the company name,
+                    # skip candidates whose name doesn't contain any positive keyword.
+                    # This prevents generic semis from entering memory_storage via
+                    # the broad "Semiconductors" FMP industry bucket.
+                    if _require_kwmatch and _pos_kws_lower:
+                        cname_l = (cand.get("company_name") or "").lower()
+                        if not any(kw in cname_l for kw in _pos_kws_lower):
+                            continue
                     if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
                         seen_dynamic.add(sym)
                         screener_syms.append(sym)
@@ -2041,6 +2083,8 @@ async def _build_thematic_universe(
                 try:
                     peers, fmp_peer_anchors = await _fmp_peers_for_anchors(candidate_syms[:3])
                     for sym in peers:
+                        if sym in _exclude_set:
+                            continue
                         if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
                             seen_dynamic.add(sym)
                             fmp_peer_syms.append(sym)
@@ -2082,6 +2126,11 @@ async def _build_thematic_universe(
         if not combined:
             combined = proxy_etfs  # absolute last resort (Source G)
 
+        # Seed tickers always occupy front slots regardless of cap pressure.
+        # _dedupe_filter removes later duplicates so each seed appears once.
+        if _seed_tickers:
+            combined = _seed_tickers + combined
+
         cleaned = _dedupe_filter(combined)[:_PER_THEME_CAP]
 
         n_dynamic = (len(etf_holdings_syms) + len(lkg_syms)
@@ -2105,6 +2154,9 @@ async def _build_thematic_universe(
             "dynamic_symbols_count":               n_dynamic,
             "static_fallback_symbols_count":       n_static,
             "used_static_fallback":                n_static > 0,
+            "membership_seed_count":               len(_seed_tickers),
+            "membership_exclude_count":            len(_exclude_set),
+            "membership_require_kw_match":         _require_kwmatch,
             "etf_files_found":                     etf_files_found,
             "sources_by_symbol":                   sources_by_symbol,
             "screener_meta_by_symbol":             screener_meta_by_symbol,
@@ -4464,6 +4516,13 @@ async def rebuild_universe(
                 status="ok", ttl_days=8,
                 metadata=bd,
             )
+            # Expire query cache so stale responses from the previous
+            # (smaller) snapshot are not served after the rebuild.
+            try:
+                from data.screener_hub_store import expire_theme_query_cache
+                expire_theme_query_cache(k)
+            except Exception as _exp_err:
+                print(f"[SCREENER_HUB] rebuild expire_theme_query_cache {k!r}: {_exp_err}")
             out["themes_built"].append({
                 "theme":               k,
                 "symbols_count":       len(syms),
