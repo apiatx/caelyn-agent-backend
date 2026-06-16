@@ -1965,6 +1965,15 @@ async def _build_thematic_universe(
                 or []
             )
         ]
+        # weak_keywords: a named subset of required_any_keywords that are too broad
+        # to serve as the SOLE proof for FMP screener candidates in pure_subtheme
+        # themes.  Terms like "optical", "server", "automation", or "security" can
+        # match many unrelated companies.  When a candidate only matches weak keywords
+        # (no strong keyword — i.e. no keyword that is NOT in weak_keywords), the FMP
+        # gate rejects it.  Seeds, ETF holdings, and LKG leaders bypass this entirely.
+        _weak_kws_set: set[str] = {
+            k.lower() for k in (theme_cfg.get("weak_keywords") or [])
+        }
         # Semantic proof gate active for all non-parent_rollup themes that define
         # required_any_keywords.  Legacy require_name_keyword_match also activates it.
         _require_kwmatch: bool = (

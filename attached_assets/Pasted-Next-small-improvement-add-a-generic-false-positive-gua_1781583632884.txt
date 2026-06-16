@@ -1,0 +1,72 @@
+Next small improvement: add a generic false-positive guard for precise Screener Hub themes.
+
+Do not rewrite the theme engine.
+Do not touch live quote / Tradier logic.
+Do not use LLM.
+Do not rebuild every system.
+This should be a small config + validation hardening pass.
+
+Problem:
+VISN slipped into ai_networking because a broad keyword like "network" matched an irrelevant company. We fixed VISN specifically, but other precise themes can have the same problem with broad words.
+
+Goal:
+Prevent weak single-keyword matches from qualifying tickers for precise themes unless there is stronger semantic proof.
+
+Tasks:
+1. Add a concept of weak_keywords vs strong_keywords for pure_subtheme themes.
+
+Example:
+ai_networking:
+- weak_keywords: network, communications, connectivity
+- strong_keywords: ethernet, switch, router, routing, optical networking, transceiver, data center networking, InfiniBand, network ASIC, DSP, packet processor
+
+2. Rule:
+For pure_subtheme themes, a ticker should not qualify from a weak keyword alone.
+A weak keyword must be paired with at least one of:
+- strong keyword match
+- seed/manual_include
+- theme-specific ETF/source
+- allowed sector/industry + profile proof
+- explicit manual override
+
+3. Add/confirm irrelevant exclude_keywords for precise themes:
+- ai_networking: marine, boat, electric boat, recreational vehicle
+- power_cooling: generic utility-only names unless direct power/cooling/data-center infrastructure proof
+- data_center_infrastructure: towers/telecom only if explicitly allowed
+- photonics_lasers: generic optics words must not pull in unrelated medical/retail names
+- robotics_automation: lab/genomics automation should be allowed only if ETF/source or explicit role supports it
+
+4. Add a validation report for weak-keyword-only candidates:
+For each precise theme, print any ticker whose only proof is a weak keyword.
+Fields:
+- theme
+- ticker
+- company_name
+- sector
+- industry
+- matched_keywords
+- discovery_sources
+- decision: included/excluded
+- reason
+
+5. If any weak-keyword-only ticker is currently included, exclude it unless it is seed/manual/ETF-backed.
+
+6. Rebuild only affected precise themes after config changes:
+- ai_networking
+- data_center_infrastructure
+- power_cooling
+- photonics_lasers
+- robotics_automation
+- drones
+- quantum
+- substrates_packaging
+- semicap_equipment
+- memory_storage
+
+Acceptance:
+- VISN remains absent from ai_networking.
+- No pure_subtheme ticker is included solely because of a generic weak keyword.
+- Rows still expose membership_source, membership_reason, membership_confidence, theme_role, discovery_sources.
+- No LLM calls.
+- No quote/Tradier changes.
+- No broad architecture changes.
