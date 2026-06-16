@@ -1,0 +1,76 @@
+We need to align Screener Hub with the ticker engine contract.
+
+Goal:
+All visible price/volume/Tradier fields should be real-time with minimal Tradier calls.
+
+Correct behavior:
+If any ticker already has fresh live Tradier data anywhere in the website, Screener Hub must reuse that data when the ticker appears in Screener Hub.
+
+But if a ticker appears only in Screener Hub and has no fresh canonical quote cache yet, Screener Hub may fetch fresh Tradier quotes only for the tickers in the currently selected Screener Hub theme/dropdown being viewed by the user.
+
+Do not fetch quotes for every Screener Hub theme.
+Do not refresh the entire Screener Hub universe.
+Do not create a new quote system.
+Do not create a new budgeting system.
+Use the existing Tradier budget/rate-limit system.
+Use the existing canonical cache keys.
+
+Required quote priority for each visible Screener Hub row:
+1. tradier:quote:sym:{SYM} if fresh
+2. quote:lkg:{SYM} if available
+3. Fresh Tradier fetch only for missing/stale tickers in the currently selected Screener Hub theme
+4. Screener Hub cached snapshot quote only as final fallback, clearly marked stale/snapshot
+
+Screener Hub may cache:
+- ticker membership
+- theme membership
+- company name
+- sector
+- industry
+- market cap
+- role
+- score
+- static enrichment
+
+Screener Hub must not rely on cached snapshot values for visible live fields when fresher canonical quote data exists.
+
+Live fields to hydrate at response-build time:
+- price
+- change_percent_1d
+- volume
+- average_volume
+- relative_volume / volume_surge
+- dollar_volume
+- bid
+- ask
+- quote_source
+- quote_is_stale
+- quote_fetched_at
+
+Implementation requirements:
+1. At the final Screener Hub response-builder step, overlay canonical quote data onto each visible row.
+2. First check tradier:quote:sym:{SYM}.
+3. Then check quote:lkg:{SYM}.
+4. Collect only still-missing/stale symbols from the active selected theme.
+5. If the existing Tradier budget allows, fetch those missing symbols through the existing Tradier quote path.
+6. Write any fresh results back into:
+   - tradier:quote:sym:{SYM}
+   - quote:lkg:{SYM}
+7. Return rows with live quote fields filled from canonical/fresh data.
+8. Preserve original Screener Hub snapshot fields separately as:
+   - snapshot_price
+   - snapshot_change_percent_1d
+   - snapshot_volume
+   - snapshot_quote_fetched_at
+
+Validation:
+Use ALAB, NBIS, AAOI, ACLS, AOSL, plus 3 tickers that exist only in the selected Screener Hub theme.
+
+Acceptance criteria:
+- If Home/Watchlist/Portfolio already pulled fresh Tradier data for a ticker, Screener Hub uses that exact same price/1D%/volume.
+- If a ticker is only in the selected Screener Hub theme and has no fresh cache, Screener Hub fetches it from Tradier only because the user is viewing that theme.
+- Switching themes only fetches missing quote data for the newly selected theme.
+- No quotes are fetched for inactive Screener Hub themes.
+- Fresh Screener Hub quote fetches write back into the shared canonical cache so other pages can reuse them.
+- No new Tradier calls beyond active-theme missing symbols.
+- Existing Tradier budget/rate-limit system remains untouched.
