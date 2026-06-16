@@ -2030,14 +2030,28 @@ async def _build_thematic_universe(
             sources_failed.append("etf_holdings")
 
         # ── Source B: LKG leaders / laggards ──────────────────────────────────
+        # Design rule (pure_subtheme themes):
+        #   LKG leaders are RANKING / DISCOVERY signals only.  They are recorded in
+        #   sources_by_symbol so they surface as enrichment context and ranking boost,
+        #   but they do NOT independently qualify a ticker for universe membership.
+        #   Membership requires one of: seed, manual_include, theme-ETF holding, or
+        #   keyword/profile-proved FMP candidate.
+        # Non-pure_subtheme themes (parent_rollup, curated_seed_core) may allow LKG
+        #   to contribute new candidates to the universe pool.
         for sym in lkg_map.get(key) or []:
             su = sym.upper() if isinstance(sym, str) else ""
             if su in _exclude_set:
                 continue
-            if su and su not in _ALL_PROXY_ETFS and su not in seen_dynamic:
-                seen_dynamic.add(su)
-                lkg_syms.append(su)
-                sources_by_symbol.setdefault(su, []).append("lkg_leaders")
+            if not su or su in _ALL_PROXY_ETFS or su in seen_dynamic:
+                continue
+            # Always record the LKG signal for ranking / enrichment context
+            sources_by_symbol.setdefault(su, []).append("lkg_leaders")
+            # pure_subtheme: signal recorded above; do NOT grant universe membership
+            if _theme_type == "pure_subtheme":
+                continue
+            # Non-pure_subtheme: LKG may introduce new universe candidates
+            seen_dynamic.add(su)
+            lkg_syms.append(su)
 
         # ── Source C: FMP industry screener (rebuild jobs only) ───────────────
         # Uses config-driven theme → industry mapping from theme_fmp_industry_map.json.

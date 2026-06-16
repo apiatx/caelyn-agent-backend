@@ -8,7 +8,8 @@ For `pure_subtheme` themes that define `weak_keywords` in config, an FMP screene
 candidate must match at least one **strong keyword** (= `required_any_keywords` minus
 `weak_keywords`) to be admitted.  Matching only weak keywords is rejected at the gate.
 
-Seeds, ETF holdings, and LKG leaders bypass this gate entirely — they are trusted sources.
+Seeds and theme-ETF holdings bypass this gate — they are trusted sources.
+LKG leaders do NOT bypass the gate (see lkg-membership-gate.md).
 
 ## Why
 Broad terms like "optical", "security", "automation", "server", "cloud", "software"

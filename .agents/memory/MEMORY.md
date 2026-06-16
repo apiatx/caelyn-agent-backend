@@ -6,4 +6,5 @@
 - [Screener Hub seed ticker tagging](screener-hub-seed-tagging.md) — seed_tickers (JSON config) and candidate_symbols (theme_rs_universe.py) must both be populated; seeds absent from candidate_symbols get sources_by_symbol="unknown" without the defensive tagging loop
 - [Screener Hub query cache after rebuild](screener-hub-rebuild-cache-expiry.md) — admin rebuild must call expire_theme_query_cache() after insert_universe_snapshot; background refresh already did this but rebuild_universe did not until fixed
 - [Screener Hub FMP dual industry taxonomy](screener-hub-fmp-dual-industry.md) — FMP screener API and fundamentals profile API use different industry strings; seeds must bypass the leakage filter
-- [Screener Hub weak/strong keyword gate](screener-hub-weak-strong-keywords.md) — pure_subtheme FMP candidates must match a strong keyword; weak_keywords alone are insufficient; seeds/ETF/LKG bypass entirely
+- [Screener Hub weak/strong keyword gate](screener-hub-weak-strong-keywords.md) — pure_subtheme FMP candidates must match a strong keyword; weak_keywords alone are insufficient; seeds/ETF bypass; LKG does NOT bypass
+- [Screener Hub LKG membership gate](screener-hub-lkg-membership-gate.md) — lkg_leaders = ranking signal only; never grants standalone universe membership for pure_subtheme; signal still recorded in sources_by_symbol
