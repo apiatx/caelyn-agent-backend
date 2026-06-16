@@ -1,0 +1,77 @@
+Critical correction: Screener Hub is NOT allowed to serve stale cached price/volume/1D% fields as display data.
+
+We already have a ticker engine / canonical quote layer. If Tradier gets a live quote for a ticker anywhere in the app, every other page that displays that ticker must use the same fresh quote data from the shared quote cache.
+
+Do not create a new Tradier budgeting system.
+Do not create a new quote endpoint.
+Do not make Screener Hub fetch Tradier directly per page load.
+Do not rewrite Screener Hub.
+
+Fix the existing Screener Hub response contract.
+
+Correct rule:
+Screener Hub may cache ticker membership, theme membership, static enrichment, role, sector, industry, market cap, and score/snapshot metadata.
+Screener Hub must NOT use cached stale snapshot values for visible live quote fields if the canonical quote cache has fresher data.
+
+Live quote fields that must be overlaid from the canonical ticker engine:
+- price
+- current_price if used
+- change_percent_1d / change_pct / change_1d_pct
+- volume
+- avg_volume / average_volume
+- relative_volume / volume_surge / volume_vs_avg
+- dollar_volume if derived from price * volume
+- bid
+- ask
+- quote_source
+- quote_is_stale
+- quote_fetched_at / last_updated
+
+Implementation requirement:
+At the final Screener Hub row-builder / response-builder step, overlay each ticker row with canonical quote data from:
+1. tradier:quote:sym:{SYM} if fresh
+2. quote:lkg:{SYM} if canonical live quote is unavailable
+3. existing Screener Hub snapshot quote only as last resort, clearly marked stale/snapshot
+
+Do not let Screener Hub's cached price overwrite fresher quote:lkg or tradier:quote:sym data.
+
+Keep separate fields if needed:
+- snapshot_price
+- snapshot_change_percent_1d
+- snapshot_volume
+- snapshot_quote_fetched_at
+
+But the fields rendered by the UI as live quote fields must be the canonical overlay:
+- price
+- change_percent_1d
+- volume
+- volume_surge
+- quote_source
+- quote_is_stale
+- quote_fetched_at
+
+Validation:
+Use ALAB, AAOI, ACLS, AOSL, NBIS.
+
+For each ticker, compare:
+- Home Watchlist Snapshot
+- Watchlist Ticker Table
+- Portfolio Holdings
+- Screener Hub row
+
+Acceptance:
+If canonical quote cache has fresh Tradier data, Screener Hub must match Home/Watchlist/Portfolio exactly for:
+- price
+- 1D %
+- volume where available
+- quote_source
+- quote_is_stale
+
+Specific known failure:
+ALAB showed 394.49 in Screener Hub while Home/Watchlist/Portfolio showed 389.20.
+After fix, Screener Hub must show 389.20 too if the shared Tradier quote cache has that value.
+
+No new Tradier calls.
+No budget changes.
+No endpoint rewrite.
+Only hydrate Screener Hub display quote fields from the existing ticker engine.

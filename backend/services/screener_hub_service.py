@@ -40,6 +40,7 @@ from typing import Any, Iterable, Optional
 
 import httpx
 
+from data.cache import cache as _shared_lkg_cache
 from data.screener_hub_store import (
     ensure_tables,
     upsert_fundamentals,
@@ -2776,6 +2777,105 @@ def _next_sunday_rebuild_et() -> str:
         return "Sunday 00:30 ET"
 
 
+def _overlay_canonical_quotes_inplace(rows: list[dict]) -> None:
+    """
+    Overlay live quote fields on each Screener Hub row from the shared in-memory
+    quote:lkg cache.  This ensures price / 1D% / volume always matches Home
+    Watchlist Snapshot and Watchlist Ticker Table when Tradier has fresher data.
+
+    Rules:
+      - Only overlays when quote:lkg has a non-None price.
+      - Preserves SH snapshot values as snapshot_price / snapshot_change_percent_1d /
+        snapshot_volume / snapshot_quote_fetched_at.
+      - Handles both raw-Tradier shape (last / change_percentage / average_volume)
+        and normalized shape (price / change_pct / avg_volume).
+      - Never raises: every symbol is wrapped in its own try/except.
+    """
+    overlaid = 0
+    for row in rows:
+        sym = (row.get("symbol") or "").upper()
+        if not sym:
+            continue
+        try:
+            lkg = _shared_lkg_cache.get(f"quote:lkg:{sym}")
+            if not lkg:
+                continue
+
+            # ── Extract canonical values — handle both raw-Tradier and normalized ──
+            canon_price = (
+                _to_float(lkg.get("last"))
+                or _to_float(lkg.get("price"))
+            )
+            if canon_price is None:
+                continue  # no usable price — leave row untouched
+
+            canon_chg = (
+                _to_float(lkg.get("change_percentage"))   # raw Tradier
+                or _to_float(lkg.get("change_pct"))       # normalized (portfolio/watchlist)
+                or _to_float(lkg.get("change_pct_1d"))
+            )
+            canon_vol     = _to_float(lkg.get("volume"))
+            canon_avg_vol = (
+                _to_float(lkg.get("average_volume"))      # raw Tradier
+                or _to_float(lkg.get("avg_volume"))       # normalized
+            )
+            canon_bid    = _to_float(lkg.get("bid"))
+            canon_ask    = _to_float(lkg.get("ask"))
+            # quote_source: explicit normalized value wins; fall back to "tradier"
+            # when reading raw Tradier shape (which doesn't carry quote_source)
+            canon_source = (
+                lkg.get("quote_source")
+                or ("tradier" if lkg.get("last") is not None else "tradier")
+            )
+            canon_stale      = bool(lkg.get("quote_is_stale", False))
+            canon_fetched_at = (
+                lkg.get("fetched_at")
+                or lkg.get("last_updated")
+                or lkg.get("quote_fetched_at")
+            )
+
+            # ── Preserve SH snapshot values for diagnostics / frontend diff ──
+            row["snapshot_price"]             = row.get("price")
+            row["snapshot_change_percent_1d"] = row.get("change_percent_1d")
+            row["snapshot_volume"]            = row.get("volume")
+            row["snapshot_quote_fetched_at"]  = (row.get("_meta") or {}).get("quote_fetched_at")
+
+            # ── Overlay live quote fields ──
+            row["price"]             = canon_price
+            row["change_percent_1d"] = canon_chg
+            row["quote_source"]      = canon_source
+            row["quote_is_stale"]    = canon_stale
+            row["quote_fetched_at"]  = canon_fetched_at
+
+            # Volume: only overlay if lkg has a value (don't blank a valid SH volume)
+            if canon_vol is not None:
+                row["volume"] = canon_vol
+            if canon_avg_vol is not None:
+                row["average_volume"] = canon_avg_vol
+            if canon_bid is not None:
+                row["bid"] = canon_bid
+            if canon_ask is not None:
+                row["ask"] = canon_ask
+
+            # ── Recompute derived fields from canonical price × volume ──
+            _ov = canon_vol if canon_vol is not None else row.get("volume")
+            _av = canon_avg_vol if canon_avg_vol is not None else row.get("average_volume")
+            if _ov is not None and _av and _av > 0:
+                row["relative_volume"] = round(_ov / _av, 4)
+            if canon_price is not None and _ov is not None:
+                row["dollar_volume"] = round(canon_price * _ov)
+
+            overlaid += 1
+        except Exception:
+            pass
+
+    if overlaid:
+        print(
+            f"[SCREENER_HUB] canonical_quote_overlay: overlaid {overlaid}/{len(rows)} "
+            f"rows from quote:lkg"
+        )
+
+
 async def get_screener_hub(
     *,
     tab: str,
@@ -2843,6 +2943,9 @@ async def get_screener_hub(
                     f"rows={_hit.get('row_count')} "
                     f"expires={_hit.get('expires_at')}"
                 )
+                # Overlay canonical quotes even on cache hits so the returned
+                # price/1D%/volume always matches Home/Watchlist/Portfolio.
+                _overlay_canonical_quotes_inplace(_cached_resp.get("rows") or [])
                 return _cached_resp
         except Exception as _qe:
             print(f"[SCREENER_QUERY_CACHE] read error (non-fatal): {_qe}")
@@ -3814,6 +3917,14 @@ async def get_screener_hub(
         await _enrich_options_page_aware(rows)
     except Exception as _opt_exc:
         print(f"[SCREENER_HUB] options enrichment non-fatal error: {_opt_exc}")
+
+    # ── Canonical quote overlay ────────────────────────────────────────────────
+    # Final step: overlay price / change_percent_1d / volume / quote_source /
+    # quote_is_stale from the shared in-memory quote:lkg cache so Screener Hub
+    # always shows the same live Tradier data as Home Watchlist Snapshot,
+    # Watchlist Ticker Table, and Portfolio.  No new Tradier calls — reads only
+    # from the already-populated canonical cache.
+    _overlay_canonical_quotes_inplace(rows)
 
     _served_at = _now_iso()
 
