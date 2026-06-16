@@ -3107,7 +3107,11 @@ async def get_screener_hub(
                 )
                 # Overlay canonical quotes even on cache hits so the returned
                 # price/1D%/volume always matches Home/Watchlist/Portfolio.
-                await _overlay_canonical_quotes_inplace(_cached_resp.get("rows") or [])
+                # Pass the selected theme so Pass 3 targets only its symbols.
+                await _overlay_canonical_quotes_inplace(
+                    _cached_resp.get("rows") or [],
+                    selected_theme=theme,
+                )
                 return _cached_resp
         except Exception as _qe:
             print(f"[SCREENER_QUERY_CACHE] read error (non-fatal): {_qe}")
@@ -4084,9 +4088,15 @@ async def get_screener_hub(
     # Final step: overlay price / change_percent_1d / volume / quote_source /
     # quote_is_stale from the shared in-memory quote:lkg cache so Screener Hub
     # always shows the same live Tradier data as Home Watchlist Snapshot,
-    # Watchlist Ticker Table, and Portfolio.  No new Tradier calls — reads only
-    # from the already-populated canonical cache.
-    await _overlay_canonical_quotes_inplace(rows)
+    # Watchlist Ticker Table, and Portfolio.
+    #
+    # Pass 3 (targeted Tradier fetch) is enabled ONLY when a specific theme is
+    # selected by the user (tab=thematic + explicit theme key).  All other tabs
+    # (watchlist_portfolio, default/all views) receive selected_theme=None and
+    # therefore skip Pass 3 — their tickers are already covered by Pass 1+2
+    # from the Home/Watchlist/Portfolio canonical cache.
+    _pass3_theme = theme if (tab == "thematic" and theme) else None
+    await _overlay_canonical_quotes_inplace(rows, selected_theme=_pass3_theme)
 
     _served_at = _now_iso()
 
