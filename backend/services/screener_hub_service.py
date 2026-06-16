@@ -3738,40 +3738,74 @@ async def get_screener_hub(
             disc_src = ["unknown"]
 
         # ── Derive membership_source / membership_reason from disc_src ─────────
-        # membership_source: canonical bucket (seed | etf_holding | lkg | fmp_screener
-        #   | social | chain_reaction | watchlist | <tag>)
-        # membership_reason: human-readable one-liner for debug/dev inspection.
-        _primary = disc_src[0]
-        if _primary.startswith("etf:"):
-            membership_source = "etf_holding"
-            membership_reason = f"{_primary.split(':',1)[1]} ETF holding"
-        elif _primary.startswith("lkg:"):
-            membership_source = "lkg"
-            membership_reason = f"LKG leader ({_primary.split(':',1)[1]})"
-        elif _primary == "lkg_leaders":
-            membership_source = "lkg"
-            membership_reason = "LKG momentum leader"
-        elif _primary == "static_seed":
+        # Answers "why this ticker belongs in this theme", not "how it ranked
+        # today."  Priority-ordered scan across ALL disc_src tags so that a seed
+        # ticker that also appears in lkg_leaders correctly reports "seed", and an
+        # ETF holding that also appeared in lkg_leaders reports the ETF.
+        # lkg_leaders is a ranking/momentum signal, not a theme membership signal,
+        # so it only wins when no stronger theme-membership source is present.
+        #
+        # Priority (highest → lowest):
+        #   1. manual_include
+        #   2. static_seed     ← always wins for explicitly configured seed tickers
+        #   3. etf:<*>         ← theme-specific ETF holding (DRAM, etc.)
+        #   4. fmp_screener:*  ← FMP industry screener / peer match
+        #   5. lkg_leaders / lkg:<*>  ← only if no stronger source
+        #   6. social_consensus / chain_reaction / watchlist_portfolio
+        _MEMBERSHIP_PRIORITY: list[tuple[str, object]] = [
+            ("manual_include", lambda s: s == "manual_include"),
+            ("static_seed",    lambda s: s == "static_seed"),
+            ("etf_holding",    lambda s: s.startswith("etf:")),
+            ("fmp_screener",   lambda s: s.startswith("fmp_screener:") or s == "fmp_peers"),
+            ("lkg",            lambda s: s == "lkg_leaders" or s.startswith("lkg:")),
+            ("social",         lambda s: s == "social_consensus"),
+            ("chain_reaction", lambda s: s == "chain_reaction"),
+            ("watchlist",      lambda s: s == "watchlist_portfolio"),
+        ]
+        _chosen_src: Optional[str] = None
+        for _bucket, _pred in _MEMBERSHIP_PRIORITY:
+            for _s in disc_src:
+                if _pred(_s):
+                    _chosen_src = _s
+                    break
+            if _chosen_src is not None:
+                break
+        if _chosen_src is None:
+            _chosen_src = disc_src[0] if disc_src else "unknown"
+
+        if _chosen_src == "manual_include":
+            membership_source = "manual_include"
+            membership_reason = "manually included"
+        elif _chosen_src == "static_seed":
             membership_source = "seed"
             membership_reason = "seed ticker"
-        elif _primary.startswith("fmp_screener:"):
+        elif _chosen_src.startswith("etf:"):
+            membership_source = "etf_holding"
+            membership_reason = f"{_chosen_src.split(':',1)[1]} ETF holding"
+        elif _chosen_src.startswith("fmp_screener:"):
             membership_source = "fmp_screener"
-            membership_reason = f"FMP screener ({_primary.split(':',1)[1]})"
-        elif _primary == "fmp_peers":
+            membership_reason = f"FMP screener ({_chosen_src.split(':',1)[1]})"
+        elif _chosen_src == "fmp_peers":
             membership_source = "fmp_screener"
             membership_reason = "FMP screener match"
-        elif _primary == "social_consensus":
+        elif _chosen_src == "lkg_leaders":
+            membership_source = "lkg"
+            membership_reason = "LKG momentum leader"
+        elif _chosen_src.startswith("lkg:"):
+            membership_source = "lkg"
+            membership_reason = f"LKG leader ({_chosen_src.split(':',1)[1]})"
+        elif _chosen_src == "social_consensus":
             membership_source = "social"
             membership_reason = "social consensus"
-        elif _primary == "chain_reaction":
+        elif _chosen_src == "chain_reaction":
             membership_source = "chain_reaction"
             membership_reason = "supply chain reaction"
-        elif _primary == "watchlist_portfolio":
+        elif _chosen_src == "watchlist_portfolio":
             membership_source = "watchlist"
             membership_reason = "watchlist / portfolio"
         else:
-            membership_source = _primary
-            membership_reason = _primary.replace("_", " ")
+            membership_source = _chosen_src
+            membership_reason = _chosen_src.replace("_", " ")
 
         # ── Row-source tally: bucket each row into its primary source ──────────
         for _src_tag in disc_src:
