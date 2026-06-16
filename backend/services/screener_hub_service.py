@@ -1625,6 +1625,184 @@ def _get_source_confidence(
     return "medium"
 
 
+def score_theme_candidate(
+    theme_cfg: dict,
+    candidate_profile: dict,
+    discovery_sources: list[str],
+) -> dict:
+    """
+    Deterministic semantic scorer for a candidate against a theme.
+
+    Inputs
+    ------
+    theme_cfg          : theme entry from theme_fmp_industry_map.json
+    candidate_profile  : dict with any of:
+                           company_name / name, sector, industry, description
+    discovery_sources  : source tags (e.g. ["fmp_screener:Semiconductors"])
+
+    Returns
+    -------
+    {
+      semantic_score        : float 0.0–1.0,
+      candidate_tier        : "core"|"verified_discovery"|"adjacent_discovery"
+                              |"watch_candidate"|"excluded",
+      matched_keywords      : list[str],
+      membership_confidence : "high"|"medium"|"low",
+      membership_reason     : str,
+      rejected_reason       : str | None,
+      industry_tier         : "core"|"adjacent"|"weak_adjacent"|"unknown",
+    }
+    """
+    company_name = (
+        candidate_profile.get("company_name")
+        or candidate_profile.get("name") or ""
+    )
+    sector      = candidate_profile.get("sector")      or ""
+    industry    = candidate_profile.get("industry")    or ""
+    description = candidate_profile.get("description") or ""
+
+    theme_type   = (theme_cfg.get("theme_type") or "pure_subtheme").lower()
+    pos_kws      = [k.lower() for k in (
+        theme_cfg.get("required_any_keywords")
+        or theme_cfg.get("positive_keywords") or []
+    )]
+    weak_kws_set = {k.lower() for k in (theme_cfg.get("weak_keywords") or [])}
+    excl_kws     = [k.lower() for k in (
+        theme_cfg.get("exclude_keywords")
+        or theme_cfg.get("negative_keywords") or []
+    )]
+
+    # ── Exclude-keyword gate (fast path) ──────────────────────────────────
+    proof_str = " ".join(filter(None, [
+        company_name.lower(), sector.lower(), industry.lower()
+    ]))
+    for ekw in excl_kws:
+        if ekw in proof_str:
+            return {
+                "semantic_score":        0.0,
+                "candidate_tier":        "excluded",
+                "matched_keywords":      [],
+                "membership_confidence": "low",
+                "membership_reason":     f"exclude_keyword: {ekw}",
+                "rejected_reason":       f"exclude_keyword: {ekw}",
+                "industry_tier":         "unknown",
+            }
+
+    # ── Industry tier + base score ─────────────────────────────────────────
+    base_score, industry_tier = _compute_theme_relevance_score(
+        industry, company_name, theme_cfg
+    )
+
+    # ── Keyword matching: name/sector/industry then description ────────────
+    name_ind_matched = [kw for kw in pos_kws if kw in proof_str]
+    desc_matched: list[str] = []
+    if description:
+        desc_lower = description.lower()
+        for kw in pos_kws:
+            if kw not in name_ind_matched and kw in desc_lower:
+                desc_matched.append(kw)
+
+    all_matched    = list(dict.fromkeys(name_ind_matched + desc_matched))
+    strong_matched = [kw for kw in all_matched if kw not in weak_kws_set]
+    weak_only      = bool(all_matched) and not strong_matched
+
+    # ── Semantic score ─────────────────────────────────────────────────────
+    kw_delta = 0.0
+    if strong_matched:
+        kw_delta += 0.20
+        if name_ind_matched and desc_matched:
+            kw_delta += 0.05   # both name and description confirm
+    elif all_matched:
+        kw_delta += 0.03       # weak-only minor lift
+    semantic_score = round(min(1.0, max(0.0, base_score + kw_delta)), 3)
+
+    # ── Seed / manual short-circuit ────────────────────────────────────────
+    src_str = " ".join(discovery_sources)
+    if "static_seed" in src_str or "manual_include" in src_str:
+        return {
+            "semantic_score":        semantic_score,
+            "candidate_tier":        "core",
+            "matched_keywords":      all_matched,
+            "membership_confidence": "high",
+            "membership_reason":     "seed ticker",
+            "rejected_reason":       None,
+            "industry_tier":         industry_tier,
+        }
+
+    # ── Keyword-requirement gate ───────────────────────────────────────────
+    require_kw = (
+        bool(theme_cfg.get("require_name_keyword_match"))
+        or (theme_type != "parent_rollup" and bool(pos_kws))
+    )
+
+    if require_kw and not all_matched:
+        # No keyword evidence — include as watch_candidate only when
+        # in a core or adjacent industry (industry bucket = partial proof).
+        if industry_tier in ("core", "adjacent") and semantic_score >= 0.45:
+            return {
+                "semantic_score":        semantic_score,
+                "candidate_tier":        "watch_candidate",
+                "matched_keywords":      [],
+                "membership_confidence": "low",
+                "membership_reason":     (
+                    f"industry-only proof ({industry}); no keyword match"
+                ),
+                "rejected_reason":       None,
+                "industry_tier":         industry_tier,
+            }
+        return {
+            "semantic_score":        semantic_score,
+            "candidate_tier":        "excluded",
+            "matched_keywords":      [],
+            "membership_confidence": "low",
+            "membership_reason":     "no keyword match",
+            "rejected_reason":       "no_keyword_match",
+            "industry_tier":         industry_tier,
+        }
+
+    # ── Classify by strength + industry tier ──────────────────────────────
+    is_adjacent = industry_tier in ("adjacent", "weak_adjacent")
+
+    if is_adjacent and not weak_only and all_matched:
+        tier       = "adjacent_discovery"
+        confidence = "medium" if strong_matched else "low"
+        reason     = (
+            f"adjacent industry ({industry_tier}); "
+            f"keyword: '{all_matched[0]}'"
+        )
+    elif weak_only or semantic_score < 0.45:
+        tier       = "watch_candidate"
+        confidence = "low"
+        reason     = (
+            f"weak keyword only: '{all_matched[0]}'" if all_matched
+            else f"industry match ({industry_tier})"
+        )
+    elif strong_matched:
+        tier       = "verified_discovery"
+        confidence = "high" if semantic_score >= 0.75 else "medium"
+        reason     = (
+            f"keyword: '{strong_matched[0]}' in "
+            f"{'name/sector/industry' if name_ind_matched else 'description'}"
+        )
+    else:
+        tier       = "watch_candidate"
+        confidence = "low"
+        reason     = (
+            f"keyword: '{all_matched[0]}'" if all_matched
+            else f"industry match ({industry_tier})"
+        )
+
+    return {
+        "semantic_score":        semantic_score,
+        "candidate_tier":        tier,
+        "matched_keywords":      all_matched,
+        "membership_confidence": confidence,
+        "membership_reason":     reason,
+        "rejected_reason":       None,
+        "industry_tier":         industry_tier,
+    }
+
+
 def _compute_liquidity_status(
     volume: Optional[float],
     market_cap: Optional[float],
@@ -2149,67 +2327,33 @@ async def _build_thematic_universe(
                     sym = cand["symbol"]
                     if sym in _exclude_set:
                         continue
-                    # Semantic proof gate for FMP candidates.
-                    # Checks company_name + FMP sector + FMP industry combined —
-                    # not company name alone.  This lets industry strings like
-                    # "Semiconductor Equipment & Materials" serve as proof for
-                    # semicap_equipment even when the company name is opaque
-                    # (e.g. "Ultra Clean Holdings").  For pure_subtheme themes
-                    # every FMP candidate must pass this gate; parent_rollup themes
-                    # skip it (FMP industry match is considered sufficient proof).
-                    if _require_kwmatch and _pos_kws_lower:
-                        _srch = " ".join(filter(None, [
-                            (cand.get("company_name") or "").lower(),
-                            (cand.get("sector")       or "").lower(),
-                            (cand.get("industry")     or "").lower(),
-                        ]))
-                        _all_matched_kws = [kw for kw in _pos_kws_lower if kw in _srch]
-                        if not _all_matched_kws:
-                            continue
-                        # Weak/strong gate: for pure_subtheme themes that define
-                        # weak_keywords, a candidate matching ONLY weak keywords is
-                        # rejected — broad terms like "optical", "server", "security"
-                        # or "automation" are not sufficient proof alone.  The candidate
-                        # must also match at least one strong keyword (any keyword NOT
-                        # in the weak_keywords set).  Seeds/ETF/LKG bypass this entirely.
-                        if _weak_kws_set and _theme_type == "pure_subtheme":
-                            _strong_matched = [
-                                kw for kw in _all_matched_kws
-                                if kw not in _weak_kws_set
-                            ]
-                            if not _strong_matched:
-                                # Soft downgrade (previously hard-drop).
-                                # The screener is a discovery engine — weak-only FMP
-                                # matches are included but flagged so analysts can judge.
-                                # Explicit exclude_keywords and manual_exclude still remove
-                                # confirmed false positives (e.g. VISN from ai_networking).
-                                cand["_kw_proof"]  = _all_matched_kws[0]
-                                cand["_weak_only"] = True
-                                _weak_kw_downgrade_count += 1
-                            else:
-                                cand["_kw_proof"]  = _strong_matched[0]
-                                cand["_weak_only"] = False
-                        else:
-                            cand["_kw_proof"] = _all_matched_kws[0]
-                        # stored for membership_reason in row-build loop
-                    # Exclude gate: reject FMP candidate when any exclude_keyword
-                    # appears in name+sector+industry.  Prevents defense/energy
-                    # companies from bleeding into niche sub-themes via broad FMP
-                    # industry buckets (e.g. BA/LMT in "Specialty Industrial Machinery").
-                    if _excl_kws_lower:
-                        _excl_srch = " ".join(filter(None, [
-                            (cand.get("company_name") or "").lower(),
-                            (cand.get("sector")       or "").lower(),
-                            (cand.get("industry")     or "").lower(),
-                        ]))
-                        if any(kw in _excl_srch for kw in _excl_kws_lower):
-                            continue
+                    # score_theme_candidate: semantic gate + tier assignment.
+                    # Replaces the inline keyword/weak/exclude-gate logic with the
+                    # reusable scorer.  Key behaviour change: companies in core
+                    # industries without a keyword match in their name/sector/industry
+                    # are now included as watch_candidate (low-confidence) rather than
+                    # hard-dropped, so the screener surfaces them for analyst review.
+                    # Explicit exclude_keywords and manual_exclude still reject.
+                    _sc_ind_tag = f"fmp_screener:{cand.get('industry') or 'unknown'}"
+                    _sc_result  = score_theme_candidate(theme_cfg, cand, [_sc_ind_tag])
+                    if _sc_result["candidate_tier"] == "excluded":
+                        continue
+                    # Store all scorer outputs in cand for row-build lookup
+                    cand["_kw_proof"]               = (_sc_result["matched_keywords"] or [""])[0]
+                    cand["_all_matched_kws"]        = _sc_result["matched_keywords"]
+                    cand["_weak_only"]              = (
+                        _sc_result["candidate_tier"] == "watch_candidate"
+                        and _sc_result["membership_confidence"] == "low"
+                    )
+                    cand["candidate_tier_override"] = _sc_result["candidate_tier"]
+                    cand["membership_confidence_override"] = _sc_result["membership_confidence"]
+                    if cand["_weak_only"]:
+                        _weak_kw_downgrade_count += 1
                     if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
                         seen_dynamic.add(sym)
                         screener_syms.append(sym)
                         screener_meta_by_symbol[sym] = cand
-                        src_tag = cand.get("discovery_source") or "fmp_screener"
-                        sources_by_symbol.setdefault(sym, []).append(src_tag)
+                        sources_by_symbol.setdefault(sym, []).append(_sc_ind_tag)
             except Exception as se:
                 print(f"[SCREENER_HUB] fmp_screener {key} error: {se}")
                 sources_failed.append("fmp_screener")
@@ -2245,49 +2389,117 @@ async def _build_thematic_universe(
                     sym = cand["symbol"]
                     if sym in _exclude_set:
                         continue
-                    # Keyword gate: mandatory even for adjacent-industry candidates.
-                    # No keyword proof → hard reject (prevents FMP category soup).
-                    _srch = " ".join(filter(None, [
-                        (cand.get("company_name") or "").lower(),
-                        (cand.get("sector")       or "").lower(),
-                        (cand.get("industry")     or "").lower(),
-                    ]))
-                    _all_adj_matched = [kw for kw in _pos_kws_lower if kw in _srch]
-                    if not _all_adj_matched:
+                    # score_theme_candidate with adjacent-source context.
+                    # Adjacent industries are more prone to FMP category soup, so the
+                    # gate here is STRICT: no keyword proof → hard reject.
+                    # Only watch_candidate rows with actual keyword matches are allowed.
+                    _adj_ind   = cand.get("industry") or _adj_industries[0]
+                    _adj_tag   = f"fmp_screener:{_adj_ind}"
+                    _adj_sc    = score_theme_candidate(theme_cfg, cand, [_adj_tag])
+                    if _adj_sc["candidate_tier"] == "excluded":
                         continue
-                    # Exclude-keywords gate (same as Source C)
-                    if _excl_kws_lower:
-                        _excl_srch = " ".join(filter(None, [
-                            (cand.get("company_name") or "").lower(),
-                            (cand.get("sector")       or "").lower(),
-                            (cand.get("industry")     or "").lower(),
-                        ]))
-                        if any(kw in _excl_srch for kw in _excl_kws_lower):
-                            continue
-                    # Weak/strong gate — identical to Source C
-                    if _weak_kws_set:
-                        _strong_adj = [kw for kw in _all_adj_matched if kw not in _weak_kws_set]
-                        if not _strong_adj:
-                            cand["_weak_only"] = True
-                            _weak_kw_downgrade_count += 1
-                        else:
-                            cand["_kw_proof"] = _strong_adj[0]
-                    else:
-                        cand["_kw_proof"] = _all_adj_matched[0]
-                    # Mark as adjacent-industry so row-build can set theme_role="adjacent"
-                    cand["_is_adjacent"] = True
+                    if not _adj_sc["matched_keywords"]:
+                        continue  # adjacent: industry-only proof insufficient
+                    cand["_kw_proof"]               = (_adj_sc["matched_keywords"] or [""])[0]
+                    cand["_all_matched_kws"]        = _adj_sc["matched_keywords"]
+                    cand["_weak_only"]              = (
+                        _adj_sc["candidate_tier"] == "watch_candidate"
+                        and _adj_sc["membership_confidence"] == "low"
+                    )
+                    cand["candidate_tier_override"] = _adj_sc["candidate_tier"]
+                    cand["membership_confidence_override"] = _adj_sc["membership_confidence"]
+                    cand["_is_adjacent"]            = True
+                    if cand["_weak_only"]:
+                        _weak_kw_downgrade_count += 1
                     if sym not in _ALL_PROXY_ETFS and sym not in seen_dynamic:
                         seen_dynamic.add(sym)
                         screener_syms.append(sym)
                         screener_meta_by_symbol[sym] = cand
-                        # Source tag matches priority-scan pattern "fmp_screener:*"
-                        _adj_ind = cand.get("industry") or _adj_industries[0]
-                        sources_by_symbol.setdefault(sym, []).append(f"fmp_screener:{_adj_ind}")
+                        sources_by_symbol.setdefault(sym, []).append(_adj_tag)
                         _adj_added += 1
                 if _adj_added:
                     print(f"[SCREENER_HUB] fmp_screener_adjacent {key!r}: +{_adj_added} adjacent candidates")
             except Exception as _adj_e:
                 print(f"[SCREENER_HUB] fmp_screener_adjacent {key!r} error: {_adj_e}")
+
+        # ── Source P: Neon profile-cache discovery ────────────────────────────
+        # Queries screener_fundamentals_cache for all non-expired profiles whose
+        # FMP industry is in the theme's core or adjacent industry list, then
+        # scores each via score_theme_candidate (uses company description for
+        # richer matching beyond just name/sector/industry).
+        # Only activates for pure_subtheme on full rebuild jobs.
+        # Skips symbols already in seen_dynamic (found via C/C2/seed/ETF).
+        _prof_inds: list[str] = list(dict.fromkeys(
+            (industries or []) + (_adj_industries or [])
+        ))
+        if with_fmp_screener and _theme_type == "pure_subtheme" and _prof_inds:
+            try:
+                from services.fmp_cache_service import get_profiles_by_industries as _get_prof_inds
+                _prof_cands = _get_prof_inds(_prof_inds)
+                _prof_added   = 0
+                _prof_upgraded = 0
+                for _pcand in _prof_cands:
+                    _psym = _pcand["symbol"]
+                    if _psym in _exclude_set:
+                        continue
+                    _p_src_tag = f"fmp_profile:{_pcand.get('industry', '')}"
+
+                    if _psym in seen_dynamic:
+                        # ── Re-scorer path ─────────────────────────────────────────
+                        # Company already discovered by Source C/C2/ETF but only has
+                        # name/sector/industry keyword evidence.  If the Neon profile
+                        # has a description with stronger keyword proof, upgrade the
+                        # candidate_tier_override (watch_candidate → verified/adjacent).
+                        _existing = screener_meta_by_symbol.get(_psym)
+                        if (
+                            _existing is not None
+                            and _existing.get("candidate_tier_override") == "watch_candidate"
+                            and _pcand.get("description")          # only re-score when desc present
+                        ):
+                            _p_sc = score_theme_candidate(theme_cfg, _pcand, [_p_src_tag])
+                            if _p_sc["candidate_tier"] in ("verified_discovery", "adjacent_discovery"):
+                                _existing["candidate_tier_override"]      = _p_sc["candidate_tier"]
+                                _existing["membership_confidence_override"] = _p_sc["membership_confidence"]
+                                _existing["_all_matched_kws"]             = _p_sc["matched_keywords"]
+                                _existing["_kw_proof"]                    = (
+                                    _p_sc["matched_keywords"] or [""]
+                                )[0]
+                                _existing["_weak_only"]                   = False
+                                _existing["theme_relevance_score"]        = _p_sc["semantic_score"]
+                                sources_by_symbol.setdefault(_psym, []).append(_p_src_tag)
+                                _prof_upgraded += 1
+                        continue
+
+                    # ── New-candidate path ─────────────────────────────────────────
+                    _p_sc = score_theme_candidate(theme_cfg, _pcand, [_p_src_tag])
+                    if _p_sc["candidate_tier"] == "excluded":
+                        continue
+                    _pcand["_kw_proof"]                    = (_p_sc["matched_keywords"] or [""])[0]
+                    _pcand["_all_matched_kws"]             = _p_sc["matched_keywords"]
+                    _pcand["_weak_only"]                   = (
+                        _p_sc["candidate_tier"] == "watch_candidate"
+                        and _p_sc["membership_confidence"] == "low"
+                    )
+                    _pcand["candidate_tier_override"]      = _p_sc["candidate_tier"]
+                    _pcand["membership_confidence_override"] = _p_sc["membership_confidence"]
+                    _pcand["theme_relevance_score"]        = _p_sc["semantic_score"]
+                    _pcand["industry_tier"]                = _p_sc["industry_tier"]
+                    _pcand["_is_adjacent"]                 = (
+                        _p_sc["industry_tier"] in ("adjacent", "weak_adjacent")
+                    )
+                    _pcand["discovery_source"]             = "fmp_profile"
+                    seen_dynamic.add(_psym)
+                    screener_syms.append(_psym)
+                    screener_meta_by_symbol[_psym] = _pcand
+                    sources_by_symbol.setdefault(_psym, []).append(_p_src_tag)
+                    _prof_added += 1
+                if _prof_added or _prof_upgraded:
+                    print(
+                        f"[SCREENER_HUB] fmp_profile_discovery {key!r}: "
+                        f"+{_prof_added} new, {_prof_upgraded} upgraded"
+                    )
+            except Exception as _pe:
+                print(f"[SCREENER_HUB] fmp_profile_discovery {key!r} error: {_pe}")
 
         # ── Source D: FMP peers (thin themes, budget-guarded) ─────────────────
         # Skip for pure_subtheme: themes are too niche for FMP's generic peer
@@ -3986,7 +4198,7 @@ async def get_screener_hub(
             ("manual_include", lambda s: s == "manual_include"),
             ("static_seed",    lambda s: s == "static_seed"),
             ("etf_holding",    lambda s: s.startswith("etf:")),
-            ("fmp_screener",   lambda s: s.startswith("fmp_screener:") or s == "fmp_peers"),
+            ("fmp_screener",   lambda s: s.startswith("fmp_screener:") or s == "fmp_peers" or s.startswith("fmp_profile:")),
             ("lkg",            lambda s: s == "lkg_leaders" or s.startswith("lkg:")),
             ("social",         lambda s: s == "social_consensus"),
             ("chain_reaction", lambda s: s == "chain_reaction"),
@@ -4025,6 +4237,18 @@ async def get_screener_hub(
         elif _chosen_src == "fmp_peers":
             membership_source = "fmp_screener"
             membership_reason = "FMP peer match"
+        elif _chosen_src.startswith("fmp_profile:"):
+            membership_source = "fmp_screener"
+            _ind_name  = _chosen_src.split(":", 1)[1]
+            _kw_proof  = (scr_meta.get("_kw_proof") or "").strip()
+            _kw_weak   = bool(scr_meta.get("_weak_only", False))
+            membership_reason = (
+                f"FMP profile:{_ind_name}"
+                + (
+                    f" | {'weak ' if _kw_weak else ''}proof: '{_kw_proof}' in description"
+                    if _kw_proof else " | description match"
+                )
+            )
         elif _chosen_src == "lkg_leaders":
             membership_source = "lkg"
             membership_reason = "LKG momentum leader"
@@ -4049,6 +4273,30 @@ async def get_screener_hub(
         _is_weak_fmp = (
             membership_source == "fmp_screener"
             and bool(scr_meta.get("_weak_only", False))
+        )
+
+        # Adjacent row flag: combines _is_adjacent (Source C2 marker) and
+        # industry_tier from screener_meta (set by _compute_theme_relevance_score).
+        _is_adjacent_row = (
+            bool(scr_meta.get("_is_adjacent"))
+            or scr_meta.get("industry_tier") in ("adjacent", "weak_adjacent")
+        )
+
+        # Resolved candidate_tier: uses scorer override when available.
+        _tier_override  = scr_meta.get("candidate_tier_override")
+        _candidate_tier = (
+            "core"               if membership_source in ("seed", "manual_include") else
+            "adjacent_discovery" if _is_adjacent_row and not _is_weak_fmp           else
+            "watch_candidate"    if _is_weak_fmp                                    else
+            (
+                _tier_override
+                if _tier_override
+                else (
+                    "verified_discovery"
+                    if membership_source in ("etf_holding", "fmp_screener")
+                    else "watch_candidate"
+                )
+            )
         )
 
         # ── Row-source tally: bucket each row into its primary source ──────────
@@ -4222,25 +4470,23 @@ async def get_screener_hub(
             "membership_source":     membership_source,
             "membership_reason":     membership_reason,
             "membership_confidence": (
-                "high"   if membership_source in ("seed", "manual_include") else
-                "low"    if _is_weak_fmp else
-                "medium" if membership_source in ("etf_holding", "fmp_screener") else
-                "low"
+                scr_meta.get("membership_confidence_override")
+                or (
+                    "high"   if membership_source in ("seed", "manual_include") else
+                    "low"    if _is_weak_fmp else
+                    "medium" if membership_source in ("etf_holding", "fmp_screener") else
+                    "low"
+                )
             ),
             "theme_role": (
                 "core"       if membership_source in ("seed", "manual_include") else
                 "emerging"   if _is_weak_fmp else
-                "adjacent"   if scr_meta.get("_is_adjacent")                   else
+                "adjacent"   if _is_adjacent_row                                else
                 "supporting" if membership_source in ("etf_holding", "fmp_screener") else
                 "emerging"
             ),
-            "candidate_tier": (
-                "core"                if membership_source in ("seed", "manual_include") else
-                "qualified_discovery" if membership_source == "etf_holding"             else
-                "watch_candidate"     if _is_weak_fmp                                   else
-                "qualified_discovery" if membership_source == "fmp_screener"            else
-                "watch_candidate"
-            ),
+            "candidate_tier":   _candidate_tier,
+            "matched_keywords": scr_meta.get("_all_matched_kws") or [],
             "quality_flags":         quality_flags,
             "source_confidence":     source_conf,
             "rs_data_status":        rs_status,

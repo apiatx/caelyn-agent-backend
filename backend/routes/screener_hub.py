@@ -248,6 +248,155 @@ async def screener_hub_status(
         )
 
 
+# ── GET /api/admin/screener-hub/audit ─────────────────────────────────────────
+
+@router.get("/api/admin/screener-hub/audit")
+async def screener_hub_audit(
+    request: Request,
+    theme: Optional[str] = Query(None, description="Theme key (e.g. 'semicap_equipment')"),
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    Discovery-engine audit for a single theme.
+
+    Returns:
+      total_rows, seed_count, verified_discovery_count, adjacent_discovery_count,
+      watch_candidate_count, tier_breakdown, source_breakdown, top_25 rows
+      (sorted by theme_relevance_score desc).
+
+    Reads from the Neon snapshot — no rebuild triggered.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+    if not theme:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "?theme= query param required"},
+        )
+    try:
+        # Read directly from the Neon snapshot — zero rebuild risk, shows ALL
+        # discovered symbols regardless of quote/fundamentals cache warmth.
+        from data.screener_hub_store import get_latest_universe as _get_snap
+        snap = _get_snap("thematic", theme)
+        if not snap:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"No snapshot found for theme={theme!r}. Run a rebuild first."},
+            )
+
+        snap_meta       = snap.get("metadata") or {}
+        sources_by_sym  = snap_meta.get("sources_by_symbol")  or {}
+        scr_meta_by_sym = snap_meta.get("screener_meta_by_symbol") or {}
+        all_syms        = snap.get("symbols") or []
+
+        # Priority-scan constants (mirrors row-build logic)
+        _BUCKET_PRIORITY = [
+            ("seed",          lambda s: s in ("static_seed", "manual_include")),
+            ("etf_holding",   lambda s: s.startswith("etf:")),
+            ("fmp_screener",  lambda s: s.startswith("fmp_screener:") or s == "fmp_peers" or s.startswith("fmp_profile:")),
+            ("lkg",           lambda s: s in ("lkg_leaders",) or s.startswith("lkg:")),
+        ]
+
+        audit_rows: list[dict] = []
+        for sym in all_syms:
+            disc_src  = sources_by_sym.get(sym) or []
+            scr_meta  = scr_meta_by_sym.get(sym) or {}
+
+            # Resolve primary source bucket
+            mem_src = "unknown"
+            for bucket, pred in _BUCKET_PRIORITY:
+                if any(pred(s) for s in disc_src):
+                    mem_src = bucket
+                    break
+
+            # Candidate tier: prefer stored override, then infer
+            tier_override    = scr_meta.get("candidate_tier_override")
+            is_adjacent      = bool(scr_meta.get("_is_adjacent")) or scr_meta.get("industry_tier") in ("adjacent", "weak_adjacent")
+            is_weak          = bool(scr_meta.get("_weak_only"))
+            candidate_tier   = (
+                "core"               if mem_src == "seed" else
+                "adjacent_discovery" if is_adjacent and not is_weak else
+                "watch_candidate"    if is_weak else
+                tier_override or (
+                    "verified_discovery" if mem_src in ("etf_holding", "fmp_screener") else
+                    "watch_candidate"
+                )
+            )
+
+            audit_rows.append({
+                "symbol":                sym,
+                "company_name":          scr_meta.get("company_name") or "",
+                "candidate_tier":        candidate_tier,
+                "theme_relevance_score": scr_meta.get("theme_relevance_score"),
+                "membership_source":     mem_src,
+                "membership_confidence": scr_meta.get("membership_confidence_override") or (
+                    "high" if mem_src == "seed" else
+                    "low"  if is_weak else
+                    "medium"
+                ),
+                "matched_keywords":      scr_meta.get("_all_matched_kws") or [],
+                "industry_tier":         scr_meta.get("industry_tier") or "unknown",
+                "theme_role":            (
+                    "core"       if mem_src == "seed" else
+                    "adjacent"   if is_adjacent else
+                    "emerging"   if is_weak else
+                    "supporting" if mem_src in ("etf_holding", "fmp_screener") else
+                    "emerging"
+                ),
+                "discovery_sources":     disc_src,
+            })
+
+        # Compute tier / source breakdowns
+        tier_counts:    dict[str, int] = {}
+        source_counts:  dict[str, int] = {}
+        src_tag_counts: dict[str, int] = {}
+        watch_by_src:   dict[str, int] = {}
+
+        for row in audit_rows:
+            tier = row["candidate_tier"]
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
+            msrc = row["membership_source"]
+            source_counts[msrc] = source_counts.get(msrc, 0) + 1
+            for stag in row["discovery_sources"]:
+                _k = stag.split(":")[0] if ":" in stag else stag
+                src_tag_counts[_k] = src_tag_counts.get(_k, 0) + 1
+            if tier == "watch_candidate":
+                watch_by_src[msrc] = watch_by_src.get(msrc, 0) + 1
+
+        top_25 = sorted(
+            audit_rows,
+            key=lambda r: -(r.get("theme_relevance_score") or 0),
+        )[:25]
+
+        profile_match_count = sum(
+            1 for r in audit_rows
+            if any(s.startswith("fmp_profile:") for s in r["discovery_sources"])
+        )
+
+        return JSONResponse(content={
+            "theme":                     theme,
+            "generated_at":              snap.get("generated_at"),
+            "total_symbols":             len(all_syms),
+            "seed_count":                tier_counts.get("core", 0),
+            "verified_discovery_count":  tier_counts.get("verified_discovery", 0),
+            "adjacent_discovery_count":  tier_counts.get("adjacent_discovery", 0),
+            "watch_candidate_count":     tier_counts.get("watch_candidate", 0),
+            "profile_match_count":       profile_match_count,
+            "fmp_screener_count":        source_counts.get("fmp_screener", 0),
+            "tier_breakdown":            tier_counts,
+            "source_breakdown":          source_counts,
+            "source_tag_breakdown":      src_tag_counts,
+            "watch_candidate_by_source": watch_by_src,
+            "top_25":                    top_25,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "theme": theme, "error": str(e)},
+        )
+
+
 # ── POST /api/admin/bottlenecks/refresh ───────────────────────────────────────
 
 @router.post("/api/admin/bottlenecks/refresh")

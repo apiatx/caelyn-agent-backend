@@ -1,0 +1,113 @@
+We want to implement the full dynamic discovery engine for Screener Hub using FMP + Tradier only.
+
+Do not use LLM.
+Do not touch existing live quote/Tradier overlay except to reuse it.
+Do not go back to FMP category soup.
+Do not make pure subthemes seed-only forever.
+Do not hide dynamic candidates in a separate pool only.
+
+Goal:
+Each theme should dynamically discover candidates from FMP and existing app data, then classify them with deterministic theme rules. Seeds anchor quality but must not cap the universe.
+
+Architecture:
+- FMP = candidate generation + profile/reference enrichment
+- Internal theme rules = semantic classification
+- Tradier = live quote/volume/RS hydration only
+- Neon = cached candidate/profile/enrichment store
+
+For every theme row, return:
+- candidate_tier: core | verified_discovery | adjacent_discovery | watch_candidate
+- membership_source
+- membership_reason
+- membership_confidence: high | medium | low
+- semantic_score
+- theme_role
+- discovery_sources
+- matched_keywords
+- rejected_reason when excluded in diagnostics
+
+Candidate sources:
+1. seed_tickers / manual_include
+2. FMP stock screener using broad allowed sectors/industries
+3. FMP company profile/name/description search where available
+4. FMP peer comparison for seed tickers
+5. existing theme_rs_universe candidates
+6. existing watchlist/theme overlap
+7. social/options/LKG only as ranking signals, not standalone membership proof
+
+Important:
+LKG/options/social/watchlist overlap may boost/rank candidates but cannot alone prove membership in pure_subtheme themes.
+
+Classification:
+For each theme, compute semantic_score:
+- strong keyword/profile match
+- sector/industry compatibility
+- source strength
+- peer/source proof
+- manual/seed boost
+- wrong-sector penalties
+- exclude keyword penalties
+
+Tiers:
+- core: seed/manual/high-confidence known names
+- verified_discovery: dynamic candidate with strong semantic proof
+- adjacent_discovery: relevant supplier/adjacent company with medium proof
+- watch_candidate: plausible but weak proof, still visible and labeled
+- excluded: explicit/manual exclude or semantic_score too low
+
+Do not hard-drop weak FMP candidates unless they are explicit excludes or clearly wrong. Weak candidates should appear as watch_candidate with low confidence.
+
+Implementation phases:
+1. Audit current candidate source coverage per theme:
+   - seed_count
+   - fmp_screener_count
+   - peer_count
+   - profile_match_count
+   - watch_candidate_count
+   - rejected_count
+
+2. Add a reusable semantic scoring function:
+   score_theme_candidate(theme_cfg, candidate_profile, discovery_sources)
+
+3. Add incremental FMP profile cache:
+   - use existing cache/Neon patterns
+   - off-hours refresh
+   - no page-load enrichment storms
+   - only enrich new/unknown candidate symbols
+
+4. For pure_subtheme themes, enable dynamic candidates:
+   - ai_networking
+   - memory_storage
+   - semicap_equipment
+   - substrates_packaging
+   - photonics_lasers
+   - quantum
+   - drones
+   - power_cooling
+   - datacenter_infra
+
+5. Return all tiers in the main table by default.
+   Frontend can later add filters for:
+   - All
+   - Core
+   - Discovery
+   - Watch
+
+Validation:
+For every theme:
+- row_count before/after
+- core_count
+- verified_discovery_count
+- adjacent_discovery_count
+- watch_candidate_count
+- rejected_count
+- top 25 rows with reason/tier
+- sample rejected rows with rejected_reason
+
+Acceptance:
+- Themes are no longer seed-only unless genuinely no dynamic candidates exist.
+- Dynamic candidates appear in the main Screener table.
+- Bad matches are either excluded or labeled low-confidence watch candidates.
+- No LLM calls.
+- No new live quote architecture.
+- No broad Tradier calls beyond existing active-theme quote hydration.

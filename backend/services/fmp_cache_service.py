@@ -273,6 +273,69 @@ def get_stock_screener_snapshot_cached(theme_or_filter_key: str) -> Optional[dic
 
 # ── Admin / audit helper ──────────────────────────────────────────────────────
 
+def get_profiles_by_industries(industries: list[str]) -> list[dict]:
+    """
+    Query screener_fundamentals_cache for all non-expired cached profiles whose
+    FMP industry classification is in the given list.
+
+    Returns list[dict] — each entry has:
+        {symbol, company_name, sector, industry, market_cap, description}
+
+    Zero FMP network calls — Neon DB only.  Never raises.
+    """
+    if not industries:
+        return []
+    try:
+        import json as _json
+        from data.screener_hub_store import get_fundamentals as _sh_get_fund
+        # Use direct pg query via the store's _get_conn/_put_conn for industry filter
+        try:
+            from data.pg_storage import _get_conn, _put_conn
+        except Exception:
+            return []
+        conn = _get_conn()
+        if conn is None:
+            return []
+        rows_out: list[dict] = []
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT symbol, sector, industry, market_cap, profile_json
+                FROM public.screener_fundamentals_cache
+                WHERE industry = ANY(%s)
+                  AND expires_at > NOW() - INTERVAL '30 days'
+                LIMIT 500
+                """,
+                (list(industries),),
+            )
+            for row in cur.fetchall():
+                sym, sector, industry, mcap, profile_json = row
+                p = (
+                    profile_json if isinstance(profile_json, dict)
+                    else (_json.loads(profile_json) if profile_json else {})
+                )
+                company_name = (
+                    p.get("companyName") or p.get("name")
+                    or p.get("company_name") or ""
+                )
+                rows_out.append({
+                    "symbol":       sym,
+                    "company_name": company_name,
+                    "sector":       sector  or "",
+                    "industry":     industry or "",
+                    "market_cap":   float(mcap) if mcap is not None else None,
+                    "description":  p.get("description") or "",
+                })
+            cur.close()
+        finally:
+            _put_conn(conn)
+        return rows_out
+    except Exception as e:
+        print(f"[FMP_CACHE] get_profiles_by_industries error: {e}")
+        return []
+
+
 def cache_coverage(symbols: list[str]) -> dict:
     """
     Coverage report for a list of symbols against screener_fundamentals_cache.
