@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Header, HTTPException, Body, Depends
+from fastapi import FastAPI, Request, Header, HTTPException, Body, Depends, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -7532,8 +7532,9 @@ def _pf_row_from_cache(sym: str, neon_row: dict) -> dict:
 async def portfolio_fundamentals(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
+    force_refresh: bool = Query(False),
 ):
-    """FMP fundamentals for every current open stock holding.
+    """FMP fundamentals for every current open stock holding + option underlyings.
 
     Cache strategy (shared with Social Screener — no new table):
       screener_fundamentals_cache (Neon), 7-day TTL.
@@ -7541,8 +7542,12 @@ async def portfolio_fundamentals(
       Cache miss → fetch all 6 FMP endpoints via fetch_enrichment_for_symbols,
                    write-through to Neon, return fresh rows.
 
-    Only open stock/equity holdings (shares > 0) are included.
-    Closed positions, fully-closed positions, and option contracts are excluded.
+    force_refresh=true  → treat ALL canonical portfolio symbols as stale,
+                          re-fetch from FMP, update Neon cache.  Use for the
+                          manual Refresh button on the Portfolio Fundamentals tab.
+
+    Symbol universe: open equity holdings (shares > 0) + open option underlyings.
+    OCC contract IDs are never included — only underlying tickers.
     Response shape mirrors Social Screener Fundamental toggle for frontend reuse.
     """
     if not _jwt_or_key(request, api_key):
@@ -7623,7 +7628,11 @@ async def portfolio_fundamentals(
         })
 
     # ── 2. Freshness check against Neon screener_fundamentals_cache ─────────
-    fresh_set: set[str] = _fresh_syms(open_symbols, max_age_days=7)
+    # force_refresh=True bypasses TTL entirely — all symbols treated as stale.
+    if force_refresh:
+        fresh_set: set[str] = set()
+    else:
+        fresh_set: set[str] = _fresh_syms(open_symbols, max_age_days=7)
     stale_set: set[str] = set(open_symbols) - fresh_set
 
     # ── 3. Live FMP fetch for cache misses / stale symbols ─────────────────

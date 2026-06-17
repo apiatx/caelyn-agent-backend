@@ -965,18 +965,25 @@ class CaelynTerminalProvider:
         _opt_position_rows: list[dict] = []
         for _op in _opt_positions_raw:
             _opt_position_rows.append({
-                "underlying":       _op.get("underlying", ""),
-                "display_symbol":   _op.get("display_symbol", ""),
-                "option_type":      _op.get("option_type", ""),
-                "expiration_date":  _op.get("expiration_date"),
-                "strike":           _op.get("strike"),
-                "contracts_open":   _op.get("contracts_open"),
-                "avg_premium":      _op.get("avg_premium"),
-                "cost_basis":       _op.get("cost_basis"),
-                "realized_pnl":     _op.get("realized_pnl"),
-                "final_status":     _op.get("final_status"),
-                "first_entry_date": _op.get("first_entry_date"),
-                "last_entry_date":  _op.get("last_entry_date"),
+                "underlying_symbol": _op.get("underlying", ""),
+                "underlying":        _op.get("underlying", ""),
+                "display_symbol":    _op.get("display_symbol", ""),
+                "option_type":       _op.get("option_type", ""),
+                "call_put":          _op.get("option_type", ""),
+                "expiration":        _op.get("expiration_date"),
+                "expiration_date":   _op.get("expiration_date"),
+                "strike":            _op.get("strike"),
+                "contracts":         _op.get("contracts_open"),
+                "contracts_open":    _op.get("contracts_open"),
+                "avg_premium":       _op.get("avg_premium"),
+                "cost_basis":        _op.get("cost_basis"),
+                "mark":              None,
+                "market_value":      None,
+                "unrealized_pnl":    None,
+                "realized_pnl":      _op.get("realized_pnl"),
+                "final_status":      _op.get("final_status"),
+                "first_entry_date":  _op.get("first_entry_date"),
+                "last_entry_date":   _op.get("last_entry_date"),
             })
 
         return {

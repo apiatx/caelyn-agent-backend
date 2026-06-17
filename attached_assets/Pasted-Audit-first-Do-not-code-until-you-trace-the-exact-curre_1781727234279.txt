@@ -1,0 +1,94 @@
+Audit first. Do not code until you trace the exact current path for:
+
+1. GET /api/portfolio/fundamentals
+2. The fundamentals cache/store used by that endpoint
+3. The FMP fetch/hydration function used for portfolio fundamentals
+4. The canonical portfolio aggregation helper that now includes equity holdings + option underlyings
+5. GET /api/caelyn-terminal and the exact option_positions response shape
+
+Current bug:
+The Portfolio Fundamentals tab now lists option holding tickers/underlyings, but their fundamental data is blank/missing. These option underlyings should be treated like normal portfolio symbols for fundamentals lookup.
+
+Important cache policy:
+
+* Fundamentals should be pulled from FMP once per symbol.
+* Then cached indefinitely in Neon.
+* Do not refetch fundamentals on every page load.
+* If the user adds a new stock position or option position, only the newly added underlying symbol(s) should trigger FMP fetches.
+* If the user manually clicks Refresh, then refresh fundamentals for the current canonical portfolio symbol universe.
+* Do not delete or bypass existing cache infrastructure.
+* Do not invent a new endpoint unless the audit proves there is no existing route.
+
+Expected behavior:
+
+1. Build canonical symbol universe:
+
+   * stock holdings symbols
+   * option underlyings
+   * deduped
+   * no OCC option contract IDs
+
+2. For each canonical symbol:
+
+   * If fundamentals cache exists and is valid, return it.
+   * If cache is missing or materially empty, fetch FMP once for that symbol only.
+   * Upsert the result into the existing fundamentals cache.
+   * Return hydrated row in the same response.
+
+3. Manual refresh behavior:
+
+   * Existing manual refresh button should force-refresh all current canonical portfolio symbols.
+   * Still dedupe symbols first.
+   * Still use existing FMP client/governor/cache patterns.
+
+4. New ticker behavior:
+
+   * If user adds a stock ticker, fetch fundamentals once for that new ticker.
+   * If user adds an option position, fetch fundamentals once for the option underlying.
+   * Existing cached symbols should not be refetched just because a new symbol was added.
+
+5. Fix unavailable behavior:
+
+   * A symbol should only be in unavailable_symbols if FMP failed or returned no usable fundamental/profile data.
+   * Do not mark option underlyings unavailable merely because they came from option_positions instead of equity holdings.
+   * unavailable_symbols must remain list[str].
+   * Never return object arrays that cause "[object Object]" on frontend.
+
+6. Terminal backend sanity:
+
+   * Confirm /api/caelyn-terminal returns actual user option holdings in a stable field, preferably top-level option_positions.
+   * Each option row should include at minimum:
+     underlying_symbol
+     option_type/call_put
+     expiration
+     strike
+     contracts
+     avg_premium
+     mark
+     market_value
+     unrealized_pnl
+   * Do not pass OCC option contract IDs into stock/fundamental/news lookups.
+   * Do not treat option underlyings as fake equity share positions for portfolio math.
+
+Likely root cause to investigate:
+The endpoint may now include option underlyings in the returned symbol list, but the hydration/fetch path may still only hydrate rows that came from equity holdings. Fix the cache miss path so option underlyings go through the same FMP profile/fundamentals fetch + Neon upsert path as stock holdings.
+
+Validation required before reporting done:
+
+1. Run GET /api/portfolio/fundamentals with current sample portfolio.
+2. Confirm response includes hydrated fundamentals rows for option underlyings:
+   CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO
+3. Confirm those rows have real values where FMP supports them, e.g. company name, market cap, sector, gross margin, debt/equity, P/E where available.
+4. Confirm a second request uses cache and does not refetch every symbol from FMP.
+5. Confirm manual refresh does force refresh for the canonical symbol universe.
+6. Confirm unavailable_symbols is list[str] and does not include symbols that hydrated successfully.
+7. Confirm /api/caelyn-terminal returns option_positions with 8 actual user option rows.
+8. Return exact files/functions changed and exact response fields validated.
+
+Constraints:
+
+* No new external API calls beyond the existing fundamentals hydration path.
+* No route replacement.
+* Preserve existing Dashboard behavior.
+* Preserve stock holdings behavior.
+* Preserve current cache table if one already exists.
