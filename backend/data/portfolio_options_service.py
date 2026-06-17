@@ -223,6 +223,8 @@ def _unavail_row(sym: str, reason: str, optionable: bool | None = None) -> dict:
         "ticker":              sym,
         "symbol":              sym,
         "optionable":          optionable,
+        "has_options":         None,
+        "has_open_option_position": False,
         "data_available":      False,
         "score":               None,
         "p_c":                 None,
@@ -242,6 +244,85 @@ def _unavail_row(sym: str, reason: str, optionable: bool | None = None) -> dict:
         "confidence":          None,
         "source":              "portfolio_scoped_options_screener",
         "unavailable_reason":  reason,
+    }
+
+
+def _build_position_fallback_row(sym: str, positions: list[dict]) -> dict:
+    """
+    Build a partial options-flow row for an open option underlying when the
+    chain scan has no result (empty chain, timeout, not in Tradier coverage).
+
+    Uses only position metadata from the database — no Tradier calls.
+    "NO OPTIONS" is never used here because the user holds open contracts
+    which prove the underlying IS optionable.
+    """
+    # Sort positions by nearest expiration so the representative contract is
+    # the most time-sensitive one.
+    sorted_pos = sorted(
+        positions,
+        key=lambda p: (p.get("expiration_date") or "9999-12-31"),
+    )
+    rep = sorted_pos[0] if sorted_pos else {}
+
+    all_calls = [p for p in positions if (p.get("option_type") or "").upper() == "CALL"]
+    all_puts  = [p for p in positions if (p.get("option_type") or "").upper() == "PUT"]
+
+    if all_calls and not all_puts:
+        direction    = "calls"
+        signal_label = "CONTRACT DATA ONLY"
+    elif all_puts and not all_calls:
+        direction    = "puts"
+        signal_label = "CONTRACT DATA ONLY"
+    else:
+        direction    = "neutral"
+        signal_label = "POSITION OPEN · FLOW STALE"
+
+    total_contracts = sum(float(p.get("contracts_open") or 0) for p in positions)
+
+    return {
+        "ticker":                   sym,
+        "symbol":                   sym,
+        "optionable":               True,
+        "has_options":              True,
+        "has_open_option_position": True,
+        "data_available":           False,   # no live flow/chain metrics
+        "score":                    None,
+        "p_c":                      None,
+        "put_call":                 None,
+        "iv":                       None,
+        "em":                       None,
+        "expected_move":            None,
+        "vol":                      None,
+        "volume":                   None,
+        "call_volume":              None,
+        "put_volume":               None,
+        "open_interest":            None,
+        "call_open_interest":       None,
+        "put_open_interest":        None,
+        "signal":                   signal_label,
+        "put_call_direction":       direction,
+        "confidence":               None,
+        "source":                   "portfolio_option_position",
+        "unavailable_reason":       "flow_scan_unavailable",
+        # Position-level fields for the frontend to render contract details
+        "position_contracts":       total_contracts,
+        "position_count":           len(positions),
+        "position_expiration":      rep.get("expiration_date"),
+        "position_strike":          float(rep.get("strike") or 0),
+        "position_option_type":     (rep.get("option_type") or "CALL").upper(),
+        "position_avg_premium":     float(rep.get("avg_premium") or 0),
+        "positions": [
+            {
+                "occ_key":         p.get("occ_key"),
+                "expiration_date": p.get("expiration_date"),
+                "strike":          float(p.get("strike") or 0),
+                "option_type":     (p.get("option_type") or "").upper(),
+                "contracts_open":  float(p.get("contracts_open") or 0),
+                "avg_premium":     float(p.get("avg_premium") or 0),
+                "cost_basis":      float(p.get("cost_basis") or 0),
+            }
+            for p in sorted_pos
+        ],
     }
 
 
@@ -491,6 +572,7 @@ async def scan_portfolio_options(
     cache,
     master_snap: dict | None = None,
     holdings_sig: str | None = None,
+    open_option_positions: "dict[str, list[dict]] | None" = None,
 ) -> dict:
     """
     Portfolio-scoped options scan — reuses the same scoring / signal / IV /
@@ -501,6 +583,11 @@ async def scan_portfolio_options(
       2. Per-ticker cache       portfolio_opts:{sym}           (300s TTL)
       3. Master screener cache rows (scored by TradierFlowEngine — best quality)
       4. Live Tradier scan for tickers not in any cache
+
+    open_option_positions: dict mapping underlying symbol → list of open
+      option position dicts (from option_trades_store). When provided, any
+      symbol in this map will never be labelled "NO OPTIONS" — a position
+      fallback row is built from the DB metadata if the chain scan fails.
 
     Args:
       symbols:      list of ticker strings for the current portfolio
@@ -630,6 +717,47 @@ async def scan_portfolio_options(
     for sym in syms:
         if sym not in results:
             results[sym] = _unavail_row(sym, "scan_not_reached")
+
+    # 4.25. Open option position override ──────────────────────────────────
+    # Symbols with open option positions in the DB are KNOWN to be optionable
+    # regardless of what the chain scan returned.  We must never label them
+    # "NO OPTIONS" — that label is reserved for symbols Tradier confirms have
+    # no options chain at all.
+    #
+    # Priority after this step (highest → lowest):
+    #   (A) data_available=True row from live scan / master snap / disk LKG  ← keep as-is
+    #   (B) position fallback row built from DB metadata                       ← built here
+    #
+    # Position fallback rows set data_available=False so the risk engine marks
+    # them UNKNOWN, but signal is "CONTRACT DATA ONLY" / "POSITION OPEN · FLOW
+    # STALE" — never "NO OPTIONS".
+    if open_option_positions:
+        _norm_opp: dict[str, list[dict]] = {
+            k.upper(): v for k, v in open_option_positions.items()
+            if k and v
+        }
+        for _sym, _positions in _norm_opp.items():
+            if _sym not in syms:
+                continue
+            existing = results.get(_sym, {})
+            if existing.get("data_available"):
+                # Full flow data present — just tag with position flags
+                results[_sym] = {
+                    **existing,
+                    "has_open_option_position": True,
+                    "has_options":              True,
+                }
+            else:
+                # Chain scan failed / no data — build position-based fallback
+                fallback = _build_position_fallback_row(_sym, _positions)
+                results[_sym] = fallback
+                print(
+                    f"[PORTFOLIO_OPTIONS_SVC] position-fallback applied "
+                    f"sym={_sym}  "
+                    f"contracts={fallback.get('position_contracts')}  "
+                    f"signal={fallback.get('signal')!r}  "
+                    f"prev_reason={existing.get('unavailable_reason')}"
+                )
 
     # 4.5. Portfolio-only pullback-risk enrichment ─────────────────────────
     # Pure post-processing: adds risk_score/level/signal/reasons/confidence

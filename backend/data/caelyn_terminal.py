@@ -796,7 +796,21 @@ class CaelynTerminalProvider:
         # fresh scan whenever the full symbol universe changes.
         import hashlib as _hs
         _opts_sig = _hs.md5(json.dumps(sorted(equity_tickers)).encode()).hexdigest()[:16]
-        _opts_scan          = await self._fetch_options_status(equity_tickers, _opts_sig)
+
+        # Build underlying → positions map so scan_portfolio_options can tag
+        # open-position underlyings and use contract metadata as a fallback
+        # when the chain scan fails. _opt_positions_raw was loaded in step 1c.
+        _open_opt_by_underlying: dict[str, list[dict]] = {}
+        for _op in _opt_positions_raw:
+            _ul = (_op.get("underlying") or "").upper().strip()
+            if _ul:
+                _open_opt_by_underlying.setdefault(_ul, []).append(_op)
+
+        _opts_scan = await self._fetch_options_status(
+            equity_tickers,
+            _opts_sig,
+            open_option_positions=_open_opt_by_underlying if _open_opt_by_underlying else None,
+        )
         _options_by_ticker  = _opts_scan.get("by_symbol", {})
         _opts_cache_hit     = _opts_scan.get("cache_hit", False)
         for _p in positions:
@@ -1493,6 +1507,7 @@ class CaelynTerminalProvider:
         self,
         equity_tickers: list[str],
         holdings_sig: str | None = None,
+        open_option_positions: "dict | None" = None,
     ) -> dict:
         """
         Portfolio-scoped options scan — reuses the exact scoring / signal / IV /
@@ -1503,6 +1518,10 @@ class CaelynTerminalProvider:
           2. Per-ticker cache       portfolio_opts:{sym}          (300 s)
           3. Master screener cache  (already scored by TradierFlowEngine)
           4. Live Tradier scan      for tickers not in any cache
+
+        open_option_positions: underlying → list of open position dicts.
+          Passed through to scan_portfolio_options so that symbols with open
+          contracts are never labelled "NO OPTIONS" when the chain scan fails.
 
         Returns the full scan dict from portfolio_options_service.scan_portfolio_options().
         """
@@ -1557,11 +1576,12 @@ class CaelynTerminalProvider:
                 }
 
         return await scan_portfolio_options(
-            symbols      = equity_tickers,
-            tradier      = self.tradier,
-            cache        = cache,
-            master_snap  = master_snap,
-            holdings_sig = holdings_sig,
+            symbols                = equity_tickers,
+            tradier                = self.tradier,
+            cache                  = cache,
+            master_snap            = master_snap,
+            holdings_sig           = holdings_sig,
+            open_option_positions  = open_option_positions,
         )
 
     def _format_holdings(self, positions: list[dict]) -> list[dict]:

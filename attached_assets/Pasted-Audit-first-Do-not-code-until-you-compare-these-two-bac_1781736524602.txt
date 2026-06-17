@@ -1,0 +1,119 @@
+Audit first. Do not code until you compare these two backend paths for the same symbols:
+
+1. Dashboard option-position popup:
+   GET /api/portfolio/options-position-detail/{underlying}
+
+2. Portfolio Terminal options-flow scan:
+   The service/path that populates /api/caelyn-terminal portfolio_options_all
+
+Problem:
+The backend currently reports CRWV, DGXX, IREN, MRAM, TE, VELO, VIVO as "NO OPTIONS" in Portfolio Terminal Options Flow. That is wrong. The user has open call option positions for these tickers, and the Dashboard option-position popup is already showing option contract data for them.
+
+Important distinction:
+
+* "No chain data returned by the scan right now" does NOT mean "NO OPTIONS."
+* If the user has an open option position for an underlying, the system must treat that underlying as optionable / has_options=true.
+* A failed live chain scan, after-hours empty chain response, restart cache miss, or missing LKG should be labeled as scan/data unavailable, not "NO OPTIONS."
+
+Audit requirements:
+
+1. For each open option underlying:
+   CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO
+   compare:
+
+   * Dashboard option-position detail response
+   * Terminal portfolio_options_all row
+   * portfolio_options_service scan result
+   * any Tradier chain/quote calls used by both paths
+
+2. Identify exactly why Dashboard can show:
+
+   * contract details
+   * bid/ask/last/mark
+   * IV/risk/signal
+     while Terminal Options Flow says "NO OPTIONS."
+
+3. Check whether Terminal scan is:
+
+   * using only near-term expirations
+   * excluding expirations matching the user's open contracts
+   * dropping symbols when chain response is empty after-hours
+   * treating empty chain as "NO OPTIONS"
+   * failing because open option underlyings are not in global/master LKG
+   * using stock screener universe filters inappropriate for actual portfolio option positions
+
+Required fix:
+Use actual open option positions as ground truth.
+
+For any symbol with an open option position:
+
+1. portfolio_options_all must never return signal="NO OPTIONS" merely because the chain scan failed.
+2. It should return a row with:
+
+   * ticker / underlying
+   * has_open_option_position: true
+   * has_options: true
+   * data_available based on whether signal metrics are available
+   * source: "portfolio_option_position" or similar when using held-contract data
+   * signal state:
+
+     * "POSITION OPEN · FLOW STALE"
+     * "CONTRACT DATA ONLY"
+     * "FLOW UNAVAILABLE"
+       or another clear label, but not "NO OPTIONS"
+3. Reuse the Dashboard option-position detail data path to hydrate portfolio options-flow rows for open option underlyings when the broader scan/cache has no result.
+4. Pull from the same contract-level Tradier data the Dashboard popup already uses:
+
+   * mark
+   * bid
+   * ask
+   * last
+   * IV if available
+   * open interest if available
+   * volume if available
+   * expiration
+   * strike
+   * call/put
+   * contracts
+5. If the existing Options Flow engine can compute signal/score from a specific contract or exact underlying/expiration, reuse it.
+6. If full flow metrics are unavailable, return a partial row, not "NO OPTIONS."
+
+Portfolio Options Flow row priority should be:
+
+1. Fresh portfolio scan row with full options-flow metrics.
+2. Portfolio-specific disk LKG row.
+3. Existing global/segment Options Flow LKG row.
+4. Dashboard/open-position contract detail data for open option underlyings.
+5. Only then:
+
+   * "NO DATA" if scan/data unavailable and no held contract data exists.
+   * "NO OPTIONS" only if the symbol is truly not optionable / Tradier confirms no options exist.
+
+Specific expected behavior:
+
+* CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO must not show as "NO OPTIONS" because the user has open calls.
+* If flow scan is not available, they should still show a row indicating the open option position and available contract data.
+* QCOM can show full flow data if segment LKG/live scan exists.
+* OUST/AOSL/LPTH can keep using portfolio disk LKG if available.
+* Symbols with no open options and no options chain can show "NO OPTIONS" only after a real optionability check.
+
+Do not:
+
+* Do not add LLM calls.
+* Do not use FMP for options.
+* Do not call Tradier repeatedly on every Terminal render.
+* Do not pass OCC contract IDs into stock/fundamental/news lookups.
+* Do not change regular Options Flow page behavior.
+* Do not label empty after-hours chain responses as "NO OPTIONS."
+
+Validation required:
+
+1. Call Dashboard option-position detail for CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO.
+2. Confirm each has open option position data.
+3. Call /api/caelyn-terminal.
+4. Confirm portfolio_options_all includes all 18 canonical portfolio symbols.
+5. Confirm CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO do not show "NO OPTIONS."
+6. Confirm open option underlyings have has_open_option_position=true.
+7. Confirm rows use full flow metrics when available and partial contract-position data when full flow is unavailable.
+8. Confirm "NO OPTIONS" is only used for truly non-optionable symbols, not failed scans.
+9. Return exact files/functions changed and sample JSON for CRWV and VELO.
