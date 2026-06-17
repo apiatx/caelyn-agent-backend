@@ -334,7 +334,7 @@ class CaelynTerminalProvider:
         cache slot — mutations in one user's Dashboard never serve stale data
         to another user, and `save_holdings` can target exactly the right key.
         """
-        return f"caelyn:terminal:v8:{portfolio_file.resolve()}"
+        return f"caelyn:terminal:v9:{portfolio_file.resolve()}"
 
     @staticmethod
     def _holdings_sig(holdings: list[dict]) -> str:
@@ -398,6 +398,29 @@ class CaelynTerminalProvider:
         asset_map = {h["ticker"].upper(): (h.get("asset_type") or "stock").lower()
                      for h in holdings_raw}
 
+        # 1c. Load open option positions and extract extra underlying symbols
+        # These are included in quote/fundamentals/history fetches so the terminal
+        # can display exposure for option underlyings alongside equity holdings.
+        # OCC contract IDs are never passed into lookup paths — only underlying tickers.
+        _opt_positions_raw: list[dict] = []
+        _opt_underlyings_extra: list[str] = []
+        _OPEN_STATUS_TERM = {"open", "partially_closed_open", "short_option_tracked_basic"}
+        try:
+            from data.option_trades_store import load_option_positions as _lop_term
+            _all_opt_term = _lop_term()
+            _opt_positions_raw = [p for p in _all_opt_term if p.get("final_status") in _OPEN_STATUS_TERM]
+            _existing_eq = set(tickers)
+            _opt_underlyings_extra = sorted({
+                (p.get("underlying") or "").upper().strip()
+                for p in _opt_positions_raw
+                if (p.get("underlying") or "").strip()
+                and (p.get("underlying") or "").upper().strip() not in _existing_eq
+            })
+            if _opt_underlyings_extra:
+                print(f"[CAELYN] option underlying extras added to terminal: {_opt_underlyings_extra}")
+        except Exception as _opt_term_err:
+            print(f"[CAELYN] option positions load error (non-fatal): {_opt_term_err}")
+
         # 1b. Load closed trades early so their tickers can be included in
         #     the history fetch — this gives accurate mark-to-market during
         #     the holding window instead of always falling back to exit_price.
@@ -418,6 +441,8 @@ class CaelynTerminalProvider:
 
         # Classify tickers by type
         equity_tickers  = [t for t in tickers if asset_map[t] in ("stock","etf","")]
+        # Append option underlying extras — they are equity lookups, deduped vs existing
+        equity_tickers  = list(dict.fromkeys(equity_tickers + _opt_underlyings_extra))
         crypto_tickers  = [t for t in tickers if asset_map[t] == "crypto"]
         all_commodity   = [t for t in tickers if asset_map[t] == "commodity"]
         # Commodities with a futures yahoo symbol → Yahoo Finance
@@ -929,23 +954,54 @@ class CaelynTerminalProvider:
         }
         print(f"[portfolio-options-risk-debug] {json.dumps(_risk_debug, default=str)}")
 
+        # Option position summary fields
+        _opt_cost_basis = round(sum(float(p.get("cost_basis") or 0) for p in _opt_positions_raw), 2)
+        _equity_pos_count = len(positions)
+        _opt_pos_count    = len(_opt_positions_raw)
+        _total_pos_count  = _equity_pos_count + _opt_pos_count
+
+        # Compact option position rows for the terminal response — preserve full
+        # contract fields but strip DB internals (import_batch_id, source_file, etc.)
+        _opt_position_rows: list[dict] = []
+        for _op in _opt_positions_raw:
+            _opt_position_rows.append({
+                "underlying":       _op.get("underlying", ""),
+                "display_symbol":   _op.get("display_symbol", ""),
+                "option_type":      _op.get("option_type", ""),
+                "expiration_date":  _op.get("expiration_date"),
+                "strike":           _op.get("strike"),
+                "contracts_open":   _op.get("contracts_open"),
+                "avg_premium":      _op.get("avg_premium"),
+                "cost_basis":       _op.get("cost_basis"),
+                "realized_pnl":     _op.get("realized_pnl"),
+                "final_status":     _op.get("final_status"),
+                "first_entry_date": _op.get("first_entry_date"),
+                "last_entry_date":  _op.get("last_entry_date"),
+            })
+
         return {
             "portfolio": {
-                "value":              round(total_value, 2),
-                "change_today":       round(change_today, 2),
-                "change_pct_today":   change_pct_today,
-                "perf_1d":            periods["perf_1d"],
-                "perf_5d":            periods["perf_5d"],
-                "perf_1m":            periods["perf_1m"],
-                "perf_6m":            periods["perf_6m"],
-                "perf_1y":            periods["perf_1y"],
-                "total_return_pct":   total_return_pct,
-                "total_return_value": round(total_return_val, 2),
-                "sentiment":          sentiment,
-                "market_status":      _market_status_et(),
+                "value":                 round(total_value, 2),
+                "change_today":          round(change_today, 2),
+                "change_pct_today":      change_pct_today,
+                "perf_1d":               periods["perf_1d"],
+                "perf_5d":               periods["perf_5d"],
+                "perf_1m":               periods["perf_1m"],
+                "perf_6m":               periods["perf_6m"],
+                "perf_1y":               periods["perf_1y"],
+                "total_return_pct":      total_return_pct,
+                "total_return_value":    round(total_return_val, 2),
+                "sentiment":             sentiment,
+                "market_status":         _market_status_et(),
+                "options_cost_basis":    _opt_cost_basis,
             },
-            "positions_count":        len(positions),
-            "holdings":               self._format_holdings(positions),
+            "positions_count":           _total_pos_count,        # all positions (equity + options)
+            "equity_position_count":     _equity_pos_count,
+            "option_position_count":     _opt_pos_count,
+            "total_position_count":      _total_pos_count,
+            "option_positions":          _opt_position_rows,
+            "option_underlying_symbols": _opt_underlyings_extra,
+            "holdings":                  self._format_holdings(positions),
             "performance_chart":      perf_chart,
             "performance_charts":     perf_charts,
             "performance_chart_meta": _perf_meta,

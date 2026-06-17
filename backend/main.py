@@ -7563,16 +7563,41 @@ async def portfolio_fundamentals(
 
     _TTL_PORTFOLIO_FUND = 7 * 24 * 3600   # 7 days — matches Social Screener TTL
 
-    # ── 1. Current open stock holdings ─────────────────────────────────────
+    # ── 1. Current open stock/equity holdings ──────────────────────────────
     holdings = _load_holdings()
-    open_symbols: list[str] = sorted({
+    equity_symbols: list[str] = sorted({
         (h.get("ticker") or h.get("symbol") or "").upper().strip()
         for h in holdings
         if isinstance(h, dict)
         and (h.get("ticker") or h.get("symbol"))
         and float(h.get("shares", 0) or 0) > 0
     })
-    open_symbols = [s for s in open_symbols if s]
+    equity_symbols = [s for s in equity_symbols if s]
+
+    # ── 1b. Option underlying symbols (from open option positions) ──────────
+    # Fetch open option positions for counts and underlying symbols
+    from data.option_trades_store import (
+        load_option_positions      as _lop_fund,
+        load_open_option_underlyings as _opt_unds_fund,
+    )
+    _OPEN_STATUS_FUND = {"open", "partially_closed_open", "short_option_tracked_basic"}
+    _all_opt_positions = _lop_fund()
+    _open_opt_positions = [p for p in _all_opt_positions if p.get("final_status") in _OPEN_STATUS_FUND]
+    _opt_underlyings: set[str] = {
+        (p.get("underlying") or "").upper().strip()
+        for p in _open_opt_positions
+        if (p.get("underlying") or "").strip()
+    }
+
+    # Counts: each option row is 1 position (not contracts_open)
+    _equity_position_count = len(equity_symbols)
+    _option_position_count = len(_open_opt_positions)
+    _total_position_count  = _equity_position_count + _option_position_count
+
+    # Merged symbol list for fundamentals — option underlyings that are already
+    # equity holdings are deduped (no double-fetch from FMP)
+    _opt_extra = sorted(_opt_underlyings - set(equity_symbols))
+    open_symbols: list[str] = sorted(set(equity_symbols) | _opt_underlyings)
 
     _now_iso = _dt.now(_tz.utc).isoformat()
     _empty_cache_meta = {
@@ -7585,11 +7610,16 @@ async def portfolio_fundamentals(
     }
     if not open_symbols:
         return JSONResponse({
-            "holdings_count": 0,
-            "symbols": [],
-            "rows": [],
-            "cache": _empty_cache_meta,
-            "unavailable": [],
+            "holdings_count":         0,
+            "equity_position_count":  _equity_position_count,
+            "option_position_count":  _option_position_count,
+            "total_position_count":   _total_position_count,
+            "unique_symbol_count":    0,
+            "symbols":                [],
+            "rows":                   [],
+            "cache":                  _empty_cache_meta,
+            "unavailable":            [],
+            "unavailable_symbols":    [],
         })
 
     # ── 2. Freshness check against Neon screener_fundamentals_cache ─────────
@@ -7686,7 +7716,12 @@ async def portfolio_fundamentals(
     )
 
     return {
-        "holdings_count": len(open_symbols),
+        "holdings_count":        len(open_symbols),   # backward-compat: unique symbol count
+        "equity_position_count": _equity_position_count,
+        "option_position_count": _option_position_count,
+        "total_position_count":  _total_position_count,
+        "unique_symbol_count":   len(open_symbols),
+        "option_underlying_symbols": _opt_extra,      # option underlyings not already in equity
         "symbols": open_symbols,
         "rows": rows,
         "cache": {
@@ -7697,7 +7732,8 @@ async def portfolio_fundamentals(
             "ttl_seconds": _TTL_PORTFOLIO_FUND,
             "updated_at":  _now_iso,
         },
-        "unavailable": unavailable,
+        "unavailable":         unavailable,
+        "unavailable_symbols": [u["symbol"] for u in unavailable],  # flat strings — fixes [object Object]
     }
 
 

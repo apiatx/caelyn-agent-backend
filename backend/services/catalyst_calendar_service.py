@@ -1772,6 +1772,10 @@ def _load_portfolio_symbols() -> set[str]:
     Uses portfolio_store.load_active_holdings() — the exact same source as
     GET /api/portfolio/holdings — so the catalyst calendar always reflects
     what the user saved on the Portfolio page.
+
+    Also includes underlying symbols from open option positions so that
+    catalyst/earnings events for option underlyings appear in calendar views.
+    OCC contract IDs are never included — only the underlying equity tickers.
     """
     try:
         from data.portfolio_store import load_active_holdings  # type: ignore
@@ -1781,7 +1785,18 @@ def _load_portfolio_symbols() -> set[str]:
             ticker = (h.get("ticker") or h.get("symbol") or "").upper().strip()
             if ticker:
                 syms.add(ticker)
-        print(f"[catalyst] _load_portfolio_symbols() → Neon: count={len(syms)}")
+
+        # Include option underlyings so option positions appear in calendars
+        try:
+            from data.option_trades_store import load_open_option_underlyings
+            opt_syms = load_open_option_underlyings()
+            syms |= opt_syms
+            if opt_syms:
+                print(f"[catalyst] option underlyings added: {sorted(opt_syms)}")
+        except Exception as _opt_e:
+            print(f"[catalyst] option underlyings load error (non-fatal): {_opt_e}")
+
+        print(f"[catalyst] _load_portfolio_symbols() → Neon+options: count={len(syms)}")
         return syms
     except Exception as e:
         print(f"[catalyst] portfolio load error: {e}")

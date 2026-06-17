@@ -62,27 +62,52 @@ _TICKERS_PER_CHUNK = 30
 
 def get_portfolio_slice(user_id: str = "default") -> Optional[dict]:
     """
-    Read the user's portfolio holdings file and return a compact exposure dict.
+    Return a compact, privacy-safe portfolio exposure dict for agent context.
+
+    Primary source: portfolio_store.load_active_holdings() (Neon-backed, same
+    canonical store as Terminal/Fundamentals/Dashboard).  Falls back to the local
+    holdings file for offline/dev environments where Neon is unavailable.
+
+    Also merges open option underlying symbols so the agent is aware of the full
+    portfolio — equity positions AND option underlyings.  OCC contract IDs are
+    never included; only the underlying stock tickers.
 
     Returns:
         {
-          "user_portfolio_count": 12,
-          "user_portfolio_tickers": "NVDA, AMD, TSLA",
-          "user_portfolio_exposure": "NVDA, AMD (stocks); BTC (crypto); GLD (ETF)"
+          "user_portfolio_count": 18,
+          "user_portfolio_tickers": "NVDA, AMD, TSLA, CRWV, ...",
+          "user_portfolio_exposure": "NVDA, AMD (stocks); CRWV (options)"
         }
         or None if no holdings or any error.
 
-    Privacy: shares, avg_cost, and cost_basis are never included.
+    Privacy: shares, avg_cost, cost_basis are never included.
     """
     try:
-        portfolio_file = _DATA_DIR / f"portfolio_holdings_{user_id}.json"
-        if not portfolio_file.exists():
-            portfolio_file = _DATA_DIR / "portfolio_holdings.json"
-        if not portfolio_file.exists():
-            return None
+        holdings: list[dict] = []
 
-        raw = json.loads(portfolio_file.read_text())
-        holdings = raw.get("holdings", [])
+        # 1. Canonical Neon-backed store (same source as Terminal / Fundamentals)
+        try:
+            from data.portfolio_store import load_active_holdings as _canon_lah
+            _neon = _canon_lah()
+            if _neon:
+                holdings = _neon
+        except Exception as _neon_err:
+            print(f"[USER_CONTEXT] Neon load error (falling back to file): {_neon_err}")
+
+        # 2. File fallback for local dev / Neon-unavailable environments
+        if not holdings:
+            portfolio_file = _DATA_DIR / f"portfolio_holdings_{user_id}.json"
+            if not portfolio_file.exists():
+                portfolio_file = _DATA_DIR / "portfolio_holdings.json"
+            if portfolio_file.exists():
+                try:
+                    raw = json.loads(portfolio_file.read_text())
+                    file_h = raw.get("holdings", []) if isinstance(raw, dict) else raw
+                    if isinstance(file_h, list):
+                        holdings = file_h
+                except Exception:
+                    pass
+
         if not isinstance(holdings, list) or not holdings:
             return None
 
@@ -91,7 +116,7 @@ def get_portfolio_slice(user_id: str = "default") -> Optional[dict]:
         for h in holdings:
             if not isinstance(h, dict):
                 continue
-            ticker = (h.get("ticker") or "").upper().strip()
+            ticker = (h.get("ticker") or h.get("symbol") or "").upper().strip()
             if not ticker:
                 continue
             raw_type = (
@@ -103,6 +128,18 @@ def get_portfolio_slice(user_id: str = "default") -> Optional[dict]:
 
         if not groups:
             return None
+
+        # Include open option underlyings so agent context reflects full portfolio
+        try:
+            from data.option_trades_store import load_open_option_underlyings as _opt_unds
+            _existing = set(all_tickers)
+            for _opt_sym in sorted(_opt_unds()):
+                if _opt_sym and _opt_sym not in _existing:
+                    groups.setdefault("options", []).append(_opt_sym)
+                    all_tickers.append(_opt_sym)
+                    _existing.add(_opt_sym)
+        except Exception as _opt_e:
+            print(f"[USER_CONTEXT] option underlyings load error (non-fatal): {_opt_e}")
 
         parts = [
             f"{', '.join(tickers)} ({label})"

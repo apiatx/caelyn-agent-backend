@@ -1,0 +1,94 @@
+Audit first. Do not code until you identify the existing portfolio routes/services/models used by:
+1. Portfolio Dashboard tab
+2. Portfolio Terminal tab
+3. Portfolio Fundamentals tab
+4. Any shared portfolio-context helper used by other pages / agent app_context / screeners / alerts
+
+Bug:
+The Dashboard tab correctly shows both stock positions and options positions, but Terminal and Fundamentals only count stock/spot positions. Options positions must be treated as part of the user's portfolio everywhere.
+
+Concrete current example from screenshots:
+- Stock/Core positions: 10
+- Options positions: 8
+- Total portfolio positions should be 18, not 10
+- Option underlyings visible on Dashboard include: CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO
+- These must be included in canonical portfolio symbols/context alongside stock holdings like SLNH, AMPG, NBIS, OUST, LPTH, PENG, FLNC, AOSL, IQEPF, SIVEF
+
+Important architectural requirement:
+Do NOT create a parallel/new portfolio system.
+Do NOT invent replacement endpoints.
+Find the existing Dashboard source of truth for options positions and promote/merge it into the canonical portfolio aggregation path used by Terminal/Fundamentals/other pages.
+
+Expected backend behavior:
+1. Create or fix one canonical portfolio aggregation helper that returns:
+   - equity_positions / stock_positions
+   - option_positions
+   - all_positions
+   - portfolio_symbols, where symbols include:
+     a) stock tickers
+     b) option underlyings
+   - counts:
+     equity_position_count
+     option_position_count
+     total_position_count = equity_position_count + option_position_count
+   - values:
+     equity_market_value
+     options_market_value
+     total_portfolio_value
+     total_cost_basis
+     total_unrealized_pnl where available
+
+2. Options should be counted as position rows, not contract count.
+   Example: 8 option rows = 8 positions, not 166 contracts.
+
+3. For option positions:
+   - Preserve full contract fields:
+     underlying_symbol
+     option_type/call_put
+     expiration
+     strike
+     contracts
+     avg_premium
+     mark
+     market_value
+     unrealized_pnl
+   - Do NOT pass OCC/contract symbols into stock quote/fundamental lookup paths.
+   - For quotes/fundamentals/news/theme matching, use the underlying symbol only.
+
+4. Fundamentals tab backend:
+   - It should include option underlyings in the portfolio universe.
+   - Fetch/cache fundamentals by unique underlying symbol only.
+   - If an option underlying already exists as a stock holding, do not duplicate the fundamentals fetch.
+   - The count exposed to frontend should still communicate the true portfolio count:
+     total_position_count = stocks + options
+     unique_underlying_symbol_count = deduped symbols used for fundamentals
+   - Fix the warning bug currently rendering:
+     "Fundamentals unavailable for: [object Object]"
+     It should serialize clean symbol strings only, e.g. "Fundamentals unavailable for: IQEPF" or whatever actually failed.
+
+5. Terminal backend:
+   - Any portfolio summary, risk metrics, asset allocation, AI review input, concentration, portfolio tickers, and portfolio context must include option positions.
+   - Options should contribute their current market value to total portfolio value and exposure.
+   - Do not silently ignore options when calculating risk/concentration.
+   - If you add optional fields like options_exposure_pct or options_market_value_pct, fine, but do not break existing response shape.
+
+6. Shared app context / other pages:
+   - Any helper that returns “portfolio tickers” or “portfolio symbols” for other pages must include option underlyings.
+   - This matters for watchlist+portfolio screeners, alerts, agent context, options scans, news, and any cross-page portfolio-aware feature.
+   - Again: use underlying symbols, not option contract IDs.
+
+Validation required before reporting done:
+- Find the live route(s) used by Dashboard, Terminal, and Fundamentals.
+- Run local/backend tests or curl checks showing:
+  a) Dashboard still shows 10 stock positions and 8 option positions.
+  b) Terminal canonical portfolio count is 18 total positions.
+  c) Fundamentals response includes option underlyings CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO either as fundamentals rows or as option-underlying portfolio symbols.
+  d) No "[object Object]" appears in unavailable fundamentals warning.
+  e) Shared portfolio symbol helper includes both stock holdings and option underlyings.
+- Return an audit summary listing exactly which existing files/functions/routes were changed.
+
+Constraints:
+- Preserve existing Neon tables and route paths unless the audit proves a migration is required.
+- No new external API calls beyond what the existing fundamentals/quotes paths already use.
+- Reuse existing Dashboard options data source.
+- Do not break the Dashboard tab, import CSV flow, edit/sell option actions, or existing spot holdings behavior.

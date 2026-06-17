@@ -245,6 +245,24 @@ def load_option_positions() -> list[dict]:
         _put_conn(conn)
 
 
+def load_open_option_underlyings() -> set[str]:
+    """Return deduplicated set of underlying symbols for all open option positions.
+
+    Open = final_status in (open, partially_closed_open, short_option_tracked_basic).
+    Use this wherever portfolio-wide symbol lists are built so option underlyings
+    are included alongside equity holdings — without passing OCC contract IDs into
+    quote/fundamentals/news lookup paths.
+    """
+    _OPEN = {"open", "partially_closed_open", "short_option_tracked_basic"}
+    positions = load_option_positions()
+    return {
+        (p.get("underlying") or "").upper().strip()
+        for p in positions
+        if p.get("final_status") in _OPEN
+        and (p.get("underlying") or "").strip()
+    }
+
+
 def save_option_positions_batch(positions: list[dict]) -> int:
     """Upsert option positions. Returns count of rows upserted."""
     _invalidate_opt_pos_cache()
