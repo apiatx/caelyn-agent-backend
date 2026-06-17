@@ -1,0 +1,53 @@
+Audit first. Do not refactor. This is a narrow sanity fix for Portfolio Terminal Options Flow.
+
+Current backend status:
+
+* /api/caelyn-terminal now returns portfolio_options_all with all 18 canonical portfolio symbols.
+* Good.
+* But after restart/outside market hours, validation showed all 18 rows as "NO OPTIONS".
+* That is not acceptable for the UI because the app already has Options Flow logic/cache/LKG elsewhere.
+
+Required behavior:
+Portfolio Terminal Options Flow should return one row per canonical portfolio symbol, but each row should use the best available options signal:
+
+Priority:
+
+1. Fresh portfolio-scoped options scan if available.
+2. Existing Options Flow master/cache/LKG data for that symbol if portfolio scan is unavailable.
+3. Clear "NO OPTIONS" / "NO DATA" row only if there is truly no usable cached or live options data for that symbol.
+
+Do not let a restart or outside-market-hours condition wipe useful options signals into all "NO OPTIONS".
+
+Audit:
+
+1. Find the existing Options Flow page cache/LKG/master result source.
+2. Find where portfolio_options_service.scan_portfolio_options or CaelynTerminalProvider currently returns by_symbol / rows.
+3. Identify why the portfolio scan falls to NO OPTIONS after restart/outside market hours.
+4. Add fallback from existing Options Flow cached/master rows by symbol before returning NO OPTIONS.
+
+Rules:
+
+* Do not add new Tradier calls beyond the existing options-flow scan path.
+* Do not call live Tradier for every symbol on every Terminal render.
+* Reuse existing cache/LKG/master data.
+* Do not change regular Options Flow page behavior.
+* Do not pass OCC option contract IDs; use underlying symbols only.
+* Keep portfolio_options_all returning every canonical portfolio symbol.
+
+Expected output:
+For each portfolio symbol:
+
+* If fresh/live options scan row exists, use it.
+* Else if Options Flow cache/LKG has that symbol, use the cached row.
+* Else return NO OPTIONS / NO DATA.
+
+Validation:
+
+1. Restart backend.
+2. Call /api/caelyn-terminal outside market hours.
+3. portfolio_options_all still includes all 18 symbols.
+4. Symbols with existing Options Flow cache/LKG data show real score/p_c/iv/em/volume/signal/risk instead of NO OPTIONS.
+5. Only symbols with no cached/live options data show NO OPTIONS.
+6. Confirm OUST and AOSL still show real rows if they exist in cache.
+7. Confirm option underlyings CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO are included.
+8. Return exact files/functions changed.

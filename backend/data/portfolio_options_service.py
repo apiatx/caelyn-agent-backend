@@ -13,6 +13,8 @@ Called by:
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 # ── Signal display mapping (matches Options Screener page) ─────────────────
@@ -35,6 +37,42 @@ _SCAN_SEM              = 6     # max concurrent Tradier chain call batches
 _SCAN_TIMEOUT_QUOTE    = 8.0
 _SCAN_TIMEOUT_EXP      = 4.0
 _SCAN_TIMEOUT_CHAIN    = 5.0
+
+
+# ── Portfolio disk LKG (survives restarts + outside-market-hours) ──────────
+# Written whenever a live scan produces data_available=True rows.
+# Read as a fallback before falling through to live Tradier calls.
+
+_PORTFOLIO_LKG_DISK = Path(__file__).resolve().parent / "portfolio_opts_lkg_v1.json"
+
+
+def _load_portfolio_lkg() -> dict[str, dict]:
+    """Load per-ticker portfolio options LKG from disk. Returns {} on any error."""
+    try:
+        if _PORTFOLIO_LKG_DISK.exists():
+            data = json.loads(_PORTFOLIO_LKG_DISK.read_text())
+            if isinstance(data, dict):
+                return {k.upper(): v for k, v in data.items() if isinstance(v, dict)}
+    except Exception as exc:
+        print(f"[PORTFOLIO_OPTS_LKG] load error: {exc}")
+    return {}
+
+
+def _save_portfolio_lkg(results: dict[str, dict]) -> None:
+    """Merge data_available=True rows into disk LKG.
+    Existing rows for symbols not in current scan are preserved so a partial
+    scan doesn't wipe rows for symbols that weren't requested this time."""
+    try:
+        existing = _load_portfolio_lkg()
+        import datetime as _dt
+        ts = _dt.datetime.utcnow().isoformat()
+        updated = dict(existing)
+        for sym, row in results.items():
+            if row.get("data_available"):
+                updated[sym.upper()] = {**row, "_lkg_saved_at": ts}
+        _PORTFOLIO_LKG_DISK.write_text(json.dumps(updated, default=str))
+    except Exception as exc:
+        print(f"[PORTFOLIO_OPTS_LKG] save error: {exc}")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -504,7 +542,13 @@ async def scan_portfolio_options(
             if t:
                 master_by_ticker[t] = row
 
-    # 2. Fill from per-ticker cache + master snap ───────────────────────────
+    # 1.5. Load portfolio-specific disk LKG ────────────────────────────────
+    # This file is written whenever a live scan succeeds so that options
+    # signals survive restarts and outside-market-hours conditions without
+    # falling through to a live Tradier call.
+    disk_lkg = _load_portfolio_lkg()
+
+    # 2. Fill from per-ticker cache → master snap → disk LKG ───────────────
     results:  dict[str, dict] = {}
     uncached: list[str]       = []
     provider_calls = 0
@@ -518,6 +562,12 @@ async def scan_portfolio_options(
             norm = _normalize_master_row(sym, master_by_ticker[sym])
             cache.set(per_key, norm, _CACHE_PER_TICKER_TTL)
             results[sym] = norm
+        elif sym in disk_lkg and disk_lkg[sym].get("data_available"):
+            # Disk LKG hit — warm the per-ticker memory cache so subsequent
+            # requests in this session avoid disk I/O.
+            row = {**disk_lkg[sym], "source": "portfolio_opts_lkg_disk", "from_lkg": True}
+            cache.set(per_key, row, _CACHE_PER_TICKER_TTL)
+            results[sym] = row
         else:
             uncached.append(sym)
 
@@ -585,6 +635,20 @@ async def scan_portfolio_options(
     # Pure post-processing: adds risk_score/level/signal/reasons/confidence
     # to every row. Does NOT touch Options Screener or any global flow.
     results = {sym: _compute_pullback_risk(row) for sym, row in results.items()}
+
+    # 4.6. Persist data_available=True rows to portfolio disk LKG ──────────
+    # Only write when we have genuinely new live results (not just rows that
+    # came from the disk LKG itself) so we don't churn disk with stale data.
+    # "from_lkg" flag is set on rows loaded from disk in step 2; any row
+    # without it that is data_available=True came from a live scan or master
+    # snap and is worth persisting.
+    fresh_available = {
+        sym: r
+        for sym, r in results.items()
+        if r.get("data_available") and not r.get("from_lkg")
+    }
+    if fresh_available:
+        _save_portfolio_lkg(fresh_available)
 
     # 5. Build final output structure ──────────────────────────────────────
     available   = [r for r in results.values() if r.get("data_available")]

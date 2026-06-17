@@ -1512,6 +1512,7 @@ class CaelynTerminalProvider:
         _MASTER_KEY = "options_master_screener_v1"
         _LKG_KEY    = "options_master_lkg_v1"
         _LKG_DISK   = Path(__file__).resolve().parent / "options_master_lkg_v1.json"
+        _DATA_DIR   = Path(__file__).resolve().parent
 
         # Resolve master snap: memory → LKG key → disk LKG
         master_snap = cache.get(_MASTER_KEY) or cache.get(_LKG_KEY)
@@ -1520,6 +1521,40 @@ class CaelynTerminalProvider:
                 master_snap = _json.loads(_LKG_DISK.read_text())
             except Exception:
                 master_snap = None
+
+        # Augment master snap with per-segment LKG disk files so portfolio
+        # symbols that appear in the regular Options Flow universe (e.g. QCOM
+        # in large_cap) are available immediately after restart without waiting
+        # for the background screener loop to complete its first cycle.
+        # This is purely additive — existing master snap rows are not replaced.
+        _SEG_NAMES = ("large_cap", "small_cap", "etf", "megacap")
+        _seg_extra: list[dict] = []
+        for _seg in _SEG_NAMES:
+            _seg_path = _DATA_DIR / f"options_lkg_v1_{_seg}.json"
+            if _seg_path.exists():
+                try:
+                    _seg_data = _json.loads(_seg_path.read_text())
+                    _seg_extra.extend(_seg_data.get("tickers") or [])
+                except Exception:
+                    pass
+
+        if _seg_extra:
+            _existing_syms: set[str] = set()
+            if master_snap:
+                _existing_syms = {
+                    (r.get("ticker") or "").upper()
+                    for r in (master_snap.get("tickers") or [])
+                }
+            _new_rows = [
+                r for r in _seg_extra
+                if (r.get("ticker") or "").upper() not in _existing_syms
+            ]
+            if _new_rows:
+                _base = master_snap or {"tickers": []}
+                master_snap = {
+                    **_base,
+                    "tickers": list(_base.get("tickers") or []) + _new_rows,
+                }
 
         return await scan_portfolio_options(
             symbols      = equity_tickers,
