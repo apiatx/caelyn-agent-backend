@@ -4064,7 +4064,10 @@ async def get_screener_hub(
     if tab == "thematic" and theme:
         _tind_cfg   = _load_industry_map_config()
         _tind_entry = (_tind_cfg.get("themes") or {}).get(theme) or {}
-        _thematic_allowed_industries = set(_tind_entry.get("fmp_industries") or [])
+        _thematic_allowed_industries = set(
+            (_tind_entry.get("fmp_industries") or [])
+            + (_tind_entry.get("adjacent_industries") or [])
+        )
 
     # ── Chain Reaction detail map (bottlenecks only) ────────────────────────────
     # Per-symbol scored node data from chain_reaction_weekly_outputs.rows_json.

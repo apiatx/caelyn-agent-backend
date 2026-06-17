@@ -1,0 +1,64 @@
+Social page cached XAI results are loading too slowly. These results are cached for 24 hours, so the Social page should render them instantly when the user visits.
+
+Do not change the XAI/Grok prompt.
+Do not add another XAI call.
+Do not shorten the cache TTL.
+Do not make the frontend wait for a refresh.
+Do not rebuild the Social page architecture.
+
+Audit first:
+1. Find every endpoint the Social page calls on load.
+2. Identify which endpoints depend on XAI/Grok cached payloads.
+3. For each endpoint, log:
+   - cache_key
+   - cache_hit true/false
+   - cache_age_seconds
+   - cache_source: memory | neon | disk | rebuilt | xai_live
+   - total_ms
+   - xai_called true/false
+4. Confirm whether page load is accidentally waiting on:
+   - XAI live call
+   - cache rebuild
+   - social screener warmup
+   - background refresh
+   - multiple sequential endpoints
+   - large payload hydration
+   - stale cache rejection
+
+Required behavior:
+1. If a valid 24h cache exists, return it immediately.
+   Target: cached response under 200–500ms.
+
+2. Use stale-while-revalidate:
+   - If cache is fresh: return cache instantly.
+   - If cache is stale but exists: return stale cache instantly with stale=true and refresh_async=true.
+   - Only if no cache exists at all should the endpoint do a blocking rebuild, and even then protect it with a timeout.
+
+3. Never block Social page load on XAI refresh.
+   XAI refresh should run in the background after the cached response has already been returned.
+
+4. Add an in-memory hot cache above Neon/disk:
+   - On first request, load latest cached social payload from Neon/disk into memory.
+   - Subsequent Social page visits should return from memory.
+   - On app startup, prewarm the latest Social cache into memory if available.
+
+5. Make sure the Social page endpoint does not recompute derived fields every request if those can be stored in the cached payload.
+   Cached payload should already include:
+   - Market Pulse
+   - Portfolio Bias
+   - Ask Livermore
+   - Top trader consensus cards
+   - Social screener rows if applicable
+   - timestamp/cache metadata
+
+6. Add a force_refresh/admin path separately.
+   Normal user page load should never force refresh.
+
+Validation:
+- Visit Social page with fresh cache.
+- Confirm xai_called=false.
+- Confirm cache_hit=true.
+- Confirm endpoint total_ms under 500ms.
+- Confirm response includes cache_age_seconds and cache_source.
+- Confirm page renders cached XAI sections immediately.
+- Confirm async refresh only happens after response if stale.

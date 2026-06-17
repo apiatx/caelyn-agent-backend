@@ -11,3 +11,4 @@
 - [Screener Hub LKG membership gate](screener-hub-lkg-membership-gate.md) — lkg_leaders = ranking signal only; never grants standalone universe membership for pure_subtheme; signal still recorded in sources_by_symbol
 - [Symbol identity check before exclusion](screener-hub-symbol-identity-check.md) — verify company name via Tradier before adding to exclude_tickers; FMP profile API is broken
 - [Screener Hub Source D peers suppressed for pure_subtheme](screener-hub-source-d-pure-subtheme.md) — FMP peer algorithm produces garbage for niche themes; seen_dynamic never counts seeds so peers always trigger for seed-only themes; gate: `with_fmp_peers and _theme_type != "pure_subtheme"`
+- [Screener Hub adjacent_industries leakage filter](screener-hub-adjacent-industries-filter.md) — _thematic_allowed_industries must include adjacent_industries + fmp_industries; adjacent-industry rows from Source C2/P were silently dropped at the row-build leakage check (line ~4070)

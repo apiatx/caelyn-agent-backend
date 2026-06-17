@@ -1,0 +1,58 @@
+Stop. You drifted back into Screener Hub dynamic discovery work.
+
+The current task is ONLY Social page cached XAI load speed.
+
+Do not work on Screener Hub.
+Do not rebuild themes.
+Do not run T001–T009.
+Do not touch candidate_tier, FMP discovery, or screener theme audits.
+Do not spend time validating pure_subtheme discovery.
+
+Return to the Social page latency audit you already completed.
+
+You already identified the correct Social bottlenecks:
+1. await build_screeners() is blocking the Social page request path and triggering a full Tradier batch (~8.5s).
+2. _load_disk_cache() parses the XAI JSON from disk on every request.
+3. build_x_dashboard() re-classifies tickers on every request.
+4. Cached XAI results should return instantly from memory/Neon/disk without waiting for screener enrichment.
+
+Implement only these Social fixes:
+
+A. Add in-memory hot cache for the XAI disk snapshot in x_consensus_cache.py.
+- First load can read disk.
+- Subsequent requests should return memory cache.
+- Include cache_age_seconds, cache_source, cache_hit.
+
+B. Add in-memory hot cache/memo for build_x_dashboard() in social_x_service.py.
+- Key by XAI snapshot timestamp/hash.
+- Do not reclassify the same cached XAI payload on every request.
+
+C. Do not await build_screeners() in the Social page request path.
+- Check screener cache first.
+- If screener cache exists, return it.
+- If screener cache is cold/stale, return Social XAI payload immediately and fire background task.
+- Never block initial Social page render on Tradier batch enrichment.
+
+D. Add stale-while-revalidate behavior:
+- Fresh cache: return instantly.
+- Stale but available cache: return stale cache instantly with stale=true and refresh_async=true.
+- Only no-cache-at-all may trigger blocking fallback, with timeout protection.
+
+E. Add timing logs for every Social endpoint:
+- endpoint
+- total_ms
+- xai_called
+- screener_awaited
+- cache_hit
+- cache_source
+- cache_age_seconds
+- background_refresh_started
+
+Validation:
+1. Visit Social page with valid 24h XAI cache.
+2. Confirm xai_called=false.
+3. Confirm screener_awaited=false.
+4. Confirm endpoint returns under 500ms.
+5. Confirm cached XAI sections render immediately.
+6. Confirm any screener refresh happens in background only.
+7. Confirm no Screener Hub files or theme rebuilds are touched.
