@@ -1,0 +1,82 @@
+Stop. You drifted into Screener Hub again.
+
+The current task is ONLY quote inconsistency in Home page Portfolio Snapshot.
+
+Do not touch:
+- Screener Hub
+- T001–T009
+- fmp_profile discovery
+- thin-themes endpoints
+- Social page
+- XAI cache
+- theme rebuilds
+
+The issue:
+Home page Portfolio Snapshot does not match Portfolio page / canonical Tradier quote data.
+
+Return to the audit you started:
+1. Home Portfolio Snapshot endpoint/builder
+2. Portfolio page endpoint/builder
+3. canonical quote cache path:
+   - tradier:quote:sym:{SYM}
+   - quote:lkg:{SYM}
+   - portfolio:tradier_lkg
+4. Home dashboard cache layer
+5. _batch_quotes helper
+
+Deliver a comparison table for 5 portfolio tickers:
+- ticker
+- home_price
+- portfolio_page_price
+- canonical_tradier_price
+- home_1d_pct
+- portfolio_page_1d_pct
+- canonical_tradier_1d_pct
+- home_volume
+- portfolio_page_volume
+- canonical_volume
+- home_avg_volume
+- portfolio_page_avg_volume
+- canonical_avg_volume
+- home_volume_x
+- portfolio_page_volume_x
+- canonical_volume_x
+- home_quote_source
+- portfolio_quote_source
+- quote_fetched_at
+
+Then fix only the Home Portfolio Snapshot path.
+
+Required behavior:
+Home Portfolio Snapshot must overlay ticker quote fields from the same canonical chain used by the Portfolio page:
+
+1. fresh tradier:quote:sym:{SYM}
+2. quote:lkg:{SYM}
+3. portfolio:tradier_lkg only if normalized and not older than shared LKG
+4. stale home/holding snapshot fields only as last resort and marked stale
+
+Do not create a new quote cache.
+Do not create a new Tradier batch system.
+Do not add Screener logic.
+Do not touch unrelated services.
+
+Normalize fields:
+- price: last / price
+- 1D%: change_percentage / change_percent / change_pct
+- volume: volume
+- avg volume: average_volume / avg_volume
+- volumeX: volume / avg_volume
+- quote_source
+- quote_fetched_at
+- quote_is_stale
+
+Validation:
+After fix, Home Portfolio Snapshot ticker rows must match Portfolio page ticker rows for:
+- price
+- 1D%
+- volume
+- avg_volume
+- volumeX
+- quote_source or fresher source
+
+Also clear/expire the Home dashboard cache if it is serving stale Portfolio Snapshot data.
