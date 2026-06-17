@@ -913,6 +913,75 @@ def _snapshot_row(
     return row
 
 
+def _overlay_portfolio_quotes(snapshot: list[dict]) -> list[dict]:
+    """Re-overlay quote fields for each portfolio row from the canonical cache chain.
+
+    Called at every cache-hit path (60 s TTL and 4 h LKG) so the Home Portfolio
+    Snapshot always reflects the same quote data as the Portfolio page — even when
+    the cached payload is up to 4 hours old.
+
+    Canonical chain (same precedence as Portfolio page):
+      1. tradier:quote:sym:{SYM}      — 60 s TTL per-symbol cache (freshest)
+      2. quote:lkg:{SYM}              — shared 72 h LKG written by all Tradier callers
+      3. portfolio:tradier_lkg:{SYM}  — Portfolio page 72 h LKG
+      4. Embedded row fields          — last resort; marked stale + reason
+
+    Pure synchronous cache reads — no I/O, no Tradier calls, no new cache keys.
+    Normalises field names so entries written by any caller (Tradier raw or
+    portfolio-normalised shape) render correctly.
+    """
+    import time as _t
+    _now = _t.time()
+    out: list[dict] = []
+    for row in (snapshot or []):
+        sym = (row.get("symbol") or "").upper()
+        if not sym:
+            out.append(row)
+            continue
+
+        # Walk canonical chain — first non-None entry with a usable price wins
+        q: dict | None = None
+        for cache_key in (
+            f"tradier:quote:sym:{sym}",
+            f"quote:lkg:{sym}",
+            f"portfolio:tradier_lkg:{sym}",
+        ):
+            entry = cache.get(cache_key)
+            if entry and (entry.get("last") or entry.get("price")):
+                q = entry
+                break
+
+        if q:
+            last    = q.get("last") or q.get("price")
+            chg_pct = q.get("change_percentage") or q.get("change_pct")
+            vol     = q.get("volume")
+            avg_vol = q.get("average_volume") or q.get("avg_volume")
+            vol_ratio = (
+                round(vol / avg_vol, 2)
+                if vol and avg_vol and avg_vol > 0
+                else q.get("relative_volume") or q.get("rel_volume")
+            )
+            out.append({
+                **row,
+                "current_price":         last,
+                "change_1d_pct":         chg_pct,
+                "volume_vs_avg":         vol_ratio,
+                "quote_source":          q.get("quote_source") or "tradier",
+                "quote_is_stale":        bool(q.get("quote_is_stale")),
+                "quote_fallback_reason": q.get("quote_fallback_reason"),
+                "quote_fetched_at":      _now,
+            })
+        else:
+            # No canonical data available — surface embedded fields as stale
+            out.append({
+                **row,
+                "quote_is_stale":        True,
+                "quote_fallback_reason": "home_lkg_no_canonical",
+                "quote_fetched_at":      _now,
+            })
+    return out
+
+
 # ── Watchlist snapshot ─────────────────────────────────────────────────────
 
 async def _fetch_watchlist_data(
@@ -1177,13 +1246,28 @@ async def build_home_dashboard(
     if not force:
         cached = cache.get(_HOME_CACHE_KEY)
         if cached is not None:
-            return {**cached, "from_cache": True}
+            payload = {**cached, "from_cache": True}
+            # Re-overlay portfolio quote fields from canonical chain so the 60 s
+            # cached snapshot always shows the same prices as the Portfolio page.
+            if payload.get("portfolio_snapshot"):
+                payload["portfolio_snapshot"] = _overlay_portfolio_quotes(
+                    payload["portfolio_snapshot"]
+                )
+            return payload
         # Hot cache miss — serve LKG immediately and rebuild in background
         lkg = cache.get(_HOME_CACHE_LKG_KEY)
         if lkg is not None:
             asyncio.create_task(_bg_rebuild_home(data_service, macro_provider))
             print("[HOME_PERF] endpoint=/api/home/dashboard cache=lkg bg_rebuild=triggered")
-            return {**lkg, "from_cache": True, "cache_status": "lkg"}
+            payload = {**lkg, "from_cache": True, "cache_status": "lkg"}
+            # Re-overlay portfolio quote fields — LKG can be up to 4 h old;
+            # canonical chain (tradier:quote:sym → quote:lkg → portfolio:tradier_lkg)
+            # always has the freshest available price.
+            if payload.get("portfolio_snapshot"):
+                payload["portfolio_snapshot"] = _overlay_portfolio_quotes(
+                    payload["portfolio_snapshot"]
+                )
+            return payload
 
     t0 = time.time()
     print("[HOME_PERF] endpoint=/api/home/dashboard cache=miss rebuild=start")
