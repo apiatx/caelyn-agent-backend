@@ -7558,8 +7558,8 @@ async def portfolio_fundamentals(
 
     from data.portfolio_store import load_active_holdings as _load_holdings
     from data.screener_hub_store import (
-        get_fundamentals        as _get_fund,
-        fundamentals_fresh_symbols as _fresh_syms,
+        get_fundamentals                  as _get_fund,
+        fundamentals_cached_symbols       as _cached_syms,
     )
     from services.social_screener_service import (
         fetch_enrichment_for_symbols as _fetch_enrich,
@@ -7627,13 +7627,16 @@ async def portfolio_fundamentals(
             "unavailable_symbols":    [],
         })
 
-    # ── 2. Freshness check against Neon screener_fundamentals_cache ─────────
-    # force_refresh=True bypasses TTL entirely — all symbols treated as stale.
+    # ── 2. Cache-exists check (no TTL for portfolio fundamentals) ────────────
+    # Portfolio policy: treat any usable cached row as fresh indefinitely.
+    # FMP is only called for symbols with NO cached row, or on force_refresh.
+    # Social Screener keeps its own 7-day TTL path via fundamentals_fresh_symbols().
     if force_refresh:
-        fresh_set: set[str] = set()
+        cached_set: set[str] = set()          # bypass cache for all symbols
     else:
-        fresh_set: set[str] = _fresh_syms(open_symbols, max_age_days=7)
-    stale_set: set[str] = set(open_symbols) - fresh_set
+        cached_set: set[str] = _cached_syms(open_symbols)
+    stale_set: set[str] = set(open_symbols) - cached_set
+    fresh_set = cached_set                    # alias kept for downstream references
 
     # ── 3. Live FMP fetch for cache misses / stale symbols ─────────────────
     live_enrichment: dict[str, dict] = {}

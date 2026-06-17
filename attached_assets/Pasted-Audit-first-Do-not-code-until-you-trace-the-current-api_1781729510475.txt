@@ -1,0 +1,68 @@
+Audit first. Do not code until you trace the current /api/portfolio/fundamentals cache freshness logic and confirm exactly where the 7-day TTL is applied.
+
+Current status:
+The previous fix validated that option underlyings are hydrated correctly:
+CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO all return real fundamentals data.
+
+Remaining backend issue:
+The endpoint still uses a 7-day TTL. That does not match the desired portfolio fundamentals cache policy.
+
+Required cache policy:
+
+1. Portfolio fundamentals should be fetched from FMP once per symbol.
+2. Once a symbol has usable cached fundamentals in Neon, treat it as fresh indefinitely.
+3. Do not auto-refetch cached symbols after 7 days.
+4. Only fetch from FMP when:
+
+   * the symbol has no cached fundamentals row
+   * the cached row is materially empty/unusable
+   * the user explicitly calls manual refresh / force_refresh=true
+5. If the user adds a new stock position, fetch fundamentals once for that new stock symbol only.
+6. If the user adds a new option position, fetch fundamentals once for that option underlying only.
+7. Existing cached symbols must not be refetched just because a new symbol was added.
+
+Manual refresh:
+
+* Keep force_refresh=true.
+* When force_refresh=true, bypass cache for the current canonical portfolio symbol universe and re-fetch all current symbols from FMP.
+* Still dedupe first.
+* Still preserve unavailable_symbols as list[str].
+
+Important:
+
+* Do not remove the cache metadata or timestamps.
+* Do not create a new route.
+* Do not create a new cache table.
+* Do not break Dashboard, Terminal, or existing stock holdings behavior.
+* Do not pass OCC option contract IDs into fundamentals lookup. Use underlying symbols only.
+
+Expected implementation:
+
+* Replace the TTL-based freshness decision for portfolio fundamentals with cache-exists/cache-usable logic.
+* If there is already a helper named fundamentals_fresh_symbols(), either:
+  a) add a portfolio mode that treats cached usable rows as fresh forever, or
+  b) add a separate helper with a clear name like fundamentals_cached_symbols_for_portfolio().
+* Avoid changing unrelated endpoints that may intentionally use TTL elsewhere.
+
+Validation required:
+
+1. First request with existing cache:
+
+   * cache hits for all cached symbols
+   * no FMP fetch for cached symbols
+   * SIVEF may remain unavailable if FMP has no data
+2. Second request:
+
+   * same cache hits
+   * zero stale TTL refetch behavior
+3. Simulate/add a new portfolio symbol not in fundamentals cache:
+
+   * only that symbol is fetched from FMP
+   * existing cached symbols are not fetched
+4. force_refresh=true:
+
+   * all current canonical portfolio symbols are re-fetched
+5. Confirm option underlyings still hydrate:
+   CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO
+6. Confirm unavailable_symbols remains list[str]
+7. Return exact files/functions changed.

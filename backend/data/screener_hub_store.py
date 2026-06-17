@@ -437,7 +437,12 @@ def get_fundamentals(symbols: Iterable[str]) -> dict[str, dict]:
 
 
 def fundamentals_fresh_symbols(symbols: Iterable[str], max_age_days: int = 7) -> set[str]:
-    """Return the subset of symbols whose fundamentals rows are still fresh (< max_age)."""
+    """Return the subset of symbols whose fundamentals rows are still fresh (< max_age).
+
+    Used by Social Screener and other TTL-aware callers.  For portfolio fundamentals
+    use fundamentals_cached_symbols() instead — portfolio rows are treated as fresh
+    indefinitely (no auto-expiry; only force_refresh or new-symbol logic refetches).
+    """
     ensure_tables()
     syms = sorted({s.upper() for s in symbols if s})
     if not syms:
@@ -464,6 +469,48 @@ def fundamentals_fresh_symbols(symbols: Iterable[str], max_age_days: int = 7) ->
     finally:
         _put_conn(conn)
     return fresh
+
+
+def fundamentals_cached_symbols(symbols: Iterable[str]) -> set[str]:
+    """Return the subset of symbols that have a usable cached fundamentals row.
+
+    Unlike fundamentals_fresh_symbols() this applies NO TTL filter — a row is
+    considered valid as long as it exists and contains at least one piece of
+    usable data (market_cap or a non-empty profile).  Used by the portfolio
+    fundamentals endpoint so existing holdings are never auto-refetched after a
+    TTL boundary; FMP is only called for genuinely new / uncached symbols or
+    when the user explicitly triggers force_refresh.
+    """
+    ensure_tables()
+    syms = sorted({s.upper() for s in symbols if s})
+    if not syms:
+        return set()
+    conn = _get_conn()
+    if conn is None:
+        return set()
+    cached: set[str] = set()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT symbol
+            FROM public.screener_fundamentals_cache
+            WHERE symbol = ANY(%s)
+              AND (
+                market_cap IS NOT NULL
+                OR (profile_json IS NOT NULL AND profile_json::text <> '{}' AND profile_json::text <> 'null')
+                OR (ratios_json  IS NOT NULL AND ratios_json::text  <> '{}' AND ratios_json::text  <> 'null')
+              )
+            """,
+            (syms,),
+        )
+        cached = {r[0] for r in cur.fetchall()}
+        cur.close()
+    except Exception as e:
+        print(f"[SCREENER_HUB_STORE] fundamentals_cached_symbols error: {e}")
+    finally:
+        _put_conn(conn)
+    return cached
 
 
 def fundamentals_table_stats() -> dict:
