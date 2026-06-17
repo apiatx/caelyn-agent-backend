@@ -1604,7 +1604,8 @@ def _get_source_confidence(
     src_str       = " ".join(discovery_sources)
     has_etf       = "etf:" in src_str
     has_lkg       = "lkg_leaders" in src_str
-    has_screener  = "fmp_screener:" in src_str
+    # fmp_screener: and fmp_profile: are both screener-class discovery sources
+    has_screener  = "fmp_screener:" in src_str or "fmp_profile:" in src_str
     has_social    = "social_overlap" in src_str
     has_options   = "options_overlap" in src_str
     has_watchlist = "watchlist_portfolio" in src_str
@@ -2115,6 +2116,8 @@ async def _build_thematic_universe(
         fmp_screener_industries_attempted: list[str] = []
         fmp_screener_industries_errored:   list[str] = []
         fmp_screener_calls_used:           int       = 0
+        fmp_profile_discovery_count:       int       = 0   # Source P: net-new from Neon profile cache
+        fmp_profile_upgrade_count:         int       = 0   # Source P: watch→verified upgrades
 
         seen_dynamic: set[str] = set()
 
@@ -2366,7 +2369,7 @@ async def _build_thematic_universe(
         # as Source C. Adjacent-industry candidates receive _is_adjacent=True in their
         # screener_meta, which causes:
         #   candidate_tier = "watch_candidate" for weak proof
-        #   candidate_tier = "qualified_discovery" for strong proof (non-weak keyword match)
+        #   candidate_tier = "verified_discovery" for strong proof (non-weak keyword match)
         #   theme_role     = "adjacent"
         #   membership_reason prefix = "adjacent FMP:<industry> | ..."
         # Only active for pure_subtheme themes that define required_any_keywords.
@@ -2497,6 +2500,8 @@ async def _build_thematic_universe(
                     screener_meta_by_symbol[_psym] = _pcand
                     sources_by_symbol.setdefault(_psym, []).append(_p_src_tag)
                     _prof_added += 1
+                fmp_profile_discovery_count = _prof_added
+                fmp_profile_upgrade_count   = _prof_upgraded
                 if _prof_added or _prof_upgraded:
                     print(
                         f"[SCREENER_HUB] fmp_profile_discovery {key!r}: "
@@ -2587,6 +2592,8 @@ async def _build_thematic_universe(
             "fmp_peer_anchors":                    fmp_peer_anchors,
             "sector_screener_count":               len(screener_syms),  # compat key
             "fmp_screener_count":                  len(screener_syms),
+            "fmp_profile_discovery_count":         fmp_profile_discovery_count,
+            "fmp_profile_upgrade_count":           fmp_profile_upgrade_count,
             "fmp_screener_industries_attempted":   fmp_screener_industries_attempted,
             "fmp_screener_industries_errored":     fmp_screener_industries_errored,
             "fmp_screener_calls_used":             fmp_screener_calls_used,

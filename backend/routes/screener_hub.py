@@ -5,6 +5,9 @@ GET  /api/screener-hub/themes
 GET  /api/screener-hub
 POST /api/admin/screener-hub/rebuild         (X-API-Key: AGENT_API_KEY)
 GET  /api/admin/screener-hub/status          (X-API-Key: AGENT_API_KEY)
+GET  /api/admin/screener-hub/audit           (X-API-Key: AGENT_API_KEY) — discovery audit for a single theme
+GET  /api/admin/screener-hub/thin-themes     (X-API-Key: AGENT_API_KEY) — list themes needing richer discovery
+POST /api/admin/screener-hub/rebuild-thin    (X-API-Key: AGENT_API_KEY) — sequential rebuild for thin themes
 POST /api/admin/bottlenecks/refresh          (X-API-Key: AGENT_API_KEY) — force full CR regen + universe rebuild
 GET  /api/debug/bottlenecks-snapshot         (X-API-Key: AGENT_API_KEY) — diagnostics for snapshot state
 """
@@ -18,6 +21,7 @@ from fastapi import APIRouter, Body, Header, Query, Request
 from fastapi.responses import JSONResponse
 
 from services.screener_hub_service import (
+    _theme_keys,
     _theme_metadata,
     get_admin_status,
     get_screener_hub,
@@ -407,6 +411,202 @@ async def screener_hub_audit(
         return JSONResponse(
             status_code=500,
             content={"status": "error", "theme": theme, "error": str(e)},
+        )
+
+
+# ── GET /api/admin/screener-hub/thin-themes ───────────────────────────────────
+
+_THIN_SEED_THRESHOLD    = 5   # fewer seeds than this → potentially thin
+_THIN_SCREENER_THRESHOLD = 3   # fewer screener symbols than this → thin
+
+@router.get("/api/admin/screener-hub/thin-themes")
+async def screener_hub_thin_themes(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    List all thematic themes whose last snapshot has insufficient dynamic discovery.
+
+    A theme is "thin" when it satisfies ANY of:
+      - fmp_screener_count == 0  AND  seed_count < _THIN_SEED_THRESHOLD
+      - No snapshot exists at all
+      - fmp_profile_discovery_count == 0  AND  fmp_industries defined in config
+
+    Returns a ranked list (thinnest first) with per-theme breakdown so the
+    operator knows which themes to prioritise for rebuild.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+    try:
+        from data.screener_hub_store import get_latest_universe as _get_snap
+        from services.screener_hub_service import _load_industry_map_config as _load_cfg
+
+        cfg_themes = (_load_cfg().get("themes") or {})
+        all_keys   = _theme_keys()
+
+        thin: list[dict]  = []
+        ok:   list[dict]  = []
+
+        for key in all_keys:
+            snap      = _get_snap("thematic", key)
+            theme_cfg = cfg_themes.get(key) or {}
+            has_fmp   = bool(theme_cfg.get("fmp_industries"))
+
+            if not snap:
+                thin.append({
+                    "theme":                   key,
+                    "reason":                  "no_snapshot",
+                    "seed_count":              len(theme_cfg.get("seed_tickers") or []),
+                    "fmp_screener_count":      0,
+                    "fmp_profile_count":       0,
+                    "total_symbols":           0,
+                    "generated_at":            None,
+                    "has_fmp_industries":      has_fmp,
+                })
+                continue
+
+            meta        = snap.get("metadata") or {}
+            seed_cnt    = int(meta.get("membership_seed_count") or 0)
+            scr_cnt     = int(meta.get("fmp_screener_count")    or 0)
+            prof_cnt    = int(meta.get("fmp_profile_discovery_count") or 0)
+            total_syms  = len(snap.get("symbols") or [])
+            gen_at      = snap.get("generated_at")
+
+            is_thin = (
+                (scr_cnt == 0 and seed_cnt < _THIN_SEED_THRESHOLD)
+                or (has_fmp and prof_cnt == 0 and scr_cnt < _THIN_SCREENER_THRESHOLD)
+            )
+            entry = {
+                "theme":              key,
+                "seed_count":         seed_cnt,
+                "fmp_screener_count": scr_cnt,
+                "fmp_profile_count":  prof_cnt,
+                "total_symbols":      total_syms,
+                "generated_at":       gen_at,
+                "has_fmp_industries": has_fmp,
+            }
+            if is_thin:
+                entry["reason"] = (
+                    "no_screener_no_seeds" if scr_cnt == 0 and seed_cnt < _THIN_SEED_THRESHOLD
+                    else "no_profile_discovery"
+                )
+                thin.append(entry)
+            else:
+                ok.append(entry)
+
+        thin.sort(key=lambda r: (r["fmp_screener_count"], r["seed_count"]))
+
+        return JSONResponse(content={
+            "thin_theme_count": len(thin),
+            "ok_theme_count":   len(ok),
+            "thin_themes":      thin,
+            "ok_themes":        ok,
+            "thresholds": {
+                "min_seeds":    _THIN_SEED_THRESHOLD,
+                "min_screener": _THIN_SCREENER_THRESHOLD,
+            },
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(e)},
+        )
+
+
+# ── POST /api/admin/screener-hub/rebuild-thin ─────────────────────────────────
+
+@router.post("/api/admin/screener-hub/rebuild-thin")
+async def screener_hub_rebuild_thin(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+    max_themes: int = Query(10, description="Max thin themes to rebuild in one call"),
+    dry_run: bool = Query(False, description="List themes that would be rebuilt without running"),
+):
+    """
+    Sequential rebuild for all thin thematic themes (Source P + FMP screener).
+
+    Identifies thin themes using the same logic as GET /api/admin/screener-hub/thin-themes
+    and triggers a full with_fmp_screener=True rebuild for each (up to `max_themes`).
+
+    Use dry_run=true to preview which themes would be rebuilt without triggering anything.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+    try:
+        from data.screener_hub_store import get_latest_universe as _get_snap
+        from services.screener_hub_service import _load_industry_map_config as _load_cfg
+
+        cfg_themes = (_load_cfg().get("themes") or {})
+        all_keys   = _theme_keys()
+
+        targets: list[str] = []
+        for key in all_keys:
+            snap      = _get_snap("thematic", key)
+            theme_cfg = cfg_themes.get(key) or {}
+            has_fmp   = bool(theme_cfg.get("fmp_industries"))
+
+            if not has_fmp:
+                continue  # no FMP config → nothing for FMP screener/profile to add
+
+            if not snap:
+                targets.append(key)
+                continue
+
+            meta     = snap.get("metadata") or {}
+            seed_cnt = int(meta.get("membership_seed_count") or 0)
+            scr_cnt  = int(meta.get("fmp_screener_count")    or 0)
+            prof_cnt = int(meta.get("fmp_profile_discovery_count") or 0)
+
+            is_thin = (
+                (scr_cnt == 0 and seed_cnt < _THIN_SEED_THRESHOLD)
+                or (prof_cnt == 0 and scr_cnt < _THIN_SCREENER_THRESHOLD)
+            )
+            if is_thin:
+                targets.append(key)
+
+        targets = targets[:max_themes]
+
+        if dry_run:
+            return JSONResponse(content={
+                "dry_run":      True,
+                "would_rebuild": targets,
+                "count":        len(targets),
+            })
+
+        results: list[dict] = []
+        for key in targets:
+            try:
+                summary = await asyncio.wait_for(
+                    rebuild_universe("thematic", theme=key, force=True),
+                    timeout=60.0,
+                )
+                bd = (summary.get("breakdown") or {}).get(key) or {}
+                results.append({
+                    "theme":              key,
+                    "status":             "ok",
+                    "fmp_screener_count": bd.get("fmp_screener_count", 0),
+                    "fmp_profile_count":  bd.get("fmp_profile_discovery_count", 0),
+                    "total_symbols":      len(summary.get("symbols", {}).get(key) or []),
+                })
+            except asyncio.TimeoutError:
+                results.append({"theme": key, "status": "timeout"})
+            except Exception as re:
+                results.append({"theme": key, "status": "error", "error": str(re)})
+
+        ok_count  = sum(1 for r in results if r.get("status") == "ok")
+        err_count = len(results) - ok_count
+        return JSONResponse(content={
+            "rebuilt":    len(results),
+            "ok":         ok_count,
+            "errors":     err_count,
+            "results":    results,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(e)},
         )
 
 

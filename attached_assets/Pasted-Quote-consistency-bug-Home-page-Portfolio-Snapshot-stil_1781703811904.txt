@@ -1,0 +1,88 @@
+Quote consistency bug: Home page Portfolio Snapshot still does not match the Portfolio page / true Tradier quote data.
+
+Do not touch Screener Hub.
+Do not touch Social page.
+Do not rebuild quote architecture.
+Do not add a new quote cache.
+Use the existing canonical quote path.
+
+Problem:
+Home Portfolio Snapshot is still showing stale/inconsistent quote fields versus Portfolio page:
+- price likely wrong/stale
+- 1D% wrong
+- volumeX / relative volume likely wrong
+- maybe volume / avg_volume using different fields
+
+Audit first:
+1. Find the exact Home Portfolio Snapshot endpoint and builder.
+2. Find the Portfolio page endpoint and builder.
+3. For the same portfolio tickers, print a comparison table:
+
+ticker
+home_price
+portfolio_page_price
+canonical_tradier_price
+home_1d_pct
+portfolio_page_1d_pct
+canonical_tradier_1d_pct
+home_volume
+portfolio_page_volume
+canonical_volume
+home_avg_volume
+portfolio_page_avg_volume
+canonical_avg_volume
+home_volume_x
+portfolio_page_volume_x
+canonical_volume_x
+home_quote_source
+portfolio_quote_source
+canonical_quote_source
+home_quote_fetched_at
+portfolio_quote_fetched_at
+field_source_used_by_home
+
+4. Confirm whether Home Portfolio Snapshot reads:
+- tradier:quote:sym:{SYM}
+- quote:lkg:{SYM}
+- portfolio:tradier_lkg
+- portfolio snapshot cache
+- holdings table/static values
+- FMP fallback
+
+Required behavior:
+For every ticker displayed in Home Portfolio Snapshot, quote fields must be overlaid from the same canonical chain used everywhere else:
+
+1. fresh tradier:quote:sym:{SYM}
+2. shared quote:lkg:{SYM}
+3. portfolio:tradier_lkg only if it is newer/equivalent and normalized
+4. stale snapshot/fundamental fields only as last resort and marked stale
+
+Home Portfolio Snapshot must not prefer stale holding/current_price fields over canonical Tradier quote fields.
+
+Normalize aliases:
+- price should accept last / price
+- 1D% should accept change_percentage / change_percent / change_pct, but output one canonical field
+- volume should accept volume
+- avg volume should accept average_volume / avg_volume
+- volumeX should be volume / avg_volume using the same canonical volume fields
+- quote_fetched_at and quote_source must be carried through
+
+Important:
+Do not make a new Tradier batch path unless the active Home request has missing/stale symbols and uses the existing limiter/cache writer. The fix should primarily be read/overlay order.
+
+Aggregation:
+If Home shows portfolio-level 1D%, calculate it from current market values / weighted holdings, not a simple average of ticker 1D%. But the ticker-level rows must still match Portfolio page exactly.
+
+Validation:
+1. Pick 5 portfolio tickers that are visibly wrong today.
+2. Hit Portfolio page endpoint and Home Portfolio Snapshot endpoint.
+3. Confirm ticker-level:
+   - price matches
+   - 1D% matches
+   - volume matches
+   - avg_volume matches
+   - volumeX matches
+   - quote_source matches or Home is fresher
+4. Confirm xai/social/screener code untouched.
+5. Add temporary diagnostic log:
+   [HOME_PORTFOLIO_QUOTE_DIFF] ticker=... home_source=... canonical_source=... diff_price=... diff_1d=... diff_volx=...
