@@ -1,0 +1,127 @@
+Audit first. Do not code until you trace these exact paths:
+
+1. Portfolio Dashboard option-position popup data source
+2. Existing Options Flow page backend engine/service/router
+3. Existing portfolio-scoped options-flow route/service used on Portfolio Terminal
+4. GET /api/caelyn-terminal response construction
+5. Canonical portfolio symbol helper that now includes equity holdings + option underlyings
+
+Current issues:
+
+1. In the Portfolio Dashboard tab, clicking an option holding opens a good popup with chart, position details, IV risk, and basic options signal. Keep all of that, but enrich it with the same derived options intelligence already used by the Options Flow page.
+2. In the Portfolio Terminal tab, the Options Flow section only shows OUST and AOSL. It must show every ticker in the user's portfolio universe: stock holdings + option underlyings, deduped.
+3. The separate Terminal "Options Holdings" section is not the desired backend model. Terminal should expose actual option positions so frontend can merge them into the main Holdings section.
+
+Important:
+
+* Do not reinvent options logic.
+* Reuse the existing custom wired Tradier/options-flow logic from the Options Flow page.
+* Do not add an LLM call.
+* Do not use FMP for options data.
+* Do not pass OCC option contract IDs into options-flow lookup. Use underlying symbols only.
+* Preserve existing Dashboard option popup fields.
+* Preserve existing Options Flow page behavior unless explicitly adding a portfolio-scoped include-all mode.
+
+Backend requirement A — Dashboard option popup enrichment:
+Find the endpoint/service used when clicking an option position in Dashboard.
+
+Add or expose richer options-flow fields from the existing Options Flow engine for the option underlying, including as many existing derived fields as already available:
+
+* options_score
+* signal_label / signal
+* risk_label / risk
+* pcr / put_call_ratio
+* iv / implied_volatility
+* expected_move
+* expected_move_pct if available
+* volume
+* open_interest
+* call_volume
+* put_volume
+* call_open_interest
+* put_open_interest
+* bullish_call_contracts or bullish_call_flow count if already derived
+* bearish_put_contracts or bearish_put_flow count if already derived
+* bullish_vs_bearish_summary
+* timeframe / suggested_timeframe / expiry_window if already derived
+* move_type / directional_bias / expected_move_direction if already derived
+* reason bullets / risk reasons if already derived
+
+Do not fake missing fields. If the existing options engine has slightly different names, expose those names clearly and document them. The frontend can map them.
+
+Backend requirement B — Portfolio Terminal Options Flow include-all:
+Find why Terminal Options Flow only returns OUST and AOSL.
+
+Likely causes to audit:
+
+* hardcoded limit/top N
+* filtering out low activity
+* only scanning equity holdings, not option underlyings
+* only returning rows above a score threshold
+* stale cache written before options underlyings were added to canonical portfolio
+* frontend only rendering first few rows
+
+Expected behavior:
+
+* Portfolio Options Flow should scan/display the canonical portfolio symbol universe:
+  equity holding symbols + option underlyings, deduped.
+* Current expected universe includes at least:
+  SLNH, AMPG, NBIS, OUST, LPTH, PENG, FLNC, AOSL, IQEPF, SIVEF,
+  CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO
+* Return one row per symbol where possible.
+* If a symbol has no options chain or Tradier has no usable options data, return a row with:
+  signal: "NO DATA" or "NO OPTIONS"
+  score: null
+  risk: "—"
+  and a clear reason.
+* Do not silently drop symbols just because their score is low.
+* Keep the regular Options Flow page ranking/filtering behavior intact. If needed, add a portfolio-specific include_all=true mode.
+
+Backend requirement C — Terminal holdings response:
+GET /api/caelyn-terminal should continue returning:
+
+* stock/equity positions
+* option_positions
+* total position counts
+* option underlyings
+
+But expose enough fields for frontend to merge option rows into the main Holdings section:
+For option rows include:
+
+* row_type: "option"
+* ticker / underlying_symbol
+* display_symbol
+* company_name if available
+* contracts
+* avg_premium
+* cost_basis
+* mark
+* market_value
+* unrealized_pnl
+* unrealized_pnl_pct
+* expiration
+* strike
+* call_put
+* current_underlying_price if already available
+* weight_pct if portfolio math supports it, otherwise null
+
+If live mark/value/P&L are already available from Dashboard option positions, use that source. If Terminal cannot access it yet, return explicit nulls, not missing fields.
+
+Caching / rate safety:
+
+* Reuse existing options-flow cache/LKG path.
+* Portfolio has ~18 symbols; this is fine, but do not create a fetch storm.
+* If the existing options-flow engine already has a master/cache, use it.
+* Do not call Tradier on every render if a fresh cache exists.
+* Manual refresh can force a refresh if an existing pattern exists.
+
+Validation required:
+
+1. Dashboard option popup endpoint for CRWV returns existing position fields plus enriched options-flow fields.
+2. Popup enrichment includes more than IV risk: score, p/c, IV, expected move, signal/risk, timeframe/expiry window if available, and call-vs-put/open-interest fields if available.
+3. Portfolio Terminal Options Flow returns rows for every canonical portfolio symbol/underlying, not just OUST and AOSL.
+4. It includes option underlyings: CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO.
+5. Symbols with no options data are returned with a clear "NO DATA" / "NO OPTIONS" state, not silently dropped.
+6. /api/caelyn-terminal exposes option_positions with fields needed to merge into the main Holdings table.
+7. No OCC contract IDs are used for portfolio options-flow lookup.
+8. Return exact files/functions/routes changed and sample JSON keys validated.

@@ -789,7 +789,14 @@ class CaelynTerminalProvider:
 
         # 19b. Options status — portfolio-scoped scan reusing Options Screener logic
         _holdings_sig_early = self._holdings_sig(holdings_raw)
-        _opts_scan          = await self._fetch_options_status(equity_tickers, _holdings_sig_early)
+        # Options cache key must reflect the FULL portfolio universe (equity +
+        # option underlyings).  Using only holdings_raw would give a stale cache
+        # key after new option positions are added, causing the old equity-only
+        # scan result to be served.  A separate sig from equity_tickers forces a
+        # fresh scan whenever the full symbol universe changes.
+        import hashlib as _hs
+        _opts_sig = _hs.md5(json.dumps(sorted(equity_tickers)).encode()).hexdigest()[:16]
+        _opts_scan          = await self._fetch_options_status(equity_tickers, _opts_sig)
         _options_by_ticker  = _opts_scan.get("by_symbol", {})
         _opts_cache_hit     = _opts_scan.get("cache_hit", False)
         for _p in positions:
@@ -965,6 +972,7 @@ class CaelynTerminalProvider:
         _opt_position_rows: list[dict] = []
         for _op in _opt_positions_raw:
             _opt_position_rows.append({
+                "row_type":          "option",
                 "underlying_symbol": _op.get("underlying", ""),
                 "underlying":        _op.get("underlying", ""),
                 "display_symbol":    _op.get("display_symbol", ""),
@@ -980,6 +988,8 @@ class CaelynTerminalProvider:
                 "mark":              None,
                 "market_value":      None,
                 "unrealized_pnl":    None,
+                "unrealized_pnl_pct": None,
+                "current_underlying_price": None,
                 "realized_pnl":      _op.get("realized_pnl"),
                 "final_status":      _op.get("final_status"),
                 "first_entry_date":  _op.get("first_entry_date"),
@@ -1037,6 +1047,17 @@ class CaelynTerminalProvider:
             "news_ticker":            news_ticker,
             # ── Portfolio-scoped options (reuses Options Screener logic) ──
             "portfolio_options":                   _opts_scan.get("rows", []),
+            # All portfolio symbols including those with no options data — lets the
+            # frontend render a row for every holding (available rows sorted first by
+            # score, then unavailable rows sorted by symbol).
+            "portfolio_options_all":               sorted(
+                _opts_scan.get("by_symbol", {}).values(),
+                key=lambda _r: (
+                    0 if _r.get("data_available") else 1,
+                    -(_r.get("score") or 0) if _r.get("data_available") else 0,
+                    (_r.get("ticker") or _r.get("symbol") or ""),
+                ),
+            ),
             "options_available_count":             _opts_scan.get("available_count", 0),
             "options_unavailable_count":           _opts_scan.get("unavailable_count", 0),
             "options_unavailable_reasons_by_symbol": _opts_scan.get("unavailable_reasons_by_symbol", {}),

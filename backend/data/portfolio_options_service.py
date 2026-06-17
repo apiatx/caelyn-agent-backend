@@ -126,45 +126,84 @@ def _normalize_master_row(sym: str, row: dict) -> dict:
     else:
         direction = "neutral"
 
+    # Derive call/put volume breakdown — prefer explicit master cache fields,
+    # fall back to algebraic derivation from total_vol + pc_ratio.
+    call_vol_m = _si(
+        row.get("call_volume") or row.get("total_call_volume") or oc.get("call_volume")
+    )
+    put_vol_m  = _si(
+        row.get("put_volume")  or row.get("total_put_volume")  or oc.get("put_volume")
+    )
+    if call_vol_m == 0 and put_vol_m == 0 and total_vol > 0 and pc is not None:
+        denom = 1 + pc
+        call_vol_m = round(total_vol / denom) if denom > 0 else 0
+        put_vol_m  = total_vol - call_vol_m
+
+    call_oi_m = _si(
+        oc.get("call_open_interest") or row.get("call_open_interest")
+    )
+    put_oi_m  = _si(
+        oc.get("put_open_interest")  or row.get("put_open_interest")
+    )
+
+    # Confidence driven by volume — mirrors _classify_signal logic
+    if total_vol > 2000:
+        confidence = "HIGH"
+    elif total_vol > 500:
+        confidence = "MEDIUM"
+    else:
+        confidence = "LOW"
+
     return {
-        "ticker":             sym,
-        "symbol":             sym,
-        "optionable":         True,
-        "data_available":     True,
-        "score":              round(float(score), 1),
-        "p_c":                round(pc, 3) if pc is not None else None,
-        "put_call":           round(pc, 3) if pc is not None else None,
-        "iv":                 round(iv_f, 4) if iv_f is not None else None,
-        "em":                 em_display,
-        "expected_move":      em_display,
-        "vol":                total_vol or None,
-        "volume":             total_vol or None,
-        "open_interest":      _si(row.get("open_interest")) or None,
-        "signal":             display,
-        "put_call_direction": direction,
-        "source":             "portfolio_scoped_options_screener",
-        "unavailable_reason": None,
+        "ticker":              sym,
+        "symbol":              sym,
+        "optionable":          True,
+        "data_available":      True,
+        "score":               round(float(score), 1),
+        "p_c":                 round(pc, 3) if pc is not None else None,
+        "put_call":            round(pc, 3) if pc is not None else None,
+        "iv":                  round(iv_f, 4) if iv_f is not None else None,
+        "em":                  em_display,
+        "expected_move":       em_display,
+        "vol":                 total_vol or None,
+        "volume":              total_vol or None,
+        "call_volume":         call_vol_m or None,
+        "put_volume":          put_vol_m or None,
+        "open_interest":       _si(row.get("open_interest")) or None,
+        "call_open_interest":  call_oi_m or None,
+        "put_open_interest":   put_oi_m or None,
+        "signal":              display,
+        "put_call_direction":  direction,
+        "confidence":          confidence,
+        "source":              "portfolio_scoped_options_screener",
+        "unavailable_reason":  None,
     }
 
 
 def _unavail_row(sym: str, reason: str, optionable: bool | None = None) -> dict:
     return {
-        "ticker":             sym,
-        "symbol":             sym,
-        "optionable":         optionable,
-        "data_available":     False,
-        "score":              None,
-        "p_c":                None,
-        "put_call":           None,
-        "iv":                 None,
-        "em":                 None,
-        "expected_move":      None,
-        "vol":                None,
-        "volume":             None,
-        "open_interest":      None,
-        "signal":             None,
-        "source":             "portfolio_scoped_options_screener",
-        "unavailable_reason": reason,
+        "ticker":              sym,
+        "symbol":              sym,
+        "optionable":          optionable,
+        "data_available":      False,
+        "score":               None,
+        "p_c":                 None,
+        "put_call":            None,
+        "iv":                  None,
+        "em":                  None,
+        "expected_move":       None,
+        "vol":                 None,
+        "volume":              None,
+        "call_volume":         None,
+        "put_volume":          None,
+        "open_interest":       None,
+        "call_open_interest":  None,
+        "put_open_interest":   None,
+        "signal":              "NO OPTIONS" if "no_chain" in reason or "not_in_tradier" in reason or "otc" in reason else "NO DATA",
+        "put_call_direction":  None,
+        "confidence":          None,
+        "source":              "portfolio_scoped_options_screener",
+        "unavailable_reason":  reason,
     }
 
 
@@ -324,15 +363,21 @@ async def _scan_one_symbol(
 
             calls_all, puts_all = [], []
             oi_total = 0
+            call_oi  = 0
+            put_oi   = 0
             for ch in chains:
                 if isinstance(ch, Exception) or not isinstance(ch, dict):
                     continue
                 for c in ch.get("calls", []):
                     calls_all.append(c)
-                    oi_total += _si(c.get("open_interest") or c.get("openInterest"))
+                    _c_oi = _si(c.get("open_interest") or c.get("openInterest"))
+                    oi_total += _c_oi
+                    call_oi  += _c_oi
                 for p in ch.get("puts", []):
                     puts_all.append(p)
-                    oi_total += _si(p.get("open_interest") or p.get("openInterest"))
+                    _p_oi = _si(p.get("open_interest") or p.get("openInterest"))
+                    oi_total += _p_oi
+                    put_oi   += _p_oi
 
             if not calls_all and not puts_all:
                 return {"_sym": sym, "_reason": "no_chain_returned"}
@@ -370,24 +415,28 @@ async def _scan_one_symbol(
             em_display = round(expected_move_raw * 100, 2) if expected_move_raw is not None else None
 
             return {
-                "ticker":             sym,
-                "symbol":             sym,
-                "optionable":         True,
-                "data_available":     True,
-                "score":              score,
-                "p_c":                pc_ratio,
-                "put_call":           pc_ratio,
-                "iv":                 iv_current,
-                "em":                 em_display,
-                "expected_move":      em_display,
-                "vol":                total_vol or None,
-                "volume":             total_vol or None,
-                "open_interest":      oi_total or None,
-                "signal":             display,
-                "put_call_direction": direction,
-                "confidence":         confidence,
-                "source":             "portfolio_scoped_options_screener",
-                "unavailable_reason": None,
+                "ticker":              sym,
+                "symbol":              sym,
+                "optionable":          True,
+                "data_available":      True,
+                "score":               score,
+                "p_c":                 pc_ratio,
+                "put_call":            pc_ratio,
+                "iv":                  iv_current,
+                "em":                  em_display,
+                "expected_move":       em_display,
+                "vol":                 total_vol or None,
+                "volume":              total_vol or None,
+                "call_volume":         call_vol or None,
+                "put_volume":          put_vol or None,
+                "open_interest":       oi_total or None,
+                "call_open_interest":  call_oi or None,
+                "put_open_interest":   put_oi or None,
+                "signal":              display,
+                "put_call_direction":  direction,
+                "confidence":          confidence,
+                "source":              "portfolio_scoped_options_screener",
+                "unavailable_reason":  None,
             }
 
         except asyncio.TimeoutError:

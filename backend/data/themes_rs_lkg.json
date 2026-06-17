@@ -35,20 +35,11 @@
         "1Y": 292.02,
         "5Y": null
       },
-      "breadth_pct": 75.0,
+      "breadth_pct": 66.7,
       "pct_from_50d": 17.41,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "static_fallback",
       "leaders": [
-        {
-          "symbol": "ASMVF",
-          "return_pct": 20.5,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "static_fallback"
-          ]
-        },
         {
           "symbol": "UMICF",
           "return_pct": 1.95,
@@ -61,6 +52,15 @@
         {
           "symbol": "ONTO",
           "return_pct": 0.88,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "static_fallback"
+          ]
+        },
+        {
+          "symbol": "KLIC",
+          "return_pct": -0.65,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -97,12 +97,12 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.282628+00:00",
+      "last_updated": "2026-06-17T21:46:59.104650+00:00",
       "rs_score": 91.5,
       "rs_vs_spy": 1.99,
       "rs_vs_qqq": 1.75,
       "state": "active",
-      "state_reason": "Top-percentile RS (92/100) vs theme universe with broad participation (75% advancing). Outperforming SPY +2.0%, QQQ +1.8%.",
+      "state_reason": "Top-percentile RS (92/100) vs theme universe with broad participation (67% advancing). Outperforming SPY +2.0%, QQQ +1.8%.",
       "momentum_rank": 1,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -122,7 +122,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.282580+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.104599+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -162,7 +162,7 @@
         "1Y": 150.3,
         "5Y": null
       },
-      "breadth_pct": 47.4,
+      "breadth_pct": 45.0,
       "pct_from_50d": 19.29,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:DRAM + etf_holding:SMH + static_fallback_seeds",
@@ -178,7 +178,7 @@
         },
         {
           "symbol": "AEHR",
-          "return_pct": 7.43,
+          "return_pct": 7.44,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -216,8 +216,8 @@
           ]
         },
         {
-          "symbol": "MRAM",
-          "return_pct": -1.84,
+          "symbol": "PSTG",
+          "return_pct": -1.93,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -225,12 +225,12 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.196399+00:00",
+      "last_updated": "2026-06-17T21:46:58.195664+00:00",
       "rs_score": 89.1,
       "rs_vs_spy": 2.69,
       "rs_vs_qqq": 2.45,
       "state": "active",
-      "state_reason": "Top-percentile RS (89/100) vs theme universe. Outperforming SPY +2.7%, QQQ +2.5%. Breadth 47%.",
+      "state_reason": "Top-percentile RS (89/100) vs theme universe. Outperforming SPY +2.7%, QQQ +2.5%. Breadth 45%.",
       "momentum_rank": 2,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -250,7 +250,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:45.196324+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.195617+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -357,7 +357,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.112903+00:00",
+      "last_updated": "2026-06-17T21:46:57.711691+00:00",
       "rs_score": 88.4,
       "rs_vs_spy": 5.15,
       "rs_vs_qqq": 4.91,
@@ -382,7 +382,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.112814+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.711607+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -425,7 +425,7 @@
       "leaders": [
         {
           "symbol": "AEHR",
-          "return_pct": 7.43,
+          "return_pct": 7.44,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -434,7 +434,7 @@
         },
         {
           "symbol": "ACMR",
-          "return_pct": 5.49,
+          "return_pct": 5.5,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -480,7 +480,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.225036+00:00",
+      "last_updated": "2026-06-17T21:46:59.043439+00:00",
       "rs_score": 86.2,
       "rs_vs_spy": 2.61,
       "rs_vs_qqq": 2.37,
@@ -505,7 +505,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.224984+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.043385+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -563,7 +563,7 @@
         },
         {
           "symbol": "ASML",
-          "return_pct": 3.54,
+          "return_pct": 3.55,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -612,7 +612,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.234530+00:00",
+      "last_updated": "2026-06-17T21:46:59.053671+00:00",
       "rs_score": 86.1,
       "rs_vs_spy": 2.11,
       "rs_vs_qqq": 1.87,
@@ -637,7 +637,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.234478+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.053612+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -711,7 +711,7 @@
       "laggards": [
         {
           "symbol": "ACHR",
-          "return_pct": -1.47,
+          "return_pct": -1.48,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -737,7 +737,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.606904+00:00",
+      "last_updated": "2026-06-17T21:46:57.955866+00:00",
       "rs_score": 74.3,
       "rs_vs_spy": 2.6,
       "rs_vs_qqq": 2.36,
@@ -762,7 +762,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.606852+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.955793+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -866,7 +866,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.596744+00:00",
+      "last_updated": "2026-06-17T21:46:57.947870+00:00",
       "rs_score": 71.5,
       "rs_vs_spy": 2.59,
       "rs_vs_qqq": 2.35,
@@ -891,7 +891,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.596688+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.947803+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -930,7 +930,7 @@
         "1Y": 46.49,
         "5Y": null
       },
-      "breadth_pct": 73.3,
+      "breadth_pct": 68.8,
       "pct_from_50d": 4.66,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XBI + static_fallback_seeds",
@@ -992,12 +992,12 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.132985+00:00",
+      "last_updated": "2026-06-17T21:46:57.727309+00:00",
       "rs_score": 71.3,
       "rs_vs_spy": 2.42,
       "rs_vs_qqq": 2.18,
       "state": "active",
-      "state_reason": "Top-percentile RS (71/100) vs theme universe with broad participation (73% advancing). Outperforming SPY +2.4%, QQQ +2.2%.",
+      "state_reason": "Top-percentile RS (71/100) vs theme universe with broad participation (69% advancing). Outperforming SPY +2.4%, QQQ +2.2%.",
       "momentum_rank": 8,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -1017,7 +1017,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.132926+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.727254+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1122,7 +1122,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.543752+00:00",
+      "last_updated": "2026-06-17T21:46:57.913796+00:00",
       "rs_score": 70.3,
       "rs_vs_spy": 0.08,
       "rs_vs_qqq": -0.16,
@@ -1147,7 +1147,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 75.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.543698+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.913727+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1245,7 +1245,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.311680+00:00",
+      "last_updated": "2026-06-17T21:46:59.132229+00:00",
       "rs_score": 65.9,
       "rs_vs_spy": 1.63,
       "rs_vs_qqq": 1.39,
@@ -1270,7 +1270,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.311615+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.132158+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1369,7 +1369,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.332228+00:00",
+      "last_updated": "2026-06-17T21:46:59.155610+00:00",
       "rs_score": 63.9,
       "rs_vs_spy": 0.7,
       "rs_vs_qqq": 0.46,
@@ -1394,7 +1394,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.332167+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.155552+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1462,7 +1462,7 @@
         },
         {
           "symbol": "BE",
-          "return_pct": 1.46,
+          "return_pct": 1.47,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -1499,7 +1499,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:46.823913+00:00",
+      "last_updated": "2026-06-17T21:46:58.438050+00:00",
       "rs_score": 62.9,
       "rs_vs_spy": 4.48,
       "rs_vs_qqq": 4.24,
@@ -1524,7 +1524,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:46.823836+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.437979+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -1621,7 +1621,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.185753+00:00",
+      "last_updated": "2026-06-17T21:46:59.002788+00:00",
       "rs_score": 62.3,
       "rs_vs_spy": 0.49,
       "rs_vs_qqq": 0.25,
@@ -1646,7 +1646,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-17T20:23:47.185686+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.002731+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1746,7 +1746,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:40.585608+00:00",
+      "last_updated": "2026-06-17T21:46:58.148683+00:00",
       "rs_score": 62.2,
       "rs_vs_spy": 1.02,
       "rs_vs_qqq": 0.78,
@@ -1771,7 +1771,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:40.585540+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.148632+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1872,7 +1872,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.182126+00:00",
+      "last_updated": "2026-06-17T21:46:58.999558+00:00",
       "rs_score": 61.3,
       "rs_vs_spy": -1.19,
       "rs_vs_qqq": -1.43,
@@ -1897,7 +1897,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 33.3
       },
-      "stage_updated_at": "2026-06-17T20:23:47.182027+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.999489+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -2001,7 +2001,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.203430+00:00",
+      "last_updated": "2026-06-17T21:46:58.202935+00:00",
       "rs_score": 60.3,
       "rs_vs_spy": -1.07,
       "rs_vs_qqq": -1.31,
@@ -2026,7 +2026,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:45.203384+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.202889+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2127,7 +2127,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.803649+00:00",
+      "last_updated": "2026-06-17T21:46:58.139074+00:00",
       "rs_score": 59.5,
       "rs_vs_spy": -1.15,
       "rs_vs_qqq": -1.39,
@@ -2152,7 +2152,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.803576+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.139009+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2248,7 +2248,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:39.219921+00:00",
+      "last_updated": "2026-06-17T21:46:58.142519+00:00",
       "rs_score": 59.0,
       "rs_vs_spy": 1.47,
       "rs_vs_qqq": 1.23,
@@ -2273,7 +2273,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-17T20:23:39.219861+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.142469+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2317,7 +2317,7 @@
       "leaders": [
         {
           "symbol": "BE",
-          "return_pct": 1.46,
+          "return_pct": 1.47,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2335,7 +2335,7 @@
         },
         {
           "symbol": "ALB",
-          "return_pct": 0.27,
+          "return_pct": 0.28,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2373,7 +2373,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.169367+00:00",
+      "last_updated": "2026-06-17T21:46:58.172200+00:00",
       "rs_score": 58.5,
       "rs_vs_spy": 0.43,
       "rs_vs_qqq": 0.19,
@@ -2398,7 +2398,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:45.169251+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.172136+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2503,7 +2503,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.340657+00:00",
+      "last_updated": "2026-06-17T21:46:59.164025+00:00",
       "rs_score": 58.4,
       "rs_vs_spy": -1.98,
       "rs_vs_qqq": -2.22,
@@ -2528,7 +2528,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.340607+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.163977+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2627,7 +2627,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.214965+00:00",
+      "last_updated": "2026-06-17T21:46:58.209826+00:00",
       "rs_score": 56.5,
       "rs_vs_spy": 0.93,
       "rs_vs_qqq": 0.69,
@@ -2652,7 +2652,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:45.214888+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.209771+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2760,7 +2760,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.587308+00:00",
+      "last_updated": "2026-06-17T21:46:57.939129+00:00",
       "rs_score": 55.8,
       "rs_vs_spy": 0.93,
       "rs_vs_qqq": 0.69,
@@ -2785,7 +2785,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.587249+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.939071+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2837,7 +2837,7 @@
         },
         {
           "symbol": "APD",
-          "return_pct": 0.45,
+          "return_pct": 0.46,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -2885,7 +2885,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.140248+00:00",
+      "last_updated": "2026-06-17T21:46:57.733627+00:00",
       "rs_score": 55.6,
       "rs_vs_spy": 0.06,
       "rs_vs_qqq": -0.18,
@@ -2910,7 +2910,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.140177+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.733575+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2965,7 +2965,7 @@
         },
         {
           "symbol": "BE",
-          "return_pct": 1.46,
+          "return_pct": 1.47,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3011,7 +3011,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.267608+00:00",
+      "last_updated": "2026-06-17T21:46:59.089829+00:00",
       "rs_score": 55.4,
       "rs_vs_spy": 0.07,
       "rs_vs_qqq": -0.17,
@@ -3036,7 +3036,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.267556+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.089755+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3072,7 +3072,7 @@
         "1Y": 7.56,
         "5Y": null
       },
-      "breadth_pct": 44.4,
+      "breadth_pct": 40.0,
       "pct_from_50d": 4.04,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XLF",
@@ -3137,12 +3137,12 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.634557+00:00",
+      "last_updated": "2026-06-17T21:46:57.979180+00:00",
       "rs_score": 54.1,
       "rs_vs_spy": 0.66,
       "rs_vs_qqq": 0.42,
       "state": "neutral",
-      "state_reason": "Mid-range RS (54/100) vs peer themes. SPY delta +0.7%, QQQ delta +0.4%. Breadth 44%.",
+      "state_reason": "Mid-range RS (54/100) vs peer themes. SPY delta +0.7%, QQQ delta +0.4%. Breadth 40%.",
       "momentum_rank": 25,
       "stage": 1,
       "stage_label": "Stage 1 Base",
@@ -3162,7 +3162,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.634443+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.979129+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3198,7 +3198,7 @@
         "1Y": 15.05,
         "5Y": null
       },
-      "breadth_pct": 42.9,
+      "breadth_pct": 46.7,
       "pct_from_50d": 3.29,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:KBE + static_fallback_seeds",
@@ -3213,17 +3213,17 @@
           ]
         },
         {
-          "symbol": "GS",
-          "return_pct": 0.78,
+          "symbol": "BK",
+          "return_pct": 1.37,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
-            "static_fallback"
+            "etf_holding:KBE"
           ]
         },
         {
-          "symbol": "JPM",
-          "return_pct": 0.71,
+          "symbol": "GS",
+          "return_pct": 0.78,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3260,12 +3260,12 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.122683+00:00",
+      "last_updated": "2026-06-17T21:46:57.719133+00:00",
       "rs_score": 53.4,
       "rs_vs_spy": 0.14,
       "rs_vs_qqq": -0.1,
       "state": "neutral",
-      "state_reason": "Mid-range RS (53/100) vs peer themes. SPY delta +0.1%, QQQ delta -0.1%. Breadth 43%.",
+      "state_reason": "Mid-range RS (53/100) vs peer themes. SPY delta +0.1%, QQQ delta -0.1%. Breadth 47%.",
       "momentum_rank": 26,
       "stage": 2,
       "stage_label": "Stage 2 Advance",
@@ -3285,7 +3285,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.122573+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.719059+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3337,7 +3337,7 @@
         },
         {
           "symbol": "APD",
-          "return_pct": 0.45,
+          "return_pct": 0.46,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3387,7 +3387,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.185636+00:00",
+      "last_updated": "2026-06-17T21:46:58.185160+00:00",
       "rs_score": 53.4,
       "rs_vs_spy": -0.11,
       "rs_vs_qqq": -0.35,
@@ -3412,7 +3412,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:45.185558+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.185108+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3522,7 +3522,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.255942+00:00",
+      "last_updated": "2026-06-17T21:46:59.077794+00:00",
       "rs_score": 53.1,
       "rs_vs_spy": -2.45,
       "rs_vs_qqq": -2.69,
@@ -3547,7 +3547,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.255868+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.077733+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3655,7 +3655,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.565840+00:00",
+      "last_updated": "2026-06-17T21:46:57.922967+00:00",
       "rs_score": 53.0,
       "rs_vs_spy": 0.09,
       "rs_vs_qqq": -0.15,
@@ -3680,7 +3680,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.565753+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.922916+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3783,7 +3783,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.198708+00:00",
+      "last_updated": "2026-06-17T21:46:59.015960+00:00",
       "rs_score": 52.3,
       "rs_vs_spy": -0.42,
       "rs_vs_qqq": -0.66,
@@ -3808,7 +3808,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.198661+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.015911+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3859,7 +3859,7 @@
       "leaders": [
         {
           "symbol": "BE",
-          "return_pct": 1.46,
+          "return_pct": 1.47,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -3918,7 +3918,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.155067+00:00",
+      "last_updated": "2026-06-17T21:46:57.750168+00:00",
       "rs_score": 52.0,
       "rs_vs_spy": 0.41,
       "rs_vs_qqq": 0.17,
@@ -3943,7 +3943,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.155011+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.750095+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4046,7 +4046,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.302384+00:00",
+      "last_updated": "2026-06-17T21:46:59.123433+00:00",
       "rs_score": 49.8,
       "rs_vs_spy": 0.5,
       "rs_vs_qqq": 0.26,
@@ -4071,7 +4071,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 33.3
       },
-      "stage_updated_at": "2026-06-17T20:23:47.302309+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.123385+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4121,7 +4121,7 @@
       "leaders": [
         {
           "symbol": "ABBNY",
-          "return_pct": 1.48,
+          "return_pct": 0.19,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -4179,7 +4179,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.216221+00:00",
+      "last_updated": "2026-06-17T21:46:59.034712+00:00",
       "rs_score": 49.6,
       "rs_vs_spy": 0.78,
       "rs_vs_qqq": 0.54,
@@ -4204,7 +4204,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.216146+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.034623+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4309,7 +4309,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.534906+00:00",
+      "last_updated": "2026-06-17T21:46:57.895467+00:00",
       "rs_score": 48.9,
       "rs_vs_spy": -1.05,
       "rs_vs_qqq": -1.29,
@@ -4334,7 +4334,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.534835+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.895395+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4438,7 +4438,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:46.806867+00:00",
+      "last_updated": "2026-06-17T21:46:58.422944+00:00",
       "rs_score": 47.6,
       "rs_vs_spy": 0.02,
       "rs_vs_qqq": -0.22,
@@ -4463,7 +4463,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:46.806785+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.422861+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -4558,7 +4558,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.626152+00:00",
+      "last_updated": "2026-06-17T21:46:57.972832+00:00",
       "rs_score": 46.6,
       "rs_vs_spy": -0.25,
       "rs_vs_qqq": -0.49,
@@ -4583,7 +4583,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-17T20:23:37.626093+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.972765+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4691,7 +4691,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.769307+00:00",
+      "last_updated": "2026-06-17T21:46:58.107379+00:00",
       "rs_score": 44.5,
       "rs_vs_spy": -1.54,
       "rs_vs_qqq": -1.78,
@@ -4716,7 +4716,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.769229+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.107279+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4820,7 +4820,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.347932+00:00",
+      "last_updated": "2026-06-17T21:46:59.171200+00:00",
       "rs_score": 43.1,
       "rs_vs_spy": 0.12,
       "rs_vs_qqq": -0.12,
@@ -4845,7 +4845,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.347880+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.171145+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4948,7 +4948,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.795875+00:00",
+      "last_updated": "2026-06-17T21:46:58.131318+00:00",
       "rs_score": 42.2,
       "rs_vs_spy": -0.06,
       "rs_vs_qqq": -0.3,
@@ -4973,7 +4973,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 66.7
       },
-      "stage_updated_at": "2026-06-17T20:23:37.795817+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.131263+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5073,7 +5073,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.294409+00:00",
+      "last_updated": "2026-06-17T21:46:59.115648+00:00",
       "rs_score": 41.3,
       "rs_vs_spy": 0.69,
       "rs_vs_qqq": 0.45,
@@ -5098,7 +5098,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.294356+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.115601+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5203,7 +5203,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.787914+00:00",
+      "last_updated": "2026-06-17T21:46:58.123357+00:00",
       "rs_score": 39.7,
       "rs_vs_spy": 0.02,
       "rs_vs_qqq": -0.22,
@@ -5228,7 +5228,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.787857+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.123276+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5336,7 +5336,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.326075+00:00",
+      "last_updated": "2026-06-17T21:46:59.148769+00:00",
       "rs_score": 39.0,
       "rs_vs_spy": -0.67,
       "rs_vs_qqq": -0.91,
@@ -5361,7 +5361,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.326025+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.148715+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5459,7 +5459,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:44.657052+00:00",
+      "last_updated": "2026-06-17T21:46:58.160955+00:00",
       "rs_score": 38.2,
       "rs_vs_spy": 0.54,
       "rs_vs_qqq": 0.3,
@@ -5484,7 +5484,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-17T20:23:44.656987+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.159670+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5587,7 +5587,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.354320+00:00",
+      "last_updated": "2026-06-17T21:46:59.177038+00:00",
       "rs_score": 38.0,
       "rs_vs_spy": -0.06,
       "rs_vs_qqq": -0.3,
@@ -5612,7 +5612,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.354262+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.176988+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5649,7 +5649,7 @@
         "1Y": 9.53,
         "5Y": null
       },
-      "breadth_pct": 23.1,
+      "breadth_pct": 21.4,
       "pct_from_50d": -1.14,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:XRT + static_fallback_seeds",
@@ -5711,12 +5711,12 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.179284+00:00",
+      "last_updated": "2026-06-17T21:46:57.778386+00:00",
       "rs_score": 37.6,
       "rs_vs_spy": -1.46,
       "rs_vs_qqq": -1.7,
       "state": "neutral",
-      "state_reason": "Mid-range RS (38/100) vs peer themes. SPY delta -1.5%, QQQ delta -1.7%. Breadth 23%.",
+      "state_reason": "Mid-range RS (38/100) vs peer themes. SPY delta -1.5%, QQQ delta -1.7%. Breadth 21%.",
       "momentum_rank": 45,
       "stage": 1,
       "stage_label": "Stage 1 Base",
@@ -5736,7 +5736,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.179231+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.778299+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5802,7 +5802,7 @@
         },
         {
           "symbol": "AMD",
-          "return_pct": 1.02,
+          "return_pct": 1.03,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5813,7 +5813,7 @@
       "laggards": [
         {
           "symbol": "AFRM",
-          "return_pct": -5.3,
+          "return_pct": -5.31,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -5840,7 +5840,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.655261+00:00",
+      "last_updated": "2026-06-17T21:46:57.995544+00:00",
       "rs_score": 34.6,
       "rs_vs_spy": -0.27,
       "rs_vs_qqq": -0.51,
@@ -5865,7 +5865,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.655149+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.995486+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5967,7 +5967,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.173555+00:00",
+      "last_updated": "2026-06-17T21:46:57.771658+00:00",
       "rs_score": 34.1,
       "rs_vs_spy": -1.17,
       "rs_vs_qqq": -1.41,
@@ -5992,7 +5992,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.173500+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.771599+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6035,7 +6035,7 @@
       "leaders": [
         {
           "symbol": "EQIX",
-          "return_pct": -0.56,
+          "return_pct": -0.57,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6055,7 +6055,7 @@
         },
         {
           "symbol": "AMT",
-          "return_pct": -1.83,
+          "return_pct": -1.84,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6094,7 +6094,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.191680+00:00",
+      "last_updated": "2026-06-17T21:46:59.008620+00:00",
       "rs_score": 32.9,
       "rs_vs_spy": -1.25,
       "rs_vs_qqq": -1.49,
@@ -6119,7 +6119,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.191625+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.008569+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6217,7 +6217,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.161226+00:00",
+      "last_updated": "2026-06-17T21:46:57.757871+00:00",
       "rs_score": 31.0,
       "rs_vs_spy": -1.46,
       "rs_vs_qqq": -1.7,
@@ -6242,7 +6242,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.161130+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.757797+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6302,7 +6302,7 @@
         },
         {
           "symbol": "ARRY",
-          "return_pct": -2.54,
+          "return_pct": -2.55,
           "timeframe": "1D",
           "source": "tradier_batch",
           "discovery_sources": [
@@ -6342,7 +6342,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.286875+00:00",
+      "last_updated": "2026-06-17T21:46:59.109236+00:00",
       "rs_score": 29.4,
       "rs_vs_spy": -2.27,
       "rs_vs_qqq": -2.51,
@@ -6367,7 +6367,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-17T20:23:47.286825+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.109186+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6465,7 +6465,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:47.273995+00:00",
+      "last_updated": "2026-06-17T21:46:59.096321+00:00",
       "rs_score": 25.9,
       "rs_vs_spy": -1.25,
       "rs_vs_qqq": -1.49,
@@ -6490,7 +6490,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-17T20:23:47.273949+00:00",
+      "stage_updated_at": "2026-06-17T21:46:59.096275+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6592,7 +6592,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.185126+00:00",
+      "last_updated": "2026-06-17T21:46:57.785629+00:00",
       "rs_score": 24.5,
       "rs_vs_spy": -0.87,
       "rs_vs_qqq": -1.11,
@@ -6617,7 +6617,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.185075+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.785564+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6720,7 +6720,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.235574+00:00",
+      "last_updated": "2026-06-17T21:46:58.224486+00:00",
       "rs_score": 24.3,
       "rs_vs_spy": -0.98,
       "rs_vs_qqq": -1.22,
@@ -6745,7 +6745,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:45.235525+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.224321+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6843,7 +6843,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.189091+00:00",
+      "last_updated": "2026-06-17T21:46:58.189145+00:00",
       "rs_score": 23.9,
       "rs_vs_spy": -1.78,
       "rs_vs_qqq": -2.02,
@@ -6868,7 +6868,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-17T20:23:45.189045+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.189102+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6973,7 +6973,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.080756+00:00",
+      "last_updated": "2026-06-17T21:46:57.683801+00:00",
       "rs_score": 23.8,
       "rs_vs_spy": 0.56,
       "rs_vs_qqq": 0.32,
@@ -6998,7 +6998,7 @@
         "breadth_above_30w_ma_pct": 33.3,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.080659+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.683719+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7098,7 +7098,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:36.167755+00:00",
+      "last_updated": "2026-06-17T21:46:57.765543+00:00",
       "rs_score": 22.2,
       "rs_vs_spy": -1.53,
       "rs_vs_qqq": -1.77,
@@ -7123,7 +7123,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-17T20:23:36.167691+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.765479+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7225,7 +7225,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:37.614284+00:00",
+      "last_updated": "2026-06-17T21:46:57.963217+00:00",
       "rs_score": 19.2,
       "rs_vs_spy": 0.18,
       "rs_vs_qqq": -0.06,
@@ -7250,7 +7250,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:37.614229+00:00",
+      "stage_updated_at": "2026-06-17T21:46:57.963011+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7286,7 +7286,7 @@
         "1Y": -10.57,
         "5Y": null
       },
-      "breadth_pct": 21.4,
+      "breadth_pct": 20.0,
       "pct_from_50d": -1.76,
       "trend_accel_20d": 0.0,
       "leader_universe_source": "etf_holding:FCG + static_fallback_seeds",
@@ -7321,6 +7321,15 @@
       ],
       "laggards": [
         {
+          "symbol": "CTRA",
+          "return_pct": -8.62,
+          "timeframe": "1D",
+          "source": "tradier_batch",
+          "discovery_sources": [
+            "etf_holding:FCG"
+          ]
+        },
+        {
           "symbol": "FANG",
           "return_pct": -1.41,
           "timeframe": "1D",
@@ -7337,23 +7346,14 @@
           "discovery_sources": [
             "etf_holding:FCG"
           ]
-        },
-        {
-          "symbol": "OXY",
-          "return_pct": -1.18,
-          "timeframe": "1D",
-          "source": "tradier_batch",
-          "discovery_sources": [
-            "etf_holding:FCG"
-          ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.178270+00:00",
+      "last_updated": "2026-06-17T21:46:58.179256+00:00",
       "rs_score": 18.5,
       "rs_vs_spy": 0.09,
       "rs_vs_qqq": -0.15,
       "state": "dead_zone",
-      "state_reason": "Bottom-quartile RS (18/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta -0.1%. Breadth 21% \u2014 minimal buying pressure.",
+      "state_reason": "Bottom-quartile RS (18/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta -0.1%. Breadth 20% \u2014 minimal buying pressure.",
       "momentum_rank": 58,
       "stage": 1,
       "stage_label": "Stage 1 \u2192 2 Breakout Watch",
@@ -7373,7 +7373,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-17T20:23:45.178156+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.179205+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7474,7 +7474,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-17T20:23:45.225856+00:00",
+      "last_updated": "2026-06-17T21:46:58.216893+00:00",
       "rs_score": 18.2,
       "rs_vs_spy": 0.0,
       "rs_vs_qqq": -0.24,
@@ -7499,7 +7499,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-17T20:23:45.225800+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.216846+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7539,7 +7539,7 @@
       "leader_universe_source": "static_fallback",
       "leaders": [],
       "laggards": [],
-      "last_updated": "2026-06-17T20:23:46.826901+00:00",
+      "last_updated": "2026-06-17T21:46:58.446456+00:00",
       "rs_score": 15.0,
       "rs_vs_spy": 9.04,
       "rs_vs_qqq": 8.8,
@@ -7564,7 +7564,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-17T20:23:46.825077+00:00",
+      "stage_updated_at": "2026-06-17T21:46:58.443447+00:00",
       "stage_source": "fallback"
     }
   ]
