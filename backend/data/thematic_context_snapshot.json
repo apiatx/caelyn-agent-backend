@@ -6,16 +6,16 @@
       "score": 91.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (92/100) vs theme universe with broad participation (75% advancing). Outperforming SPY +2.0%, QQQ +1.8"
+        "Top-percentile RS (92/100) vs theme universe with broad participation (67% advancing). Outperforming SPY +2.0%, QQQ +1.8"
       ],
       "related_etfs": [
         "AMKR",
         "ASX"
       ],
       "related_tickers": [
-        "ASMVF",
         "UMICF",
-        "ONTO"
+        "ONTO",
+        "KLIC"
       ]
     },
     {
@@ -23,7 +23,7 @@
       "score": 89.6,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (89/100) vs theme universe. Outperforming SPY +2.7%, QQQ +2.5%. Breadth 47%.",
+        "Top-percentile RS (89/100) vs theme universe. Outperforming SPY +2.7%, QQQ +2.5%. Breadth 45%.",
         "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
@@ -135,7 +135,7 @@
       "score": 71.3,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (71/100) vs theme universe with broad participation (73% advancing). Outperforming SPY +2.4%, QQQ +2.2"
+        "Top-percentile RS (71/100) vs theme universe with broad participation (69% advancing). Outperforming SPY +2.4%, QQQ +2.2"
       ],
       "related_etfs": [
         "XBI",
@@ -274,7 +274,7 @@
       "score": 18.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (18/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta -0.1%. Breadth 21% \u2014 minimal buying pressur"
+        "Bottom-quartile RS (18/100) vs 60-theme universe. SPY delta +0.1%, QQQ delta -0.1%. Breadth 20% \u2014 minimal buying pressur"
       ],
       "related_etfs": [
         "FCG",
@@ -357,7 +357,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-17T21:46:37.319365+00:00",
+  "last_updated": "2026-06-17T22:07:37.682905+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -368,5 +368,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1781732797.3194182
+  "_saved_at": 1781734057.6830332
 }
