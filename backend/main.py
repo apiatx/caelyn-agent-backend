@@ -3384,33 +3384,75 @@ async def social_x_dashboard(
                              score.  Missing per-symbol data returns null +
                              data_quality="partial|missing" rather than 500.
     """
+    import time as _time
     try:
         from services.social_x_service import build_x_dashboard
-        from services.social_screener_service import build_screeners
+        from services.social_screener_service import build_screeners, _is_us_market_open
         from services.x_consensus_cache import _load_disk_cache
+        from data.cache import cache as _ss_cache
         from config import FMP_API_KEY
+        from datetime import datetime as _dt, timezone as _tz
 
+        _t0 = _time.monotonic()
+
+        # ── 1. XAI snapshot (mtime hot-cached — no JSON re-parse if unchanged) ──
+        snapshot = _load_disk_cache()
+
+        # ── 2. Dashboard sections (sections cache — skip classifier on same snap) ──
         payload = build_x_dashboard()
 
-        # Additive screeners — derived from the SAME snapshot, zero extra Grok calls.
-        # allow_live_fmp=True: social enrichment is always live (Tradier + FMP
-        # profile/price-change) so market_cap/price/volume are never blank.
-        # background_fund=True: fundamentals served from 7-day cache; if the
-        # cache is cold a background task warms it without blocking this response.
-        from datetime import datetime as _dt, timezone as _tz
-        try:
-            snapshot = _load_disk_cache()
-            # Always call build_screeners regardless of cache state.
-            # build_screeners has its own internal fast-path: when both compiled
-            # caches (social_payload + fs_payload) are warm it returns in <1ms
-            # with zero network calls.  On cold cache it runs Tradier batch
-            # (~2 s for 100 tickers) + FMP profiles (24h-cached after first run)
-            # for the social screener, and defers fund enrichment to a background
-            # task via background_fund=True so it never blocks this response.
-            # The previous double-warm gate caused a deadlock: _bg_warm_fundamentals
-            # only populated fs_payload, never social_payload, so the screener
-            # returned 0 rows indefinitely after every server restart.
-            social_screener, fundamental_screener = await build_screeners(
+        # ── 3. Screener: cache-first, NEVER await in request thread ───────────────
+        # Fast path:  both compiled caches warm → serve from cache, zero network calls.
+        # Cold path:  fire asyncio.create_task(build_screeners(...)) so Tradier/FMP
+        #             batch runs in the background; return "warming" status immediately.
+        # build_screeners() never raises — all exceptions produce empty-screener dicts.
+        _cached_ss = _ss_cache.get("social_screener:social_payload")
+        _cached_fs = _ss_cache.get("social_screener:fs_payload")
+        _ss_warm   = bool(_cached_ss and isinstance(_cached_ss, dict) and _cached_ss.get("rows"))
+        _fs_warm   = bool(_cached_fs and isinstance(_cached_fs, dict) and _cached_fs.get("rows"))
+        _bg_started = False
+        _mkt = _is_us_market_open()
+        _now_str = _dt.now(_tz.utc).isoformat()
+
+        def _empty_ss_payload(status: str) -> dict:
+            return {
+                "generated_at": _now_str,
+                "source":       "cache",
+                "rows":         [],
+                "meta": {
+                    "xai_call_added":    False,
+                    "ticker_count":      0,
+                    "enrichment_status": status,
+                    "market_hours_open": _mkt,
+                },
+            }
+
+        def _empty_fs_payload(status: str) -> dict:
+            return {
+                "generated_at": _now_str,
+                "source":       "fmp_enrichment",
+                "rows":         [],
+                "meta": {
+                    "ticker_count":      0,
+                    "cache_status":      status,
+                    "market_hours_open": _mkt,
+                },
+            }
+
+        if _ss_warm and _fs_warm:
+            # Both caches warm — serve immediately with zero network calls
+            payload["social_screener"]      = _cached_ss
+            payload["fundamental_screener"] = _cached_fs
+            print(
+                f"[SOCIAL_X_DASHBOARD] screener CACHE HIT — "
+                f"social={len((_cached_ss or {}).get('rows', []))} "
+                f"fund={len((_cached_fs or {}).get('rows', []))} rows"
+            )
+        else:
+            # At least one cache cold — return warming status, fire background build
+            payload["social_screener"]      = _cached_ss if _ss_warm else _empty_ss_payload("warming")
+            payload["fundamental_screener"] = _cached_fs if _fs_warm else _empty_fs_payload("warming")
+            asyncio.create_task(build_screeners(
                 snapshot=snapshot,
                 x_consensus_rows=payload.get("x_consensus") or [],
                 sentiment_accel_rows=payload.get("sentiment_acceleration") or [],
@@ -3419,40 +3461,26 @@ async def social_x_dashboard(
                 fmp_api_key=FMP_API_KEY,
                 allow_live_fmp=True,
                 background_fund=True,
-            )
-            payload["social_screener"]      = social_screener
-            payload["fundamental_screener"] = fundamental_screener
+            ))
+            _bg_started = True
             print(
-                f"[SOCIAL_X_DASHBOARD] screeners appended — "
-                f"social={social_screener['meta']['ticker_count']} "
-                f"enrichment={social_screener['meta']['enrichment_status']} "
-                f"fund={fundamental_screener['meta'].get('ticker_count', 0)} "
-                f"xai_call_added={social_screener['meta']['xai_call_added']}"
+                f"[SOCIAL_X_DASHBOARD] screener cache cold "
+                f"(ss_warm={_ss_warm} fs_warm={_fs_warm}) — background warmup fired"
             )
 
-        except Exception as screener_exc:
-            # Screener failure must never break the existing Social top sections.
-            print(f"[SOCIAL_X_DASHBOARD] Screener build failed (non-fatal): {screener_exc}")
-            _now_str = _dt.now(_tz.utc).isoformat()
-            payload["social_screener"] = {
-                "generated_at": _now_str,
-                "source":       "existing_social_payload",
-                "rows":         [],
-                "meta": {
-                    "xai_call_added":    False,
-                    "ticker_count":      0,
-                    "enrichment_status": "unavailable",
-                },
-            }
-            payload["fundamental_screener"] = {
-                "generated_at": _now_str,
-                "source":       "fmp_enrichment",
-                "rows":         [],
-                "meta": {
-                    "ticker_count": 0,
-                    "cache_status": "unavailable",
-                },
-            }
+        # ── 4. Response metadata ──────────────────────────────────────────────────
+        _total_ms = int((_time.monotonic() - _t0) * 1000)
+        payload["cache_hit"]                  = _ss_warm and _fs_warm
+        payload["cache_source"]               = (
+            "screener_cache" if (_ss_warm and _fs_warm) else
+            "social_cache"   if _ss_warm                else
+            "cold"
+        )
+        payload["cache_age_seconds"]          = (payload.get("metadata") or {}).get("age_seconds")
+        payload["xai_called"]                 = False
+        payload["screener_awaited"]           = False
+        payload["background_refresh_started"] = _bg_started
+        payload["total_ms"]                   = _total_ms
 
         return JSONResponse(content=payload)
     except Exception as e:

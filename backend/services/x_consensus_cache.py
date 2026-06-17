@@ -267,25 +267,56 @@ def _next_window_open_iso() -> str:
     return next_open_ct.astimezone(timezone.utc).isoformat()
 
 
+# ── In-memory hot cache for disk snapshots ───────────────────────────────────
+# Eliminates JSON re-parse on every request when the snapshot file has not
+# changed.  Keyed by file mtime — automatically invalidated the moment a
+# new snapshot is written to disk (new mtime ≠ cached mtime).
+_hot_disk_cache: Optional[dict]  = None
+_hot_disk_cache_mtime: float     = 0.0
+_hot_prior_cache: Optional[dict] = None
+_hot_prior_cache_mtime: float    = 0.0
+
+
 def _load_disk_cache() -> Optional[dict]:
-    """Return the raw saved snapshot dict if it exists on disk, else None."""
+    """Return the raw saved snapshot dict if it exists on disk, else None.
+
+    Uses an in-memory hot cache keyed by file mtime so repeated calls
+    within the same snapshot window never re-parse the JSON file.
+    """
+    global _hot_disk_cache, _hot_disk_cache_mtime
     if not _CACHE_PATH.exists():
         return None
     try:
+        mtime = _CACHE_PATH.stat().st_mtime
+        if _hot_disk_cache is not None and mtime == _hot_disk_cache_mtime:
+            return _hot_disk_cache          # hot hit — no JSON parse
         raw = json.loads(_CACHE_PATH.read_text())
-        return raw if isinstance(raw, dict) else None
+        result = raw if isinstance(raw, dict) else None
+        _hot_disk_cache       = result
+        _hot_disk_cache_mtime = mtime
+        return result
     except Exception as e:
         print(f"[X_CONSENSUS] Cache read error: {e}")
         return None
 
 
 def _load_prior_cache() -> Optional[dict]:
-    """Return the previous snapshot dict if it exists on disk, else None."""
+    """Return the previous snapshot dict if it exists on disk, else None.
+
+    Uses the same mtime-based hot cache strategy as _load_disk_cache().
+    """
+    global _hot_prior_cache, _hot_prior_cache_mtime
     if not _PRIOR_CACHE_PATH.exists():
         return None
     try:
+        mtime = _PRIOR_CACHE_PATH.stat().st_mtime
+        if _hot_prior_cache is not None and mtime == _hot_prior_cache_mtime:
+            return _hot_prior_cache         # hot hit
         raw = json.loads(_PRIOR_CACHE_PATH.read_text())
-        return raw if isinstance(raw, dict) else None
+        result = raw if isinstance(raw, dict) else None
+        _hot_prior_cache       = result
+        _hot_prior_cache_mtime = mtime
+        return result
     except Exception as e:
         print(f"[X_CONSENSUS] Prior cache read error: {e}")
         return None

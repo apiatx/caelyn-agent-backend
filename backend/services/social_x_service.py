@@ -1304,18 +1304,29 @@ def _build_metadata(snapshot: Optional[dict]) -> dict:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
+# Sections hot-cache: keyed by the snapshot's _saved_at epoch float.
+# Stores only the expensive-to-compute section payloads (classifier output +
+# all four section builders).  The time-sensitive parts (_public_payload and
+# _build_metadata) are always recomputed fresh so fields like
+# refresh_in_progress, age_seconds, and window_open are never stale.
+# Invalidated automatically when _saved_at changes (i.e. new XAI scan).
+_SECTIONS_CACHE: dict = {}   # {"saved_at": float, "data": dict}
+
+
 def build_x_dashboard() -> dict:
     """
     Build the Social X-dashboard payload from cached snapshots only.
     Zero Grok/XAI calls.
 
     Orchestration:
-      1. Load current + prior snapshots.
-      2. Run _classify_tickers_for_sections() — single unified pass that assigns
-         every ticker in _backend_ranked to fa / sa / xc / none.
-      3. Pass classification map to all three section builders.
-      4. Each builder enforces mutual exclusion: only tickers with its own
-         classification are emitted.
+      1. Load current snapshot (hot-cached — no JSON re-parse if file unchanged).
+      2. Check sections cache keyed by _saved_at — skip classifier + builders
+         when the snapshot has not changed since the last call (~once per day).
+      3. On cache miss: load prior snapshot + ticker history, run the unified
+         classifier, build all four sections, and store in sections cache.
+      4. Always recompute _public_payload + _build_metadata fresh so
+         time-sensitive fields (refresh_in_progress, age_seconds, etc.) reflect
+         the current moment.
 
     Shape contract:
       A. Home-style consensus payload (flat, unchanged):
@@ -1335,11 +1346,18 @@ def build_x_dashboard() -> dict:
         _public_payload,
         _in_refresh_window,
         _REFRESH_LOCK,
+        _load_disk_cache,
+        _load_prior_cache,
+        load_ticker_history,
+        _ASKLIVERMORE_FALLBACK,
     )
 
-    current_snap, prior_snap, ticker_history = _load_snapshots()
-    cur_raw = _raw(current_snap)
+    # ── Load current snapshot (mtime hot-cached — no JSON re-parse if unchanged) ─
+    current_snap  = _load_disk_cache()
+    snap_saved_at = float((current_snap or {}).get("_saved_at") or 0.0)
+    cur_raw       = _raw(current_snap)
 
+    # Time-sensitive home payload + metadata are always recomputed fresh.
     window_open         = _in_refresh_window()
     refresh_in_progress = _REFRESH_LOCK.locked()
     home_payload = _public_payload(
@@ -1360,6 +1378,21 @@ def build_x_dashboard() -> dict:
             "sentiment_acceleration": [],
             "metadata":               _build_metadata(None),
         }
+
+    # ── Sections hot-cache check ──────────────────────────────────────────────
+    # When the XAI snapshot has not changed, skip the classifier and all four
+    # section builders entirely.  Only prior_snap and ticker_history are not
+    # loaded in this path (they are only needed for the full build below).
+    if snap_saved_at > 0 and _SECTIONS_CACHE.get("saved_at") == snap_saved_at:
+        return {
+            **home_payload,
+            **_SECTIONS_CACHE["data"],
+            "metadata": _build_metadata(current_snap),
+        }
+
+    # ── Full build — only runs when snapshot actually changes (~once per day) ──
+    prior_snap     = _load_prior_cache()
+    ticker_history = load_ticker_history()
 
     # ── Step 1: Build classifier inputs ──────────────────────────────────────
     backend_ranked: list[dict] = (current_snap or {}).get("_backend_ranked") or []
@@ -1384,15 +1417,9 @@ def build_x_dashboard() -> dict:
     sentiment_acceleration_data = _build_sentiment_accel(current_snap, prior_snap, classified)
 
     # ── Section-status + cache-status (reliability diagnostics) ───────────────
-    # Tells the frontend which sections have live data vs LKG vs empty, without
-    # changing any existing field that callers depend on.
     _lkg_sections: list[str] = list((current_snap or {}).get("_lkg_sections_used") or [])
     _lkg_set: set[str] = set(_lkg_sections)
 
-    # Map each UI section to the cache-level keys it depends on so that
-    # section_status reflects only THAT section's freshness, not the whole
-    # snapshot.  e.g. sentiment_acceleration can be empty without marking
-    # x_consensus as lkg.
     _UI_CACHE_DEPS: dict[str, set[str]] = {
         "x_consensus":            {"_backend_ranked", "consensus_picks"},
         "freshest_alpha":         {"_mention_data", "_backend_ranked"},
@@ -1401,14 +1428,6 @@ def build_x_dashboard() -> dict:
     }
 
     def _sec_status(section_key: str, data) -> str:
-        """Return 'ok', 'lkg', or 'empty' for a section.
-
-        'lkg'   — section has data AND at least one of its underlying cache
-                  keys was restored from LKG on this scan.
-        'ok'    — section has data and all underlying cache keys were fresh.
-        'empty' — section produced no rows/items (may be legitimate, e.g.
-                  sentiment_acceleration when no momentum divergence exists).
-        """
         if isinstance(data, list):
             has_data = len(data) > 0
         elif isinstance(data, dict):
@@ -1419,9 +1438,8 @@ def build_x_dashboard() -> dict:
             has_data = bool(data)
         if not has_data:
             return "empty"
-        # Check only the cache keys this specific section depends on
         deps = _UI_CACHE_DEPS.get(section_key, set())
-        if deps & _lkg_set:   # any dependency was LKG-restored
+        if deps & _lkg_set:
             return "lkg"
         return "ok"
 
@@ -1431,32 +1449,44 @@ def build_x_dashboard() -> dict:
         "theme_leadership":       _sec_status("theme_leadership",       theme_leadership_data),
         "sentiment_acceleration": _sec_status("sentiment_acceleration", sentiment_acceleration_data),
     }
-    if not current_snap:
-        cache_status = "no_data"
-    elif _lkg_set:
-        cache_status = "lkg_partial"
-    else:
-        cache_status = "ok"
+    cache_status = (
+        "no_data"     if not current_snap else
+        "lkg_partial" if _lkg_set         else
+        "ok"
+    )
 
     # ── Ask Livermore signal — additive pass-through from snapshot ────────────
-    # Falls back to fallback shape if not present (e.g. pre-feature snapshot).
-    from services.x_consensus_cache import _ASKLIVERMORE_FALLBACK
     _al_signal = (current_snap or {}).get("ask_livermore_signal")
     if not isinstance(_al_signal, dict):
         _al_signal = dict(_ASKLIVERMORE_FALLBACK)
 
+    # Sections payload: stable, cached keyed by snapshot _saved_at
+    sections_data = {
+        "market_pulse":             cur_raw.get("market_pulse"),
+        "portfolio_bias":           cur_raw.get("portfolio_bias"),
+        "spotlight":                cur_raw.get("spotlight"),
+        "x_consensus":              x_consensus_data,
+        "freshest_alpha":           freshest_alpha_data,
+        "theme_leadership":         theme_leadership_data,
+        "sentiment_acceleration":   sentiment_acceleration_data,
+        "ask_livermore_signal":     _al_signal,
+        "section_status":           section_status,
+        "cache_status":             cache_status,
+        "lkg_sections":             sorted(_lkg_set),
+    }
+
+    # Store in sections cache — invalidated automatically when _saved_at changes
+    _SECTIONS_CACHE["saved_at"] = snap_saved_at
+    _SECTIONS_CACHE["data"]     = sections_data
+    print(
+        f"[SOCIAL_X] sections cache updated saved_at={snap_saved_at} "
+        f"xc={len(x_consensus_data)} fa_trades="
+        f"{len((freshest_alpha_data or {}).get('trades') or [])} "
+        f"sa={len(sentiment_acceleration_data)}"
+    )
+
     return {
         **home_payload,
-        "market_pulse":   cur_raw.get("market_pulse"),
-        "portfolio_bias": cur_raw.get("portfolio_bias"),
-        "spotlight":      cur_raw.get("spotlight"),
-        "x_consensus":            x_consensus_data,
-        "freshest_alpha":         freshest_alpha_data,
-        "theme_leadership":       theme_leadership_data,
-        "sentiment_acceleration": sentiment_acceleration_data,
-        "ask_livermore_signal":   _al_signal,
-        "metadata":               _build_metadata(current_snap),
-        "section_status":         section_status,
-        "cache_status":           cache_status,
-        "lkg_sections":           sorted(_lkg_set),
+        **sections_data,
+        "metadata": _build_metadata(current_snap),
     }

@@ -12,3 +12,4 @@
 - [Symbol identity check before exclusion](screener-hub-symbol-identity-check.md) — verify company name via Tradier before adding to exclude_tickers; FMP profile API is broken
 - [Screener Hub Source D peers suppressed for pure_subtheme](screener-hub-source-d-pure-subtheme.md) — FMP peer algorithm produces garbage for niche themes; seen_dynamic never counts seeds so peers always trigger for seed-only themes; gate: `with_fmp_peers and _theme_type != "pure_subtheme"`
 - [Screener Hub adjacent_industries leakage filter](screener-hub-adjacent-industries-filter.md) — _thematic_allowed_industries must include adjacent_industries + fmp_industries; adjacent-industry rows from Source C2/P were silently dropped at the row-build leakage check (line ~4070)
+- [Social page speed hot cache](social-speed-hot-cache.md) — 3-layer fix: mtime hot-cache for disk reads, sections cache keyed by _saved_at, never await build_screeners in request path
