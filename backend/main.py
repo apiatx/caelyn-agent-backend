@@ -498,27 +498,6 @@ async def lifespan(app):
     # dashboard is ready before the first user request arrives.
     asyncio.create_task(_terminal_prewarm())
 
-    # Chart Radar OHLC warmup — pre-fill 15m/10d bars for watchlist symbols.
-    # Non-blocking: runs in background, never delays startup.
-    try:
-        from services.chart_radar_router import warm_chart_radar_ohlc as _cr_ohlc_warm
-        from services.watchlist_service import load_watchlist as _wl_load
-        _wl_store = _wl_load()
-        _cr_seed_syms: list[str] = []
-        if _wl_store:
-            _cr_seed_syms = [
-                str(t).strip().upper()
-                for t in (_wl_store.get("tickers") or [])
-                if t and str(t).strip()
-            ][:50]
-        if _cr_seed_syms:
-            asyncio.create_task(_cr_ohlc_warm(_cr_seed_syms, interval="15m", range_str="10d"))
-            print(f"[CHART_RADAR_OHLC] Warmup task registered for {len(_cr_seed_syms)} symbols")
-        else:
-            print("[CHART_RADAR_OHLC] Warmup skipped — no watchlist symbols found")
-    except Exception as _cr_e:
-        print(f"[CHART_RADAR_OHLC] Warmup init error (non-fatal): {_cr_e}")
-
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)
