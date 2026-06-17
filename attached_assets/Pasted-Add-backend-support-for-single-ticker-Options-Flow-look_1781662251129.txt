@@ -1,0 +1,46 @@
+Add backend support for single-ticker Options Flow lookup, but do this surgically.
+
+Goal:
+The Options Flow page needs a ticker lookup at the top. When the frontend submits a ticker, backend should return the same normalized options signal data we already compute/display elsewhere for options flow. Do NOT create a separate scoring system. Do NOT create a new options engine. Reuse the existing Tradier/options flow logic already used by the Options Flow page, Home Unusual Options Flow, and any existing options signal endpoints.
+
+Hard constraints:
+- Do not change existing Options Flow page behavior, ranking, curated list generation, caching, scoring, columns, or response shape.
+- Do not add any LLM calls.
+- Do not use FMP for options signal data.
+- Do not invent new calculations if existing options scoring/signal logic already exists.
+- Do not refactor unrelated options modules.
+- Do not break current Options Flow endpoint(s).
+- Keep any new endpoint read-only.
+- Respect existing Tradier rate limits and cache patterns.
+- Prefer cache/LKG behavior if the current options system already uses it.
+
+Audit first:
+1. Find the current backend route(s) used by the Options Flow page.
+2. Find the current service/function that computes normalized options signal rows.
+3. Find whether a single-symbol lookup endpoint already exists.
+4. Find the current response fields used by the frontend options rows/modal/card components.
+
+Implementation:
+- If a single-ticker options signal endpoint already exists, do not create another one. Document the existing endpoint and make sure it returns enough fields for the popup.
+- If no endpoint exists, add one minimal endpoint using existing route naming conventions, for example something like:
+  GET /api/options-flow/ticker/{symbol}
+  or the closest existing route style.
+- The endpoint should:
+  - uppercase/trim the symbol
+  - validate ticker format
+  - call the existing options signal builder/scorer for exactly one ticker
+  - return the same normalized fields used in existing options flow rows
+  - include enough detail for the popup: ticker, company/name if already available, price/underlying quote if already available, call/put activity, volume, open interest, OI change if already computed, IV, IV rank/level if already computed, expected move if already computed, bullish/bearish/neutral signal label, score, top contracts, expiration, strike, bid/ask/mid, delta/gamma/theta/vega/rho if already parsed, updated_at, source/cache status.
+- If some fields are not currently computed, do not bolt on a bunch of new API calls. Return nulls or omit optional fields unless there is already built-in logic for them.
+
+Autocomplete:
+- Only add backend autocomplete if the frontend does not already have a symbol search source.
+- Prefer existing watchlist/options universe/ticker metadata endpoints before adding anything new.
+- If adding autocomplete endpoint, make it lightweight and cache-backed. Do not call Tradier chains just for dropdown suggestions.
+
+Testing:
+- Test with a liquid ticker like NVDA or AAPL.
+- Test with a ticker that has no options or bad symbol and return a clean error.
+- Confirm existing Options Flow page endpoint still returns exactly as before.
+- Confirm no new background job, no new LLM calls, no new broad FMP calls.
+- Print a concise summary of files changed and the existing functions reused.

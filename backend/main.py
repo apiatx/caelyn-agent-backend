@@ -11874,6 +11874,83 @@ async def options_flow_master_latest(
     }
 
 
+@app.get("/api/options-flow/symbols")
+@limiter.limit("120/minute")
+async def options_flow_symbols(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+    _sub: None = Depends(require_subscription),
+    q: str | None = None,
+):
+    """
+    Lightweight autocomplete source for the Options Flow ticker search box.
+
+    Returns symbols currently in the master screener cache, enriched with
+    company name and asset/cap metadata. Falls back to the static seed lists
+    if the master cache is not yet warm.
+
+    Optional ?q=<prefix> filter (case-insensitive prefix match, max 20 results).
+
+    Zero new Tradier or FMP calls — reads exclusively from in-memory cache.
+    """
+    from data.cache import cache
+
+    _SYMS_CACHE_KEY = "options_flow:symbols_autocomplete:v1"
+    cached = cache.get(_SYMS_CACHE_KEY)
+    if not cached:
+        snap = cache.get(_OPTIONS_MASTER_CACHE_KEY) or cache.get(_OPTIONS_MASTER_LKG_KEY)
+        if snap:
+            entries = [
+                {
+                    "symbol":           t.get("ticker", ""),
+                    "asset_type":       t.get("asset_type", "stock"),
+                    "market_cap_bucket": t.get("market_cap_bucket", "unknown"),
+                    "composite_score":  t.get("composite_score"),
+                }
+                for t in snap.get("tickers", [])
+                if t.get("ticker")
+            ]
+        else:
+            # Fall back to static seed universe — zero API calls
+            _all_seeds = (
+                _OPTIONS_ETF_SEEDS
+                + _OPTIONS_MEGACAP_SEEDS
+                + _OPTIONS_LARGE_CAP_SEEDS
+                + _OPTIONS_SMALL_CAP_SEEDS
+            )
+            _cap_map = {
+                **{s: ("etf",      "etf")      for s in _OPTIONS_ETF_SEEDS},
+                **{s: ("stock",    "megacap")  for s in _OPTIONS_MEGACAP_SEEDS},
+                **{s: ("stock",    "large")    for s in _OPTIONS_LARGE_CAP_SEEDS},
+                **{s: ("stock",    "small")    for s in _OPTIONS_SMALL_CAP_SEEDS},
+            }
+            entries = [
+                {
+                    "symbol":            sym,
+                    "asset_type":        _cap_map.get(sym, ("stock", "unknown"))[0],
+                    "market_cap_bucket": _cap_map.get(sym, ("stock", "unknown"))[1],
+                    "composite_score":   None,
+                }
+                for sym in dict.fromkeys(_all_seeds)
+            ]
+        # Sort by composite_score desc (None sorts last)
+        entries.sort(key=lambda e: -(e.get("composite_score") or 0))
+        cached = {"symbols": entries, "source": "master_cache" if snap else "seed_fallback"}
+        cache.set(_SYMS_CACHE_KEY, cached, 120)  # 2-min TTL — refreshes with master cache
+
+    symbols = cached["symbols"]
+    if q:
+        prefix = q.upper().strip()
+        symbols = [e for e in symbols if e["symbol"].startswith(prefix)][:20]
+
+    return {
+        "symbols":  symbols,
+        "count":    len(symbols),
+        "source":   cached["source"],
+        "filtered": q is not None,
+    }
+
+
 @app.get("/api/options/screener/{symbol}")
 @limiter.limit("60/minute")
 async def options_screener_ticker_detail(
@@ -11895,8 +11972,14 @@ async def options_screener_ticker_detail(
     Existing keys (top_contracts, thesis, score, signal, etc.) are
     preserved exactly.
     """
+    import re as _re
     from data.cache import cache
     sym = symbol.upper().strip()
+    if not _re.match(r'^[A-Z]{1,5}(-[A-Z]{1,2})?$', sym):
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid ticker format: {sym!r}. Use 1–5 uppercase letters (e.g. NVDA, BRK-B)."},
+        )
     snap = cache.get(_OPTIONS_MASTER_CACHE_KEY) or cache.get(_OPTIONS_MASTER_LKG_KEY)
     if not snap:
         return JSONResponse(status_code=503, content={"error": "no_data_yet"})
