@@ -71,6 +71,49 @@ _FMP_BASE = "https://financialmodelingprep.com/stable"
 # Guard against concurrent background fundamental warmup tasks
 _fund_bg_running: bool = False
 
+# Guard against concurrent background screener warmup tasks fired from the
+# x-dashboard route.  Set synchronously by the route before create_task() so
+# that all concurrent cold-cache requests see True immediately (asyncio is
+# single-threaded; setting a bool before the first await is race-free).
+_screener_warmup_running: bool = False
+
+
+async def _run_screeners_bg(
+    snapshot: Optional[dict],
+    x_consensus_rows: list,
+    sentiment_accel_rows: list,
+    freshest_alpha: dict,
+    theme_leadership: dict,
+    fmp_api_key: str,
+) -> None:
+    """Single-flight background wrapper for screener cache warmup.
+
+    Called via asyncio.create_task() from the x-dashboard route when
+    social_screener:social_payload or fs_payload is cold.  All exceptions
+    are caught and logged — failures never silently die.
+
+    The caller sets _screener_warmup_running = True synchronously before
+    creating the task.  This function clears it in a finally block.
+    """
+    global _screener_warmup_running
+    try:
+        print("[SOCIAL_SCREENER] BG-SCREENER: starting screener warmup …")
+        await build_screeners(
+            snapshot=snapshot,
+            x_consensus_rows=x_consensus_rows,
+            sentiment_accel_rows=sentiment_accel_rows,
+            freshest_alpha=freshest_alpha,
+            theme_leadership=theme_leadership,
+            fmp_api_key=fmp_api_key,
+            allow_live_fmp=True,
+            background_fund=True,
+        )
+        print("[SOCIAL_SCREENER] BG-SCREENER: warmup complete")
+    except Exception as exc:
+        print(f"[SOCIAL_SCREENER] BG-SCREENER: warmup failed: {exc}")
+    finally:
+        _screener_warmup_running = False
+
 
 # ── Market-hours guard ────────────────────────────────────────────────────────
 

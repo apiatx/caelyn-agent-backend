@@ -3387,7 +3387,10 @@ async def social_x_dashboard(
     import time as _time
     try:
         from services.social_x_service import build_x_dashboard
-        from services.social_screener_service import build_screeners, _is_us_market_open
+        import services.social_screener_service as _sss
+        from services.social_screener_service import (
+            _is_us_market_open, _run_screeners_bg,
+        )
         from services.x_consensus_cache import _load_disk_cache
         from data.cache import cache as _ss_cache
         from config import FMP_API_KEY
@@ -3449,24 +3452,33 @@ async def social_x_dashboard(
                 f"fund={len((_cached_fs or {}).get('rows', []))} rows"
             )
         else:
-            # At least one cache cold — return warming status, fire background build
+            # At least one cache cold — return warming status, fire background build.
+            # Single-flight: set the flag synchronously before create_task so that
+            # any concurrent requests arriving before the first await all see True
+            # and skip creating a duplicate task.  asyncio is single-threaded so
+            # this test-and-set is race-free.
             payload["social_screener"]      = _cached_ss if _ss_warm else _empty_ss_payload("warming")
             payload["fundamental_screener"] = _cached_fs if _fs_warm else _empty_fs_payload("warming")
-            asyncio.create_task(build_screeners(
-                snapshot=snapshot,
-                x_consensus_rows=payload.get("x_consensus") or [],
-                sentiment_accel_rows=payload.get("sentiment_acceleration") or [],
-                freshest_alpha=payload.get("freshest_alpha") or {},
-                theme_leadership=payload.get("theme_leadership") or {},
-                fmp_api_key=FMP_API_KEY,
-                allow_live_fmp=True,
-                background_fund=True,
-            ))
-            _bg_started = True
-            print(
-                f"[SOCIAL_X_DASHBOARD] screener cache cold "
-                f"(ss_warm={_ss_warm} fs_warm={_fs_warm}) — background warmup fired"
-            )
+            if _sss._screener_warmup_running:
+                print(
+                    f"[SOCIAL_X_DASHBOARD] background_refresh_already_running=true "
+                    f"(ss_warm={_ss_warm} fs_warm={_fs_warm}) — skipping duplicate task"
+                )
+            else:
+                _sss._screener_warmup_running = True   # set before create_task
+                asyncio.create_task(_run_screeners_bg(
+                    snapshot=snapshot,
+                    x_consensus_rows=payload.get("x_consensus") or [],
+                    sentiment_accel_rows=payload.get("sentiment_acceleration") or [],
+                    freshest_alpha=payload.get("freshest_alpha") or {},
+                    theme_leadership=payload.get("theme_leadership") or {},
+                    fmp_api_key=FMP_API_KEY,
+                ))
+                _bg_started = True
+                print(
+                    f"[SOCIAL_X_DASHBOARD] screener cache cold "
+                    f"(ss_warm={_ss_warm} fs_warm={_fs_warm}) — background warmup fired"
+                )
 
         # ── 4. Response metadata ──────────────────────────────────────────────────
         _total_ms = int((_time.monotonic() - _t0) * 1000)
