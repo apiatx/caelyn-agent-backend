@@ -1,0 +1,74 @@
+Audit first. Do not code until you inspect the current /api/caelyn-terminal response construction and confirm where quote/market fields are loaded for the Terminal Holdings section.
+
+Current frontend status:
+The Terminal Holdings section now correctly avoids rendering option contract fields into market columns. Good.
+
+Remaining bug:
+Option-only underlyings in the compact Terminal Holdings table now show:
+Price: —
+Chg%: —
+VolX: —
+Vol/MC: —
+
+Reason:
+The frontend only has market quote rows for stock holdings in d.holdings. Option underlyings like CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO are included as option_positions / option_underlying_symbols, but /api/caelyn-terminal does not expose their underlying equity market data in a usable field for the compact Holdings table.
+
+Required backend behavior:
+In /api/caelyn-terminal, expose market snapshot fields for option underlyings separately from actual equity holdings.
+
+Add one stable response field, preferably:
+
+option_underlying_quotes: [
+{
+ticker: "CRWV",
+price: 115.21,
+change_pct: ...,
+vol_x: ...,
+volume: ...,
+avg_volume: ...,
+vol_mc_pct: ...,
+vol_mc_label: ...,
+vol_mc_unavailable_reason: ...
+}
+]
+
+Alternative acceptable name:
+portfolio_market_rows or option_underlying_market_rows, but keep it explicit and documented.
+
+Important:
+
+* Do NOT add option underlyings into d.holdings if d.holdings means actual stock/share positions and is used for portfolio math.
+* Do NOT treat option underlyings as fake stock positions.
+* Do NOT use option contract mark/value/cost basis for these quote fields.
+* Use underlying stock/equity quote data only.
+* Use the same quote/cache/canonical market-data path already used for stock holdings if available.
+* If the Terminal backend already fetches quotes for equity_tickers including option_underlyings, reuse that data.
+* If not, fetch only missing option underlyings through the existing canonical Tradier quote/cache layer.
+* Do not create a new provider path.
+* Do not call Tradier repeatedly on every render if cached quotes exist.
+
+Expected symbols:
+Option underlyings needing market rows:
+CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO
+
+Expected fields should align with stock holding market rows:
+
+* ticker
+* price
+* change_pct
+* vol_x
+* volume
+* avg_volume
+* vol_mc_pct
+* vol_mc_label
+* vol_mc_unavailable_reason
+
+Validation:
+
+1. Call /api/caelyn-terminal.
+2. Confirm option_underlying_quotes includes CRWV, DGXX, IREN, MRAM, QCOM, TE, VELO, VIVO.
+3. Confirm each row uses underlying equity market data, not option contract data.
+4. Confirm existing d.holdings stock rows are unchanged.
+5. Confirm portfolio math/allocation/risk does not treat option underlyings as fake shares.
+6. Confirm no OCC option contract IDs are passed into stock quote paths.
+7. Return exact files/functions changed and sample JSON for CRWV and VELO.

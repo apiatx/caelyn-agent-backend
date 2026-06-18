@@ -1010,6 +1010,88 @@ class CaelynTerminalProvider:
                 "last_entry_date":   _op.get("last_entry_date"),
             })
 
+        # ── option_underlying_quotes ─────────────────────────────────────────
+        # Underlying equity market snapshot for each option underlying that is
+        # NOT an actual equity holding.  Quotes + fundamentals are already
+        # fetched above (equity_tickers includes _opt_underlyings_extra), so
+        # this block is pure computation — zero extra network calls.
+        #
+        # Field alignment mirrors the stock-holding market columns so the
+        # frontend compact Holdings table can render: Price, Chg%, VolX, Vol/MC.
+        _option_underlying_quotes: list[dict] = []
+        for _ou in _opt_underlyings_extra:
+            _ou_q       = _q(_ou)
+            _ou_price   = _ou_q.get("price") or 0.0
+            _ou_vol     = _ou_q.get("volume") or None
+            _ou_avg_vol = _ou_q.get("avg_volume") or None
+            _ou_funda   = fundamentals_raw.get(_ou, {})
+
+            # FMP volAvg fallback (already fetched, zero cost)
+            _ou_avg_vol_src = ("tradier" if _ou in tradier_quotes
+                               else "yf_fallback" if _ou in _yf_fb_q
+                               else "unavailable")
+            if not _ou_avg_vol:
+                _ou_fmp_avg = _sf(_ou_funda.get("avg_volume"))
+                if _ou_fmp_avg and _ou_fmp_avg > 0:
+                    _ou_avg_vol     = _ou_fmp_avg
+                    _ou_avg_vol_src = "fmp_profile"
+
+            # VolX
+            _ou_vol_x = (round(_ou_vol / _ou_avg_vol, 2)
+                         if (_ou_vol and _ou_avg_vol and _ou_avg_vol > 0) else None)
+            _ou_vol_x_reason: str | None = None
+            if _ou_vol_x is None:
+                if not _ou_vol:
+                    _ou_vol_x_reason = "volume_unavailable"
+                elif not _ou_avg_vol:
+                    _ou_vol_x_reason = ("avg_volume_unavailable_otc"
+                                        if _ou_avg_vol_src in ("yf_fallback", "unavailable")
+                                        else "avg_volume_unavailable")
+                else:
+                    _ou_vol_x_reason = "calculation_error"
+
+            # Vol/MC
+            _ou_mktcap    = _sf(_ou_funda.get("market_cap"))
+            _ou_dol_vol   = round(_ou_price * _ou_vol, 2) if (_ou_price and _ou_vol) else None
+            _ou_vol_mc_pct:   float | None = None
+            _ou_vol_mc_label: str   | None = None
+            _ou_vol_mc_unavail: str | None = None
+            if _ou_dol_vol is not None and _ou_mktcap and _ou_mktcap > 0:
+                _ou_vm_ratio = round(_ou_dol_vol / _ou_mktcap, 6)
+                _ou_vol_mc_pct = round(_ou_vm_ratio * 100, 4)
+                if _ou_vol_mc_pct >= 10:
+                    _ou_vol_mc_label = "high"
+                elif _ou_vol_mc_pct >= 5:
+                    _ou_vol_mc_label = "elevated"
+                elif _ou_vol_mc_pct >= 1:
+                    _ou_vol_mc_label = "normal"
+                else:
+                    _ou_vol_mc_label = "low"
+            else:
+                if not _ou_vol:
+                    _ou_vol_mc_unavail = "volume_unavailable"
+                elif not _ou_mktcap:
+                    _ou_vol_mc_unavail = "market_cap_unavailable"
+                else:
+                    _ou_vol_mc_unavail = "price_missing"
+
+            _option_underlying_quotes.append({
+                "ticker":                     _ou,
+                "price":                      _sr(_ou_price) if _ou_price else None,
+                "change":                     _sr(_ou_q.get("change")),
+                "change_pct":                 _sr(_ou_q.get("change_pct"), 3),
+                "volume":                     _ou_vol,
+                "avg_volume":                 _ou_avg_vol,
+                "vol_x":                      _ou_vol_x,
+                "vol_x_unavailable_reason":   _ou_vol_x_reason,
+                "vol_mc_pct":                 _ou_vol_mc_pct,
+                "vol_mc_label":               _ou_vol_mc_label,
+                "vol_mc_unavailable_reason":  _ou_vol_mc_unavail,
+                "company_name":               _ou_funda.get("name", _ou),
+                "sector":                     _ou_funda.get("sector"),
+                "market_cap":                 _ou_mktcap,
+            })
+
         return {
             "portfolio": {
                 "value":                 round(total_value, 2),
@@ -1032,6 +1114,7 @@ class CaelynTerminalProvider:
             "total_position_count":      _total_pos_count,
             "option_positions":          _opt_position_rows,
             "option_underlying_symbols": _opt_underlyings_extra,
+            "option_underlying_quotes":  _option_underlying_quotes,
             "holdings":                  self._format_holdings(positions),
             "performance_chart":      perf_chart,
             "performance_charts":     perf_charts,
