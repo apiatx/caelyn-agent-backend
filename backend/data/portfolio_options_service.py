@@ -805,3 +805,208 @@ async def scan_portfolio_options(
         cache.set(_scan_key, output, _CACHE_PORTFOLIO_TTL)
 
     return output
+
+
+# ── Watchlist options-signal engine ─────────────────────────────────────────
+# Reuses the same three-layer cache as scan_portfolio_options but:
+#   • No _MAX_SYMBOLS cap on the cache-first lookup pass
+#   • Returns immediately with cached/LKG results + stale placeholders for
+#     uncached tickers
+#   • Enqueues background Tradier scan (batches of _MAX_SYMBOLS = 25) via
+#     asyncio.create_task — never blocks the request
+#   • Shares portfolio_opts:{sym} cache keys with Portfolio Terminal so a
+#     warm Portfolio cache immediately benefits Watchlist (and vice-versa)
+#   • Does NOT call _compute_pullback_risk again — cached rows already have
+#     risk fields applied by scan_portfolio_options before they were cached
+
+_WL_SIGNAL_FIELD = "options_signal"   # sentinel to detect normalised rows
+
+
+def _normalize_to_watchlist_row(sym: str, r: dict, is_stale: bool) -> dict:
+    """Project an internal options row into the watchlist-signal field shape."""
+    return {
+        "ticker":                    sym,
+        "options_score":             r.get("score"),
+        "options_signal":            r.get("signal"),
+        "options_put_call_ratio":    r.get("p_c"),
+        "options_iv":                r.get("iv"),
+        "options_expected_move":     r.get("em"),
+        "options_volume":            r.get("vol"),
+        "options_open_interest":     r.get("open_interest"),
+        "options_call_volume":       r.get("call_volume"),
+        "options_put_volume":        r.get("put_volume"),
+        "options_updated_at":        r.get("_updated_at") or r.get("_lkg_saved_at"),
+        "options_source":            r.get("source"),
+        "options_stale":             is_stale,
+        "options_unavailable_reason": r.get("unavailable_reason"),
+        "options_data_available":    r.get("data_available", False),
+        "options_risk_score":        r.get("risk_score"),
+        "options_risk_level":        r.get("risk_level"),
+        "options_confidence":        r.get("confidence"),
+        "options_put_call_direction": r.get("put_call_direction"),
+    }
+
+
+async def scan_watchlist_options(
+    symbols: list[str],
+    tradier,
+    cache,
+    master_snap: dict | None = None,
+    *,
+    max_live_scan: int = 50,
+) -> dict:
+    """
+    Cache-first options signal lookup for all watchlist tickers.
+
+    Returns immediately — never blocks the request on Tradier calls.
+
+    Three-layer cache (shared with Portfolio Terminal):
+      1. Per-ticker memory cache  portfolio_opts:{sym}  (300s TTL)
+      2. Master screener snapshot (pre-computed by TradierFlowEngine)
+      3. Disk LKG portfolio_opts_lkg_v1.json           (survives restarts)
+
+    Uncached tickers:
+      • Returned immediately as stale placeholders (options_stale=True,
+        options_unavailable_reason="scan_pending")
+      • Up to max_live_scan uncached symbols are queued for background scan
+        via asyncio.create_task in batches of _MAX_SYMBOLS (25), going
+        through the existing Tradier rate-limiter/spacer automatically
+
+    Response:
+      {
+        "signals":      {ticker: {options_score, options_signal, ...}},
+        "options_meta": {scope, symbols_requested, cache_hits, cache_misses,
+                         live_calls_enqueued, live_calls_completed,
+                         rate_limited_or_deferred, generated_at, ttl_seconds}
+      }
+    """
+    import asyncio as _aio
+    import time as _tm
+    import datetime as _dt
+
+    _t0 = _tm.monotonic()
+
+    syms = [s.upper() for s in (symbols or []) if s.strip()]
+    if not syms:
+        return {
+            "signals": {},
+            "options_meta": {
+                "scope":                    "watchlist",
+                "symbols_requested":        0,
+                "cache_hits":               0,
+                "cache_misses":             0,
+                "live_calls_enqueued":      0,
+                "live_calls_completed":     0,
+                "rate_limited_or_deferred": 0,
+                "generated_at":             _dt.datetime.utcnow().isoformat() + "Z",
+                "ttl_seconds":              _CACHE_PER_TICKER_TTL,
+            },
+        }
+
+    # 1. Build master-snap lookup (zero network calls — already fetched by caller)
+    master_by_ticker: dict[str, dict] = {}
+    if master_snap:
+        for row in (master_snap.get("tickers") or []):
+            t = (row.get("ticker") or "").upper()
+            if t:
+                master_by_ticker[t] = row
+
+    # 2. Disk LKG (single file read, cached in memory after first access)
+    disk_lkg = _load_portfolio_lkg()
+
+    # 3. Cache-first pass — NO _MAX_SYMBOLS cap here
+    # In-flight guard: symbols already queued for background scan carry a
+    # 90s TTL marker (portfolio_opts_wl_inflight:{sym}).  If present, treat
+    # the symbol as scan_pending but do NOT re-enqueue — avoids duplicate
+    # Tradier batches when the user reloads before the first scan finishes.
+    _INFLIGHT_PFX = "portfolio_opts_wl_inflight:"
+    _INFLIGHT_TTL = 90   # seconds — slightly longer than a full batch scan
+
+    results:   dict[str, dict] = {}
+    uncached:  list[str]       = []   # truly uncached, needs enqueue
+    inflight:  list[str]       = []   # scan already running, skip enqueue
+    cache_hits = 0
+
+    for sym in syms:
+        per_key = _per_ticker_cache_key(sym)
+        hit = cache.get(per_key)
+        if hit and isinstance(hit, dict):
+            results[sym] = hit
+            cache_hits += 1
+        elif sym in master_by_ticker:
+            norm = _normalize_master_row(sym, master_by_ticker[sym])
+            cache.set(per_key, norm, _CACHE_PER_TICKER_TTL)
+            results[sym] = norm
+            cache_hits += 1
+        elif sym in disk_lkg and disk_lkg[sym].get("data_available"):
+            row = {**disk_lkg[sym], "source": "portfolio_opts_lkg_disk",
+                   "from_lkg": True}
+            cache.set(per_key, row, _CACHE_PER_TICKER_TTL)
+            results[sym] = row
+            cache_hits += 1
+        elif cache.get(_INFLIGHT_PFX + sym):
+            # Background scan already in progress — return placeholder, skip re-enqueue
+            inflight.append(sym)
+            results[sym] = _unavail_row(sym, "scan_in_progress")
+        else:
+            uncached.append(sym)
+            results[sym] = _unavail_row(sym, "scan_pending")
+
+    # 4. Background scan for uncached symbols
+    _to_scan  = uncached[:max_live_scan]
+    _deferred = max(0, len(uncached) - max_live_scan)
+    enqueued  = 0
+
+    if _to_scan and tradier:
+        enqueued = len(_to_scan)
+
+        # Mark each symbol as in-flight before enqueueing so repeat calls
+        # within the scan window don't dispatch duplicate batches
+        for _s in _to_scan:
+            cache.set(_INFLIGHT_PFX + _s, 1, _INFLIGHT_TTL)
+
+        async def _bg_batch_scan(_batch: list[str]) -> None:
+            try:
+                await scan_portfolio_options(
+                    _batch, tradier, cache, master_snap=master_snap
+                )
+            except Exception as _bge:
+                print(f"[WATCHLIST_OPTIONS_BG] batch scan error ({_batch}): {_bge}")
+            finally:
+                # Clear in-flight markers so the next page load gets fresh data
+                for _s in _batch:
+                    try:
+                        cache.delete(_INFLIGHT_PFX + _s)
+                    except Exception:
+                        pass
+
+        # Chunk into _MAX_SYMBOLS batches — scan_portfolio_options has its own cap
+        for _i in range(0, len(_to_scan), _MAX_SYMBOLS):
+            _batch = _to_scan[_i : _i + _MAX_SYMBOLS]
+            _aio.create_task(_bg_batch_scan(_batch))
+
+    # 5. Build normalised signal map
+    signals: dict[str, dict] = {}
+    for sym in syms:
+        r = results[sym]
+        is_stale = sym in uncached or sym in inflight or bool(r.get("from_lkg"))
+        signals[sym] = _normalize_to_watchlist_row(sym, r, is_stale)
+
+    elapsed_ms = round((_tm.monotonic() - _t0) * 1000, 1)
+
+    return {
+        "signals": signals,
+        "options_meta": {
+            "scope":                      "watchlist",
+            "symbols_requested":          len(syms),
+            "cache_hits":                 cache_hits,
+            "cache_misses":               len(uncached),
+            "scan_in_progress":           len(inflight),
+            "live_calls_enqueued":        enqueued,
+            "live_calls_completed":       0,   # background — not yet done
+            "rate_limited_or_deferred":   _deferred,
+            "generated_at":               _dt.datetime.utcnow().isoformat() + "Z",
+            "ttl_seconds":                _CACHE_PER_TICKER_TTL,
+            "elapsed_ms":                 elapsed_ms,
+        },
+    }

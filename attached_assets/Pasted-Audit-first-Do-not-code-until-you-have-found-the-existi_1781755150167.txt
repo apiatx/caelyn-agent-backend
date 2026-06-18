@@ -1,0 +1,102 @@
+Audit first. Do not code until you have found the existing Portfolio Terminal options section backend path and the existing Tradier options/rate-limit/spacer path.
+
+Goal:
+Create a synced internal options-signal engine for Watchlist using the same backend logic/data shape/frequency as the Portfolio page Terminal tab Options section.
+
+Hard constraints:
+
+* Do NOT change the Options Flow page at all.
+* Do NOT change the existing Options Flow screener/search behavior.
+* Do NOT create a new independent options engine.
+* Do NOT create a second Tradier rate limiter/budget system.
+* Do NOT bypass the existing Tradier API spacer/governor/rate-limit avoidance system.
+* Do NOT make Tradier calls directly from the Watchlist page route unless those calls go through the same provider/spacer path Portfolio already uses.
+* Do NOT use FMP for options data.
+* Do NOT call Tradier on every page load.
+* Use only 1 Tradier options API call per ticker, at the same freshness frequency / TTL / refresh cadence as the Portfolio Terminal options section.
+
+Audit checklist:
+
+1. Find the backend route/service that powers the Portfolio page Terminal tab Options section.
+2. Identify the exact fields returned there. Preserve the exact field names if possible.
+3. Identify the Tradier provider function used for option-chain/flow/signal data.
+4. Identify the existing Tradier call spacer/governor/rate-limit avoidance mechanism.
+5. Identify how Portfolio caches or gates option refresh frequency.
+6. Identify the backend route that powers the Watchlist page ticker payload.
+7. Identify where watchlist tickers are loaded for the active watchlist.
+8. Identify current watchlist theme/category metadata on each ticker, because this will be needed later for Themes page grouping.
+
+Implementation:
+
+1. Extract/reuse the Portfolio Terminal options row builder into a shared backend helper/service if it is currently embedded in a Portfolio-only route.
+
+   * Example intent: `build_options_signal_rows(symbols, scope="portfolio" | "watchlist")`
+   * Do not duplicate scoring math.
+   * Do not fork field names.
+   * Do not fork provider calls.
+
+2. Add a Watchlist options-signal snapshot path:
+
+   * Input: all tickers in the active watchlist.
+   * Output: map keyed by ticker.
+   * Each ticker should get the same options fields Portfolio Terminal gets.
+   * Include status metadata per ticker if data is unavailable, stale, skipped, or still building.
+
+3. Add backend response fields to the existing Watchlist ticker payload, not a separate display section.
+
+   * Each ticker row should be enriched with options fields from the shared snapshot.
+   * Do not break existing watchlist response shape. Add optional fields only.
+   * Suggested normalized field names only if Portfolio does not already have exact names:
+
+     * `options_score`
+     * `options_signal`
+     * `options_put_call_ratio`
+     * `options_iv`
+     * `options_expected_move`
+     * `options_volume`
+     * `options_open_interest`
+     * `options_updated_at`
+     * `options_source`
+     * `options_stale`
+     * `options_unavailable_reason`
+
+4. Rate-limit / cache behavior:
+
+   * Use the same freshness TTL as Portfolio Terminal options.
+   * If Watchlist has 302 tickers, do not blast 302 calls immediately unless the existing Portfolio cadence/spacer safely queues them.
+   * Page load should return cached/LKG rows immediately.
+   * If stale/missing, schedule or perform refresh through the existing Tradier spacer queue.
+   * Respect global Tradier budget shared with Options Flow, Portfolio, Home, and any other Tradier users.
+   * Add a concurrency cap if the existing spacer supports it; do not invent a parallel limiter.
+
+5. Endpoint design:
+
+   * Prefer enriching the existing `/api/watchlist/{id}` response if that is where ticker rows are already built.
+   * If the current architecture makes that risky, add a small companion endpoint like `/api/watchlist/{id}/options-signals`, but the frontend must merge it into the existing Tickers table, not create a new Watchlist section.
+   * Either way, the backend source of truth should be one shared options snapshot/helper.
+
+6. Diagnostics:
+   Add lightweight metadata so we can verify no Tradier overload:
+
+   * `options_meta.symbols_requested`
+   * `options_meta.cache_hits`
+   * `options_meta.cache_misses`
+   * `options_meta.live_calls_enqueued`
+   * `options_meta.live_calls_completed`
+   * `options_meta.rate_limited_or_deferred`
+   * `options_meta.generated_at`
+   * `options_meta.ttl_seconds`
+   * `options_meta.scope = "watchlist"`
+
+7. Validation:
+
+   * Confirm Options Flow page response is unchanged.
+   * Confirm Portfolio Terminal Options section still matches before/after.
+   * Confirm Watchlist ticker payload includes options fields for the active watchlist tickers.
+   * Confirm refreshing/reloading Watchlist does not immediately re-call Tradier for fresh cached tickers.
+   * Confirm Tradier calls go through the existing spacer/governor logs.
+   * Confirm no FMP calls were added.
+   * Confirm unavailable option symbols fail gracefully with `—` fields, not page errors.
+
+Round one scope:
+Only backend support for Watchlist options signals. Do not implement Themes page tab yet except preserving theme/category metadata needed for later grouping.

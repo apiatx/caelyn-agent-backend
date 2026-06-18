@@ -9785,6 +9785,104 @@ async def compare_watchlist_options(
     }
 
 
+# ============================================================
+# Watchlist Options Signals
+# ============================================================
+
+@app.get("/api/watchlist/{watchlist_id}/options-signals")
+@limiter.limit("30/minute")
+async def watchlist_options_signals(
+    request: Request,
+    watchlist_id: str,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Options signal snapshot for all tickers in a watchlist.
+
+    Returns immediately from cache — never blocks on Tradier calls.
+
+    Cache layers (shared with Portfolio Terminal via portfolio_opts:{sym} keys):
+      1. Per-ticker memory cache (300s TTL)
+      2. Master options screener snapshot
+      3. Disk LKG (survives restarts / outside market hours)
+
+    Uncached tickers are returned immediately as stale placeholders
+    (options_stale=True, options_unavailable_reason="scan_pending") while
+    background Tradier scans are enqueued in batches through the existing
+    rate-limiter/spacer — no second limiter, no FMP calls.
+
+    Response:
+      {
+        "signals":      { "AAPL": { options_score, options_signal, options_iv, ... } },
+        "options_meta": { scope, symbols_requested, cache_hits, cache_misses,
+                          live_calls_enqueued, live_calls_completed,
+                          rate_limited_or_deferred, generated_at, ttl_seconds }
+      }
+    """
+    if not _jwt_or_key(request, api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key.")
+
+    from services.watchlist_service import load_watchlist as _load_wl
+    from data.portfolio_options_service import scan_watchlist_options as _scan_wl_opts
+    from data.cache import cache as _cache
+
+    store = _load_wl(watchlist_id)
+    if store is None:
+        import datetime as _dt
+        return {
+            "signals": {},
+            "options_meta": {
+                "scope": "watchlist",
+                "symbols_requested": 0,
+                "cache_hits": 0,
+                "cache_misses": 0,
+                "live_calls_enqueued": 0,
+                "live_calls_completed": 0,
+                "rate_limited_or_deferred": 0,
+                "generated_at": _dt.datetime.utcnow().isoformat() + "Z",
+                "ttl_seconds": 300,
+                "error": "watchlist_not_found",
+            },
+        }
+
+    tickers = [t.strip().upper() for t in (store.get("tickers") or []) if t.strip()]
+    if not tickers:
+        import datetime as _dt
+        return {
+            "signals": {},
+            "options_meta": {
+                "scope": "watchlist",
+                "symbols_requested": 0,
+                "cache_hits": 0,
+                "cache_misses": 0,
+                "live_calls_enqueued": 0,
+                "live_calls_completed": 0,
+                "rate_limited_or_deferred": 0,
+                "generated_at": _dt.datetime.utcnow().isoformat() + "Z",
+                "ttl_seconds": 300,
+            },
+        }
+
+    master_snap = _cache.get(_OPTIONS_MASTER_CACHE_KEY) or _cache.get(_OPTIONS_MASTER_LKG_KEY)
+    _tradier    = data_service.tradier if data_service else None
+
+    result = await _scan_wl_opts(
+        symbols     = tickers,
+        tradier     = _tradier,
+        cache       = _cache,
+        master_snap = master_snap,
+    )
+
+    print(
+        f"[WATCHLIST_OPTIONS_SIGNALS] id={watchlist_id!r} "
+        f"tickers={len(tickers)} "
+        f"cache_hits={result['options_meta'].get('cache_hits',0)} "
+        f"cache_misses={result['options_meta'].get('cache_misses',0)} "
+        f"enqueued={result['options_meta'].get('live_calls_enqueued',0)}"
+    )
+    return result
+
+
 @app.get("/api/portfolio/compare-watchlist/latest")
 @limiter.limit("30/minute")
 async def compare_watchlist_latest(
