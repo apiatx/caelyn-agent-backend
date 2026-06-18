@@ -970,6 +970,12 @@ async def scan_watchlist_options(
     _deferred = max(0, len(uncached) - max_live_scan)
     enqueued  = 0
 
+    # Short-TTL for confirmed-unavailable rows (no Tradier coverage, OTC, etc.)
+    # Prevents re-enqueueing the same failing symbols on every page load.
+    # Much shorter than _CACHE_PER_TICKER_TTL (300s) so that transient failures
+    # (rate-limit timeouts) are retried after a minute, not after 5 minutes.
+    _UNAVAIL_CACHE_TTL = 60   # 60s — retry unavailable symbols after 1 minute
+
     if _to_scan and tradier:
         enqueued = len(_to_scan)
 
@@ -980,9 +986,20 @@ async def scan_watchlist_options(
 
         async def _bg_batch_scan(_batch: list[str]) -> None:
             try:
-                await scan_portfolio_options(
+                scan_out = await scan_portfolio_options(
                     _batch, tradier, cache, master_snap=master_snap
                 )
+                # scan_portfolio_options only caches data_available=True rows.
+                # For unavailable rows (OTC, no coverage, timeout) we write a
+                # short-TTL entry so repeat page loads don't re-enqueue the same
+                # symbols while they are known-unavailable.
+                by_sym = scan_out.get("by_symbol", {}) if isinstance(scan_out, dict) else {}
+                for _s, _row in by_sym.items():
+                    if _row.get("data_available"):
+                        continue   # already cached by scan_portfolio_options
+                    _pk = _per_ticker_cache_key(_s)
+                    if not cache.get(_pk):   # don't overwrite if it appeared elsewhere
+                        cache.set(_pk, _row, _UNAVAIL_CACHE_TTL)
             except Exception as _bge:
                 print(f"[WATCHLIST_OPTIONS_BG] batch scan error ({_batch}): {_bge}")
             finally:

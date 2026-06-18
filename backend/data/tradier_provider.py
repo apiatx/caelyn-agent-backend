@@ -31,10 +31,19 @@ _TIMEOUT = 12  # seconds per request
 
 
 # ── Process-wide Tradier rate limiter ─────────────────────────────────────────
-# Tradier production: 120 req/min. We cap at 100/min to keep headroom for the
-# 8 services that call Tradier directly (bypassing this provider).
-# Uses an async sliding-window — zero latency penalty at normal volumes,
-# automatically queues during burst scans (options screener, etc.).
+# Tradier production: ~120 req/min for market-data endpoints.
+# We cap conservatively below that ceiling.
+#
+# Configurable via env:  TRADIER_MARKET_DATA_RPM (int, default 110, max 110)
+# Raising above 110 risks 429s on the Tradier sandbox plan.
+# Do NOT use this constant for /trade or order-management endpoints.
+_TRADIER_MARKET_DATA_RPM_DEFAULT = 110
+_TRADIER_MARKET_DATA_RPM_MAX     = 110
+_TRADIER_MARKET_DATA_RPM: int = min(
+    _TRADIER_MARKET_DATA_RPM_MAX,
+    max(1, int(os.environ.get("TRADIER_MARKET_DATA_RPM", _TRADIER_MARKET_DATA_RPM_DEFAULT)))
+)
+
 
 class _TradierRateLimiter:
     """Async sliding-window rate limiter. Safe for a single asyncio event loop."""
@@ -96,7 +105,10 @@ class _TradierRateLimiter:
 
 
 # Singleton — imported by other modules that need to report into the same counter
-TRADIER_LIMITER = _TradierRateLimiter(max_calls=100, window_seconds=60.0)
+TRADIER_LIMITER = _TradierRateLimiter(max_calls=_TRADIER_MARKET_DATA_RPM, window_seconds=60.0)
+print(f"[TRADIER_LIMITER] market-data cap configured: {_TRADIER_MARKET_DATA_RPM} req/min "
+      f"(env TRADIER_MARKET_DATA_RPM={os.environ.get('TRADIER_MARKET_DATA_RPM', 'unset')}, "
+      f"max={_TRADIER_MARKET_DATA_RPM_MAX})")
 
 
 def _safe_float(v: Any) -> float | None:
