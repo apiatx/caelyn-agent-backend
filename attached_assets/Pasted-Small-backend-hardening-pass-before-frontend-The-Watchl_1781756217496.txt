@@ -1,0 +1,54 @@
+Small backend hardening pass before frontend.
+
+The Watchlist options endpoint implementation is directionally correct. Do not redesign it. Keep:
+
+* `scan_watchlist_options()`
+* shared `scan_portfolio_options()`
+* shared `portfolio_opts:{sym}` cache
+* shared master snapshot/LKG
+* existing Tradier provider/rate limiter
+* `/api/watchlist/{id}/options-signals`
+* no Options Flow changes
+* no `/api/watchlist/{id}` shape changes
+
+Patch only the in-flight protection and diagnostics.
+
+Issue:
+The current in-flight guard TTL is 90s. For a 302-symbol watchlist, a cold scan can exceed 90s because Tradier calls are globally spaced/rate-limited. The guard can expire while the original background scan is still queued/running, causing repeated page loads to re-enqueue symbols.
+
+Required fix:
+
+1. Replace the short 90s symbol in-flight guard with one of these safer approaches:
+
+   * Preferred: real process-local in-flight registry keyed by symbol or scan batch, cleared only in `finally` after that symbol/batch completes.
+   * Acceptable: raise TTL to a conservative value like 10–15 minutes and still clear in `finally` after completion.
+
+2. Make sure repeat calls during a long cold scan do not re-enqueue any symbol already pending/running.
+
+3. Update `options_meta` so it clearly separates:
+
+   * `symbols_requested`
+   * `cache_hits`
+   * `master_hits`
+   * `lkg_hits`
+   * `cache_misses`
+   * `live_calls_enqueued`
+   * `already_inflight`
+   * `scan_in_progress`
+   * `rate_limited_or_deferred`
+   * `generated_at`
+   * `ttl_seconds`
+   * `scope`
+
+4. Validate with the 302-ticker watchlist:
+
+   * Call `/api/watchlist/{id}/options-signals`.
+   * Call again after 2 seconds.
+   * Call again after 2 minutes.
+   * Call again after 5 minutes.
+   * Confirm no duplicate re-enqueue for symbols already in-flight.
+   * Confirm all live Tradier work still routes through the existing `_TradierRateLimiter`.
+   * Confirm `/api/portfolio/options` unchanged.
+   * Confirm Options Flow page endpoints unchanged.
+
+Do not start Themes page yet.
