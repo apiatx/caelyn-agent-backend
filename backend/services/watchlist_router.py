@@ -611,6 +611,62 @@ def _volmc_neon_save(watchlist_id: str, current_snap: dict) -> None:
         print(f"[VOLMC_RANK] pg save skipped: {exc}")
 
 
+# ── Weinstein Stage Analysis (cache-only, no live fetches) ───────────────────
+
+def _get_stage2_breakout(sym: str) -> dict:
+    """
+    Return a slim stage2_breakout dict for *sym* using only already-cached
+    daily price bars.  Never issues a network call — if bars are absent from
+    the in-memory cache the result is all-null.
+
+    Cache keys checked (set by theme_rs_service during normal Themes warmup):
+      fmp_hist:{SYM}       — FMP bars, ~4 h TTL
+      tdier_hist:{SYM}:400 — Tradier bars, 1 h TTL
+
+    Returns:
+        {"score": float|None, "label": str|None, "reason": str|None}
+    """
+    _null: dict = {"score": None, "label": None, "reason": None}
+    try:
+        from data.cache import cache as _cache
+        from services.stage_analysis import weekly_bars_from_daily, analyze_symbol_stage
+
+        s = sym.upper()
+
+        # ── Probe bar caches — no network I/O ────────────────────────────────
+        daily: list[dict] | None = (
+            _cache.get(f"fmp_hist:{s}")
+            or _cache.get(f"tdier_hist:{s}:400")
+        )
+        if not daily:
+            return _null
+
+        weekly = weekly_bars_from_daily(daily)
+        if len(weekly) < 35:   # _MIN_WEEKLY_BARS from stage_analysis
+            return _null
+
+        # SPY weekly bars for relative-strength calculation (optional)
+        spy_daily: list[dict] | None = (
+            _cache.get("fmp_hist:SPY")
+            or _cache.get("tdier_hist:SPY:400")
+        )
+        spy_weekly = weekly_bars_from_daily(spy_daily) if spy_daily else None
+
+        result = analyze_symbol_stage(
+            weekly_bars=weekly,
+            spy_weekly_bars=spy_weekly,
+            source="watchlist_cached_bars",
+        )
+        return {
+            "score":  result.get("stage_score"),
+            "label":  result.get("stage_label"),
+            "reason": result.get("stage_reason"),
+        }
+    except Exception as _e:
+        print(f"[WATCHLIST_STAGE] {sym}: {_e}")
+        return _null
+
+
 # ── Quote enrichment helper ──────────────────────────────────────────────────
 
 async def _enrich_store_with_quotes(store: dict) -> dict:
@@ -759,6 +815,9 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             and enriched.get("price") is not None
         ):
             enriched["vol_mc_unavailable_reason"] = "quote_unavailable"
+
+        # ── Weinstein Stage Analysis (cache-only) ───────────────────────────
+        enriched["stage2_breakout"] = _get_stage2_breakout(sym)
 
         return enriched
 
