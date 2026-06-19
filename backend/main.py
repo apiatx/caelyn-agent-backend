@@ -432,6 +432,26 @@ async def lifespan(app):
         asyncio.create_task(_thematic_warmup())
     except Exception as _e:
         print(f"[STARTUP] Thematic context warmup task error: {_e}")
+    # Defiance 2X catalog: load disk LKG on startup, refresh daily off-hours.
+    try:
+        from services.defiance_leveraged_etfs_service import (
+            load_catalog_lkg  as _d2x_load_lkg,
+            refresh_catalog   as _d2x_refresh_catalog,
+        )
+        _d2x_load_lkg()   # synchronous — zero I/O if LKG exists
+
+        async def _defiance_2x_daily_loop():
+            await asyncio.sleep(120)   # 2-min startup delay
+            while True:
+                try:
+                    await _d2x_refresh_catalog()
+                except Exception as _e:
+                    print(f"[DEFIANCE_2X] Daily refresh error: {_e}")
+                await asyncio.sleep(20 * 3600)   # 20-hour cadence
+
+        asyncio.create_task(_defiance_2x_daily_loop())
+    except Exception as _e:
+        print(f"[STARTUP] Defiance 2X catalog init error: {_e}")
     # Dynamic thematic universe: build and refresh every 15 min.
     # Provides ETF-holdings + FMP-peers + X-consensus tickers to TA Screener and Options Flow.
     asyncio.create_task(_dynamic_thematic_universe_loop())

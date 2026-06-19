@@ -1,0 +1,94 @@
+Audit first. I need a new backend endpoint for a Watchlist tab called “2X Stock ETFs” / “Leveraged Stocks”.
+
+Goal:
+Create an automatically updating list of Defiance Daily Target 2X Long single-stock ETFs, mapped to their clean underlying stock tickers. The frontend should display rows for the underlying stock, while showing the corresponding Defiance ETF ticker visibly in the row.
+
+Critical constraints:
+- Do NOT manually hardcode a permanent Defiance ETF list.
+- Do NOT create a separate replacement watchlist system.
+- Preserve existing Watchlist quote/fundamental/cache paths.
+- Reuse existing canonical quote, market cap, volX, vol/market-cap, theme/category, and chart data logic for the UNDERLYING ticker.
+- The Defiance ETF ticker is metadata only.
+- Do NOT fetch chart/candle data for the Defiance ETF.
+- Do NOT use an LLM.
+- Do NOT add expensive per-request scans.
+- This must auto-update when Defiance launches new public ETFs.
+
+Audit required:
+1. Find existing Watchlist backend route(s), response shape, quote overlay, market cap/fundamental enrichment, theme mapping, and tab logic.
+2. Find existing cache/Neon patterns for small reference datasets.
+3. Find existing HTTP/web-fetch helper patterns, if any.
+4. Find existing FMP provider methods for ETF symbol search / ETF info / company profile.
+5. Find existing scheduler or warmup patterns.
+
+Implementation:
+1. Add a small service, e.g. defiance_leveraged_etfs_service.py.
+2. Source of truth should be Defiance’s public ETF catalog/news/site data, not a hardcoded list.
+   - First audit whether https://www.defianceetfs.com/explore-our-etfs/ exposes a JSON/API/static data source used by the page.
+   - Prefer that structured source if available.
+   - If no structured source exists, use a conservative HTML parser against the official Defiance pages.
+   - Optional validation fallback: use FMP ETF Symbol Search / ETF & Fund Information to confirm ticker/name when available.
+3. Parse only ETFs whose names match single-stock 2X long patterns:
+   - “Defiance Daily Target 2X Long {UNDERLYING} ETF”
+   - “Daily Target 2X Long {UNDERLYING} ETF”
+   - “2X Long {UNDERLYING} ETF”
+4. Exclude:
+   - “Short”
+   - “Inverse”
+   - “Income”
+   - “Option Income”
+   - “Covered call”
+   - “Thematic”
+   - broad basket/index/sector strategy ETFs
+   - any row where underlying ticker cannot be confidently extracted and validated.
+5. Store/cache mappings in Neon or existing app cache:
+   - defiance_etf_ticker
+   - defiance_etf_name
+   - underlying_symbol
+   - direction = long
+   - leverage = 2
+   - source_url
+   - discovered_at
+   - last_seen_at
+   - active = true/false
+   - confidence
+   - parse_method
+6. Refresh cadence:
+   - Daily premarket/off-hours refresh is enough.
+   - Also allow manual force refresh via internal/admin/debug query if existing patterns support that.
+   - On normal user page load, serve cached data. Do not scrape Defiance live on every request.
+7. Build endpoint:
+   GET /api/watchlist/defiance-2x
+   or align with existing watchlist tab route conventions after audit.
+8. Endpoint response rows should be underlying-centric:
+   {
+     "symbol": "MSTR",
+     "name": "...",
+     "price": ...,
+     "change_pct": ...,
+     "market_cap": ...,
+     "vol_x": ...,
+     "vol_market_cap": ...,
+     "theme": ...,
+     "stage": ...,
+     "defiance_etf": {
+       "symbol": "MSTX",
+       "name": "Defiance Daily Target 2X Long MSTR ETF",
+       "leverage": 2,
+       "direction": "long",
+       "source_url": "...",
+       "last_seen_at": "..."
+     }
+   }
+9. Use existing quote/fundamental enrichment for the underlying symbol only.
+10. Validate with logs/tests:
+   - endpoint returns rows
+   - no ETF chart/quote fields are used as the primary row data
+   - rows are underlying symbols
+   - Defiance ETF ticker appears as metadata
+   - shorts/income/thematic ETFs are excluded
+   - cache survives restart
+   - refresh does not run on every user request
+
+Important:
+Your job is not to redesign the Watchlist page. Add the smallest backend surface needed for this new tab and preserve existing data paths.

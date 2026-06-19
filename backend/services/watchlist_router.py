@@ -1981,6 +1981,123 @@ async def remove_favorite(request: Request, ticker: str):
     return {"ticker": raw, "is_favorite": False, "favorites": favorites}
 
 
+# ── Defiance 2X Long ETF tab ─────────────────────────────────────────────────
+
+@router.get("/defiance-2x")
+async def defiance_2x_endpoint(request: Request, force_refresh: bool = False):
+    """
+    Underlying-centric rows for Defiance Daily Target 2X Long single-stock ETFs.
+
+    Catalog is sourced from https://www.defianceetfs.com/wp-json/defiance/v1/etfs-explore
+    and refreshed daily off-hours.  On every user request the endpoint:
+      1. Serves the cached catalog (no Defiance fetch).
+      2. Gets quotes for *underlying* tickers via the shared LKG quote cache.
+      3. Attaches the Defiance ETF ticker as metadata only.
+    No chart/candle data is fetched for the ETF ticker itself.
+    """
+    import os as _os
+    from services.defiance_leveraged_etfs_service import (
+        get_catalog         as _d2x_catalog,
+        refresh_catalog     as _d2x_refresh,
+        get_last_refresh_ts as _d2x_ts,
+    )
+    from services.watchlist_quote_cache import get_watchlist_quotes
+    from services.theme_ticker_mapper import map_ticker_to_primary_theme
+
+    # ── Admin force-refresh ───────────────────────────────────────────────────
+    if force_refresh:
+        _ak = _os.getenv("AGENT_API_KEY", "")
+        _auth = request.headers.get("Authorization", "")
+        if _ak and _auth != f"Bearer {_ak}":
+            raise HTTPException(status_code=403, detail="Admin only")
+        await _d2x_refresh(force=True)
+
+    catalog = _d2x_catalog()
+
+    if not catalog:
+        import asyncio as _aio
+        _aio.create_task(_d2x_refresh())
+        return {
+            "tab":        "defiance-2x",
+            "title":      "Defiance 2× Long ETFs",
+            "rows":       [],
+            "count":      0,
+            "updated_at": None,
+            "status":     "warming_up",
+        }
+
+    # ── Quote enrichment for underlying tickers (cache-only, zero blocking I/O) ─
+    underlying_syms = [r["underlying_symbol"] for r in catalog if r.get("underlying_symbol")]
+    quotes = await get_watchlist_quotes(underlying_syms)
+
+    rows: list[dict] = []
+    for entry in catalog:
+        sym = entry.get("underlying_symbol")
+        if not sym:
+            continue
+
+        q       = quotes.get(sym.upper(), {})
+        price   = q.get("price")
+        change  = q.get("change_pct_1d")
+        volume  = q.get("volume")
+        rel_vol = q.get("relative_volume")
+        name    = q.get("name") or sym
+
+        # Vol/MC fields (market_cap typically not in quote cache; graceful None)
+        market_cap = q.get("market_cap")
+        vmc = _vol_mc_fields(price, volume, market_cap)
+
+        # Stage analysis — zero I/O; reads only from populated LKG caches
+        stage = _get_stage2_breakout(sym)
+
+        # Theme mapping
+        theme = map_ticker_to_primary_theme(sym)
+
+        rows.append({
+            "symbol":       sym,
+            "name":         name,
+            "price":        price,
+            "change_pct":   change,
+            "market_cap":   vmc.get("market_cap"),
+            "volume":       volume,
+            "vol_x":        rel_vol,
+            "vol_mc_ratio": vmc.get("vol_mc_ratio"),
+            "vol_mc_pct":   vmc.get("vol_mc_pct"),
+            "vol_mc_label": vmc.get("vol_mc_label"),
+            "theme":        theme,
+            "stage_analysis": stage,
+            "defiance_etf": {
+                "symbol":       entry["defiance_etf_ticker"],
+                "name":         entry["defiance_etf_name"],
+                "leverage":     entry["leverage"],
+                "direction":    entry["direction"],
+                "source_url":   entry["source_url"],
+                "last_seen_at": entry["last_seen_at"],
+            },
+        })
+
+    # Sort: have-price rows first, then by market_cap desc, nulls last
+    rows.sort(key=lambda r: (
+        r.get("price") is None,
+        r.get("market_cap") is None,
+        -(r.get("market_cap") or 0),
+    ))
+
+    ts = _d2x_ts()
+    updated_at = (
+        datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        if ts else None
+    )
+
+    return {
+        "tab":        "defiance-2x",
+        "title":      "Defiance 2× Long ETFs",
+        "updated_at": updated_at,
+        "count":      len(rows),
+        "rows":       rows,
+    }
+
+
 # ── Parameterized endpoints (MUST be after static paths) ────────────────────
 
 @router.patch("/{watchlist_id}/rename")
