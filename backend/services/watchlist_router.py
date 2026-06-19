@@ -615,25 +615,32 @@ def _volmc_neon_save(watchlist_id: str, current_snap: dict) -> None:
 
 def _get_stage2_breakout(sym: str) -> dict:
     """
-    Return a slim stage2_breakout dict for *sym* using only already-cached
-    daily price bars.  Never issues a network call — if bars are absent from
-    the in-memory cache the result is all-null.
+    Return a slim stage2_breakout dict for *sym*.  Zero I/O — reads only from
+    already-populated caches.  Never fetches bars during page render.
 
-    Cache keys checked (set by theme_rs_service during normal Themes warmup):
-      fmp_hist:{SYM}       — FMP bars, ~4 h TTL
-      tdier_hist:{SYM}:400 — Tradier bars, 1 h TTL
+    Lookup order:
+      1. watchlist_stage2_service LKG (disk-backed, populated by off-hours warmup)
+      2. In-memory bar caches (fmp_hist:{SYM} / tdier_hist:{SYM}:400, set by
+         theme_rs_service for ETF/stock proxy symbols)
 
-    Returns:
-        {"score": float|None, "label": str|None, "reason": str|None}
+    Returns {"score": float|None, "label": str|None, "reason": str|None}
     """
     _null: dict = {"score": None, "label": None, "reason": None}
     try:
+        # ── 1. Disk-backed LKG (primary — covers all 302 watchlist tickers) ─
+        from services.watchlist_stage2_service import get_stage2 as _gs2
+        lkg = _gs2(sym)
+        # Return if we have a real result OR an explicit null stored by warmup
+        # (explicit null = computed_at is present in the internal dict)
+        from services import watchlist_stage2_service as _s2svc
+        if _s2svc._STAGE2_LKG.get(sym.upper()):
+            return lkg   # includes deliberate nulls written by warmup
+
+        # ── 2. In-memory bar probe (theme_rs proxy symbols — ETFs, stock proxies) ─
         from data.cache import cache as _cache
         from services.stage_analysis import weekly_bars_from_daily, analyze_symbol_stage
 
         s = sym.upper()
-
-        # ── Probe bar caches — no network I/O ────────────────────────────────
         daily: list[dict] | None = (
             _cache.get(f"fmp_hist:{s}")
             or _cache.get(f"tdier_hist:{s}:400")
@@ -642,10 +649,9 @@ def _get_stage2_breakout(sym: str) -> dict:
             return _null
 
         weekly = weekly_bars_from_daily(daily)
-        if len(weekly) < 35:   # _MIN_WEEKLY_BARS from stage_analysis
+        if len(weekly) < 35:
             return _null
 
-        # SPY weekly bars for relative-strength calculation (optional)
         spy_daily: list[dict] | None = (
             _cache.get("fmp_hist:SPY")
             or _cache.get("tdier_hist:SPY:400")

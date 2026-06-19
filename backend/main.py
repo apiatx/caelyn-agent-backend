@@ -442,6 +442,17 @@ async def lifespan(app):
         asyncio.create_task(_theme_rs_warmup())
     except Exception as _e:
         print(f"[STARTUP] Theme RS warmup error: {_e}")
+    # Watchlist Stage 2 — load disk LKG into memory then kick a gentle
+    # background warmup that fetches bars for any stale/missing symbols.
+    try:
+        from services.watchlist_stage2_service import (
+            load_lkg as _wl_stage2_load,
+            warmup_stage2_all_watchlists as _wl_stage2_warmup,
+        )
+        _wl_stage2_load()   # synchronous — zero I/O if disk file exists
+        asyncio.create_task(_wl_stage2_warmup(startup_delay_s=60.0))
+    except Exception as _e:
+        print(f"[STARTUP] Watchlist Stage2 warmup error: {_e}")
     try:
         from data.options_screener_snapshot import load_state as _load_opt_snapshot
         _load_opt_snapshot()

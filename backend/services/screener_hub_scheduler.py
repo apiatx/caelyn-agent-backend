@@ -221,16 +221,30 @@ async def _run_watchlist_portfolio_warm() -> None:
     print(f"[SCREENER_HUB][SCHED] watchlist+portfolio fundamentals warm done: {out}")
 
 
+async def _run_watchlist_stage2_warm() -> None:
+    """Daily off-hours: fetch bars + compute Weinstein stage for all watchlist tickers."""
+    print("[SCREENER_HUB][SCHED] watchlist stage2 warm starting")
+    try:
+        from services.watchlist_stage2_service import warmup_stage2_all_watchlists
+        result = await warmup_stage2_all_watchlists()
+        print(f"[SCREENER_HUB][SCHED] watchlist stage2 warm done: {result}")
+    except Exception as exc:
+        print(f"[SCREENER_HUB][SCHED] watchlist stage2 warm error: {exc}")
+
+
 _SLOTS: list[tuple[Callable[[int], bool], int, int, str, Callable[[], Awaitable[None]]]] = [
-    (_is_sunday,  0, 30, "thematic_rebuild",          _run_thematic_rebuild),
-    (_is_sunday,  1, 15, "thematic_warm",             _run_thematic_warm),
-    (_is_sunday,  1, 45, "returns_warm",              _run_returns_warm),
-    (_is_sunday,  2, 15, "chain_reaction_dynamic",    _run_chain_reaction_dynamic),
-    (_is_sunday,  3, 15, "bottlenecks_warm",          _run_bottlenecks_warm),
-    (_is_sunday,  3, 45, "screener_snapshot_rebuild", _run_screener_snapshot_rebuild),
-    (_not_saturday, 11, 10, "social_scan",             _run_social_scan),
-    (_not_saturday, 11, 45, "social_warm",             _run_social_warm),
-    (_is_friday,  2,  0, "watchlist_portfolio_warm",  _run_watchlist_portfolio_warm),
+    (_is_sunday,    0, 30, "thematic_rebuild",          _run_thematic_rebuild),
+    (_is_sunday,    1, 15, "thematic_warm",             _run_thematic_warm),
+    (_is_sunday,    1, 45, "returns_warm",              _run_returns_warm),
+    (_is_sunday,    2, 15, "chain_reaction_dynamic",    _run_chain_reaction_dynamic),
+    (_is_sunday,    3, 15, "bottlenecks_warm",          _run_bottlenecks_warm),
+    (_is_sunday,    3, 45, "screener_snapshot_rebuild", _run_screener_snapshot_rebuild),
+    (_not_saturday, 11, 10, "social_scan",              _run_social_scan),
+    (_not_saturday, 11, 45, "social_warm",              _run_social_warm),
+    (_is_friday,    2,  0, "watchlist_portfolio_warm",  _run_watchlist_portfolio_warm),
+    # Daily 3:30 AM ET — Weinstein stage2 for all watchlist tickers.
+    # Off-hours only: bars are daily-precision, no intraday updates needed.
+    (_not_saturday, 3, 30, "watchlist_stage2_warm",    _run_watchlist_stage2_warm),
 ]
 
 
