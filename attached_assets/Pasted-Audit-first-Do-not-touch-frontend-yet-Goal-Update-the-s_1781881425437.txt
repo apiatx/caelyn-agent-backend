@@ -1,0 +1,159 @@
+Audit first. Do not touch frontend yet.
+
+Goal:
+Update the shared Weinstein / stage-analysis logic so both the Themes page and Watchlist page use the same full stage lifecycle labels.
+
+Current issue:
+The Watchlist backend now exposes `stage2_breakout`, and the Themes page already has stage logic. But observed labels appear incomplete:
+
+* S1 Base
+* S1-2 Watch
+* Stage 2 Advance
+* S3-S4 Danger
+* Stage 4 Decline
+
+We need the full shared taxonomy:
+
+* S1 Base
+* S1-2 Watch
+* S2 Breakout
+* S2-S3 Advance
+* S3 Momentum
+* S3-S4 Top
+* S4 Decline
+
+Important:
+This must apply to both:
+
+1. Themes page stage labels
+2. Watchlist page ticker-level stage labels
+
+Do not create separate logic for Watchlist and Themes.
+Do not create frontend-only guesses.
+Do not just rename labels without verifying the underlying stage conditions.
+
+Audit requirements:
+
+1. Find the shared stage analysis engine, likely `analyze_symbol_stage()`.
+2. Confirm all current possible labels returned by the engine.
+3. Confirm whether the engine currently distinguishes:
+
+   * S2 Breakout
+   * S2-S3 Advance
+   * S3 Momentum
+   * S3-S4 Top
+4. If the engine currently collapses these into fewer buckets, enhance the shared engine.
+5. Confirm both Themes page and Watchlist stage warmup use the same shared engine.
+6. Do not add provider calls on page render.
+7. Preserve the existing Watchlist zero-I/O render behavior.
+
+Required label taxonomy:
+Use these exact labels:
+
+S1 Base:
+
+* bottoming/base-building
+* price below or near long-term trend
+* not yet confirmed breakout
+
+S1-2 Watch:
+
+* base tightening
+* price reclaiming key moving averages
+* near breakout / support-to-breakout setup
+* early constructive setup, but not confirmed breakout yet
+
+S2 Breakout:
+
+* confirmed breakout / early Stage 2
+* price above key moving averages
+* breakout from base or strong reclaim
+* trend beginning to expand
+
+S2-S3 Advance:
+
+* established advance
+* price above rising long-term moving average
+* trend still healthy
+* not just breaking out; already in the advance phase
+
+S3 Momentum:
+
+* mature momentum / late-stage trend
+* price may be extended
+* momentum is still strong, but risk is rising
+* should not be classified as S2 Breakout if it is already far into the move
+
+S3-S4 Top:
+
+* topping / distribution risk
+* momentum weakening
+* price losing structure or failing near highs
+* not yet confirmed Stage 4 decline
+
+S4 Decline:
+
+* confirmed downtrend
+* below declining long-term trend
+* weak structure
+
+Naming rules:
+
+* Use compact “S” labels only.
+* Do not return `Stage 2 Advance`.
+* Do not return `Stage 4 Decline`.
+* Return `S2 Breakout` and `S4 Decline`.
+* Replace old `S3-S4 Danger` wording with `S3-S4 Top`.
+
+Backend output:
+Keep current field for backward compatibility:
+
+stage2_breakout: {
+score: number | null,
+label: string | null,
+reason: string | null
+}
+
+But also add a better alias if easy:
+
+stage_analysis: {
+score: number | null,
+label: string | null,
+reason: string | null
+}
+
+For now, both fields can contain the same object so old frontend code does not break.
+
+Accuracy requirements:
+Do not assign labels only by score buckets.
+Use the actual technical structure from weekly bars:
+
+* price vs long-term MA
+* long-term MA slope
+* breakout/base behavior
+* extension from moving averages
+* loss/reclaim of support
+* momentum/relative strength if already available
+* trend maturity where possible
+
+Validation:
+
+1. Run the stage analysis on current watchlist cached bars.
+2. Print count by label across all 302 watchlist tickers.
+3. Confirm all possible labels are reachable if conditions exist.
+4. Confirm old labels no longer appear:
+
+   * Stage 2 Advance
+   * Stage 4 Decline
+   * S3-S4 Danger
+5. Confirm new labels appear where appropriate:
+
+   * S2 Breakout
+   * S2-S3 Advance
+   * S3 Momentum
+   * S3-S4 Top
+6. Confirm Themes page still works and uses the same labels.
+7. Confirm Watchlist endpoint still returns stage data on every row.
+8. Confirm Watchlist page render still performs zero provider calls.
+9. Confirm stage warmup still writes/loads LKG safely.
+10. Confirm frontend can render the backend label directly without guessing.

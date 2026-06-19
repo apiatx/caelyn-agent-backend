@@ -20,19 +20,27 @@ from typing import Optional, Union
 
 # ── Types & constants ───────────────────────────────────────────────────────────
 
-StageKey = Union[int, str]   # 1, "12", 2, 3, "34", 4
+StageKey = Union[int, str]   # 1, "12", "2b", 2, "3m", 3, "34", 4
 
+# ── Compact taxonomy — 7 distinct human-readable labels ──────────────────────
+# "2b" = S2 Breakout  (confirmed breakout from a base / downtrend)
+# 2    = S2-S3 Advance (established advance, trend healthy)
+# "3m" = S3 Momentum  (extended / late-stage advance, risk rising)
+# 3    = S3-S4 Top    (topping / distribution — MA flattening, prior uptrend)
+# "34" = S3-S4 Top    (broke below flat-to-falling MA after an uptrend)
 STAGE_LABELS: dict[StageKey, str] = {
-    1:    "Stage 1 Base",
-    "12": "Stage 1 → 2 Breakout Watch",
-    2:    "Stage 2 Advance",
-    3:    "Stage 3 Top/Range",
-    "34": "Stage 3 → 4 Danger",
-    4:    "Stage 4 Decline",
+    1:    "S1 Base",
+    "12": "S1-2 Watch",
+    "2b": "S2 Breakout",
+    2:    "S2-S3 Advance",
+    "3m": "S3 Momentum",
+    3:    "S3-S4 Top",
+    "34": "S3-S4 Top",
+    4:    "S4 Decline",
 }
 
 STAGE_INT: dict[StageKey, int] = {
-    1: 1, "12": 1, 2: 2, 3: 3, "34": 3, 4: 4
+    1: 1, "12": 1, "2b": 2, 2: 2, "3m": 3, 3: 3, "34": 3, 4: 4
 }
 
 _MIN_WEEKLY_BARS = 35    # 30w MA + 5 weeks of context minimum
@@ -174,52 +182,63 @@ def _classify_stage(
     prior_up   = prior_trend_pct is not None and prior_trend_pct >  12.0
     prior_down = prior_trend_pct is not None and prior_trend_pct < -10.0
 
-    # ── Stage 4: price below a declining 30w MA ───────────────────────────────
+    # ── S4 Decline: price below a declining 30w MA ───────────────────────────
     if not price_above and ma_falling:
         return 4, False, False
 
-    # ── Stage 3→4: broke below flat-to-falling MA after an uptrend ───────────
+    # ── S3-S4 Top ("34"): broke below flat-to-falling MA after an uptrend ───
     if not price_above and ma_flat and prior_up:
         return "34", False, True
 
-    # ── Stage 3: topping — prior uptrend, MA flattening, price choppy near MA ─
+    # ── S3-S4 Top (3): topping — prior uptrend, MA flattening ────────────────
     if price_near and ma_flat and prior_up:
         return 3, False, False
 
     if price_above and ma_flat and prior_up:
         return 3, False, False
 
-    # ── Stage 2: price above a rising 30w MA ─────────────────────────────────
+    # ── S3 Momentum ("3m"): very extended above a rising MA, prior uptrend ───
+    # Must come BEFORE the general S2-S3 Advance check so highly-extended
+    # symbols are not miscalled S2-S3 Advance.
+    # Threshold: > 20% above MA AND already had a prior uptrend = late-stage.
+    if price_above and ma_rising and price_vs_ma > 20.0 and prior_up:
+        return "3m", False, False
+
+    # ── S2 Breakout ("2b"): confirmed breakout from a downtrend base ─────────
+    # Price has crossed above the 30w MA coming from a prior downtrend context.
+    # Replaces the old "12" (Watch) condition where price_above + prior_down.
+    if price_above and (ma_flat or ma_rising) and prior_down:
+        return "2b", True, False
+
+    # ── S2-S3 Advance (2): established advance (rising MA, above, no base ctx)─
     if price_above and ma_rising:
         return 2, False, False
 
-    # Stage 2 continuation — no obvious prior downtrend, still above flat MA
+    # S2-S3 Advance continuation — flat MA, still above, not from downtrend
     if price_above and ma_flat and not prior_down and weeks_above_ma >= 5:
         return 2, False, False
 
-    # ── Stage 1→2: emerging breakout from a base ─────────────────────────────
-    if price_above and (ma_flat or ma_rising) and prior_down:
-        return "12", True, False
-
+    # ── S1-2 Watch ("12"): price near MA, watching for breakout ──────────────
+    # Price is still near (but not clearly above) the MA — not yet confirmed.
     if price_near and ma_flat and prior_down and rs_trend in ("rising", "flat"):
         return "12", True, False
 
     if price_near and ma_rising and prior_down:
         return "12", True, False
 
-    # ── Stage 1: basing after a decline ──────────────────────────────────────
+    # ── S1 Base (1): basing after a decline ───────────────────────────────────
     if not price_above and (ma_flat or ma_slope > -0.5) and prior_down:
         return 1, False, False
 
     if price_near and ma_flat and not prior_up:
         return 1, False, False
 
-    # ── Fallback: use continuous score ────────────────────────────────────────
+    # ── Fallback: continuous score ────────────────────────────────────────────
     score = _compute_stage_score(price_vs_ma, ma_slope, weeks_above_ma, rs_trend)
     if score >= 72:
-        return 2, False, False
+        return 2, False, False     # S2-S3 Advance
     if score >= 55:
-        return "12", True, False
+        return "2b", True, False   # S2 Breakout (was "12" Watch in old code)
     if score >= 38:
         stage = 1 if not prior_up else 3
         return stage, False, False
@@ -308,37 +327,49 @@ def _build_stage_reason(
     ma_dir = "rising" if ma_slope > 0.25 else ("falling" if ma_slope < -0.25 else "flat")
     vol_str = f" Vol {volume_ratio:.1f}× avg." if volume_ratio is not None else ""
 
+    if stage_key == "2b":
+        prior_str = f" Prior 26w: {prior_trend_pct:+.0f}%." if prior_trend_pct is not None else ""
+        return (
+            f"Confirmed breakout from base. Price {sign}{price_vs_ma:.1f}% above 30-week MA "
+            f"({ma_dir} slope).{prior_str} RS vs SPY: {rs_trend}.{vol_str}"
+        )
     if stage_key == 2:
         return (
-            f"Price {sign}{price_vs_ma:.1f}% above a {ma_dir} 30-week MA "
+            f"Established advance. Price {sign}{price_vs_ma:.1f}% above a {ma_dir} 30-week MA "
             f"({weeks_above_ma}/8 recent weeks above MA). RS vs SPY: {rs_trend}.{vol_str}"
+        )
+    if stage_key == "3m":
+        return (
+            f"Extended momentum. Price {sign}{price_vs_ma:.1f}% above rising 30-week MA — "
+            f"late-stage advance ({weeks_above_ma}/8 weeks above MA). "
+            f"RS vs SPY: {rs_trend}. Trend intact but risk rising.{vol_str}"
         )
     if stage_key == "12":
         prior_str = f" Prior 26w: {prior_trend_pct:+.0f}%." if prior_trend_pct is not None else ""
         return (
-            f"Price {sign}{price_vs_ma:.1f}% vs 30-week MA ({ma_dir} slope)."
-            f"{prior_str} RS vs SPY {rs_trend}. Watch for volume breakout.{vol_str}"
+            f"Base tightening. Price {sign}{price_vs_ma:.1f}% vs 30-week MA ({ma_dir} slope)."
+            f"{prior_str} RS vs SPY: {rs_trend}. Watch for confirmed breakout.{vol_str}"
         )
     if stage_key == 1:
         prior_str = f" Prior 26w: {prior_trend_pct:+.0f}%." if prior_trend_pct is not None else ""
         return (
-            f"Basing phase. Price {sign}{price_vs_ma:.1f}% vs flat 30-week MA.{prior_str}"
+            f"Basing / bottoming. Price {sign}{price_vs_ma:.1f}% vs flat 30-week MA.{prior_str}"
             f" RS vs SPY: {rs_trend}. No breakout signal yet."
         )
     if stage_key == 3:
         prior_str = f" Prior 26w gain: {prior_trend_pct:+.0f}%." if prior_trend_pct is not None else ""
         return (
-            f"Topping / ranging. 30-week MA {ma_dir}, price {sign}{price_vs_ma:.1f}% vs MA.{prior_str}"
+            f"Topping / distribution. 30-week MA {ma_dir}, price {sign}{price_vs_ma:.1f}% vs MA.{prior_str}"
             f" RS vs SPY: {rs_trend}. Watch for breakdown."
         )
     if stage_key == "34":
         return (
-            f"Danger zone — broke below 30-week MA ({sign}{price_vs_ma:.1f}%). "
-            f"MA slope: {ma_slope:+.2f}%/4w. RS vs SPY: {rs_trend}. Risk of Stage 4 decline.{vol_str}"
+            f"Distribution risk — broke below 30-week MA ({sign}{price_vs_ma:.1f}%). "
+            f"MA slope: {ma_slope:+.2f}%/4w. RS vs SPY: {rs_trend}. Risk of S4 decline.{vol_str}"
         )
-    # Stage 4
+    # S4 Decline
     return (
-        f"Declining trend. Price {sign}{price_vs_ma:.1f}% below a {ma_dir} 30-week MA. "
+        f"Downtrend confirmed. Price {sign}{price_vs_ma:.1f}% below a {ma_dir} 30-week MA. "
         f"RS vs SPY: {rs_trend}. Avoid new longs."
     )
 
@@ -381,15 +412,17 @@ def _breadth_only_result(
 ) -> dict:
     """Stage estimated from member breadth when no representative price series exists."""
     if breadth_above >= 65 and (breadth_rising or 0) >= 50:
-        sk: StageKey = 2
-    elif breadth_above >= 50:
-        sk = "12"
-    elif breadth_above >= 35:
-        sk = 3
-    elif breadth_above >= 20:
-        sk = "34"
+        sk: StageKey = 2      # S2-S3 Advance
+    elif breadth_above >= 55:
+        sk = "2b"             # S2 Breakout
+    elif breadth_above >= 40:
+        sk = "12"             # S1-2 Watch
+    elif breadth_above >= 28:
+        sk = 3                # S3-S4 Top
+    elif breadth_above >= 15:
+        sk = "34"             # S3-S4 Top (distribution)
     else:
-        sk = 4
+        sk = 4                # S4 Decline
 
     sigs = _empty_signals()
     sigs["breadth_above_30w_ma_pct"]  = breadth_above

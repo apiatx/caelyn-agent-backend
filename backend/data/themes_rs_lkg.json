@@ -97,18 +97,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.802170+00:00",
+      "last_updated": "2026-06-19T15:26:14.289182+00:00",
       "rs_score": 92.7,
       "rs_vs_spy": 5.46,
       "rs_vs_qqq": 3.99,
       "state": "active",
       "state_reason": "Top-percentile RS (93/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +5.5%, QQQ +4.0%.",
       "momentum_rank": 1,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +65.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Extended momentum. Price +65.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 65.74,
         "ma_30w_slope_pct": 13.33,
@@ -122,7 +122,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.802111+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.289120+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -229,18 +229,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.233392+00:00",
+      "last_updated": "2026-06-19T15:26:13.896661+00:00",
       "rs_score": 90.9,
       "rs_vs_spy": 6.23,
       "rs_vs_qqq": 4.76,
       "state": "active",
       "state_reason": "Top-percentile RS (91/100) vs theme universe. Outperforming SPY +6.2%, QQQ +4.8%. Breadth 57%.",
       "momentum_rank": 2,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +73.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Extended momentum. Price +73.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 73.72,
         "ma_30w_slope_pct": 10.35,
@@ -254,7 +254,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.233313+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.896579+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -358,18 +358,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.447192+00:00",
+      "last_updated": "2026-06-19T15:26:14.111281+00:00",
       "rs_score": 90.0,
       "rs_vs_spy": 5.59,
       "rs_vs_qqq": 4.12,
       "state": "active",
       "state_reason": "Top-percentile RS (90/100) vs theme universe with broad participation (95% advancing). Outperforming SPY +5.6%, QQQ +4.1%.",
       "momentum_rank": 3,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +48.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Extended momentum. Price +48.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 48.02,
         "ma_30w_slope_pct": 8.66,
@@ -383,7 +383,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.447138+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.111229+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -489,18 +489,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.759538+00:00",
+      "last_updated": "2026-06-19T15:26:14.253495+00:00",
       "rs_score": 88.6,
       "rs_vs_spy": 5.49,
       "rs_vs_qqq": 4.02,
       "state": "active",
       "state_reason": "Top-percentile RS (89/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +5.5%, QQQ +4.0%.",
       "momentum_rank": 4,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +48.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Extended momentum. Price +48.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 48.02,
         "ma_30w_slope_pct": 8.66,
@@ -514,7 +514,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.759484+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.253430+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -612,18 +612,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.751042+00:00",
+      "last_updated": "2026-06-19T15:26:14.243580+00:00",
       "rs_score": 88.5,
       "rs_vs_spy": 5.16,
       "rs_vs_qqq": 3.69,
       "state": "active",
       "state_reason": "Top-percentile RS (88/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +5.2%, QQQ +3.7%.",
       "momentum_rank": 5,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +54.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Extended momentum. Price +54.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 54.59,
         "ma_30w_slope_pct": 9.85,
@@ -637,7 +637,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.750981+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.243519+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -743,7 +743,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.310851+00:00",
+      "last_updated": "2026-06-19T15:26:13.977247+00:00",
       "rs_score": 78.4,
       "rs_vs_spy": 1.44,
       "rs_vs_qqq": -0.03,
@@ -751,10 +751,10 @@
       "state_reason": "Top-percentile RS (78/100) vs theme universe with broad participation (69% advancing). Outperforming SPY +1.4%, QQQ -0.0%.",
       "momentum_rank": 6,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 94.1,
       "stage_confidence": "high",
-      "stage_reason": "Price +13.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +13.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 13.25,
         "ma_30w_slope_pct": 0.54,
@@ -768,7 +768,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 75.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.310792+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.977187+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -873,18 +873,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.522428+00:00",
+      "last_updated": "2026-06-19T15:26:14.188214+00:00",
       "rs_score": 77.1,
       "rs_vs_spy": 2.88,
       "rs_vs_qqq": 1.41,
       "state": "active",
       "state_reason": "Top-percentile RS (77/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +2.9%, QQQ +1.4%.",
       "momentum_rank": 7,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 80.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +23.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Extended momentum. Price +23.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 23.34,
         "ma_30w_slope_pct": 4.68,
@@ -898,7 +898,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.522366+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.188132+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -999,7 +999,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.247948+00:00",
+      "last_updated": "2026-06-19T15:26:13.909802+00:00",
       "rs_score": 76.3,
       "rs_vs_spy": -0.08,
       "rs_vs_qqq": -1.55,
@@ -1007,10 +1007,10 @@
       "state_reason": "Top-percentile RS (76/100) vs theme universe with broad participation (62% advancing). Outperforming SPY -0.1%, QQQ -1.6%.",
       "momentum_rank": 8,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +10.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +10.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 10.38,
         "ma_30w_slope_pct": 2.34,
@@ -1024,7 +1024,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.247889+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.909749+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1125,18 +1125,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.544304+00:00",
+      "last_updated": "2026-06-19T15:26:14.202482+00:00",
       "rs_score": 75.1,
       "rs_vs_spy": 4.47,
       "rs_vs_qqq": 3.0,
       "state": "active",
       "state_reason": "Top-percentile RS (75/100) vs theme universe with broad participation (67% advancing). Outperforming SPY +4.5%, QQQ +3.0%.",
       "momentum_rank": 9,
-      "stage": 1,
-      "stage_label": "Stage 1 \u2192 2 Breakout Watch",
+      "stage": 2,
+      "stage_label": "S2 Breakout",
       "stage_score": 64.4,
       "stage_confidence": "high",
-      "stage_reason": "Price +15.6% vs 30-week MA (falling slope). Prior 26w: +8%. RS vs SPY rising. Watch for volume breakout.",
+      "stage_reason": "Confirmed breakout from base. Price +15.6% above 30-week MA (falling slope). Prior 26w: +8%. RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 15.6,
         "ma_30w_slope_pct": -1.66,
@@ -1150,7 +1150,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 33.3
       },
-      "stage_updated_at": "2026-06-19T14:50:31.544242+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.202412+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -1250,18 +1250,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.845572+00:00",
+      "last_updated": "2026-06-19T15:26:14.329871+00:00",
       "rs_score": 73.9,
       "rs_vs_spy": 1.81,
       "rs_vs_qqq": 0.34,
       "state": "active",
       "state_reason": "Top-percentile RS (74/100) vs theme universe with broad participation (82% advancing). Outperforming SPY +1.8%, QQQ +0.3%.",
       "momentum_rank": 10,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +25.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Extended momentum. Price +25.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 25.3,
         "ma_30w_slope_pct": 3.91,
@@ -1275,7 +1275,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.845514+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.329802+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1385,7 +1385,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.264327+00:00",
+      "last_updated": "2026-06-19T15:26:13.924764+00:00",
       "rs_score": 71.3,
       "rs_vs_spy": 2.96,
       "rs_vs_qqq": 1.49,
@@ -1393,10 +1393,10 @@
       "state_reason": "Top-percentile RS (71/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +3.0%, QQQ +1.5%.",
       "momentum_rank": 11,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 80.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +11.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +11.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 11.54,
         "ma_30w_slope_pct": 3.44,
@@ -1410,7 +1410,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.264262+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.924708+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1506,7 +1506,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.402704+00:00",
+      "last_updated": "2026-06-19T15:26:14.069317+00:00",
       "rs_score": 71.3,
       "rs_vs_spy": 2.28,
       "rs_vs_qqq": 0.81,
@@ -1514,10 +1514,10 @@
       "state_reason": "Top-percentile RS (71/100) vs theme universe with broad participation (75% advancing). Outperforming SPY +2.3%, QQQ +0.8%.",
       "momentum_rank": 12,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +14.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +14.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 14.78,
         "ma_30w_slope_pct": 1.73,
@@ -1531,7 +1531,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-19T14:50:31.402651+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.069220+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1629,18 +1629,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.832406+00:00",
+      "last_updated": "2026-06-19T15:26:14.316217+00:00",
       "rs_score": 66.4,
       "rs_vs_spy": 0.42,
       "rs_vs_qqq": -1.05,
       "state": "emerging",
       "state_reason": "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.4%, QQQ delta -1.1%.",
       "momentum_rank": 13,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +26.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Extended momentum. Price +26.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 26.0,
         "ma_30w_slope_pct": 4.78,
@@ -1654,7 +1654,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.829910+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.316100+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1755,7 +1755,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.399376+00:00",
+      "last_updated": "2026-06-19T15:26:14.065677+00:00",
       "rs_score": 63.6,
       "rs_vs_spy": 2.5,
       "rs_vs_qqq": 1.03,
@@ -1763,10 +1763,10 @@
       "state_reason": "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +2.5%, QQQ delta +1.0%.",
       "momentum_rank": 14,
       "stage": 3,
-      "stage_label": "Stage 3 \u2192 4 Danger",
+      "stage_label": "S3-S4 Top",
       "stage_score": 37.6,
       "stage_confidence": "low",
-      "stage_reason": "Danger zone \u2014 broke below 30-week MA (+0.5%). MA slope: -0.43%/4w. RS vs SPY: flat. Risk of Stage 4 decline.",
+      "stage_reason": "Distribution risk \u2014 broke below 30-week MA (+0.5%). MA slope: -0.43%/4w. RS vs SPY: flat. Risk of S4 decline.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 0.45,
         "ma_30w_slope_pct": -0.43,
@@ -1780,7 +1780,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.399320+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.065619+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -1879,7 +1879,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.412530+00:00",
+      "last_updated": "2026-06-19T15:26:14.076186+00:00",
       "rs_score": 62.1,
       "rs_vs_spy": -0.12,
       "rs_vs_qqq": -1.59,
@@ -1887,10 +1887,10 @@
       "state_reason": "Rising RS (62/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -0.1%, QQQ delta -1.6%.",
       "momentum_rank": 15,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 87.2,
       "stage_confidence": "high",
-      "stage_reason": "Price +8.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +8.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 7.99,
         "ma_30w_slope_pct": 1.91,
@@ -1904,7 +1904,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.412475+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.076115+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2003,7 +2003,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.470737+00:00",
+      "last_updated": "2026-06-19T15:26:14.135896+00:00",
       "rs_score": 60.5,
       "rs_vs_spy": 0.62,
       "rs_vs_qqq": -0.85,
@@ -2011,10 +2011,10 @@
       "state_reason": "Rising RS (60/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.6%, QQQ delta -0.8%.",
       "momentum_rank": 16,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 90.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +12.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +12.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 12.43,
         "ma_30w_slope_pct": 3.04,
@@ -2028,7 +2028,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.470678+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.135802+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2128,7 +2128,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.342012+00:00",
+      "last_updated": "2026-06-19T15:26:14.008379+00:00",
       "rs_score": 59.0,
       "rs_vs_spy": -2.06,
       "rs_vs_qqq": -3.53,
@@ -2136,10 +2136,10 @@
       "state_reason": "Rising RS (59/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -2.1%, QQQ delta -3.5%.",
       "momentum_rank": 17,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 96.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +7.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +7.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 7.12,
         "ma_30w_slope_pct": 2.5,
@@ -2153,7 +2153,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.341929+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.008325+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2254,7 +2254,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.784813+00:00",
+      "last_updated": "2026-06-19T15:26:14.272636+00:00",
       "rs_score": 58.4,
       "rs_vs_spy": 0.77,
       "rs_vs_qqq": -0.7,
@@ -2262,10 +2262,10 @@
       "state_reason": "Rising RS (58/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.8%, QQQ delta -0.7%.",
       "momentum_rank": 19,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 100.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +11.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +11.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 11.65,
         "ma_30w_slope_pct": 2.57,
@@ -2279,7 +2279,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.783848+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.272563+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2386,7 +2386,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.327763+00:00",
+      "last_updated": "2026-06-19T15:26:13.994631+00:00",
       "rs_score": 58.4,
       "rs_vs_spy": -0.81,
       "rs_vs_qqq": -2.28,
@@ -2394,10 +2394,10 @@
       "state_reason": "Rising RS (58/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -0.8%, QQQ delta -2.3%.",
       "momentum_rank": 18,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 71.7,
       "stage_confidence": "high",
-      "stage_reason": "Price +4.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +4.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 4.38,
         "ma_30w_slope_pct": 1.7,
@@ -2411,7 +2411,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.327704+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.994570+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2519,7 +2519,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.743517+00:00",
+      "last_updated": "2026-06-19T15:26:14.236101+00:00",
       "rs_score": 58.3,
       "rs_vs_spy": 0.66,
       "rs_vs_qqq": -0.81,
@@ -2527,10 +2527,10 @@
       "state_reason": "Rising RS (58/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.7%, QQQ delta -0.8%.",
       "momentum_rank": 20,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 68.7,
       "stage_confidence": "medium",
-      "stage_reason": "Price +3.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +3.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 2.97,
         "ma_30w_slope_pct": 1.01,
@@ -2544,7 +2544,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.743452+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.236015+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2649,7 +2649,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.853270+00:00",
+      "last_updated": "2026-06-19T15:26:14.338647+00:00",
       "rs_score": 58.0,
       "rs_vs_spy": 0.68,
       "rs_vs_qqq": -0.79,
@@ -2657,10 +2657,10 @@
       "state_reason": "Rising RS (58/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.7%, QQQ delta -0.8%.",
       "momentum_rank": 21,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 85.4,
       "stage_confidence": "high",
-      "stage_reason": "Price +6.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +6.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 6.73,
         "ma_30w_slope_pct": 2.29,
@@ -2674,7 +2674,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.853208+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.338574+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -2778,18 +2778,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.507687+00:00",
+      "last_updated": "2026-06-19T15:26:14.172235+00:00",
       "rs_score": 57.2,
       "rs_vs_spy": -0.77,
       "rs_vs_qqq": -2.24,
       "state": "emerging",
       "state_reason": "Rising RS (57/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -0.8%, QQQ delta -2.2%.",
       "momentum_rank": 22,
-      "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage": 3,
+      "stage_label": "S3 Momentum",
       "stage_score": 80.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +45.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Extended momentum. Price +45.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 45.94,
         "ma_30w_slope_pct": 15.97,
@@ -2803,7 +2803,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.507621+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.172136+00:00",
       "stage_source": "synthetic_basket"
     },
     {
@@ -2900,7 +2900,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.548385+00:00",
+      "last_updated": "2026-06-19T15:26:14.206491+00:00",
       "rs_score": 56.9,
       "rs_vs_spy": -1.55,
       "rs_vs_qqq": -3.02,
@@ -2908,10 +2908,10 @@
       "state_reason": "Rising RS (57/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -1.6%, QQQ delta -3.0%.",
       "momentum_rank": 23,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 75.5,
       "stage_confidence": "high",
-      "stage_reason": "Price +6.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +6.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 6.8,
         "ma_30w_slope_pct": 4.05,
@@ -2925,7 +2925,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-19T14:50:31.548318+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.206426+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3029,7 +3029,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.335288+00:00",
+      "last_updated": "2026-06-19T15:26:14.002029+00:00",
       "rs_score": 56.1,
       "rs_vs_spy": -2.41,
       "rs_vs_qqq": -3.88,
@@ -3037,10 +3037,10 @@
       "state_reason": "Rising RS (56/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta -2.4%, QQQ delta -3.9%.",
       "momentum_rank": 24,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 89.9,
       "stage_confidence": "high",
-      "stage_reason": "Price +5.4% above a rising 30-week MA (6/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +5.4% above a rising 30-week MA (6/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 5.43,
         "ma_30w_slope_pct": 1.62,
@@ -3054,7 +3054,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.335234+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.001971+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3158,18 +3158,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.819756+00:00",
+      "last_updated": "2026-06-19T15:26:14.306551+00:00",
       "rs_score": 55.6,
       "rs_vs_spy": 0.78,
       "rs_vs_qqq": -0.69,
       "state": "emerging",
       "state_reason": "Rising RS (56/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delta +0.8%, QQQ delta -0.7%.",
       "momentum_rank": 25,
-      "stage": 1,
-      "stage_label": "Stage 1 \u2192 2 Breakout Watch",
+      "stage": 2,
+      "stage_label": "S2 Breakout",
       "stage_score": 55.2,
       "stage_confidence": "medium",
-      "stage_reason": "Price +5.9% vs 30-week MA (falling slope). Prior 26w: +1%. RS vs SPY flat. Watch for volume breakout.",
+      "stage_reason": "Confirmed breakout from base. Price +5.9% above 30-week MA (falling slope). Prior 26w: +1%. RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 5.86,
         "ma_30w_slope_pct": -0.34,
@@ -3183,7 +3183,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 33.3
       },
-      "stage_updated_at": "2026-06-19T14:50:31.819688+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.306472+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3284,7 +3284,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.425410+00:00",
+      "last_updated": "2026-06-19T15:26:14.088257+00:00",
       "rs_score": 54.8,
       "rs_vs_spy": -1.69,
       "rs_vs_qqq": -3.16,
@@ -3292,10 +3292,10 @@
       "state_reason": "Mid-range RS (55/100) vs peer themes. SPY delta -1.7%, QQQ delta -3.2%. Breadth 40%.",
       "momentum_rank": 26,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 80.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +10.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +10.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 10.08,
         "ma_30w_slope_pct": 3.84,
@@ -3309,7 +3309,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.425356+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.088203+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3411,7 +3411,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.731791+00:00",
+      "last_updated": "2026-06-19T15:26:14.224254+00:00",
       "rs_score": 49.9,
       "rs_vs_spy": -0.5,
       "rs_vs_qqq": -1.97,
@@ -3419,10 +3419,10 @@
       "state_reason": "Positive return but mid-table RS (50/100) \u2014 lagging stronger themes. SPY delta -0.5%, QQQ delta -2.0%.",
       "momentum_rank": 27,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 83.8,
       "stage_confidence": "high",
-      "stage_reason": "Price +5.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +5.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 5.58,
         "ma_30w_slope_pct": 2.07,
@@ -3436,7 +3436,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.731733+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.224183+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3534,7 +3534,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.239840+00:00",
+      "last_updated": "2026-06-19T15:26:13.902627+00:00",
       "rs_score": 49.2,
       "rs_vs_spy": -1.21,
       "rs_vs_qqq": -2.68,
@@ -3542,10 +3542,10 @@
       "state_reason": "Mid-range RS (49/100) vs peer themes. SPY delta -1.2%, QQQ delta -2.7%. Breadth 40%.",
       "momentum_rank": 28,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 83.0,
       "stage_confidence": "high",
-      "stage_reason": "Price +5.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +5.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 5.03,
         "ma_30w_slope_pct": 1.69,
@@ -3559,7 +3559,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.239768+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.902571+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3660,7 +3660,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.436799+00:00",
+      "last_updated": "2026-06-19T15:26:14.100658+00:00",
       "rs_score": 49.0,
       "rs_vs_spy": -1.32,
       "rs_vs_qqq": -2.79,
@@ -3668,10 +3668,10 @@
       "state_reason": "Mid-range RS (49/100) vs peer themes. SPY delta -1.3%, QQQ delta -2.8%. Breadth 50%.",
       "momentum_rank": 30,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 71.7,
       "stage_confidence": "high",
-      "stage_reason": "Price +4.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +4.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 4.39,
         "ma_30w_slope_pct": 2.3,
@@ -3685,7 +3685,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.436752+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.100601+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3786,7 +3786,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.358993+00:00",
+      "last_updated": "2026-06-19T15:26:14.025618+00:00",
       "rs_score": 49.0,
       "rs_vs_spy": -1.85,
       "rs_vs_qqq": -3.32,
@@ -3794,10 +3794,10 @@
       "state_reason": "Mid-range RS (49/100) vs peer themes. SPY delta -1.9%, QQQ delta -3.3%. Breadth 0%.",
       "momentum_rank": 29,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 55.0,
       "stage_confidence": "medium",
-      "stage_reason": "Basing phase. Price +2.3% vs flat 30-week MA. Prior 26w: -4%. RS vs SPY: flat. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price +2.3% vs flat 30-week MA. Prior 26w: -4%. RS vs SPY: flat. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 2.3,
         "ma_30w_slope_pct": 0.1,
@@ -3811,7 +3811,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.358925+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.025561+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -3911,7 +3911,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.254796+00:00",
+      "last_updated": "2026-06-19T15:26:13.915855+00:00",
       "rs_score": 48.8,
       "rs_vs_spy": -1.7,
       "rs_vs_qqq": -3.17,
@@ -3919,10 +3919,10 @@
       "state_reason": "Mid-range RS (49/100) vs peer themes. SPY delta -1.7%, QQQ delta -3.2%. Breadth 50%.",
       "momentum_rank": 31,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 71.7,
       "stage_confidence": "high",
-      "stage_reason": "Price +4.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +4.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 4.39,
         "ma_30w_slope_pct": 2.3,
@@ -3936,7 +3936,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.254725+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.915797+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4041,7 +4041,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.384963+00:00",
+      "last_updated": "2026-06-19T15:26:14.051192+00:00",
       "rs_score": 47.9,
       "rs_vs_spy": 0.6,
       "rs_vs_qqq": -0.87,
@@ -4049,10 +4049,10 @@
       "state_reason": "Positive return but mid-table RS (48/100) \u2014 lagging stronger themes. SPY delta +0.6%, QQQ delta -0.9%.",
       "momentum_rank": 32,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 79.2,
       "stage_confidence": "high",
-      "stage_reason": "Price +5.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +5.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 5.2,
         "ma_30w_slope_pct": 0.68,
@@ -4066,7 +4066,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.384906+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.051129+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4176,7 +4176,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.771519+00:00",
+      "last_updated": "2026-06-19T15:26:14.262518+00:00",
       "rs_score": 47.5,
       "rs_vs_spy": -3.39,
       "rs_vs_qqq": -4.86,
@@ -4184,10 +4184,10 @@
       "state_reason": "Mid-range RS (48/100) vs peer themes. SPY delta -3.4%, QQQ delta -4.9%. Breadth 0%.",
       "momentum_rank": 33,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 40.8,
       "stage_confidence": "high",
-      "stage_reason": "Basing phase. Price -13.4% vs flat 30-week MA. Prior 26w: -16%. RS vs SPY: falling. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price -13.4% vs flat 30-week MA. Prior 26w: -16%. RS vs SPY: falling. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -13.4,
         "ma_30w_slope_pct": 3.59,
@@ -4201,7 +4201,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.771451+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.262448+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4296,7 +4296,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.353217+00:00",
+      "last_updated": "2026-06-19T15:26:14.019749+00:00",
       "rs_score": 46.7,
       "rs_vs_spy": -0.57,
       "rs_vs_qqq": -2.04,
@@ -4304,10 +4304,10 @@
       "state_reason": "Positive return but mid-table RS (47/100) \u2014 lagging stronger themes. SPY delta -0.6%, QQQ delta -2.0%.",
       "momentum_rank": 34,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 83.4,
       "stage_confidence": "high",
-      "stage_reason": "Price +5.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +5.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 5.3,
         "ma_30w_slope_pct": 1.52,
@@ -4321,7 +4321,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-19T14:50:31.353171+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.019703+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4428,7 +4428,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.839355+00:00",
+      "last_updated": "2026-06-19T15:26:14.323461+00:00",
       "rs_score": 44.5,
       "rs_vs_spy": 0.91,
       "rs_vs_qqq": -0.56,
@@ -4436,10 +4436,10 @@
       "state_reason": "Positive return but mid-table RS (44/100) \u2014 lagging stronger themes. SPY delta +0.9%, QQQ delta -0.6%.",
       "momentum_rank": 35,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 55.5,
       "stage_confidence": "medium",
-      "stage_reason": "Price +1.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +1.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 1.06,
         "ma_30w_slope_pct": 0.29,
@@ -4453,7 +4453,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.839238+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.323386+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4559,7 +4559,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.319268+00:00",
+      "last_updated": "2026-06-19T15:26:13.985850+00:00",
       "rs_score": 44.4,
       "rs_vs_spy": -0.53,
       "rs_vs_qqq": -2.0,
@@ -4567,10 +4567,10 @@
       "state_reason": "Positive return but mid-table RS (44/100) \u2014 lagging stronger themes. SPY delta -0.5%, QQQ delta -2.0%.",
       "momentum_rank": 36,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 98.1,
       "stage_confidence": "high",
-      "stage_reason": "Price +17.8% above a rising 30-week MA (7/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +17.8% above a rising 30-week MA (7/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 17.84,
         "ma_30w_slope_pct": 2.21,
@@ -4584,7 +4584,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.319216+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.985791+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4688,7 +4688,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.862349+00:00",
+      "last_updated": "2026-06-19T15:26:14.348009+00:00",
       "rs_score": 44.0,
       "rs_vs_spy": 0.41,
       "rs_vs_qqq": -1.06,
@@ -4696,10 +4696,10 @@
       "state_reason": "Positive return but mid-table RS (44/100) \u2014 lagging stronger themes. SPY delta +0.4%, QQQ delta -1.1%.",
       "momentum_rank": 37,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 29.7,
       "stage_confidence": "low",
-      "stage_reason": "Basing phase. Price -5.0% vs flat 30-week MA. Prior 26w: +4%. RS vs SPY: falling. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price -5.0% vs flat 30-week MA. Prior 26w: +4%. RS vs SPY: falling. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -4.95,
         "ma_30w_slope_pct": 0.01,
@@ -4713,7 +4713,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.862281+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.347911+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4815,7 +4815,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.871725+00:00",
+      "last_updated": "2026-06-19T15:26:14.353703+00:00",
       "rs_score": 43.5,
       "rs_vs_spy": -0.34,
       "rs_vs_qqq": -1.81,
@@ -4823,10 +4823,10 @@
       "state_reason": "Positive return but mid-table RS (44/100) \u2014 lagging stronger themes. SPY delta -0.3%, QQQ delta -1.8%.",
       "momentum_rank": 38,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 38.5,
       "stage_confidence": "low",
-      "stage_reason": "Basing phase. Price -0.0% vs flat 30-week MA. Prior 26w: +5%. RS vs SPY: falling. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price -0.0% vs flat 30-week MA. Prior 26w: +5%. RS vs SPY: falling. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -0.03,
         "ma_30w_slope_pct": 0.02,
@@ -4840,7 +4840,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.871664+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.353651+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -4945,7 +4945,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.302360+00:00",
+      "last_updated": "2026-06-19T15:26:13.968321+00:00",
       "rs_score": 42.4,
       "rs_vs_spy": -0.76,
       "rs_vs_qqq": -2.23,
@@ -4953,10 +4953,10 @@
       "state_reason": "Positive return but mid-table RS (42/100) \u2014 lagging stronger themes. SPY delta -0.8%, QQQ delta -2.2%.",
       "momentum_rank": 39,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 95.3,
       "stage_confidence": "high",
-      "stage_reason": "Price +6.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +6.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 6.64,
         "ma_30w_slope_pct": 4.25,
@@ -4970,7 +4970,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.302305+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.968263+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5074,7 +5074,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.454752+00:00",
+      "last_updated": "2026-06-19T15:26:14.118748+00:00",
       "rs_score": 40.8,
       "rs_vs_spy": -2.87,
       "rs_vs_qqq": -4.34,
@@ -5082,10 +5082,10 @@
       "state_reason": "Mid-range RS (41/100) vs peer themes. SPY delta -2.9%, QQQ delta -4.3%. Breadth 30%.",
       "momentum_rank": 40,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 67.6,
       "stage_confidence": "medium",
-      "stage_reason": "Price +2.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +2.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 2.42,
         "ma_30w_slope_pct": 3.33,
@@ -5099,7 +5099,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.454699+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.118676+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5207,7 +5207,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.375988+00:00",
+      "last_updated": "2026-06-19T15:26:14.042046+00:00",
       "rs_score": 39.7,
       "rs_vs_spy": -2.34,
       "rs_vs_qqq": -3.81,
@@ -5215,10 +5215,10 @@
       "state_reason": "Mid-range RS (40/100) vs peer themes. SPY delta -2.3%, QQQ delta -3.8%. Breadth 0%.",
       "momentum_rank": 41,
       "stage": 3,
-      "stage_label": "Stage 3 \u2192 4 Danger",
+      "stage_label": "S3-S4 Top",
       "stage_score": 36.2,
       "stage_confidence": "high",
-      "stage_reason": "Danger zone \u2014 broke below 30-week MA (-9.1%). MA slope: +0.79%/4w. RS vs SPY: falling. Risk of Stage 4 decline.",
+      "stage_reason": "Distribution risk \u2014 broke below 30-week MA (-9.1%). MA slope: +0.79%/4w. RS vs SPY: falling. Risk of S4 decline.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -9.1,
         "ma_30w_slope_pct": 0.79,
@@ -5232,7 +5232,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.375899+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.041985+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5333,7 +5333,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.282915+00:00",
+      "last_updated": "2026-06-19T15:26:13.943905+00:00",
       "rs_score": 39.4,
       "rs_vs_spy": 0.61,
       "rs_vs_qqq": -0.86,
@@ -5341,10 +5341,10 @@
       "state_reason": "Positive return but mid-table RS (39/100) \u2014 lagging stronger themes. SPY delta +0.6%, QQQ delta -0.9%.",
       "momentum_rank": 42,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 41.6,
       "stage_confidence": "low",
-      "stage_reason": "Basing phase. Price -0.2% vs flat 30-week MA. Prior 26w: -4%. RS vs SPY: falling. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price -0.2% vs flat 30-week MA. Prior 26w: -4%. RS vs SPY: falling. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -0.23,
         "ma_30w_slope_pct": 0.1,
@@ -5358,7 +5358,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.282864+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.943852+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5457,7 +5457,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.288684+00:00",
+      "last_updated": "2026-06-19T15:26:13.949685+00:00",
       "rs_score": 38.5,
       "rs_vs_spy": 0.31,
       "rs_vs_qqq": -1.16,
@@ -5465,10 +5465,10 @@
       "state_reason": "Positive return but mid-table RS (38/100) \u2014 lagging stronger themes. SPY delta +0.3%, QQQ delta -1.2%.",
       "momentum_rank": 43,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 55.1,
       "stage_confidence": "medium",
-      "stage_reason": "Price +1.4% above a rising 30-week MA (4/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +1.4% above a rising 30-week MA (4/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 1.38,
         "ma_30w_slope_pct": 0.78,
@@ -5482,7 +5482,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.288623+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.949634+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5582,7 +5582,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.805241+00:00",
+      "last_updated": "2026-06-19T15:26:14.292364+00:00",
       "rs_score": 35.9,
       "rs_vs_spy": 2.61,
       "rs_vs_qqq": 1.14,
@@ -5590,10 +5590,10 @@
       "state_reason": "Positive return but mid-table RS (36/100) \u2014 lagging stronger themes. SPY delta +2.6%, QQQ delta +1.1%.",
       "momentum_rank": 44,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 86.3,
       "stage_confidence": "high",
-      "stage_reason": "Price +7.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +7.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 7.34,
         "ma_30w_slope_pct": 4.1,
@@ -5607,7 +5607,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-19T14:50:31.805191+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.292314+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5711,7 +5711,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.393552+00:00",
+      "last_updated": "2026-06-19T15:26:14.059680+00:00",
       "rs_score": 34.9,
       "rs_vs_spy": -1.76,
       "rs_vs_qqq": -3.23,
@@ -5719,10 +5719,10 @@
       "state_reason": "Mid-range RS (35/100) vs peer themes. SPY delta -1.8%, QQQ delta -3.2%. Breadth 30%.",
       "momentum_rank": 45,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 47.2,
       "stage_confidence": "medium",
-      "stage_reason": "Basing phase. Price -1.6% vs flat 30-week MA. Prior 26w: -4%. RS vs SPY: flat. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price -1.6% vs flat 30-week MA. Prior 26w: -4%. RS vs SPY: flat. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -1.61,
         "ma_30w_slope_pct": 0.19,
@@ -5736,7 +5736,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 33.3
       },
-      "stage_updated_at": "2026-06-19T14:50:31.393492+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.059616+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5840,7 +5840,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.366045+00:00",
+      "last_updated": "2026-06-19T15:26:14.033502+00:00",
       "rs_score": 34.6,
       "rs_vs_spy": -0.05,
       "rs_vs_qqq": -1.52,
@@ -5848,10 +5848,10 @@
       "state_reason": "Positive return but mid-table RS (35/100) \u2014 lagging stronger themes. SPY delta -0.1%, QQQ delta -1.5%.",
       "momentum_rank": 46,
       "stage": 4,
-      "stage_label": "Stage 4 Decline",
+      "stage_label": "S4 Decline",
       "stage_score": 9.0,
       "stage_confidence": "high",
-      "stage_reason": "Declining trend. Price -4.8% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "stage_reason": "Downtrend confirmed. Price -4.8% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -4.85,
         "ma_30w_slope_pct": -3.02,
@@ -5865,7 +5865,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.365937+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.033439+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -5963,7 +5963,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.419580+00:00",
+      "last_updated": "2026-06-19T15:26:14.082035+00:00",
       "rs_score": 31.5,
       "rs_vs_spy": -1.34,
       "rs_vs_qqq": -2.81,
@@ -5971,10 +5971,10 @@
       "state_reason": "Mid-range RS (32/100) vs peer themes. SPY delta -1.3%, QQQ delta -2.8%. Breadth 36%.",
       "momentum_rank": 47,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 43.1,
       "stage_confidence": "low",
-      "stage_reason": "Basing phase. Price +0.9% vs flat 30-week MA. Prior 26w: -4%. RS vs SPY: flat. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price +0.9% vs flat 30-week MA. Prior 26w: -4%. RS vs SPY: flat. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 0.88,
         "ma_30w_slope_pct": -0.25,
@@ -5988,7 +5988,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.419526+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.081979+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6087,7 +6087,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.812301+00:00",
+      "last_updated": "2026-06-19T15:26:14.298121+00:00",
       "rs_score": 31.0,
       "rs_vs_spy": -1.74,
       "rs_vs_qqq": -3.21,
@@ -6095,10 +6095,10 @@
       "state_reason": "Mid-range RS (31/100) vs peer themes. SPY delta -1.7%, QQQ delta -3.2%. Breadth 64%.",
       "momentum_rank": 48,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 87.1,
       "stage_confidence": "high",
-      "stage_reason": "Price +7.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "stage_reason": "Established advance. Price +7.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 7.94,
         "ma_30w_slope_pct": 2.8,
@@ -6112,7 +6112,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.812242+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.298037+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6213,7 +6213,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.722303+00:00",
+      "last_updated": "2026-06-19T15:26:14.213919+00:00",
       "rs_score": 28.4,
       "rs_vs_spy": -1.19,
       "rs_vs_qqq": -2.66,
@@ -6221,10 +6221,10 @@
       "state_reason": "Bottom-quartile RS (28/100) vs 60-theme universe. SPY delta -1.2%, QQQ delta -2.7%. Breadth 54% \u2014 minimal buying pressure.",
       "momentum_rank": 49,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 69.2,
       "stage_confidence": "high",
-      "stage_reason": "Price +3.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +3.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 3.19,
         "ma_30w_slope_pct": 1.1,
@@ -6238,7 +6238,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.722244+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.213850+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6337,7 +6337,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.440323+00:00",
+      "last_updated": "2026-06-19T15:26:14.104646+00:00",
       "rs_score": 24.6,
       "rs_vs_spy": 0.35,
       "rs_vs_qqq": -1.12,
@@ -6345,10 +6345,10 @@
       "state_reason": "Bottom-quartile RS (25/100) vs 60-theme universe. SPY delta +0.3%, QQQ delta -1.1%. Breadth 90% \u2014 minimal buying pressure.",
       "momentum_rank": 50,
       "stage": 4,
-      "stage_label": "Stage 4 Decline",
+      "stage_label": "S4 Decline",
       "stage_score": 1.9,
       "stage_confidence": "high",
-      "stage_reason": "Declining trend. Price -12.8% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "stage_reason": "Downtrend confirmed. Price -12.8% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -12.8,
         "ma_30w_slope_pct": -2.81,
@@ -6362,7 +6362,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-19T14:50:31.440266+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.104586+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6461,7 +6461,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.270702+00:00",
+      "last_updated": "2026-06-19T15:26:13.932402+00:00",
       "rs_score": 24.5,
       "rs_vs_spy": -1.58,
       "rs_vs_qqq": -3.05,
@@ -6469,10 +6469,10 @@
       "state_reason": "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta -1.6%, QQQ delta -3.0%. Breadth 62% \u2014 minimal buying pressure.",
       "momentum_rank": 51,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 88.7,
       "stage_confidence": "high",
-      "stage_reason": "Price +7.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "stage_reason": "Established advance. Price +7.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 7.23,
         "ma_30w_slope_pct": 0.42,
@@ -6486,7 +6486,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.270642+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.932327+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6590,7 +6590,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.206747+00:00",
+      "last_updated": "2026-06-19T15:26:13.879935+00:00",
       "rs_score": 23.5,
       "rs_vs_spy": -1.47,
       "rs_vs_qqq": -2.94,
@@ -6598,10 +6598,10 @@
       "state_reason": "Bottom-quartile RS (24/100) vs 60-theme universe. SPY delta -1.5%, QQQ delta -2.9%. Breadth 44% \u2014 minimal buying pressure.",
       "momentum_rank": 52,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 50.5,
       "stage_confidence": "medium",
-      "stage_reason": "Basing phase. Price -3.6% vs flat 30-week MA. Prior 26w: +5%. RS vs SPY: falling. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price -3.6% vs flat 30-week MA. Prior 26w: +5%. RS vs SPY: falling. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -3.63,
         "ma_30w_slope_pct": 1.22,
@@ -6615,7 +6615,7 @@
         "breadth_above_30w_ma_pct": 33.3,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.206657+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.879854+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6716,7 +6716,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.493730+00:00",
+      "last_updated": "2026-06-19T15:26:14.151402+00:00",
       "rs_score": 22.5,
       "rs_vs_spy": -3.69,
       "rs_vs_qqq": -5.16,
@@ -6724,10 +6724,10 @@
       "state_reason": "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -3.7%, QQQ delta -5.2%. Breadth 8% \u2014 minimal buying pressure.",
       "momentum_rank": 53,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 69.1,
       "stage_confidence": "high",
-      "stage_reason": "Price +3.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +3.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 3.15,
         "ma_30w_slope_pct": 4.76,
@@ -6741,7 +6741,7 @@
         "breadth_above_30w_ma_pct": 100.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.493676+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.151342+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6839,18 +6839,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.431238+00:00",
+      "last_updated": "2026-06-19T15:26:14.094005+00:00",
       "rs_score": 22.4,
       "rs_vs_spy": -1.04,
       "rs_vs_qqq": -2.51,
       "state": "dead_zone",
       "state_reason": "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -1.0%, QQQ delta -2.5%. Breadth 20% \u2014 minimal buying pressure.",
       "momentum_rank": 54,
-      "stage": 1,
-      "stage_label": "Stage 1 \u2192 2 Breakout Watch",
+      "stage": 2,
+      "stage_label": "S2 Breakout",
       "stage_score": 56.7,
       "stage_confidence": "medium",
-      "stage_reason": "Price -2.3% vs 30-week MA (rising slope). Prior 26w: +16%. RS vs SPY falling. Watch for volume breakout.",
+      "stage_reason": "Confirmed breakout from base. Price -2.3% above 30-week MA (rising slope). Prior 26w: +16%. RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -2.26,
         "ma_30w_slope_pct": 2.43,
@@ -6864,7 +6864,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.431183+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.093933+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -6965,7 +6965,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.294614+00:00",
+      "last_updated": "2026-06-19T15:26:13.960524+00:00",
       "rs_score": 22.3,
       "rs_vs_spy": -1.47,
       "rs_vs_qqq": -2.94,
@@ -6973,10 +6973,10 @@
       "state_reason": "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -1.5%, QQQ delta -2.9%. Breadth 30% \u2014 minimal buying pressure.",
       "momentum_rank": 55,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 63.2,
       "stage_confidence": "low",
-      "stage_reason": "Price +0.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +0.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 0.33,
         "ma_30w_slope_pct": 1.11,
@@ -6990,7 +6990,7 @@
         "breadth_above_30w_ma_pct": 50.0,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.294559+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.960462+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7090,7 +7090,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.277365+00:00",
+      "last_updated": "2026-06-19T15:26:13.938143+00:00",
       "rs_score": 22.2,
       "rs_vs_spy": -0.56,
       "rs_vs_qqq": -2.03,
@@ -7098,10 +7098,10 @@
       "state_reason": "Bottom-quartile RS (22/100) vs 60-theme universe. SPY delta -0.6%, QQQ delta -2.0%. Breadth 46% \u2014 minimal buying pressure.",
       "momentum_rank": 56,
       "stage": 1,
-      "stage_label": "Stage 1 Base",
+      "stage_label": "S1 Base",
       "stage_score": 32.0,
       "stage_confidence": "low",
-      "stage_reason": "Basing phase. Price -5.1% vs flat 30-week MA. Prior 26w: -7%. RS vs SPY: falling. No breakout signal yet.",
+      "stage_reason": "Basing / bottoming. Price -5.1% vs flat 30-week MA. Prior 26w: -7%. RS vs SPY: falling. No breakout signal yet.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -5.11,
         "ma_30w_slope_pct": -0.05,
@@ -7115,7 +7115,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 50.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.277300+00:00",
+      "stage_updated_at": "2026-06-19T15:26:13.938092+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7214,7 +7214,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.792353+00:00",
+      "last_updated": "2026-06-19T15:26:14.280769+00:00",
       "rs_score": 20.6,
       "rs_vs_spy": -1.2,
       "rs_vs_qqq": -2.67,
@@ -7222,10 +7222,10 @@
       "state_reason": "Bottom-quartile RS (21/100) vs 60-theme universe. SPY delta -1.2%, QQQ delta -2.7%. Breadth 29% \u2014 minimal buying pressure.",
       "momentum_rank": 57,
       "stage": 4,
-      "stage_label": "Stage 4 Decline",
+      "stage_label": "S4 Decline",
       "stage_score": 25.9,
       "stage_confidence": "high",
-      "stage_reason": "Declining trend. Price -3.1% below a falling 30-week MA. RS vs SPY: flat. Avoid new longs.",
+      "stage_reason": "Downtrend confirmed. Price -3.1% below a falling 30-week MA. RS vs SPY: flat. Avoid new longs.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -3.06,
         "ma_30w_slope_pct": -1.99,
@@ -7239,7 +7239,7 @@
         "breadth_above_30w_ma_pct": 0.0,
         "breadth_rising_30w_ma_pct": 0.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.792282+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.280705+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7341,7 +7341,7 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.349558+00:00",
+      "last_updated": "2026-06-19T15:26:14.015915+00:00",
       "rs_score": 18.1,
       "rs_vs_spy": -2.64,
       "rs_vs_qqq": -4.11,
@@ -7349,10 +7349,10 @@
       "state_reason": "Bottom-quartile RS (18/100) vs 60-theme universe. SPY delta -2.6%, QQQ delta -4.1%. Breadth 20% \u2014 minimal buying pressure.",
       "momentum_rank": 58,
       "stage": 2,
-      "stage_label": "Stage 2 Advance",
+      "stage_label": "S2-S3 Advance",
       "stage_score": 63.4,
       "stage_confidence": "low",
-      "stage_reason": "Price +0.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "stage_reason": "Established advance. Price +0.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": 0.45,
         "ma_30w_slope_pct": 2.93,
@@ -7366,7 +7366,7 @@
         "breadth_above_30w_ma_pct": 66.7,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.349383+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.015850+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7467,18 +7467,18 @@
           ]
         }
       ],
-      "last_updated": "2026-06-19T14:50:31.478832+00:00",
+      "last_updated": "2026-06-19T15:26:14.143835+00:00",
       "rs_score": 16.6,
       "rs_vs_spy": -2.69,
       "rs_vs_qqq": -4.16,
       "state": "dead_zone",
       "state_reason": "Bottom-quartile RS (17/100) vs 60-theme universe. SPY delta -2.7%, QQQ delta -4.2%. Breadth 0% \u2014 minimal buying pressure.",
       "momentum_rank": 59,
-      "stage": 1,
-      "stage_label": "Stage 1 \u2192 2 Breakout Watch",
+      "stage": 2,
+      "stage_label": "S2 Breakout",
       "stage_score": 61.7,
       "stage_confidence": "low",
-      "stage_reason": "Price -0.4% vs 30-week MA (rising slope). Prior 26w: +23%. RS vs SPY falling. Watch for volume breakout.",
+      "stage_reason": "Confirmed breakout from base. Price -0.4% above 30-week MA (rising slope). Prior 26w: +23%. RS vs SPY: falling.",
       "stage_signals": {
         "price_vs_30w_ma_pct": -0.44,
         "ma_30w_slope_pct": 2.86,
@@ -7492,7 +7492,7 @@
         "breadth_above_30w_ma_pct": 66.7,
         "breadth_rising_30w_ma_pct": 100.0
       },
-      "stage_updated_at": "2026-06-19T14:50:31.478771+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.143778+00:00",
       "stage_source": "etf_proxy"
     },
     {
@@ -7532,7 +7532,7 @@
       "leader_universe_source": "static_fallback",
       "leaders": [],
       "laggards": [],
-      "last_updated": "2026-06-19T14:50:31.525521+00:00",
+      "last_updated": "2026-06-19T15:26:14.190809+00:00",
       "rs_score": 15.0,
       "rs_vs_spy": 0.33,
       "rs_vs_qqq": -1.14,
@@ -7557,7 +7557,7 @@
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
-      "stage_updated_at": "2026-06-19T14:50:31.523370+00:00",
+      "stage_updated_at": "2026-06-19T15:26:14.189229+00:00",
       "stage_source": "fallback"
     }
   ]

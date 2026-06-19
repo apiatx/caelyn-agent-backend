@@ -823,7 +823,9 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             enriched["vol_mc_unavailable_reason"] = "quote_unavailable"
 
         # ── Weinstein Stage Analysis (cache-only) ───────────────────────────
-        enriched["stage2_breakout"] = _get_stage2_breakout(sym)
+        _stage = _get_stage2_breakout(sym)
+        enriched["stage2_breakout"] = _stage   # backward-compat field
+        enriched["stage_analysis"]  = _stage   # canonical alias (same object)
 
         return enriched
 
