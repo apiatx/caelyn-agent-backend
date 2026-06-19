@@ -1,0 +1,106 @@
+Good first pass, but this is not complete yet because the real Watchlist endpoint returned all-null `stage2_breakout` values for all 302 rows.
+
+Do not send this to frontend yet except as a placeholder column. The Watchlist page needs usable Stage 2 values for individual watchlist tickers, not only nulls.
+
+Current issue:
+
+* `_get_stage2_breakout(sym)` correctly reuses `analyze_symbol_stage()`.
+* It correctly avoids provider calls during Watchlist page render.
+* But it only probes in-memory bar caches:
+
+  * `fmp_hist:{SYM}`
+  * `tdier_hist:{SYM}:400`
+* Theme RS warmup only populates ETF/theme proxy histories, not the individual 302 watchlist stocks.
+* Result: every actual watchlist ticker returns `{ score: null, label: null, reason: null }`.
+
+Goal:
+Make `stage2_breakout` useful for individual Watchlist tickers without creating a page-render fetch storm.
+
+Audit first:
+
+1. Search for any existing historical bar caches/services used by:
+
+   * Watchlist
+   * Screener Hub
+   * Chart Radar
+   * Portfolio
+   * technical indicators
+   * stage/base/breakout logic
+2. Confirm whether individual stock daily bars are already stored anywhere in:
+
+   * Neon
+   * disk cache
+   * memory cache
+   * existing FMP history service
+   * existing Tradier history cache
+3. If an existing persisted cache exists, reuse it.
+4. If no persisted individual-stock history cache exists, add a controlled warmup path. Do not fetch during page render.
+
+Required architecture:
+
+* Watchlist endpoint must remain zero-provider-call on page render.
+* Stage 2 values must come from cached/persisted historical bars or precomputed cached stage2 results.
+* Do not use only in-memory cache if it means values disappear on restart.
+* Prefer Neon/disk-backed cache if existing patterns support it.
+* Reuse existing cache/store conventions. Do not invent a parallel storage system unless no existing pattern exists.
+
+Implementation options, in preferred order:
+
+Option A — Existing individual ticker historical bars already cached:
+
+* Read those bars.
+* Convert daily → weekly using existing `weekly_bars_from_daily()`.
+* Run existing `analyze_symbol_stage()`.
+* Return `stage2_breakout`.
+
+Option B — Historical bars are not cached, but existing scheduled/off-hours watchlist refresh exists:
+
+* Add Stage 2 warmup to the existing watchlist refresh path.
+* Fetch daily bars for watchlist symbols in controlled batches.
+* Use existing FMP/Tradier historical service and existing rate/budget controls.
+* Persist either:
+  a. the historical bars using the existing historical cache pattern, or
+  b. the computed `stage2_breakout` result per symbol.
+* Watchlist endpoint reads only cached results.
+
+Option C — No scheduler/warmup path exists:
+
+* Add a manual/admin/internal warmup function or endpoint only if consistent with project patterns.
+* It should process watchlist tickers in chunks and never run automatically on page render.
+
+Data freshness:
+
+* Stage 2 breakout does not need intraday precision.
+* Daily/off-hours refresh is fine.
+* Cache TTL can be 24h or align with the existing watchlist/theme technical refresh cadence.
+
+Provider/cost rules:
+
+* Do not make 302 FMP calls when the Watchlist page loads.
+* Do not make 302 Tradier calls when the Watchlist page loads.
+* Do not fetch historical bars in `_build_ticker_row()`.
+* `_build_ticker_row()` should only read cached bars/results.
+* If data is missing, return null until the warmup has populated it.
+
+Output shape:
+Keep the existing field:
+
+stage2_breakout: {
+score: number | null,
+label: string | null,
+reason: string | null
+}
+
+Labels:
+If `analyze_symbol_stage()` returns labels like “Stage 2 Advance”, preserve them in backend. Frontend can compact them later.
+
+Validation required:
+
+1. Run the warmup/cache path for a sample set of actual watchlist tickers.
+2. Confirm at least some real watchlist tickers return non-null `stage2_breakout`.
+3. Confirm cold/missing tickers still return null safely.
+4. Confirm Watchlist endpoint itself performs zero provider calls.
+5. Confirm values survive a server restart if persisted cache exists.
+6. Confirm no 302-call fetch storm happens on page render.
+7. Confirm existing Themes page Stage 2 behavior is unchanged.
+8. Confirm endpoint response still includes `stage2_breakout` on every ticker row.
