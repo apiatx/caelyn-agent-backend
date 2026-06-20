@@ -435,6 +435,164 @@ def generate_chain_reaction_weekly(
     return result
 
 
+# ── Multi-anchor extension ─────────────────────────────────────────────────────
+#
+# Each config defines ONE anchor's theme filter.  The existing
+# build_cross_theme_top() is called once per anchor; the only thing that
+# changes is which themes are used to slice the full universe.
+#
+# Private companies (SPCX, ANTHROPIC, OPENAI) are mapped to the Serenity
+# theme IDs that best represent their supply-chain footprint.
+# Public companies (NVDA, TSM, GOOG) use the themes from GIANT_MAP.
+
+MULTI_ANCHOR_CONFIGS: list[dict] = [
+    {
+        "anchor":        "NVDA",
+        "anchor_name":   "NVIDIA",
+        "anchor_themes": [
+            "ai_infrastructure", "advanced_packaging_test", "memory",
+            "photonics_cpo", "ai_power_energy", "semicap_supply_chain",
+        ],
+    },
+    {
+        "anchor":        "SPCX",
+        "anchor_name":   "SpaceX",
+        "anchor_themes": [
+            "space", "space_sensing", "defense_optics", "defense",
+        ],
+    },
+    {
+        "anchor":        "ANTHROPIC",
+        "anchor_name":   "Anthropic",
+        "anchor_themes": [
+            "ai_infrastructure", "neocloud",
+        ],
+    },
+    {
+        "anchor":        "OPENAI",
+        "anchor_name":   "OpenAI",
+        "anchor_themes": [
+            "ai_infrastructure", "neocloud",
+        ],
+    },
+    {
+        "anchor":        "TSM",
+        "anchor_name":   "Taiwan Semiconductor Manufacturing Company",
+        "anchor_themes": [
+            "semicap_supply_chain", "advanced_packaging_test",
+        ],
+    },
+    {
+        "anchor":        "GOOG",
+        "anchor_name":   "Google / Alphabet",
+        "anchor_themes": [
+            "ai_infrastructure", "neocloud", "advanced_packaging_test",
+            "photonics_cpo",
+        ],
+    },
+]
+
+
+def build_anchor_top(
+    anchor: str,
+    anchor_name: str,
+    anchor_themes: list[str],
+    limit: int = 20,
+    max_age_days: int = 10,
+) -> dict:
+    """
+    Anchor-filtered variant of build_cross_theme_top().
+
+    This is the ONLY new function added for multi-anchor support.  It
+    calls the existing build_cross_theme_top() with a large limit to
+    retrieve the full scored universe, then keeps only the rows whose
+    `themes` field intersects with this anchor's theme set.
+
+    No scoring, ranking, or normalization logic is changed.
+    The existing /api/bottlenecks/current endpoint is completely unaffected.
+
+    Parameters
+    ----------
+    anchor        : Short identifier (e.g. "NVDA", "SPCX").
+    anchor_name   : Display name (e.g. "NVIDIA", "SpaceX").
+    anchor_themes : Serenity theme IDs that define this anchor's supply-chain
+                    footprint.  Rows whose themes intersect this set are kept.
+    limit         : Maximum rows to return for this anchor.
+    max_age_days  : Reject CR data older than this many days.
+
+    Returns
+    -------
+    Dict with status + rows shaped identically to build_cross_theme_top().
+    Adds top-level `anchor` and `anchor_name` fields.
+    """
+    # ── Step 1: Get the full scored universe via the existing function ──────────
+    # Pass limit=400 (= _GLOBAL_CAP) so the diversity gates operate on the full
+    # universe rather than a truncated slice.  With require_* = 0 the gates are
+    # no-ops and the function simply returns all rows in final_score order.
+    full = build_cross_theme_top(
+        limit=_GLOBAL_CAP,
+        max_age_days=max_age_days,
+        require_themes=0,
+        require_small_mid=0,
+        require_gems=0,
+    )
+
+    if full.get("status") == "error":
+        return {
+            **full,
+            "anchor":      anchor,
+            "anchor_name": anchor_name,
+        }
+
+    # ── Step 2: Filter to anchor-relevant rows ──────────────────────────────────
+    anchor_theme_set = set(anchor_themes)
+    anchor_rows = [
+        r for r in full.get("rows", [])
+        if set(r.get("themes") or []) & anchor_theme_set
+    ]
+
+    if not anchor_rows:
+        return {
+            "status":          "error",
+            "error":           (
+                f"No rows found for anchor {anchor!r} "
+                f"with themes {anchor_themes!r}. "
+                "Run POST /api/admin/bottlenecks/refresh to regenerate CR data."
+            ),
+            "anchor":          anchor,
+            "anchor_name":     anchor_name,
+            "rows":            [],
+            "visible_tickers": [],
+        }
+
+    # Rows arrive pre-sorted by final_score from build_cross_theme_top().
+    selected = anchor_rows[:limit]
+
+    themes_in_anchor: list[str] = sorted(
+        {t for r in selected for t in (r.get("themes") or [])}
+    )
+    vis_buckets: dict[str, int] = {}
+    for r in selected:
+        b = r.get("marketCapBucket") or "unknown"
+        vis_buckets[b] = vis_buckets.get(b, 0) + 1
+
+    return {
+        "status":                  "ok",
+        "anchor":                  anchor,
+        "anchor_name":             anchor_name,
+        "anchor_themes":           anchor_themes,
+        "rows":                    selected,
+        "visible_count":           len(selected),
+        "visible_tickers":         [r["bottleneck_ticker"] for r in selected],
+        "universe_count":          full.get("universe_count", 0),
+        "themes_in_anchor":        themes_in_anchor,
+        "market_cap_buckets":      vis_buckets,
+        "week_start":              full.get("week_start"),
+        "visible_generated_at":    full.get("visible_generated_at"),
+        "source_version":          full.get("source_version"),
+    }
+
+
 def get_latest_cr_weekly_output(max_age_days: int = 10) -> Optional[dict]:
     """
     Return the most recent chain_reaction_weekly_outputs row if it exists

@@ -1,0 +1,73 @@
+Implement a minimal multi-anchor extension for the existing Bottlenecks strategy.
+
+Critical constraints:
+
+* Do NOT rewrite the Bottlenecks strategy.
+* Do NOT change the existing AI prompt wording, scoring logic, result schema, ranking logic, normalization, cache behavior, or existing single-anchor endpoint behavior unless absolutely required for compatibility.
+* Do NOT create a new Bottlenecks engine.
+* Do NOT replace the current prompt with a “better” prompt.
+* Do NOT parallelize the LLM calls.
+* The current one-anchor Bottlenecks results are perfect. Preserve that exact quality and behavior.
+
+Before editing, audit the current Bottlenecks implementation and report:
+
+1. The exact file(s), route(s), service function(s), prompt template(s), and cache path(s) currently used.
+2. The smallest additive change needed to run the existing Bottlenecks logic for multiple anchors.
+3. Anything you believe would require changing the existing prompt, output schema, or UI.
+
+Goal:
+Add support for running the existing Bottlenecks strategy for six market-leading anchors, one after another, using the exact same logic currently used for one anchor.
+
+Anchors:
+
+1. NVDA / NVIDIA
+2. SPCX / SpaceX
+3. ANTHROPIC / Anthropic
+4. OPENAI / OpenAI
+5. TSM / Taiwan Semiconductor Manufacturing Company
+6. GOOG / Google / Alphabet
+
+Implementation requirements:
+
+1. Identify the exact existing function/path currently used to generate the single-anchor Bottlenecks result.
+2. Add a thin orchestration wrapper that calls that existing function six times sequentially.
+3. Each call must use the same model, same prompt template, same input construction, same post-processing, same output quality controls, and same cache/write path pattern where applicable.
+4. Do not make a special prompt for each anchor. The only thing that should vary is the anchor/entity passed into the existing flow.
+5. Return a grouped response shaped roughly like:
+   {
+   "anchors": [
+   {
+   "anchor": "NVDA",
+   "anchor_name": "NVIDIA",
+   "status": "success",
+   "data": <exact existing single-anchor bottlenecks payload>
+   },
+   {
+   "anchor": "SPCX",
+   "anchor_name": "SpaceX",
+   "status": "success",
+   "data": <exact existing single-anchor bottlenecks payload>
+   }
+   ],
+   "generated_at": "...",
+   "partial_failures": []
+   }
+6. Do not let one failed anchor kill the whole response. If one anchor fails, return the successful anchors and include a clean partial failure object for the failed anchor.
+7. Preserve the existing single-anchor endpoint exactly so nothing currently using it breaks.
+8. Add either a new endpoint or optional multi-anchor mode, whichever best matches the existing architecture. Prefer minimal additive change.
+9. Add a force-refresh parameter only if the existing Bottlenecks endpoint already supports that pattern. Do not invent a new refresh system.
+10. Use sequential awaits / loop execution. No Promise.all, asyncio.gather, threadpool fanout, or parallel batch LLM calls.
+11. Add concise logging showing anchor start, anchor success/failure, elapsed time per anchor, and total multi-anchor completion.
+12. Do not add new external data providers.
+13. Do not increase FMP/Tradier/Finnhub/etc. usage unless the existing single-anchor Bottlenecks logic already does so.
+14. Do not change unrelated pages, strategy tabs, charting, watchlist logic, portfolio logic, themes, screener logic, or options flow logic.
+
+Validation:
+
+* Run the existing single-anchor endpoint before and after the change and confirm response shape/quality is unchanged.
+* Run the new multi-anchor endpoint and confirm the six anchors are processed sequentially in this order: NVDA, SPCX, ANTHROPIC, OPENAI, TSM, GOOG.
+* Confirm the multi-anchor response includes all six anchor groups.
+* Confirm each anchor group contains the same type/quality/depth of Bottlenecks output as the current single-anchor result.
+* Confirm partial failure handling works by simulating or safely forcing one failed anchor without breaking the other five.
+* Confirm no duplicate prompt templates were created unless unavoidable.
+* Confirm the original Bottlenecks page still works exactly as before.

@@ -1075,6 +1075,135 @@ async def bottlenecks_current(
     return JSONResponse(content=response)
 
 
+# ── GET /api/bottlenecks/multi-anchor ─────────────────────────────────────────
+#
+# Runs the existing build_anchor_top() (which internally calls the existing
+# build_cross_theme_top()) for each of the six market-leading anchors,
+# sequentially, and returns a grouped response.
+#
+# The existing GET /api/bottlenecks/current is completely unchanged.
+# No new scoring, ranking, or prompt logic was introduced.
+# Anchors are processed in this fixed order:
+#   NVDA → SPCX → ANTHROPIC → OPENAI → TSM → GOOG
+
+@router.get("/api/bottlenecks/multi-anchor")
+async def bottlenecks_multi_anchor(
+    request: Request,
+    limit:        int = Query(default=20, ge=1, le=110, description="Max rows per anchor"),
+    max_age_days: int = Query(default=10, ge=1, le=30,  description="Reject CR data older than N days"),
+):
+    """
+    Multi-anchor Bottlenecks — runs the existing Bottlenecks supply-chain
+    scoring for six market-leading anchors one at a time (sequential, not
+    parallel) and returns a grouped result.
+
+    Same source data as GET /api/bottlenecks/current.
+    Same scoring, ranking, and output shape per anchor group.
+    GET /api/bottlenecks/current is unchanged.
+
+    Anchors (processed in order):
+      1. NVDA  / NVIDIA
+      2. SPCX  / SpaceX
+      3. ANTHROPIC / Anthropic
+      4. OPENAI / OpenAI
+      5. TSM   / Taiwan Semiconductor Manufacturing Company
+      6. GOOG  / Google / Alphabet
+
+    Partial failures: if one anchor fails the others still appear;
+    the failed anchor is listed under `partial_failures`.
+
+    status values per anchor:
+      "success" — rows ready
+      "error"   — no matching data (check partial_failures)
+
+    Top-level status:
+      "ok"           — all anchors succeeded
+      "partial"      — some anchors succeeded, some failed
+      "error"        — all anchors failed
+    """
+    import time as _time
+    from datetime import datetime, timezone
+    from services.chain_reaction_weekly_service import (
+        build_anchor_top,
+        MULTI_ANCHOR_CONFIGS,
+    )
+
+    start_total = _time.monotonic()
+    anchors_result: list[dict] = []
+    partial_failures: list[dict] = []
+
+    for cfg in MULTI_ANCHOR_CONFIGS:
+        anchor      = cfg["anchor"]
+        anchor_name = cfg["anchor_name"]
+        t0 = _time.monotonic()
+        print(f"[MULTI_ANCHOR] start  anchor={anchor!r}  ({anchor_name})")
+
+        try:
+            result = build_anchor_top(
+                anchor=anchor,
+                anchor_name=anchor_name,
+                anchor_themes=cfg["anchor_themes"],
+                limit=limit,
+                max_age_days=max_age_days,
+            )
+            elapsed = round(_time.monotonic() - t0, 2)
+
+            if result.get("status") == "error":
+                raise ValueError(result.get("error", "unknown error from build_anchor_top"))
+
+            row_count = result.get("visible_count", 0)
+            print(
+                f"[MULTI_ANCHOR] ok     anchor={anchor!r}  "
+                f"rows={row_count}  elapsed={elapsed}s"
+            )
+            anchors_result.append({
+                "anchor":        anchor,
+                "anchor_name":   anchor_name,
+                "anchor_themes": cfg["anchor_themes"],
+                "status":        "success",
+                "elapsed_s":     elapsed,
+                "data":          result,
+            })
+
+        except Exception as _exc:
+            elapsed = round(_time.monotonic() - t0, 2)
+            print(
+                f"[MULTI_ANCHOR] fail   anchor={anchor!r}  "
+                f"elapsed={elapsed}s  error={_exc}"
+            )
+            partial_failures.append({
+                "anchor":      anchor,
+                "anchor_name": anchor_name,
+                "status":      "error",
+                "error":       str(_exc),
+                "elapsed_s":   elapsed,
+            })
+
+    total_elapsed = round(_time.monotonic() - start_total, 2)
+    n_ok   = len(anchors_result)
+    n_fail = len(partial_failures)
+    print(
+        f"[MULTI_ANCHOR] complete  ok={n_ok}  failed={n_fail}  "
+        f"total_elapsed={total_elapsed}s"
+    )
+
+    if n_ok == 0:
+        top_status = "error"
+    elif n_fail > 0:
+        top_status = "partial"
+    else:
+        top_status = "ok"
+
+    return JSONResponse(content={
+        "status":          top_status,
+        "anchors":         anchors_result,
+        "generated_at":    datetime.now(timezone.utc).isoformat(),
+        "total_elapsed_s": total_elapsed,
+        "partial_failures": partial_failures,
+        "anchor_order":    [cfg["anchor"] for cfg in MULTI_ANCHOR_CONFIGS],
+    })
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Saved Screens — Parts 1–5
 # ═══════════════════════════════════════════════════════════════════════════════
