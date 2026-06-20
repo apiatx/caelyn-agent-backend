@@ -1,17 +1,19 @@
 """
 Chain Reaction Weekly Service.
 
-Generates a dynamic weekly Screener Hub Bottlenecks universe from the
-NODE_REGISTRY in supply_chain_graph.py, enriched with live market data
-from screener_fundamentals_cache and screener_quote_cache.
+Generates a dynamic weekly Screener Hub Bottlenecks universe from:
+  1. NODE_REGISTRY in supply_chain_graph.py (110 static curated nodes)
+  2. anchor_supply_chain_research_nodes (monthly LLM-researched overlay nodes)
+
+Enriches each node with live market data from screener_fundamentals_cache
+and screener_quote_cache, then writes scored rows to chain_reaction_weekly_outputs.
 
 Design:
-- Reads NODE_REGISTRY (89 curated nodes, static ground truth).
-- Enriches each node with cached FMP fundamentals + Tradier quotes.
-- Computes a dynamic composite score (bottleneck × momentum × fundamentals).
-- Writes scored rows + symbol list to chain_reaction_weekly_outputs (Neon).
-- Screener Hub bottlenecks tab reads from this table first.
-- NODE_REGISTRY itself is never modified; it remains the static fallback.
+- NODE_REGISTRY is never modified; it remains the static ground truth.
+- Overlay nodes from monthly LLM research are merged in at scoring time.
+- Weekly job does NOT call any LLM — zero LLM calls.
+- Page-load endpoints do NOT call any LLM.
+- Multi-anchor endpoint filters by exact giant_anchors membership, not themes.
 
 Weekly cadence: Sunday 2:15 AM ET (fired by screener_hub_scheduler).
 """
@@ -337,6 +339,7 @@ def generate_chain_reaction_weekly(
             "bottleneck_ticker":       us_ticker,
             "company_name":            node.get("company_name") or profile.get("companyName") or us_ticker,
             "anchor_ticker":           (anchors[0] if anchors else None),
+            "giant_anchors":           anchors,                 # full list — used by multi-anchor filter
             "anchor_theme":            (themes[0] if themes else None),
             "supply_chain_role":       node.get("role"),
             "bottleneck_type":         node.get("confidence"),
@@ -380,6 +383,118 @@ def generate_chain_reaction_weekly(
             "error": f"Output validation failed: only {len(valid_rows)} rows have required ticker+role fields",
             "raw_count": len(scored_rows),
         }
+
+    # ── Merge approved overlay nodes (monthly LLM research) ───────────────────
+    try:
+        from data.screener_hub_store import get_all_approved_research_nodes, ensure_anchor_research_tables
+        ensure_anchor_research_tables()
+        overlay_nodes = get_all_approved_research_nodes()
+
+        if overlay_nodes:
+            existing_tickers = {r["bottleneck_ticker"].upper() for r in scored_rows}
+            overlay_public = [
+                n for n in overlay_nodes
+                if n.get("is_public") and n.get("ticker")
+                and str(n["ticker"]).upper() not in existing_tickers
+            ]
+            overlay_tickers = list({str(n["ticker"]).upper() for n in overlay_public})
+            if overlay_tickers:
+                ov_funds = get_fundamentals(overlay_tickers)
+                ov_quotes = get_quotes(overlay_tickers)
+            else:
+                ov_funds, ov_quotes = {}, {}
+
+            seen_overlay: set = set()
+            for node in overlay_nodes:
+                ticker = str(node.get("ticker") or "").strip().upper()
+                if not node.get("is_public") or not ticker:
+                    continue
+                if ticker in existing_tickers or ticker in seen_overlay:
+                    continue
+                seen_overlay.add(ticker)
+
+                f_data  = ov_funds.get(ticker, {})
+                q_data  = ov_quotes.get(ticker, {})
+                profile = f_data.get("profile") or {}
+                metrics = f_data.get("metrics") or {}
+                quote   = q_data.get("quote") or {}
+
+                bn_score = float(node.get("bottleneck_score") or 60)
+                layer    = int(node.get("layer") or 2)
+                themes   = list(node.get("themes") or [])
+                evidence = list(node.get("evidence") or [])
+                anchors  = list(node.get("giant_anchors") or [str(node.get("anchor_key") or "")])
+                layer_bonus = {0: -5, 1: 0, 2: 2, 3: 5, 4: 8}.get(layer, 0)
+
+                mom_score  = _momentum_score(quote)
+                vol_score  = _volume_score(quote)
+                fund_score = _fundamental_score(profile, metrics)
+                ta_score   = _theme_alignment_score(themes)
+                social_sc  = 3.0 if ticker in social_set else 0.0
+                options_sc = 3.0 if ticker in options_set else 0.0
+
+                final_score = round(
+                    bn_score * 0.50
+                    + mom_score * 10 * 0.15
+                    + fund_score * 10 * 0.10
+                    + ta_score * 0.10
+                    + social_sc * 2
+                    + options_sc * 2
+                    + layer_bonus,
+                    2,
+                )
+                final_score = max(0.0, min(100.0, final_score))
+
+                mcap = _to_float(profile.get("marketCap") or profile.get("mktCap"))
+                chg  = _to_float(quote.get("change_percentage"))
+                discovery_sources = ["anchor_research"]
+                if ticker in social_set:
+                    discovery_sources.append("social_overlap")
+                if ticker in options_set:
+                    discovery_sources.append("options_overlap")
+
+                scored_rows.append({
+                    "bottleneck_ticker":        ticker,
+                    "company_name":             node.get("company_name") or profile.get("companyName") or ticker,
+                    "anchor_ticker":            anchors[0] if anchors else None,
+                    "giant_anchors":            anchors,
+                    "anchor_theme":             themes[0] if themes else None,
+                    "supply_chain_role":        node.get("supply_chain_role"),
+                    "bottleneck_type":          node.get("confidence"),
+                    "bottleneckReason":         node.get("supply_chain_role"),
+                    "layer":                    layer,
+                    "themes":                   themes,
+                    "theme":                    themes[0] if themes else None,
+                    "theme_alignment_score":    ta_score,
+                    "bottleneck_score":         bn_score,
+                    "momentum_score":           mom_score,
+                    "volume_score":             vol_score,
+                    "fundamental_score":        fund_score,
+                    "social_score":             social_sc,
+                    "options_score":            options_sc,
+                    "final_score":              final_score,
+                    "market_cap":               mcap,
+                    "marketCap":                mcap,
+                    "marketCapBucket":          _market_cap_bucket(mcap),
+                    "evidence":                 evidence,
+                    "change_percent_1d":        chg,
+                    "discovery_sources":        discovery_sources,
+                    "country":                  None,
+                    "exchange":                 node.get("exchange"),
+                    "lastUpdated":              datetime.now(timezone.utc).isoformat(),
+                    "why_it_matters":           node.get("why_it_matters"),
+                    "why_hidden":               node.get("why_hidden"),
+                    "why_now":                  node.get("why_now"),
+                    "what_would_break_thesis":  node.get("what_would_break_thesis"),
+                    "relationship_type":        node.get("relationship_type"),
+                    "source_urls":              node.get("source_urls") or [],
+                    "confidence":               node.get("confidence"),
+                })
+
+            if seen_overlay:
+                print(f"[CR_WEEKLY] merged {len(seen_overlay)} overlay research nodes")
+    except Exception as _ov_err:
+        print(f"[CR_WEEKLY] overlay merge error (non-fatal): {_ov_err}")
 
     # ── Sort by final_score descending ────────────────────────────────────────
     scored_rows.sort(key=lambda r: r["final_score"], reverse=True)
@@ -436,99 +551,219 @@ def generate_chain_reaction_weekly(
 
 
 # ── Multi-anchor extension ─────────────────────────────────────────────────────
-#
-# Each config defines ONE anchor's theme filter.  The existing
-# build_cross_theme_top() is called once per anchor; the only thing that
-# changes is which themes are used to slice the full universe.
-#
-# Private companies (SPCX, ANTHROPIC, OPENAI) are mapped to the Serenity
-# theme IDs that best represent their supply-chain footprint.
-# Public companies (NVDA, TSM, GOOG) use the themes from GIANT_MAP.
+# Anchors are processed in this fixed order by the multi-anchor endpoint.
+# is_overlay_anchor=True means the node set comes from monthly LLM research
+# (anchor_supply_chain_research_nodes) rather than NODE_REGISTRY giant_anchors.
+# anchor_themes is kept for informational metadata only — filtering now uses
+# the exact giant_anchors membership stored in each scored row.
 
 MULTI_ANCHOR_CONFIGS: list[dict] = [
     {
-        "anchor":        "NVDA",
-        "anchor_name":   "NVIDIA",
-        "anchor_themes": [
+        "anchor":            "NVDA",
+        "anchor_name":       "NVIDIA",
+        "is_overlay_anchor": False,
+        "anchor_themes":     [
             "ai_infrastructure", "advanced_packaging_test", "memory",
             "photonics_cpo", "ai_power_energy", "semicap_supply_chain",
         ],
     },
     {
-        "anchor":        "SPCX",
-        "anchor_name":   "SpaceX",
-        "anchor_themes": [
-            "space", "space_sensing", "defense_optics", "defense",
-        ],
+        "anchor":            "SPCX",
+        "anchor_name":       "SpaceX",
+        "is_overlay_anchor": True,
+        "anchor_themes":     ["space", "launch_supply_chain", "propulsion_materials"],
     },
     {
-        "anchor":        "ANTHROPIC",
-        "anchor_name":   "Anthropic",
-        "anchor_themes": [
-            "ai_infrastructure", "neocloud",
-        ],
+        "anchor":            "ANTHROPIC",
+        "anchor_name":       "Anthropic",
+        "is_overlay_anchor": True,
+        "anchor_themes":     ["ai_infrastructure", "cloud_ai_infra"],
     },
     {
-        "anchor":        "OPENAI",
-        "anchor_name":   "OpenAI",
-        "anchor_themes": [
-            "ai_infrastructure", "neocloud",
-        ],
+        "anchor":            "OPENAI",
+        "anchor_name":       "OpenAI",
+        "is_overlay_anchor": True,
+        "anchor_themes":     ["ai_infrastructure", "cloud_ai_infra", "model_serving_infra"],
     },
     {
-        "anchor":        "TSM",
-        "anchor_name":   "Taiwan Semiconductor Manufacturing Company",
-        "anchor_themes": [
-            "semicap_supply_chain", "advanced_packaging_test",
-        ],
+        "anchor":            "TSM",
+        "anchor_name":       "Taiwan Semiconductor Manufacturing Company",
+        "is_overlay_anchor": False,
+        "anchor_themes":     ["semicap_supply_chain", "advanced_packaging_test"],
     },
     {
-        "anchor":        "GOOG",
-        "anchor_name":   "Google / Alphabet",
-        "anchor_themes": [
-            "ai_infrastructure", "neocloud", "advanced_packaging_test",
-            "photonics_cpo",
+        "anchor":            "GOOG",
+        "anchor_name":       "Google / Alphabet",
+        "is_overlay_anchor": False,
+        "anchor_themes":     [
+            "ai_infrastructure", "neocloud", "advanced_packaging_test", "photonics_cpo",
         ],
     },
 ]
+
+# GOOG in MULTI_ANCHOR_CONFIGS maps to GOOGL in NODE_REGISTRY giant_anchors
+_ANCHOR_GA_ALIAS: dict[str, str] = {"GOOG": "GOOGL"}
+
+# Anchors whose supply-chain nodes come from monthly LLM research (not NODE_REGISTRY)
+_OVERLAY_ANCHOR_KEYS: frozenset[str] = frozenset(
+    cfg["anchor"].upper()
+    for cfg in MULTI_ANCHOR_CONFIGS
+    if cfg.get("is_overlay_anchor")
+)
+
+
+def _anchor_in_row(anchor_key: str, row: dict) -> bool:
+    """Return True if anchor_key (or its alias) is in row['giant_anchors']."""
+    key = anchor_key.upper()
+    alias = _ANCHOR_GA_ALIAS.get(key)
+    ga_set = {str(g).upper() for g in (row.get("giant_anchors") or [])}
+    return key in ga_set or (alias is not None and alias in ga_set)
+
+
+def _score_overlay_nodes_inmemory(
+    anchor_key: str,
+    overlay_nodes: list,
+    social_set: Optional[set] = None,
+    options_set: Optional[set] = None,
+) -> list:
+    """
+    Score overlay DB nodes in-memory using cached market data.
+    Used as fallback when the weekly output has no rows for an overlay anchor
+    (e.g., immediately after research but before the next weekly job).
+    Returns a list of scored row dicts sorted by final_score descending.
+    """
+    social_set  = social_set or set()
+    options_set = options_set or set()
+
+    public_nodes = [
+        n for n in overlay_nodes
+        if n.get("is_public") and n.get("ticker")
+    ]
+    if not public_nodes:
+        return []
+
+    tickers = list({str(n["ticker"]).upper() for n in public_nodes})
+    try:
+        funds  = get_fundamentals(tickers)
+        quotes = get_quotes(tickers)
+    except Exception:
+        funds, quotes = {}, {}
+
+    rows: list[dict] = []
+    for node in overlay_nodes:
+        ticker = str(node.get("ticker") or "").strip().upper()
+        if not node.get("is_public") or not ticker:
+            continue
+
+        f_data  = funds.get(ticker, {})
+        q_data  = quotes.get(ticker, {})
+        profile = f_data.get("profile") or {}
+        metrics = f_data.get("metrics") or {}
+        quote   = q_data.get("quote") or {}
+
+        bn_score   = float(node.get("bottleneck_score") or 60)
+        layer      = int(node.get("layer") or 2)
+        themes     = list(node.get("themes") or [])
+        evidence   = list(node.get("evidence") or [])
+        anchors    = list(node.get("giant_anchors") or [anchor_key.upper()])
+        layer_bonus = {0: -5, 1: 0, 2: 2, 3: 5, 4: 8}.get(layer, 0)
+
+        mom_score  = _momentum_score(quote)
+        vol_score  = _volume_score(quote)
+        fund_score = _fundamental_score(profile, metrics)
+        ta_score   = _theme_alignment_score(themes)
+        social_sc  = 3.0 if ticker in social_set else 0.0
+        options_sc = 3.0 if ticker in options_set else 0.0
+
+        final_score = round(
+            bn_score * 0.50
+            + mom_score * 10 * 0.15
+            + fund_score * 10 * 0.10
+            + ta_score * 0.10
+            + social_sc * 2
+            + options_sc * 2
+            + layer_bonus,
+            2,
+        )
+        final_score = max(0.0, min(100.0, final_score))
+
+        mcap = _to_float(profile.get("marketCap") or profile.get("mktCap"))
+        chg  = _to_float(quote.get("change_percentage"))
+
+        rows.append({
+            "bottleneck_ticker":       ticker,
+            "company_name":            node.get("company_name") or profile.get("companyName") or ticker,
+            "anchor_ticker":           anchors[0] if anchors else None,
+            "giant_anchors":           anchors,
+            "anchor_theme":            themes[0] if themes else None,
+            "supply_chain_role":       node.get("supply_chain_role"),
+            "bottleneck_type":         node.get("confidence"),
+            "bottleneckReason":        node.get("supply_chain_role"),
+            "layer":                   layer,
+            "themes":                  themes,
+            "theme":                   themes[0] if themes else None,
+            "theme_alignment_score":   ta_score,
+            "bottleneck_score":        bn_score,
+            "momentum_score":          mom_score,
+            "volume_score":            vol_score,
+            "fundamental_score":       fund_score,
+            "social_score":            social_sc,
+            "options_score":           options_sc,
+            "final_score":             final_score,
+            "market_cap":              mcap,
+            "marketCap":               mcap,
+            "marketCapBucket":         _market_cap_bucket(mcap),
+            "evidence":                evidence,
+            "change_percent_1d":       chg,
+            "discovery_sources":       ["anchor_research"],
+            "country":                 None,
+            "exchange":                node.get("exchange"),
+            "lastUpdated":             datetime.now(timezone.utc).isoformat(),
+            "why_it_matters":          node.get("why_it_matters"),
+            "why_hidden":              node.get("why_hidden"),
+            "why_now":                 node.get("why_now"),
+            "what_would_break_thesis": node.get("what_would_break_thesis"),
+            "relationship_type":       node.get("relationship_type"),
+            "source_urls":             node.get("source_urls") or [],
+            "confidence":              node.get("confidence"),
+        })
+
+    rows.sort(key=lambda r: r["final_score"], reverse=True)
+    return rows
 
 
 def build_anchor_top(
     anchor: str,
     anchor_name: str,
-    anchor_themes: list[str],
+    anchor_themes: Optional[list] = None,
     limit: int = 20,
     max_age_days: int = 10,
 ) -> dict:
     """
-    Anchor-filtered variant of build_cross_theme_top().
+    Anchor-filtered Bottlenecks top-N.
 
-    This is the ONLY new function added for multi-anchor support.  It
-    calls the existing build_cross_theme_top() with a large limit to
-    retrieve the full scored universe, then keeps only the rows whose
-    `themes` field intersects with this anchor's theme set.
+    Filtering is based on exact `giant_anchors` membership stored in each
+    scored row — NOT on theme intersection.  This ensures:
+      - NVDA/TSM/GOOG use the curated giant_anchors lists from NODE_REGISTRY.
+      - SPCX/OPENAI/ANTHROPIC use LLM-researched overlay nodes.
+      - GOOG → GOOGL alias is handled transparently.
 
-    No scoring, ranking, or normalization logic is changed.
-    The existing /api/bottlenecks/current endpoint is completely unaffected.
+    The anchor_themes parameter is accepted for backward compatibility
+    (the route still passes it) but is NOT used for filtering.
 
-    Parameters
-    ----------
-    anchor        : Short identifier (e.g. "NVDA", "SPCX").
-    anchor_name   : Display name (e.g. "NVIDIA", "SpaceX").
-    anchor_themes : Serenity theme IDs that define this anchor's supply-chain
-                    footprint.  Rows whose themes intersect this set are kept.
-    limit         : Maximum rows to return for this anchor.
-    max_age_days  : Reject CR data older than this many days.
+    For overlay anchors with no rows in weekly output, the function falls back
+    to in-memory scoring of the DB overlay nodes so results are available
+    immediately after research without waiting for the next weekly job.
 
-    Returns
-    -------
-    Dict with status + rows shaped identically to build_cross_theme_top().
-    Adds top-level `anchor` and `anchor_name` fields.
+    If no overlay research has been run yet for an overlay anchor, returns:
+      {"status": "needs_research", ...}  — NOT treated as an error.
     """
-    # ── Step 1: Get the full scored universe via the existing function ──────────
-    # Pass limit=400 (= _GLOBAL_CAP) so the diversity gates operate on the full
-    # universe rather than a truncated slice.  With require_* = 0 the gates are
-    # no-ops and the function simply returns all rows in final_score order.
+    from datetime import datetime as _dt, timezone as _tz
+
+    anchor     = anchor.upper()
+    is_overlay = anchor in _OVERLAY_ANCHOR_KEYS
+
+    # ── Step 1: Load the full scored universe ──────────────────────────────────
     full = build_cross_theme_top(
         limit=_GLOBAL_CAP,
         max_age_days=max_age_days,
@@ -538,25 +773,65 @@ def build_anchor_top(
     )
 
     if full.get("status") == "error":
-        return {
-            **full,
-            "anchor":      anchor,
-            "anchor_name": anchor_name,
-        }
+        if is_overlay:
+            # Weekly output may be stale or absent; try DB overlay directly
+            pass  # fall through to overlay fallback below
+        else:
+            return {
+                **full,
+                "anchor":      anchor,
+                "anchor_name": anchor_name,
+            }
 
-    # ── Step 2: Filter to anchor-relevant rows ──────────────────────────────────
-    anchor_theme_set = set(anchor_themes)
-    anchor_rows = [
-        r for r in full.get("rows", [])
-        if set(r.get("themes") or []) & anchor_theme_set
-    ]
+    # ── Step 2: Filter weekly output rows by giant_anchors ─────────────────────
+    all_weekly_rows = full.get("rows") or []
+    anchor_rows = [r for r in all_weekly_rows if _anchor_in_row(anchor, r)]
+
+    # ── Step 3: Overlay anchor fallback — score DB nodes in-memory ────────────
+    if not anchor_rows and is_overlay:
+        try:
+            from data.screener_hub_store import (
+                get_anchor_research_nodes,
+                ensure_anchor_research_tables,
+            )
+            ensure_anchor_research_tables()
+            overlay_nodes = get_anchor_research_nodes(anchor, status="approved")
+
+            if not overlay_nodes:
+                return {
+                    "status":          "needs_research",
+                    "anchor":          anchor,
+                    "anchor_name":     anchor_name,
+                    "message":         (
+                        f"No supply-chain research exists for {anchor_name} yet. "
+                        f"Run POST /api/admin/bottlenecks/research-anchor?anchor={anchor} "
+                        "to generate it."
+                    ),
+                    "rows":            [],
+                    "visible_count":   0,
+                    "visible_tickers": [],
+                    "needs_research":  True,
+                    "generated_at":    _dt.now(_tz.utc).isoformat(),
+                }
+
+            anchor_rows = _score_overlay_nodes_inmemory(anchor, overlay_nodes)
+            source_note = "anchor_research_inmemory"
+        except Exception as _db_err:
+            return {
+                "status":      "error",
+                "error":       f"overlay DB lookup failed: {_db_err}",
+                "anchor":      anchor,
+                "anchor_name": anchor_name,
+                "rows":        [],
+            }
+    else:
+        source_note = "weekly_output"
 
     if not anchor_rows:
         return {
             "status":          "error",
             "error":           (
-                f"No rows found for anchor {anchor!r} "
-                f"with themes {anchor_themes!r}. "
+                f"No rows found for anchor {anchor!r} in the weekly output. "
                 "Run POST /api/admin/bottlenecks/refresh to regenerate CR data."
             ),
             "anchor":          anchor,
@@ -565,7 +840,7 @@ def build_anchor_top(
             "visible_tickers": [],
         }
 
-    # Rows arrive pre-sorted by final_score from build_cross_theme_top().
+    # ── Step 4: Take top-N, build metadata ─────────────────────────────────────
     selected = anchor_rows[:limit]
 
     themes_in_anchor: list[str] = sorted(
@@ -577,19 +852,20 @@ def build_anchor_top(
         vis_buckets[b] = vis_buckets.get(b, 0) + 1
 
     return {
-        "status":                  "ok",
-        "anchor":                  anchor,
-        "anchor_name":             anchor_name,
-        "anchor_themes":           anchor_themes,
-        "rows":                    selected,
-        "visible_count":           len(selected),
-        "visible_tickers":         [r["bottleneck_ticker"] for r in selected],
-        "universe_count":          full.get("universe_count", 0),
-        "themes_in_anchor":        themes_in_anchor,
-        "market_cap_buckets":      vis_buckets,
-        "week_start":              full.get("week_start"),
-        "visible_generated_at":    full.get("visible_generated_at"),
-        "source_version":          full.get("source_version"),
+        "status":               "ok",
+        "anchor":               anchor,
+        "anchor_name":          anchor_name,
+        "anchor_themes":        anchor_themes or [],
+        "rows":                 selected,
+        "visible_count":        len(selected),
+        "visible_tickers":      [r["bottleneck_ticker"] for r in selected],
+        "universe_count":       full.get("universe_count", len(all_weekly_rows)),
+        "themes_in_anchor":     themes_in_anchor,
+        "market_cap_buckets":   vis_buckets,
+        "week_start":           full.get("week_start"),
+        "visible_generated_at": full.get("visible_generated_at"),
+        "source_version":       full.get("source_version"),
+        "source_note":          source_note,
     }
 
 

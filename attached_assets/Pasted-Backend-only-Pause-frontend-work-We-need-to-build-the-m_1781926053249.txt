@@ -1,0 +1,232 @@
+Backend only. Pause frontend work.
+
+We need to build the monthly Chain Reaction / Bottlenecks anchor research pipeline using the Serenity bottleneck strategy as the canonical research philosophy.
+
+Important correction:
+Do NOT hard-code narrow anchor focus areas as the full research scope. Anchor focus areas should be treated only as non-exhaustive discovery lenses. The LLM must search beyond them and identify missing bottlenecks from evidence.
+
+Context from audit:
+
+* The original Chain Reaction / Bottlenecks LLM prompt was not found in the repo.
+* `NODE_REGISTRY` is static curated graph data.
+* The current detail drawer is deterministic and generated from stored candidate/node fields.
+* The weekly Chain Reaction job does not call an LLM and must stay that way.
+* Current multi-anchor filtering by broad themes is misleading.
+* We need monthly anchor-specific LLM research, cached into durable graph/overlay rows, then scored weekly with deterministic code.
+
+Goal:
+Create a monthly, cached, anchor-specific supply-chain research system that follows the Serenity bottleneck strategy:
+
+Core Serenity strategy:
+
+1. Start from a supercycle / secular demand anchor.
+2. Work backward from the end customer.
+3. Identify physical, capacity, regulatory, technical, geographic, or capital-intensive bottlenecks.
+4. Map suppliers, enablers, scarce inputs, tooling, substrates, infrastructure, and public-market proxies.
+5. Prefer unknown / undercovered bottlenecks over obvious crowded beneficiaries.
+6. Score asymmetry: small/mid-cap public proxy, scarce capacity, pricing power, low substitutability, clean balance sheet, near-term catalysts.
+7. Require evidence. No unsupported supplier claims.
+8. Preserve the current Chain Reaction style: concise, direct, bottleneck-focused, research-grade.
+
+Critical constraints:
+
+* Do NOT change `/api/bottlenecks/current` response shape.
+* Do NOT redesign the Chain Reaction page.
+* Do NOT change current table/drawer UI format.
+* Do NOT change weekly scoring formula.
+* Do NOT run LLM calls on page load.
+* Do NOT run LLM calls during weekly Chain Reaction scoring.
+* Do NOT run LLM calls more than once per anchor per monthly refresh cycle unless `force=true`.
+* Do NOT use broad theme fallback as if it were anchor-specific research.
+* Do NOT cache only theme mappings.
+* Do NOT mutate or rewrite existing `NODE_REGISTRY` entries.
+* Research must run one anchor at a time, sequentially.
+* Save the reconstructed prompt permanently in the repo.
+
+Prompt architecture:
+Create a canonical prompt file, for example:
+`backend/services/playbook/prompts/serenity_anchor_bottleneck_research_v1.py`
+
+The prompt should include:
+
+1. A permanent Serenity strategy rubric.
+2. A structured JSON output schema.
+3. Anchor-specific seed lenses.
+4. Explicit instruction that seed lenses are non-exhaustive and must not limit discovery.
+5. Evidence requirements.
+6. Anti-duplication rules.
+7. Public-market proxy rules.
+8. Hallucination guardrails.
+
+The prompt must say, in substance:
+
+“Anchor-specific seed lenses are starting points only. Do not restrict research to these categories. Search for missing bottlenecks, second-order suppliers, upstream constraints, obscure public proxies, and non-obvious choke points. If evidence points to a bottleneck outside the seed lenses, include it.”
+
+Target anchors:
+
+* SPCX / SpaceX
+* OPENAI / OpenAI
+* ANTHROPIC / Anthropic
+
+Anchor seed lenses:
+
+SPCX / SpaceX:
+Use these as non-exhaustive starting lenses only:
+
+* launch supply chain
+* launch-site and test infrastructure
+* propulsion, engines, turbomachinery
+* methane/LOX/cryogenic infrastructure
+* specialty metals, composites, coatings, seals, fasteners
+* satellite manufacturing
+* Starlink user terminals
+* phased-array antennas
+* RF components
+* optical links / laser communications
+* solar arrays and batteries
+* radiation-tolerant electronics
+* avionics, sensors, inertial navigation, telemetry
+* ground stations, backhaul, network infrastructure
+* defense/NASA ecosystem
+* manufacturing automation, precision machining, metrology
+* scarce public-market suppliers/proxies
+
+OPENAI / OpenAI:
+Use these as non-exhaustive starting lenses only:
+
+* Microsoft/Azure dependency
+* Stargate-related infrastructure where evidence supports it
+* Oracle/CoreWeave/data center partners where evidence supports it
+* GPUs and accelerators
+* HBM/memory/storage
+* networking: Ethernet, InfiniBand, optical, switches, transceivers
+* server ODMs, racks, power shelves
+* data center land, permitting, construction, EPC
+* substations, transformers, switchgear, grid interconnection
+* cooling, thermal management, liquid cooling
+* power procurement and generation
+* inference serving infrastructure
+* security, identity, compliance infrastructure
+* observability / model-serving operations
+* public-market suppliers/proxies
+
+ANTHROPIC / Anthropic:
+Use these as non-exhaustive starting lenses only:
+
+* AWS dependency
+* Google dependency
+* Trainium / TPU / GPU infrastructure
+* cloud regions and data centers
+* networking: Ethernet, optical, switches, transceivers
+* HBM/memory/storage
+* server ODMs, racks, power infrastructure
+* data center land, permitting, construction, EPC
+* substations, transformers, switchgear, grid interconnection
+* cooling, thermal management, liquid cooling
+* power procurement and generation
+* model-serving infrastructure
+* security, compliance, enterprise deployment infrastructure
+* public-market suppliers/proxies
+
+Anti-duplication rule:
+OPENAI and ANTHROPIC must not be treated as identical just because both are AI labs. Start from their actual known compute/cloud/capital relationships and then map bottlenecks from there. Shared suppliers are allowed only when source evidence supports the overlap. If the same supplier appears for both, explain why the relationship applies to each anchor separately.
+
+Research output:
+The LLM must return structured JSON only.
+
+Each researched node must include:
+
+* anchor_key
+* anchor_name
+* ticker
+* company_name
+* is_public
+* exchange
+* supply_chain_role
+* relationship_type: direct / indirect / infrastructure / proxy / inferred
+* themes
+* layer
+* bottleneck_score
+* confidence
+* evidence
+* source_urls
+* giant_anchors
+* why_it_matters
+* why_hidden
+* why_now
+* what_would_break_thesis
+* public_market_proxy_reason
+* overlap_existing_node_registry
+* last_researched_at
+
+Rules for candidate selection:
+
+* Prefer investable public companies where possible.
+* Include private companies only if they are essential to understanding the bottleneck map.
+* Do not include mega-cap obvious beneficiaries unless they are structurally required to explain the chain.
+* Prioritize scarce enablers, physical constraints, undercovered public suppliers, specialized tooling, substrates, components, infrastructure, and capacity bottlenecks.
+* Avoid generic “AI infrastructure” filler.
+* Avoid broad theme labels without a supplier relationship.
+* Exclude claims without evidence.
+* Distinguish direct supplier, indirect supplier, infrastructure dependency, and public proxy.
+
+Monthly cache behavior:
+
+* Create/use `anchor_supply_chain_research_nodes`.
+* One LLM research call per stale/missing anchor.
+* `next_research_due_at = last_researched_at + 30 days`.
+* Weekly Chain Reaction scoring reads approved cached rows only.
+* Weekly scoring must not call the LLM.
+* Page-load endpoints must not call the LLM.
+* If research is stale, weekly scoring may keep using last approved rows but should not self-trigger research.
+
+Multi-anchor endpoint:
+
+* Filter by exact `giant_anchors`, not broad theme overlap.
+* NVDA uses `NVDA`.
+* TSM uses `TSM`.
+* GOOG maps internally to `GOOGL`.
+* SPCX uses `SPCX`.
+* OPENAI uses `OPENAI`.
+* ANTHROPIC uses `ANTHROPIC`.
+* If exact researched rows exist, return `success`.
+* If no exact rows exist, return `needs_research`.
+* Do not return generic AI infrastructure rows for OPENAI/ANTHROPIC.
+* Do not return generic space/defense rows for SPCX.
+
+Implementation:
+
+1. Save the canonical prompt file permanently.
+2. Add/update durable overlay table for researched nodes.
+3. Add admin-only monthly research route/job.
+4. Add sequential monthly refresh for configured anchors.
+5. Add prompt version/hash storage.
+6. Merge approved overlay nodes into weekly deterministic scoring.
+7. Fix multi-anchor endpoint to filter by `giant_anchors`.
+
+Validation:
+
+1. Confirm `/api/bottlenecks/current` still works and response shape is unchanged.
+2. Confirm existing detail drawer still works.
+3. Confirm weekly Chain Reaction job has zero LLM calls.
+4. Confirm page-load endpoints have zero LLM calls.
+5. Confirm monthly research runs one anchor at a time.
+6. Confirm each stale/missing anchor gets no more than one LLM call per 30-day cycle.
+7. Confirm prompt file exists and prompt hash/version are stored.
+8. Confirm OPENAI and ANTHROPIC do not duplicate unless evidence-backed overlap exists.
+9. Confirm SPCX does not use generic theme fallback.
+10. Confirm every researched row has `giant_anchors` containing the exact anchor key.
+11. Confirm every researched row includes evidence and source URLs where available.
+12. Confirm no unrelated frontend or backend pages changed.
+
+Deliverable:
+First implement the backend pipeline and provide:
+
+* prompt file path
+* final saved prompt text
+* schema/migration
+* admin routes
+* changed files
+* sample response for one anchor
+* proof weekly scoring does not call LLM
+* proof multi-anchor now filters by `giant_anchors`

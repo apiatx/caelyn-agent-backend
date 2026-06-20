@@ -2570,3 +2570,483 @@ def cleanup_expired_query_cache() -> int:
         return 0
     finally:
         _put_conn(conn)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Anchor Research — durable overlay tables
+# anchor_supply_chain_research_nodes  — researched nodes per private anchor
+# anchor_research_runs                — audit log of each LLM research run
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_ARCN_DDL_APPLIED: bool = False
+
+
+def _arcn_ddl_sql() -> str:
+    return """
+    CREATE TABLE IF NOT EXISTS public.anchor_supply_chain_research_nodes (
+        id                          BIGSERIAL PRIMARY KEY,
+        anchor_key                  TEXT NOT NULL,
+        anchor_name                 TEXT NOT NULL,
+        ticker                      TEXT NOT NULL DEFAULT '',
+        company_name                TEXT NOT NULL,
+        is_public                   BOOLEAN NOT NULL DEFAULT TRUE,
+        exchange                    TEXT NULL,
+        supply_chain_role           TEXT NULL,
+        relationship_type           TEXT NOT NULL DEFAULT 'direct',
+        themes                      JSONB NOT NULL DEFAULT '[]'::jsonb,
+        layer                       INTEGER NOT NULL DEFAULT 2,
+        bottleneck_score            NUMERIC(6,2) NOT NULL DEFAULT 60,
+        confidence                  TEXT NOT NULL DEFAULT 'medium',
+        evidence                    JSONB NOT NULL DEFAULT '[]'::jsonb,
+        source_urls                 JSONB NOT NULL DEFAULT '[]'::jsonb,
+        giant_anchors               JSONB NOT NULL DEFAULT '[]'::jsonb,
+        why_it_matters              TEXT NULL,
+        why_hidden                  TEXT NULL,
+        why_now                     TEXT NULL,
+        what_would_break_thesis     TEXT NULL,
+        public_market_proxy_reason  TEXT NULL,
+        overlap_existing_node_registry BOOLEAN NOT NULL DEFAULT FALSE,
+        last_researched_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        next_research_due_at        TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
+        research_model              TEXT NULL,
+        prompt_version              TEXT NULL,
+        prompt_hash                 TEXT NULL,
+        research_status             TEXT NOT NULL DEFAULT 'approved',
+        error                       TEXT NULL,
+        created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_arcn_anchor_ticker
+        ON public.anchor_supply_chain_research_nodes (anchor_key, ticker, company_name);
+    CREATE INDEX IF NOT EXISTS idx_arcn_anchor_key
+        ON public.anchor_supply_chain_research_nodes (anchor_key);
+    CREATE INDEX IF NOT EXISTS idx_arcn_research_due
+        ON public.anchor_supply_chain_research_nodes (next_research_due_at);
+    CREATE INDEX IF NOT EXISTS idx_arcn_status
+        ON public.anchor_supply_chain_research_nodes (research_status);
+
+    CREATE TABLE IF NOT EXISTS public.anchor_research_runs (
+        id              BIGSERIAL PRIMARY KEY,
+        anchor_key      TEXT NOT NULL,
+        anchor_name     TEXT NOT NULL,
+        started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at     TIMESTAMPTZ NULL,
+        status          TEXT NOT NULL DEFAULT 'running',
+        nodes_written   INTEGER NOT NULL DEFAULT 0,
+        model           TEXT NULL,
+        prompt_version  TEXT NULL,
+        prompt_hash     TEXT NULL,
+        error           TEXT NULL,
+        metadata_json   JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+    CREATE INDEX IF NOT EXISTS idx_arr_anchor_started
+        ON public.anchor_research_runs (anchor_key, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_arr_started
+        ON public.anchor_research_runs (started_at DESC);
+    """
+
+
+def ensure_anchor_research_tables() -> bool:
+    """Idempotently create the anchor research overlay tables. Safe to call repeatedly."""
+    global _ARCN_DDL_APPLIED
+    if _ARCN_DDL_APPLIED:
+        return True
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(_arcn_ddl_sql())
+        conn.commit()
+        cur.close()
+        _ARCN_DDL_APPLIED = True
+        return True
+    except Exception as e:
+        print(f"[ARCN_DDL] ensure_anchor_research_tables error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+# ── CRUD: anchor_supply_chain_research_nodes ───────────────────────────────────
+
+def upsert_anchor_research_nodes(
+    anchor_key: str,
+    anchor_name: str,
+    nodes: list,
+    model: str,
+    prompt_version: str,
+    prompt_hash: str,
+    last_researched_at: str,
+    next_research_due_at: str,
+) -> bool:
+    """
+    Replace all approved nodes for the given anchor with the new researched set.
+
+    Strategy: delete existing approved nodes for anchor_key, then bulk-insert new ones.
+    Nodes with research_status='error' are left untouched (they are diagnostic records).
+
+    Returns True on success.
+    """
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        # Delete current approved nodes for this anchor
+        cur.execute(
+            "DELETE FROM public.anchor_supply_chain_research_nodes "
+            "WHERE anchor_key = %s AND research_status = 'approved'",
+            (anchor_key.upper(),),
+        )
+        # Bulk insert new nodes
+        for node in nodes:
+            cur.execute(
+                """
+                INSERT INTO public.anchor_supply_chain_research_nodes (
+                    anchor_key, anchor_name, ticker, company_name,
+                    is_public, exchange, supply_chain_role, relationship_type,
+                    themes, layer, bottleneck_score, confidence,
+                    evidence, source_urls, giant_anchors,
+                    why_it_matters, why_hidden, why_now, what_would_break_thesis,
+                    public_market_proxy_reason, overlap_existing_node_registry,
+                    last_researched_at, next_research_due_at,
+                    research_model, prompt_version, prompt_hash,
+                    research_status, created_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s::jsonb, %s, %s, %s,
+                    %s::jsonb, %s::jsonb, %s::jsonb,
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    'approved', NOW(), NOW()
+                )
+                """,
+                (
+                    anchor_key.upper(),
+                    anchor_name,
+                    str(node.get("ticker") or ""),
+                    str(node.get("company_name") or ""),
+                    bool(node.get("is_public", True)),
+                    node.get("exchange"),
+                    node.get("supply_chain_role"),
+                    str(node.get("relationship_type") or "direct"),
+                    json.dumps(node.get("themes") or []),
+                    int(node.get("layer") or 2),
+                    float(node.get("bottleneck_score") or 60),
+                    str(node.get("confidence") or "medium"),
+                    json.dumps(node.get("evidence") or []),
+                    json.dumps(node.get("source_urls") or []),
+                    json.dumps(node.get("giant_anchors") or [anchor_key.upper()]),
+                    node.get("why_it_matters"),
+                    node.get("why_hidden"),
+                    node.get("why_now"),
+                    node.get("what_would_break_thesis"),
+                    node.get("public_market_proxy_reason"),
+                    bool(node.get("overlap_existing_node_registry", False)),
+                    last_researched_at,
+                    next_research_due_at,
+                    model,
+                    prompt_version,
+                    prompt_hash,
+                ),
+            )
+        conn.commit()
+        cur.close()
+        print(f"[ARCN] upsert_anchor_research_nodes: anchor={anchor_key} wrote {len(nodes)} nodes")
+        return True
+    except Exception as e:
+        print(f"[ARCN] upsert_anchor_research_nodes error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def get_anchor_research_nodes(
+    anchor_key: str,
+    status: str = "approved",
+) -> list:
+    """
+    Return all overlay nodes for an anchor.  Default status='approved'.
+    Each row is returned as a plain dict.
+    """
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                anchor_key, anchor_name, ticker, company_name,
+                is_public, exchange, supply_chain_role, relationship_type,
+                themes, layer, bottleneck_score, confidence,
+                evidence, source_urls, giant_anchors,
+                why_it_matters, why_hidden, why_now, what_would_break_thesis,
+                public_market_proxy_reason, overlap_existing_node_registry,
+                last_researched_at, next_research_due_at,
+                research_model, prompt_version, prompt_hash, research_status
+            FROM public.anchor_supply_chain_research_nodes
+            WHERE anchor_key = %s AND research_status = %s
+            ORDER BY bottleneck_score DESC, id ASC
+            """,
+            (anchor_key.upper(), status),
+        )
+        cols = [d[0] for d in cur.description]
+        rows = []
+        for row in cur.fetchall():
+            d = dict(zip(cols, row))
+            # Deserialise JSONB columns that psycopg2 returns as dicts/lists
+            for col in ("themes", "evidence", "source_urls", "giant_anchors"):
+                v = d.get(col)
+                if isinstance(v, str):
+                    try:
+                        d[col] = json.loads(v)
+                    except Exception:
+                        d[col] = []
+                elif v is None:
+                    d[col] = []
+            # Timestamps → str
+            for col in ("last_researched_at", "next_research_due_at"):
+                v = d.get(col)
+                if v is not None and not isinstance(v, str):
+                    d[col] = v.isoformat() if hasattr(v, "isoformat") else str(v)
+            rows.append(d)
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"[ARCN] get_anchor_research_nodes error (anchor={anchor_key}): {e}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def get_all_approved_research_nodes() -> list:
+    """Return all approved overlay nodes across all anchors."""
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                anchor_key, anchor_name, ticker, company_name,
+                is_public, exchange, supply_chain_role, relationship_type,
+                themes, layer, bottleneck_score, confidence,
+                evidence, source_urls, giant_anchors,
+                why_it_matters, why_hidden, why_now, what_would_break_thesis,
+                public_market_proxy_reason, overlap_existing_node_registry,
+                last_researched_at, next_research_due_at,
+                research_model, prompt_version, prompt_hash
+            FROM public.anchor_supply_chain_research_nodes
+            WHERE research_status = 'approved'
+            ORDER BY anchor_key, bottleneck_score DESC
+            """,
+        )
+        cols = [d[0] for d in cur.description]
+        rows = []
+        for row in cur.fetchall():
+            d = dict(zip(cols, row))
+            for col in ("themes", "evidence", "source_urls", "giant_anchors"):
+                v = d.get(col)
+                if isinstance(v, str):
+                    try:
+                        d[col] = json.loads(v)
+                    except Exception:
+                        d[col] = []
+                elif v is None:
+                    d[col] = []
+            for col in ("last_researched_at", "next_research_due_at"):
+                v = d.get(col)
+                if v is not None and not isinstance(v, str):
+                    d[col] = v.isoformat() if hasattr(v, "isoformat") else str(v)
+            rows.append(d)
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"[ARCN] get_all_approved_research_nodes error: {e}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def get_anchor_research_status(anchor_key: str) -> Optional[dict]:
+    """
+    Return summary status for an anchor: node count, last/next research timestamps.
+    Returns None if no data exists.
+    """
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) as node_count,
+                MAX(last_researched_at) as last_researched_at,
+                MAX(next_research_due_at) as next_research_due_at,
+                MAX(research_model) as research_model,
+                MAX(prompt_version) as prompt_version,
+                MAX(prompt_hash) as prompt_hash
+            FROM public.anchor_supply_chain_research_nodes
+            WHERE anchor_key = %s AND research_status = 'approved'
+            """,
+            (anchor_key.upper(),),
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row or row[0] == 0:
+            return None
+        return {
+            "anchor_key":          anchor_key.upper(),
+            "node_count":          int(row[0]),
+            "last_researched_at":  row[1].isoformat() if row[1] and hasattr(row[1], "isoformat") else str(row[1] or ""),
+            "next_research_due_at": row[2].isoformat() if row[2] and hasattr(row[2], "isoformat") else str(row[2] or ""),
+            "research_model":      row[3],
+            "prompt_version":      row[4],
+            "prompt_hash":         row[5],
+        }
+    except Exception as e:
+        print(f"[ARCN] get_anchor_research_status error (anchor={anchor_key}): {e}")
+        return None
+    finally:
+        _put_conn(conn)
+
+
+def get_all_anchor_research_status() -> list:
+    """Return status for every anchor that has approved nodes."""
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                anchor_key,
+                COUNT(*) as node_count,
+                MAX(last_researched_at) as last_researched_at,
+                MAX(next_research_due_at) as next_research_due_at,
+                MAX(research_model) as research_model,
+                MAX(prompt_version) as prompt_version
+            FROM public.anchor_supply_chain_research_nodes
+            WHERE research_status = 'approved'
+            GROUP BY anchor_key
+            ORDER BY anchor_key
+            """
+        )
+        rows = []
+        for row in cur.fetchall():
+            rows.append({
+                "anchor_key":          row[0],
+                "node_count":          int(row[1]),
+                "last_researched_at":  row[2].isoformat() if row[2] and hasattr(row[2], "isoformat") else str(row[2] or ""),
+                "next_research_due_at": row[3].isoformat() if row[3] and hasattr(row[3], "isoformat") else str(row[3] or ""),
+                "research_model":      row[4],
+                "prompt_version":      row[5],
+            })
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"[ARCN] get_all_anchor_research_status error: {e}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+# ── CRUD: anchor_research_runs ─────────────────────────────────────────────────
+
+def log_research_run(
+    anchor_key: str,
+    anchor_name: str,
+    model: str,
+    prompt_version: str,
+    prompt_hash: str,
+) -> int:
+    """
+    Insert a new research run record (status='running').
+    Returns the new run id, or -1 on failure.
+    """
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return -1
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.anchor_research_runs
+                (anchor_key, anchor_name, status, model, prompt_version, prompt_hash, started_at)
+            VALUES (%s, %s, 'running', %s, %s, %s, NOW())
+            RETURNING id
+            """,
+            (anchor_key.upper(), anchor_name, model, prompt_version, prompt_hash),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        return int(row[0]) if row else -1
+    except Exception as e:
+        print(f"[ARCN] log_research_run error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return -1
+    finally:
+        _put_conn(conn)
+
+
+def finish_research_run(
+    run_id: int,
+    status: str,
+    nodes_written: int,
+    error: Optional[str] = None,
+) -> bool:
+    """Update a research run record with final status."""
+    if run_id < 0:
+        return False
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE public.anchor_research_runs
+            SET status = %s, nodes_written = %s, error = %s, finished_at = NOW()
+            WHERE id = %s
+            """,
+            (status, nodes_written, error, run_id),
+        )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        print(f"[ARCN] finish_research_run error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)

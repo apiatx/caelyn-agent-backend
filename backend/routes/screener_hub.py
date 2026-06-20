@@ -3,13 +3,16 @@ Screener Hub HTTP endpoints.
 
 GET  /api/screener-hub/themes
 GET  /api/screener-hub
-POST /api/admin/screener-hub/rebuild         (X-API-Key: AGENT_API_KEY)
-GET  /api/admin/screener-hub/status          (X-API-Key: AGENT_API_KEY)
-GET  /api/admin/screener-hub/audit           (X-API-Key: AGENT_API_KEY) — discovery audit for a single theme
-GET  /api/admin/screener-hub/thin-themes     (X-API-Key: AGENT_API_KEY) — list themes needing richer discovery
-POST /api/admin/screener-hub/rebuild-thin    (X-API-Key: AGENT_API_KEY) — sequential rebuild for thin themes
-POST /api/admin/bottlenecks/refresh          (X-API-Key: AGENT_API_KEY) — force full CR regen + universe rebuild
-GET  /api/debug/bottlenecks-snapshot         (X-API-Key: AGENT_API_KEY) — diagnostics for snapshot state
+POST /api/admin/screener-hub/rebuild             (X-API-Key: AGENT_API_KEY)
+GET  /api/admin/screener-hub/status              (X-API-Key: AGENT_API_KEY)
+GET  /api/admin/screener-hub/audit               (X-API-Key: AGENT_API_KEY) — discovery audit for a single theme
+GET  /api/admin/screener-hub/thin-themes         (X-API-Key: AGENT_API_KEY) — list themes needing richer discovery
+POST /api/admin/screener-hub/rebuild-thin        (X-API-Key: AGENT_API_KEY) — sequential rebuild for thin themes
+POST /api/admin/bottlenecks/refresh              (X-API-Key: AGENT_API_KEY) — force full CR regen + universe rebuild
+POST /api/admin/bottlenecks/research-anchor      (X-API-Key: AGENT_API_KEY) — run LLM research for one overlay anchor
+POST /api/admin/bottlenecks/research-anchors-monthly (X-API-Key: AGENT_API_KEY) — run monthly refresh for all overlay anchors
+GET  /api/admin/bottlenecks/research-status      (X-API-Key: AGENT_API_KEY) — overlay anchor research status
+GET  /api/debug/bottlenecks-snapshot             (X-API-Key: AGENT_API_KEY) — diagnostics for snapshot state
 """
 from __future__ import annotations
 
@@ -841,6 +844,149 @@ async def bottlenecks_force_refresh(
     })
 
 
+# ── POST /api/admin/bottlenecks/research-anchor ───────────────────────────────
+# Run monthly LLM research for ONE overlay anchor (SPCX, OPENAI, or ANTHROPIC).
+# Safe to call on demand; skips anchors that were researched within 30 days
+# unless force=true.  Never runs LLM on page load or as part of weekly job.
+
+@router.post("/api/admin/bottlenecks/research-anchor")
+async def bottlenecks_research_anchor(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+    anchor:  str  = Query(..., description="Anchor key: SPCX | OPENAI | ANTHROPIC"),
+    force:   bool = Query(False, description="Skip the 30-day freshness check"),
+):
+    """
+    Trigger LLM supply-chain research for a single overlay anchor.
+
+    - One Claude API call (claude-3-5-sonnet).
+    - Results written to anchor_supply_chain_research_nodes (Neon).
+    - Weekly job and page-load endpoints do NOT call this LLM.
+    - Freshness gate: skips if researched within 30 days (override with force=true).
+    - Valid anchors: SPCX, OPENAI, ANTHROPIC.
+
+    Requires X-API-Key header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    from services.anchor_research_service import run_anchor_research, OVERLAY_ANCHOR_KEYS
+
+    anchor_key = anchor.strip().upper()
+    if anchor_key not in OVERLAY_ANCHOR_KEYS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "error":  f"Unknown anchor {anchor_key!r}. Valid anchors: {sorted(OVERLAY_ANCHOR_KEYS)}",
+            },
+        )
+
+    print(f"[RESEARCH_ANCHOR] starting anchor={anchor_key} force={force}")
+    try:
+        result = await run_anchor_research(anchor_key=anchor_key, force=force)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(e), "anchor": anchor_key},
+        )
+
+    status_code = 200 if result.get("status") in ("ok", "skipped") else 500
+    return JSONResponse(status_code=status_code, content=result)
+
+
+# ── POST /api/admin/bottlenecks/research-anchors-monthly ──────────────────────
+# Run monthly LLM research for ALL configured overlay anchors, sequentially.
+
+@router.post("/api/admin/bottlenecks/research-anchors-monthly")
+async def bottlenecks_research_monthly(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+    force:   bool = Query(False, description="Skip freshness check for all anchors"),
+):
+    """
+    Run the monthly LLM research pipeline for all overlay anchors
+    (SPCX, OPENAI, ANTHROPIC) one at a time.
+
+    - Anchors still fresh (researched within 30 days) are skipped unless force=true.
+    - Results are written to anchor_supply_chain_research_nodes (Neon).
+    - One Claude API call per stale anchor; brief pause between calls.
+
+    Requires X-API-Key header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    from services.anchor_research_service import run_monthly_refresh
+
+    print(f"[RESEARCH_MONTHLY] starting force={force}")
+    try:
+        result = await run_monthly_refresh(force=force)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(e)},
+        )
+
+    status_code = 200 if result.get("status") in ("ok", "partial") else 500
+    return JSONResponse(status_code=status_code, content=result)
+
+
+# ── GET /api/admin/bottlenecks/research-status ────────────────────────────────
+
+@router.get("/api/admin/bottlenecks/research-status")
+async def bottlenecks_research_status(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    Return the research status for all overlay anchors:
+    node count, last researched timestamp, next research due timestamp,
+    and whether each anchor needs a refresh.
+
+    Requires X-API-Key header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    from services.anchor_research_service import anchor_needs_research, OVERLAY_ANCHOR_KEYS
+    from data.screener_hub_store import (
+        ensure_anchor_research_tables,
+        get_all_anchor_research_status,
+    )
+
+    try:
+        ensure_anchor_research_tables()
+        db_statuses = {s["anchor_key"]: s for s in get_all_anchor_research_status()}
+    except Exception as e:
+        db_statuses = {}
+        print(f"[RESEARCH_STATUS] DB error: {e}")
+
+    anchors_out = []
+    for anchor_key in OVERLAY_ANCHOR_KEYS:
+        db = db_statuses.get(anchor_key.upper(), {})
+        freshness = anchor_needs_research(anchor_key)
+        anchors_out.append({
+            "anchor_key":           anchor_key,
+            "node_count":           db.get("node_count", 0),
+            "last_researched_at":   db.get("last_researched_at"),
+            "next_research_due_at": db.get("next_research_due_at"),
+            "research_model":       db.get("research_model"),
+            "prompt_version":       db.get("prompt_version"),
+            "needs_research":       freshness["needs_research"],
+            "freshness_reason":     freshness["reason"],
+        })
+
+    return JSONResponse(content={
+        "status":  "ok",
+        "anchors": anchors_out,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
 # ── GET /api/debug/bottlenecks-snapshot ───────────────────────────────────────
 
 @router.get("/api/debug/bottlenecks-snapshot")
@@ -1142,28 +1288,46 @@ async def bottlenecks_multi_anchor(
             result = build_anchor_top(
                 anchor=anchor,
                 anchor_name=anchor_name,
-                anchor_themes=cfg["anchor_themes"],
+                anchor_themes=cfg.get("anchor_themes", []),
                 limit=limit,
                 max_age_days=max_age_days,
             )
             elapsed = round(_time.monotonic() - t0, 2)
+            result_status = result.get("status", "error")
 
-            if result.get("status") == "error":
+            if result_status == "needs_research":
+                # Expected state for overlay anchors not yet researched — not an error
+                row_count = 0
+                print(
+                    f"[MULTI_ANCHOR] needs_research  anchor={anchor!r}  "
+                    f"elapsed={elapsed}s"
+                )
+                anchors_result.append({
+                    "anchor":            anchor,
+                    "anchor_name":       anchor_name,
+                    "anchor_themes":     cfg.get("anchor_themes", []),
+                    "is_overlay_anchor": cfg.get("is_overlay_anchor", False),
+                    "status":            "needs_research",
+                    "elapsed_s":         elapsed,
+                    "data":              result,
+                })
+            elif result_status == "error":
                 raise ValueError(result.get("error", "unknown error from build_anchor_top"))
-
-            row_count = result.get("visible_count", 0)
-            print(
-                f"[MULTI_ANCHOR] ok     anchor={anchor!r}  "
-                f"rows={row_count}  elapsed={elapsed}s"
-            )
-            anchors_result.append({
-                "anchor":        anchor,
-                "anchor_name":   anchor_name,
-                "anchor_themes": cfg["anchor_themes"],
-                "status":        "success",
-                "elapsed_s":     elapsed,
-                "data":          result,
-            })
+            else:
+                row_count = result.get("visible_count", 0)
+                print(
+                    f"[MULTI_ANCHOR] ok     anchor={anchor!r}  "
+                    f"rows={row_count}  elapsed={elapsed}s"
+                )
+                anchors_result.append({
+                    "anchor":            anchor,
+                    "anchor_name":       anchor_name,
+                    "anchor_themes":     cfg.get("anchor_themes", []),
+                    "is_overlay_anchor": cfg.get("is_overlay_anchor", False),
+                    "status":            "success",
+                    "elapsed_s":         elapsed,
+                    "data":              result,
+                })
 
         except Exception as _exc:
             elapsed = round(_time.monotonic() - t0, 2)
@@ -1172,11 +1336,12 @@ async def bottlenecks_multi_anchor(
                 f"elapsed={elapsed}s  error={_exc}"
             )
             partial_failures.append({
-                "anchor":      anchor,
-                "anchor_name": anchor_name,
-                "status":      "error",
-                "error":       str(_exc),
-                "elapsed_s":   elapsed,
+                "anchor":            anchor,
+                "anchor_name":       anchor_name,
+                "is_overlay_anchor": cfg.get("is_overlay_anchor", False),
+                "status":            "error",
+                "error":             str(_exc),
+                "elapsed_s":         elapsed,
             })
 
     total_elapsed = round(_time.monotonic() - start_total, 2)
