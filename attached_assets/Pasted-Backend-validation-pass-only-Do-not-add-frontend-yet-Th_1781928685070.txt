@@ -1,0 +1,54 @@
+Backend validation pass only. Do not add frontend yet.
+
+The implementation sounds architecturally correct, but I need proof the research pipeline produces real, usable Chain Reaction rows before we trust it.
+
+Critical validation questions:
+
+1. Does `anchor_research_service.py` call Claude directly with only the prompt, or does it feed Claude grounded search/source context first?
+2. If it is Claude-only, explain how `source_urls` are validated and how hallucinated URLs/claims are rejected.
+3. If there is no grounded search/source retrieval step, do not call this “research” in logs or response text yet. Call it “LLM synthesis pending source validation” or add a grounding step using existing search infrastructure.
+4. Confirm whether the monthly research call is exactly one LLM call per anchor. Search/API calls for source gathering, if any, must be reported separately.
+5. Confirm stale-but-approved rows remain usable by weekly scoring after 30 days. They should be marked stale/due for refresh, but they should NOT disappear from Chain Reaction just because `next_research_due_at <= now()`.
+6. Confirm private/non-public nodes can be stored for map context, but only public/investable rows are scored into the visible Bottlenecks table unless the existing UI supports private rows.
+7. Confirm `research_status` is not blindly set to `approved` if required evidence/source fields are missing.
+8. Confirm every saved researched public node includes:
+
+   * ticker
+   * company_name
+   * supply_chain_role
+   * themes
+   * layer
+   * bottleneck_score
+   * confidence
+   * evidence
+   * source_urls
+   * giant_anchors containing the exact anchor key
+   * why_it_matters / why_hidden / why_now / what_would_break_thesis if required by the drawer
+
+Run one anchor only first:
+`POST /api/admin/bottlenecks/research-anchor?anchor=SPCX&force=false`
+
+Do not run all three yet.
+
+After SPCX completes, report:
+
+1. raw route response
+2. number of rows written to `anchor_supply_chain_research_nodes`
+3. 5 sample saved rows
+4. evidence/source URLs for those rows
+5. whether any rows were rejected and why
+6. whether `/api/bottlenecks/multi-anchor` now returns SPCX as `success`
+7. whether the rows are filtered by `giant_anchors`, not theme
+8. whether `generate_chain_reaction_weekly()` can merge these rows without any LLM call
+9. whether one of the researched SPCX rows can generate the same style detail drawer as the existing ACMR screenshot
+
+Also run these regression checks:
+
+1. `/api/bottlenecks/current` still works and shape is unchanged.
+2. weekly scoring path has zero LLM calls.
+3. page-load endpoints have zero LLM calls.
+4. fresh anchor research skips if `next_research_due_at > now()` and `force=false`.
+5. `force=true` overrides the freshness gate.
+6. logs are concise and do not dump full prompts or API keys.
+
+Do not proceed to OPENAI or ANTHROPIC until SPCX quality is inspected.

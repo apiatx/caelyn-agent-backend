@@ -290,7 +290,8 @@ Anti-duplication note for this anchor:
 Research timestamp: {now_iso}
 Giant anchors for all nodes: include "{anchor_key.upper()}" in every node's giant_anchors array.
 
-Deliver 12 to 25 nodes. Prioritize investable public companies. Include private companies only where essential.
+Deliver exactly 12 to 16 nodes. Quality over quantity — 16 strong nodes with full evidence is better than 25 thin ones.
+Prioritize investable public companies. Include private companies only where essential.
 Return valid JSON only — no markdown, no code fences, no commentary before or after.
 """
     return SERENITY_SYSTEM_PROMPT.strip(), user_prompt.strip()

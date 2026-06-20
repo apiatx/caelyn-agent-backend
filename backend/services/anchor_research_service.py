@@ -23,11 +23,15 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-_RESEARCH_MODEL = "claude-3-5-sonnet-20241022"
-_MAX_TOKENS = 8192
+_RESEARCH_MODEL = "claude-sonnet-4-5-20250929"
+_MAX_TOKENS = 16000
 _RESEARCH_INTERVAL_DAYS = 30
 _MIN_NODES_REQUIRED = 5
 _MAX_NODES_ACCEPTED = 40
+
+# No grounding/search step is performed; synthesis is Claude-only from training knowledge.
+# source_urls are Claude-generated and NOT verified.  Label accordingly everywhere.
+_SYNTHESIS_METHOD = "llm_only_no_grounding"
 
 OVERLAY_ANCHOR_KEYS: list[str] = ["SPCX", "OPENAI", "ANTHROPIC"]
 
@@ -151,25 +155,76 @@ def anchor_needs_research(anchor_key: str) -> dict:
 
 def _extract_json(raw_text: str) -> dict:
     """
-    Parse the LLM response as JSON.  Handles minor formatting artifacts.
-    Raises ValueError on parse failure.
+    Parse the LLM response as JSON.  Handles minor formatting artifacts and
+    gracefully recovers complete nodes from truncated responses.
+    Raises ValueError only when no complete nodes can be extracted.
     """
     text = raw_text.strip()
     # Strip optional markdown code fences
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     text = text.strip()
+
+    # ── Attempt 1: full parse ─────────────────────────────────────────────────
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Try to find the outermost JSON object
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start:end])
-            except json.JSONDecodeError:
-                pass
+        pass
+
+    # ── Attempt 2: trim trailing garbage and retry ────────────────────────────
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start >= 0 and end > start:
+        try:
+            return json.loads(text[start:end])
+        except json.JSONDecodeError:
+            pass
+
+    # ── Attempt 3: partial recovery — extract complete node objects ───────────
+    # Handles the common case where max_tokens truncates the response mid-node.
+    nodes_key_pos = text.find('"nodes"')
+    if nodes_key_pos >= 0:
+        bracket_open = text.find("[", nodes_key_pos)
+        if bracket_open >= 0:
+            pos = bracket_open + 1
+            depth = 0
+            node_start: Optional[int] = None
+            complete_nodes: list = []
+            while pos < len(text):
+                ch = text[pos]
+                if ch == "{":
+                    if depth == 0:
+                        node_start = pos
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0 and node_start is not None:
+                        try:
+                            complete_nodes.append(json.loads(text[node_start:pos + 1]))
+                        except json.JSONDecodeError:
+                            pass
+                        node_start = None
+                elif ch == "]" and depth == 0:
+                    break
+                pos += 1
+
+            if complete_nodes:
+                # Extract top-level metadata from the prefix
+                prefix = text[:nodes_key_pos]
+                ak = re.search(r'"anchor_key"\s*:\s*"([^"]+)"', prefix)
+                an = re.search(r'"anchor_name"\s*:\s*"([^"]+)"', prefix)
+                print(
+                    f"[ANCHOR_SYNTHESIS] partial JSON recovery: "
+                    f"{len(complete_nodes)} complete nodes recovered from truncated response"
+                )
+                return {
+                    "anchor_key": ak.group(1) if ak else "",
+                    "anchor_name": an.group(1) if an else "",
+                    "node_count": len(complete_nodes),
+                    "nodes": complete_nodes,
+                    "_recovered_partial": True,
+                }
+
     raise ValueError(f"Cannot parse LLM response as JSON. First 300 chars: {text[:300]!r}")
 
 
@@ -182,6 +237,10 @@ def _validate_node(node: Any, anchor_key: str) -> dict:
         raise ValueError(f"Node is not a dict: {type(node)}")
 
     ticker = str(node.get("ticker") or "").strip().upper()
+    # CONFIRM_TICKER is Claude's placeholder for uncertain symbols — treat as unresolved private
+    if "CONFIRM" in ticker:
+        ticker = ""
+
     company_name = str(node.get("company_name") or "").strip()
     if not company_name:
         raise ValueError("Node missing company_name")
@@ -190,9 +249,13 @@ def _validate_node(node: Any, anchor_key: str) -> dict:
     if not supply_chain_role:
         raise ValueError(f"Node {ticker or company_name!r} missing supply_chain_role")
 
+    # Require at least one non-empty evidence string — no evidence means no approval
     evidence = node.get("evidence") or []
     if not isinstance(evidence, list):
         evidence = [str(evidence)]
+    evidence = [str(e).strip() for e in evidence if str(e).strip()]
+    if not evidence:
+        raise ValueError(f"Node {ticker or company_name!r} has no evidence strings — rejected")
 
     giant_anchors = node.get("giant_anchors") or []
     if not isinstance(giant_anchors, list):
@@ -317,6 +380,7 @@ async def run_anchor_research(
             "model": _RESEARCH_MODEL,
             "prompt_version": PROMPT_VERSION,
             "prompt_hash": PROMPT_HASH,
+            "synthesis_method": _SYNTHESIS_METHOD,
             "elapsed_s": round(_time.monotonic() - t0, 2),
             "error": f"Anchor {anchor_key!r} has no research configuration in the prompt file.",
             "skipped_reason": None,
@@ -327,7 +391,7 @@ async def run_anchor_research(
         freshness = anchor_needs_research(anchor_key)
         if not freshness["needs_research"]:
             print(
-                f"[ANCHOR_RESEARCH] {anchor_key}: skipping — research fresh "
+                f"[ANCHOR_SYNTHESIS] {anchor_key}: skipping — research fresh "
                 f"(next_due={freshness['next_research_due_at']}, nodes={freshness['node_count']})"
             )
             return {
@@ -341,6 +405,7 @@ async def run_anchor_research(
                 "model": _RESEARCH_MODEL,
                 "prompt_version": PROMPT_VERSION,
                 "prompt_hash": PROMPT_HASH,
+                "synthesis_method": _SYNTHESIS_METHOD,
                 "elapsed_s": round(_time.monotonic() - t0, 2),
                 "error": None,
                 "skipped_reason": f"fresh: {freshness['reason']}",
@@ -354,7 +419,7 @@ async def run_anchor_research(
         prompt_version=PROMPT_VERSION,
         prompt_hash=PROMPT_HASH,
     )
-    print(f"[ANCHOR_RESEARCH] {anchor_key}: starting LLM research (run_id={run_id}, force={force})")
+    print(f"[ANCHOR_SYNTHESIS] {anchor_key}: starting LLM synthesis (run_id={run_id}, force={force})")
 
     # ── Build prompt ──────────────────────────────────────────────────────────
     system_prompt, user_prompt = build_research_prompt(anchor_key)
@@ -371,10 +436,10 @@ async def run_anchor_research(
             messages=[{"role": "user", "content": user_prompt}],
         )
         raw_text = response.content[0].text if response.content else ""
-        print(f"[ANCHOR_RESEARCH] {anchor_key}: LLM responded ({len(raw_text)} chars)")
+        print(f"[ANCHOR_SYNTHESIS] {anchor_key}: LLM responded ({len(raw_text)} chars)")
     except Exception as llm_err:
         err_str = str(llm_err)
-        print(f"[ANCHOR_RESEARCH] {anchor_key}: LLM call failed: {err_str}")
+        print(f"[ANCHOR_SYNTHESIS] {anchor_key}: LLM call failed: {err_str}")
         finish_research_run(run_id, status="error", nodes_written=0, error=err_str)
         return {
             "status": "error",
@@ -387,6 +452,7 @@ async def run_anchor_research(
             "model": _RESEARCH_MODEL,
             "prompt_version": PROMPT_VERSION,
             "prompt_hash": PROMPT_HASH,
+            "synthesis_method": _SYNTHESIS_METHOD,
             "elapsed_s": round(_time.monotonic() - t0, 2),
             "error": err_str,
             "skipped_reason": None,
@@ -397,7 +463,7 @@ async def run_anchor_research(
         parsed = _extract_json(raw_text)
     except ValueError as parse_err:
         err_str = str(parse_err)
-        print(f"[ANCHOR_RESEARCH] {anchor_key}: JSON parse failed: {err_str}")
+        print(f"[ANCHOR_SYNTHESIS] {anchor_key}: JSON parse failed: {err_str}")
         finish_research_run(run_id, status="parse_error", nodes_written=0, error=err_str)
         return {
             "status": "error",
@@ -410,6 +476,7 @@ async def run_anchor_research(
             "model": _RESEARCH_MODEL,
             "prompt_version": PROMPT_VERSION,
             "prompt_hash": PROMPT_HASH,
+            "synthesis_method": _SYNTHESIS_METHOD,
             "elapsed_s": round(_time.monotonic() - t0, 2),
             "error": err_str,
             "skipped_reason": None,
@@ -428,14 +495,14 @@ async def run_anchor_research(
             validated.append(clean)
         except ValueError as ve:
             rejected.append({"node": raw_node, "reason": str(ve)})
-            print(f"[ANCHOR_RESEARCH] {anchor_key}: node rejected — {ve}")
+            print(f"[ANCHOR_SYNTHESIS] {anchor_key}: node rejected — {ve}")
 
     if len(validated) < _MIN_NODES_REQUIRED:
         err_str = (
             f"Only {len(validated)} valid nodes returned (min {_MIN_NODES_REQUIRED}). "
             f"Rejected {len(rejected)}. LLM response may be malformed."
         )
-        print(f"[ANCHOR_RESEARCH] {anchor_key}: {err_str}")
+        print(f"[ANCHOR_SYNTHESIS] {anchor_key}: {err_str}")
         finish_research_run(run_id, status="insufficient_nodes", nodes_written=0, error=err_str)
         return {
             "status": "error",
@@ -448,6 +515,7 @@ async def run_anchor_research(
             "model": _RESEARCH_MODEL,
             "prompt_version": PROMPT_VERSION,
             "prompt_hash": PROMPT_HASH,
+            "synthesis_method": _SYNTHESIS_METHOD,
             "elapsed_s": round(_time.monotonic() - t0, 2),
             "error": err_str,
             "skipped_reason": None,
@@ -481,6 +549,7 @@ async def run_anchor_research(
             "model": _RESEARCH_MODEL,
             "prompt_version": PROMPT_VERSION,
             "prompt_hash": PROMPT_HASH,
+            "synthesis_method": _SYNTHESIS_METHOD,
             "elapsed_s": round(_time.monotonic() - t0, 2),
             "error": err_str,
             "skipped_reason": None,
@@ -489,7 +558,7 @@ async def run_anchor_research(
     finish_research_run(run_id, status="ok", nodes_written=len(validated), error=None)
     elapsed = round(_time.monotonic() - t0, 2)
     print(
-        f"[ANCHOR_RESEARCH] {anchor_key}: done — {len(validated)} nodes written, "
+        f"[ANCHOR_SYNTHESIS] {anchor_key}: done — {len(validated)} nodes written, "
         f"{len(rejected)} rejected, {elapsed}s"
     )
     return {
@@ -503,6 +572,7 @@ async def run_anchor_research(
         "model": _RESEARCH_MODEL,
         "prompt_version": PROMPT_VERSION,
         "prompt_hash": PROMPT_HASH,
+        "synthesis_method": _SYNTHESIS_METHOD,
         "elapsed_s": elapsed,
         "error": None,
         "skipped_reason": None,
@@ -524,14 +594,14 @@ async def run_monthly_refresh(force: bool = False) -> dict:
     t0 = _time.monotonic()
     results: list[dict] = []
 
-    print(f"[ANCHOR_RESEARCH] monthly refresh starting (force={force}) anchors={OVERLAY_ANCHOR_KEYS}")
+    print(f"[ANCHOR_SYNTHESIS] monthly refresh starting (force={force}) anchors={OVERLAY_ANCHOR_KEYS}")
 
     for anchor_key in OVERLAY_ANCHOR_KEYS:
-        print(f"[ANCHOR_RESEARCH] monthly: starting {anchor_key}")
+        print(f"[ANCHOR_SYNTHESIS] monthly: starting {anchor_key}")
         result = await run_anchor_research(anchor_key, force=force)
         results.append(result)
         if result["status"] not in ("ok", "skipped"):
-            print(f"[ANCHOR_RESEARCH] monthly: {anchor_key} failed — {result.get('error')}")
+            print(f"[ANCHOR_SYNTHESIS] monthly: {anchor_key} failed — {result.get('error')}")
         # Brief pause between anchors to avoid rate-limit saturation
         if anchor_key != OVERLAY_ANCHOR_KEYS[-1]:
             await asyncio.sleep(2.0)
@@ -542,7 +612,7 @@ async def run_monthly_refresh(force: bool = False) -> dict:
     elapsed   = round(_time.monotonic() - t0, 2)
 
     print(
-        f"[ANCHOR_RESEARCH] monthly refresh done: ok={n_ok} skipped={n_skipped} "
+        f"[ANCHOR_SYNTHESIS] monthly refresh done: ok={n_ok} skipped={n_skipped} "
         f"error={n_error} elapsed={elapsed}s"
     )
     return {
