@@ -1,0 +1,100 @@
+Continue from the last step. Do not restart the whole audit unless necessary.
+
+You already confirmed:
+
+* you read all six truncated source files and have the complete source data
+* you read the anchor route handlers
+* you read `_fill_node`
+* you inspected existing anchor entry patterns
+* you were about to build all 6 source files and the phase2 data
+
+Resume from there.
+
+Task:
+Implement the six new curated Chain Reaction / Bottlenecks anchors:
+
+* AAPL
+* AMD
+* AVGO
+* MSFT
+* META
+* AMZN
+
+Use the full source text you already read as the source of truth.
+
+Critical requirements:
+
+* include every public company/ticker listed in each source map
+* preserve category/layer structure
+* do not omit smaller/niche/foreign/OTC names
+* do not exclude Chinese/Taiwan/Japan/Korea/Europe-listed names just because there is no U.S. ADR
+* do not filter out rows because quote, market cap, exchange, country, profile, or TradingView symbol is missing
+* no Claude/OpenAI/web search
+* keep `/api/bottlenecks/current` unchanged
+* keep old LLM research routes disabled
+
+Proceed in this order:
+
+1. Create/preserve source audit files:
+
+   * `backend/services/playbook/curated_sources/aapl_bottleneck_map.md`
+   * `backend/services/playbook/curated_sources/amd_bottleneck_map.md`
+   * `backend/services/playbook/curated_sources/avgo_bottleneck_map.md`
+   * `backend/services/playbook/curated_sources/msft_bottleneck_map.md`
+   * `backend/services/playbook/curated_sources/meta_bottleneck_map.md`
+   * `backend/services/playbook/curated_sources/amzn_bottleneck_map.md`
+
+2. Add the six new anchors to the curated anchor data source using the existing row patterns and `_fill_node`.
+
+3. Make sure every row includes the existing base Chain Reaction keys plus:
+
+   * anchor_key
+   * anchor_name
+   * category_name
+   * category_order
+   * category_rank if available
+   * layer_name
+   * tradingview_symbol
+   * directness/status/confidence
+   * relationship_specificity
+   * source_type: curated_static
+   * manual_added: false
+
+4. Preserve category grouping in the API:
+   `/api/bottlenecks/anchor/{anchor_key}` should return both:
+
+   * `rows`
+   * `categories`
+
+5. Update `/api/bottlenecks/anchors` so all anchors appear:
+
+   * SPCX
+   * ANTHROPIC
+   * NVDA
+   * OPENAI
+   * TSM
+   * GOOG
+   * AAPL
+   * AMD
+   * AVGO
+   * MSFT
+   * META
+   * AMZN
+
+6. Update overlap detection to include the six new anchors.
+
+7. Validate live endpoints:
+
+   * `/api/bottlenecks/anchor/AAPL`
+   * `/api/bottlenecks/anchor/AMD`
+   * `/api/bottlenecks/anchor/AVGO`
+   * `/api/bottlenecks/anchor/MSFT`
+   * `/api/bottlenecks/anchor/META`
+   * `/api/bottlenecks/anchor/AMZN`
+   * `/api/bottlenecks/anchor-overlap`
+   * `/api/bottlenecks/current`
+
+8. Report:
+   Anchor | Source rows extracted | API rows returned | Category count | Exclusions
+
+Do not mark complete until every public company from every source map is represented in the relevant anchor endpoint.
