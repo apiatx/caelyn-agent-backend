@@ -857,11 +857,12 @@ async def bottlenecks_research_anchor(
     force:   bool = Query(False, description="Skip the 30-day freshness check"),
 ):
     """
-    Trigger LLM supply-chain research for a single overlay anchor.
+    Trigger web-search research for a single overlay anchor.
 
-    - One Claude API call (claude-3-5-sonnet).
+    - One OpenAI Responses API call with forced web_search_preview.
+    - Old approved rows are quarantined (→ pending_review) before re-running.
     - Results written to anchor_supply_chain_research_nodes (Neon).
-    - Weekly job and page-load endpoints do NOT call this LLM.
+    - Weekly job and page-load endpoints do NOT call any LLM.
     - Freshness gate: skips if researched within 30 days (override with force=true).
     - Valid anchors: SPCX, OPENAI, ANTHROPIC.
 
@@ -906,12 +907,13 @@ async def bottlenecks_research_monthly(
     force:   bool = Query(False, description="Skip freshness check for all anchors"),
 ):
     """
-    Run the monthly LLM research pipeline for all overlay anchors
-    (SPCX, OPENAI, ANTHROPIC) one at a time.
+    Run the monthly web-search research pipeline for all overlay anchors
+    (SPCX, OPENAI, ANTHROPIC) one at a time, sequentially.
 
     - Anchors still fresh (researched within 30 days) are skipped unless force=true.
     - Results are written to anchor_supply_chain_research_nodes (Neon).
-    - One Claude API call per stale anchor; brief pause between calls.
+    - One OpenAI Responses API call per stale anchor; brief pause between calls.
+    - Old approved rows are quarantined before each re-run.
 
     Requires X-API-Key header.
     """

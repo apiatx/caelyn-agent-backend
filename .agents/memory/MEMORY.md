@@ -15,3 +15,4 @@
 - [Social page speed hot cache](social-speed-hot-cache.md) — 3-layer fix: mtime hot-cache for disk reads, sections cache keyed by _saved_at, never await build_screeners in request path
 - [Options in portfolio canonical paths](options-portfolio-canonical.md) — option_trades_store.load_open_option_underlyings() is the single helper; Terminal cache key must be bumped on any options-shape change; user_context_service must use load_active_holdings() not local file (file is empty in prod)
 - [Bottlenecks anchor research pipeline](bottlenecks-anchor-research.md) — monthly LLM overlay for SPCX/OPENAI/ANTHROPIC; giant_anchors filter replaces theme filter in build_anchor_top; GOOG→GOOGL alias required
+- [Anchor Research — OpenAI Responses API](anchor-research-openai.md) — quarantine+partial-index pattern; web_search_sources empty for JSON requests; ticker_validated is best-effort cache check only

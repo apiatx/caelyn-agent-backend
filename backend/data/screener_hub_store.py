@@ -2616,8 +2616,6 @@ def _arcn_ddl_sql() -> str:
         created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_arcn_anchor_ticker
-        ON public.anchor_supply_chain_research_nodes (anchor_key, ticker, company_name);
     CREATE INDEX IF NOT EXISTS idx_arcn_anchor_key
         ON public.anchor_supply_chain_research_nodes (anchor_key);
     CREATE INDEX IF NOT EXISTS idx_arcn_research_due
@@ -2646,6 +2644,31 @@ def _arcn_ddl_sql() -> str:
     """
 
 
+def _arcn_migrate_sql() -> str:
+    """
+    Idempotent migrations run after CREATE TABLE IF NOT EXISTS.
+    Safe to call on both fresh and pre-existing tables.
+    """
+    return """
+    ALTER TABLE public.anchor_supply_chain_research_nodes
+        ADD COLUMN IF NOT EXISTS tradingview_symbol TEXT NULL;
+    ALTER TABLE public.anchor_supply_chain_research_nodes
+        ADD COLUMN IF NOT EXISTS source_titles JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE public.anchor_supply_chain_research_nodes
+        ADD COLUMN IF NOT EXISTS web_search_sources JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE public.anchor_supply_chain_research_nodes
+        ADD COLUMN IF NOT EXISTS ticker_validated BOOLEAN NOT NULL DEFAULT FALSE;
+
+    -- Replace the full unique index with a partial index restricted to 'approved' rows.
+    -- This allows quarantined (pending_review) rows to coexist with new approved rows
+    -- without a unique constraint violation during re-research cycles.
+    DROP INDEX IF EXISTS public.idx_arcn_anchor_ticker;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_arcn_anchor_ticker_approved
+        ON public.anchor_supply_chain_research_nodes (anchor_key, ticker, company_name)
+        WHERE research_status = 'approved';
+    """
+
+
 def ensure_anchor_research_tables() -> bool:
     """Idempotently create the anchor research overlay tables. Safe to call repeatedly."""
     global _ARCN_DDL_APPLIED
@@ -2658,6 +2681,16 @@ def ensure_anchor_research_tables() -> bool:
         cur = conn.cursor()
         cur.execute(_arcn_ddl_sql())
         conn.commit()
+        # Idempotent column additions (safe on both fresh and existing tables)
+        try:
+            cur.execute(_arcn_migrate_sql())
+            conn.commit()
+        except Exception as me:
+            print(f"[ARCN_DDL] migration warning (non-fatal): {me}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         cur.close()
         _ARCN_DDL_APPLIED = True
         return True
@@ -2710,21 +2743,23 @@ def upsert_anchor_research_nodes(
                 """
                 INSERT INTO public.anchor_supply_chain_research_nodes (
                     anchor_key, anchor_name, ticker, company_name,
-                    is_public, exchange, supply_chain_role, relationship_type,
+                    is_public, exchange, tradingview_symbol, supply_chain_role, relationship_type,
                     themes, layer, bottleneck_score, confidence,
-                    evidence, source_urls, giant_anchors,
+                    evidence, source_urls, source_titles, web_search_sources, giant_anchors,
                     why_it_matters, why_hidden, why_now, what_would_break_thesis,
                     public_market_proxy_reason, overlap_existing_node_registry,
+                    ticker_validated,
                     last_researched_at, next_research_due_at,
                     research_model, prompt_version, prompt_hash,
                     research_status, created_at, updated_at
                 ) VALUES (
                     %s, %s, %s, %s,
-                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
                     %s::jsonb, %s, %s, %s,
-                    %s::jsonb, %s::jsonb, %s::jsonb,
+                    %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
                     %s, %s, %s, %s,
                     %s, %s,
+                    %s,
                     %s, %s,
                     %s, %s, %s,
                     'approved', NOW(), NOW()
@@ -2737,6 +2772,7 @@ def upsert_anchor_research_nodes(
                     str(node.get("company_name") or ""),
                     bool(node.get("is_public", True)),
                     node.get("exchange"),
+                    str(node.get("tradingview_symbol") or node.get("ticker") or ""),
                     node.get("supply_chain_role"),
                     str(node.get("relationship_type") or "direct"),
                     json.dumps(node.get("themes") or []),
@@ -2745,6 +2781,8 @@ def upsert_anchor_research_nodes(
                     str(node.get("confidence") or "medium"),
                     json.dumps(node.get("evidence") or []),
                     json.dumps(node.get("source_urls") or []),
+                    json.dumps(node.get("source_titles") or []),
+                    json.dumps(node.get("web_search_sources") or []),
                     json.dumps(node.get("giant_anchors") or [anchor_key.upper()]),
                     node.get("why_it_matters"),
                     node.get("why_hidden"),
@@ -2752,6 +2790,7 @@ def upsert_anchor_research_nodes(
                     node.get("what_would_break_thesis"),
                     node.get("public_market_proxy_reason"),
                     bool(node.get("overlap_existing_node_registry", False)),
+                    bool(node.get("ticker_validated", False)),
                     last_researched_at,
                     next_research_due_at,
                     model,
@@ -2774,6 +2813,43 @@ def upsert_anchor_research_nodes(
         _put_conn(conn)
 
 
+def quarantine_anchor_research_nodes(anchor_key: str) -> int:
+    """
+    Move all 'approved' nodes for anchor_key to 'pending_review'.
+    Called before re-running research so old Claude/ungrounded rows
+    are preserved for audit but excluded from scoring.
+    Returns the number of rows quarantined (0 is fine if none existed).
+    """
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE public.anchor_supply_chain_research_nodes
+            SET research_status = 'pending_review', updated_at = NOW()
+            WHERE anchor_key = %s AND research_status = 'approved'
+            """,
+            (anchor_key.upper(),),
+        )
+        n = cur.rowcount
+        conn.commit()
+        cur.close()
+        print(f"[ARCN] quarantine_anchor_research_nodes: anchor={anchor_key} quarantined {n} rows")
+        return n
+    except Exception as e:
+        print(f"[ARCN] quarantine_anchor_research_nodes error (anchor={anchor_key}): {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        _put_conn(conn)
+
+
 def get_anchor_research_nodes(
     anchor_key: str,
     status: str = "approved",
@@ -2792,11 +2868,12 @@ def get_anchor_research_nodes(
             """
             SELECT
                 anchor_key, anchor_name, ticker, company_name,
-                is_public, exchange, supply_chain_role, relationship_type,
+                is_public, exchange, tradingview_symbol, supply_chain_role, relationship_type,
                 themes, layer, bottleneck_score, confidence,
-                evidence, source_urls, giant_anchors,
+                evidence, source_urls, source_titles, web_search_sources, giant_anchors,
                 why_it_matters, why_hidden, why_now, what_would_break_thesis,
                 public_market_proxy_reason, overlap_existing_node_registry,
+                ticker_validated,
                 last_researched_at, next_research_due_at,
                 research_model, prompt_version, prompt_hash, research_status
             FROM public.anchor_supply_chain_research_nodes
@@ -2810,7 +2887,7 @@ def get_anchor_research_nodes(
         for row in cur.fetchall():
             d = dict(zip(cols, row))
             # Deserialise JSONB columns that psycopg2 returns as dicts/lists
-            for col in ("themes", "evidence", "source_urls", "giant_anchors"):
+            for col in ("themes", "evidence", "source_urls", "source_titles", "web_search_sources", "giant_anchors"):
                 v = d.get(col)
                 if isinstance(v, str):
                     try:
@@ -2846,11 +2923,12 @@ def get_all_approved_research_nodes() -> list:
             """
             SELECT
                 anchor_key, anchor_name, ticker, company_name,
-                is_public, exchange, supply_chain_role, relationship_type,
+                is_public, exchange, tradingview_symbol, supply_chain_role, relationship_type,
                 themes, layer, bottleneck_score, confidence,
-                evidence, source_urls, giant_anchors,
+                evidence, source_urls, source_titles, web_search_sources, giant_anchors,
                 why_it_matters, why_hidden, why_now, what_would_break_thesis,
                 public_market_proxy_reason, overlap_existing_node_registry,
+                ticker_validated,
                 last_researched_at, next_research_due_at,
                 research_model, prompt_version, prompt_hash
             FROM public.anchor_supply_chain_research_nodes
@@ -2862,7 +2940,7 @@ def get_all_approved_research_nodes() -> list:
         rows = []
         for row in cur.fetchall():
             d = dict(zip(cols, row))
-            for col in ("themes", "evidence", "source_urls", "giant_anchors"):
+            for col in ("themes", "evidence", "source_urls", "source_titles", "web_search_sources", "giant_anchors"):
                 v = d.get(col)
                 if isinstance(v, str):
                     try:
