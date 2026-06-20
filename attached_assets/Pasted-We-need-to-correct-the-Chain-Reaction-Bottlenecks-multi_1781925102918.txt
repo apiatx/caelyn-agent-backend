@@ -1,0 +1,146 @@
+We need to correct the Chain Reaction / Bottlenecks multi-anchor architecture.
+
+Current understanding:
+
+The existing Chain Reaction / Bottlenecks page appears to be powered by a static curated graph, likely created from a prior one-time LLM/research pass.
+The weekly Chain Reaction job should only score/rank/refresh market data overlays from cached/curated data.
+The weekly job must NOT use an LLM.
+New or stale anchor supply-chain maps should be researched with an LLM only once per month per anchor, not weekly and never on page load.
+
+Critical requirements:
+
+Use the same EXACT prompt/template that was originally used to create the current Chain Reaction / Bottlenecks researched format.
+Do NOT paraphrase, “improve,” simplify, or replace the prompt.
+Do NOT create a new prompt if the existing one can be found.
+Do NOT change the existing Chain Reaction page format.
+Do NOT change /api/bottlenecks/current.
+Do NOT rewrite the scoring/ranking logic.
+Do NOT rewrite existing NODE_REGISTRY entries.
+Do NOT run LLM calls during normal user page loads.
+Do NOT run LLM calls during the weekly scoring job.
+Do NOT use broad theme fallback as if it were true anchor-specific supply-chain research.
+Do NOT cache only theme mappings. That is not enough.
+
+First audit before editing:
+
+Search the repo for the exact original Chain Reaction / Bottlenecks LLM prompt/template.
+Search scripts, services, old admin routes, notebooks, seed files, migrations, prompt files, comments, and any archived utilities.
+Search terms should include: Chain Reaction, Bottlenecks, supply chain, NODE_REGISTRY, giant_anchors, research, prompt, playbook, generate, LLM, Claude, Anthropic, OpenAI.
+Identify whether the existing NODE_REGISTRY was generated from a one-time LLM/research pass or manually written.
+Identify exactly where the current drawer/detail research text comes from:
+NODE_REGISTRY
+chain_reaction_weekly_outputs
+frontend templates
+another detail endpoint
+another cache/table
+Confirm whether the existing weekly Chain Reaction job currently calls an LLM.
+Confirm the weekly job only does deterministic scoring/cache refresh from existing graph data and cached quote/fundamental/social/options overlays.
+Report the exact files/functions/tables involved before making changes.
+
+If the exact original prompt is found:
+
+Reuse it verbatim.
+Wrap it only with the minimum anchor-specific variables needed, such as anchor ticker/name.
+Preserve the same output format and research style currently visible in the Chain Reaction detail drawer.
+
+If the exact original prompt is NOT found:
+
+Stop and report that the original prompt is missing.
+Do not invent a replacement prompt.
+Do not implement new LLM research until I approve a recreated prompt.
+
+Target anchors needing real research:
+
+SPCX / SpaceX
+OPENAI / OpenAI
+ANTHROPIC / Anthropic
+
+Research cadence:
+
+Each anchor gets at most one LLM research call per monthly refresh cycle.
+Research runs sequentially, one anchor at a time.
+No parallel LLM calls.
+Research should run only when:
+anchor has no researched supply-chain cache yet, or
+anchor research is older than 30 days, or
+admin force-refresh is explicitly requested.
+Weekly Chain Reaction scoring can use the cached researched nodes, but must not invoke the LLM.
+
+Preferred architecture:
+
+Add a durable researched overlay/cache for anchor-specific supply-chain nodes.
+Suggested table:
+anchor_supply_chain_research_nodes
+Do not directly mutate the static Python NODE_REGISTRY unless the audit proves that is the existing intended pattern.
+Prefer overlay/cache first.
+Each researched node must be compatible with the existing Chain Reaction / Bottlenecks output format and detail drawer.
+
+Each researched node should include:
+
+anchor_key, e.g. OPENAI
+anchor_name, e.g. OpenAI
+ticker
+company_name
+public/private status
+exchange / market if public
+supply_chain_role
+theme IDs
+layer
+bottleneck_score
+confidence
+evidence strings
+source URLs if the existing prompt supports sources
+summary / why_it_matters / why_hidden / why_now fields if required by the current detail drawer
+giant_anchors including the exact anchor key
+last_researched_at
+next_research_due_at
+research_model
+research_prompt_version or prompt hash
+research_status
+error field if research failed
+
+Monthly refresh behavior:
+
+Add an admin/scheduled monthly refresh path that checks each configured anchor.
+If research cache is missing or older than 30 days, run exactly one LLM research call for that anchor using the existing exact Chain Reaction prompt.
+Store results to the researched overlay/cache.
+Do not call the LLM again for that anchor until the next monthly window unless force=true.
+
+Example admin route, if it matches the repo style:
+POST /api/admin/bottlenecks/research-anchor?anchor=OPENAI
+POST /api/admin/bottlenecks/research-anchors-monthly
+
+Or use a script/job if that better matches the current architecture.
+
+Weekly scoring behavior:
+
+Weekly Chain Reaction scoring should merge:
+existing static NODE_REGISTRY nodes
+approved researched overlay nodes
+Then score/rank using the existing deterministic scoring pipeline.
+No LLM call is allowed during weekly scoring.
+No LLM call is allowed during /api/bottlenecks/current.
+No LLM call is allowed during /api/bottlenecks/multi-anchor.
+
+Multi-anchor endpoint behavior:
+
+Filter by real giant_anchors, not broad theme overlap.
+NVDA, TSM, and GOOG/GOOGL should use existing curated graph relationships.
+SPCX, OPENAI, and ANTHROPIC should return needs_research until researched overlay nodes exist.
+After monthly research exists, they should return success using exact giant_anchors matches.
+
+Validation:
+
+Confirm /api/bottlenecks/current still works and does not change shape.
+Confirm the existing detail drawer format still works.
+Confirm the weekly job does not call an LLM.
+Confirm page-load endpoints do not call an LLM.
+Confirm monthly refresh runs one anchor at a time.
+Confirm each stale/missing anchor gets no more than one LLM call per monthly cycle.
+Confirm SPCX, OPENAI, and ANTHROPIC no longer show generic duplicate theme-filtered rows.
+Confirm researched rows contain real anchor-specific giant_anchors.
+Confirm the researched output preserves the same style/depth as the current Chain Reaction/Bottlenecks detail drawer.
+Confirm the final logs show when an anchor was skipped because its research cache is still fresh.
+
+Deliverable:
+First provide the audit report and exact implementation plan. Do not implement until approved.
