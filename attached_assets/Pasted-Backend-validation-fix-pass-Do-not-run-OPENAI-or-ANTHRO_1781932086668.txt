@@ -1,0 +1,102 @@
+Backend validation/fix pass. Do not run OPENAI or ANTHROPIC yet.
+
+The OpenAI Responses API + web search architecture is directionally correct. Keep it. Do not roll back to Claude.
+
+However, SPCX is not approved yet because the validation gates are still too loose.
+
+Critical issue:
+`MRC` was stored as approved even though `ticker_validated=false`.
+
+Hard rule:
+No row can be `approved` or visible in Bottlenecks unless `ticker_validated=true`.
+
+Required fixes:
+
+1. Ticker validation must be a hard approval gate
+   For every public researched row:
+
+* If `ticker_validated=false`, set `research_status="pending_review"` or `rejected`.
+* Do not include it in visible scoring.
+* Do not allow it into `/api/bottlenecks/multi-anchor` success rows.
+* Do not rely on “probably real” or cache miss. If validation misses a real ticker, either perform the validation through FMP/Tradier/profile/search or keep it pending.
+
+Approved row requirements:
+
+* `ticker_validated=true`
+* current public/tradeable ticker
+* `tradingview_symbol` present
+* valid company_name
+* non-empty supply_chain_role
+* non-empty evidence
+* non-empty source_urls
+* `giant_anchors` contains exact anchor key
+* drawer fields present
+
+2. Validate via existing market data paths
+   Use existing cached profile/quote/reference paths first.
+   If cache misses, use paid FMP access monthly as fallback:
+
+* FMP Company Profile
+* FMP Stock Symbol Search / Company Name Search
+* FMP Actively Trading list if already implemented or cheap to use
+* FMP Delisted Companies if needed
+
+This is monthly and only ~10-16 candidates per anchor, so correctness matters more than saving one tiny validation call.
+
+3. Source/citation validation must be row-specific
+   The route reported `web_searches_fired=1`. That proves the tool fired, but not that every approved row has row-specific evidence.
+
+For every approved row, confirm:
+
+* at least one `source_url` supports that specific ticker’s relationship to the anchor or to the precise supply-chain bottleneck
+* source is not just a generic homepage
+* evidence is not merely generic “company operates in aerospace”
+* evidence supports the claimed relationship type: direct / indirect / infrastructure / public_proxy
+
+If the source only supports broad sector exposure, mark the row `pending_review`.
+
+4. Add relationship quality gating
+   For SPCX specifically, reject or pending-review rows that are merely “space/aerospace adjacent” without a specific SpaceX supply-chain/bottleneck relationship.
+
+Examples to scrutinize:
+
+* `SPCE`: likely not a SpaceX supplier or bottleneck proxy unless a source proves a specific relationship. Do not approve just because it is space-themed.
+* `BA`, `RTX`, `NOC`: may be defense/space primes, but require evidence that they are specific supply-chain bottlenecks, infrastructure dependencies, or high-quality public proxies for SpaceX/Starlink/launch/satellite capacity. Otherwise pending_review.
+* `MRC`: ticker validation failed, so it cannot remain approved.
+
+The system should prefer names with a clear supply-chain role over generic aerospace exposure.
+
+5. Revalidate existing SPCX rows
+   Do not rerun the LLM yet unless needed.
+   First revalidate the 10 existing OpenAI SPCX rows under the stricter gates.
+
+Report:
+
+* approved count
+* pending_review count
+* rejected count
+* each row status
+* each row rejection/pending reason
+* whether `ticker_validated=true`
+* whether source evidence is row-specific
+* whether relationship is specific enough for Serenity bottleneck quality
+
+6. If fewer than 8 high-quality approved rows remain
+   Then rerun SPCX with a stricter prompt:
+
+* public companies only
+* no generic aerospace/space-adjacent exposure
+* must be supplier, infrastructure bottleneck, scarce component/material/tooling provider, or highly defensible public proxy
+* must provide row-specific source-backed evidence
+* do not include companies just because they are in the same sector
+
+7. Keep these unchanged
+
+* No Claude/Anthropic for this feature.
+* No LLM/web calls in weekly scoring.
+* No LLM/web calls on page load.
+* No frontend changes yet.
+* `/api/bottlenecks/current` shape unchanged.
+* Multi-anchor filters by exact `giant_anchors`, not themes.
+
+After SPCX passes with only validated public tickers and row-specific evidence, then run OPENAI first, validate it, then run ANTHROPIC.
