@@ -336,29 +336,54 @@ def manual_node_to_cr_row(row: dict) -> dict:
     rel_spec   = row.get("relationship_specificity") or "direct"
     conf       = "high" if score >= 70 else "medium" if score >= 50 else "low"
 
+    layer   = int(row.get("layer") or 2)
+    themes  = row.get("themes") or []
+    primary_theme = themes[0] if themes else anchor_key.lower()
+
     return {
-        # Chain Reaction–compatible fields
+        # ── Chain Reaction–compatible fields ───────────────────────────────────
         "bottleneck_ticker":        ticker,
         "company_name":             co_name,
         "anchor_ticker":            anchor_key,
         "giant_anchors":            [anchor_key],
         "supply_chain_role":        role,
-        "layer":                    2,
-        "themes":                   [],
+        "layer":                    layer,
+        "themes":                   themes,
         "bottleneck_score":         score,
         "confidence":               conf,
         "evidence":                 row.get("evidence") or [],
         "relationship_type":        _rel_type(rel_spec),
         "source_urls":              row.get("source_urls") or [],
-        "why_it_matters":           _why_it_matters(anchor_key, co_name, 2, role, int(score)),
+        "why_it_matters":           _why_it_matters(anchor_key, co_name, layer, role, int(score)),
         "why_hidden":               _GRADE_WHY_HIDDEN.get(grade, _GRADE_WHY_HIDDEN["B"]),
         "why_now":                  _why_now(anchor_key, role),
         "what_would_break_thesis":  _what_breaks(rel_spec, anchor_key, ticker),
-        # Curated-specific fields
+        # ── Fallback fields to match /api/bottlenecks/current row shape ────────
+        "final_score":              score,
+        "theme_alignment_score":    100.0,
+        "bottleneck_type":          "supply_chain",
+        "bottleneckReason":         role,
+        "anchor_theme":             primary_theme,
+        "theme":                    primary_theme,
+        "discovery_sources":        ["manual"],
+        "lastUpdated":              LAST_CURATED_AT,
+        "momentum_score":           None,
+        "volume_score":             None,
+        "fundamental_score":        None,
+        "social_score":             None,
+        "options_score":            None,
+        "change_percent_1d":        None,
+        "revenueSignal":            None,
+        "exchange":                 None,
+        "country":                  None,
+        "market_cap":               None,
+        "marketCap":                None,
+        "marketCapBucket":          None,
+        # ── Curated-specific fields ────────────────────────────────────────────
         "anchor_key":               anchor_key,
         "anchor_name":              anchor_key,
         "tradingview_symbol":       row.get("tradingview_symbol") or ticker,
-        "layer_name":               _LAYER_NAMES.get(2, "Key Component"),
+        "layer_name":               _LAYER_NAMES.get(layer, "Key Component"),
         "evidence_grade":           grade,
         "evidence_grade_reason":    row.get("notes") or "",
         "relationship_specificity": rel_spec,

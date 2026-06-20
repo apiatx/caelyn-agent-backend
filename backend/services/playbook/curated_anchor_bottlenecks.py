@@ -90,6 +90,8 @@ def _fill_node(anchor_key: str, anchor_name: str, n: dict) -> dict:
     themes   = n.get("themes", [])
     evidence = n.get("evidence", [])
     src_urls = n.get("source_urls", [])
+    # Derive anchor_theme / theme from themes list (first entry) or anchor key
+    primary_theme = themes[0] if themes else anchor_key.lower()
 
     return {
         # ── Chain Reaction–compatible fields (preserve existing drawer/table) ──
@@ -100,15 +102,40 @@ def _fill_node(anchor_key: str, anchor_name: str, n: dict) -> dict:
         "supply_chain_role":        role,
         "layer":                    layer,
         "themes":                   themes,
-        "bottleneck_score":         score,
+        "bottleneck_score":         float(score),
         "confidence":               conf,
         "evidence":                 evidence,
         "relationship_type":        _rel_type(rel_spec),
         "source_urls":              src_urls,
-        "why_it_matters":           n.get("why_it_matters")           or _why_it_matters(anchor_name, co_name, layer, role, score),
+        "why_it_matters":           n.get("why_it_matters")           or _why_it_matters(anchor_name, co_name, layer, role, int(score)),
         "why_hidden":               n.get("why_hidden")               or _GRADE_WHY_HIDDEN.get(grade, _GRADE_WHY_HIDDEN["B"]),
         "why_now":                  n.get("why_now")                  or _why_now(anchor_name, role),
         "what_would_break_thesis":  n.get("what_would_break_thesis")  or _what_breaks(rel_spec, anchor_name, ticker),
+        # ── Fallback fields to match /api/bottlenecks/current row shape ────────
+        # Score components: curated rows carry no live scoring; use None so the
+        # frontend can distinguish "not computed" from "zero".
+        "final_score":              float(score),      # best deterministic proxy
+        "theme_alignment_score":    100.0,             # curated = fully aligned
+        "bottleneck_type":          "supply_chain",    # static category for curated rows
+        "bottleneckReason":         role,              # camelCase alias of supply_chain_role
+        "anchor_theme":             primary_theme,
+        "theme":                    primary_theme,
+        "discovery_sources":        ["curated_static"],
+        "lastUpdated":              LAST_CURATED_AT,
+        # Live market fields — not available without a quote lookup; None signals
+        # "not enriched" to the frontend (same pattern as optional current rows).
+        "momentum_score":           None,
+        "volume_score":             None,
+        "fundamental_score":        None,
+        "social_score":             None,
+        "options_score":            None,
+        "change_percent_1d":        None,
+        "revenueSignal":            None,
+        "exchange":                 None,
+        "country":                  None,
+        "market_cap":               None,
+        "marketCap":                None,
+        "marketCapBucket":          None,
         # ── Curated-specific fields ────────────────────────────────────────────
         "anchor_key":               anchor_key,
         "anchor_name":              anchor_name,
@@ -328,7 +355,7 @@ _ANCHOR_RAW: dict[str, dict] = {
                 ],
             },
             {
-                "ticker": "TW:6271",
+                "ticker": "6271",
                 "company_name": "Tong Hsing Electronic Industries",
                 "tradingview_symbol": "TW:6271",
                 "layer": 3,
