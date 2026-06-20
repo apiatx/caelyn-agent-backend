@@ -1981,28 +1981,159 @@ async def remove_favorite(request: Request, ticker: str):
     return {"ticker": raw, "is_favorite": False, "favorites": favorites}
 
 
-# ── Defiance 2X Long ETF tab ─────────────────────────────────────────────────
+# ── Defiance 2X enrichment helper (shared by watchlist alias + strategy route) ─
+
+async def _build_defiance_rows(
+    *,
+    catalog: list[dict],
+    get_quotes,
+    quote_cache: dict,
+    get_theme,
+    get_ts,
+    tab_key: str,
+) -> dict:
+    """
+    Core enrichment for Defiance 2X Long ETF rows.
+
+    Enrichment policy
+    -----------------
+    - underlying_symbol is the primary/row ticker; defiance_etf_ticker is metadata only.
+    - `is_already_tracked` = underlying was already in the canonical quote cache *before*
+      this request fired; no new Tradier call was needed for it.
+    - `quote_reused` = same as is_already_tracked (alias kept for API clarity).
+    - chart_symbol and quote_source_symbol always equal the underlying symbol.
+    - The Defiance ETF ticker is NEVER used for price, market cap, VolX, or chart.
+
+    Logging
+    -------
+    Emits a single [DEFIANCE_2X] summary line with:
+      total_catalog | reused_quote_count | new_tradier_fetch_count | fetch_symbols
+    """
+    # Snapshot which underlying symbols are already in the canonical quote cache
+    # BEFORE calling get_watchlist_quotes (which may pull new Tradier quotes).
+    underlying_syms = [r["underlying_symbol"] for r in catalog if r.get("underlying_symbol")]
+    already_tracked: set[str] = {s.upper() for s in underlying_syms if s.upper() in quote_cache}
+    new_fetch_syms = [s for s in underlying_syms if s.upper() not in already_tracked]
+
+    quotes = await get_quotes(underlying_syms)
+
+    rows: list[dict] = []
+    for entry in catalog:
+        sym = entry.get("underlying_symbol")
+        if not sym:
+            continue
+
+        etf_ticker = entry.get("defiance_etf_ticker", "")
+        # Defensive guard: never allow a row where underlying == ETF ticker
+        if sym.upper() == etf_ticker.upper():
+            print(
+                f"[DEFIANCE_2X] skipped row — underlying==etf_ticker: {sym!r}"
+                f"  name={entry.get('defiance_etf_name')!r}"
+            )
+            continue
+
+        sym_up  = sym.upper()
+        q       = quotes.get(sym_up, {})
+        price   = q.get("price")
+        change  = q.get("change_pct_1d")
+        volume  = q.get("volume")
+        rel_vol = q.get("relative_volume")
+        name    = q.get("name") or sym
+
+        market_cap = q.get("market_cap")
+        vmc = _vol_mc_fields(price, volume, market_cap)
+
+        stage = _get_stage2_breakout(sym)
+        theme = get_theme(sym)
+
+        is_tracked = sym_up in already_tracked
+
+        rows.append({
+            "symbol":            sym,
+            "chart_symbol":      sym,
+            "quote_source_symbol": sym,
+            "name":              name,
+            "price":             price,
+            "change_pct":        change,
+            "market_cap":        vmc.get("market_cap"),
+            "volume":            volume,
+            "vol_x":             rel_vol,
+            "vol_mc_ratio":      vmc.get("vol_mc_ratio"),
+            "vol_mc_pct":        vmc.get("vol_mc_pct"),
+            "vol_mc_label":      vmc.get("vol_mc_label"),
+            "theme":             theme,
+            "stage_analysis":    stage,
+            "is_already_tracked": is_tracked,
+            "quote_reused":      is_tracked,
+            "defiance_etf": {
+                "symbol":       etf_ticker,
+                "name":         entry.get("defiance_etf_name", ""),
+                "leverage":     entry.get("leverage", 2),
+                "direction":    entry.get("direction", "long"),
+                "source_url":   entry.get("source_url", ""),
+                "last_seen_at": entry.get("last_seen_at"),
+            },
+        })
+
+    # Sort: priced rows first, then market_cap desc, nulls last
+    rows.sort(key=lambda r: (
+        r.get("price") is None,
+        r.get("market_cap") is None,
+        -(r.get("market_cap") or 0),
+    ))
+
+    reused = sum(1 for r in rows if r["is_already_tracked"])
+    new_fetched = len(rows) - reused
+    print(
+        f"[DEFIANCE_2X] response built: total_catalog={len(catalog)}"
+        f"  rows={len(rows)}"
+        f"  reused_quote_count={reused}"
+        f"  new_tradier_fetch_count={len(new_fetch_syms)}"
+        + (f"  fetch_syms={new_fetch_syms}" if new_fetch_syms else "")
+    )
+
+    ts = get_ts()
+    updated_at = (
+        datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        if ts else None
+    )
+
+    return {
+        "tab":        tab_key,
+        "title":      "Defiance 2× Long ETFs",
+        "updated_at": updated_at,
+        "count":      len(rows),
+        "rows":       rows,
+    }
+
+
+# ── Defiance 2X Long ETF tab — backwards-compatible alias ────────────────────
+# Primary endpoint: GET /api/strategy/defiance (Strategy page)
+# This route is retained for any existing frontend consumers.
 
 @router.get("/defiance-2x")
 async def defiance_2x_endpoint(request: Request, force_refresh: bool = False):
     """
-    Underlying-centric rows for Defiance Daily Target 2X Long single-stock ETFs.
+    Backwards-compatible alias for /api/strategy/defiance.
 
-    Catalog is sourced from https://www.defianceetfs.com/wp-json/defiance/v1/etfs-explore
-    and refreshed daily off-hours.  On every user request the endpoint:
-      1. Serves the cached catalog (no Defiance fetch).
-      2. Gets quotes for *underlying* tickers via the shared LKG quote cache.
-      3. Attaches the Defiance ETF ticker as metadata only.
-    No chart/candle data is fetched for the ETF ticker itself.
+    The canonical endpoint lives on the Strategy page.  This route delegates
+    to the same underlying logic so existing frontend consumers continue to
+    work unchanged while the frontend migrates to /api/strategy/defiance.
+
+    Response shape is identical to /api/strategy/defiance.
     """
-    import os as _os
     from services.defiance_leveraged_etfs_service import (
         get_catalog         as _d2x_catalog,
         refresh_catalog     as _d2x_refresh,
         get_last_refresh_ts as _d2x_ts,
+        get_quarantined     as _d2x_quarantined,
     )
-    from services.watchlist_quote_cache import get_watchlist_quotes
+    from services.watchlist_quote_cache import (
+        get_watchlist_quotes as _get_quotes,
+        _quote_cache         as _qc,
+    )
     from services.theme_ticker_mapper import map_ticker_to_primary_theme
+    import os as _os
 
     # ── Admin force-refresh ───────────────────────────────────────────────────
     if force_refresh:
@@ -2026,76 +2157,14 @@ async def defiance_2x_endpoint(request: Request, force_refresh: bool = False):
             "status":     "warming_up",
         }
 
-    # ── Quote enrichment for underlying tickers (cache-only, zero blocking I/O) ─
-    underlying_syms = [r["underlying_symbol"] for r in catalog if r.get("underlying_symbol")]
-    quotes = await get_watchlist_quotes(underlying_syms)
-
-    rows: list[dict] = []
-    for entry in catalog:
-        sym = entry.get("underlying_symbol")
-        if not sym:
-            continue
-
-        q       = quotes.get(sym.upper(), {})
-        price   = q.get("price")
-        change  = q.get("change_pct_1d")
-        volume  = q.get("volume")
-        rel_vol = q.get("relative_volume")
-        name    = q.get("name") or sym
-
-        # Vol/MC fields (market_cap typically not in quote cache; graceful None)
-        market_cap = q.get("market_cap")
-        vmc = _vol_mc_fields(price, volume, market_cap)
-
-        # Stage analysis — zero I/O; reads only from populated LKG caches
-        stage = _get_stage2_breakout(sym)
-
-        # Theme mapping
-        theme = map_ticker_to_primary_theme(sym)
-
-        rows.append({
-            "symbol":       sym,
-            "name":         name,
-            "price":        price,
-            "change_pct":   change,
-            "market_cap":   vmc.get("market_cap"),
-            "volume":       volume,
-            "vol_x":        rel_vol,
-            "vol_mc_ratio": vmc.get("vol_mc_ratio"),
-            "vol_mc_pct":   vmc.get("vol_mc_pct"),
-            "vol_mc_label": vmc.get("vol_mc_label"),
-            "theme":        theme,
-            "stage_analysis": stage,
-            "defiance_etf": {
-                "symbol":       entry["defiance_etf_ticker"],
-                "name":         entry["defiance_etf_name"],
-                "leverage":     entry["leverage"],
-                "direction":    entry["direction"],
-                "source_url":   entry["source_url"],
-                "last_seen_at": entry["last_seen_at"],
-            },
-        })
-
-    # Sort: have-price rows first, then by market_cap desc, nulls last
-    rows.sort(key=lambda r: (
-        r.get("price") is None,
-        r.get("market_cap") is None,
-        -(r.get("market_cap") or 0),
-    ))
-
-    ts = _d2x_ts()
-    updated_at = (
-        datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-        if ts else None
+    return await _build_defiance_rows(
+        catalog      = catalog,
+        get_quotes   = _get_quotes,
+        quote_cache  = _qc,
+        get_theme    = map_ticker_to_primary_theme,
+        get_ts       = _d2x_ts,
+        tab_key      = "defiance-2x",
     )
-
-    return {
-        "tab":        "defiance-2x",
-        "title":      "Defiance 2× Long ETFs",
-        "updated_at": updated_at,
-        "count":      len(rows),
-        "rows":       rows,
-    }
 
 
 # ── Parameterized endpoints (MUST be after static paths) ────────────────────

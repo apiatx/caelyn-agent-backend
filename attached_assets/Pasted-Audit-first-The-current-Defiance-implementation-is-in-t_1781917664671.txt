@@ -1,0 +1,122 @@
+Audit first. The current Defiance implementation is in the wrong place conceptually and the output is not correct.
+
+Current issue:
+The frontend screenshot shows the Underlying column as “—” while the Defiance ETF badge shows values like AMA · 2X Long, AMKL · 2X Long, etc. That is wrong. The primary row symbol must be the clean underlying stock ticker. The Defiance ETF ticker is metadata only.
+
+New product location:
+This feature should belong to the Strategy page, not Watchlist.
+
+Backend goal:
+Fix/replace the current Defiance 2X endpoint so it returns a clean underlying-centric response suitable for a Strategy page tab named “Defiance”.
+
+Critical requirements:
+
+* Do NOT track/chart/quote the Defiance ETF as the primary asset.
+* The row symbol must be the underlying stock ticker.
+* The Defiance ETF ticker must only appear in nested metadata.
+* Any already-tracked underlying stock must reuse the existing canonical quote/ticker universe/cache path.
+* Only underlying stocks that are not already tracked anywhere in the app may trigger a new Tradier quote call.
+* Do NOT duplicate Tradier calls for tickers already present in the app’s ticker universe, watchlist, portfolio, themes, options flow cache, or canonical quote cache.
+* Do NOT use an LLM.
+* Do NOT manually maintain a permanent ETF list.
+* Do NOT scrape live on every user request.
+* Preserve existing quote/fundamental/stage/chart paths.
+
+Audit required:
+
+1. Find the current Defiance backend files:
+
+   * defiance_leveraged_etfs_service.py
+   * current route in watchlist_router.py
+   * startup/warmup hook in main.py
+2. Audit the actual Defiance API payload from:
+   /wp-json/defiance/v1/etfs-explore
+3. Determine whether the payload itself contains a reliable underlying ticker, target ticker, fund URL, slug, title, or metadata field.
+4. If the ETF catalog payload does not directly expose the underlying ticker, fetch the individual official Defiance fund page/API detail for each leveraged-long ETF and parse the official underlying/target exposure from that source.
+5. Do not assume the Defiance ETF ticker is the underlying ticker. The screenshot proves that assumption is wrong.
+6. Find the existing app-level ticker universe / canonical quote cache utilities so already-tracked underlying tickers can be reused without additional Tradier calls.
+
+Implementation changes:
+
+1. Keep the Defiance ETF catalog refresh service, but fix its mapping contract.
+2. Build rows only when a valid underlying stock ticker is found.
+3. Validation rules for each row:
+
+   * underlying_symbol is non-empty
+   * defiance_etf_ticker is non-empty
+   * underlying_symbol !== defiance_etf_ticker
+   * underlying_symbol validates as a stock/common equity where possible
+   * defiance_etf_ticker validates as an ETF/fund where possible
+   * quote_source_symbol must equal underlying_symbol
+   * chart_symbol must equal underlying_symbol
+4. Any ETF where the underlying cannot be confidently mapped should be quarantined/excluded from the user-facing response and logged as unmapped_defiance_etf.
+5. Add/rename endpoint for Strategy page:
+   Preferred:
+   GET /api/strategy/defiance
+   or:
+   GET /api/strategy/defiance-2x
+6. The old /api/watchlist/defiance-2x route can either:
+
+   * be removed if no frontend depends on it, or
+   * remain as a thin backwards-compatible alias temporarily,
+     but it must not be treated as a Watchlist feature anymore.
+7. Endpoint response must be underlying-centric:
+   {
+   "symbol": "AMAT",
+   "chart_symbol": "AMAT",
+   "quote_source_symbol": "AMAT",
+   "name": "...",
+   "price": ...,
+   "change_pct": ...,
+   "market_cap": ...,
+   "vol_x": ...,
+   "vol_market_cap": ...,
+   "theme": ...,
+   "stage": ...,
+   "is_already_tracked": true,
+   "quote_reused": true,
+   "defiance_etf": {
+   "symbol": "AMA",
+   "name": "...",
+   "leverage": 2,
+   "direction": "long",
+   "source_url": "...",
+   "last_seen_at": "..."
+   }
+   }
+8. Enrichment policy:
+
+   * Use existing canonical quote cache for underlying tickers first.
+   * Use existing app ticker universe/tracked-symbol utilities to avoid duplicate quote calls.
+   * Only fetch Tradier for missing underlying tickers not already tracked.
+   * Use existing market cap/fundamentals cache for underlying tickers first.
+   * Do not fetch quote/chart/fundamental data for the Defiance ETF ticker.
+9. Cache policy:
+
+   * Continue daily/off-hours Defiance catalog refresh.
+   * Serve cached catalog on normal user request.
+   * Do not call Defiance on every tab load.
+10. Logging:
+    Add clear debug/validation logs:
+
+* total Defiance leveraged-long ETFs found
+* mapped underlying count
+* unmapped/quarantined count
+* reused_quote_count
+* new_tradier_fetch_count
+* new_tradier_fetch_symbols
+* no ETF tickers used as quote_source_symbol
+
+Validation:
+Run endpoint validation and prove:
+
+* No row has blank symbol.
+* No row has symbol equal to defiance_etf.symbol.
+* All chart_symbol values equal the underlying symbol.
+* All quote_source_symbol values equal the underlying symbol.
+* Already-tracked tickers do not trigger new Tradier calls.
+* Untracked underlying tickers may trigger a Tradier call.
+* Defiance ETF tickers are never used for price, market cap, VolX, or chart.
+* Unmapped ETFs are excluded and logged.
+* Strategy endpoint returns usable rows.
+* Existing Watchlist endpoints still work.

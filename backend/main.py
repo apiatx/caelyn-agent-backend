@@ -15174,6 +15174,100 @@ async def strategy_ten_year_spx(
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
+# ── GET /api/strategy/defiance ───────────────────────────────────────────────
+
+@app.get("/api/strategy/defiance")
+@limiter.limit("30/minute")
+async def strategy_defiance(
+    request: Request,
+    force_refresh: bool = False,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Defiance Daily Target 2X Long single-stock ETF tab — Strategy page.
+
+    Contract
+    --------
+    - `symbol` is always the underlying stock ticker (e.g. AMAT, AMKR).
+    - `defiance_etf.symbol` is the Defiance ETF ticker (e.g. AMA, AMKL) — metadata only.
+    - `chart_symbol` and `quote_source_symbol` always equal `symbol` (the underlying).
+    - The Defiance ETF ticker is NEVER used for price, market cap, VolX, or chart data.
+    - `is_already_tracked` / `quote_reused` = underlying was already in canonical
+      quote cache; no new Tradier call was needed.
+    - Any ETF whose underlying cannot be parsed (or underlying == ETF ticker) is
+      quarantined and excluded from this response.
+
+    Source: https://www.defianceetfs.com/wp-json/defiance/v1/etfs-explore
+    Refreshed daily off-hours; served from cache on normal user requests.
+    """
+    import os as _os
+    from services.defiance_leveraged_etfs_service import (
+        get_catalog         as _d2x_catalog,
+        refresh_catalog     as _d2x_refresh,
+        get_last_refresh_ts as _d2x_ts,
+        get_quarantined     as _d2x_quarantined,
+    )
+    from services.watchlist_quote_cache import (
+        get_watchlist_quotes as _get_quotes,
+        _quote_cache         as _qc,
+    )
+    from services.theme_ticker_mapper import map_ticker_to_primary_theme
+    from services.watchlist_router import (
+        _build_defiance_rows,
+        _vol_mc_fields,
+        _get_stage2_breakout,
+    )
+
+    # ── Admin force-refresh ───────────────────────────────────────────────────
+    if force_refresh:
+        _ak = _os.getenv("AGENT_API_KEY", "")
+        _auth = request.headers.get("Authorization", "")
+        if _ak and _auth != f"Bearer {_ak}":
+            return JSONResponse(status_code=403, content={"error": "Admin only"})
+        result = await _d2x_refresh(force=True)
+        print(f"[DEFIANCE_2X] Admin force-refresh via /api/strategy/defiance: {result}")
+
+    catalog = _d2x_catalog()
+    quarantined = _d2x_quarantined()
+
+    if not catalog:
+        import asyncio as _aio
+        _aio.create_task(_d2x_refresh())
+        return JSONResponse(content={
+            "tab":              "defiance",
+            "title":            "Defiance 2× Long ETFs",
+            "rows":             [],
+            "count":            0,
+            "updated_at":       None,
+            "status":           "warming_up",
+            "unmapped_count":   len(quarantined),
+            "unmapped_etfs":    [q["defiance_etf_ticker"] for q in quarantined],
+        })
+
+    # Detailed pre-enrichment logging
+    unmapped_count = len(quarantined)
+    if unmapped_count:
+        print(
+            f"[DEFIANCE_2X] quarantined_count={unmapped_count}  "
+            f"unmapped_etfs={[q['defiance_etf_ticker'] for q in quarantined]}"
+        )
+
+    response = await _build_defiance_rows(
+        catalog      = catalog,
+        get_quotes   = _get_quotes,
+        quote_cache  = _qc,
+        get_theme    = map_ticker_to_primary_theme,
+        get_ts       = _d2x_ts,
+        tab_key      = "defiance",
+    )
+
+    # Append quarantine metadata
+    response["unmapped_count"] = unmapped_count
+    response["unmapped_etfs"]  = [q["defiance_etf_ticker"] for q in quarantined]
+
+    return JSONResponse(content=response)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Alert Signal Bus Endpoints
 # Order matters: literal-path routes must precede /{alert_id} param routes.
