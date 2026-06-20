@@ -34,6 +34,22 @@ _RESEARCH_METHOD: str = "openai_responses_web_search"
 
 OVERLAY_ANCHOR_KEYS: list[str] = ["SPCX", "OPENAI", "ANTHROPIC"]
 
+# ── Evidence quality gate config ───────────────────────────────────────────────
+
+_ANCHOR_KEYWORDS: dict[str, list[str]] = {
+    "SPCX":      ["SpaceX", "Starlink", "Falcon", "Raptor", "Starship", "launch vehicle"],
+    "OPENAI":    ["OpenAI", "GPT", "ChatGPT", "Stargate", "Azure OpenAI"],
+    "ANTHROPIC": ["Anthropic", "Claude", "Amazon Bedrock", "Google Vertex"],
+}
+
+_HEDGE_RE = re.compile(
+    r"\bmay supply\b|\bmay provide\b|\bmay be\b|\bpossibly\b|\bpossible\b|"
+    r"\bmight provide\b|\bmight supply\b|\bcould supply\b|\bcould provide\b|"
+    r"\bpotentially\b|\bpotential supplier\b|\bunconfirmed\b|\bbelieved to\b|"
+    r"\bspeculated\b|\bperhaps\b|\bmay also\b|\blikely supplies\b|\blikely provides\b",
+    re.IGNORECASE,
+)
+
 
 # ── Lazy imports ───────────────────────────────────────────────────────────────
 
@@ -237,13 +253,10 @@ def _looks_valid_ticker(ticker: str) -> bool:
     return True
 
 
-def _validate_tickers_batch_sync(tickers: list[str]) -> dict[str, bool]:
+async def _validate_tickers_async(tickers: list[str]) -> dict[str, bool]:
     """
-    Batch-validate tickers using existing market data cache.
-    Returns {ticker: is_validated}.
-
-    Validated = get_quotes returns a price OR get_fundamentals returns a profile.
-    Unvalidated = cache miss (ticker may still be real; don't reject outright).
+    Three-round ticker validation: in-memory cache → fundamentals cache → FMP live API.
+    Hard-correct for monthly research (correctness > speed).
     """
     if not tickers:
         return {}
@@ -253,32 +266,115 @@ def _validate_tickers_batch_sync(tickers: list[str]) -> dict[str, bool]:
     try:
         get_quotes, get_fundamentals = _get_quote_validators()
 
-        # Round 1: get_quotes
-        quotes = get_quotes(tickers)
+        # Round 1: in-memory quote cache
+        quotes = await asyncio.to_thread(get_quotes, tickers)
         for t in tickers:
             q = (quotes.get(t) or {}).get("quote") or {}
             price = (
-                q.get("last")
-                or q.get("close")
-                or q.get("price")
-                or q.get("regularMarketPrice")
+                q.get("last") or q.get("close")
+                or q.get("price") or q.get("regularMarketPrice")
             )
             if price:
                 result[t] = True
 
-        # Round 2: fundamentals for cache misses
+        # Round 2: fundamentals cache for remaining misses
         misses = [t for t, v in result.items() if not v]
         if misses:
-            funds = get_fundamentals(misses)
+            funds = await asyncio.to_thread(get_fundamentals, misses)
             for t in misses:
                 profile = (funds.get(t) or {}).get("profile") or {}
                 if profile.get("companyName") or profile.get("symbol"):
                     result[t] = True
 
+        # Round 3: FMP live API for any still-unvalidated tickers
+        misses2 = [t for t, v in result.items() if not v]
+        if misses2:
+            print(f"[ANCHOR_RESEARCH] cache miss for {misses2} — trying FMP live validation")
+            fmp_live = await _fmp_live_validate_batch(misses2)
+            for t, ok in fmp_live.items():
+                if ok:
+                    result[t] = True
+                    print(f"[ANCHOR_RESEARCH] ticker={t} confirmed via FMP live")
+
     except Exception as e:
         print(f"[ANCHOR_RESEARCH] ticker validation error (non-fatal): {e}")
 
     return result
+
+
+async def _fmp_live_validate_batch(tickers: list[str]) -> dict[str, bool]:
+    """Try FMP stable/quote for each ticker. Non-null price = valid & actively trading."""
+    try:
+        from config import FMP_API_KEY
+        if not FMP_API_KEY:
+            return {t: False for t in tickers}
+        from data.fmp_provider import FMPProvider
+        fmp = FMPProvider(FMP_API_KEY)
+    except Exception as e:
+        print(f"[ANCHOR_RESEARCH] FMP live init failed: {e}")
+        return {t: False for t in tickers}
+
+    async def _check(ticker: str) -> tuple[str, bool]:
+        try:
+            quote = await asyncio.wait_for(fmp.get_quote(ticker), timeout=8.0)
+            if quote and quote.get("price") is not None:
+                return ticker, True
+            profile = await asyncio.wait_for(fmp.get_company_profile(ticker), timeout=8.0)
+            return ticker, bool(profile and profile.get("name"))
+        except Exception:
+            return ticker, False
+
+    checks = await asyncio.gather(*[_check(t) for t in tickers], return_exceptions=True)
+    results: dict[str, bool] = {}
+    for item in checks:
+        if isinstance(item, Exception):
+            continue
+        t, ok = item
+        results[t] = ok
+    return results
+
+
+async def _check_source_urls_async(urls: list[str]) -> dict[str, bool]:
+    """HEAD (then GET fallback) each URL. Returns {url: reachable}."""
+    import httpx
+    results: dict[str, bool] = {}
+
+    async def _check(url: str) -> tuple[str, bool]:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; CaelynAI/1.0; research-validator)"}
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.head(url, headers=headers)
+                if resp.status_code < 400:
+                    return url, True
+                # HEAD blocked on some servers — try GET
+                resp2 = await client.get(url, headers=headers)
+                return url, resp2.status_code < 400
+        except Exception:
+            return url, False
+
+    checks = await asyncio.gather(*[_check(u) for u in urls], return_exceptions=True)
+    for item in checks:
+        if isinstance(item, Exception):
+            continue
+        u, ok = item
+        results[u] = ok
+    return results
+
+
+def _evidence_has_hedging(evidence: list[str]) -> tuple[bool, str]:
+    """Return (True, reason) if evidence contains speculative/hedging language."""
+    for e in evidence:
+        m = _HEDGE_RE.search(e)
+        if m:
+            return True, f"hedging '{m.group()}' in: {e[:120]!r}"
+    return False, ""
+
+
+def _evidence_has_anchor_keyword(evidence: list[str], anchor_key: str) -> bool:
+    """Evidence must mention at least one anchor-specific keyword."""
+    keywords = _ANCHOR_KEYWORDS.get(anchor_key.upper(), [anchor_key])
+    text = " ".join(evidence).lower()
+    return any(kw.lower() in text for kw in keywords)
 
 
 # ── Node validation ────────────────────────────────────────────────────────────
@@ -288,11 +384,12 @@ def _validate_node(
     anchor_key: str,
     web_search_sources: list[dict],
     ticker_validation: dict[str, bool],
+    url_reachable: dict[str, bool] | None = None,
 ) -> dict:
     """
     Validate and normalise a single researched node dict.
-    Raises ValueError if the node fails hard validation.
-    Returns a clean dict ready to upsert.
+    Hard failures → ValueError (node rejected entirely).
+    Soft failures → returned dict has research_status='pending_review' + validation_notes.
     """
     if not isinstance(node, dict):
         raise ValueError(f"Node is not a dict: {type(node)}")
@@ -380,12 +477,71 @@ def _validate_node(
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    # ── Soft gates (→ pending_review, not hard rejection) ─────────────────────
+    soft_failures: list[str] = []
+
+    # S1: ticker must be market-validated (cache or FMP live)
+    if not ticker_validated:
+        soft_failures.append(
+            f"ticker_validated=False: {ticker!r} not confirmed in cache or FMP live"
+        )
+
+    # S2: evidence must not contain speculative/hedging language
+    hedged, hedge_reason = _evidence_has_hedging(evidence)
+    if hedged:
+        soft_failures.append(f"evidence_hedged: {hedge_reason}")
+
+    # S3: evidence must mention at least one anchor-specific keyword
+    if not _evidence_has_anchor_keyword(evidence, anchor_key):
+        kws = _ANCHOR_KEYWORDS.get(anchor_key.upper(), [anchor_key])
+        soft_failures.append(f"evidence_missing_anchor_keyword: no mention of {kws}")
+
+    # S4: source URLs must have a specific path (not just a bare homepage domain)
+    # We check URL format only — HTTP reachability is logged separately but not a hard gate
+    # because the model sometimes returns real but paywalled or CDN-managed URLs.
+    if source_urls:
+        from urllib.parse import urlparse
+        specific_urls = []
+        for u in source_urls:
+            try:
+                parsed = urlparse(u)
+                path = (parsed.path or "").rstrip("/")
+                segs = [s for s in path.split("/") if s and s not in ("index.html", "index.htm", "index.php")]
+                if len(segs) >= 1:
+                    specific_urls.append(u)
+            except Exception:
+                pass
+        if not specific_urls:
+            soft_failures.append(
+                f"source_urls_are_homepages: {len(source_urls)} URL(s) have no specific path beyond the domain"
+            )
+
+    # Log reachability diagnostics (advisory only — does NOT block approval)
+    if url_reachable is not None and source_urls:
+        reachable = [u for u in source_urls if url_reachable.get(u, False)]
+        if not reachable:
+            print(
+                f"[ANCHOR_RESEARCH] {anchor_key}: advisory — {ticker!r} source URLs all unresolved "
+                f"(not blocking approval; check for paywalls/CDN rewrites)"
+            )
+
+    research_status = "approved" if not soft_failures else "pending_review"
+    validation_notes = "; ".join(soft_failures) if soft_failures else None
+
+    if soft_failures:
+        print(
+            f"[ANCHOR_RESEARCH] {anchor_key}: node {ticker!r} → pending_review "
+            f"({len(soft_failures)} soft gate(s) failed)"
+        )
+        for sf in soft_failures:
+            print(f"[ANCHOR_RESEARCH]   • {sf}")
+
     return {
         "anchor_key":                     anchor_key.upper(),
         "anchor_name":                    str(node.get("anchor_name") or "").strip(),
         "ticker":                         ticker,
         "company_name":                   company_name,
-        "is_public":                      True,   # always True — public companies only
+        "is_public":                      True,
         "exchange":                       str(node.get("exchange") or "").strip() or None,
         "tradingview_symbol":             tradingview_symbol,
         "supply_chain_role":              supply_chain_role,
@@ -406,6 +562,8 @@ def _validate_node(
         "public_market_proxy_reason":     str(node.get("public_market_proxy_reason") or "").strip() or None,
         "overlap_existing_node_registry": False,
         "ticker_validated":               ticker_validated,
+        "research_status":                research_status,
+        "validation_notes":               validation_notes,
         "last_researched_at":             now_iso,
     }
 
@@ -591,7 +749,7 @@ async def run_anchor_research(
     if not isinstance(raw_nodes, list):
         raw_nodes = []
 
-    # ── Ticker validation (batch, cache-based) ────────────────────────────────
+    # ── Ticker validation — cache + FMP live fallback ────────────────────────
     candidate_tickers = []
     for n in raw_nodes[:_MAX_NODES_ACCEPTED]:
         t = str(n.get("ticker") or "").strip().upper()
@@ -600,34 +758,65 @@ async def run_anchor_research(
 
     ticker_validation: dict[str, bool] = {}
     if candidate_tickers:
-        ticker_validation = await asyncio.to_thread(
-            _validate_tickers_batch_sync, candidate_tickers
-        )
-        validated_list = [t for t, v in ticker_validation.items() if v]
+        ticker_validation = await _validate_tickers_async(candidate_tickers)
+        validated_list   = [t for t, v in ticker_validation.items() if v]
         unvalidated_list = [t for t, v in ticker_validation.items() if not v]
         print(
             f"[ANCHOR_RESEARCH] {anchor_key}: ticker validation — "
             f"validated={validated_list}, unvalidated={unvalidated_list}"
         )
 
-    # ── Validate nodes ────────────────────────────────────────────────────────
-    validated: list[dict] = []
-    rejected: list[dict] = []
+    # ── Source URL reachability (advisory diagnostic — not a blocking gate) ───
+    # S4 now checks URL path-specificity only (no network). HTTP reachability
+    # fires in the background and logs results without delaying node approval.
+    url_reachable: dict[str, bool] = {}
+    all_candidate_urls: list[str] = [
+        u.strip()
+        for n in raw_nodes[:_MAX_NODES_ACCEPTED]
+        for u in (n.get("source_urls") or [])
+        if isinstance(u, str) and u.strip()
+    ]
+    if all_candidate_urls:
+        async def _log_url_reachability() -> None:
+            try:
+                result = await _check_source_urls_async(all_candidate_urls)
+                n_ok = sum(1 for v in result.values() if v)
+                print(
+                    f"[ANCHOR_RESEARCH] {anchor_key}: url-reachability (advisory): "
+                    f"{n_ok}/{len(result)} resolved"
+                )
+            except Exception as exc:
+                print(f"[ANCHOR_RESEARCH] {anchor_key}: url-reachability check failed: {exc}")
+        asyncio.create_task(_log_url_reachability())
+
+    # ── Validate and gate each node ───────────────────────────────────────────
+    all_nodes: list[dict] = []   # approved + pending_review
+    rejected:  list[dict] = []   # hard-rejected (missing required fields)
 
     for raw_node in raw_nodes[:_MAX_NODES_ACCEPTED]:
         try:
             clean = _validate_node(
-                raw_node, anchor_key, web_search_sources, ticker_validation
+                raw_node, anchor_key, web_search_sources, ticker_validation, url_reachable
             )
-            validated.append(clean)
+            all_nodes.append(clean)
         except ValueError as ve:
             rejected.append({"node": raw_node, "reason": str(ve)})
-            print(f"[ANCHOR_RESEARCH] {anchor_key}: node rejected — {ve}")
+            print(f"[ANCHOR_RESEARCH] {anchor_key}: node hard-rejected — {ve}")
 
-    if len(validated) < _MIN_NODES_REQUIRED:
+    approved_nodes = [n for n in all_nodes if n.get("research_status") == "approved"]
+    pending_nodes  = [n for n in all_nodes if n.get("research_status") == "pending_review"]
+
+    print(
+        f"[ANCHOR_RESEARCH] {anchor_key}: gate results — "
+        f"approved={len(approved_nodes)}, pending_review={len(pending_nodes)}, "
+        f"hard_rejected={len(rejected)}"
+    )
+
+    if len(approved_nodes) < _MIN_NODES_REQUIRED:
         err_str = (
-            f"Only {len(validated)} valid nodes returned (min {_MIN_NODES_REQUIRED}). "
-            f"Rejected {len(rejected)}."
+            f"Only {len(approved_nodes)} approved nodes (min {_MIN_NODES_REQUIRED}). "
+            f"Pending_review={len(pending_nodes)}, hard_rejected={len(rejected)}. "
+            f"Pending nodes: {[n['ticker'] for n in pending_nodes]}"
         )
         print(f"[ANCHOR_RESEARCH] {anchor_key}: {err_str}")
         finish_research_run(run_id, status="insufficient_nodes", nodes_written=0, error=err_str)
@@ -638,13 +827,13 @@ async def run_anchor_research(
             error=err_str,
         )
 
-    # ── Write to DB ───────────────────────────────────────────────────────────
+    # ── Write to DB — approved + pending_review nodes ────────────────────────
     now = datetime.now(timezone.utc)
     next_due = now + timedelta(days=_RESEARCH_INTERVAL_DAYS)
     ok = upsert_anchor_research_nodes(
         anchor_key=anchor_key,
         anchor_name=anchor_name,
-        nodes=validated,
+        nodes=all_nodes,          # upsert writes each node with its research_status
         model=_RESEARCH_MODEL,
         prompt_version=PROMPT_VERSION,
         prompt_hash=PROMPT_HASH,
@@ -662,34 +851,215 @@ async def run_anchor_research(
             error=err_str,
         )
 
-    finish_research_run(run_id, status="ok", nodes_written=len(validated), error=None)
+    finish_research_run(run_id, status="ok", nodes_written=len(approved_nodes), error=None)
     elapsed = round(_time.monotonic() - t0, 2)
-    tickers_validated   = [n["ticker"] for n in validated if n.get("ticker_validated")]
-    tickers_unvalidated = [n["ticker"] for n in validated if not n.get("ticker_validated")]
+    tickers_validated   = [n["ticker"] for n in approved_nodes if n.get("ticker_validated")]
+    tickers_unvalidated = [n["ticker"] for n in pending_nodes]
 
     print(
-        f"[ANCHOR_RESEARCH] {anchor_key}: done — {len(validated)} nodes written, "
-        f"{len(rejected)} rejected, {web_searches_fired} web searches, {elapsed}s"
+        f"[ANCHOR_RESEARCH] {anchor_key}: done — {len(approved_nodes)} approved, "
+        f"{len(pending_nodes)} pending_review, {len(rejected)} hard-rejected, "
+        f"{web_searches_fired} web searches, {elapsed}s"
     )
     return {
-        "status":              "ok",
-        "anchor_key":          anchor_key,
-        "anchor_name":         anchor_name,
-        "nodes_written":       len(validated),
-        "nodes_rejected":      len(rejected),
-        "rejection_reasons":   [r["reason"] for r in rejected],
-        "tickers_validated":   tickers_validated,
-        "tickers_unvalidated": tickers_unvalidated,
-        "web_searches_fired":  web_searches_fired,
-        "last_researched_at":  now.isoformat(),
+        "status":               "ok",
+        "anchor_key":           anchor_key,
+        "anchor_name":          anchor_name,
+        "nodes_written":        len(approved_nodes),
+        "nodes_pending_review": len(pending_nodes),
+        "nodes_rejected":       len(rejected),
+        "rejection_reasons":    [r["reason"] for r in rejected],
+        "pending_reasons":      [
+            {"ticker": n["ticker"], "notes": n.get("validation_notes")}
+            for n in pending_nodes
+        ],
+        "tickers_validated":    tickers_validated,
+        "tickers_unvalidated":  tickers_unvalidated,
+        "web_searches_fired":   web_searches_fired,
+        "last_researched_at":   now.isoformat(),
         "next_research_due_at": next_due.isoformat(),
-        "model":               _RESEARCH_MODEL,
-        "prompt_version":      PROMPT_VERSION,
-        "prompt_hash":         PROMPT_HASH,
-        "research_method":     _RESEARCH_METHOD,
-        "elapsed_s":           elapsed,
-        "error":               None,
-        "skipped_reason":      None,
+        "model":                _RESEARCH_MODEL,
+        "prompt_version":       PROMPT_VERSION,
+        "prompt_hash":          PROMPT_HASH,
+        "research_method":      _RESEARCH_METHOD,
+        "elapsed_s":            elapsed,
+        "error":                None,
+        "skipped_reason":       None,
+    }
+
+
+# ── Standalone revalidation (existing approved rows, no LLM call) ──────────────
+
+_MIN_APPROVED_NODES: int = 8   # threshold below which a re-run is recommended
+
+async def revalidate_anchor_nodes(anchor_key: str) -> dict:
+    """
+    Re-run validation gates on existing approved nodes WITHOUT calling the LLM.
+
+    For each approved row:
+    1. Re-check ticker via FMP live if not already validated.
+    2. Check source URL reachability (HEAD/GET).
+    3. Check evidence for hedging language.
+    4. Check evidence for anchor-specific keywords.
+    Rows failing any gate are moved to pending_review in the DB.
+
+    Returns a full per-row report plus approved/pending counts.
+    Recommends a re-run if approved < _MIN_APPROVED_NODES (8).
+    """
+    import time as _time
+    t0 = _time.monotonic()
+    anchor_key = anchor_key.upper()
+
+    from data.screener_hub_store import (
+        get_anchor_research_nodes,
+        update_node_statuses,
+        ensure_anchor_research_tables,
+    )
+
+    ensure_anchor_research_tables()
+    rows = get_anchor_research_nodes(anchor_key, status="approved")
+
+    if not rows:
+        return {
+            "anchor_key":    anchor_key,
+            "status":        "no_approved_rows",
+            "approved":      0,
+            "pending_review": 0,
+            "recommend_rerun": True,
+            "details":       [],
+            "elapsed_s":     round(_time.monotonic() - t0, 2),
+        }
+
+    # ── Step 1: FMP live validation for unvalidated tickers ───────────────────
+    unvalidated_tickers = [r["ticker"] for r in rows if not r.get("ticker_validated")]
+    fmp_results: dict[str, bool] = {}
+    if unvalidated_tickers:
+        print(
+            f"[REVALIDATE] {anchor_key}: {unvalidated_tickers} have ticker_validated=False "
+            f"— trying FMP live"
+        )
+        fmp_results = await _fmp_live_validate_batch(unvalidated_tickers)
+        for t, ok in fmp_results.items():
+            print(f"[REVALIDATE] {anchor_key}: FMP live {t!r} → {ok}")
+
+    # ── Step 2: Source URL reachability (advisory / diagnostic only) ──────────
+    all_urls: list[str] = list({
+        u for r in rows for u in (r.get("source_urls") or []) if u
+    })
+    url_reachable: dict[str, bool] = {}
+    if all_urls:
+        print(f"[REVALIDATE] {anchor_key}: checking {len(all_urls)} source URL(s) (advisory)…")
+        url_reachable = await _check_source_urls_async(all_urls)
+        n_ok = sum(1 for v in url_reachable.values() if v)
+        print(f"[REVALIDATE] {anchor_key}: {n_ok}/{len(all_urls)} URLs reachable (advisory; not a hard gate)")
+
+    # ── Step 3: Apply gates to each row ───────────────────────────────────────
+    updates:  list[dict] = []
+    details:  list[dict] = []
+
+    for row in rows:
+        ticker       = row["ticker"]
+        evidence     = row.get("evidence") or []
+        source_urls  = row.get("source_urls") or []
+        was_validated = bool(row.get("ticker_validated", False))
+        gates_failed: list[str] = []
+
+        # G1: ticker_validated
+        is_validated = was_validated or bool(fmp_results.get(ticker, False))
+        if not is_validated:
+            gates_failed.append(
+                f"ticker_validated=False: {ticker!r} not confirmed in cache or FMP live"
+            )
+
+        # G2: hedging language
+        hedged, hedge_reason = _evidence_has_hedging(evidence)
+        if hedged:
+            gates_failed.append(f"evidence_hedged: {hedge_reason}")
+
+        # G3: anchor keyword
+        if not _evidence_has_anchor_keyword(evidence, anchor_key):
+            kws = _ANCHOR_KEYWORDS.get(anchor_key, [anchor_key])
+            gates_failed.append(f"evidence_missing_anchor_keyword: {kws}")
+
+        # G4: source URLs must have a specific path (not just bare homepage domains)
+        # HTTP reachability is logged above but is advisory — CDN/paywall redirects cause false negatives.
+        if source_urls:
+            from urllib.parse import urlparse
+            specific_urls: list[str] = []
+            for u in source_urls:
+                try:
+                    parsed = urlparse(u)
+                    path = (parsed.path or "").rstrip("/")
+                    segs = [s for s in path.split("/")
+                            if s and s not in ("index.html", "index.htm", "index.php")]
+                    if len(segs) >= 1:
+                        specific_urls.append(u)
+                except Exception:
+                    pass
+            if not specific_urls:
+                gates_failed.append(
+                    f"source_urls_are_homepages: {len(source_urls)} URL(s) have no specific path"
+                )
+
+        new_status       = "approved" if not gates_failed else "pending_review"
+        validation_notes = "; ".join(gates_failed) if gates_failed else "all_gates_passed"
+
+        bn = row.get("bottleneck_score")
+        try:
+            bn = float(bn) if bn is not None else None
+        except (TypeError, ValueError):
+            bn = None
+
+        details.append({
+            "ticker":                  ticker,
+            "company_name":            row.get("company_name", ""),
+            "bottleneck_score":        bn,
+            "confidence":              row.get("confidence"),
+            "relationship_type":       row.get("relationship_type"),
+            "ticker_validated_before": was_validated,
+            "ticker_validated_after":  is_validated,
+            "new_status":              new_status,
+            "gates_failed":            gates_failed,
+            "source_urls_reachable":   {u: url_reachable.get(u) for u in source_urls},
+        })
+
+        # Only update if status is changing or ticker_validated is newly confirmed
+        if gates_failed or (is_validated and not was_validated):
+            updates.append({
+                "id":               row["id"],
+                "research_status":  new_status,
+                "ticker_validated": is_validated,
+                "validation_notes": validation_notes,
+            })
+
+    # ── Step 4: Write status changes to DB ────────────────────────────────────
+    if updates:
+        n_updated = update_node_statuses(updates)
+        print(f"[REVALIDATE] {anchor_key}: updated {n_updated} row(s) in DB")
+
+    approved_count = sum(1 for d in details if d["new_status"] == "approved")
+    pending_count  = sum(1 for d in details if d["new_status"] == "pending_review")
+    recommend_rerun = approved_count < _MIN_APPROVED_NODES
+
+    elapsed = round(_time.monotonic() - t0, 2)
+    print(
+        f"[REVALIDATE] {anchor_key}: done — approved={approved_count}, "
+        f"pending_review={pending_count}, recommend_rerun={recommend_rerun}, "
+        f"elapsed={elapsed}s"
+    )
+
+    return {
+        "anchor_key":      anchor_key,
+        "status":          "ok",
+        "approved":        approved_count,
+        "pending_review":  pending_count,
+        "recommend_rerun": recommend_rerun,
+        "rerun_reason":    (
+            f"Only {approved_count} approved nodes; minimum recommended is {_MIN_APPROVED_NODES}"
+            if recommend_rerun else None
+        ),
+        "details":         details,
+        "elapsed_s":       elapsed,
     }
 
 

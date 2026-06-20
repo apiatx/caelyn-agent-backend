@@ -14,7 +14,7 @@ import hashlib
 import os
 from typing import Optional
 
-PROMPT_VERSION: str = "serenity_anchor_bottleneck_research_v2"
+PROMPT_VERSION: str = "serenity_anchor_bottleneck_research_v4"
 
 # ── Serenity system prompt (public-only, web-search aware) ────────────────────
 
@@ -77,12 +77,16 @@ Do NOT cite:
 - Unverified rumors or speculation
 - General industry descriptions not tied to the anchor
 
-SOURCE URL RULES
-For each node, include source_urls from the web pages you actually searched.
-- source_urls must be URLs you found and used during your web search — not invented.
-- If a source URL supports the evidence, include it.
-- source_titles should contain the page title or article title.
-- Do NOT fabricate URLs. If you did not find a direct URL, omit source_urls rather than guess.
+SOURCE URL RULES — ABSOLUTE REQUIREMENT
+- source_urls MUST contain ONLY URLs that appeared verbatim in your web search results or browser tool output.
+- Copy URLs character-for-character from your search results. Do NOT construct or guess URLs.
+- Do NOT modify a URL you found — copy it exactly as it appeared in the search result.
+- Do NOT include a URL unless you confirmed it appeared in a search result you received.
+- If you cannot find a supporting URL in your search results for a node, set source_urls to [] rather than fabricate one.
+- A fabricated URL (one you constructed from the company name + a plausible path) is WORSE than no URL.
+- source_titles must match the actual page title from the search result — do not write titles you invent.
+- Acceptable: direct links to press releases, SEC filings, news articles, investor day pages, 10-K filings.
+- Not acceptable: homepage URLs (https://www.company.com), constructed news paths, or guessed article URLs.
 
 ANTI-HALLUCINATION GUARDRAILS
 - If you cannot name a specific, verifiable supplier relationship, do NOT include the company.
@@ -177,7 +181,23 @@ ANCHOR_CONFIGS: dict[str, dict] = {
         "anti_duplication_note": (
             "SpaceX supply chain is distinct from AI lab supply chains. "
             "Do not include general data center or GPU infrastructure. "
-            "Focus on launch vehicle hardware, satellite hardware, propulsion, and launch site infrastructure."
+            "Focus on launch vehicle hardware, satellite hardware, propulsion, and launch site infrastructure.\n\n"
+            "SPCX-SPECIFIC QUALITY RULES — READ CAREFULLY:\n\n"
+            "RULE 1 — Do NOT include Virgin Galactic / SPCE. It is a space tourism competitor, not a SpaceX supplier.\n\n"
+            "RULE 2 — Defense primes (Boeing BA, Northrop Grumman NOC, Raytheon RTX, L3Harris LHX) must ONLY be included "
+            "if you find a CONFIRMED, NAMED contract or supply agreement with SpaceX in your web search — not based on sector overlap.\n"
+            "   - WRONG: 'Boeing provides satellite buses for Starlink' — SpaceX builds all Starlink satellites in-house.\n"
+            "   - WRONG: 'Northrop provides solid rocket boosters for Falcon Heavy' — Falcon Heavy uses liquid Merlin engines only.\n"
+            "   - WRONG: 'Raytheon provides laser ISLs for Starlink' — SpaceX builds its own inter-satellite laser links.\n"
+            "   - ONLY include a defense prime if your web search returns a specific documented SpaceX supply agreement.\n\n"
+            "RULE 3 — Specialty L2/L3/L4 suppliers (metals, alloys, composites, castings, forgings, chemicals, electronics, "
+            "RF components, cryogenic hardware) do NOT need a named formal contract. They are valid if your evidence explicitly "
+            "names SpaceX or a SpaceX program (Falcon 9, Starlink, Starship, Raptor, Dragon) and describes the product supplied.\n"
+            "   - CORRECT: 'ATI Inc. supplies titanium and nickel superalloys used in SpaceX Falcon 9 propulsion components, "
+            "confirmed in ATI's 2022 annual report citing aerospace customers.'\n"
+            "   - CORRECT: 'Hexcel supplies carbon fiber prepregs for SpaceX Falcon 9 fairing panels, referenced in Hexcel "
+            "investor presentations and industry supply-chain reports.'\n\n"
+            "RULE 4 — Source URLs must be copied verbatim from your web search results. Do NOT construct URLs."
         ),
     },
     "OPENAI": {
@@ -279,6 +299,11 @@ Critical instructions:
 4. For each company, cite the specific source URL from your web search.
 5. Prefer undercovered, scarce bottleneck suppliers over obvious mega-caps.
 6. The seed lenses are starting points only — your web search should discover additional bottlenecks.
+7. EVERY evidence string MUST explicitly name "{anchor_name}" or a specific program/product of {anchor_name} \
+(e.g., SpaceX, Starlink, Falcon 9, Falcon Heavy, Starship, Raptor engine, Merlin engine, Dragon). \
+Evidence that says only "aerospace", "rocket", "launch vehicle", or "space" without naming {anchor_name} \
+or one of its named programs is INSUFFICIENT and will be rejected. If you cannot find evidence that \
+explicitly names {anchor_name} or its programs, do NOT include the company.
 
 Anti-duplication note for this anchor:
 {anti_dup}

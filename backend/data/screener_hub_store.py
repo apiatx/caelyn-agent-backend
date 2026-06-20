@@ -2658,6 +2658,8 @@ def _arcn_migrate_sql() -> str:
         ADD COLUMN IF NOT EXISTS web_search_sources JSONB NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE public.anchor_supply_chain_research_nodes
         ADD COLUMN IF NOT EXISTS ticker_validated BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE public.anchor_supply_chain_research_nodes
+        ADD COLUMN IF NOT EXISTS validation_notes TEXT NULL;
 
     -- Replace the full unique index with a partial index restricted to 'approved' rows.
     -- This allows quarantined (pending_review) rows to coexist with new approved rows
@@ -2748,7 +2750,7 @@ def upsert_anchor_research_nodes(
                     evidence, source_urls, source_titles, web_search_sources, giant_anchors,
                     why_it_matters, why_hidden, why_now, what_would_break_thesis,
                     public_market_proxy_reason, overlap_existing_node_registry,
-                    ticker_validated,
+                    ticker_validated, validation_notes,
                     last_researched_at, next_research_due_at,
                     research_model, prompt_version, prompt_hash,
                     research_status, created_at, updated_at
@@ -2759,10 +2761,10 @@ def upsert_anchor_research_nodes(
                     %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
                     %s, %s, %s, %s,
                     %s, %s,
-                    %s,
+                    %s, %s,
                     %s, %s,
                     %s, %s, %s,
-                    'approved', NOW(), NOW()
+                    %s, NOW(), NOW()
                 )
                 """,
                 (
@@ -2791,11 +2793,13 @@ def upsert_anchor_research_nodes(
                     node.get("public_market_proxy_reason"),
                     bool(node.get("overlap_existing_node_registry", False)),
                     bool(node.get("ticker_validated", False)),
+                    node.get("validation_notes"),
                     last_researched_at,
                     next_research_due_at,
                     model,
                     prompt_version,
                     prompt_hash,
+                    str(node.get("research_status") or "approved"),
                 ),
             )
         conn.commit()
@@ -2850,6 +2854,54 @@ def quarantine_anchor_research_nodes(anchor_key: str) -> int:
         _put_conn(conn)
 
 
+def update_node_statuses(updates: list[dict]) -> int:
+    """
+    Update research_status, ticker_validated, and validation_notes for specific nodes.
+    Each entry in `updates` must have: {id, research_status, ticker_validated, validation_notes}.
+    Returns the total number of rows updated.
+    """
+    if not updates:
+        return 0
+    ensure_anchor_research_tables()
+    conn = _get_conn()
+    if conn is None:
+        return 0
+    try:
+        cur = conn.cursor()
+        count = 0
+        for u in updates:
+            cur.execute(
+                """
+                UPDATE public.anchor_supply_chain_research_nodes
+                SET research_status  = %s,
+                    ticker_validated = %s,
+                    validation_notes = %s,
+                    updated_at       = NOW()
+                WHERE id = %s
+                """,
+                (
+                    str(u.get("research_status", "pending_review")),
+                    bool(u.get("ticker_validated", False)),
+                    u.get("validation_notes"),
+                    int(u["id"]),
+                ),
+            )
+            count += cur.rowcount
+        conn.commit()
+        cur.close()
+        print(f"[ARCN] update_node_statuses: updated {count} row(s)")
+        return count
+    except Exception as e:
+        print(f"[ARCN] update_node_statuses error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        _put_conn(conn)
+
+
 def get_anchor_research_nodes(
     anchor_key: str,
     status: str = "approved",
@@ -2867,13 +2919,14 @@ def get_anchor_research_nodes(
         cur.execute(
             """
             SELECT
+                id,
                 anchor_key, anchor_name, ticker, company_name,
                 is_public, exchange, tradingview_symbol, supply_chain_role, relationship_type,
                 themes, layer, bottleneck_score, confidence,
                 evidence, source_urls, source_titles, web_search_sources, giant_anchors,
                 why_it_matters, why_hidden, why_now, what_would_break_thesis,
                 public_market_proxy_reason, overlap_existing_node_registry,
-                ticker_validated,
+                ticker_validated, validation_notes,
                 last_researched_at, next_research_due_at,
                 research_model, prompt_version, prompt_hash, research_status
             FROM public.anchor_supply_chain_research_nodes

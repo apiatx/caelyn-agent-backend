@@ -10,6 +10,7 @@ GET  /api/admin/screener-hub/thin-themes         (X-API-Key: AGENT_API_KEY) — 
 POST /api/admin/screener-hub/rebuild-thin        (X-API-Key: AGENT_API_KEY) — sequential rebuild for thin themes
 POST /api/admin/bottlenecks/refresh              (X-API-Key: AGENT_API_KEY) — force full CR regen + universe rebuild
 POST /api/admin/bottlenecks/research-anchor      (X-API-Key: AGENT_API_KEY) — run LLM research for one overlay anchor
+POST /api/admin/bottlenecks/revalidate-anchor    (X-API-Key: AGENT_API_KEY) — re-run validation gates on existing approved nodes (no LLM)
 POST /api/admin/bottlenecks/research-anchors-monthly (X-API-Key: AGENT_API_KEY) — run monthly refresh for all overlay anchors
 GET  /api/admin/bottlenecks/research-status      (X-API-Key: AGENT_API_KEY) — overlay anchor research status
 GET  /api/debug/bottlenecks-snapshot             (X-API-Key: AGENT_API_KEY) — diagnostics for snapshot state
@@ -895,6 +896,61 @@ async def bottlenecks_research_anchor(
 
     status_code = 200 if result.get("status") in ("ok", "skipped") else 500
     return JSONResponse(status_code=status_code, content=result)
+
+
+# ── POST /api/admin/bottlenecks/revalidate-anchor ─────────────────────────────
+# Re-run validation gates on existing approved nodes WITHOUT calling the LLM.
+# Use after a research run to tighten gates or when manually reviewing quality.
+
+@router.post("/api/admin/bottlenecks/revalidate-anchor")
+async def bottlenecks_revalidate_anchor(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+    anchor:  str  = Query(..., description="Anchor key: SPCX | OPENAI | ANTHROPIC"),
+):
+    """
+    Re-run all validation gates on existing approved nodes (no LLM call).
+
+    Checks each approved row:
+    - ticker_validated: FMP live API fallback for cache misses (hard gate)
+    - evidence_hedged: reject speculative language like 'may supply'
+    - evidence_anchor_keyword: evidence must mention the anchor
+    - source_url_reachable: at least one URL must return HTTP 2xx/3xx
+
+    Rows failing any gate → research_status = pending_review.
+    Returns per-row report with gate results and a recommend_rerun flag
+    (True when approved count < 8 after revalidation).
+
+    Requires X-API-Key header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    from services.anchor_research_service import revalidate_anchor_nodes, OVERLAY_ANCHOR_KEYS
+
+    anchor_key = anchor.strip().upper()
+    if anchor_key not in OVERLAY_ANCHOR_KEYS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "error":  f"Unknown anchor {anchor_key!r}. Valid: {sorted(OVERLAY_ANCHOR_KEYS)}",
+            },
+        )
+
+    print(f"[REVALIDATE_ANCHOR] starting anchor={anchor_key}")
+    try:
+        result = await revalidate_anchor_nodes(anchor_key)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "error": str(e), "anchor": anchor_key},
+        )
+
+    return JSONResponse(status_code=200, content=result)
 
 
 # ── POST /api/admin/bottlenecks/research-anchors-monthly ──────────────────────
