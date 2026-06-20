@@ -1,0 +1,257 @@
+The hard truth: for Meta, the bottleneck is now less “apps/social” and more gigawatts + accelerators + packaging + HBM + optics + cooling. The public market alpha is usually one layer below the obvious vendor, not always the logo on the rack.
+
+Thought for 2m 59s
+Meta supply-chain thesis
+
+Meta is no longer “just” an ad platform. The real bottleneck stack is compute → packaging/HBM → networking/optics → power/cooling → data-center execution. Meta raised 2026 capex guidance to $125B–$145B, citing higher component pricing and future data-center capacity costs. That tells you exactly where the stress is.
+
+Meta has confirmed it is using NVIDIA, AMD, and its own MTIA custom silicon, with GB200/GB300-class racks driving absurd power density and liquid-cooling needs. AMD now has a multi-year 6GW Instinct GPU agreement with Meta, while Broadcom has a direct MTIA custom silicon + packaging + networking partnership with an initial >1GW deployment and multi-GW roadmap.
+
+This is exactly the “work backward from hyperscaler capex into physical bottlenecks” framework: map the end customer, find the scarce chokepoints, then identify public companies with the highest replacement difficulty. The power-law reason this matters: the best returns often come from a small number of companies sitting at the intersection of possibility, adoption, and market misunderstanding.
+
+Legend: C = confirmed/direct Meta relationship, P = public partner/contracted capacity, I = indirect upstream exposure through NVIDIA/AMD/Broadcom/TSMC/data-center stack, E = ecosystem bottleneck, not proven direct.
+Score is bottleneck importance to Meta, not a buy rating.
+
+Highest-score public bottlenecks
+Score	Company / Ticker	Layer	Link	Why it matters
+100	Broadcom / AVGO	MTIA custom silicon, XPU platform, Ethernet, packaging	C	Direct Meta MTIA partner; chip design + packaging + AI networking in one vendor. One of the nastiest chokepoints.
+99	AMD / AMD	AI GPUs, EPYC CPUs, rack-scale systems	C	6GW Meta agreement across Instinct GPUs; first 1GW begins 2H26 with custom MI450-based GPU.
+98	NVIDIA / NVDA	Blackwell/GB200/GB300 GPU systems	C	Still the default AI accelerator supplier; Meta engineering shows NVIDIA Blackwell deployment.
+98	TSMC / TSM, 2330.TW	Foundry, 2nm, CoWoS/advanced packaging	I	Enables NVIDIA, AMD, Broadcom/MTIA. If TSMC bottlenecks, everything bottlenecks.
+96	SK hynix / 000660.KS	HBM	I	Primary NVIDIA HBM supplier; HBM remains one of the tightest AI chip constraints. Reuters describes SK hynix as primary HBM supplier to NVIDIA.
+95	Arista Networks / ANET	AI Ethernet switching	C	Meta deployed Arista 7700R4 DES for latest Ethernet AI cluster; Meta-Arista co-development goes back years.
+94	Corning / GLW	Fiber optic cable/connectivity	C	Meta signed deal worth up to $6B for AI data-center fiber, with Meta as anchor customer at Corning’s Hickory plant.
+93	Entergy / ETR	Utility power, gas generation, transmission	C	Building >5.2GW of gas-fired generation for Meta data centers in Louisiana.
+92	Micron / MU	HBM, DRAM, NAND	I	HBM/DRAM/NAND exposure; U.S. memory supplier. Critical if Meta wants more non-SK Hynix supply diversity.
+92	Vertiv / VRT	Power, thermal, liquid cooling	E/I	Not Meta-confirmed in sources here, but core AI data-center power/cooling supplier. Meta’s high-density racks make this layer unavoidable.
+91	Samsung Electronics / 005930.KS	HBM, DRAM, NAND, foundry, displays	I	Memory diversification, NAND/storage, and device displays; also part of the broader HBM4/HBM3E race.
+91	Eaton / ETN	Switchgear, UPS, electrical distribution	E/I	Critical electrical infrastructure for high-density data centers. Replacement is hard because lead times and certifications matter.
+90	Schneider Electric / SU.PA / SBGSY	Power, cooling, energy management	E/I	AI data-center power/cooling platform; also partnered with Foxconn on next-gen AI data-center infrastructure.
+90	CoreWeave / CRWV	Neocloud AI compute capacity	C/P	Meta signed $21B additional cloud capacity deal on top of prior $14.2B; gives Meta early access to NVIDIA Vera Rubin chips.
+89	Nebius / NBIS	Neocloud GPU + power capacity	C/P	Meta agreed to $12B AI capacity by 2027 plus potential $15B more; total up to $27B.
+88	Williams / WMB	Gas infrastructure / off-grid power	C/P	Reuters says a Williams subsidiary is building Apollo Generating Station to serve Meta’s Ohio data center.
+88	NextEra Energy / NEE	Renewable PPAs, storage	C	Meta and NextEra reached ~2.5GW of clean energy contracts through 11 PPAs and 2 storage agreements.
+87	Alphabet / GOOGL	Third-party cloud / TPU capacity	P	Reuters says Meta signed contracts with Alphabet/Google as part of capacity expansion.
+86	Coherent / COHR	Optical components, lasers, transceivers	I/E	High-speed optics beneficiary; NVIDIA also committed capital to Coherent/Lumentum for AI photonics capacity.
+86	Lumentum / LITE	Lasers, optical components	I/E	Strong AI optics leverage; NVIDIA photonics commitments validate the bottleneck.
+85	GE Vernova / GEV	Gas turbines, grid equipment	E/I	If Meta’s bottleneck is gigawatts, turbines and grid gear become picks-and-shovels.
+85	Quanta / 2382.TW	AI server/rack ODM	I	Major AI server ODM exposure; key to turning GPUs into deployable rack systems.
+84	Hon Hai / Foxconn / 2317.TW	AI server manufacturing, systems	I	AI server/rack manufacturing; partnered with Schneider on AI data-center infra.
+84	Wiwynn / 6669.TW	Hyperscale AI servers	I	One of the most levered public server ODMs to hyperscale AI buildouts.
+84	Marvell / MRVL	DSPs, custom silicon, connectivity	I/E	Not Meta-confirmed here, but important in AI networking/custom silicon supply chain.
+83	ASE Technology / ASX, 3711.TW	OSAT, advanced packaging	I	Upstream packaging capacity for AI chips and chiplets.
+83	Astera Labs / ALAB	PCIe/CXL retimers, connectivity	I/E	High-speed inside-rack connectivity; benefits as GPU systems get more complex.
+83	Credo / CRDO	AECs, SerDes, AI connectivity	I/E	Copper/optical interconnect bottleneck name; small enough to matter for asymmetry.
+82	Amkor / AMKR	Advanced packaging / OSAT	I	Packaging overflow and advanced OSAT capacity.
+82	Applied Optoelectronics / AAOI	800G optical transceivers	E/I	Smaller public optics pure-play; demand from AI data centers is the thesis, not proven Meta-direct.
+82	Amphenol / APH	Connectors, cables, interconnect	I/E	Dense GPU racks consume a stupid amount of connectors. Boring, critical, beautiful.
+82	Caterpillar / CAT	Backup/on-site power	E/I	Generators and power reliability for AI campuses.
+81	Cummins / CMI	Generators, power systems	E/I	Backup/on-site generation layer.
+81	Wistron / 3231.TW	AI server systems	I	AI server integration and manufacturing exposure.
+80	Oracle / ORCL	Cloud capacity	Watch	Reuters says Oracle was in talks with Meta for a ~$20B cloud deal; not confirmed as signed in my sources.
+80	TE Connectivity / TEL	Connectors, sensors, cabling	I/E	Electrical interconnect inside data centers and devices.
+80	Super Micro / SMCI	AI servers	E/I	Server integration exposure; less direct Meta evidence than ODMs.
+79	Modine / MOD	Data-center cooling	E/I	Smaller cooling beneficiary; strong AI thermal angle.
+79	Delta Electronics / 2308.TW	Power supplies, fans, thermal	I/E	Power/thermal modules across servers and data centers.
+78	Powell Industries / POWL	Switchgear/electrical systems	E/I	Smaller U.S. electrical bottleneck; not direct Meta-proven, but exactly the right layer.
+78	Unimicron / 3037.TW	IC substrates	I	AI packaging substrate exposure.
+78	MACOM / MTSI	Optical/semi connectivity	I/E	Datacom chips, lasers, high-speed connectivity.
+77	Hammond Power / HPS.A.TO	Transformers	E/I	Smaller transformer bottleneck. Hyperscalers cannot plug “future capacity” into vibes.
+77	Ibiden / 4062.T	IC substrates	I	High-end package substrate supplier.
+76	nVent / NVT	Enclosures, electrical protection, liquid cooling adjacencies	E/I	Electrical/mechanical infrastructure in dense data centers.
+76	Celestica / CLS	AI hardware manufacturing	E/I	High-mix hyperscale hardware manufacturing.
+76	Johnson Controls / JCI	Building systems, cooling controls	E/I	Data-center building controls and HVAC.
+76	Trane / TT	HVAC/cooling	E/I	Thermal infrastructure.
+75	Soitec / SOI.PA	Engineered substrates / silicon photonics	I/E	Smaller photonics substrate angle; relevant to optical/silicon photonics bottlenecks.
+75	Hubbell / HUBB	Electrical infrastructure	E/I	Grid/data-center electrical hardware.
+75	SPX Technologies / SPXC	Cooling / engineered equipment	E/I	Smaller cooling infrastructure angle.
+74	Dell / DELL	Servers / enterprise infra	E/I	Lower purity for Meta, but relevant AI server supply chain.
+74	HPE / HPE	Servers, networking via Juniper	E/I	AI networking/server infrastructure; lower direct Meta visibility.
+74	Seagate / STX	HDD/storage	I/E	AI infrastructure still needs huge storage.
+74	Western Digital / WDC	HDD/NAND/storage	I/E	Storage capacity layer.
+73	Advanced Energy / AEIS	Precision power conversion	I/E	Power conversion for semiconductor equipment and compute systems.
+72	Tower Semi / TSEM	Specialty foundry / silicon photonics	I/E	Smaller photonics foundry angle.
+72	GlobalFoundries / GFS	Specialty foundry	I/E	Silicon photonics/RF/specialty capacity.
+72	Semtech / SMTC	Signal integrity / connectivity	I/E	Lower-purity but relevant to high-speed interconnect.
+70	Enplas / 6961.T	Micro-lens arrays, IC test sockets	I/E	Small Japanese chokepoint-style name in optical/test chain.
+70	Aehr Test / AEHR	Semiconductor test burn-in	E/I	Smaller test bottleneck exposure.
+70	MaxLinear / MXL	Connectivity semis	E/I	Lower-purity networking/optics chip exposure.
+Layer-by-layer map
+1. AI compute accelerators and custom silicon
+
+Meta’s confirmed stack: NVIDIA Blackwell/GB200/GB300, AMD Instinct/EPYC, and MTIA custom silicon. Meta specifically says it uses AMD, NVIDIA, and custom silicon; its GB200 pod shows 72 Blackwell GPUs and extreme power/thermal demand.
+
+Priority	Public companies
+Core	AVGO, AMD, NVDA, TSM, SK hynix, MU, Samsung
+Secondary	ARM, MRVL, INTC, QCOM
+Upstream semi tools	ASML, AMAT, LRCX, KLAC, Tokyo Electron / 8035.T, ASM International / ASMI.AS, BESI, DISCO / 6146.T, Advantest / 6857.T, Teradyne / TER, Camtek / CAMT
+
+Best bottleneck read: Broadcom is the cleanest Meta-specific custom silicon play. AMD is the cleanest confirmed non-NVIDIA accelerator expansion. NVIDIA is still the king, but Meta is clearly trying not to be trapped under one GPU vendor forever.
+
+2. Foundry, CoWoS, substrates, OSAT
+
+This is the “you can design the chip, but can you package the damn thing?” layer. TSMC is the central bottleneck because NVIDIA, AMD, and Broadcom custom silicon all need advanced nodes and advanced packaging. CoWoS remains the key wafer-level packaging approach for the largest AI processors.
+
+Priority	Public companies
+Foundry / advanced packaging	TSM, Samsung, INTC, GFS, TSEM
+OSAT	ASE / ASX, AMKR, Powertech / 6239.TW
+Substrates	Unimicron / 3037.TW, Ibiden / 4062.T, Kinsus / 3189.TW, Nan Ya PCB / 8046.TW
+Test / inspection	Advantest, Teradyne, Camtek, AEHR, KLAC
+
+Smaller names to not miss: AMKR, CAMT, AEHR, TSEM, Kinsus, Unimicron. These are not all Meta-direct, but they live in the right stress layer.
+
+3. HBM, DRAM, NAND, storage
+
+AI compute is memory-starved. HBM supply is a direct limiter on NVIDIA/AMD AI accelerators. Reuters called SK hynix the primary HBM supplier to NVIDIA, with Samsung and Micron competing.
+
+Priority	Public companies
+HBM / DRAM	SK hynix, MU, Samsung
+NAND / SSD	Samsung, MU, WDC, Kioxia / 285A.T
+HDD / bulk storage	STX, WDC
+Storage systems	NTAP, PSTG, DELL, HPE
+
+Best bottleneck read: SK hynix is the tightest HBM chokepoint; Micron is the U.S. HBM catch-up/asymmetry angle; Samsung is broader but less pure.
+
+4. AI networking: switches, NICs, SerDes, interconnect
+
+Meta is leaning into Ethernet. Arista confirmed Meta deployed Arista’s 7700R4 Distributed Etherlink Switch for an Ethernet AI cluster. Broadcom is also directly tied to Meta through MTIA and advanced Ethernet tech.
+
+Priority	Public companies
+Switch systems	ANET, CSCO, HPE, Nokia / NOK, Juniper now inside HPE
+Switch silicon / NICs / DSPs	AVGO, MRVL, MTSI, CRDO, ALAB, SMTC, MXL
+Cables/connectors	APH, TEL, GLW, Bel Fuse / BELFB, LFUS
+Data-center interconnect	CIEN, Nokia, NEC / 6701.T, Infinera now Nokia-linked
+
+Best bottleneck read: ANET + AVGO + GLW are the cleanest confirmed Meta/networking cluster. For smaller upside: CRDO, ALAB, MTSI, AAOI.
+
+5. Optical networking, fiber, transceivers, photonics
+
+Meta’s direct Corning deal makes fiber/connectivity a confirmed chokepoint. Corning will supply advanced optical fiber, cable, and connectivity products, and Meta is the anchor customer for its Hickory plant.
+
+Priority	Public companies
+Fiber/cable	GLW, Prysmian / PRY.MI, Furukawa / 5801.T, Sumitomo Electric / 5802.T
+Transceivers / modules	COHR, LITE, FN, AAOI, Zhongji Innolight / 300308.SZ, Eoptolink / 300502.SZ, TFC Optical / 300394.SZ, Accelink / 002281.SZ, Broadex / 300548.SZ
+Lasers / components	COHR, LITE, MTSI, SMTC, Hamamatsu / 6965.T, Yuanjie / 688498.SS, Shijia Photons / 688313.SS
+Silicon photonics / specialty	SOI.PA, TSEM, GFS, HIMX, Enplas / 6961.T
+
+Best bottleneck read: Corning is confirmed Meta. Coherent/Lumentum are high-quality AI optics names. Smaller “squeeze-the-stack” names: AAOI, Eoptolink, Innolight, MTSI, TSEM, SOI.PA, Enplas.
+
+6. Power: utility interconnect, on-site generation, gas, renewables
+
+Power is probably the most underappreciated Meta bottleneck. Reuters says data centers are pushing U.S. electricity use to record highs and regulators are scrambling around large-load interconnection rules. Meta has a confirmed Louisiana power buildout with Entergy involving seven gas-fired combined-cycle plants totaling more than 5.2GW.
+
+Priority	Public companies
+Confirmed Meta power	ETR, NEE, WMB
+Power generation / turbines	GEV, Siemens Energy / ENR.DE, Mitsubishi Heavy / 7011.T, CAT, CMI, GNRC
+IPPs / power suppliers	CEG, VST, TLN, NRG, AES, BEP, CWEN
+Renewables / PPAs	NEE, AES, BEP, Orsted / ORSTED.CO, Iberdrola / IBE.MC, RWE / RWE.DE, EDP Renováveis / EDPR.LS
+Gas infrastructure	WMB, ET, KMI, TRP, ENB, LNG, EQT
+
+Best bottleneck read: For direct Meta linkage: ETR, NEE, WMB. For broader AI power asymmetry: GEV, CMI, CAT, VST, CEG, TLN, POWL, HPS.A.
+
+7. Electrical infrastructure: switchgear, transformers, UPS, power conversion
+
+This is the most “boring but lethal” bottleneck. A GPU campus is useless without transformers, switchgear, UPS, PDUs, busways, breakers, and power conversion. Meta’s own cooling and rack-density comments make clear that facility-level power design is now a hard limit.
+
+Priority	Public companies
+Power distribution / UPS	VRT, ETN, Schneider, ABB, Siemens, Delta Electronics, Legrand / LR.PA
+Switchgear / transformers	POWL, HPS.A.TO, HUBB, RRX, NVT
+Power semis / modules	MPWR, VICR, AEIS, ON, STM, IFX.DE, ROHM / 6963.T
+Protection / connectors	LFUS, BELFB, APH, TEL
+
+Best smaller names: POWL, HPS.A, VICR, AEIS, BELFB, NVT, HUBB. Not all Meta-direct, but this is exactly where hyperscaler demand creates weird supply/delay leverage.
+
+8. Cooling and thermal management
+
+Meta says its AI-optimized data-center design uses direct-to-chip liquid, closed-loop cooling, usually with dry coolers, and minimal operational water use. Meta also said traditional data centers lacked facility liquid cooling, forcing air-assisted liquid cooling racks around GB200 deployments.
+
+Priority	Public companies
+Liquid/power cooling leaders	VRT, Schneider, ETN, Delta Electronics
+HVAC / building cooling	TT, CARR, JCI, MOD, SPXC, MTRS.ST, ALFA.ST, Belimo / BEAN.SW
+Enclosures / thermal hardware	NVT, APH, TEL, FLEX, JBL
+
+Best bottleneck read: VRT is the obvious premium name; MOD/SPXC/Munters/Alfa Laval are the smaller thermal angles.
+
+9. AI servers, rack integration, ODMs, EMS
+
+Meta designs a lot internally, but physical AI clusters still depend on ODM/EMS manufacturing ecosystems. This is less “single-vendor moat” and more “who has capacity, quality, and NVIDIA/AMD platform access.”
+
+Priority	Public companies
+Taiwan AI server ODMs	Hon Hai/Foxconn, Quanta, Wiwynn, Wistron, Inventec, Pegatron / 4938.TW
+U.S./global server OEMs	SMCI, DELL, HPE, Lenovo / 0992.HK
+EMS / manufacturing	CLS, JBL, FLEX, SANM, Plexus / PLXS
+
+Best bottleneck read: Wiwynn, Quanta, Foxconn, Celestica are cleaner AI infrastructure manufacturing beneficiaries than generic OEMs.
+
+10. Neocloud / leased AI compute capacity
+
+Meta is clearly supplementing owned data-center buildouts with contracted capacity. Reuters says Meta signed with CoreWeave and Nebius, and also reported new deals with private Crusoe.
+
+Priority	Public companies
+Confirmed Meta neoclouds	CRWV, NBIS
+Possible / reported discussions	ORCL
+Broader data-center capacity	EQIX, DLR, IRM, GDS, VNET
+Excluded because private	Crusoe, VAST Data, Core Scientific-style private/contract entities where not listed
+
+Best bottleneck read: NBIS/CRWV are the clearest public “Meta needs more capacity yesterday” names. High upside, high leverage, high “don’t be a hero without a stop” risk.
+
+11. Construction, EPC, grid buildout, data-center trades
+
+Meta’s capex cannot convert to compute without construction labor, substation work, transmission, mechanical systems, and commissioning. This layer is less glamorous, but it is where schedules die.
+
+Priority	Public companies
+Grid/transmission EPC	PWR, MTZ, MYRG, EME
+Mechanical/electrical contractors	FIX, IESC, STRL, APG, GVA
+Engineering / design	J, ACM, WSP.TO
+Materials	VMC, MLM, EXP, CRH, NUE, STLD
+
+Best smaller names: IESC, STRL, FIX, MYRG. These are not necessarily Meta-direct, but they are prime beneficiaries of hyperscale construction bottlenecks.
+
+12. Reality Labs / Quest / Ray-Ban Meta / AI glasses
+
+This is less critical than AI data centers, but still part of Meta’s full supply chain. Ray-Ban Meta is a direct Meta–EssilorLuxottica product line, and Qualcomm lists Meta Quest 3/3S and multiple Meta glasses devices using Snapdragon XR/AR platforms.
+
+Score	Company / Ticker	Layer	Link	Notes
+84	EssilorLuxottica / EL.PA	Ray-Ban/Oakley smart glasses	C	Direct consumer hardware partner.
+82	Qualcomm / QCOM	XR/AR processors	C	Snapdragon XR2 Gen 2 for Quest 3/3S; AR1 Gen 1 listed for Meta glasses.
+79	Goertek / 002241.SZ	XR/AR manufacturing	C/P	Meta’s Chinese manufacturer for Quest; Meta denied full design outsourcing, but Goertek remains key manufacturing partner.
+76	Sony / 6758.T	Image sensors	E/I	Camera/sensor layer for wearables and XR.
+72	STM / STM	MEMS/sensors	E/I	Motion/sensing components.
+70	BOE / 000725.SZ	Displays	E/I	XR/display supply chain.
+68	LG Display / LPL	Displays	E/I	XR/display exposure.
+67	Sunny Optical / 2382.HK	Lenses/camera modules	E/I	Optics module supply chain.
+65	AAC Tech / 2018.HK	Audio/acoustics	E/I	Smart glasses audio/acoustic components.
+64	Himax / HIMX	Display drivers / microdisplay adjacencies	E/I	XR display component exposure.
+60	Kopin / KOPN	Microdisplays	E/I	Speculative AR display chain.
+Clean “don’t miss these smaller public names” list
+
+These are the non-mega-cap names I’d keep on the Meta bottleneck radar:
+
+Networking / optics: CRDO, ALAB, AAOI, FN, MTSI, Eoptolink, Innolight, TSEM, SOI.PA, Enplas, HIMX
+Power / electrical: POWL, HPS.A, VICR, AEIS, BELFB, NVT, MOD, SPXC, IESC, STRL, MYRG, FIX
+Neocloud / capacity: NBIS, CRWV
+Manufacturing: CLS, JBL, FLEX, SANM, Wiwynn, Quanta, Wistron
+Reality Labs: Goertek, Sunny Optical, AAC Tech, Himax, Kopin
+
+That is where the asymmetry usually hides. NVIDIA is obvious. Broadcom is obvious-ish. But the next AAOI/CRDO-style move often comes from the “boring component that suddenly became impossible to procure.” Wall Street eventually discovers the plumbing. Usually late, wearing a Patagonia vest.
+
+Bottleneck hierarchy for Meta
+Gigawatts / grid interconnect / power generation — highest physical constraint.
+Advanced AI accelerators — NVIDIA, AMD, MTIA/Broadcom.
+TSMC + CoWoS + HBM — the semiconductor choke chain.
+Ethernet AI networking + optics — Arista, Broadcom, Corning, Coherent/Lumentum, optical module makers.
+Liquid cooling + power distribution — Vertiv/Eaton/Schneider/Delta/Modine.
+Server/rack manufacturing — Taiwan ODMs and EMS players.
+Neocloud capacity — CoreWeave/Nebius when owned data centers lag demand.
+Consumer AI devices — EssilorLuxottica, Qualcomm, Goertek, optics/sensor/display supply chain.
+Investing read
+
+Bias: Structurally bullish on the Meta AI infrastructure supply chain, but many obvious names are already crowded.
+
+Macro overlay: Neutral-to-risk-on for AI infrastructure capex; risk-off if rates spike, credit spreads widen, or AI capex gets questioned. Power/data-center policy remains a tailwind, with FERC pushing grids to overhaul large-load connection rules for data centers.
+
+Best setup type: Do not chase every supplier. The best hunting ground is smaller public bottleneck names with real revenue, accelerating backlog/orders, and direct exposure to AI data-center power/optics/cooling.
+
+Most important public names by actual Meta exposure: AVGO, AMD, NVDA, ANET, GLW, ETR, NEE, WMB, CRWV, NBIS, GOOGL, QCOM, EssilorLuxottica, Goertek.
+
+Biggest risk to thesis: AI capex digestion. If Meta slows spending, delays projects, or investors force a “show me ROI” pivot, the high-multiple suppliers get hit first. The other risk is substitution: Meta is actively diversifying away from single-vendor dependence, which is bullish for AMD/Broadcom but caps infinite NVIDIA-style extrapolation.

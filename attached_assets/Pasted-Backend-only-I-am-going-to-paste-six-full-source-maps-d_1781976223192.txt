@@ -1,0 +1,232 @@
+Backend only.
+
+I am going to paste six full source maps directly into this Replit Agent message.
+
+You must:
+
+1. Read the pasted source maps from this message.
+2. Create source audit files in the repo yourself.
+3. Extract every public-company bottleneck row from those source maps.
+4. Add the new anchors to the curated Chain Reaction / Bottlenecks backend.
+
+Do NOT ask me to upload files.
+Do NOT use Claude.
+Do NOT use OpenAI.
+Do NOT use web search.
+Do NOT fetch ChatGPT links.
+Do NOT implement from memory.
+Do NOT use only the summary sections.
+Do NOT omit smaller/niche/foreign/OTC public names.
+Do NOT filter rows out because quote, market cap, FMP profile, exchange, country, or TradingView symbol is missing.
+Do NOT exclude Chinese-listed, Taiwan-listed, Japan-listed, Korea-listed, European-listed, Canadian-listed, Australian-listed, or OTC public companies.
+Public is public. If a public ticker is listed in the pasted source text, include it.
+
+New anchors:
+
+* AAPL / Apple
+* AMD / Advanced Micro Devices
+* AVGO / Broadcom
+* MSFT / Microsoft
+* META / Meta
+* AMZN / Amazon
+
+First, before touching curated data, create these source files from the pasted text:
+
+* `backend/services/playbook/curated_sources/aapl_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/amd_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/avgo_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/msft_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/meta_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/amzn_bottleneck_map.md`
+
+Then report:
+
+* file path
+* character count
+* first 5 lines
+* last 5 lines
+* detected category headings
+* rough count of public tickers found
+
+If any pasted source section is missing, empty, truncated, or assigned to the wrong anchor, stop and tell me before implementation.
+
+After source files are created and verified, implement.
+
+Data extraction rules:
+For each anchor, extract every public company/ticker from:
+
+* master ranking tables
+* top public bottleneck tables
+* layer-by-layer maps
+* long-tail supplier tables
+* smaller-player sections
+* “don’t miss these” sections
+* “highest-quality watchlist” sections
+* public-only proxy sections
+* direct/confirmed/indirect/upstream/ecosystem tables
+* final takeaway/watchlist lists
+
+Do not stop at the first table.
+
+Preserve category structure:
+Each row must carry:
+
+* category_name
+* category_order
+* category_rank if available
+* layer_name
+
+The frontend needs to display rows grouped by the same categories/layers from the source text.
+
+Normalized row shape:
+Every new row must include the existing Chain Reaction base keys plus curated extras.
+
+Include:
+
+* anchor_key
+* anchor_name
+* ticker
+* bottleneck_ticker
+* company_name
+* tradingview_symbol
+* category_name
+* category_order
+* category_rank
+* layer
+* layer_name
+* supply_chain_role
+* bottleneck_score
+* final_score
+* directness / status / confidence label from source
+* relationship_specificity
+* relationship_type
+* themes
+* theme
+* anchor_theme
+* confidence
+* evidence
+* source_urls if present
+* why_it_matters
+* why_hidden
+* why_now
+* what_would_break_thesis
+* giant_anchors containing the anchor key
+* source_type: `curated_static`
+* manual_added: false
+* last_curated_at
+
+If the source has “Why it matters” or notes, preserve that as evidence/why_it_matters. Do not flatten all research into generic placeholder text.
+
+Deduping rules:
+Within one anchor:
+
+* dedupe by canonical ticker only
+* use the highest bottleneck score found for that anchor
+* merge all categories/layers where the ticker appears
+* merge role/evidence text so no research is lost
+* keep the most specific directness/status label
+
+Across different anchors:
+
+* do NOT dedupe away rows
+* same ticker should appear under every relevant anchor
+* overlap endpoint should surface multi-anchor names
+
+Acceptable exclusion reasons only:
+
+* private company
+* delisted / no longer public
+* no public ticker provided or reasonably inferable from the source text
+* duplicate already merged under the same anchor
+
+If excluding anything, report exact company, exact anchor, and exact reason.
+
+Update:
+
+* `GET /api/bottlenecks/anchors`
+* `GET /api/bottlenecks/anchor/{anchor_key}`
+* `GET /api/bottlenecks/anchor-overlap`
+
+`GET /api/bottlenecks/anchors` should include:
+
+* SPCX
+* ANTHROPIC
+* NVDA
+* OPENAI
+* TSM
+* GOOG
+* AAPL
+* AMD
+* AVGO
+* MSFT
+* META
+* AMZN
+
+`GET /api/bottlenecks/anchor/{anchor_key}` should return:
+
+* status
+* anchor_key
+* anchor_name
+* row_count
+* category_count
+* rows: flat list of every row
+* categories: grouped rows by source category/layer
+
+Do not remove the flat `rows` field. The categories field is additive.
+
+Manual rows:
+
+* still merge into the relevant anchor
+* if manual row has no category, place under `Manual additions`
+* still count toward overlap
+
+Validation:
+Run:
+
+* `/api/bottlenecks/anchor/AAPL`
+* `/api/bottlenecks/anchor/AMD`
+* `/api/bottlenecks/anchor/AVGO`
+* `/api/bottlenecks/anchor/MSFT`
+* `/api/bottlenecks/anchor/META`
+* `/api/bottlenecks/anchor/AMZN`
+
+Report:
+Anchor | Source rows extracted | API rows returned | Category count | Exclusions
+
+Also confirm:
+
+* `/api/bottlenecks/current` unchanged
+* old disabled LLM routes still return `disabled_static_curated_mode`
+* no Bottlenecks endpoint calls Claude/OpenAI/web search
+* manual add still works
+* overlap works after adding all new anchors
+* every row includes the existing 28 base Chain Reaction keys
+* curated rows remain a superset of `/api/bottlenecks/current` row shape
+
+Do not mark complete until every public company from every pasted source map is represented in the relevant anchor API response.
+
+After this prompt, I will paste the source maps using this format:
+
+===== AAPL SOURCE START =====
+[pasted Apple map]
+===== AAPL SOURCE END =====
+
+===== AMD SOURCE START =====
+[pasted AMD map]
+===== AMD SOURCE END =====
+
+===== AVGO SOURCE START =====
+[pasted Broadcom map]
+===== AVGO SOURCE END =====
+
+===== MSFT SOURCE START =====
+[pasted Microsoft map]
+===== MSFT SOURCE END =====
+
+===== META SOURCE START =====
+[pasted Meta map]
+===== META SOURCE END =====
+
+===== AMZN SOURCE START =====
+[pasted Amazon map]
+===== AMZN SOURCE END =====

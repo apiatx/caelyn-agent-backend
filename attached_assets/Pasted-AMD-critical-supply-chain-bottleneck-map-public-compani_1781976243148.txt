@@ -1,0 +1,200 @@
+AMD critical supply-chain bottleneck map — public companies only
+
+Bias: AMD’s real bottleneck stack is TSMC + CoWoS/SoIC + HBM + ABF substrates + ATMP/test + rack-scale deployment. Consumer motherboard/AIB names matter, but they are not the bottleneck. The power-law lesson applies here: a small number of chokepoints drive most of the strategic value, not the giant vendor list.
+
+Important caveat: this is not a buy rating. A high bottleneck score means “hard to replace / capacity-constrained / critical to AMD’s roadmap,” not “cheap stock.” Some names are direct AMD suppliers; others are upstream suppliers to AMD’s foundries, HBM vendors, packaging partners, or server ecosystem.
+
+AMD directly says it relies on TSMC for 7nm-or-smaller microprocessor/GPU wafers, GlobalFoundries for 12/14nm HPC wafers, and TSMC/UMC/Samsung for programmable-logic ICs. AMD also names ATMP reliance and says Tongfu Microelectronics, SPIL/ASE, and KYEC provide packaging/test services. MI350X is built on TSMC 3nm/6nm, with 288GB HBM3E and 8TB/s memory bandwidth, so HBM and advanced packaging are not optional side quests; they are the boss level. TSMC’s CoWoS integrates logic chiplets with HBM on large interposers for AI/HPC, which is exactly the kind of packaging AMD needs for Instinct-class accelerators.
+
+Bottleneck scoring key
+
+90–100: existential chokepoint for AMD AI/datacenter roadmap.
+80–89: direct high-value manufacturing/packaging/test bottleneck.
+70–79: upstream bottleneck where capacity/qualification matters.
+60–69: important system or infrastructure gatekeeper.
+40–59: meaningful second-order supply-chain enabler.
+<40: relevant but less scarce, more replaceable, or mostly downstream.
+
+Ranked public-only AMD supply-chain bottleneck list
+Rank	Company	Ticker	Layer	AMD relevance	Bottleneck score
+1	TSMC	TSM / 2330.TW	Leading-edge foundry + CoWoS/SoIC	Core AMD wafer and AI packaging dependency	100
+2	Samsung Electronics	005930.KS	HBM, DDR5, foundry, PLD wafers	HBM3E/next-gen HBM4 supplier; AMD also names Samsung for programmable logic ICs	94
+3	Micron	MU	HBM/DRAM	Micron HBM3E 36GB 12-high is integrated into AMD MI350 platforms	92
+4	SK hynix	000660.KS	HBM/DRAM	HBM market leader; critical alternative/benchmark supplier for AI memory	90
+5	ASE Technology / SPIL	ASX / 3711.TW	ATMP / advanced packaging	AMD filing names SPIL; ASE owns SPIL	88
+6	Tongfu Microelectronics	002156.SZ	ATMP	AMD-named ATMP JV/partner	86
+7	King Yuan Electronics / KYEC	2449.TW	Test / ATMP	AMD-named test/ATMP provider	84
+8	Ibiden	4062.T	ABF / advanced substrates	High-end AI/HPC package substrates; scarce capacity	83
+9	Unimicron	3037.TW	ABF / IC substrates	Major AI/HPC substrate supplier	82
+10	ASML	ASML / ASML.AS	EUV lithography	Upstream to TSMC/Samsung/SK/Micron leading-edge capacity; ASML says EUV enables mass production of the world’s most advanced chips	81
+11	Amkor	AMKR	OSAT / advanced packaging	Major packaging alternative; important if AMD diversifies beyond TSMC/ASE/Tongfu	80
+12	Kinsus Interconnect	3189.TW	ABF / CoWoS substrates	Reported supplier to AMD/Micron and verified in advanced packaging ecosystem; smaller, higher-beta substrate choke	79
+13	Ajinomoto	2802.T	ABF film	ABF resin film is foundational for high-end substrates	78
+14	GlobalFoundries	GFS	Mature-node foundry	AMD-named for 12/14nm HPC wafers	77
+15	UMC	UMC / 2303.TW	Foundry	AMD-named for programmable-logic IC wafers	75
+16	Advantest	6857.T	Semiconductor test	AI/HBM/advanced logic test bottleneck	74
+17	Teradyne	TER	Semiconductor test	Test equipment for complex semiconductors	72
+18	Applied Materials	AMAT	Deposition/etch/materials engineering	Upstream to TSMC/Samsung/Micron/SK capacity	72
+19	KLA	KLAC	Process control/inspection	Yield-control bottleneck for advanced nodes and packaging	72
+20	Lam Research	LRCX	Etch/deposition	Upstream to leading-edge logic and HBM fabs	71
+21	Tokyo Electron	8035.T	Etch/deposition/coater/developer	Core semiconductor equipment supplier	70
+22	Synopsys	SNPS	EDA/IP	Essential design flow; Synopsys counts AMD as a customer per Reuters	70
+23	Cadence	CDNS	EDA/IP	Dominant EDA player for complex chip design	69
+24	HPE	HPE	Rack-scale systems	First major OEM for AMD Helios rack-scale AI architecture	68
+25	Broadcom	AVGO	AI Ethernet / switch ASICs	Co-developing HPE Juniper scale-up switch for AMD Helios over UALoE	68
+26	Supermicro	SMCI	AI servers / liquid cooling	Confirmed MI350/MI355X systems, fast deployment channel	67
+27	Dell Technologies	DELL	AI servers / enterprise OEM	Core AMD EPYC/Instinct OEM channel	66
+28	Lenovo	0992.HK	AI servers / enterprise OEM	AMD CPU/GPU server partner	65
+29	Hon Hai / Foxconn	2317.TW	ODM / server manufacturing	High-scale electronics/server manufacturing	65
+30	Quanta Computer	2382.TW	ODM / AI servers	Hyperscale server ODM	64
+31	Wiwynn	6669.TW	Cloud server ODM	AI/cloud server integration	64
+32	Wistron	3231.TW	ODM / servers	Server and systems manufacturing	63
+33	Inventec	2356.TW	ODM / servers	Server manufacturing	62
+34	Gigabyte	2376.TW	Servers, motherboards, AIB	AMD AIB/OEM ecosystem; also AI server exposure	62
+35	ASUSTeK	2357.TW	AIB, motherboards, systems	AMD official AIB/OE partner	61
+36	Delta Electronics	2308.TW	Power supplies, cooling, power electronics	AI rack power/cooling enabler	60
+37	Vertiv	VRT	Data-center power/cooling	Downstream deployment bottleneck for GPU clusters	60
+38	Schneider Electric	SU.PA	Data-center power infrastructure	Electrical distribution/power management	58
+39	Eaton	ETN	Data-center power infrastructure	UPS/switchgear/power distribution	58
+40	Amphenol	APH	Connectors/cables	High-speed electrical interconnects for racks/servers	57
+41	Credo Technology	CRDO	AEC/DSP connectivity	AI cluster copper connectivity; more ecosystem than AMD-specific	56
+42	Astera Labs	ALAB	PCIe/CXL retimers	AI server connectivity bottleneck	56
+43	Marvell	MRVL	Ethernet/optical/DSP/custom silicon	AI networking ecosystem; less directly tied than Broadcom	55
+44	Entegris	ENTG	Process chemicals/filtration/materials	Advanced-node materials/contamination control	55
+45	Shin-Etsu Chemical	4063.T	Wafers, photoresists, materials	Silicon wafers and advanced materials	54
+46	SUMCO	3436.T	Silicon wafers	300mm wafer supply	53
+47	GlobalWafers	6488.TWO	Silicon wafers	300mm wafer supply	52
+48	Siltronic	WAF.DE	Silicon wafers	Advanced wafer supply	51
+49	Hoya	7741.T	Photomasks / mask blanks	EUV mask ecosystem	51
+50	Toppan Holdings	7911.T	Photomasks	Advanced masks	50
+51	Dai Nippon Printing	7912.T	Photomasks / packaging materials	Mask + packaging ecosystem; also part of Shinko privatization consortium	50
+52	Lasertec	6920.T	EUV mask inspection	Mask inspection choke for leading-edge nodes	50
+53	Photronics	PLAB	Photomasks	Smaller public mask supplier	49
+54	Merck KGaA	MRK.DE	Semiconductor chemicals/materials	Specialty gases/chemicals/materials	49
+55	FUJIFILM Holdings	4901.T	Photoresists/CMP/materials	Semiconductor materials	48
+56	Tokyo Ohka Kogyo	4186.T	Photoresists	Advanced resist supplier	48
+57	Resonac	4004.T	Packaging/materials	Semiconductor packaging materials	47
+58	Air Liquide	AI.PA	Specialty gases	Fab gases for TSMC/Samsung/memory fabs	47
+59	Linde	LIN	Industrial/specialty gases	Fab gases	47
+60	Air Products	APD	Industrial gases	Fab gas supply	46
+61	ASM International	ASMI.AS	ALD/deposition	Advanced-node deposition	46
+62	SCREEN Holdings	7735.T	Wafer cleaning	Advanced wafer process equipment	46
+63	DISCO	6146.T	Dicing/grinding	HBM/advanced packaging processing	45
+64	BE Semiconductor / BESI	BESI.AS	Hybrid bonding / packaging tools	Advanced packaging and hybrid bonding	45
+65	Hanmi Semiconductor	042700.KS	TC bonders for HBM	Smaller HBM equipment bottleneck; Hanmi has major TC bonder share/order flow	44
+66	ASMPT	0522.HK	TC bonding / packaging tools	Diversification source for HBM/advanced packaging bonders	44
+67	Kulicke & Soffa	KLIC	Bonding tools	Packaging equipment	43
+68	Techwing	089030.KQ	Memory test handlers	HBM/memory test equipment	42
+69	ISC	095340.KQ	Test sockets	AI/HBM/logic test sockets	42
+70	Leeno Industrial	058470.KQ	Probe pins/test sockets	Semiconductor test consumables	41
+71	TSE Co.	131290.KQ	Probe cards/test sockets	Test consumables	41
+72	FormFactor	FORM	Probe cards	Wafer probe/test	40
+73	Cohu	COHU	Test/handlers	Back-end semiconductor test	39
+74	Chroma ATE	2360.TW	Test equipment	Power/semiconductor test	38
+75	Towa	6315.T	Molding/packaging tools	Back-end packaging tools	38
+76	AT&S	ATS.VI	ABF / IC substrates	Advanced package substrate supplier	37
+77	Nan Ya PCB	8046.TW	ABF substrates / PCBs	AI/HPC substrate ecosystem	37
+78	Samsung Electro-Mechanics	009150.KS	IC substrates / MLCC	Substrate and passive component supplier	36
+79	Daeduck Electronics	353200.KS	IC substrates	Korean substrate supplier	35
+80	Elite Material	2383.TW	Copper-clad laminates / PCB materials	AI server PCB materials	34
+81	ITEQ	6213.TW	PCB laminates	Server board material	33
+82	Acer	2353.TW	OE/AIB/channel	AMD official AIB/OE partner	32
+83	ASRock	3515.TW	Motherboards/AIB	AMD official AIB partner	31
+84	MSI	2377.TW	Motherboards/AIB/systems	AMD official AIB partner	31
+85	TUL / PowerColor	6150.TWO	Radeon AIB	AMD official AIB partner	31
+86	Biostar	2399.TW	Motherboards/AIB	AMD official AIB partner	30
+87	Arrow Electronics	ARW	Distribution	AMD component/channel distribution	29
+88	Avnet	AVT	Distribution	Semiconductor distribution	29
+89	TD SYNNEX	SNX	Distribution	IT channel	28
+90	Ingram Micro	INGM	Distribution	IT channel	28
+91	Jabil	JBL	EMS / systems manufacturing	Electronics manufacturing services	27
+92	Sanmina	SANM	EMS	Electronics manufacturing services	27
+93	Celestica	CLS	EMS / AI hardware	AI/server manufacturing exposure	27
+94	Flex	FLEX	EMS	Electronics manufacturing services	27
+95	Modine	MOD	Thermal management	Data-center cooling	26
+96	nVent	NVT	Electrical enclosures/power	Data-center electrical infrastructure	25
+97	Legrand	LR.PA	Data-center electrical infrastructure	Racks, PDUs, infrastructure	25
+98	Nidec	6594.T	Fans/motors/cooling components	Thermal components	25
+99	Lite-On	2301.TW	PSUs / power components	Server power supply ecosystem	24
+100	AcBel Polytech	6282.TW	Power supplies	Server/PC power supply ecosystem	23
+101	Chicony Power	6412.TW	Power supplies	PC/server power	23
+102	FSP Technology	3015.TW	Power supplies	PSU ecosystem	22
+103	Auras Technology	3324.TWO	Cooling modules	Thermal modules	22
+104	Sunonwealth	2421.TW	Fans/thermal	Fan/cooling components	21
+105	Arm Holdings	ARM	IP	Relevant to AMD/Xilinx adaptive SoC ecosystem, not core x86/Instinct	20
+106	Rambus	RMBS	Memory interface IP	DDR/HBM interface IP ecosystem; indirect	20
+
+AMD’s official AIB/OE partner list includes public names like Acer, ASUS, ASRock, Biostar, Gigabyte, MSI, and PowerColor/TUL, while private/regional partners like Sapphire and XFX are excluded here because the user asked for public-only. AMD also says authorized distributors can sell CPU, GPU, server, embedded, Instinct, cooling, and memory products, but distribution is much more replaceable than wafers/HBM/packaging, so those names score lower.
+
+Layer-by-layer bottleneck map
+1. Design / EDA / IP
+
+Key public names: Synopsys, Cadence, Siemens, Arm, Rambus.
+Bottleneck read: necessary but not AMD-specific enough to be the best equity angle. EDA is mission-critical, but AMD is not captive to one public EDA name in the same way it is captive to TSMC/HBM/CoWoS. Reuters notes Synopsys counts AMD as a customer, and Cadence is one of the dominant EDA firms benefiting from complex AI-chip design demand.
+
+2. Wafer fabrication
+
+Key public names: TSMC, GlobalFoundries, UMC, Samsung Electronics.
+Bottleneck read: TSMC is the single highest bottleneck. AMD explicitly says TSMC produces its 7nm-or-smaller microprocessor/GPU wafers, while GF supports 12/14nm HPC wafers and UMC/Samsung are used for programmable logic ICs.
+
+3. HBM / memory
+
+Key public names: Samsung Electronics, Micron, SK hynix.
+Bottleneck read: AMD’s AI accelerator competitiveness is gated by HBM capacity and power efficiency. Micron confirmed its HBM3E 36GB 12-high product is integrated into AMD MI350 Series platforms. Reuters reported Samsung and AMD signed an MOU for HBM4 supply for MI455X and DDR5 for 6th-gen EPYC, while Samsung is already a primary HBM supplier for MI350X/MI355X; Reuters also cited Counterpoint share estimates of SK hynix ~57% and Samsung ~22% in HBM.
+
+4. Advanced packaging / CoWoS / SoIC / ATMP
+
+Key public names: TSMC, ASE/SPIL, Tongfu, KYEC, Amkor, JCET, Powertech, ChipMOS, Sigurd, Unisem.
+Bottleneck read: this is AMD’s “can we actually ship Instinct volume?” layer. AMD names Tongfu, SPIL/ASE, and KYEC in its ATMP disclosures. TSMC’s CoWoS is the highest-end constraint because it places logic chiplets and HBM together on silicon interposers for AI/HPC packages.
+
+5. ABF substrates / package substrates
+
+Key public names: Ibiden, Unimicron, Kinsus, Nan Ya PCB, AT&S, Samsung Electro-Mechanics, Daeduck, Ajinomoto.
+Bottleneck read: underappreciated and more interesting than most people realize. Kinsus is especially worth watching because Nikkei/FT reported it is a supplier to AMD and Micron and one of a small set of high-end chip-substrate suppliers tied to advanced packaging demand.
+
+6. Fab equipment / process control / materials
+
+Key public names: ASML, AMAT, LRCX, KLAC, TEL, ASMI, SCREEN, Lasertec, Entegris, Shin-Etsu, SUMCO, GlobalWafers, Siltronic, Hoya, Toppan, DNP, Photronics.
+Bottleneck read: these are mostly TSMC/Samsung/SK/Micron enablers, not direct AMD suppliers. Still critical. ASML’s EUV systems make mass production of the world’s most advanced chips possible, and AMD’s advanced nodes depend on fabs with that capability.
+
+7. HBM equipment / bonding / test
+
+Key public names: Hanmi, ASMPT, BESI, DISCO, Advantest, Teradyne, Techwing, ISC, Leeno, TSE, FormFactor, Cohu.
+Bottleneck read: this is the “small public-company rabbit hole” layer. Hanmi/ASMPT/BESI/DISCO/Advantest-style names are not AMD vendors in the filing sense, but if HBM packaging/test capacity is tight, these names become leverage points. The Elec reported Hanmi supplies TC bonders used in HBM production, with Techwing, Zeus, and Auros also tied to HBM back-end equipment.
+
+8. Server OEM / ODM / rack integration
+
+Key public names: HPE, Supermicro, Dell, Lenovo, Gigabyte, ASUS, Quanta, Wiwynn, Wistron, Inventec, Hon Hai/Foxconn, Celestica, Jabil, Sanmina, Flex.
+Bottleneck read: AMD can design great chips and still lose the deployment war if rack-scale platforms are late. Supermicro confirmed liquid- and air-cooled systems with MI350 GPUs, dual EPYC 9005 CPUs, 8-GPU servers, and 2.304TB HBM3E per 8-GPU server. AMD and HPE also announced HPE will adopt AMD Helios rack-scale architecture worldwide in 2026, integrating MI455X GPUs, EPYC Venice CPUs, Pensando NICs, ROCm, and a Broadcom-collaborative scale-up Ethernet switch using UALoE.
+
+9. Data-center power, cooling, interconnect
+
+Key public names: Broadcom, Marvell, Astera, Credo, Amphenol, Vertiv, Delta, Schneider, Eaton, Modine, nVent, Legrand, Lite-On, AcBel, Chicony Power.
+Bottleneck read: downstream but increasingly strategic. Helios makes Broadcom more relevant to AMD’s AI rack story because the HPE scale-up switch is being developed with Broadcom. Power/cooling names are not AMD suppliers in a narrow chip sense, but they gate how fast AMD-based clusters can be deployed.
+
+Highest-signal “don’t ignore these” smaller/public bottleneck names
+
+The most interesting non-mega-cap public names in the AMD chain:
+
+Kinsus, Tongfu Microelectronics, KYEC, Amkor, Unimicron, Ibiden, AT&S, Nan Ya PCB, Hanmi Semiconductor, ASMPT, BESI, Techwing, ISC, Leeno, TSE, FormFactor, Cohu, Chroma ATE, Towa, Elite Material, ITEQ.
+
+That’s where the smaller-player asymmetry could live. The obvious mega-caps are still critical, but the market usually sees them. Smaller substrate/test/bonding names are where the “wait, this boring thing is suddenly a chokepoint” re-rating can happen.
+
+Public-only exclusions worth noting
+
+These matter to AMD’s ecosystem but are not included in the scored public list:
+
+Company	Why excluded
+Shinko Electric	Highly relevant substrate/packaging player, but delisted from TSE on June 6, 2025.
+Sapphire	AMD AIB partner, but private.
+XFX / Pine	AMD AIB partner, but private.
+SEMES	Samsung equipment subsidiary; not separately public.
+UTAC	OSAT, private.
+Molex	Connector supplier, owned by Koch; private.
+Samtec	Private interconnect company.
+ZT Systems	AMD acquired it; no longer public/private standalone equity angle.
+Biggest risk to the AMD bottleneck thesis
+
+AMD’s biggest supply-chain risk is not one thing breaking; it is synchronized scarcity across TSMC allocation, HBM, CoWoS, ABF substrates, and liquid-cooled rack deployment. If any one of those slips, Instinct revenue ramps can be delayed. If all improve together, AMD has a much cleaner path to converting AI demand into shipped revenue.
+
+Trade lens: no automatic buy. The most investable bottleneck bucket is probably HBM + ABF substrates + ATMP/test + rack deployment, because those are where scarcity can create pricing power and re-ratings. The lowest-quality bucket is generic consumer AIB/motherboard exposure. Good brands, weak bottleneck.

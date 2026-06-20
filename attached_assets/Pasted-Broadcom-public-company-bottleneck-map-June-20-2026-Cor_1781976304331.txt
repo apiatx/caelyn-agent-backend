@@ -1,0 +1,268 @@
+Broadcom public-company bottleneck map — June 20, 2026
+
+Core truth: Broadcom’s constraint is not “can it design chips?” It is reserved leading-edge TSMC capacity + CoWoS/advanced packaging + HBM + ABF substrates/PCBs + lasers/optical components + OSAT/test execution. Broadcom’s FY2025 10-K says it outsources most manufacturing, names TSMC as its key front-end foundry, names TSMC, ASE, Foxconn, Amkor, and Siliconware/SPIL for assembly/test, and says ~95% of wafers manufactured by its contract manufacturers in FY2025 came from TSMC. That is the choke point. Not subtle. Not cute. It’s TSMC with a crown and everyone else begging for wafers.
+
+Broadcom’s AI exposure is now big enough that these constraints matter immediately: Q2 FY2026 revenue was $22.2B, AI semiconductor revenue was $10.8B, +143% YoY, and Broadcom guided Q3 AI semiconductor revenue to $16.0B, +200%+ YoY, driven by custom AI accelerators and AI networking.
+
+This is a bottleneck score, not a buy rating. It ranks how hard the layer is to replace, how long qualification takes, how directly it blocks Broadcom shipments, and whether scarcity can create pricing power. That fits your power-law/bottleneck lens: the market’s real upside usually concentrates in a small number of structural winners, not a giant basket of “kinda related” names.
+
+Score legend
+
+95–100: existential chokepoint
+85–94: severe bottleneck / long qualification / scarce capacity
+75–84: critical but some alternatives
+65–74: important enabler, more replaceable
+50–64: ecosystem/channel exposure, lower direct bottleneck
+D = directly named by Broadcom. U = upstream into Broadcom’s suppliers. E = ecosystem/downstream enabler.
+
+1. Directly confirmed Broadcom manufacturing chokepoints
+
+Broadcom says its AI/custom silicon stack includes custom XPUs, Ethernet switching/routing silicon, Ethernet NICs, PHYs, optical components, and racks/systems, with advanced packaging integrating logic, HBM, SerDes, IP cores and processor cores. Broadcom’s 3.5D XPU platform integrates thousands of mm² of silicon and up to 12 HBM stacks, and its lead 3.5D XPU uses TSMC process nodes and CoWoS packaging.
+
+Score	Company	Ticker	Layer	Directness	Why it matters to Broadcom
+100	Taiwan Semiconductor Manufacturing	TSM / 2330.TW	Leading-edge foundry + CoWoS	D	The core Broadcom choke. Broadcom says ~95% of CM wafers were produced by TSMC in FY2025; TSMC capacity is now explicitly called a 2026 bottleneck.
+92	ASE Technology Holding	ASX / 3711.TW	OSAT / assembly & test / SPIL parent	D	Broadcom names ASE and Siliconware/SPIL in assembly/test. Critical for high-volume packaging/test execution.
+86	Amkor Technology	AMKR	OSAT / advanced packaging & test	D	Directly named by Broadcom; more strategically relevant as AI packaging shifts beyond basic assembly.
+80	Hon Hai / Foxconn	2317.TW / HNHPF	Assembly/test + systems/racks	D	Broadcom names Foxconn for assembly/test; also relevant if Broadcom ramps AI rack/system delivery models.
+74	Siliconware Precision Industries	via ASE Technology	OSAT	D	Directly named, but investable exposure is ASE because SPIL is under ASE.
+2. The real Broadcom bottleneck stack, by layer
+A. Leading-edge logic and specialty foundry
+Score	Company	Ticker	Directness	Bottleneck role
+100	TSMC	TSM / 2330.TW	D	Leading-edge nodes for XPUs, networking ASICs, PHY/DSP silicon, plus CoWoS. Broadcom-specific choke.
+72	GlobalFoundries	GFS	U	Specialty/mature-node alternative for RF, mixed-signal, connectivity and non-leading-edge silicon. Useful, not a TSMC replacement for AI XPUs.
+68	United Microelectronics	UMC / 2303.TW	U	Mature-node foundry capacity for legacy/mixed-signal/broadband/storage-related chips.
+65	Samsung Electronics / Foundry	005930.KS	U	Potential alternate advanced foundry/packaging path, but Broadcom’s public dependency points much more to TSMC.
+60	Intel Foundry	INTC	U	Long-term alternative for advanced packaging/foundry diversity, but not the present Broadcom choke.
+70	WIN Semiconductors	3105.TWO	U	GaAs compound-semiconductor foundry exposure; relevant to RF/optical ecosystem, though Broadcom does much III-V internally.
+
+Takeaway: TSMC is the kingpin. Reuters reported Broadcom saying TSMC capacity had “choked” the supply chain in 2026; Broadcom also flagged lasers and optical-transceiver PCBs as adjacent constraints.
+
+B. Advanced packaging, CoWoS, OSAT, and test
+
+Epoch AI’s 2026 analysis found that frontier AI chips were bottlenecked more by CoWoS advanced packaging and HBM than logic wafers in 2025; the four largest AI chip designers consumed around 90% of global CoWoS and HBM supply while using only about 12% of advanced logic die production.
+
+Score	Company	Ticker	Directness	Bottleneck role
+98	TSMC	TSM / 2330.TW	D	CoWoS / 2.5D / 3D integration. Mandatory for Broadcom’s 3.5D XPU roadmap.
+92	ASE Technology	ASX / 3711.TW	D	Directly named assembly/test; advanced packaging beneficiary.
+86	Amkor	AMKR	D	Directly named assembly/test; U.S./global OSAT diversification angle.
+76	JCET Group	600584.SS	U	Large China OSAT; not named by Broadcom, but relevant to global OSAT capacity.
+72	Powertech Technology	6239.TW	U	Memory/logic packaging and test exposure.
+70	King Yuan Electronics	2449.TW	U	Semiconductor test capacity; smaller but important Taiwan test bottleneck.
+66	Tongfu Microelectronics	002156.SZ	U	OSAT capacity; more China/AMD-adjacent, but global capacity matters.
+64	Huatian Technology	002185.SZ	U	China OSAT ecosystem.
+62	ChipMOS	IMOS / 8150.TW	U	Testing/assembly, more display/driver/memory exposed. Lower Broadcom specificity.
+60	Unisem	5005.KL	U	Mid-tier OSAT; useful in packaging capacity map, less direct.
+C. HBM / advanced memory
+
+Broadcom’s next-gen AI XPUs depend on HBM integration. Broadcom’s own 3.5D release says its XDSiP platform supports up to 12 HBM stacks in one package, and the lead 3.5D XPU integrates HBM modules with TSMC CoWoS.
+
+Score	Company	Ticker	Directness	Bottleneck role
+96	SK hynix	000660.KS	U	HBM leader. If Broadcom customers are reserving XPU/HBM capacity, SK hynix is one of the hardest-to-replace memory suppliers.
+92	Micron	MU	U	U.S.-listed HBM winner; crucial HBM3E/HBM4 supplier for AI accelerators.
+90	Samsung Electronics	005930.KS	U	HBM, DRAM, foundry, packaging optionality. Memory oligopoly member.
+58	Kioxia	285A.T	U	NAND/storage ecosystem, less direct to AI XPU HBM bottleneck.
+55	Western Digital / SanDisk	WDC / SNDK	U/E	Storage ecosystem; not a core Broadcom AI bottleneck unless mapping SSD/storage customers.
+
+Takeaway: HBM is a top-three bottleneck. If you want the purest public bottleneck exposure under Broadcom’s AI ramp, it is TSMC + SK hynix/Micron/Samsung + substrates.
+
+D. ABF substrates, advanced IC substrates, and AI PCBs
+
+This is the sneaky layer. Broadcom explicitly warned that PCBs used in optical transceivers had stretched from ~6-week lead times to ~6 months, with Taiwanese and Chinese PCB suppliers facing capacity limits. Separately, advanced IC substrate research lists Unimicron, Ibiden, Nan Ya PCB, Shinko, and AT&S among the top substrate suppliers; Shinko was important historically but is no longer public after being delisted in June 2025, so I exclude it from the public-only list.
+
+Score	Company	Ticker	Directness	Bottleneck role
+92	Ajinomoto	2802.T	U	ABF film is the material chokepoint behind ABF substrates. Not flashy. Very real.
+91	Ibiden	4062.T	U	Top-tier ABF/FC-BGA substrate supplier for advanced processors.
+90	Unimicron	3037.TW	U	Major ABF and advanced substrate player; critical for AI/HPC packaging.
+86	Nan Ya PCB	8046.TW	U	Key ABF substrate supplier; Taiwan capacity matters.
+84	Kinsus Interconnect	3189.TW	U	Smaller/high-beta substrate exposure; relevant to AI package substrate tightness.
+83	AT&S	ATS.VI	U	Advanced IC substrates; Europe/US localization optionality.
+81	Samsung Electro-Mechanics	009150.KS	U	FC-BGA/advanced substrates; Korean alternative capacity.
+75	Shennan Circuits	002916.SZ	U	China PCB/substrate expansion; more relevant as PCB supply tightens.
+74	Zhen Ding Technology	4958.TW	U	Large PCB supplier; relevant to AI server/optical PCB capacity.
+73	LG Innotek	011070.KS	U	Substrate/PCB exposure; more consumer-heavy but still relevant.
+71	Daeduck Electronics	353200.KS	U	Korean FC-BGA/PCB supplier; smaller-cap angle.
+71	Compeq Manufacturing	2313.TW	U	Taiwan PCB supplier; optical/networking boards.
+70	Tripod Technology	3044.TW	U	PCB supplier; AI/server PCB capacity relevance.
+70	TTM Technologies	TTMI	U	U.S.-listed PCB supplier; relevant to high-speed networking/server boards.
+69	Victory Giant Technology	300476.SZ	U	China high-speed PCB/AI server exposure.
+68	Wus Printed Circuit	002463.SZ	U	China/Taiwan PCB exposure; high-speed boards.
+65	Kyocera	6971.T	U	Ceramic/packages/substrate ecosystem.
+64	Kingboard Laminates	1888.HK	U	PCB laminates/materials.
+62	Toppan Holdings	7911.T	U	Packaging materials/photomasks/substrate ecosystem.
+58	Meiko Electronics	6787.T	U	PCB supplier; lower directness.
+55	Schweizer Electronic	SCE.DE	U	Smaller PCB supplier; more auto/industrial than Broadcom AI.
+
+Excluded but important: Shinko Electric was a major substrate player, but its shares were delisted June 6, 2025, so it fails the public-only rule.
+
+E. Optical, lasers, InP/GaAs, fiber, and transceiver ecosystem
+
+Broadcom’s 10-K says it supplies optical components and uses internal fabs for VCSELs, side-emitting lasers, GaAs and InP lasers, but Broadcom also said in March 2026 that the laser space is supply-constrained.
+
+Score	Company	Ticker	Directness	Bottleneck role
+88	Coherent	COHR	U/E	InP lasers, optical components, transceivers, VCSELs; critical AI optical ecosystem.
+86	Lumentum	LITE	U/E	EML lasers, optical components, cloud/datacenter optics.
+83	Fabrinet	FN	E	Optical module manufacturing capacity. Quiet monster in AI optical buildout.
+80	Sumitomo Electric	5802.T	U	Optical fiber/cable, compound materials, datacom/telecom components.
+75	Furukawa Electric	5801.T	U	Fiber/cable and optical components.
+74	AXT	AXTI	U	InP/GaAs substrate supplier. Smaller, more asymmetric, higher execution risk.
+72	IQE	IQE.L	U	Compound semiconductor epiwafers for RF/photonic devices.
+72	Fujikura	5803.T	U	Optical fiber/cable/connectivity.
+70	WIN Semiconductors	3105.TWO	U	GaAs foundry; RF/optical ecosystem.
+69	Zhongji Innolight	300308.SZ	E	Optical transceiver module leader, CPO/AI networking ecosystem.
+68	Applied Optoelectronics	AAOI	E	Smaller optical transceiver player; high-beta AI networking exposure.
+68	Corning	GLW	U	Optical fiber, glass, and next-gen substrate optionality.
+67	Eoptolink	300502.SZ	E	China optical transceiver supplier.
+63	Accelink	002281.SZ	E	Optical components/modules.
+62	TFC Optical Communication	300394.SZ	E	Optical passive components/connectors.
+60	MACOM	MTSI	U/E	RF/optical analog semis; less direct but useful optical stack exposure.
+58	Semtech	SMTC	U/E	Signal integrity / datacom chips; less direct to Broadcom because also competitor-adjacent.
+F. Wafer fab equipment and process-control suppliers upstream of TSMC
+
+These are not Broadcom suppliers directly in the purchase-order sense. They are the suppliers that determine how quickly TSMC can add capacity and yield advanced nodes/CoWoS-related flows. In bottleneck terms, they sit above Broadcom’s oxygen tank.
+
+Score	Company	Ticker	Directness	Bottleneck role
+96	ASML	ASML	U	EUV lithography monopoly for leading-edge nodes. No ASML, no leading-edge TSMC expansion.
+92	Applied Materials	AMAT	U	Deposition/etch/process tools; broadest semi-cap equipment exposure.
+90	Lam Research	LRCX	U	Etch/deposition; advanced logic and memory capacity.
+90	KLA	KLAC	U	Process control/metrology. Critical to yield.
+89	Tokyo Electron	8035.T	U	Coater/developer, etch, deposition, cleaning tools.
+83	ASM International	ASMI.AS	U	ALD/epi tools for advanced nodes.
+82	DISCO	6146.T	U	Dicing/grinding/thinning; advanced packaging and HBM stack handling.
+80	Lasertec	6920.T	U	EUV mask inspection. Narrow but critical.
+76	Screen Holdings	7735.T	U	Wafer cleaning and process equipment.
+72	Nikon	7731.T	U	Lithography/metrology outside EUV; lower leading-edge AI specificity.
+70	Canon	7751.T	U	Lithography/nanoimprint optionality; less direct to Broadcom today.
+G. Materials, chemicals, gases, wafers, photomasks
+Score	Company	Ticker	Directness	Bottleneck role
+88	Shin-Etsu Chemical	4063.T	U	Silicon wafers, photoresist/chemicals; foundational supplier.
+84	SUMCO	3436.T	U	Silicon wafers.
+82	Entegris	ENTG	U	Specialty chemicals, filtration, contamination control.
+80	GlobalWafers	6488.TWO	U	Silicon wafers; smaller than Shin-Etsu/SUMCO but strategic.
+78	DuPont	DD	U	Advanced materials, CMP, lithography/process materials.
+78	Merck KGaA	MRK.DE	U	Electronic chemicals/materials.
+78	Soitec	SOI.PA	U	Engineered substrates/RF-SOI/photonic optionality.
+76	Air Liquide	AI.PA	U	Specialty gases for fabs.
+76	Linde	LIN	U	Industrial/specialty gases.
+75	Resonac	4004.T	U	Semiconductor materials, packaging materials.
+73	Tokyo Ohka Kogyo	4186.T	U	Photoresists and lithography chemicals.
+72	FUJIFILM Holdings	4901.T	U	Photoresists/process chemicals.
+72	Air Products	APD	U	Industrial gases.
+70	Mitsubishi Chemical Group	4188.T	U	Electronic materials ecosystem.
+68	ADEKA	4401.T	U	Semiconductor chemicals/materials.
+66	Nitto Denko	6988.T	U	Tapes/films/electronic materials.
+H. EDA, IP, verification, simulation
+
+Broadcom’s 3.5D XPU release explicitly says its platform sits on “technology and tools from TSMC and EDA partners.” Synopsys also completed the acquisition of Ansys in July 2025, combining EDA/IP with multiphysics simulation.
+
+Score	Company	Ticker	Directness	Bottleneck role
+95	Synopsys	SNPS	U	EDA, IP, signoff, simulation after Ansys deal. Critical to 3D/3.5D chip design.
+92	Cadence Design Systems	CDNS	U	EDA, verification, package-aware design, HBM/3DIC workflows.
+87	Siemens	SIE.DE / SIEGY	U	Siemens EDA, verification, packaging, system design.
+80	Arm Holdings	ARM	U	CPU/interconnect IP ecosystem for custom silicon. Broadcom XPUs may use customer-specific architectures; Arm is still a key public IP chokepoint.
+73	Rambus	RMBS	U	Memory interface/security IP, HBM/DDR/controller exposure.
+71	Keysight	KEYS	U	High-speed validation, signal integrity, optical/electrical test.
+58	CEVA	CEVA	U	Niche IP licensing. Less central to Broadcom AI XPUs.
+I. Semiconductor test, inspection, probe, and yield
+Score	Company	Ticker	Directness	Bottleneck role
+88	Advantest	6857.T	U	AI/HPC chip test equipment. High bottleneck as packages get bigger and more complex.
+82	Teradyne	TER	U	Semiconductor test platforms.
+76	FormFactor	FORM	U	Probe cards; critical to wafer-level testing.
+75	Camtek	CAMT	U	Inspection/metrology for advanced packaging.
+74	Onto Innovation	ONTO	U	Advanced packaging metrology/inspection.
+72	Nova	NVMI	U	Process control/metrology.
+66	Cohu	COHU	U	Test handlers and back-end test equipment.
+60	Aehr Test Systems	AEHR	U	Wafer-level burn-in/test; more niche, higher volatility.
+J. AI racks, systems, ODM/EMS, power/cooling, interconnect
+
+Broadcom’s 10-K now contemplates not just chips but racks and systems based on XPUs, and even notes that customers may seek leasing/alternative financing for AI racks or systems. This means the systems supply chain starts to matter more.
+
+Score	Company	Ticker	Directness	Bottleneck role
+80	Hon Hai / Foxconn	2317.TW	D/E	Directly named assembly/test; also AI server/rack manufacturing exposure.
+77	Delta Electronics	2308.TW	E	Power supplies, thermal, fans, datacenter power hardware.
+76	Quanta Computer	2382.TW	E	AI server/rack ODM.
+75	Wiwynn	6669.TW	E	Hyperscale AI server ODM; high direct exposure to AI infrastructure.
+74	Celestica	CLS	E	Networking/server manufacturing; strong AI infra contract manufacturing exposure.
+72	Wistron	3231.TW	E	AI server/rack ODM.
+70	Jabil	JBL	E	EMS/manufacturing.
+70	Vertiv	VRT	E	Datacenter power/cooling bottleneck; not Broadcom-specific, but critical to AI deployments.
+68	Flex	FLEX	E	EMS/manufacturing.
+68	Inventec	2356.TW	E	Server ODM.
+68	Accton Technology	2345.TW	E	White-box networking/switch ecosystem.
+66	Amphenol	APH	E	High-speed connectors/interconnect.
+65	Lite-On Technology	2301.TW	E	Power supplies/electronics manufacturing.
+64	Eaton	ETN	E	Electrical power infrastructure.
+63	TE Connectivity	TEL	E	Connectors/interconnect.
+63	Super Micro Computer	SMCI	E	AI server integrator; downstream Broadcom silicon demand channel.
+62	Sanmina	SANM	E	EMS, networking, optical manufacturing.
+60	BizLink	3665.TW	E	Cables/interconnects.
+58	Schneider Electric	SU.PA	E	Datacenter electrical infrastructure.
+K. Distribution / channel
+
+Broadcom says distributors accounted for 48% of net revenue in FY2025 and FY2024, and aggregate sales to its top five end customers were about 40% of net revenue. This layer is less of a physical chokepoint than a demand/channel amplifier.
+
+Score	Company	Ticker	Directness	Bottleneck role
+55	Arrow Electronics	ARW	E	Global semiconductor/electronics distributor.
+55	Avnet	AVT	E	Global component distributor.
+52	WPG Holdings	3702.TW	E	Asia electronics distribution.
+52	WT Microelectronics	3036.TW	E	Asia semiconductor distributor.
+50	Macnica Holdings	3132.T	E	Japan/Asia semiconductor distribution.
+L. VMware / private cloud ecosystem — lower “supply” bottleneck, but important demand pull-through
+
+Broadcom’s infrastructure software stack includes VMware Cloud Foundation, vSphere Foundation, Telco Cloud Platform, VMware Private AI, cybersecurity and mainframe/enterprise software. This is not the same supply-chain bottleneck as TSMC/HBM, but it creates pull-through into enterprise/private-AI infrastructure.
+
+Score	Company	Ticker	Directness	Bottleneck role
+58	Dell Technologies	DELL	E	VMware/private cloud hardware ecosystem.
+55	Hewlett Packard Enterprise	HPE	E	Enterprise/private cloud server ecosystem.
+53	Lenovo	0992.HK	E	Enterprise server/private cloud ecosystem.
+52	Cisco	CSCO	E	Enterprise networking/VMware ecosystem.
+52	Amazon	AMZN	E	VMware cloud endpoint / cloud partner ecosystem.
+52	Microsoft	MSFT	E	Enterprise cloud/private AI ecosystem.
+52	Alphabet	GOOGL	E	Cloud + custom AI silicon customer ecosystem.
+Highest-conviction bottleneck clusters
+1. TSMC is the single biggest Broadcom bottleneck
+
+Broadcom can design monster XPUs all day. If TSMC leading-edge + CoWoS allocation is tight, shipments get throttled. Broadcom’s own disclosure says TSMC produced ~95% of its CM wafers in FY2025, and Reuters reported Broadcom calling TSMC capacity a 2026 choke point.
+
+Best public exposure: TSM.
+
+2. HBM is the second choke
+
+Broadcom’s 3.5D platform needs HBM stacks, and industry-wide AI chip scaling is heavily constrained by HBM and CoWoS, not just logic dies.
+
+Best public exposure: SK hynix, Micron, Samsung.
+
+3. ABF substrates and optical PCBs are the under-owned bottleneck
+
+Broadcom specifically called optical-transceiver PCBs an unexpected bottleneck, with lead times moving from roughly six weeks to six months.
+
+Best public exposure: Ibiden, Unimicron, Nan Ya PCB, Kinsus, AT&S, Samsung Electro-Mechanics, TTM.
+
+4. Optical/laser supply is the smaller-player hunting ground
+
+Broadcom flagged laser supply constraints; the public small/mid-cap angle lives in COHR, LITE, FN, AXTI, IQE, AAOI, plus Asian optical players like Eoptolink and Innolight. This is where the basket can get explosive, but also where garbage entries get punished. No hero ball without charts.
+
+5. EDA/test/metrology are “boring toll roads”
+
+Synopsys, Cadence, Siemens EDA, Advantest, Teradyne, FormFactor, Camtek, Onto and KLA are less sexy than “AI chip winner,” but they are buried in every serious AI-chip ramp.
+
+Clean ranked watchlist from this map
+
+Tier 1 — Broadcom-critical chokepoints:
+TSM, SK hynix, MU, Samsung Electronics, ASX, AMKR, ASML, AMAT, LRCX, KLAC, SNPS, CDNS.
+
+Tier 2 — high-quality bottleneck suppliers:
+Ibiden, Unimicron, Nan Ya PCB, Kinsus, AT&S, Advantest, Teradyne, Shin-Etsu, SUMCO, Entegris, Tokyo Electron, ASMI, DISCO, Lasertec.
+
+Tier 3 — smaller / more asymmetric / higher risk:
+AXTI, IQE, AAOI, CAMT, ONTO, FORM, TTMI, Kinsus, Wus Printed Circuit, Victory Giant, Eoptolink, TFC Optical, KYEC, ChipMOS, Cohu, Aehr.
+
+Tier 4 — ecosystem pull-through, not pure bottleneck:
+CLS, FLEX, JBL, FN, VRT, DELL, HPE, ARW, AVT, WPG, WT Micro, Macnica.
+
+Final read
+
+For Broadcom, the most investable bottleneck map is:
+
+TSMC / CoWoS → HBM → ABF substrates/PCBs → OSAT/test → lasers/optics → EDA/IP → rack/ODM/power.
+
+The asymmetric hunt is not “buy everything Broadcom-adjacent.” It is finding the names where Broadcom AI demand collides with scarce capacity, long qualification cycles, and still-not-insane valuation. Right now, the best hunting zones are HBM, substrates/PCBs, optical lasers/components, advanced packaging/test, and select EMS/ODM infrastructure.
