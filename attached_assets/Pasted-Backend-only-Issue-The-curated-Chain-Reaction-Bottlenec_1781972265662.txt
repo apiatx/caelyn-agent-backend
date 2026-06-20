@@ -1,0 +1,280 @@
+Backend only.
+
+Issue:
+The curated Chain Reaction / Bottlenecks anchor tabs are missing many public bottleneck stocks from the user-provided source maps, especially smaller/niche suppliers.
+
+This is not acceptable. The requirement is to include every public company from the curated source maps, not just the top obvious names or summary/highlight names.
+
+Critical constraints:
+
+* Do NOT use Claude.
+* Do NOT use OpenAI.
+* Do NOT use web search.
+* Do NOT re-enable dynamic research routes.
+* Do NOT change `/api/bottlenecks/current`.
+* Do NOT filter rows out because quote, market cap, FMP profile, exchange, or TradingView data is missing.
+* Do NOT omit foreign tickers.
+* Do NOT omit OTC tickers if they were included in the curated source.
+* Do NOT only include “top names.”
+* Do NOT treat the earlier “must include names such as…” list as exhaustive. That was a minimum sanity check, not the full list.
+
+Goal:
+Make the backend static curated data exhaustive.
+
+The curated source maps are the source of truth. Every public company mentioned in those maps must be represented in the relevant anchor tab unless there is a clear exclusion reason.
+
+Include every public company from:
+
+* master ranking tables
+* layer-by-layer maps
+* long-tail supplier tables
+* smaller-player lists
+* “don’t leave out smaller players” sections
+* best basket/watchlist sections
+* public-only proxy sections
+
+Anchors:
+
+* SPCX
+* ANTHROPIC
+* NVDA
+* OPENAI
+* TSM
+* GOOG
+
+Backend audit steps:
+
+1. Open the static curated data file currently powering:
+
+   * `/api/bottlenecks/anchor/SPCX`
+   * `/api/bottlenecks/anchor/ANTHROPIC`
+   * `/api/bottlenecks/anchor/NVDA`
+   * `/api/bottlenecks/anchor/OPENAI`
+   * `/api/bottlenecks/anchor/TSM`
+   * `/api/bottlenecks/anchor/GOOG`
+
+2. Count current hardcoded rows per anchor.
+
+3. Compare the static rows against the full user-provided curated maps.
+
+4. Identify every missing public ticker/company from each source map.
+
+5. Add every missing public-company row.
+
+Deduping rule within the same anchor:
+
+* Dedupe by canonical ticker only.
+* If the same company appears in multiple layers for the same anchor, keep one row but merge:
+
+  * layer roles
+  * themes
+  * evidence / notes
+  * relationship reasons
+  * source URLs if available
+* Use the highest bottleneck score found for that anchor.
+* Keep the most specific relationship/directness label.
+* Preserve enough text so the detail drawer explains all relevant roles.
+
+Across different anchors:
+
+* Do NOT dedupe away rows.
+* The same ticker must appear in every anchor tab where it belongs.
+* Cross-anchor duplicates should be surfaced through overlap detection.
+
+Acceptable exclusion reasons only:
+
+* private company
+* delisted / no longer public
+* duplicate already merged under same anchor
+* no public ticker was provided or reasonably inferable from the user’s source text
+
+Ticker formatting:
+
+* `ticker` / `bottleneck_ticker` should be the bare symbol where possible.
+* `tradingview_symbol` should hold exchange prefix if needed.
+* Do not drop a row because TradingView symbol is imperfect or uncertain.
+* Keep foreign tickers visible:
+  `.TW`, `.TWO`, `.T`, `.KS`, `.SZ`, `.SW`, `.PA`, `.AS`, `.VI`, `.DE`, `.MI`, `.HK`, `.HE`, `.TO`, `.V`, etc.
+* Missing quote/live data should be `null` or `—`, not a reason to remove the row.
+
+Specific validation expectations:
+
+SPCX must include smaller/niche names such as:
+
+* Filtronic
+* Wistron NeWeb
+* Chin-Poon
+* Universal Microwave
+* Shenmao
+* Compeq
+* Tong Hsing
+* Meiko
+* Kinpo
+* Velo3D if valid
+* Outokumpu if public ticker is included
+* KULR
+* AMPX
+  plus the full ranked SpaceX list from the source map.
+
+NVDA must include the full long-tail map, including:
+
+* Ajinomoto
+* Ibiden
+* Unimicron
+* Nan Ya PCB
+* Kinsus
+* AT&S
+* Elite Material
+* Doosan
+* Compeq
+* Gold Circuit
+* Zhen Ding
+* Camtek
+* Onto
+* Nova
+* DISCO
+* BESI
+* SÜSS
+* Towa
+* KLIC
+* VAT Group
+* MKS
+* Auras
+* Asia Vital Components
+* nVent
+* Browave
+* Eoptolink
+* Innolight
+* Sumitomo Electric
+  plus all other public rows from the NVDA source map.
+
+OPENAI must include smaller/niche names such as:
+
+* CRDO
+* ALAB
+* FN
+* AAOI
+* MOD
+* POWL
+* Hammond Power
+* CAMT
+* NVMI
+* FORM
+* ONTO
+* UCTT
+* ICHR
+* VAT Group
+* AEHR
+* TTMI
+* SIMO
+* Phison
+* PWR
+* EME
+* FIX
+* DOV
+* NVT
+  plus all other public rows from the OpenAI source map.
+
+TSM must include the full long-tail Taiwan/Japan/Europe supplier map, including:
+
+* Taiwan Puritic
+* Marketech
+* Scientech
+* Jentech
+* Topco
+* All Ring
+* C Sun
+* United Integrated Services
+* Organo
+* Technoprobe
+* Shibaura
+* Ebara
+* Kokusai
+* ULVAC
+* Canon
+* Asahi Kasei
+* JX Advanced Metals
+* LCY Chemical
+* Kanto Denka
+* Stella Chemifa
+* Fujimi
+* China Steel Structure
+* Dacin
+* Tung Ho Steel
+  plus all other public rows from the TSM source map.
+
+GOOG must include smaller/niche names such as:
+
+* Envicool
+* Victory Giant
+* Auras
+* Inventec
+* Eoptolink
+* Innolight
+* Delta Electronics
+* Credo
+* Fabrinet
+* EMCOR
+* Comfort Systems
+* Powell
+* IES Holdings
+* MYR Group
+* Primoris
+* Sterling Infrastructure
+* Delta Asia
+* Lingyi iTech
+* Feilong Auto Components
+* HD Hyundai Electric
+* Hyosung Heavy Industries
+  plus all other public rows from the Google source map.
+
+ANTHROPIC must include the full pasted Anthropic list, including:
+
+* WULF
+* CIFR
+* POWL
+* MOD
+* PENG
+* CAMT
+* NVMI
+* ONTO
+* FORM
+* UCTT
+* TTMI
+* FN
+* LITE
+* COHR
+* ATS
+* Kinsus
+* Nan Ya PCB
+  plus all other public rows from the Anthropic source map.
+
+Endpoint validation:
+Run and report row counts for:
+
+* `/api/bottlenecks/anchor/SPCX`
+* `/api/bottlenecks/anchor/ANTHROPIC`
+* `/api/bottlenecks/anchor/NVDA`
+* `/api/bottlenecks/anchor/OPENAI`
+* `/api/bottlenecks/anchor/TSM`
+* `/api/bottlenecks/anchor/GOOG`
+
+Also validate:
+
+* `/api/bottlenecks/anchor-overlap`
+* `/api/bottlenecks/current`
+
+Required report:
+Return a table:
+
+Anchor | Rows before | Rows after | Missing rows added | Exclusions
+
+For exclusions, include exact reason. Do not mark complete until every public company from the curated maps is represented.
+
+Final validation:
+
+* No Bottlenecks endpoint calls Claude/OpenAI/web search.
+* Disabled research routes still return `disabled_static_curated_mode`.
+* `/api/bottlenecks/current` unchanged.
+* Manual-added rows still merge correctly.
+* Overlap detection still works after the expanded row set.
