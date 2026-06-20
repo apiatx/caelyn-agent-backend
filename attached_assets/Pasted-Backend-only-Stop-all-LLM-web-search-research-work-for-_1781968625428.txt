@@ -1,0 +1,268 @@
+Backend only.
+
+Stop all LLM/web-search research work for Chain Reaction / Bottlenecks anchor maps. We are switching to static curated public-company bottleneck maps from the user-provided pasted/uploaded source text.
+
+Critical constraints:
+
+* Do NOT use Claude.
+* Do NOT use OpenAI.
+* Do NOT use web search.
+* Do NOT run monthly anchor research.
+* Do NOT run LLM/web calls on page load.
+* Do NOT run LLM/web calls in weekly scoring.
+* Do NOT keep trying to auto-discover supplier lists.
+* Do NOT fetch ChatGPT share links at runtime.
+* Do NOT change `/api/bottlenecks/current` response shape.
+* Do NOT redesign existing Chain Reaction / Bottlenecks data format.
+* Do NOT break the existing table/detail drawer/TradingView chart behavior.
+* Preserve the exact current Chain Reaction row/detail format.
+
+Goal:
+Add deterministic curated anchor bottleneck maps for:
+
+* SPCX / SpaceX
+* ANTHROPIC / Anthropic
+* NVDA / NVIDIA
+* OPENAI / OpenAI
+* TSM / TSMC
+* GOOG / Google / Alphabet
+
+Source of truth:
+Use only the user-provided pasted/uploaded curated maps for each anchor. These are already researched. Do not regenerate, summarize with an LLM, or search the web.
+
+Before editing:
+
+1. Audit the existing backend Chain Reaction / Bottlenecks implementation.
+2. Identify:
+
+   * current `/api/bottlenecks/current` route
+   * current row shape
+   * detail drawer fields
+   * TradingView/ticker fields
+   * Chain Reaction scoring/service path
+   * any previously added Claude/OpenAI anchor research service/routes
+3. Report the files/functions you will touch.
+4. Then implement the smallest additive change.
+
+Implementation:
+
+1. Add a static curated data source.
+
+Preferred file:
+`backend/services/playbook/curated_anchor_bottlenecks.py`
+
+Alternative JSON is okay if it better matches the repo:
+`backend/data/curated_anchor_bottlenecks.json`
+
+2. Create a normalized curated row shape compatible with the existing Chain Reaction table/detail drawer.
+
+Each row should include:
+
+* anchor_key
+* anchor_name
+* ticker
+* company_name
+* tradingview_symbol
+* layer
+* layer_name
+* supply_chain_role
+* bottleneck_score
+* evidence_grade: A / B / C where available
+* evidence_grade_reason
+* relationship_specificity:
+
+  * confirmed_supplier
+  * confirmed_partner
+  * confirmed_asset_partner
+  * direct
+  * ecosystem
+  * critical_upstream
+  * strong_proxy
+  * category_proxy
+* directness / link code if available from source text
+* themes
+* confidence
+* evidence
+* source_urls if present in source text
+* why_it_matters
+* why_hidden
+* why_now
+* what_would_break_thesis
+* giant_anchors containing the anchor key
+* source_type: `curated_static`
+* manual_added: false
+* last_curated_at
+
+If a source map does not provide every drawer field explicitly, derive short deterministic fallback text from the row’s layer, role, score, directness, and notes. Do not use an LLM.
+
+3. Populate all six anchors from the user-provided curated maps.
+
+Use the pasted/uploaded maps as source of truth:
+
+* SPCX / SpaceX public-company map
+* ANTHROPIC / Anthropic public-company map
+* NVDA / NVIDIA public-company map
+* OPENAI / OpenAI public-company map
+* TSM / TSMC public-company map
+* GOOG / Google public-company map
+
+Do not fetch links. Do not call an LLM. Hardcode/parse the pasted curated text.
+
+4. Disable dynamic anchor research.
+
+Previously built Claude/OpenAI anchor research code should not run.
+
+Required behavior:
+
+* Admin research routes should either be removed from active use or return:
+  `disabled_static_curated_mode`
+* Old generated rows from `anchor_supply_chain_research_nodes` should not override curated static rows.
+* Old Claude/OpenAI generated SPCX rows should not appear in curated tabs.
+* Weekly scoring must remain deterministic and must not call LLM/web.
+
+5. Add deterministic backend functions:
+
+* `get_curated_anchor_bottlenecks(anchor_key)`
+* `get_curated_anchor_list()`
+* `get_curated_anchor_overlap()`
+
+6. Add deterministic endpoints:
+
+* `GET /api/bottlenecks/anchors`
+* `GET /api/bottlenecks/anchor/{anchor_key}`
+* `GET /api/bottlenecks/anchor-overlap`
+
+Keep existing:
+
+* `GET /api/bottlenecks/current`
+
+Do not change `/api/bottlenecks/current` shape.
+
+7. `GET /api/bottlenecks/anchors` should return:
+
+* anchor_key
+* anchor_name
+* row_count
+* status: `ready`
+* last_curated_at
+
+8. `GET /api/bottlenecks/anchor/{anchor_key}` should return rows in the same shape expected by the current Chain Reaction / Bottlenecks table and detail drawer.
+
+It should include:
+
+* curated static rows
+* active manual rows for that anchor
+* quote/fundamental overlays only if existing deterministic cache paths already support that
+* no LLM/web calls
+
+9. `GET /api/bottlenecks/anchor-overlap` should surface tickers listed under more than one anchor.
+
+Response shape:
+{
+"items": [
+{
+"ticker": "TSM",
+"company_name": "TSMC",
+"anchors": ["SPCX", "NVDA", "OPENAI", "ANTHROPIC", "GOOG"],
+"count": 5,
+"max_bottleneck_score": 98,
+"roles_by_anchor": {
+"SPCX": "...",
+"NVDA": "...",
+"OPENAI": "..."
+}
+}
+]
+}
+
+Manual-added rows must count toward overlap detection.
+
+10. Manual add feature.
+
+Create a persistent manual overlay table:
+`manual_anchor_bottlenecks`
+
+Fields:
+
+* id
+* anchor_key
+* ticker
+* company_name
+* tradingview_symbol
+* supply_chain_role
+* bottleneck_score
+* evidence_grade
+* relationship_specificity
+* evidence
+* source_urls
+* notes
+* deal_signed_date
+* added_by
+* ticker_validated
+* is_active
+* created_at
+* updated_at
+
+Admin endpoints:
+
+* `GET /api/admin/bottlenecks/manual-nodes`
+* `POST /api/admin/bottlenecks/manual-node`
+* `PUT /api/admin/bottlenecks/manual-node/{id}`
+* `DELETE /api/admin/bottlenecks/manual-node/{id}` or soft-disable
+
+Manual add validation:
+
+* Require anchor_key, ticker, company_name, supply_chain_role.
+* Validate ticker through existing quote/profile/reference paths if practical.
+* Do not block manual add if ticker validation fails, but set `ticker_validated=false` and include a warning.
+* Manual rows should show `manual_added=true`.
+* Manual rows should merge into the correct anchor tab and use the same row/detail drawer/TradingView chart format.
+
+11. Static map population expectations.
+
+SPCX should include high-signal names such as:
+STM, Filtronic, LIN, Wistron NeWeb, Chin-Poon, Universal Microwave, Shenmao, Velo3D if valid, SATS, TMUS, TSM, ASML, NVDA, AMAT, AMD, LRCX, KLAC, Compeq, Tong Hsing, Meiko, Kinpo, RKLB, MTRN, HWM, CRS, LHX, KULR, AMPX.
+
+ANTHROPIC should include names such as:
+AMZN, GOOGL, AVGO, TSM, NVDA, SK hynix, ASML, MSFT, CRWV, MU, Samsung, WULF, CIFR, VRT, ANET, MRVL, AMAT, LRCX, KLAC, Tokyo Electron, ASMI, BESI, Advantest, TER, GLW, ETN, Schneider, ABB, POWL, HUBB, server ODMs, optics, storage, power, and smaller players from the pasted Anthropic map.
+
+NVDA should include names such as:
+TSM, SK hynix, ASML, MU, Samsung, Foxconn, AMAT, LRCX, Ajinomoto, Tokyo Electron, KLAC, ASE, Wistron, Ibiden, LITE, COHR, AMKR, Advantest, VRT, Delta, Unimicron, FN, GLW, Lite-On, DISCO, ASMI, ETN, Sumitomo Electric, Browave, Eoptolink, Innolight, Nan Ya PCB, Kinsus, AT&S, Auras, nVent, Asia Vital Components, and the additional layer-map names from the pasted NVDA map.
+
+OPENAI should include names such as:
+NVDA, TSM, AVGO, ASML, ORCL, SK hynix, MSFT, AMD, VRT, Schneider, AMZN, CRWV, AMAT, GEV, MU, LRCX, KLAC, Ajinomoto, PWR, ANET, ETN, ABB, Ibiden, ARM, MRVL, APH, Foxconn, Quanta, CRDO, ALAB, COHR, LITE, DELL, SMCI, MOD, EME, POWL, FN, Hammond Power, AMKR, CAMT, NVMI, FORM, ONTO, AAOI, CIEN, FIX, NVT, DOV, UCTT, and the additional layer-map names from the pasted OpenAI map.
+
+TSM should include names such as:
+ASML, AMAT, Tokyo Electron, LRCX, KLAC, Shin-Etsu, SUMCO, SCREEN, ASMI, DISCO, Advantest, Ebara, Tokyo Ohka, Resonac, JX Advanced Metals, Merck KGaA, CDNS, Kokusai, ENTG, Lasertec, ULVAC, ONTO, Canon, Asahi Kasei, Shibaura, Unimicron, Ibiden, GlobalWafers, Fujifilm, Scientech, Technoprobe, Ajinomoto, Siltronic, MKS, Hoya, Nan Ya PCB, Taiwan Puritic, Air Liquide, Topco, Marketech, Kinsus, LIN, VAT Group, AEIS, Organo, DNP, Toppan, AT&S, UIS, FORM, APD, Sumitomo Chemical, Daifuku, Atlas Copco, Photronics, AMKR, ASX, Jentech, CTCI, Horiba, ADEKA, and smaller Taiwan/Japan suppliers from the pasted TSM map.
+
+GOOG should include names such as:
+AVGO, TSM, SK hynix, Samsung, MU, ASML, Envicool, Schneider, ETN, VRT, Foxconn, NEE, AES, Inventec, Innolight, AMAT, LRCX, KLAC, LITE, COHR, AMKR, ASX, Tokyo Electron, Unimicron, Ibiden, Victory Giant, Eoptolink, Auras, Delta, ABB, SNPS, CDNS, MRVL, Prysmian, Nokia, CIEN, ARM, MediaTek, Quanta, Wiwynn, Wistron, CLS, FN, CRDO, and the additional layer-map names from the pasted Google map.
+
+12. Validation:
+
+* Confirm `/api/bottlenecks/current` is unchanged.
+* Confirm no Bottlenecks endpoint calls Claude/OpenAI/web search.
+* Confirm any old dynamic research route returns `disabled_static_curated_mode`.
+* Confirm `/api/bottlenecks/anchors` returns all six anchors with ready status.
+* Confirm `/api/bottlenecks/anchor/SPCX` includes the curated high-signal SpaceX names.
+* Confirm `/api/bottlenecks/anchor/ANTHROPIC` includes the pasted Anthropic map.
+* Confirm `/api/bottlenecks/anchor/NVDA` includes the pasted NVDA map.
+* Confirm `/api/bottlenecks/anchor/OPENAI` includes the pasted OpenAI map.
+* Confirm `/api/bottlenecks/anchor/TSM` includes the pasted TSM map.
+* Confirm `/api/bottlenecks/anchor/GOOG` includes the pasted Google map.
+* Confirm `/api/bottlenecks/anchor-overlap` surfaces shared tickers like TSM, NVDA, ASML, AMAT, LRCX, KLAC, VRT, GLW, AVGO, MU, ETN where applicable.
+* Confirm manual add creates a row and it appears in the right anchor tab.
+* Confirm manual-added rows can be edited/disabled.
+* Confirm each row still feeds the existing detail drawer and TradingView chart.
+* Confirm no unrelated files/pages changed.
+
+Deliverable:
+Report:
+
+* files changed
+* endpoints added/disabled
+* row counts per anchor
+* overlap count
+* sample rows from SPCX, ANTHROPIC, NVDA, OPENAI, TSM, GOOG
+* manual add test result
+* proof no LLM/web calls are used

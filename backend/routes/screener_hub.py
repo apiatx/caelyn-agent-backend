@@ -873,29 +873,15 @@ async def bottlenecks_research_anchor(
     if err:
         return err
 
-    from services.anchor_research_service import run_anchor_research, OVERLAY_ANCHOR_KEYS
-
-    anchor_key = anchor.strip().upper()
-    if anchor_key not in OVERLAY_ANCHOR_KEYS:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "error":  f"Unknown anchor {anchor_key!r}. Valid anchors: {sorted(OVERLAY_ANCHOR_KEYS)}",
-            },
-        )
-
-    print(f"[RESEARCH_ANCHOR] starting anchor={anchor_key} force={force}")
-    try:
-        result = await run_anchor_research(anchor_key=anchor_key, force=force)
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "error": str(e), "anchor": anchor_key},
-        )
-
-    status_code = 200 if result.get("status") in ("ok", "skipped") else 500
-    return JSONResponse(status_code=status_code, content=result)
+    return JSONResponse(content={
+        "status": "disabled_static_curated_mode",
+        "message": (
+            "LLM/web-search anchor research is disabled. "
+            "Anchor maps are now served from the static curated data in "
+            "services/playbook/curated_anchor_bottlenecks.py. "
+            "Use GET /api/bottlenecks/anchor/{anchor_key} for curated rows."
+        ),
+    })
 
 
 # ── POST /api/admin/bottlenecks/revalidate-anchor ─────────────────────────────
@@ -927,30 +913,14 @@ async def bottlenecks_revalidate_anchor(
     if err:
         return err
 
-    from services.anchor_research_service import revalidate_anchor_nodes, OVERLAY_ANCHOR_KEYS
-
-    anchor_key = anchor.strip().upper()
-    if anchor_key not in OVERLAY_ANCHOR_KEYS:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "error":  f"Unknown anchor {anchor_key!r}. Valid: {sorted(OVERLAY_ANCHOR_KEYS)}",
-            },
-        )
-
-    print(f"[REVALIDATE_ANCHOR] starting anchor={anchor_key}")
-    try:
-        result = await revalidate_anchor_nodes(anchor_key)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "error": str(e), "anchor": anchor_key},
-        )
-
-    return JSONResponse(status_code=200, content=result)
+    return JSONResponse(content={
+        "status": "disabled_static_curated_mode",
+        "message": (
+            "LLM/web-search anchor revalidation is disabled. "
+            "Anchor maps are now served from static curated data. "
+            "Use GET /api/bottlenecks/anchor/{anchor_key} for curated rows."
+        ),
+    })
 
 
 # ── POST /api/admin/bottlenecks/research-anchors-monthly ──────────────────────
@@ -977,19 +947,14 @@ async def bottlenecks_research_monthly(
     if err:
         return err
 
-    from services.anchor_research_service import run_monthly_refresh
-
-    print(f"[RESEARCH_MONTHLY] starting force={force}")
-    try:
-        result = await run_monthly_refresh(force=force)
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "error": str(e)},
-        )
-
-    status_code = 200 if result.get("status") in ("ok", "partial") else 500
-    return JSONResponse(status_code=status_code, content=result)
+    return JSONResponse(content={
+        "status": "disabled_static_curated_mode",
+        "message": (
+            "Monthly LLM anchor research is disabled. "
+            "Anchor maps are now served from static curated data. "
+            "Use GET /api/bottlenecks/anchors for the curated anchor list."
+        ),
+    })
 
 
 # ── GET /api/admin/bottlenecks/research-status ────────────────────────────────
@@ -1010,38 +975,12 @@ async def bottlenecks_research_status(
     if err:
         return err
 
-    from services.anchor_research_service import anchor_needs_research, OVERLAY_ANCHOR_KEYS
-    from data.screener_hub_store import (
-        ensure_anchor_research_tables,
-        get_all_anchor_research_status,
-    )
-
-    try:
-        ensure_anchor_research_tables()
-        db_statuses = {s["anchor_key"]: s for s in get_all_anchor_research_status()}
-    except Exception as e:
-        db_statuses = {}
-        print(f"[RESEARCH_STATUS] DB error: {e}")
-
-    anchors_out = []
-    for anchor_key in OVERLAY_ANCHOR_KEYS:
-        db = db_statuses.get(anchor_key.upper(), {})
-        freshness = anchor_needs_research(anchor_key)
-        anchors_out.append({
-            "anchor_key":           anchor_key,
-            "node_count":           db.get("node_count", 0),
-            "last_researched_at":   db.get("last_researched_at"),
-            "next_research_due_at": db.get("next_research_due_at"),
-            "research_model":       db.get("research_model"),
-            "prompt_version":       db.get("prompt_version"),
-            "needs_research":       freshness["needs_research"],
-            "freshness_reason":     freshness["reason"],
-        })
-
     return JSONResponse(content={
-        "status":  "ok",
-        "anchors": anchors_out,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "status": "disabled_static_curated_mode",
+        "message": (
+            "LLM anchor research status is disabled. "
+            "Use GET /api/bottlenecks/anchors for curated anchor status."
+        ),
     })
 
 
@@ -1685,3 +1624,289 @@ async def delete_saved_screen_endpoint(request: Request, screen_id: str):
     except Exception as e:
         print(f"[SAVED_SCREENS] DELETE error: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STATIC CURATED ANCHOR BOTTLENECK ENDPOINTS
+# Source: services/playbook/curated_anchor_bottlenecks.py (no LLM, no web)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── GET /api/bottlenecks/anchors ──────────────────────────────────────────────
+
+@router.get("/api/bottlenecks/anchors")
+async def bottlenecks_curated_anchor_list(request: Request):
+    """
+    Return a summary row per curated anchor: anchor_key, anchor_name,
+    row_count, status, last_curated_at.
+
+    No LLM. No web search. Deterministic static data.
+    """
+    try:
+        from services.playbook.curated_anchor_bottlenecks import get_curated_anchor_list
+        items = get_curated_anchor_list()
+        return JSONResponse(content={"status": "ok", "anchors": items})
+    except Exception as e:
+        print(f"[CURATED_ANCHORS] list error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── GET /api/bottlenecks/anchor/{anchor_key} ──────────────────────────────────
+
+@router.get("/api/bottlenecks/anchor/{anchor_key}")
+async def bottlenecks_curated_anchor_detail(
+    request: Request,
+    anchor_key: str,
+):
+    """
+    Return all curated + active manual nodes for one anchor in the same row
+    shape used by the Chain Reaction / Bottlenecks table and detail drawer.
+
+    No LLM. No web search.
+
+    Valid anchor_key values: SPCX, ANTHROPIC, NVDA, OPENAI, TSM, GOOG
+    """
+    try:
+        from services.playbook.curated_anchor_bottlenecks import (
+            get_curated_anchor_bottlenecks,
+            get_curated_anchor_list,
+        )
+        from data.manual_anchor_bottlenecks_store import (
+            get_manual_nodes,
+            manual_node_to_cr_row,
+        )
+
+        key = anchor_key.strip().upper()
+
+        # Validate anchor key
+        valid_keys = {a["anchor_key"] for a in get_curated_anchor_list()}
+        if key not in valid_keys:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "error": f"Unknown anchor_key {key!r}. Valid: {sorted(valid_keys)}",
+                },
+            )
+
+        # Curated static rows
+        curated_rows = get_curated_anchor_bottlenecks(key)
+
+        # Active manual overlay rows for this anchor
+        manual_db_rows = get_manual_nodes(anchor_key=key, active_only=True)
+        manual_rows = [manual_node_to_cr_row(r) for r in manual_db_rows]
+
+        # Merge: curated first (sorted by score desc), then manual
+        all_rows = curated_rows + manual_rows
+        all_rows.sort(key=lambda r: float(r.get("bottleneck_score") or 0), reverse=True)
+
+        return JSONResponse(content={
+            "status":          "ok",
+            "anchor_key":      key,
+            "curated_count":   len(curated_rows),
+            "manual_count":    len(manual_rows),
+            "total_count":     len(all_rows),
+            "source_type":     "curated_static",
+            "rows":            all_rows,
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[CURATED_ANCHOR_DETAIL] error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── GET /api/bottlenecks/anchor-overlap ───────────────────────────────────────
+
+@router.get("/api/bottlenecks/anchor-overlap")
+async def bottlenecks_curated_anchor_overlap(request: Request):
+    """
+    Return tickers that appear in more than one anchor map (curated + manual).
+
+    Response shape:
+      {
+        "items": [
+          {
+            "ticker": "TSM",
+            "company_name": "...",
+            "anchors": ["ANTHROPIC", "GOOG", "NVDA", "OPENAI", "SPCX"],
+            "count": 5,
+            "max_bottleneck_score": 98,
+            "roles_by_anchor": { "SPCX": "...", ... }
+          }
+        ]
+      }
+    """
+    try:
+        from services.playbook.curated_anchor_bottlenecks import get_curated_anchor_overlap
+        from data.manual_anchor_bottlenecks_store import get_manual_nodes
+
+        manual_rows = get_manual_nodes(active_only=True)
+        items = get_curated_anchor_overlap(include_manual=manual_rows)
+        return JSONResponse(content={"status": "ok", "items": items, "count": len(items)})
+    except Exception as e:
+        print(f"[CURATED_ANCHOR_OVERLAP] error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MANUAL ANCHOR BOTTLENECK ADMIN CRUD
+# Table: public.manual_anchor_bottlenecks
+# All routes require X-API-Key header.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── GET /api/admin/bottlenecks/manual-nodes ───────────────────────────────────
+
+@router.get("/api/admin/bottlenecks/manual-nodes")
+async def admin_bottlenecks_manual_nodes_list(
+    request: Request,
+    api_key:    Optional[str] = Header(None, alias=_AUTH_HEADER),
+    anchor_key: Optional[str] = Query(None, description="Filter by anchor_key (e.g. SPCX)"),
+    active_only: bool         = Query(True,  description="Only return is_active=true rows"),
+):
+    """
+    List manual anchor bottleneck overlay nodes.
+    Optionally filter by anchor_key and/or active status.
+    Requires X-API-Key header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    try:
+        from data.manual_anchor_bottlenecks_store import get_manual_nodes
+        rows = get_manual_nodes(anchor_key=anchor_key, active_only=active_only)
+        return JSONResponse(content={"status": "ok", "count": len(rows), "nodes": rows})
+    except Exception as e:
+        print(f"[MANUAL_NODES] list error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── POST /api/admin/bottlenecks/manual-node ───────────────────────────────────
+
+@router.post("/api/admin/bottlenecks/manual-node")
+async def admin_bottlenecks_manual_node_create(
+    request: Request,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    Create a new manual anchor bottleneck node.
+
+    Required body fields: anchor_key, ticker, company_name, supply_chain_role.
+    Optional: tradingview_symbol, bottleneck_score, evidence_grade,
+              relationship_specificity, evidence, source_urls, notes,
+              deal_signed_date, added_by.
+
+    Ticker validation is attempted via existing quote paths; if it fails,
+    ticker_validated=false is recorded and a warning is included in the response.
+    No LLM. No web search.
+
+    Requires X-API-Key header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "Invalid JSON body"})
+
+    # Validate required fields
+    required = ["anchor_key", "ticker", "company_name", "supply_chain_role"]
+    missing = [f for f in required if not body.get(f)]
+    if missing:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "error": f"Missing required fields: {missing}"},
+        )
+
+    # Attempt ticker validation via existing quote service (non-blocking)
+    ticker_validated = False
+    validation_warning: Optional[str] = None
+    try:
+        from data.market_data_service import get_quote_cached
+        quote = get_quote_cached(body["ticker"].upper())
+        ticker_validated = bool(quote and quote.get("price"))
+    except Exception as ve:
+        validation_warning = f"Ticker validation skipped: {ve}"
+
+    body["ticker_validated"] = ticker_validated
+
+    try:
+        from data.manual_anchor_bottlenecks_store import insert_manual_node
+        row = insert_manual_node(body)
+        resp: dict = {"status": "ok", "node": row}
+        if not ticker_validated:
+            resp["warning"] = validation_warning or "Ticker could not be validated; ticker_validated=false"
+        return JSONResponse(status_code=201, content=resp)
+    except Exception as e:
+        print(f"[MANUAL_NODES] create error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── PUT /api/admin/bottlenecks/manual-node/{id} ───────────────────────────────
+
+@router.put("/api/admin/bottlenecks/manual-node/{node_id}")
+async def admin_bottlenecks_manual_node_update(
+    request: Request,
+    node_id: int,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    Update an existing manual anchor bottleneck node.
+
+    Updatable fields: company_name, tradingview_symbol, supply_chain_role,
+    bottleneck_score, evidence_grade, relationship_specificity, evidence,
+    source_urls, notes, deal_signed_date, ticker_validated, is_active.
+
+    Requires X-API-Key header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"status": "error", "error": "Invalid JSON body"})
+
+    try:
+        from data.manual_anchor_bottlenecks_store import update_manual_node, get_manual_node_by_id
+        existing = get_manual_node_by_id(node_id)
+        if existing is None:
+            return JSONResponse(status_code=404, content={"status": "error", "error": f"Node {node_id} not found"})
+        row = update_manual_node(node_id, body)
+        return JSONResponse(content={"status": "ok", "node": row})
+    except Exception as e:
+        print(f"[MANUAL_NODES] update error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── DELETE /api/admin/bottlenecks/manual-node/{id} (soft disable) ─────────────
+
+@router.delete("/api/admin/bottlenecks/manual-node/{node_id}")
+async def admin_bottlenecks_manual_node_disable(
+    request: Request,
+    node_id: int,
+    api_key: Optional[str] = Header(None, alias=_AUTH_HEADER),
+):
+    """
+    Soft-disable a manual anchor bottleneck node (sets is_active=False).
+    The row is preserved in the database but excluded from public endpoints.
+    Use PUT to re-enable.
+
+    Requires X-API-Key header.
+    """
+    err = _check_admin_key(api_key)
+    if err:
+        return err
+
+    try:
+        from data.manual_anchor_bottlenecks_store import disable_manual_node
+        disabled = disable_manual_node(node_id)
+        if not disabled:
+            return JSONResponse(status_code=404, content={"status": "error", "error": f"Node {node_id} not found"})
+        return JSONResponse(content={"status": "disabled", "id": node_id})
+    except Exception as e:
+        print(f"[MANUAL_NODES] disable error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})

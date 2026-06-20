@@ -377,6 +377,13 @@ async def lifespan(app):
     except Exception as _psa_err:
         print(f"[portfolio-source-audit] startup_audit error: {_psa_err}")
 
+    # Manual anchor bottlenecks overlay table
+    try:
+        from data.manual_anchor_bottlenecks_store import ensure_manual_anchor_table
+        ensure_manual_anchor_table()
+    except Exception as _mab_err:
+        print(f"[MANUAL_ANCHOR] startup ensure error: {_mab_err}")
+
     import threading
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())

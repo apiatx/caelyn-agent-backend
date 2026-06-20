@@ -1,0 +1,73 @@
+Do not accept the current SPCX v4 output as production-valid.
+
+The audit showed a serious validation drift: S1-S4 gates catch fake tickers, hedging language, missing anchor keywords, and generic URLs, but false-specific claims still pass when the model inserts words like SpaceX/Falcon/Starlink/Raptor into fabricated evidence. Examples flagged by the audit include RTX → Raptor components, LHX → Starlink communications systems, NOC → SpaceX composite structures, and HXL evidence copied from the prompt example.
+
+Implement a proof-grade fifth gate for anchor research nodes.
+
+Requirements:
+
+1. Preserve the existing anchor research architecture, route paths, DB fields, and approved/pending_review/quarantine workflow. Do not invent a replacement pipeline.
+
+2. Keep the existing S1-S4 gates, but add S5: SOURCE_GROUNDED_RELATIONSHIP.
+
+3. The model must not be allowed to invent source URLs.
+   - Search/fetch layer must produce a list of source objects:
+     source_id, url, title, domain, snippet, fetched_text_excerpt if available.
+   - The LLM may only cite source_id values from that source list.
+   - If a returned node has a source URL not in the source list, auto-fail it as pending_review with reason source_not_from_search_results.
+
+4. Add source evidence fields if missing:
+   - evidence_source_ids jsonb
+   - evidence_source_urls jsonb
+   - evidence_source_titles jsonb
+   - validation_reasons jsonb
+   - validation_status / status should continue to use approved, pending_review, quarantined
+   - source_grounded boolean
+   Keep migrations additive only.
+
+5. S5 gate logic:
+   A node can only be approved if at least one cited source proves the relationship.
+   A source proves the relationship only if:
+   - The source text/title/snippet contains the supplier company name or a strong alias.
+   - The same source text/title/snippet contains the anchor name or anchor program/product, e.g. SpaceX, Falcon, Falcon 9, Starship, Dragon, Starlink, Raptor.
+   - The source contains a relationship verb or phrase near both entities: supplies, supplier, provides, contract, awarded, customer, partner, components, materials, systems, agreement, launch vehicle, spacecraft, satellite, propulsion, avionics, composite, actuation.
+   - The evidence names a concrete component/material/system/program OR a named contract/customer relationship.
+   - Generic aerospace capability language is not enough.
+   - Generic “aerospace components for SpaceX launch vehicles” without a verifiable source should fail.
+
+6. Add a known-bad relationship denylist for SPCX:
+   - SPCE → any SpaceX relationship: fail
+   - RTX → Raptor / Raptor engines: fail unless source is a direct RTX/SpaceX/SEC/source document proving it
+   - LHX → Starlink communications systems: fail unless source directly proves it
+   - NOC → SpaceX composite structures: fail unless source directly proves it
+   - Generic defense primes should require named SpaceX contract or explicit SpaceX customer disclosure.
+   Denylist should be anchor-specific config, not hardcoded inside generic validator logic.
+
+7. Add a known-good override/normalization path for class-share ticker validation:
+   - Normalize tickers like MOG.A and MOG/B for validation lookups where providers differ.
+   - Store canonical display ticker separately from provider lookup ticker if needed.
+   - Do not automatically reject real class-share tickers just because FMP dot-notation fails.
+   - MOG.A should be able to pass ticker validation if company identity resolves cleanly.
+
+8. Add prompt-injection protection:
+   - Remove examples that can be copied verbatim into evidence.
+   - Do not include “example evidence” that names real ticker + real relationship unless it is marked as forbidden to copy.
+   - Add a validator check that fails evidence text if it substantially matches prompt examples.
+
+9. Add an admin route or extend the existing revalidation route to return:
+   - total nodes checked
+   - approved count
+   - pending_review count
+   - failed gate counts by gate
+   - per-node validation reasons
+   - cited source IDs and URLs used
+   - source_grounded true/false
+
+10. Re-run SPCX after implementation:
+   - Quarantine prior questionable rows from the v4 run.
+   - Re-run SPCX with the new S5 gate.
+   - Report which nodes are approved by source-grounded proof.
+   - Do not approve RTX, LHX, NOC, HXL, TDG, ESLT, or CR unless their cited source actually proves the SpaceX-specific relationship.
+   - Manually handle/normalize MOG.A rather than discarding it as fake.
+
+Important: A second LLM fact-check pass is acceptable only after the fetched-source evidence is attached. The verifier must judge the cited snippets/sources, not rely on “general public knowledge.” The source-grounded relationship gate is the source of truth.
