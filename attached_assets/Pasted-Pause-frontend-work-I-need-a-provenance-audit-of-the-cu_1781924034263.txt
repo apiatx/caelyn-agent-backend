@@ -1,0 +1,61 @@
+Pause frontend work.
+
+I need a provenance audit of the current Bottlenecks / Chain Reaction supply-chain data before we ship the multi-anchor view.
+
+Concern:
+The multi-anchor endpoint currently makes ANTHROPIC and OPENAI identical because both map to `ai_infrastructure` + `neocloud`. That suggests the endpoint is filtering by broad theme exposure, not actually researching or validating each anchor’s real supply chain.
+
+Please audit and report, without making changes yet:
+
+1. Where exactly do Bottlenecks rows originate?
+
+   * File names
+   * Functions
+   * Tables
+   * Any static registries such as `NODE_REGISTRY`
+   * Any generated/cache tables such as `chain_reaction_weekly_outputs`
+
+2. What creates `chain_reaction_weekly_outputs`?
+
+   * Is it purely deterministic?
+   * Does it ever call an LLM?
+   * Does it ever call web/search?
+   * Does it use source citations/evidence?
+   * Does it use FMP/Tradier/Finnhub/etc.?
+
+3. For each row in Bottlenecks, what fields prove the relationship to a market-leading anchor?
+
+   * `giant_anchors`
+   * `themes`
+   * relationship text
+   * evidence/source fields
+   * confidence fields
+   * last researched/verified timestamp
+
+4. Is `giant_anchors` an actual company-specific relationship, or just a broad theme association?
+
+5. For the new multi-anchor endpoint, confirm whether it is currently:
+   A. true anchor-specific supply-chain research, or
+   B. theme-filtered bottleneck rows grouped under anchor labels.
+
+6. Specifically explain why ANTHROPIC and OPENAI return the same tickers.
+
+   * Is that because the actual graph has identical supplier relationships?
+   * Or because we manually mapped both anchors to the same themes?
+
+7. For NVDA, TSM, GOOG, SPCX, ANTHROPIC, and OPENAI, list the current source of truth used for each anchor:
+
+   * `GIANT_MAP`
+   * custom config
+   * `NODE_REGISTRY`
+   * DB rows
+   * anything else
+
+8. Do not change prompts, scoring, routes, UI, or data yet.
+
+9. Do not add LLM calls yet.
+
+10. Just report the truth of the current architecture and data provenance.
+
+Expected outcome:
+I need to know whether the current multi-anchor feature is genuinely analyzing each anchor’s supply-chain bottlenecks, or whether it is just re-bucketing existing thematic bottlenecks.
