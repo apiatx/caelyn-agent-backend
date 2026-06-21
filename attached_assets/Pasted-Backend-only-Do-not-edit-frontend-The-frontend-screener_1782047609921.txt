@@ -1,0 +1,188 @@
+Backend only.
+
+Do not edit frontend.
+
+The frontend screener rebuild is complete, but now we need to verify whether the backend data actually operationalizes the full source markdown research files.
+
+Concern:
+The frontend validation reported very low row counts for some original anchors, for example:
+
+* X / X Ecosystem: 36 rows
+* NVDA: 43 rows
+
+That looks too low if the full source markdown files were truly parsed and converted into curated anchor rows.
+
+Also, the new screener endpoint reports market/price fields as always null. That is acceptable only if no cached values exist, but the endpoint should reuse existing cached/fillable fields where available and never make new live market-data calls.
+
+Task:
+Audit and, if needed, rebuild the curated anchor Python data from the full markdown sources.
+
+Do not use Claude/OpenAI/web search.
+Do not overwrite or compress the markdown files.
+Do not change `/api/bottlenecks/current`.
+Do not break frontend routes.
+Do not break manual overlay.
+Do not break overlap.
+Do not make live quote/fundamental calls.
+
+Source markdown files to use as source of truth:
+
+* `backend/services/playbook/curated_sources/x_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/nvda_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/goog_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/anthropic_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/openai_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/tsm_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/aapl_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/amd_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/avgo_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/msft_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/meta_bottleneck_map.md`
+* `backend/services/playbook/curated_sources/amzn_bottleneck_map.md`
+
+Step 1 — Coverage audit before changing data:
+For each source markdown file:
+
+* count public ticker/company rows in the ranked table
+* count public ticker/company rows in each layer section
+* count public ticker/company rows in smaller-player / basket / final ranking sections
+* identify duplicates that should merge
+* identify companies that are private/delisted/no public ticker
+
+Compare against current API rows from:
+
+* `/api/bottlenecks/anchor/X`
+* `/api/bottlenecks/anchor/NVDA`
+* `/api/bottlenecks/anchor/GOOG`
+* `/api/bottlenecks/anchor/ANTHROPIC`
+* `/api/bottlenecks/anchor/OPENAI`
+* `/api/bottlenecks/anchor/TSM`
+* `/api/bottlenecks/anchor/AAPL`
+* `/api/bottlenecks/anchor/AMD`
+* `/api/bottlenecks/anchor/AVGO`
+* `/api/bottlenecks/anchor/MSFT`
+* `/api/bottlenecks/anchor/META`
+* `/api/bottlenecks/anchor/AMZN`
+
+Report first:
+
+Anchor | Source tickers found | Current API rows | Missing public tickers | Exclusions | Needs rebuild?
+
+Do not proceed if you cannot read the full markdown files.
+
+Step 2 — Rebuild only anchors that are missing rows or missing research fields.
+
+For each rebuilt anchor:
+
+* extract every public-company bottleneck row from the markdown
+* preserve category/layer structure
+* preserve category summaries / bottleneck reads
+* preserve directness/confidence/status
+* preserve why_it_matters
+* preserve why_hidden
+* preserve why_now
+* preserve evidence
+* preserve invalidation / risk / trade overlay fields where available
+* preserve smaller-player / basket / tier context where available
+
+Do not stop at the top ranked table.
+Do not omit smaller/niche/foreign/OTC names.
+Do not exclude public foreign listings.
+
+Acceptable exclusions only:
+
+* private company
+* delisted / no longer public
+* no public ticker provided or reasonably inferable
+* duplicate merged under same anchor
+
+Step 3 — Make the screener endpoints richer.
+
+For `/api/bottlenecks/anchor/{anchor_key}`:
+Each row should expose:
+
+* ticker / bottleneck_ticker
+* company_name
+* tradingview_symbol
+* category_name
+* category_order
+* layer_name
+* supply_chain_role
+* bottleneck_score
+* directness/status/confidence
+* evidence
+* why_it_matters
+* why_hidden
+* why_now
+* what_would_break_thesis
+* basket_tier / basket_name if available
+* risk_notes / invalidation_notes if available
+
+Each category object should expose:
+
+* category_name
+* category_order
+* row_count
+* category_summary or bottleneck_read if available
+* rows
+
+For `/api/bottlenecks/multi-anchor-screener?min_anchors=2&limit=1000`:
+Each row should expose:
+
+* ticker
+* company_name
+* anchor_count
+* anchors
+* anchor_names
+* max_bottleneck_score
+* avg_bottleneck_score
+* roles_by_anchor
+* categories_by_anchor
+* why_it_matters_summary
+* why_hidden_summary
+* why_now_summary
+* directness_summary
+* primary_category
+* primary_layer
+* evidence_count
+* cross-anchor research summary if possible
+
+Step 4 — Cached market fields only:
+Do not make live calls, but if the existing curated row or existing backend cache already has:
+
+* market_cap / marketCap
+* marketCapBucket
+* price
+* change_percent_1d
+* volume_score
+* momentum_score
+* options_score
+* fundamental_score
+
+then preserve/overlay those fields into screener rows.
+
+If unavailable, return null. Do not drop the row.
+
+Step 5 — Validate after rebuild:
+Run:
+
+* `/api/bottlenecks/anchors`
+* `/api/bottlenecks/multi-anchor-screener?min_anchors=2&limit=1000`
+* all 12 `/api/bottlenecks/anchor/{anchor_key}` endpoints
+* one drawer endpoint for TSM or NVDA
+* `/api/bottlenecks/current`
+
+Report:
+
+Anchor | Source tickers found | API rows after rebuild | Category count | Missing public tickers | Exclusions | Evidence/why fields populated?
+
+Also report:
+
+* multi-anchor row count
+* top 25 multi-anchor rows by anchor_count/max_score
+* proof `/api/bottlenecks/current` unchanged
+* proof no LLM/web calls
+* proof manual overlay still works
+* proof frontend endpoints remain compatible
+
+Do not mark complete if X, NVDA, GOOG, ANTHROPIC, OPENAI, or TSM are still using old low-count curated data instead of the full markdown research.
