@@ -1,0 +1,101 @@
+Backend follow-up — verify and complete Theme Universe / Watchlist Theme merge
+
+Good start, but we need to verify and tighten the merge behavior before moving to frontend.
+
+Important clarification:
+Do not replace, discard, or weaken the existing Themes-page tracker symbols. Many Themes-page themes are already tracked through existing ETF proxies, manually imported ETF constituent baskets, or custom ticker baskets. Those existing symbols should remain part of the Themes-page theme basket.
+
+The goal is:
+
+1. Preserve the existing Themes-page tracker symbols.
+2. Merge in the dev account Watchlist tickers that are categorized under the matching/overlapping Watchlist theme.
+3. Canonicalize duplicate/overlapping theme names so the Watchlist theme name wins where there is overlap.
+4. Calculate theme performance from the combined Themes-page basket.
+5. Do not touch the Watchlist page or Watchlist storage.
+
+Concern from current implementation:
+The summary said: “ETF themes — watchlist tickers go into candidate_symbols only, preserving the existing ETF-median performance metric.”
+
+That may not satisfy the requirement if candidate_symbols are not used in the actual daily/weekly/monthly/etc theme performance calculation.
+
+Audit first before writing code:
+
+1. Identify exactly which symbol field(s) are used to calculate live theme performance:
+
+   * proxy_symbols?
+   * candidate_symbols?
+   * all_proxy_symbols?
+   * another derived field?
+2. For each enriched/merged theme, prove whether the Watchlist-added tickers are included in the actual performance calculation, not just present in metadata/candidates.
+3. Identify whether overlapping themes still appear as duplicate visible theme rows in the final Themes API response.
+4. Identify whether Watchlist theme names are actually used as the final display_name where overlap exists.
+5. Identify whether old backend theme names are preserved as aliases instead of separate duplicate visible themes.
+
+Required behavior:
+
+1. Existing Themes-page tracker symbols stay.
+
+   * If a theme already tracks an ETF proxy, manually imported ETF constituent basket, or custom basket, keep those symbols.
+   * Do not throw them out.
+   * Do not add them to the Watchlist.
+2. Matching Watchlist theme tickers are added to the Themes-page basket for that canonical theme.
+3. Final performance basket = deduped union of:
+
+   * existing Themes-page tracker symbols,
+   * existing custom basket symbols,
+   * matching dev-account Watchlist tickers.
+4. The actual daily/weekly/monthly/etc performance calculation must use that merged performance basket.
+5. If the current service only calculates performance from proxy_symbols, then merged Watchlist tickers must be included in the equivalent performance-driving symbol set.
+6. If candidate_symbols are only used for discovery/display and not performance, do not rely on candidate_symbols alone.
+7. Duplicate or overlapping themes should be canonicalized:
+
+   * one visible final theme row,
+   * Watchlist theme display name wins,
+   * old backend names become aliases,
+   * baskets are merged.
+8. Existing-only Themes-page themes remain unchanged.
+9. Watchlist-only themes from the dev account become new universal Themes-page themes using their Watchlist ticker basket.
+10. No logged-in-user runtime dependency. The universal Themes page should use the dev account taxonomy as a backend seed/source, not dynamically use whichever user is logged in.
+
+Extend /api/themes/merge-debug to show, per canonical theme:
+
+* canonical_theme_id
+* final display_name
+* aliases
+* source_type: existing_only / watchlist_only / merged
+* old backend theme ids/names collapsed into this theme
+* original tracker/proxy symbols before merge
+* original custom basket symbols before merge
+* watchlist_added_symbols
+* final performance_symbols
+* which field is used by the actual performance calculation
+* whether watchlist_added_symbols are included in the actual performance calculation
+* duplicate_candidates_detected
+* visible_in_final_api: true/false
+
+Validation required:
+
+1. Show final theme count before vs after canonicalization.
+2. Show any duplicate/near-duplicate groups that were collapsed.
+3. Show at least 5 examples:
+
+   * old Themes-page name
+   * matching Watchlist theme name
+   * final display name
+   * original tracker symbols
+   * watchlist-added symbols
+   * final performance symbols
+4. Prove that the final Themes API does not return duplicate visible themes for mapped overlaps.
+5. Prove that daily/weekly/monthly/etc performance is calculated from the merged basket, not just the old tracker basket.
+6. Prove that Watchlist page endpoints/files were not changed.
+
+Do not:
+
+* Do not touch Watchlist page behavior.
+* Do not add existing Themes tracker symbols into the Watchlist.
+* Do not remove existing ETF/manual tracker basket symbols.
+* Do not replace the existing Themes performance engine.
+* Do not add random stocks.
+* Do not create new LLM calls.
+* Do not fetch ETF holdings.
+* Do not create per-request expensive data fetch loops.

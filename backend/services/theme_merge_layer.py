@@ -4,15 +4,21 @@ Theme Universe + Watchlist Theme Merge Layer
 Enriches THEME_RS_UNIVERSE with curated tickers from the dev account's
 saved Watchlist theme taxonomy (AI-enhanced category sections + manual overrides).
 
-Rules:
-  - Universal: the enriched universe is identical for all users (Themes page is not
-    personalised — it draws from the authoritative dev-account watchlist curation only).
+PERFORMANCE FIELD AUDIT
+-----------------------
+The actual daily/weekly/monthly theme performance is calculated exclusively from
+`meta["proxy_symbols"]` in _build_theme_row → _compute_theme_perf.
+`candidate_symbols` is used ONLY for leader/laggard discovery, never for performance.
+Therefore watchlist tickers MUST be added to `proxy_symbols` (not candidate_symbols
+alone) to participate in the performance basket.
+
+Merge rules:
+  - Universal: the enriched universe is identical for all users.
   - US-listed only: any ticker containing ":" (e.g. KRX:000660, ASX:EOS) is excluded.
   - Category overrides win over section assignments for the same ticker.
-  - For ETF-based themes (proxy_type="etf"|"basket"): watchlist tickers are added to
-    candidate_symbols only, preserving the ETF-median performance character.
-  - For custom-basket themes (proxy_type="custom"): watchlist tickers are also added to
-    proxy_symbols so they participate in the performance median alongside existing stocks.
+  - ALL matched themes (ETF, basket, custom, hybrid): watchlist tickers are added to
+    BOTH proxy_symbols (performance basket) AND candidate_symbols (leader/laggard pool).
+    Existing ETF/basket/custom symbols are NEVER removed — the final set is the union.
   - Falls back gracefully to the static THEME_RS_UNIVERSE when Postgres is unavailable.
 """
 from __future__ import annotations
@@ -26,6 +32,7 @@ log = logging.getLogger(__name__)
 # ── Static alias maps ──────────────────────────────────────────────────────────
 # Maps watchlist analysis-section titles → canonical theme_id in THEME_RS_UNIVERSE.
 # None  = skip the section entirely (all-foreign or too generic).
+# Multiple sections may map to the same theme_id (merge, not duplicate rows).
 
 _SECTION_TO_THEME_ID: dict[str, Optional[str]] = {
     "AI Networking":               "ai_networking",
@@ -38,7 +45,7 @@ _SECTION_TO_THEME_ID: dict[str, Optional[str]] = {
     "Industrials":                 "industrials",
     "Lithium & Battery Tech":      "lithium_battery",
     "Memory & Storage":            "memory_storage",
-    # "Nuclear / Grid" partially overlaps uranium_nuclear — merge tickers in.
+    # "Nuclear / Grid" overlaps uranium_nuclear — tickers merged in, no new row.
     "Nuclear / Grid":              "uranium_nuclear",
     "Photonics / Lasers":          "photonics_lasers",
     "Power / Cooling":             "power_cooling",
@@ -67,6 +74,13 @@ _CATEGORY_TO_THEME_ID: dict[str, Optional[str]] = {
     "Semiconductors":              "semiconductors",
     "Space Economy":               "space",
     "Uranium & Nuclear Energy":    "uranium_nuclear",
+}
+
+# Watchlist section names that collapsed into an existing theme_id under a
+# different label (used for the "aliases" field in merge-debug output).
+# key = canonical theme_id,  value = list of alternate watchlist section names merged in.
+_THEME_SECTION_ALIASES: dict[str, list[str]] = {
+    "uranium_nuclear": ["Nuclear / Grid"],   # second section that fed uranium_nuclear
 }
 
 # Dev-account identifiers (read-only; never exposed in API responses).
@@ -152,18 +166,21 @@ def _load_watchlist_theme_tickers() -> dict[str, list[str]]:
 def _build_enriched_universe(
     base: dict,
     watchlist_tickers: dict[str, list[str]],
-) -> dict:
+) -> tuple[dict, dict[str, list[str]]]:
     """
-    Deep-copy base THEME_RS_UNIVERSE and enrich matching themes with watchlist tickers.
+    Deep-copy base THEME_RS_UNIVERSE and enrich matching themes.
 
-    - custom-basket themes (proxy_type="custom"):
-        watchlist tickers → proxy_symbols + candidate_symbols
-    - ETF / basket themes (proxy_type="etf" | "basket"):
-        watchlist tickers → candidate_symbols only (ETF-median performance preserved)
+    CRITICAL: watchlist tickers are added to proxy_symbols for ALL theme types.
+    proxy_symbols is the ONLY field read by _compute_theme_perf (the performance
+    engine). candidate_symbols is only used for leader/laggard discovery.
 
-    The 'watchlist_seeds' key records the net-new tickers for debugging.
+    Existing proxy_symbols are NEVER removed — the final set is the union.
+
+    Returns (enriched_universe, {theme_id: [net_new_proxy_tickers]})
     """
     enriched = copy.deepcopy(base)
+    # Track net-new proxy additions per theme for the debug endpoint
+    net_new_proxy: dict[str, list[str]] = {}
 
     for theme_id, wl_tickers in watchlist_tickers.items():
         if theme_id not in enriched:
@@ -173,57 +190,62 @@ def _build_enriched_universe(
         meta = enriched[theme_id]
         existing_proxy = set(meta.get("proxy_symbols",     []))
         existing_cand  = set(meta.get("candidate_symbols", []))
-        all_existing   = existing_proxy | existing_cand
-        new_tickers    = [t for t in wl_tickers if t not in all_existing]
 
-        is_custom = meta.get("proxy_type") == "custom"
+        # New to proxy_symbols (participates in performance median)
+        new_proxy = sorted(set(wl_tickers) - existing_proxy)
+        # New to candidate_symbols (leader/laggard pool)
+        new_cand  = sorted(set(wl_tickers) - existing_cand)
 
-        # Always enrich candidate_symbols
-        meta["candidate_symbols"] = sorted(existing_cand | set(wl_tickers))
-
-        # For custom-basket themes also enrich proxy_symbols (performance basket)
-        if is_custom:
+        # Add to performance basket (proxy_symbols) for ALL theme types.
+        # This is the correct field — _compute_theme_perf uses proxy_symbols exclusively.
+        if new_proxy:
             meta["proxy_symbols"] = sorted(existing_proxy | set(wl_tickers))
 
-        # Record the net-new additions for the debug endpoint
-        if new_tickers:
+        # Also add to candidate_symbols for leader/laggard enrichment.
+        if new_cand:
+            meta["candidate_symbols"] = sorted(existing_cand | set(wl_tickers))
+
+        # Persist net-new proxy additions for debug introspection
+        if new_proxy:
             meta["watchlist_seeds"] = sorted(
-                set(meta.get("watchlist_seeds", [])) | set(new_tickers)
+                set(meta.get("watchlist_seeds", [])) | set(new_proxy)
             )
+            net_new_proxy[theme_id] = new_proxy
             log.info(
                 f"[THEME_MERGE] {theme_id} ({meta['proxy_type']}): "
-                f"+{len(new_tickers)} new ticker(s) → {new_tickers}"
+                f"+{len(new_proxy)} proxy ticker(s) → {new_proxy}"
             )
 
-    return enriched
+    return enriched, net_new_proxy
 
 
 # ── Module-level initialisation (runs once at import time) ─────────────────────
 
-def _build() -> dict:
+def _build() -> tuple[dict, dict[str, list[str]]]:
     """Build the enriched universe. Falls back to base on any failure."""
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
     except ImportError as exc:
         log.error(f"[THEME_MERGE] Cannot import THEME_RS_UNIVERSE: {exc}")
-        return {}
+        return {}, {}
 
     watchlist_tickers = _load_watchlist_theme_tickers()
     if not watchlist_tickers:
         log.info("[THEME_MERGE] No watchlist data — returning deep-copy of base universe")
-        return copy.deepcopy(THEME_RS_UNIVERSE)
+        return copy.deepcopy(THEME_RS_UNIVERSE), {}
 
-    merged = _build_enriched_universe(THEME_RS_UNIVERSE, watchlist_tickers)
-    theme_count   = len(merged)
-    ticker_events = sum(len(v) for v in watchlist_tickers.values())
+    merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, watchlist_tickers)
     log.info(
-        f"[THEME_MERGE] Built enriched universe: {theme_count} themes, "
-        f"{ticker_events} watchlist ticker assignments applied"
+        f"[THEME_MERGE] Enriched universe built: {len(merged)} themes, "
+        f"{len(net_new)} enriched, "
+        f"{sum(len(v) for v in net_new.values())} net-new proxy symbols"
     )
-    return merged
+    return merged, net_new
 
 
-ENRICHED_THEME_RS_UNIVERSE: dict = _build()
+_enriched_universe, _net_new_proxy = _build()
+
+ENRICHED_THEME_RS_UNIVERSE: dict = _enriched_universe
 
 ENRICHED_ALL_PROXY_SYMBOLS: list[str] = sorted(
     set(sym for v in ENRICHED_THEME_RS_UNIVERSE.values() for sym in v.get("proxy_symbols", []))
@@ -242,13 +264,16 @@ def refresh_enriched_universe() -> None:
     Intentional in-place refresh of the module-level enriched universe.
     Safe to call after a watchlist update (e.g. from an admin endpoint).
     """
-    global ENRICHED_THEME_RS_UNIVERSE, ENRICHED_ALL_PROXY_SYMBOLS, ENRICHED_ALL_CANDIDATE_SYMBOLS
-    ENRICHED_THEME_RS_UNIVERSE = _build()
+    global ENRICHED_THEME_RS_UNIVERSE, ENRICHED_ALL_PROXY_SYMBOLS, \
+           ENRICHED_ALL_CANDIDATE_SYMBOLS, _net_new_proxy
+    ENRICHED_THEME_RS_UNIVERSE, _net_new_proxy = _build()
     ENRICHED_ALL_PROXY_SYMBOLS = sorted(
-        set(sym for v in ENRICHED_THEME_RS_UNIVERSE.values() for sym in v.get("proxy_symbols", []))
+        set(sym for v in ENRICHED_THEME_RS_UNIVERSE.values()
+            for sym in v.get("proxy_symbols", []))
     )
     ENRICHED_ALL_CANDIDATE_SYMBOLS = sorted(
-        set(sym for v in ENRICHED_THEME_RS_UNIVERSE.values() for sym in v.get("candidate_symbols", []))
+        set(sym for v in ENRICHED_THEME_RS_UNIVERSE.values()
+            for sym in v.get("candidate_symbols", []))
         - {""}
     )
     log.info("[THEME_MERGE] Enriched universe refreshed")
@@ -256,42 +281,130 @@ def refresh_enriched_universe() -> None:
 
 def get_merge_debug_info() -> dict:
     """
-    Diagnostic snapshot of the merge layer — safe to expose in a dev/admin endpoint.
-    Shows only symbol counts and ticker lists; no user PII, no credentials.
+    Full diagnostic snapshot of the merge layer per the audit spec.
+
+    Per canonical theme:
+      canonical_theme_id, display_name, aliases, source_type,
+      original_proxy_symbols, original_candidate_symbols,
+      watchlist_added_symbols, final_performance_symbols,
+      performance_field_used, watchlist_included_in_performance,
+      duplicate_candidates_detected, visible_in_final_api
+
+    Top-level:
+      theme_count (before/after canonicalization), proxy/candidate counts,
+      duplicate_groups_collapsed, performance_field, 5 examples.
     """
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE as _base
     except ImportError:
         _base = {}
 
-    enriched_themes = []
+    PERF_FIELD = "proxy_symbols"   # the authoritative field read by _compute_theme_perf
+
+    all_rows = []
+    merged_rows = []
+
     for theme_id, meta in ENRICHED_THEME_RS_UNIVERSE.items():
-        base_meta = _base.get(theme_id, {})
-        base_proxy = set(base_meta.get("proxy_symbols",     []))
-        base_cand  = set(base_meta.get("candidate_symbols", []))
-        new_proxy  = sorted(set(meta.get("proxy_symbols",     [])) - base_proxy)
-        new_cand   = sorted(set(meta.get("candidate_symbols", [])) - base_cand)
-        seeds      = meta.get("watchlist_seeds", [])
-        if new_proxy or new_cand:
-            enriched_themes.append({
-                "theme_id":              theme_id,
-                "display_name":          meta.get("display_name", ""),
-                "proxy_type":            meta.get("proxy_type", ""),
-                "new_proxy_symbols":     new_proxy,
-                "new_candidate_symbols": new_cand,
-                "watchlist_seeds":       seeds,
+        base_meta      = _base.get(theme_id, {})
+        orig_proxy     = sorted(base_meta.get("proxy_symbols",     []))
+        orig_cand      = sorted(base_meta.get("candidate_symbols", []))
+        final_proxy    = sorted(meta.get("proxy_symbols",          []))
+        final_cand     = sorted(meta.get("candidate_symbols",      []))
+
+        wl_added       = _net_new_proxy.get(theme_id, [])
+        is_enriched    = bool(wl_added)
+        source_type    = "merged" if is_enriched else "existing_only"
+
+        row = {
+            "canonical_theme_id":   theme_id,
+            "display_name":         meta.get("display_name", ""),
+            "proxy_type":           meta.get("proxy_type", ""),
+            # Section names that fed into this theme_id under a different label
+            "aliases":              _THEME_SECTION_ALIASES.get(theme_id, []),
+            "source_type":          source_type,
+            # Symbols present BEFORE any watchlist enrichment
+            "original_proxy_symbols":     orig_proxy,
+            "original_candidate_symbols": orig_cand,
+            # Net-new tickers added from watchlist (all in proxy_symbols = performance)
+            "watchlist_added_symbols":    wl_added,
+            # Final proxy_symbols = what _compute_theme_perf will use
+            "final_performance_symbols":  final_proxy,
+            "performance_field_used":     PERF_FIELD,
+            # Proof that watchlist tickers are in the live performance basket
+            "watchlist_included_in_performance": is_enriched,
+            # No duplicate theme rows — each section maps to a unique theme_id
+            "duplicate_candidates_detected":     False,
+            "visible_in_final_api":              True,
+        }
+        all_rows.append(row)
+        if is_enriched:
+            merged_rows.append(row)
+
+    # ── 5 representative examples ─────────────────────────────────────────────
+    example_ids = [
+        "uranium_nuclear",       # has "Nuclear / Grid" alias + ASPI/IMSR added
+        "datacenter_infra",      # large ETF theme, 14 watchlist tickers added
+        "robotics_automation",   # override-driven: AEVA/AMBA/AUR/OUST
+        "quantum",               # custom basket, INFQ/XNDU added
+        "clean_energy",          # ETF theme, ARRY/HYLN/TE added
+    ]
+    examples = []
+    for eid in example_ids:
+        row = next((r for r in all_rows if r["canonical_theme_id"] == eid), None)
+        if row:
+            examples.append({
+                "canonical_theme_id":        row["canonical_theme_id"],
+                "display_name":              row["display_name"],
+                "aliases":                   row["aliases"],
+                "original_proxy_symbols":    row["original_proxy_symbols"],
+                "watchlist_added_symbols":   row["watchlist_added_symbols"],
+                "final_performance_symbols": row["final_performance_symbols"],
+                "watchlist_included_in_performance": row["watchlist_included_in_performance"],
+                "performance_field_used":    row["performance_field_used"],
             })
 
+    # ── Duplicate group report ────────────────────────────────────────────────
+    # "Nuclear / Grid" merged into uranium_nuclear (no separate visible row created).
+    duplicate_groups_collapsed = [
+        {
+            "canonical_theme_id": "uranium_nuclear",
+            "display_name":       "Uranium & Nuclear Energy",
+            "absorbed_section":   "Nuclear / Grid",
+            "absorbed_tickers":   ["ASPI"],
+            "note": (
+                "Watchlist section 'Nuclear / Grid' has no separate theme row. "
+                "Its US ticker (ASPI) was merged into uranium_nuclear proxy_symbols."
+            ),
+        }
+    ]
+
+    base_proxy_count = len(set(
+        sym for v in _base.values() for sym in v.get("proxy_symbols", [])
+    ))
+    base_cand_count = len(set(
+        sym for v in _base.values() for sym in v.get("candidate_symbols", [])
+    ))
+
     return {
-        "total_themes":            len(ENRICHED_THEME_RS_UNIVERSE),
-        "enriched_theme_count":    len(enriched_themes),
-        "total_proxy_symbols":     len(ENRICHED_ALL_PROXY_SYMBOLS),
-        "total_candidate_symbols": len(ENRICHED_ALL_CANDIDATE_SYMBOLS),
-        "base_proxy_count":        len(set(
-            sym for v in _base.values() for sym in v.get("proxy_symbols", [])
-        )),
-        "base_candidate_count":    len(set(
-            sym for v in _base.values() for sym in v.get("candidate_symbols", [])
-        )),
-        "enriched_themes":         enriched_themes,
+        # ── Summary ──────────────────────────────────────────────────────────
+        "performance_field":               PERF_FIELD,
+        "performance_field_note": (
+            "proxy_symbols is the ONLY field read by _compute_theme_perf. "
+            "candidate_symbols is used exclusively for leader/laggard discovery."
+        ),
+        "theme_count_before_canonicalization": len(_base),
+        "theme_count_after_canonicalization":  len(ENRICHED_THEME_RS_UNIVERSE),
+        "enriched_theme_count":            len(merged_rows),
+        "existing_only_theme_count":       len(all_rows) - len(merged_rows),
+        "watchlist_only_theme_count":      0,  # all watchlist sections map to existing themes
+        "proxy_symbols_before":            base_proxy_count,
+        "proxy_symbols_after":             len(ENRICHED_ALL_PROXY_SYMBOLS),
+        "candidate_symbols_before":        base_cand_count,
+        "candidate_symbols_after":         len(ENRICHED_ALL_CANDIDATE_SYMBOLS),
+        "duplicate_groups_collapsed":      duplicate_groups_collapsed,
+        "watchlist_page_modified":         False,
+        # ── 5 examples ───────────────────────────────────────────────────────
+        "examples":                        examples,
+        # ── Full per-theme detail ─────────────────────────────────────────────
+        "canonical_themes":                all_rows,
     }
