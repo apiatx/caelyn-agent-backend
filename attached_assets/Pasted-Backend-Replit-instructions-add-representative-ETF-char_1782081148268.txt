@@ -1,0 +1,137 @@
+Backend Replit instructions — add representative ETF/chart ticker for every theme
+
+New issue:
+The Themes page Ticker column is showing `CUSTOM` or individual component stocks like ADEA, ARRY, ASPI, AIR, etc. That is not acceptable. Every theme row needs one clean representative ETF/proxy ticker for the Ticker column and TradingView popup.
+
+Important:
+Do not change the theme performance merge that was just fixed.
+Do not remove watchlist tickers from the performance basket.
+Do not touch Watchlist page behavior.
+Do not replace the merged performance basket with a single ETF.
+
+We need to separate two concepts:
+
+1. performance symbols:
+
+   * existing ETF/manual tracker symbols
+   * existing custom basket symbols
+   * added dev-watchlist theme tickers
+   * used for daily/weekly/monthly/YTD/1Y/5Y performance calculation
+
+2. representative chart symbol:
+
+   * one ETF/proxy ticker per theme
+   * used only for the Themes page Ticker column and TradingView popup
+   * should never be `CUSTOM`
+   * should avoid individual component stocks when an ETF/proxy exists
+   * should be stable and explicitly mapped
+
+Audit first:
+
+1. Find where the Themes API chooses/returns the visible ticker shown in the frontend Ticker column.
+2. Find where TradingView popup symbol is derived.
+3. Confirm whether the frontend currently uses:
+
+   * first proxy_symbols item,
+   * ticker,
+   * symbol,
+   * primary_symbol,
+   * display_ticker,
+   * or a hardcoded `CUSTOM` fallback.
+4. Confirm where `CUSTOM` is being generated.
+5. Confirm whether watchlist-added tickers are now being sorted before ETF proxies, causing stocks like ADEA/ARRY/ASPI/AIR to appear as the row ticker.
+
+Required backend behavior:
+Add a stable field to each theme response, for example:
+
+* representative_symbol
+* chart_symbol
+* display_ticker
+* representative_etf
+
+Use whichever naming fits the existing API style, but it must be explicit and documented.
+
+Rules:
+
+1. Every theme must return a valid non-empty representative chart symbol.
+2. No row should return `CUSTOM` as its representative symbol.
+3. Representative symbol should be an ETF/proxy whenever possible.
+4. The representative symbol should be separate from proxy_symbols/performance_symbols.
+5. Do not let watchlist-added stocks override the representative chart symbol.
+6. Do not derive representative symbol by simply taking the first item in proxy_symbols after merge.
+7. Existing performance calculation must still use the merged proxy_symbols basket.
+8. Existing tracker symbols must remain preserved.
+9. Watchlist-added tickers must remain in performance.
+10. Watchlist page must remain untouched.
+
+Recommended logic:
+
+1. If the base theme universe already had ETF proxies, choose the primary/most representative ETF from the original pre-merge tracker symbols.
+2. If the theme is a custom basket with no direct ETF, use an explicit best-fit ETF proxy map.
+3. If no exact ETF exists, choose the closest broad ETF that best represents the theme.
+4. Store this as a separate field from performance symbols.
+
+Seed representative ETF/proxy map for current visible problem rows:
+
+* substrates_packaging → SOXX or SMH
+* ai_networking → SMH or SOXX
+* semicap_equipment → SMH or SOXX
+* power_cooling → GRID or PAVE
+* quantum → QTUM
+* photonics_lasers → ROBO or ARKQ
+* memory_storage → SMH or SOXX
+* datacenter_infra → DTCR or SRVR
+* clean_energy → ICLN or CNRG
+* drones → ARKQ or ITA
+* defense → ITA or PPA
+* uranium_nuclear → URA or URNM
+* robotics_automation → BOTZ or ROBO
+* fintech → FINX or ARKF
+* lithium_battery → LIT or BATT
+* cybersecurity → CIBR or HACK
+* crypto_equities → BLOK
+* biotech → XBI
+* regional_banks → KRE
+* banks → KBE
+* copper_miners → COPX
+* rare_earth → REMX or MP only if no ETF is already in universe
+* space → ARKX or UFO
+* semiconductor themes → SMH, SOXX, or SOXQ depending on existing universe
+
+Do not make new API calls to discover ETF holdings.
+Do not use FMP ETF holdings.
+Do not add a new data source.
+This should be a static explicit representative-symbol map layered onto the existing theme universe.
+
+Extend /api/themes/merge-debug or add a small debug field to show:
+
+* theme_id
+* display_name
+* representative_symbol
+* representative_symbol_source: original_proxy / explicit_map / fallback
+* original_tracker_symbols
+* final performance proxy_symbols
+* whether representative_symbol is included in proxy_symbols
+* whether representative_symbol is non-CUSTOM
+
+Validation required:
+
+1. GET /api/themes/relative-strength returns 60 themes.
+2. Every theme has representative_symbol/display_ticker/chart_symbol populated.
+3. Zero rows return `CUSTOM` as representative symbol.
+4. No row uses an individual watchlist-added stock as representative symbol if an ETF/proxy exists.
+5. Existing performance basket remains unchanged from the fixed merge.
+6. Watchlist-added tickers still enter proxy_symbols for performance.
+7. Watchlist files remain untouched.
+8. Provide a before/after sample for:
+
+   * Substrates / Packaging
+   * AI Networking
+   * Semiconductor Equipment
+   * Power / Cooling
+   * Quantum Computing
+   * Photonics / Lasers
+   * Data Center Infrastructure
+   * Clean Energy
+   * Uranium & Nuclear Energy
+   * Defense

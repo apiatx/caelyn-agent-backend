@@ -940,6 +940,11 @@ async def _build_theme_row(
         "parent_sector":         meta.get("parent_sector"),
         "sector_tags":           meta.get("sector_tags", []),
         "proxy_type":            meta["proxy_type"],
+        # Stable chart symbol for Ticker column / TradingView popup.
+        # Never "CUSTOM". Never a watchlist-added individual stock.
+        # Separate from the performance basket (proxy_symbols).
+        "representative_symbol":        meta.get("representative_symbol", meta["proxy_type"].upper()),
+        "representative_symbol_source": meta.get("representative_symbol_source", "fallback_stock"),
         "proxy_symbols":         proxy_syms,
         "proxy_symbols_used":    used_proxies,
         "proxy_source_health":   source_health,

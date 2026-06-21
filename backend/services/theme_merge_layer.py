@@ -88,6 +88,83 @@ _DEV_WATCHLIST_ID = "23eec278-074a-4706-a62a-c35d38b384ea"
 _DEV_USER_ID      = "default"
 
 
+# ── Representative chart symbol map ───────────────────────────────────────────
+# Stable, explicit ETF/proxy ticker per theme.
+# Used ONLY for the Ticker column and TradingView popup — never replaces
+# proxy_symbols/performance_symbols.
+#
+# Coverage:
+#   1. All 8 custom/hybrid themes (no ETF in base proxy_symbols).
+#   2. ETF themes where seed-map specifies a preferred representative.
+#   3. All remaining themes fall back to proxy_symbols[0] from the BASE universe
+#      (always an ETF/primary proxy, pre-merge).
+#
+# Rules: never CUSTOM, never a watchlist-added individual stock,
+# separate from the performance basket.
+
+_REPRESENTATIVE_ETF_MAP: dict[str, str] = {
+    # ── Custom basket themes (no ETF in base proxy_symbols) ──────────────────
+    "ai_networking":        "SMH",    # basket of stocks; SMH is the nearest ETF proxy
+    "photonics_lasers":     "ROBO",   # no photonics ETF; robotics ETF is closest
+    "power_cooling":        "GRID",   # power-infrastructure ETF
+    "pre_ipo":              "VCX",    # private-equity proxy; VCX is the only option
+    "quantum":              "QTUM",   # dedicated quantum/AI ETF
+    "semicap_equipment":    "SOXX",   # SOXX already in proxy_symbols
+    "substrates_packaging": "SOXX",   # semis packaging → SOXX
+    # ── Hybrid themes ─────────────────────────────────────────────────────────
+    "drones":               "ITA",    # ITA (defense/aerospace) is the primary ETF
+    # ── ETF themes — preferred representative from seed map ───────────────────
+    "banks":                "KBE",
+    "biotech":              "XBI",
+    "clean_energy":         "ICLN",
+    "copper_miners":        "COPX",
+    "crypto_equities":      "BLOK",
+    "cybersecurity":        "CIBR",
+    "datacenter_infra":     "DTCR",
+    "defense":              "ITA",
+    "fintech":              "FINX",
+    "lithium_battery":      "LIT",
+    "memory_storage":       "SMH",
+    "rare_earth":           "REMX",
+    "regional_banks":       "KRE",
+    "robotics_automation":  "BOTZ",
+    "semiconductors":       "SMH",
+    "space":                "ARKX",
+    "uranium_nuclear":      "URA",
+}
+
+
+def _get_representative_symbol(
+    theme_id: str,
+    base_meta: dict,
+) -> tuple[str, str]:
+    """
+    Return (representative_symbol, source) where source is one of:
+      "explicit_map"   — theme_id is in _REPRESENTATIVE_ETF_MAP
+      "original_proxy" — first symbol from BASE (pre-merge) proxy_symbols
+      "fallback_stock" — last resort: first BASE candidate_symbols entry
+
+    Never returns "CUSTOM". Never uses watchlist-added tickers.
+    The symbol is used for display/TradingView only, not performance.
+    """
+    # 1. Explicit map wins
+    if theme_id in _REPRESENTATIVE_ETF_MAP:
+        return _REPRESENTATIVE_ETF_MAP[theme_id], "explicit_map"
+
+    # 2. First symbol from BASE proxy_symbols (pre-merge, always a primary ETF/proxy)
+    base_proxy = base_meta.get("proxy_symbols", [])
+    if base_proxy:
+        return base_proxy[0], "original_proxy"
+
+    # 3. Last resort — first candidate
+    base_cand = base_meta.get("candidate_symbols", [])
+    if base_cand:
+        return base_cand[0], "fallback_stock"
+
+    # Absolute fallback (should never happen; every theme has at least one symbol)
+    return theme_id.upper()[:6], "fallback_stock"
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _is_us_ticker(sym: str) -> bool:
@@ -176,6 +253,10 @@ def _build_enriched_universe(
 
     Existing proxy_symbols are NEVER removed — the final set is the union.
 
+    Also stamps representative_symbol + representative_symbol_source onto EVERY
+    theme (derived from _REPRESENTATIVE_ETF_MAP or BASE proxy_symbols[0]).
+    This field is for display/TradingView only and is separate from performance.
+
     Returns (enriched_universe, {theme_id: [net_new_proxy_tickers]})
     """
     enriched = copy.deepcopy(base)
@@ -216,6 +297,14 @@ def _build_enriched_universe(
                 f"+{len(new_proxy)} proxy ticker(s) → {new_proxy}"
             )
 
+    # ── Stamp representative_symbol on EVERY theme (must run after proxy merge) ──
+    # Uses BASE meta (pre-merge) so watchlist-added stocks never become representative.
+    for theme_id, meta in enriched.items():
+        base_meta = base.get(theme_id, {})
+        rep_sym, rep_src = _get_representative_symbol(theme_id, base_meta)
+        meta["representative_symbol"]        = rep_sym
+        meta["representative_symbol_source"] = rep_src
+
     return enriched, net_new_proxy
 
 
@@ -231,8 +320,13 @@ def _build() -> tuple[dict, dict[str, list[str]]]:
 
     watchlist_tickers = _load_watchlist_theme_tickers()
     if not watchlist_tickers:
-        log.info("[THEME_MERGE] No watchlist data — returning deep-copy of base universe")
-        return copy.deepcopy(THEME_RS_UNIVERSE), {}
+        log.info("[THEME_MERGE] No watchlist data — stamping representative symbols only")
+        # Still run _build_enriched_universe with empty watchlist so that
+        # representative_symbol is stamped on every theme (the enrichment loop
+        # is a no-op when watchlist_tickers is empty, but the representative
+        # stamp pass still executes).
+        merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, {})
+        return merged, net_new
 
     merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, watchlist_tickers)
     log.info(
@@ -315,6 +409,9 @@ def get_merge_debug_info() -> dict:
         is_enriched    = bool(wl_added)
         source_type    = "merged" if is_enriched else "existing_only"
 
+        rep_sym = meta.get("representative_symbol", "")
+        rep_src = meta.get("representative_symbol_source", "fallback_stock")
+
         row = {
             "canonical_theme_id":   theme_id,
             "display_name":         meta.get("display_name", ""),
@@ -322,6 +419,13 @@ def get_merge_debug_info() -> dict:
             # Section names that fed into this theme_id under a different label
             "aliases":              _THEME_SECTION_ALIASES.get(theme_id, []),
             "source_type":          source_type,
+            # ── Representative chart symbol (Ticker column / TradingView) ──────
+            # Stable ETF/proxy — never CUSTOM, never a watchlist-added stock.
+            # Separate from performance basket.
+            "representative_symbol":        rep_sym,
+            "representative_symbol_source": rep_src,
+            "representative_symbol_in_proxy_symbols": rep_sym in set(final_proxy),
+            "representative_symbol_non_custom": rep_sym != "CUSTOM",
             # Symbols present BEFORE any watchlist enrichment
             "original_proxy_symbols":     orig_proxy,
             "original_candidate_symbols": orig_cand,
@@ -356,6 +460,9 @@ def get_merge_debug_info() -> dict:
                 "canonical_theme_id":        row["canonical_theme_id"],
                 "display_name":              row["display_name"],
                 "aliases":                   row["aliases"],
+                "representative_symbol":        row["representative_symbol"],
+                "representative_symbol_source": row["representative_symbol_source"],
+                "representative_symbol_in_proxy_symbols": row["representative_symbol_in_proxy_symbols"],
                 "original_proxy_symbols":    row["original_proxy_symbols"],
                 "watchlist_added_symbols":   row["watchlist_added_symbols"],
                 "final_performance_symbols": row["final_performance_symbols"],
