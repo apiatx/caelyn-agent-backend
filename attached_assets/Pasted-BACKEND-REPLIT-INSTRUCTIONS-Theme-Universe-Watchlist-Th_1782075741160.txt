@@ -1,0 +1,169 @@
+BACKEND REPLIT INSTRUCTIONS — Theme Universe + Watchlist Theme Merge
+
+Goal:
+Audit first, then update the backend theme universe so the universal Themes page is enhanced by the dev account’s saved Watchlist theme taxonomy. Do not break or modify Watchlist page behavior. Do not reinvent the Themes page performance engine. The existing Themes page already calculates daily/weekly/monthly/etc performance correctly; we are only improving the theme naming/mapping and adding watchlist tickers into the relevant theme baskets where appropriate.
+
+Critical constraints:
+
+1. Start with an audit. Do not write code until you identify:
+
+   * Where the backend theme universe is defined.
+   * Where Themes page data/performance is assembled.
+   * Where existing theme ETF proxies and custom theme baskets are stored.
+   * Where Watchlist tickers and AI-enhanced Watchlist theme categories are stored/read.
+   * Which endpoint(s) the frontend Themes page currently uses.
+   * Whether theme performance is calculated from ETF proxies, custom baskets, cached quote data, or another existing helper.
+2. Do not change Watchlist page endpoints, Watchlist theme assignment behavior, Watchlist UI payloads, or user watchlist storage.
+3. This is a multi-user app. The Themes page is universal for all users. Use the dev account’s saved watchlist taxonomy as a universal seed/source for improving the backend theme universe, but do not make the Themes page dynamically depend on whichever user is logged in.
+4. Do not add random stocks to a theme. Only add watchlist tickers where the dev account’s saved Watchlist already categorizes those tickers into that theme.
+5. If a Themes-page theme has no matching Watchlist theme/tickers, leave it unchanged.
+6. If a Themes-page theme already uses an ETF proxy and a matching Watchlist theme exists, do not delete the ETF. Add the ETF/proxy to the same performance basket alongside the Watchlist tickers and keep using the existing average/performance calculation pattern.
+7. If a Watchlist theme is clearly new and does not overlap an existing Themes-page theme, add it as a new universal Themes-page theme with its basket equal to the dev account watchlist tickers in that Watchlist theme.
+8. If there is overlap with slightly different names, the Watchlist theme name should win as the display name.
+
+Audit checklist:
+Search for files/functions related to:
+
+* theme universe
+* themes page API route
+* theme performance
+* theme ETF
+* theme baskets
+* watchlist themes
+* watchlist categories
+* AI theme categorization
+* custom sub-themes
+* saved watchlist
+* user watchlist storage
+
+After the audit, report:
+
+* Current backend files involved.
+* Current Themes API response shape.
+* Current Watchlist theme source.
+* Current performance calculation function.
+* Proposed exact files to change.
+* Any risks before editing.
+
+Implementation target:
+Create a canonical merge layer for themes. This should preserve the existing Themes universe but enrich it with Watchlist theme taxonomy.
+
+Desired canonical model conceptually:
+
+* canonical_theme_id: stable internal slug/key.
+* display_name: Watchlist theme name when overlap exists; otherwise existing Themes-page name.
+* aliases: existing theme names and Watchlist theme names that map to the same canonical theme.
+* source_type: existing_theme_only, watchlist_only, or merged_existing_plus_watchlist.
+* components:
+
+  * existing ETF/proxy symbols already used by the Themes page.
+  * existing custom basket symbols already used by the Themes page.
+  * dev-account Watchlist tickers categorized into the matching Watchlist theme.
+* performance_symbols: deduped union of components used by the existing performance calculation.
+* component_count / watchlist_component_count / proxy_component_count for debugging.
+* original_theme_id/original_theme_name where useful for backward compatibility.
+
+Merge rules:
+
+1. Exact or obvious overlap:
+
+   * Example: “AI Infrastructure” on Themes and “AI Infra” on Watchlist should become one canonical theme.
+   * The Watchlist display name wins.
+   * Symbols = existing ETF/proxy/custom basket symbols + Watchlist tickers in that theme.
+2. Existing theme only:
+
+   * Keep the existing theme unchanged.
+   * Do not rename.
+   * Do not add stocks.
+3. Watchlist theme only:
+
+   * Add as a new universal theme.
+   * Basket = tickers from dev account watchlist categorized in that theme.
+   * No ETF required.
+4. Duplicate ticker handling:
+
+   * Deduplicate symbols case-insensitively.
+   * Keep uppercase symbols.
+   * Do not let duplicate tickers overweight the average.
+5. Missing quote/performance handling:
+
+   * Preserve existing missing-data behavior.
+   * If some symbols lack live data, skip/mark them exactly how the existing Themes calculation currently does.
+   * Do not introduce new expensive fetch storms.
+6. Caching:
+
+   * Reuse existing quote/theme cache paths where possible.
+   * Do not create per-request LLM calls.
+   * Do not make the Themes page depend on live Watchlist AI categorization at request time.
+   * Prefer a materialized/static generated mapping or cache layer that can be refreshed intentionally.
+
+Important architecture preference:
+Do not replace the existing Themes performance calculation. Feed it the enriched basket of symbols and let the current logic calculate daily/weekly/monthly/etc gains the same way it already does.
+
+Suggested backend approach:
+
+1. Add a backend theme alias/merge map config, for example:
+
+   * existing theme name/id -> canonical theme id
+   * watchlist theme name -> canonical theme id
+   * canonical display name
+2. Add a small builder/helper:
+
+   * load existing theme universe
+   * load dev account Watchlist ticker/theme assignments
+   * normalize names/tickers
+   * apply alias map
+   * produce enriched canonical theme universe
+3. Update the Themes API path to use the enriched canonical universe.
+4. Keep old IDs/slugs as aliases where possible so frontend links/sorting do not break.
+5. Add a debug/dev endpoint or log output that shows:
+
+   * canonical theme
+   * aliases
+   * components
+   * source_type
+   * performance_symbols
+     This is for validation only; do not expose sensitive user data.
+
+Do not do:
+
+* Do not touch Watchlist page UI.
+* Do not change Watchlist categorization logic.
+* Do not move user watchlist storage.
+* Do not introduce a new AI theme engine.
+* Do not replace ETF proxies.
+* Do not remove existing custom theme baskets.
+* Do not fetch ETF holdings.
+* Do not use the logged-in user’s watchlist dynamically for the universal Themes page.
+* Do not add new API calls per symbol unless the existing Themes page already does so.
+* Do not break existing Themes page cards, sorting, stage logic, or performance windows.
+
+Validation requirements:
+Run before/after checks and report:
+
+1. Existing Themes endpoint still returns all previous themes, except renamed overlapping themes should appear under canonical Watchlist-priority names.
+2. Watchlist-only themes from the dev account appear as new universal themes.
+3. Existing-only themes remain unchanged.
+4. A merged theme’s performance symbols include:
+
+   * existing ETF/proxy symbols,
+   * existing custom basket symbols,
+   * Watchlist tickers from the matched Watchlist theme.
+5. No duplicate symbols in a theme basket.
+6. Daily/weekly/monthly/etc calculations still use the same existing calculation logic.
+7. Watchlist page still loads and returns the same theme/category payload as before.
+8. Multi-user behavior:
+
+   * Themes page result is the same regardless of logged-in user.
+   * Watchlist page remains user-specific.
+9. No new LLM calls are introduced.
+10. No expensive new FMP/Tradier fetch loops are introduced.
+
+Deliverable:
+After implementation, provide:
+
+* Audit summary.
+* Files changed.
+* Exact merge/alias map created.
+* Example of 5 merged themes showing old Themes name, Watchlist name, final display name, and basket symbols.
+* Validation output proving Watchlist page was not changed/broken.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, HTTPException
 
-from services.theme_rs_universe import THEME_RS_UNIVERSE
+from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as THEME_RS_UNIVERSE
 
 router = APIRouter(prefix="/api/themes", tags=["themes"])
 
@@ -100,6 +100,16 @@ async def themes_relative_strength_refresh(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Theme RS refresh error: {e}")
+
+
+@router.get("/merge-debug")
+async def themes_merge_debug():
+    """
+    Diagnostic: shows which themes were enriched with watchlist tickers and what was added.
+    No price data. No user PII. Dev/admin use only.
+    """
+    from services.theme_merge_layer import get_merge_debug_info
+    return get_merge_debug_info()
 
 
 @router.get("/list")

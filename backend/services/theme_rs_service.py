@@ -50,10 +50,10 @@ import httpx
 
 from data.cache import cache
 from data.fmp_utils import fmp_hist_ttl
-from services.theme_rs_universe import (
-    THEME_RS_UNIVERSE,
-    ALL_PROXY_SYMBOLS,
-    ALL_CANDIDATE_SYMBOLS,
+from services.theme_merge_layer import (
+    ENRICHED_THEME_RS_UNIVERSE as THEME_RS_UNIVERSE,
+    ENRICHED_ALL_PROXY_SYMBOLS as ALL_PROXY_SYMBOLS,
+    ENRICHED_ALL_CANDIDATE_SYMBOLS as ALL_CANDIDATE_SYMBOLS,
 )
 from services.sector_rotation.analytics import _pct_change, _ytd_change, _sma
 from services.sector_rotation.providers import (
@@ -1462,7 +1462,10 @@ def get_theme_rs_status() -> dict:
     Return a diagnostic snapshot for admin/status endpoints.
     Pure read — no FMP calls, no cache writes, no I/O beyond stat checks.
     """
-    from services.theme_rs_universe import ALL_PROXY_SYMBOLS, ALL_CANDIDATE_SYMBOLS
+    from services.theme_merge_layer import (
+        ENRICHED_ALL_PROXY_SYMBOLS as ALL_PROXY_SYMBOLS,
+        ENRICHED_ALL_CANDIDATE_SYMBOLS as ALL_CANDIDATE_SYMBOLS,
+    )
 
     now = time.time()
     benchmarks = _BENCHMARKS
