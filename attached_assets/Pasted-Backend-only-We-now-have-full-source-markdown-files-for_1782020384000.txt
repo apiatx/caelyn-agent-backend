@@ -1,0 +1,285 @@
+Backend only.
+
+We now have full source markdown files for the Chain Reaction / Bottlenecks anchors. The next step is to operationalize that research into screener-ready API fields.
+
+Do not edit frontend.
+Do not use Claude/OpenAI/web search.
+Do not overwrite or compress the source markdown files.
+Do not change `/api/bottlenecks/current`.
+Do not break manual overlay.
+Do not break overlap.
+Do not re-enable old LLM routes.
+Do not make live market-data calls from these new endpoints. Reuse existing cached quote/fundamental/options fields only.
+
+Goal:
+Make the Bottlenecks / Chain Reaction page usable as a true bottleneck screener.
+
+Required UX/data model:
+
+* The old `Current / All` tab should no longer show the outdated weekly screener rows.
+* It should become `Multi-anchor bottlenecks`.
+* The Multi-anchor tab should show only multi-anchor overlap rows in a tight screener-table shape.
+* Individual anchor tabs should show tight anchor-specific screener rows.
+* The repeated “Multi-anchor bottlenecks” section should be removed from every individual anchor tab.
+* Individual anchors should not show big boxy cards as the primary row display.
+* The detail drawer should remain the place for TradingView chart + full research.
+
+Backend tasks:
+
+1. Audit current bottleneck endpoints and response shapes:
+
+* `/api/bottlenecks/current`
+* `/api/bottlenecks/anchors`
+* `/api/bottlenecks/anchor/{anchor_key}`
+* `/api/bottlenecks/anchor-overlap`
+* any current route used by the frontend Chain Reaction page
+
+Report which route the frontend currently uses for:
+
+* Current / All tab
+* anchor tabs
+* multi-anchor section
+* drawer/detail popup
+
+2. Preserve `/api/bottlenecks/current` for backward compatibility, but frontend should stop using it as the visible default tab.
+
+Do not delete it. Just make sure the new page has a better endpoint for the visible Multi-anchor screener.
+
+3. Create or update a screener-friendly Multi-anchor endpoint.
+
+Preferred endpoint if no equivalent exists:
+`GET /api/bottlenecks/multi-anchor-screener`
+
+It should return:
+
+* status
+* row_count
+* anchors_count
+* rows
+
+Each row should represent one public ticker that appears in more than one anchor.
+
+Required row fields:
+
+* ticker
+* bottleneck_ticker
+* tradingview_symbol
+* company_name
+* anchor_keys
+* anchor_names
+* anchor_count
+* anchor_badges
+* categories_by_anchor
+* roles_by_anchor
+* max_bottleneck_score
+* avg_bottleneck_score
+* overlap_score
+* highest_confidence
+* directness_summary
+* primary_category
+* primary_layer
+* why_it_matters_summary
+* why_hidden_summary
+* why_now_summary
+* what_would_break_thesis
+* evidence_count
+* source_count
+* marketCap / market_cap if cached
+* marketCapBucket if cached
+* price if cached
+* change_percent_1d if cached
+* volume_score if cached
+* momentum_score if cached
+* fundamental_score if cached
+* options_score if cached
+* final_score if available
+* manual_added
+
+No row should disappear because market data is missing. Missing market data should be null/`—`.
+
+4. Update anchor detail endpoints for screener usage.
+
+`GET /api/bottlenecks/anchor/{anchor_key}` should return:
+
+* status
+* anchor_key
+* anchor_name
+* description/subtitle if available
+* row_count
+* category_count
+* rows
+* categories
+* anchor_summary if available
+* bottleneck_hierarchy if available
+* trade_overlay if available
+* risk_overlay if available
+* source_file_path if available
+* last_curated_at
+
+Each anchor row should include:
+
+* ticker
+* bottleneck_ticker
+* tradingview_symbol
+* company_name
+* category_name
+* category_order
+* category_rank if available
+* layer
+* layer_name
+* supply_chain_role
+* bottleneck_score
+* final_score if available
+* directness / status / confidence label
+* relationship_specificity
+* relationship_type
+* themes
+* anchor_key
+* anchor_name
+* giant_anchors
+* evidence
+* source_urls
+* why_it_matters
+* why_hidden
+* why_now
+* what_would_break_thesis
+* basket_tier if available
+* basket_name if available
+* trade_grade if available
+* risk_notes if available
+* invalidation_notes if available
+* marketCap / market_cap if cached
+* marketCapBucket if cached
+* price if cached
+* change_percent_1d if cached
+* volume_score if cached
+* momentum_score if cached
+* fundamental_score if cached
+* options_score if cached
+* manual_added
+
+The full `.md` source research should be operationalized into these row/category/anchor fields wherever possible.
+
+5. Category objects should be useful, not just wrappers.
+
+Each category should include:
+
+* category_name
+* category_order
+* row_count
+* category_summary if available
+* bottleneck_read if available
+* rows
+
+For example, if the source has a paragraph explaining “HBM / memory” or “Power-rich data-center developers,” that explanation should be preserved as `category_summary` or `bottleneck_read`.
+
+6. Drawer/detail payload.
+
+Either ensure the row contains enough research for the existing drawer, or add a dedicated endpoint if the current drawer route expects one.
+
+Preferred if needed:
+`GET /api/bottlenecks/anchor/{anchor_key}/ticker/{ticker}`
+
+It should return:
+
+* row
+* all anchor-specific research for that ticker
+* all categories/layers where it appears
+* evidence
+* source_urls
+* why_it_matters
+* why_hidden
+* why_now
+* what_would_break_thesis
+* related_anchor_mentions
+* overlap summary
+* chart symbol / tradingview_symbol
+
+Do not break the existing drawer if it already has a route.
+
+7. X anchor naming.
+
+Visible anchor list should use:
+
+* X / X Ecosystem, subtitle `SpaceX / Tesla / xAI`
+  not old visible `SPCX`.
+
+If backward compatibility for `/api/bottlenecks/anchor/SPCX` is easy, keep it as an alias to X, but visible frontend should use X.
+
+8. Multi-anchor logic.
+
+The Multi-anchor screener should be built from the curated anchor rows, not the old outdated `/api/bottlenecks/current` weekly output.
+
+Definition:
+A multi-anchor bottleneck is a ticker appearing in 2 or more visible anchors.
+
+Visible anchors:
+
+* X
+* ANTHROPIC
+* NVDA
+* OPENAI
+* TSM
+* GOOG
+* AAPL
+* AMD
+* AVGO
+* MSFT
+* META
+* AMZN
+
+Do not show single-anchor rows on the Multi-anchor tab unless a filter explicitly allows it.
+
+9. Validation.
+
+Run:
+
+* `/api/bottlenecks/anchors`
+* `/api/bottlenecks/multi-anchor-screener`
+* `/api/bottlenecks/anchor/X`
+* `/api/bottlenecks/anchor/ANTHROPIC`
+* `/api/bottlenecks/anchor/NVDA`
+* `/api/bottlenecks/anchor/OPENAI`
+* `/api/bottlenecks/anchor/TSM`
+* `/api/bottlenecks/anchor/GOOG`
+* `/api/bottlenecks/anchor/AAPL`
+* `/api/bottlenecks/anchor/AMD`
+* `/api/bottlenecks/anchor/AVGO`
+* `/api/bottlenecks/anchor/MSFT`
+* `/api/bottlenecks/anchor/META`
+* `/api/bottlenecks/anchor/AMZN`
+* `/api/bottlenecks/current`
+
+For each anchor validate:
+
+* endpoint returns status ok
+* rows exists
+* categories exists
+* row_count equals len(rows)
+* category_count equals len(categories)
+* every row has bottleneck_ticker
+* every row has company_name
+* every row has category_name
+* every row has category_order
+* every row has evidence and/or why_it_matters
+* no anchor is dumped entirely into Other
+* missing market data does not remove rows
+
+For multi-anchor screener validate:
+
+* every row has anchor_count >= 2
+* every row has anchor badges
+* every row has roles_by_anchor or categories_by_anchor
+* every row has a usable research summary
+* missing market data does not remove rows
+
+10. Return a frontend contract.
+
+At the end, provide exact sample JSON shape for:
+
+* `/api/bottlenecks/anchors`
+* `/api/bottlenecks/multi-anchor-screener`
+* `/api/bottlenecks/anchor/ANTHROPIC`
+* one detail/drawer row
+
+Do not mark complete until the API exposes enough structured fields for a tight screener table plus a rich detail drawer.
