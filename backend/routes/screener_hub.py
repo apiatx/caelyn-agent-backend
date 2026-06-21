@@ -1663,20 +1663,27 @@ async def bottlenecks_curated_anchor_detail(
 
     No LLM. No web search.
 
-    Valid anchor_key values (Phase 1): SPCX, ANTHROPIC, NVDA, OPENAI, TSM, GOOG
+    Valid anchor_key values (Phase 1): SPCX (alias: X), ANTHROPIC, NVDA, OPENAI, TSM, GOOG
     Valid anchor_key values (Phase 2): AAPL, AMD, AVGO, MSFT, META, AMZN
+
+    Top-level response fields include anchor_name, visible_name, subtitle,
+    anchor_description for frontend display.
     """
     try:
         from services.playbook.curated_anchor_bottlenecks import (
             get_curated_anchor_bottlenecks,
             get_curated_anchor_list,
+            resolve_anchor_key,
+            _ANCHOR_RAW,
+            _ANCHOR_META,
         )
         from data.manual_anchor_bottlenecks_store import (
             get_manual_nodes,
             manual_node_to_cr_row,
         )
 
-        key = anchor_key.strip().upper()
+        # Resolve aliases (X → SPCX, GOOGLE → GOOG, etc.)
+        key = resolve_anchor_key(anchor_key)
 
         # Validate anchor key
         valid_keys = {a["anchor_key"] for a in get_curated_anchor_list()}
@@ -1719,20 +1726,94 @@ async def bottlenecks_curated_anchor_detail(
             for cn in sorted(_cats_order, key=lambda x: _cats_order[x])
         ]
 
+        # Top-level anchor metadata for frontend display
+        _raw_entry = _ANCHOR_RAW.get(key, {})
+        _meta      = _ANCHOR_META.get(key, {})
+
         return JSONResponse(content={
-            "status":          "ok",
-            "anchor_key":      key,
-            "curated_count":   len(curated_rows),
-            "manual_count":    len(manual_rows),
-            "total_count":     len(all_rows),
-            "source_type":     "curated_static",
-            "rows":            all_rows,
-            "categories":      categories,
+            "status":              "ok",
+            "anchor_key":          key,
+            "anchor_name":         _raw_entry.get("anchor_name", key),
+            "visible_name":        _meta.get("visible_name", _raw_entry.get("anchor_name", key)),
+            "subtitle":            _meta.get("subtitle", ""),
+            "display_order":       _meta.get("display_order", 99),
+            "anchor_description":  _raw_entry.get("anchor_description", ""),
+            "curated_count":       len(curated_rows),
+            "manual_count":        len(manual_rows),
+            "total_count":         len(all_rows),
+            "source_type":         "curated_static",
+            "last_curated_at":     _raw_entry.get("last_curated_at") or "2026-06-20",
+            "rows":                all_rows,
+            "categories":          categories,
         })
     except Exception as e:
         import traceback
         traceback.print_exc()
         print(f"[CURATED_ANCHOR_DETAIL] error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── GET /api/bottlenecks/anchor/{anchor_key}/ticker/{ticker} ──────────────────
+#
+# Drawer detail: single ticker within an anchor's supply chain map, plus
+# cross-anchor context (every other anchor where this ticker also appears).
+#
+# No LLM. No web search. No live market-data calls.
+
+@router.get("/api/bottlenecks/anchor/{anchor_key}/ticker/{ticker}")
+async def bottlenecks_anchor_ticker_detail(
+    request: Request,
+    anchor_key: str,
+    ticker: str,
+):
+    """
+    Ticker-level detail drawer for a curated supply-chain node.
+
+    Returns:
+      - `row`  : the fully-expanded curated row for this (anchor_key, ticker) pair
+      - `cross_anchor_appearances` : every anchor where this ticker appears, with
+        its role, score, and evidence grade in that anchor
+      - `cross_anchor_count` : total count of anchors this ticker appears in
+
+    Useful for rendering a drawer that shows "TSM appears in 8 anchors: …"
+
+    Errors:
+      404 if anchor_key is unknown or ticker is not in that anchor's node list.
+    """
+    try:
+        from services.playbook.curated_anchor_bottlenecks import (
+            get_ticker_anchor_detail,
+            get_curated_anchor_list,
+            resolve_anchor_key,
+        )
+
+        key = resolve_anchor_key(anchor_key)
+        valid_keys = {a["anchor_key"] for a in get_curated_anchor_list()}
+        if key not in valid_keys:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "error": f"Unknown anchor_key {key!r}. Valid: {sorted(valid_keys)}",
+                },
+            )
+
+        detail = get_ticker_anchor_detail(key, ticker)
+        if detail is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "status": "error",
+                    "error": f"Ticker {ticker.upper()!r} not found in anchor {key!r}.",
+                },
+            )
+
+        return JSONResponse(content={"status": "ok", **detail})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[ANCHOR_TICKER_DETAIL] error: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 
@@ -1766,6 +1847,103 @@ async def bottlenecks_curated_anchor_overlap(request: Request):
         return JSONResponse(content={"status": "ok", "items": items, "count": len(items)})
     except Exception as e:
         print(f"[CURATED_ANCHOR_OVERLAP] error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
+
+
+# ── GET /api/bottlenecks/multi-anchor-screener ────────────────────────────────
+#
+# Screener across ALL 12 curated anchors.  Every unique ticker gets one row
+# that aggregates its presence across anchors: anchor count, max/min/avg score,
+# roles per anchor, merged themes, best evidence grade.
+#
+# No LLM. No web search. No live market-data calls.
+# Missing market-data fields are always null — rows are never removed for lack
+# of price data.
+#
+# Query params:
+#   min_anchors   int  1–12  default 1   — 2 = multi-anchor overlap only
+#   anchor_filter str        optional    — comma-sep anchor keys to restrict to
+#   min_score     float 0–100 default 0  — exclude tickers whose max score < this
+#   limit         int  1–1000 default 500
+#   include_manual bool default true     — merge active manual overlay nodes
+
+@router.get("/api/bottlenecks/multi-anchor-screener")
+async def bottlenecks_multi_anchor_screener(
+    request:        Request,
+    min_anchors:    int   = Query(default=1,   ge=1, le=12,   description="Min anchors a ticker must appear in"),
+    anchor_filter:  Optional[str] = Query(default=None,       description="Comma-sep anchor keys to restrict to (e.g. NVDA,AMZN)"),
+    min_score:      float = Query(default=0.0, ge=0, le=100,  description="Min max_bottleneck_score"),
+    limit:          int   = Query(default=500, ge=1, le=1000, description="Max rows to return"),
+    include_manual: bool  = Query(default=True,               description="Include active manual overlay nodes"),
+):
+    """
+    Cross-anchor bottleneck screener built entirely from curated static data.
+
+    Returns one row per unique ticker aggregated across all 12 curated anchors
+    (SPCX/X, NVDA, AMZN, MSFT, GOOG, META, AAPL, TSM, AVGO, AMD, OPENAI,
+    ANTHROPIC) plus any active manual overlays.
+
+    Row fields per ticker:
+      ticker, company_name, tradingview_symbol,
+      anchors[]           — sorted list of anchor keys the ticker appears in
+      anchor_names[]      — display names (visible_name) for those anchors
+      anchor_count        — number of anchors
+      max_bottleneck_score, min_bottleneck_score, avg_bottleneck_score
+      roles_by_anchor     — { ANCHOR_KEY: "role text", … }
+      scores_by_anchor    — { ANCHOR_KEY: score, … }
+      themes[]            — merged unique themes
+      best_evidence_grade — best grade across all anchor appearances (A > B > C)
+      layers[]            — sorted unique supply-chain layers
+      categories[]        — unique category_name values
+      last_curated_at
+      price, change_percent_1d, market_cap, marketCapBucket — always null
+
+    Sort order: multi-anchor tickers first (anchor_count desc), then
+    max_bottleneck_score desc within the same count.
+
+    Status values:
+      "ok"    — result ready (may be empty if filters exclude everything)
+      "error" — unexpected server error
+    """
+    try:
+        from services.playbook.curated_anchor_bottlenecks import get_multi_anchor_screener
+
+        af_list: Optional[list[str]] = (
+            [s.strip() for s in anchor_filter.split(",") if s.strip()]
+            if anchor_filter else None
+        )
+
+        manual_rows: list[dict] = []
+        if include_manual:
+            try:
+                from data.manual_anchor_bottlenecks_store import get_manual_nodes
+                manual_rows = get_manual_nodes(active_only=True)
+            except Exception as _me:
+                print(f"[MULTI_ANCHOR_SCREENER] manual overlay load warning: {_me}")
+
+        items = get_multi_anchor_screener(
+            min_anchors    = min_anchors,
+            anchor_filter  = af_list,
+            min_score      = min_score,
+            limit          = limit,
+            include_manual = manual_rows if include_manual else None,
+        )
+
+        return JSONResponse(content={
+            "status":           "ok",
+            "count":            len(items),
+            "min_anchors":      min_anchors,
+            "anchor_filter":    af_list,
+            "min_score":        min_score,
+            "limit":            limit,
+            "include_manual":   include_manual,
+            "items":            items,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[MULTI_ANCHOR_SCREENER] error: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})
 
 

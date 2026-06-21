@@ -3965,19 +3965,57 @@ def get_curated_anchor_bottlenecks(anchor_key: str) -> list[dict]:
     return nodes
 
 
+_ANCHOR_META: dict[str, dict] = {
+    "SPCX":      {"visible_name": "X / X Ecosystem",    "subtitle": "SpaceX / Tesla / xAI",          "display_order": 1},
+    "NVDA":      {"visible_name": "NVIDIA",              "subtitle": "AI GPU & Accelerators",          "display_order": 2},
+    "AMZN":      {"visible_name": "Amazon",              "subtitle": "AWS & Logistics",                "display_order": 3},
+    "MSFT":      {"visible_name": "Microsoft",           "subtitle": "Azure & AI Platform",            "display_order": 4},
+    "GOOG":      {"visible_name": "Google / Alphabet",   "subtitle": "GCP & Custom Silicon",           "display_order": 5},
+    "META":      {"visible_name": "Meta",                "subtitle": "AI Infrastructure & AR/VR",      "display_order": 6},
+    "AAPL":      {"visible_name": "Apple",               "subtitle": "Device & Silicon Supply Chain",  "display_order": 7},
+    "TSM":       {"visible_name": "TSMC",                "subtitle": "Advanced Foundry",               "display_order": 8},
+    "AVGO":      {"visible_name": "Broadcom",            "subtitle": "Custom Silicon & Networking",    "display_order": 9},
+    "AMD":       {"visible_name": "AMD",                 "subtitle": "GPU & CPU for AI",               "display_order": 10},
+    "OPENAI":    {"visible_name": "OpenAI",              "subtitle": "AI Research & Deployment",       "display_order": 11},
+    "ANTHROPIC": {"visible_name": "Anthropic",           "subtitle": "AI Safety & Cloud Inference",    "display_order": 12},
+}
+
+# Normalise external-facing aliases → internal registry key
+_ANCHOR_ALIASES: dict[str, str] = {
+    "X": "SPCX",
+    "SPACEX": "SPCX",
+    "GOOGLE": "GOOG",
+    "ALPHABET": "GOOG",
+    "BROADCOM": "AVGO",
+}
+
+
+def resolve_anchor_key(raw_key: str) -> str:
+    """Normalise any alias to the canonical _ANCHOR_RAW key (upper-cased)."""
+    k = raw_key.strip().upper()
+    return _ANCHOR_ALIASES.get(k, k)
+
+
 def get_curated_anchor_list() -> list[dict]:
     """
-    Return a summary row per anchor (anchor_key, anchor_name, row_count, status, last_curated_at).
+    Return a summary row per anchor: anchor_key, anchor_name, visible_name,
+    subtitle, display_order, anchor_description, row_count, status, last_curated_at.
     """
     result = []
     for key, entry in _ANCHOR_RAW.items():
+        meta = _ANCHOR_META.get(key, {})
         result.append({
-            "anchor_key":      key,
-            "anchor_name":     entry["anchor_name"],
-            "row_count":       len(entry["nodes"]),
-            "status":          "ready",
-            "last_curated_at": LAST_CURATED_AT,
+            "anchor_key":          key,
+            "anchor_name":         entry["anchor_name"],
+            "visible_name":        meta.get("visible_name", entry["anchor_name"]),
+            "subtitle":            meta.get("subtitle", ""),
+            "display_order":       meta.get("display_order", 99),
+            "anchor_description":  entry.get("anchor_description", ""),
+            "row_count":           len(entry["nodes"]),
+            "status":              "ready",
+            "last_curated_at":     LAST_CURATED_AT,
         })
+    result.sort(key=lambda x: x["display_order"])
     return result
 
 
@@ -4041,3 +4079,232 @@ def get_curated_anchor_overlap(include_manual: Optional[list[dict]] = None) -> l
 
     items.sort(key=lambda x: (-x["count"], -x["max_bottleneck_score"]))
     return items
+
+
+# ── Multi-anchor screener ───────────────────────────────────────────────────────
+
+def get_multi_anchor_screener(
+    min_anchors:    int              = 1,
+    anchor_filter:  Optional[list[str]] = None,
+    min_score:      float            = 0.0,
+    limit:          int              = 500,
+    include_manual: Optional[list[dict]] = None,
+) -> list[dict]:
+    """
+    Screener view across all curated anchors.
+
+    Each row represents a unique ticker and shows every anchor it appears in,
+    its max/min/avg bottleneck score, merged themes, best evidence grade, and
+    the role it plays in each anchor's supply chain.
+
+    No live market-data calls; price/market_cap fields are always None.
+
+    Args:
+        min_anchors:    Only include tickers appearing in at least this many anchors.
+                        Default 1 = return all. Use 2 for multi-anchor-only.
+        anchor_filter:  Restrict to a specific subset of anchor keys
+                        (e.g. ["NVDA", "AMZN"]). None = all 12 anchors.
+        min_score:      Exclude tickers whose max bottleneck_score < this value.
+        limit:          Max rows to return (default 500, hard cap).
+        include_manual: Optional manual-overlay rows in manual_node_to_cr_row shape.
+    """
+    _GRADE_ORDER = {"A": 0, "B": 1, "C": 2}
+
+    active_keys = list(_ANCHOR_RAW.keys())
+    if anchor_filter:
+        af_upper = {k.strip().upper() for k in anchor_filter}
+        af_upper = {_ANCHOR_ALIASES.get(k, k) for k in af_upper}
+        active_keys = [k for k in active_keys if k in af_upper]
+
+    ticker_map: dict[str, dict] = {}
+
+    def _upsert(t: str, co_name: str, tv_sym: str, key: str, anchor_name: str,
+                role: str, score: float, grade: str, layer: int,
+                themes: list, category: str) -> None:
+        if t not in ticker_map:
+            ticker_map[t] = {
+                "ticker":              t,
+                "company_name":        co_name,
+                "tradingview_symbol":  tv_sym,
+                "anchors":             [],
+                "anchor_names":        [],
+                "anchor_count":        0,
+                "max_bottleneck_score": 0.0,
+                "min_bottleneck_score": 9999.0,
+                "_sum_score":          0.0,
+                "_score_count":        0,
+                "roles_by_anchor":     {},
+                "scores_by_anchor":    {},
+                "themes":              [],
+                "best_evidence_grade": "C",
+                "layers":              [],
+                "categories":          [],
+                # live fields — always None (no market-data calls from this module)
+                "price":               None,
+                "change_percent_1d":   None,
+                "market_cap":          None,
+                "marketCapBucket":     None,
+            }
+        d = ticker_map[t]
+        if key not in d["anchors"]:
+            d["anchors"].append(key)
+            d["anchor_names"].append(anchor_name)
+            d["anchor_count"] += 1
+        d["max_bottleneck_score"] = max(d["max_bottleneck_score"], score)
+        d["min_bottleneck_score"] = min(d["min_bottleneck_score"], score)
+        d["_sum_score"]   += score
+        d["_score_count"] += 1
+        d["roles_by_anchor"][key]  = role
+        d["scores_by_anchor"][key] = score
+        for theme in themes:
+            if theme not in d["themes"]:
+                d["themes"].append(theme)
+        if _GRADE_ORDER.get(grade, 2) < _GRADE_ORDER.get(d["best_evidence_grade"], 2):
+            d["best_evidence_grade"] = grade
+        if layer is not None and layer not in d["layers"]:
+            d["layers"].append(layer)
+        if category and category not in d["categories"]:
+            d["categories"].append(category)
+
+    # ── Curated rows ──────────────────────────────────────────────────────────
+    for key in active_keys:
+        entry      = _ANCHOR_RAW[key]
+        anchor_name = entry["anchor_name"]
+        for n in entry["nodes"]:
+            _upsert(
+                t          = n["ticker"].upper(),
+                co_name    = n["company_name"],
+                tv_sym     = n.get("tradingview_symbol") or n["ticker"],
+                key        = key,
+                anchor_name= anchor_name,
+                role       = n["supply_chain_role"],
+                score      = float(n.get("bottleneck_score") or 0),
+                grade      = n.get("evidence_grade") or "C",
+                layer      = n.get("layer"),
+                themes     = n.get("themes") or [],
+                category   = n.get("category_name") or "",
+            )
+
+    # ── Manual overlay rows (optional) ────────────────────────────────────────
+    if include_manual:
+        for row in include_manual:
+            ak = (row.get("anchor_key") or "").strip().upper()
+            ak = _ANCHOR_ALIASES.get(ak, ak)
+            if not ak:
+                continue
+            if anchor_filter and ak not in {_ANCHOR_ALIASES.get(k.upper(), k.upper()) for k in anchor_filter}:
+                continue
+            entry = _ANCHOR_RAW.get(ak, {})
+            _upsert(
+                t          = (row.get("ticker") or "").upper(),
+                co_name    = row.get("company_name") or "",
+                tv_sym     = row.get("tradingview_symbol") or row.get("ticker") or "",
+                key        = ak,
+                anchor_name= entry.get("anchor_name") or ak,
+                role       = row.get("supply_chain_role") or "",
+                score      = float(row.get("bottleneck_score") or 0),
+                grade      = row.get("evidence_grade") or "C",
+                layer      = row.get("layer"),
+                themes     = row.get("themes") or [],
+                category   = "",
+            )
+
+    # ── Post-process and filter ────────────────────────────────────────────────
+    items: list[dict] = []
+    for t, d in ticker_map.items():
+        if d["anchor_count"] < min_anchors:
+            continue
+        if d["max_bottleneck_score"] < min_score:
+            continue
+        min_s = d["min_bottleneck_score"] if d["min_bottleneck_score"] < 9999.0 else d["max_bottleneck_score"]
+        avg_s = round(d["_sum_score"] / max(d["_score_count"], 1), 1)
+        meta  = _ANCHOR_META
+        items.append({
+            "ticker":               t,
+            "company_name":         d["company_name"],
+            "tradingview_symbol":   d["tradingview_symbol"],
+            "anchors":              sorted(d["anchors"]),
+            "anchor_names":         [
+                meta.get(ak, {}).get("visible_name", _ANCHOR_RAW.get(ak, {}).get("anchor_name", ak))
+                for ak in sorted(d["anchors"])
+            ],
+            "anchor_count":         d["anchor_count"],
+            "max_bottleneck_score": d["max_bottleneck_score"],
+            "min_bottleneck_score": min_s,
+            "avg_bottleneck_score": avg_s,
+            "roles_by_anchor":      d["roles_by_anchor"],
+            "scores_by_anchor":     d["scores_by_anchor"],
+            "themes":               d["themes"],
+            "best_evidence_grade":  d["best_evidence_grade"],
+            "layers":               sorted(d["layers"]),
+            "categories":           d["categories"],
+            "price":                None,
+            "change_percent_1d":    None,
+            "market_cap":           None,
+            "marketCapBucket":      None,
+            "last_curated_at":      LAST_CURATED_AT,
+        })
+
+    items.sort(key=lambda x: (-x["anchor_count"], -x["max_bottleneck_score"]))
+    return items[:limit]
+
+
+# ── Ticker-level anchor drawer ─────────────────────────────────────────────────
+
+def get_ticker_anchor_detail(anchor_key: str, ticker: str) -> Optional[dict]:
+    """
+    Return the single curated row for (anchor_key, ticker) plus cross-anchor
+    context — every other anchor where this ticker also appears.
+
+    Returns None if anchor_key is unknown OR ticker is not in that anchor.
+    """
+    key     = resolve_anchor_key(anchor_key)
+    t_upper = ticker.strip().upper()
+
+    entry = _ANCHOR_RAW.get(key)
+    if not entry:
+        return None
+
+    # Find the specific row in this anchor
+    anchor_row: Optional[dict] = None
+    for n in entry["nodes"]:
+        if n["ticker"].upper() == t_upper:
+            anchor_row = _fill_node(key, entry["anchor_name"], n)
+            break
+
+    if anchor_row is None:
+        return None
+
+    # Cross-anchor context: every anchor where this ticker appears
+    cross: list[dict] = []
+    for ak, ae in _ANCHOR_RAW.items():
+        for n in ae["nodes"]:
+            if n["ticker"].upper() == t_upper:
+                meta = _ANCHOR_META.get(ak, {})
+                cross.append({
+                    "anchor_key":         ak,
+                    "anchor_name":        ae["anchor_name"],
+                    "visible_name":       meta.get("visible_name", ae["anchor_name"]),
+                    "subtitle":           meta.get("subtitle", ""),
+                    "supply_chain_role":  n["supply_chain_role"],
+                    "bottleneck_score":   float(n["bottleneck_score"]),
+                    "evidence_grade":     n.get("evidence_grade") or "B",
+                    "layer":              n.get("layer"),
+                    "layer_name":         _LAYER_NAMES.get(n.get("layer", 0), ""),
+                    "relationship_specificity": n.get("relationship_specificity") or "direct",
+                    "themes":             n.get("themes") or [],
+                    "is_current_anchor":  ak == key,
+                })
+                break
+
+    cross.sort(key=lambda x: -x["bottleneck_score"])
+
+    return {
+        "ticker":                t_upper,
+        "company_name":          anchor_row["company_name"],
+        "tradingview_symbol":    anchor_row["tradingview_symbol"],
+        "row":                   anchor_row,
+        "cross_anchor_count":    len(cross),
+        "cross_anchor_appearances": cross,
+        "last_curated_at":       LAST_CURATED_AT,
+    }
