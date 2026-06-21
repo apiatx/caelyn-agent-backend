@@ -97,10 +97,10 @@
     },
     {
       "name": "Crypto Equities / Blockchain",
-      "score": 77.9,
+      "score": 77.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (78/100) vs theme universe with broad participation (69% advancing). Outperforming SPY +1.5%, QQQ -0.0"
+        "Top-percentile RS (78/100) vs theme universe with broad participation (69% advancing). Outperforming SPY +1.4%, QQQ -0.0"
       ],
       "related_etfs": [
         "BLOK",
@@ -116,10 +116,10 @@
     },
     {
       "name": "Power / Cooling",
-      "score": 77.1,
+      "score": 76.5,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (77/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +2.9%, QQQ +1."
+        "Top-percentile RS (76/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +2.9%, QQQ +1."
       ],
       "related_etfs": [
         "VRT",
@@ -154,8 +154,27 @@
   ],
   "emerging_themes": [
     {
+      "name": "Data Center Infrastructure",
+      "score": 68.8,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
+        "X consensus: 1 ticker mentioned"
+      ],
+      "related_etfs": [
+        "SRVR",
+        "VPN",
+        "DTCR"
+      ],
+      "related_tickers": [
+        "SMCI",
+        "IREN",
+        "NBIS"
+      ]
+    },
+    {
       "name": "Homebuilders",
-      "score": 63.2,
+      "score": 62.8,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (63/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -172,7 +191,7 @@
     },
     {
       "name": "Industrials",
-      "score": 62.1,
+      "score": 61.5,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (62/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -189,7 +208,7 @@
     },
     {
       "name": "Microcaps",
-      "score": 60.5,
+      "score": 59.9,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (60/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -219,25 +238,6 @@
         "JOBY",
         "ACHR",
         "ATI"
-      ]
-    },
-    {
-      "name": "Data Center Infrastructure",
-      "score": 58.6,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (58/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
-        "X consensus: 1 ticker mentioned"
-      ],
-      "related_etfs": [
-        "SRVR",
-        "VPN",
-        "DTCR"
-      ],
-      "related_tickers": [
-        "SMCI",
-        "IREN",
-        "NBIS"
       ]
     }
   ],
@@ -335,7 +335,7 @@
     {
       "sector": "Industrials",
       "ticker": "XLI",
-      "score": 62.1,
+      "score": 61.5,
       "posture": "improving"
     }
   ],
@@ -366,7 +366,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-20T18:14:03.823725+00:00",
+  "last_updated": "2026-06-21T03:05:41.729490+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -377,5 +377,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1781979243.8239138
+  "_saved_at": 1782011141.729576
 }

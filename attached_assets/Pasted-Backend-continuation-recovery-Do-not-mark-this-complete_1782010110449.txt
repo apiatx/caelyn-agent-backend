@@ -1,0 +1,80 @@
+Backend continuation / recovery.
+
+Do not mark this complete yet.
+
+The last log said the phase2 data file was syntactically incomplete because it was truncated mid-entry. Fix this cleanly before doing anything else.
+
+Critical instructions:
+
+* Do NOT leave a broken/incomplete Python data file in the repo.
+* Do NOT rely on a fragile `phase2_fix.py` patch unless it is only temporary and the final import path is clean.
+* Do NOT mark complete until the backend starts, imports all curated anchor data, and live endpoints validate.
+* Do NOT drop any rows while recovering from the truncation.
+
+Preferred fix:
+Instead of one massive Python file, split the new anchor data into separate per-anchor files, for example:
+
+* `backend/services/playbook/curated_anchor_bottlenecks_aapl.py`
+* `backend/services/playbook/curated_anchor_bottlenecks_amd.py`
+* `backend/services/playbook/curated_anchor_bottlenecks_avgo.py`
+* `backend/services/playbook/curated_anchor_bottlenecks_msft.py`
+* `backend/services/playbook/curated_anchor_bottlenecks_meta.py`
+* `backend/services/playbook/curated_anchor_bottlenecks_amzn.py`
+
+Then import/merge them from the main curated anchor data file.
+
+Acceptable alternative:
+Use JSON files per anchor if that matches the repo better.
+
+Required recovery steps:
+
+1. Identify the broken/truncated file.
+2. Either repair it fully or replace it with clean per-anchor data modules.
+3. Run syntax/import checks:
+
+   * `python -m py_compile <changed curated data files>`
+   * import the curated data module directly
+   * confirm no syntax errors
+4. Confirm all existing anchors still load:
+
+   * SPCX
+   * ANTHROPIC
+   * NVDA
+   * OPENAI
+   * TSM
+   * GOOG
+5. Confirm all new anchors load:
+
+   * AAPL
+   * AMD
+   * AVGO
+   * MSFT
+   * META
+   * AMZN
+6. Confirm `/api/bottlenecks/anchors` includes all 12 anchors.
+7. Confirm `/api/bottlenecks/anchor/{anchor_key}` returns:
+
+   * `rows`
+   * `categories`
+   * `row_count`
+   * `category_count`
+8. Confirm `/api/bottlenecks/anchor-overlap` works.
+9. Confirm `/api/bottlenecks/current` is unchanged.
+10. Confirm disabled LLM research routes still return `disabled_static_curated_mode`.
+11. Confirm no Claude/OpenAI/web-search calls are used.
+
+Important:
+Do not lose META or AMZN rows because the first write got truncated. Re-read the source files you already created if needed and extract the remaining rows.
+
+Final report required:
+
+* broken file identified
+* final data file structure used
+* syntax/import check result
+* row count per anchor
+* category count per anchor
+* exclusions per anchor
+* endpoint validation results
+* confirmation `/api/bottlenecks/current` unchanged
+
+Do not mark complete until the app starts and all live endpoint tests pass.

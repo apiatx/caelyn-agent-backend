@@ -1663,7 +1663,8 @@ async def bottlenecks_curated_anchor_detail(
 
     No LLM. No web search.
 
-    Valid anchor_key values: SPCX, ANTHROPIC, NVDA, OPENAI, TSM, GOOG
+    Valid anchor_key values (Phase 1): SPCX, ANTHROPIC, NVDA, OPENAI, TSM, GOOG
+    Valid anchor_key values (Phase 2): AAPL, AMD, AVGO, MSFT, META, AMZN
     """
     try:
         from services.playbook.curated_anchor_bottlenecks import (
@@ -1699,6 +1700,25 @@ async def bottlenecks_curated_anchor_detail(
         all_rows = curated_rows + manual_rows
         all_rows.sort(key=lambda r: float(r.get("bottleneck_score") or 0), reverse=True)
 
+        # Build categories grouping (for Phase-2 anchors with category_name/order)
+        from collections import defaultdict as _dd
+        _cats_rows: dict = _dd(list)
+        _cats_order: dict = {}
+        for _r in all_rows:
+            _cn = (_r.get("category_name") or "").strip() or "Other"
+            _co = _r.get("category_order") or 99
+            _cats_rows[_cn].append(_r)
+            if _cn not in _cats_order:
+                _cats_order[_cn] = _co
+        categories = [
+            {
+                "category_name":  cn,
+                "category_order": _cats_order[cn],
+                "rows":           _cats_rows[cn],
+            }
+            for cn in sorted(_cats_order, key=lambda x: _cats_order[x])
+        ]
+
         return JSONResponse(content={
             "status":          "ok",
             "anchor_key":      key,
@@ -1707,6 +1727,7 @@ async def bottlenecks_curated_anchor_detail(
             "total_count":     len(all_rows),
             "source_type":     "curated_static",
             "rows":            all_rows,
+            "categories":      categories,
         })
     except Exception as e:
         import traceback

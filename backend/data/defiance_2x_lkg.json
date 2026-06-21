@@ -1,7 +1,8 @@
 {
-  "refreshed_at": "2026-06-19T21:57:56.545186+00:00",
-  "refreshed_at_ts": 1781906276.545186,
+  "refreshed_at": "2026-06-20T18:42:57.336861+00:00",
+  "refreshed_at_ts": 1781980977.336861,
   "count": 46,
+  "quarantined_count": 4,
   "catalog": [
     {
       "defiance_etf_ticker": "AMA",
@@ -11,10 +12,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/ama/",
       "discovered_at": "2026-06-19T21:57:56.544864+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544864+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336220+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "AMKL",
@@ -24,10 +25,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/amkl/",
       "discovered_at": "2026-06-19T21:57:56.544884+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544884+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336243+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "AMPU",
@@ -37,10 +38,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/ampu/",
       "discovered_at": "2026-06-19T21:57:56.544892+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544892+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336253+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "ANEL",
@@ -50,10 +51,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/anel/",
       "discovered_at": "2026-06-19T21:57:56.544900+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544900+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336260+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "ASTY",
@@ -63,10 +64,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/asty/",
       "discovered_at": "2026-06-19T21:57:56.544908+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544908+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336271+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "AVGX",
@@ -76,10 +77,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/avgx/",
       "discovered_at": "2026-06-19T21:57:56.544915+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544915+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336280+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "AVXX",
@@ -89,10 +90,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/avxx/",
       "discovered_at": "2026-06-19T21:57:56.544921+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544921+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336288+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "DKNX",
@@ -102,10 +103,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/dknx/",
       "discovered_at": "2026-06-19T21:57:56.544933+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544933+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336374+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "HIMZ",
@@ -115,10 +116,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/himz/",
       "discovered_at": "2026-06-19T21:57:56.544943+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544943+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336437+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "HOOX",
@@ -128,10 +129,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/hoox/",
       "discovered_at": "2026-06-19T21:57:56.544949+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544949+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336449+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "INFH",
@@ -141,10 +142,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/infh/",
       "discovered_at": "2026-06-19T21:57:56.544956+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544956+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336459+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "IONX",
@@ -154,10 +155,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/ionx/",
       "discovered_at": "2026-06-19T21:57:56.544963+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544963+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336467+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "IRE",
@@ -167,10 +168,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/ire/",
       "discovered_at": "2026-06-19T21:57:56.544969+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544969+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336518+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "KEEX",
@@ -180,10 +181,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/keex/",
       "discovered_at": "2026-06-19T21:57:56.544975+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544975+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336530+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "LLYX",
@@ -193,10 +194,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/llyx/",
       "discovered_at": "2026-06-19T21:57:56.544981+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544981+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336539+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "LMNX",
@@ -206,10 +207,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/lmnx/",
       "discovered_at": "2026-06-19T21:57:56.544988+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544988+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336546+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "LNOK",
@@ -219,10 +220,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/lnok/",
       "discovered_at": "2026-06-19T21:57:56.544994+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.544994+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336554+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "LUNL",
@@ -232,10 +233,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/lunl/",
       "discovered_at": "2026-06-19T21:57:56.545000+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545000+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336562+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "MPL",
@@ -245,10 +246,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/mpl/",
       "discovered_at": "2026-06-19T21:57:56.545005+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545005+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336571+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "MRNX",
@@ -258,10 +259,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/mrnx/",
       "discovered_at": "2026-06-19T21:57:56.545017+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545017+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336579+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "MSTX",
@@ -271,10 +272,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/mstx/",
       "discovered_at": "2026-06-19T21:57:56.545024+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545024+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336588+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "NVOX",
@@ -284,10 +285,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/nvox/",
       "discovered_at": "2026-06-19T21:57:56.545030+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545030+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336595+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "OKLL",
@@ -297,10 +298,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/okll/",
       "discovered_at": "2026-06-19T21:57:56.545036+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545036+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336603+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "ONDL",
@@ -310,10 +311,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/ondl/",
       "discovered_at": "2026-06-19T21:57:56.545043+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545043+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336610+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "ORCX",
@@ -323,10 +324,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/orcx/",
       "discovered_at": "2026-06-19T21:57:56.545048+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545048+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336617+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "OSCX",
@@ -336,10 +337,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/oscx/",
       "discovered_at": "2026-06-19T21:57:56.545054+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545054+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336625+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "OSSL",
@@ -349,10 +350,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/ossl/",
       "discovered_at": "2026-06-19T21:57:56.545060+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545060+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336632+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "PLU",
@@ -362,10 +363,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/plu/",
       "discovered_at": "2026-06-19T21:57:56.545065+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545065+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336640+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "POEL",
@@ -375,10 +376,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/poel/",
       "discovered_at": "2026-06-19T21:57:56.545071+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545071+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336648+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "QSU",
@@ -388,10 +389,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/qsu/",
       "discovered_at": "2026-06-19T21:57:56.545081+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545081+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336687+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "RCAX",
@@ -401,10 +402,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/rcax/",
       "discovered_at": "2026-06-19T21:57:56.545087+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545087+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336699+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "RGTX",
@@ -414,10 +415,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/rgtx/",
       "discovered_at": "2026-06-19T21:57:56.545093+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545093+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336706+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "RIOX",
@@ -427,10 +428,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/riox/",
       "discovered_at": "2026-06-19T21:57:56.545100+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545100+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336714+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "RKLX",
@@ -440,10 +441,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/rklx/",
       "discovered_at": "2026-06-19T21:57:56.545106+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545106+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336723+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "RKTL",
@@ -453,10 +454,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/rktl/",
       "discovered_at": "2026-06-19T21:57:56.545112+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545112+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336732+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "SMCX",
@@ -466,10 +467,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/smcx/",
       "discovered_at": "2026-06-19T21:57:56.545118+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545118+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336739+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "SOFX",
@@ -479,10 +480,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/sofx/",
       "discovered_at": "2026-06-19T21:57:56.545124+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545124+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336747+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "SOUX",
@@ -492,10 +493,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/soux/",
       "discovered_at": "2026-06-19T21:57:56.545130+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545130+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336754+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "SPCU",
@@ -505,10 +506,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/spcu/",
       "discovered_at": "2026-06-19T21:57:56.545138+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545138+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336801+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "STXL",
@@ -518,10 +519,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/stxl/",
       "discovered_at": "2026-06-19T21:57:56.545145+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545145+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336812+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "UMAL",
@@ -531,10 +532,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/umal/",
       "discovered_at": "2026-06-19T21:57:56.545152+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545152+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336820+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "VELL",
@@ -544,10 +545,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/vell/",
       "discovered_at": "2026-06-19T21:57:56.545158+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545158+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336828+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "VSTL",
@@ -557,10 +558,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/vstl/",
       "discovered_at": "2026-06-19T21:57:56.545165+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545165+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336835+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "WYFL",
@@ -570,10 +571,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/wyfl/",
       "discovered_at": "2026-06-19T21:57:56.545171+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545171+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336842+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "XOVL",
@@ -583,10 +584,10 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/xovl/",
       "discovered_at": "2026-06-19T21:57:56.545177+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545177+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336850+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
     },
     {
       "defiance_etf_ticker": "ZETX",
@@ -596,10 +597,36 @@
       "leverage": 2,
       "source_url": "https://www.defianceetfs.com/zetx/",
       "discovered_at": "2026-06-19T21:57:56.545183+00:00",
-      "last_seen_at": "2026-06-19T21:57:56.545183+00:00",
+      "last_seen_at": "2026-06-20T18:42:57.336857+00:00",
       "active": true,
       "confidence": "high",
-      "parse_method": "defiance_wp_api"
+      "parse_method": "defiance_wp_api_name_regex"
+    }
+  ],
+  "quarantined": [
+    {
+      "defiance_etf_ticker": "COPZ",
+      "defiance_etf_name": "Defiance Daily Target 2X Long Copper Miners ETF",
+      "verdict": "broad_basket",
+      "quarantined_at": "2026-06-20T18:42:57.336297+00:00"
+    },
+    {
+      "defiance_etf_ticker": "DRNL",
+      "defiance_etf_name": "Defiance 2X Daily Long Pure Drone and Aerial Automation ETF",
+      "verdict": "broad_basket",
+      "quarantined_at": "2026-06-20T18:42:57.336386+00:00"
+    },
+    {
+      "defiance_etf_ticker": "QPUX",
+      "defiance_etf_name": "Defiance 2X Daily Long Pure Quantum ETF",
+      "verdict": "broad_basket",
+      "quarantined_at": "2026-06-20T18:42:57.336656+00:00"
+    },
+    {
+      "defiance_etf_ticker": "SPCL",
+      "defiance_etf_name": "Defiance Daily 2X Space ETF",
+      "verdict": "broad_basket",
+      "quarantined_at": "2026-06-20T18:42:57.336761+00:00"
     }
   ]
 }

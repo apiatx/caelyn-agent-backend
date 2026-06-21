@@ -11,6 +11,18 @@ from typing import Optional
 
 LAST_CURATED_AT: str = "2026-06-20"
 
+# ── Phase-2 per-anchor data modules ──────────────────────────────────────────
+try:
+    from services.playbook.curated_anchor_bottlenecks_aapl import _ANCHOR_DATA as _AAPL_DATA
+    from services.playbook.curated_anchor_bottlenecks_amd  import _ANCHOR_DATA as _AMD_DATA
+    from services.playbook.curated_anchor_bottlenecks_avgo import _ANCHOR_DATA as _AVGO_DATA
+    from services.playbook.curated_anchor_bottlenecks_msft import _ANCHOR_DATA as _MSFT_DATA
+    from services.playbook.curated_anchor_bottlenecks_meta import _ANCHOR_DATA as _META_DATA
+    from services.playbook.curated_anchor_bottlenecks_amzn import _ANCHOR_DATA as _AMZN_DATA
+    _PHASE2_AVAILABLE = True
+except ImportError:
+    _PHASE2_AVAILABLE = False
+
 _LAYER_NAMES: dict[int, str] = {
     0: "Platform Anchor",
     1: "Systems Integrator",
@@ -84,12 +96,14 @@ def _fill_node(anchor_key: str, anchor_name: str, n: dict) -> dict:
     role     = n["supply_chain_role"]
     score    = n["bottleneck_score"]
     grade    = n.get("evidence_grade", "B")
-    gr_rsn   = n.get("evidence_grade_reason", "")
-    rel_spec = n.get("relationship_specificity", "direct")
-    conf     = n.get("confidence") or ("high" if score >= 70 else "medium" if score >= 50 else "low")
-    themes   = n.get("themes", [])
-    evidence = n.get("evidence", [])
-    src_urls = n.get("source_urls", [])
+    gr_rsn    = n.get("evidence_grade_reason", "")
+    rel_spec  = n.get("relationship_specificity", "direct")
+    conf      = n.get("confidence") or ("high" if score >= 70 else "medium" if score >= 50 else "low")
+    themes    = n.get("themes", [])
+    evidence  = n.get("evidence", [])
+    src_urls  = n.get("source_urls", [])
+    cat_name  = n.get("category_name") or ""
+    cat_order = n.get("category_order") or 0
     # Derive anchor_theme / theme from themes list (first entry) or anchor key
     primary_theme = themes[0] if themes else anchor_key.lower()
 
@@ -147,6 +161,9 @@ def _fill_node(anchor_key: str, anchor_name: str, n: dict) -> dict:
         "source_type":              "curated_static",
         "manual_added":             False,
         "last_curated_at":          LAST_CURATED_AT,
+        # ── Category grouping (Phase-2 anchors) ───────────────────────────────
+        "category_name":            cat_name,
+        "category_order":           cat_order,
     }
 
 
@@ -3916,6 +3933,19 @@ _ANCHOR_RAW: dict[str, dict] = {
         ],
     },
 }
+
+
+# ── Phase-2 anchors merged in (AAPL, AMD, AVGO, MSFT, META, AMZN) ─────────────
+if _PHASE2_AVAILABLE:
+    for _key, _data in [
+        ("AAPL",  _AAPL_DATA),
+        ("AMD",   _AMD_DATA),
+        ("AVGO",  _AVGO_DATA),
+        ("MSFT",  _MSFT_DATA),
+        ("META",  _META_DATA),
+        ("AMZN",  _AMZN_DATA),
+    ]:
+        _ANCHOR_RAW[_key] = _data
 
 
 # ── Public API ──────────────────────────────────────────────────────────────────
