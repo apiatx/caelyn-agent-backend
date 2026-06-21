@@ -1,0 +1,53 @@
+Backend sanity check before frontend handoff
+
+Good fix. The key bug is resolved: watchlist-added theme tickers now enter proxy_symbols, and proxy_symbols are confirmed as the actual input to _compute_theme_perf.
+
+Before we move to frontend, do one final audit/validation pass.
+
+Please verify:
+
+1. Final visible theme taxonomy
+
+   * Print/list all final theme slugs + display names returned by the live Themes API.
+   * Identify any remaining near-duplicate names, especially themes with similar wording or high basket overlap.
+   * Do not guess — compare final display names and symbol overlap.
+
+2. Duplicate/canonicalization proof
+
+   * You reported only 1 collapsed duplicate group: "Nuclear / Grid" → uranium_nuclear.
+   * Confirm whether there are truly no other duplicate/near-duplicate theme groups.
+   * If near-duplicates remain, list them and explain whether they should remain separate or be canonicalized.
+
+3. Watchlist-only themes
+
+   * Confirm whether any dev-watchlist themes did not map to existing Themes-page themes.
+   * If there were watchlist-only themes, explain whether they were added as new universal Themes-page themes, skipped, or merged.
+   * If skipped, explain why.
+
+4. Data reuse / no duplicate fetch path
+
+   * proxy_symbols increased from 140 → 220 because watchlist tickers now correctly enter the theme performance basket.
+   * These watchlist tickers are already being fetched elsewhere by the app for Watchlist/live quote/theme data, so this should reuse existing canonical quote/history/cache paths.
+   * Confirm the merge does not create a second independent fetch path for the same symbols.
+   * Confirm page load does not directly fetch all merged theme symbols from FMP/Tradier every time.
+   * Confirm the existing cache/warmup behavior is reused.
+   * If there is any one-time historical backfill/warmup for newly added symbols, identify it clearly and confirm it is bounded/cached.
+
+5. Final examples
+
+   * Show 10 enriched themes, not just 5.
+   * For each, show:
+
+     * final display name
+     * old/backend alias names
+     * watchlist source theme/category
+     * original tracker symbols preserved
+     * watchlist-added symbols
+     * final proxy_symbols used for performance
+     * wl_in_perf = true
+
+Do not change Watchlist page behavior.
+Do not touch Watchlist files.
+Do not remove existing Themes tracker symbols.
+Do not add random symbols.
+Do not create a new data fetch system.
