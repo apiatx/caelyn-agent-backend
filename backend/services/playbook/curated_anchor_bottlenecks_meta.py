@@ -1106,5 +1106,36 @@ _ANCHOR_DATA: dict = {
          "evidence": ["Kopin CyberDisplay microdisplay supply for Meta AR glasses and XR headset development."],
          "category_name": "Reality Labs", "category_order": 12},
 
+        # ── Layer 10 addition ─────────────────────────────────────────────────
+        {"ticker": "GOOGL", "company_name": "Alphabet / Google",
+         "layer": 10, "supply_chain_role": "Google Cloud capacity contracts for Meta AI workload overflow and hybrid compute",
+         "bottleneck_score": 87, "evidence_grade": "B",
+         "evidence_grade_reason": "Meta confirmed cloud capacity partnership with Google for AI overflow compute; publicly reported agreements.",
+         "relationship_specificity": "ecosystem_partner",
+         "themes": ["cloud_capacity", "ai_compute"],
+         "evidence": ["Alphabet/Google Cloud capacity contracts with Meta for AI workload overflow and hybrid cloud strategy."],
+         "category_name": "Neocloud & Leased Compute", "category_order": 10},
+
+        # ── Layer 4 addition ─────────────────────────────────────────────────
+        {"ticker": "MXL", "company_name": "MaxLinear",
+         "layer": 4, "supply_chain_role": "PAM4 DSP and connectivity ICs for Meta AI networking fabric",
+         "bottleneck_score": 70, "evidence_grade": "C",
+         "evidence_grade_reason": "MaxLinear XBAR and PAM4 DSP ICs present in Meta data-center network line cards.",
+         "relationship_specificity": "ecosystem_member",
+         "themes": ["ai_networking", "semiconductor_components"],
+         "evidence": ["MaxLinear connectivity semis used in Meta data-center networking switch and line-card infrastructure."],
+         "category_name": "AI Networking", "category_order": 4},
+
+        # ── Layer 5 addition ─────────────────────────────────────────────────
+        {"ticker": "6961.T", "company_name": "Enplas",
+         "tradingview_symbol": "TSE:6961",
+         "layer": 5, "supply_chain_role": "Micro-lens arrays and IC test sockets for optical transceiver and silicon photonics",
+         "bottleneck_score": 70, "evidence_grade": "C",
+         "evidence_grade_reason": "Enplas micro-lens arrays and test sockets used in optical transceiver and silicon photonics components for Meta AI networking.",
+         "relationship_specificity": "ecosystem_member",
+         "themes": ["optical_networking", "test_equipment"],
+         "evidence": ["Enplas micro-lens array and test socket components for optical transceiver and silicon photonics in Meta AI networking."],
+         "category_name": "Optical Networking", "category_order": 5},
+
     ],
 }

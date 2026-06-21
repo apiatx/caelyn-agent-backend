@@ -1,0 +1,211 @@
+Backend only.
+
+Before frontend starts, normalize the original Phase 1 anchors so all 12 anchors use the same category-aware structure.
+
+Current issue:
+The new Phase 2 anchors are organized into per-anchor files and return real `categories`:
+
+* AAPL
+* AMD
+* AVGO
+* MSFT
+* META
+* AMZN
+
+But the original anchors are currently falling into a generic `Other` bucket because they do not have category_name/category_order:
+
+* SPCX
+* ANTHROPIC
+* NVDA
+* OPENAI
+* TSM
+* GOOG
+
+That will make the frontend inconsistent.
+
+Goal:
+Make all 12 anchors use the same backend structure:
+
+* per-anchor source/data file if practical
+* category_name
+* category_order
+* layer_name
+* rows
+* categories array
+* same normalized Chain Reaction row shape
+
+Do NOT change `/api/bottlenecks/current`.
+Do NOT use Claude/OpenAI/web search.
+Do NOT re-enable dynamic research routes.
+Do NOT remove any rows.
+Do NOT filter foreign/OTC rows.
+Do NOT lose manual overlay behavior.
+Do NOT break overlap.
+
+Tasks:
+
+1. Audit current Phase 1 anchor data:
+
+* SPCX
+* ANTHROPIC
+* NVDA
+* OPENAI
+* TSM
+* GOOG
+
+Report:
+
+* where each anchor’s rows currently live
+* row count per anchor
+* whether source markdown/research files exist
+* whether category_name/category_order exists
+* whether `/api/bottlenecks/anchor/{key}` currently returns meaningful categories or only `Other`
+
+2. Normalize Phase 1 data.
+
+Preferred structure:
+Create per-anchor files matching Phase 2 style, for example:
+
+* `backend/services/playbook/curated_anchors/_spcx.py`
+* `backend/services/playbook/curated_anchors/_anthropic.py`
+* `backend/services/playbook/curated_anchors/_nvda.py`
+* `backend/services/playbook/curated_anchors/_openai.py`
+* `backend/services/playbook/curated_anchors/_tsm.py`
+* `backend/services/playbook/curated_anchors/_goog.py`
+
+Use the existing curated rows as the source of truth unless full source markdown files already exist in the repo.
+
+3. Add meaningful category structure for each Phase 1 anchor.
+
+Do not leave them all in `Other`.
+
+Use existing row fields like layer/layer_name/supply_chain_role/evidence to assign categories deterministically.
+
+Suggested category groupings:
+
+SPCX / SpaceX:
+
+* Starlink silicon / semiconductors
+* RF, microwave, antennas, phased array
+* Satellite terminals / manufacturing
+* Launch fuels, gases, materials
+* Direct-to-cell / spectrum / telecom
+* Advanced manufacturing / additive
+* Aerospace materials / defense suppliers
+* Batteries / thermal / power
+* Indirect upstream semicap
+
+ANTHROPIC:
+
+* Cloud / compute partners
+* AI accelerators / custom silicon
+* Foundry / CoWoS / packaging
+* HBM / memory / storage
+* Semicap equipment
+* ABF substrates / PCB
+* Networking / optics
+* Server ODMs / racks
+* Power / cooling / electrical
+* Neocloud / power-rich data centers
+* Smaller public bottlenecks
+
+NVDA:
+
+* Foundry / CoWoS / advanced packaging
+* HBM / memory
+* ABF substrates / PCBs
+* OSAT / test / inspection
+* Semicap equipment
+* Materials / wafers / chemicals
+* Rack / ODM / server systems
+* Power / cooling / electrical
+* Networking / optics / photonics
+* Storage / ecosystem
+* Smaller public bottlenecks
+
+OPENAI:
+
+* Cloud / Stargate / neocloud operators
+* AI accelerators / custom silicon
+* Foundry / CoWoS / advanced packaging
+* HBM / memory / storage
+* ABF substrates / PCBs
+* Networking / optics / interconnect
+* Server ODMs / racks
+* Power / grid / cooling / turbines
+* Construction / EPC / financing
+* Fiber / backbone / data transport
+* Smaller public bottlenecks
+
+TSM:
+
+* Core fab equipment / front-end chokepoints
+* Wafers / photoresist / chemicals / gases / metals
+* Photomasks / mask inspection / mask blanks
+* CoWoS / advanced packaging / 3DFabric
+* Subsystems behind tools
+* Fab construction / facilities / water / localization
+* EDA / IP ecosystem
+* Small Taiwan/Japan supplier layer
+
+GOOG:
+
+* Custom silicon / TPU / accelerators
+* Foundry / HBM / semicap
+* Advanced packaging / substrates / PCBs
+* Server ODMs / racks
+* Networking / optics / subsea / backbone
+* Liquid cooling / thermal
+* Power / grid / energy
+* Construction / MEP / EPC
+* Smaller public bottlenecks
+
+4. Preserve every existing row.
+
+For each Phase 1 anchor:
+
+* row count before normalization must equal row count after normalization unless duplicates are explicitly merged
+* do not remove existing rows
+* do not rename tickers incorrectly
+* keep `bottleneck_ticker` bare
+* keep `tradingview_symbol` with exchange prefix if needed
+
+5. API behavior:
+   `GET /api/bottlenecks/anchor/{anchor_key}` should return for every anchor:
+
+* rows
+* categories
+* row_count
+* category_count
+
+For all 12 anchors, `category_count` should be greater than 1 unless there is a valid reason.
+
+6. Validate all 12 anchors:
+
+* SPCX
+* ANTHROPIC
+* NVDA
+* OPENAI
+* TSM
+* GOOG
+* AAPL
+* AMD
+* AVGO
+* MSFT
+* META
+* AMZN
+
+Report:
+Anchor | Rows before | Rows after | Category count | Still in Other? | Notes
+
+7. Existing validation:
+   Confirm:
+
+* `/api/bottlenecks/current` unchanged
+* manual add still works
+* overlap endpoint still works
+* old LLM research routes still return `disabled_static_curated_mode`
+* no Bottlenecks endpoint calls Claude/OpenAI/web search
+* every row still includes the existing 28 Chain Reaction base keys
+
+Do not mark complete until all 12 anchors return meaningful categories and no Phase 1 anchor is dumped entirely into `Other`.
