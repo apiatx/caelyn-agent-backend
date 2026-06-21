@@ -1,0 +1,110 @@
+Backend Replit instructions — separate representative ETF chart symbol from true theme holdings
+
+New issue:
+The Themes page expanded view is showing ETF holdings from the representative chart ticker. Example: Substrates / Packaging uses SOXX as representative_symbol for the TradingView chart, but when expanded it shows SOXX holdings like AVGO, MU, AMD, NVDA, INTC. That is wrong.
+
+Important distinction:
+representative_symbol is for the TradingView chart only.
+It must not define the theme’s holdings/basket.
+It must not control the expanded holdings table.
+It must not replace the true theme basket.
+
+The true theme basket should be the actual tracked symbols for that theme:
+
+* existing custom basket symbols
+* existing manually curated theme symbols
+* watchlist-added symbols mapped to that canonical theme
+* existing ETF/manual tracker symbols only when they are actually intended to be part of the theme basket/performance basket
+
+Audit first:
+
+1. Find the endpoint/data source used by the expanded Themes page holdings table.
+2. Find where ETF holdings are fetched or attached.
+3. Find whether the expanded view uses representative_symbol, lead_proxy, ticker, or proxy_symbols to decide which holdings to show.
+4. Confirm why Substrates / Packaging expands to SOXX holdings instead of AMKR/ASX.
+5. Identify all custom/hybrid/watchlist-enriched themes that currently show representative ETF holdings incorrectly.
+
+Required backend behavior:
+Add an explicit distinction between:
+
+1. representative_symbol
+
+   * one ETF/proxy used for TradingView chart only
+
+2. performance_symbols
+
+   * the merged basket used for 1D/7D/30D/YTD/1Y/5Y performance calculations
+
+3. display_symbols or theme_holdings
+
+   * the true symbols shown in the expanded theme holdings table
+
+4. holdings_display_mode
+
+   * "theme_basket" for custom/hybrid/watchlist-enriched themes
+   * "etf_holdings" only for themes where the ETF holdings are intentionally the actual theme representation
+   * optional "none" if no holdings should be shown
+
+Rules:
+
+1. For custom themes, expanded holdings must show the theme basket, not representative ETF holdings.
+2. For hybrid/watchlist-enriched themes, expanded holdings must show the merged theme basket, not representative ETF holdings.
+3. For pure ETF themes, it is okay to show ETF holdings only if that was already intended.
+4. representative_symbol should remain available for the chart.
+5. representative_symbol should not be used to fetch/choose expanded holdings unless holdings_display_mode = "etf_holdings".
+6. Do not remove watchlist tickers from performance.
+7. Do not change Watchlist page behavior.
+8. Do not create new LLM calls.
+9. Do not create new frontend-only classification logic.
+
+Expected examples:
+Substrates / Packaging:
+
+* representative_symbol: SOXX
+* expanded holdings should show AMKR, ASX
+* should not show SOXX holdings like AVGO, MU, AMD, NVDA, INTC
+
+AI Networking:
+
+* representative_symbol: SMH
+* expanded holdings should show ANET, AVGO, MRVL, CRDO, ALAB
+* should not show full SMH holdings
+
+Semiconductor Equipment:
+
+* representative_symbol: SOXX
+* expanded holdings should show ACLS, AEHR, KLAC, ONTO, SMH, SOXX, TRT or the true curated basket
+* should not blindly show full SOXX holdings
+
+Power / Cooling:
+
+* representative_symbol: GRID
+* expanded holdings should show ETN, GEV, SEI, TT, VRT
+* should not show full GRID holdings unless those holdings are intentionally part of the theme
+
+Photonics / Lasers:
+
+* representative_symbol: ROBO
+* expanded holdings should show AAOI, COHR, FN, IPGP, LITE
+* should not show ROBO holdings
+
+Validation required:
+
+1. GET /api/themes/relative-strength still returns 60 themes.
+2. Every row still has representative_symbol.
+3. Performance fields remain unchanged.
+4. Expanded holdings for custom/hybrid themes come from true theme basket/display_symbols, not representative ETF holdings.
+5. Substrates / Packaging expanded view shows AMKR and ASX, not SOXX holdings.
+6. AI Networking expanded view shows ANET, AVGO, MRVL, CRDO, ALAB, not SMH holdings.
+7. Power / Cooling expanded view shows ETN, GEV, SEI, TT, VRT, not GRID holdings.
+8. TradingView popup still uses representative_symbol.
+9. Watchlist files untouched.
+
+Deliverable:
+Report:
+
+* Endpoint/function that was wrongly using representative_symbol or ticker to fetch ETF holdings.
+* Fields added or changed.
+* Examples proving expanded holdings now show true theme baskets.
+* Confirmation performance math was unchanged.
+* Confirmation Watchlist files were untouched.

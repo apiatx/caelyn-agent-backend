@@ -589,10 +589,14 @@ async def _build_leader_universe(
     Build the leader/laggard universe for a theme dynamically.
 
     Priority:
-      1. ETF holdings from the PRIMARY proxy ETF (used first)
-      2. ETF holdings from secondary proxy ETFs (if primary < 3 results)
-      3. X/Grok consensus tickers matched to theme keywords (disk read-only)
-      4. Static candidate_symbols as last-resort fallback seeds
+      1a. [theme_basket mode] Seed universe directly from proxy_symbols — the
+          curated basket IS the holdings. Never call _etf_holdings_for_proxy for
+          custom/hybrid themes because their representative_symbol is an unrelated
+          chart-only ETF whose holdings would pollute the leaders table.
+      1b. [etf_holdings mode] ETF holdings from primary proxy ETF (used first),
+          then secondary proxy ETFs (if primary < threshold).
+      2. X/Grok consensus tickers matched to theme keywords (disk read-only).
+      3. Static candidate_symbols as last-resort fallback seeds.
 
     Returns:
       (universe_tickers, discovery_sources_by_ticker, universe_source_label)
@@ -601,22 +605,42 @@ async def _build_leader_universe(
     universe: list[str] = []
     label_parts: list[str] = []
 
-    # ── 1. ETF holdings from proxy ETFs ────────────────────────────────────────
-    proxies_to_try = proxy_symbols_used[:3] if proxy_symbols_used else meta["proxy_symbols"][:3]
+    holdings_mode = meta.get("holdings_display_mode", "etf_holdings")
 
-    for etf in proxies_to_try:
-        holdings = await _etf_holdings_for_proxy(etf)
-        if holdings:
-            label_parts.append(f"etf_holding:{etf}")
-            for sym in holdings:
-                sources_by_ticker.setdefault(sym, [])
-                src = f"etf_holding:{etf}"
-                if src not in sources_by_ticker[sym]:
-                    sources_by_ticker[sym].append(src)
-                if sym not in universe:
-                    universe.append(sym)
-        if len(universe) >= _ETF_HOLDINGS_TOP_N:
-            break
+    # ── 1. Build initial universe based on holdings_display_mode ──────────────
+    if holdings_mode == "theme_basket":
+        # Custom/hybrid themes: the proxy basket IS the holdings.
+        # Seed universe from every proxy symbol (used + unused) so the
+        # leader/laggard table reflects the true curated basket, not the
+        # holdings of an unrelated chart-only ETF (e.g. SOXX for substrates).
+        basket = list(dict.fromkeys(
+            (proxy_symbols_used or []) + meta.get("proxy_symbols", [])
+        ))
+        for sym in basket:
+            sources_by_ticker.setdefault(sym, [])
+            if "theme_basket" not in sources_by_ticker[sym]:
+                sources_by_ticker[sym].append("theme_basket")
+            if sym not in universe:
+                universe.append(sym)
+        if universe:
+            label_parts.append("theme_basket")
+    else:
+        # ── 1b. ETF holdings from proxy ETFs (original behavior) ──────────────
+        proxies_to_try = proxy_symbols_used[:3] if proxy_symbols_used else meta["proxy_symbols"][:3]
+
+        for etf in proxies_to_try:
+            holdings = await _etf_holdings_for_proxy(etf)
+            if holdings:
+                label_parts.append(f"etf_holding:{etf}")
+                for sym in holdings:
+                    sources_by_ticker.setdefault(sym, [])
+                    src = f"etf_holding:{etf}"
+                    if src not in sources_by_ticker[sym]:
+                        sources_by_ticker[sym].append(src)
+                    if sym not in universe:
+                        universe.append(sym)
+            if len(universe) >= _ETF_HOLDINGS_TOP_N:
+                break
 
     # ── 2. X/Grok consensus filtered by theme keywords (disk, no API call) ─────
     if len(universe) < 5:
@@ -945,6 +969,13 @@ async def _build_theme_row(
         # Separate from the performance basket (proxy_symbols).
         "representative_symbol":        meta.get("representative_symbol", meta["proxy_type"].upper()),
         "representative_symbol_source": meta.get("representative_symbol_source", "fallback_stock"),
+        # holdings_display_mode: how the frontend should populate the expanded table.
+        #   "theme_basket" — show theme_holdings directly (custom/hybrid themes).
+        #   "etf_holdings" — fetch ETF holdings for representative_symbol (ETF themes).
+        "holdings_display_mode":        meta.get("holdings_display_mode", "etf_holdings"),
+        # theme_holdings: explicit basket for theme_basket mode.
+        #   For etf_holdings mode this is empty — frontend uses representative_symbol.
+        "theme_holdings": sorted(proxy_syms) if meta.get("holdings_display_mode") == "theme_basket" else [],
         "proxy_symbols":         proxy_syms,
         "proxy_symbols_used":    used_proxies,
         "proxy_source_health":   source_health,

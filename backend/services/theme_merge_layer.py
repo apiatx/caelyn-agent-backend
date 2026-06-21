@@ -297,13 +297,27 @@ def _build_enriched_universe(
                 f"+{len(new_proxy)} proxy ticker(s) → {new_proxy}"
             )
 
-    # ── Stamp representative_symbol on EVERY theme (must run after proxy merge) ──
-    # Uses BASE meta (pre-merge) so watchlist-added stocks never become representative.
+    # ── Stamp representative_symbol + holdings_display_mode on EVERY theme ───────
+    # representative_symbol: stable display ticker (Ticker column / TradingView).
+    #   Uses BASE meta (pre-merge) so watchlist-added stocks never become representative.
+    #
+    # holdings_display_mode: tells the frontend/row-builder how to populate the
+    #   expanded holdings table.
+    #   "theme_basket" — custom/hybrid themes: show proxy_symbols directly as the
+    #     basket. Do NOT call _etf_holdings_for_proxy on representative_symbol —
+    #     those would be holdings of an unrelated ETF used only for charting.
+    #   "etf_holdings" — pure ETF/basket themes: existing behavior; ETF holdings
+    #     are fetched for the primary proxy ETF and shown in the expanded view.
     for theme_id, meta in enriched.items():
         base_meta = base.get(theme_id, {})
         rep_sym, rep_src = _get_representative_symbol(theme_id, base_meta)
         meta["representative_symbol"]        = rep_sym
         meta["representative_symbol_source"] = rep_src
+        # custom and hybrid themes use the curated basket directly as holdings.
+        ptype = meta.get("proxy_type", "etf")
+        meta["holdings_display_mode"] = (
+            "theme_basket" if ptype in ("custom", "hybrid") else "etf_holdings"
+        )
 
     return enriched, net_new_proxy
 
