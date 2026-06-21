@@ -1,0 +1,285 @@
+TSMC Critical Supply Chain Map — Public Companies Only
+Tier 1: Core Fab Equipment / Front-End Chokepoints
+Score	Company	Ticker	Layer	Bottleneck Role
+99	ASML	ASML	EUV / DUV lithography	The irreplaceable lithography gatekeeper. EUV is the single hardest front-end tool bottleneck.
+95	Applied Materials	AMAT	Deposition, etch, implant, CMP, materials engineering	Broadest process-equipment platform. TSMC direct long-time supplier.
+94	Tokyo Electron	8035.T / TOELY	Coaters/developers, etch, deposition, cleaning	Huge role around lithography track systems and process modules.
+93	Lam Research	LRCX	Etch, deposition, cleaning	Critical for advanced logic pattern transfer and 3D structures.
+92	KLA	KLAC	Inspection / metrology / yield control	The “eyes of the fab.” Yield learning bottleneck.
+89	ASM International	ASMI.AS	ALD / epitaxy / deposition	Gate-all-around and advanced materials deposition enabler.
+87	SCREEN Holdings	7735.T	Wafer cleaning / track tools	Cleaning becomes more critical as defects become existential.
+86	Ebara	6361.T	CMP / plating / vacuum equipment	Planarization bottleneck for both front-end and packaging.
+84	Kokusai Electric	6525.T	Batch deposition / thermal process	Smaller, high-quality Japanese WFE bottleneck.
+82	ULVAC	6728.T	Vacuum / sputtering / deposition	Key vacuum and thin-film process supplier.
+80	Canon	7751.T	Lithography / packaging tools	Not ASML, but directly awarded by TSMC and relevant in advanced packaging.
+
+Read-through: The big five — ASML, AMAT, TEL, Lam, KLA — are obvious, but ASM, SCREEN, Ebara, Kokusai, ULVAC, and Canon are the “don’t be lazy” layer. TSMC validated many of these directly in supplier awards and Arizona supplier disclosures.
+
+Tier 2: Wafers, Photoresist, Chemicals, Gases, Metals
+Score	Company	Ticker	Layer	Bottleneck Role
+91	Shin-Etsu Chemical / Shin-Etsu Handotai	4063.T	Silicon wafers, resist, specialty materials	One of the most important wafer suppliers. TSMC awarded Shin-Etsu Handotai in 2025.
+90	SUMCO	3436.T	Silicon wafers	Core 300mm wafer supplier. Direct TSMC award winner.
+84	Merck KGaA	MRK.DE	Specialty chemicals / gases / materials	High-purity semiconductor materials; TSMC 2025 award winner.
+83	Tokyo Ohka Kogyo	4186.T	Photoresist / EUV resist	One of the key advanced photoresist names; TSMC 2024 award winner.
+82	Entegris	ENTG	Filtration, contamination control, CMP materials	Contamination control is a silent yield bottleneck. Not flashy, very real.
+81	Resonac	4004.T	Packaging materials, CMP, semiconductor materials	TSMC 2025 award winner; important for advanced packaging/materials.
+80	JX Advanced Metals	5016.T	Sputtering targets / high-purity metals	TSMC 2024 award winner; key high-purity metals supplier.
+79	Fujifilm	4901.T	Photoresist, CMP slurry, chemicals	Major semiconductor materials supplier.
+78	GlobalWafers	6488.TW	Silicon wafers	Taiwan-listed wafer supplier; strategic regional leverage.
+77	Siltronic	WAF.DE	Silicon wafers	European wafer supplier; less TSMC-specific but structurally important.
+76	Air Liquide	AI.PA	Industrial / electronic gases	Critical fab gas supplier; Taiwan expansion read-through.
+75	Linde	LIN	Industrial / electronic gases	Global gas major; critical for high-volume fabs.
+74	Air Products	APD	Industrial gases	Important but less pure-play than Air Liquide/Linde.
+74	Sumitomo Chemical	4005.T	Photoresist / chemicals	Advanced materials exposure.
+72	AGC	5201.T	Glass, quartz, semiconductor materials	Materials and glass exposure around masks/packaging.
+70	ADEKA	4401.T	Precursors / high-k materials	Smaller Japanese advanced materials bottleneck.
+69	Kanto Denka Kogyo	4047.T	Specialty gases / fluorine chemistry	Niche semiconductor gases.
+68	LCY Chemical	1704.TW	Chemicals	TSMC 2024 green manufacturing award winner.
+67	Stella Chemifa	4109.T	Fluorine chemicals	Niche high-purity chemical exposure.
+67	Fujimi	5384.T	CMP slurries	Niche CMP consumables.
+65	Daikin Industries	6367.T	Fluorochemicals / materials	Broader, less pure, but relevant.
+
+Read-through: This is where the market often underprices the bottleneck because “chemicals” sounds boring. Boring is where the bodies — and sometimes the alpha — are buried.
+
+Tier 3: Photomasks, Mask Inspection, Mask Blanks
+Score	Company	Ticker	Layer	Bottleneck Role
+82	Lasertec	6920.T	EUV mask inspection	One of the nastiest chokepoints in EUV yield learning.
+78	Hoya	7741.T	Mask blanks / optics materials	Critical mask blank supplier.
+76	Toppan Holdings	7911.T	Photomasks	Major photomask supplier.
+75	Dai Nippon Printing	7912.T	Photomasks	Major photomask supplier.
+72	Photronics	PLAB	Merchant photomasks	Public, smaller, less leading-edge dominant but relevant.
+68	Taiwan Mask Corp.	2338.TW	Photomasks	Taiwan-local mask exposure.
+
+Private but important and excluded: NuFlare was named by TSMC in 2024 for mask writer collaboration, but it is not a public pure-play anymore, so it is excluded from the public-only ranking.
+
+Tier 4: CoWoS / Advanced Packaging / 3DFabric
+
+This is the new sexy bottleneck. TSMC’s CoWoS-S uses a silicon interposer for ultra-high-performance AI/supercomputing packages, integrating logic chiplets with HBM cubes. Reuters also describes CoWoS as TSMC’s advanced packaging technology widely used for AI chips, including Nvidia-designed chips. And TSMC is still emphasizing that wafer-level CoWoS has more near-term scaling runway than panel-level packaging.
+
+Score	Company	Ticker	Layer	Bottleneck Role
+88	DISCO	6146.T	Dicing, grinding, thinning	Critical for advanced packaging and wafer thinning. TSMC 2025 award winner.
+84	Advantest	6857.T	Semiconductor test	Critical for AI/HBM/system-level test. TSMC 2025 award winner.
+82	Onto Innovation	ONTO	Packaging inspection/metrology	Direct 2025 TSMC award; strong advanced packaging metrology angle.
+81	Shibaura Mechatronics	6590.T	Advanced packaging tools	TSMC 2024 award for advanced packaging production support.
+80	Asahi Kasei	3407.T	Photosensitive dielectric / packaging materials	TSMC 2025 award; advanced packaging materials exposure.
+79	Unimicron	3037.TW	ABF substrates	Major AI/HPC substrate supplier; critical downstream to CoWoS packages.
+79	Ibiden	4062.T	ABF substrates	High-end package substrate leader.
+78	Scientech	3583.TW	Advanced packaging support/tools	TSMC 2024 award winner. Smaller Taiwan name.
+78	Technoprobe	TPRO.MI	Probe cards	Direct TSMC 2024 award winner.
+77	Ajinomoto	2802.T	ABF film	Owns the ABF material chokepoint. Not a pure semiconductor company, but structurally important.
+76	Nan Ya PCB	8046.TW	ABF substrates	Taiwan substrate supplier.
+75	Kinsus	3189.TW	ABF / BT substrates	Smaller Taiwan substrate leverage.
+74	AT&S	ATS.VI	IC substrates	European substrate supplier.
+73	FormFactor	FORM	Probe cards / test interfaces	Public probe-card exposure.
+72	Amkor	AMKR	Outsourced advanced packaging / test	Not a core TSMC supplier everywhere, but relevant to TSMC Arizona ecosystem. Amkor’s Arizona packaging site is positioned as a key link for TSMC Arizona wafer output.
+71	ASE Technology	ASX / 3711.TW	OSAT / packaging / test	Biggest OSAT; important downstream partner, less scarce than CoWoS itself.
+70	Powertech Technology	6239.TW	Memory/package/test	Packaging/test exposure.
+69	KYEC	2449.TW	Test services	Taiwan test house.
+68	ChipMOS	IMOS / 8150.TW	Assembly/test	More memory/display driver skew, but relevant back-end exposure.
+67	Greatek	2441.TW	Packaging/test	Smaller Taiwan OSAT.
+
+Read-through: CoWoS is not one bottleneck. It is a stack: interposer → HBM integration → substrate → dicing/thinning → metrology → probe/test → OSAT capacity. DISCO, Onto, Shibaura, Advantest, Technoprobe, Unimicron, Ibiden, Kinsus, Nan Ya PCB, and Amkor/ASE are the public map.
+
+Tier 5: Subsystems Behind the Tools — Vacuum, RF Power, Motion, Automation
+Score	Company	Ticker	Layer	Bottleneck Role
+77	MKS Instruments	MKSI	Vacuum, RF power, gas delivery, process control	Critical “tools behind the tools.”
+75	VAT Group	VACN.SW	Vacuum valves	Underappreciated vacuum chokepoint.
+74	Advanced Energy	AEIS	Precision power / plasma power	Key subsystem supplier into WFE.
+72	Atlas Copco	ATCO-A.ST	Vacuum pumps via Edwards	Broad industrial, but Edwards vacuum is critical.
+72	Daifuku	6383.T	Fab automation / AMHS	Wafer movement and fab logistics.
+70	Horiba	6856.T	Process control / measurement	Niche instrumentation.
+69	Brooks / Azenta	AZTA	Automation / life sciences legacy exposure	Less direct now after portfolio changes; lower conviction.
+
+Read-through: These are second-order bottlenecks. If WFE orders boom, these suppliers feel it. If WFE pauses, they get whacked first. Great businesses, but don’t confuse “critical” with “immune.”
+
+Tier 6: Fab Construction, Facilities, Water, Localization
+
+TSMC’s 2025 award list had a very loud message: localization, construction safety, and fab infrastructure matter. Marketech, Taiwan Puritic, China Steel Structure, United Integrated Services, Dacin, and others show up because fabs are not magic buildings; they’re chemical plants wearing bunny suits.
+
+Score	Company	Ticker	Layer	Bottleneck Role
+76	Taiwan Puritic	6826.TWO	Gas/chemical facility systems	Direct 2025 TSMC award; small public Taiwan bottleneck.
+75	Marketech International	6196.TW	Fab equipment integration / construction support	Direct 2025 TSMC safety award; key local supplier.
+74	Organo	6368.T	Ultra-pure water systems	TSMC 2024 award winner; UPW is non-negotiable.
+73	United Integrated Services	2404.TW	Cleanroom/facility engineering	TSMC 2024 fab construction award winner.
+72	Topco Scientific	5434.TWO	Quartz/material distribution / fab materials	Parent exposure to Topco Quartz, TSMC 2024 award winner.
+71	Jentech Precision	3653.TW	Precision parts / thermal / semiconductor components	Direct 2025 TSMC award; small Taiwan name.
+70	CTCI	9933.TW	Engineering / fab infrastructure	Taiwan engineering contractor.
+69	Dacin Construction	2535.TW	Fab construction	Direct TSMC 2024 award winner.
+68	China Steel Structure	2013.TW	Steel structure / fab construction	Direct 2025 TSMC award winner.
+67	Tung Ho Steel	2006.TW	Steel / Tung Kang Steel Structure exposure	Parent-linked exposure to TSMC-awarded steel structure subsidiary.
+66	All Ring Tech	6187.TWO	Automation equipment	Direct 2025 TSMC award winner; tiny Taiwan automation angle.
+65	C Sun Manufacturing	2467.TW	Process / automation equipment	Part of CSUN/G2C+ TSMC 2025 award mention.
+64	Kurita Water	6370.T	Water treatment	High-quality water infrastructure, less TSMC-specific.
+62	Veolia	VIE.PA	Water / waste treatment	Broad infrastructure exposure.
+61	Xylem	XYL	Water systems	Broad water infrastructure; lower direct TSMC purity.
+
+Read-through: If you want “smaller players,” this is the pond. Taiwan Puritic, Marketech, Jentech, All Ring, Scientech, Topco, UIS, Dacin — these are the names most people miss because they’re too busy yelling ASML into the void like it’s a spell.
+
+Tier 7: EDA / IP Ecosystem
+
+This is not “supply to TSMC’s fabs” in the same way chemicals and tools are, but it is critical to customer adoption of TSMC nodes. TSMC says its EDA Alliance reduces design barriers for adoption of TSMC process technologies by combining TSMC and EDA partner R&D.
+
+Score	Company	Ticker	Layer	Bottleneck Role
+86	Synopsys	SNPS	EDA / IP / simulation	Now includes Ansys; critical for advanced-node design flows. Synopsys completed Ansys acquisition in July 2025.
+84	Cadence	CDNS	EDA / IP / verification	Advanced-node implementation and verification.
+79	Siemens	SIE.DE	Siemens EDA / Mentor	Key EDA player, but less pure-play.
+77	Arm Holdings	ARM	CPU IP / chiplet ecosystem	Critical IP supplier for many TSMC customers, not a fab supplier.
+
+Read-through: EDA/IP is a bottleneck to TSMC customer volume, not TSMC’s own wafer output. I’d keep this as a separate bucket so the map doesn’t turn into soup.
+
+Full Ranked Public-Only Watchlist by Bottleneck Score
+90–100: Highest Bottleneck Power
+ASML — ASML — 99
+Applied Materials — AMAT — 95
+Tokyo Electron — 8035.T / TOELY — 94
+Lam Research — LRCX — 93
+KLA — KLAC — 92
+Shin-Etsu Chemical — 4063.T — 91
+SUMCO — 3436.T — 90
+80–89: Mission-Critical
+SCREEN Holdings — 7735.T — 89
+ASM International — ASMI.AS — 89
+DISCO — 6146.T — 88
+Advantest — 6857.T — 84–88 depending on AI test cycle
+Ebara — 6361.T — 86
+Synopsys — SNPS — 86
+Tokyo Ohka Kogyo — 4186.T — 83–86
+Resonac — 4004.T — 81–85
+JX Advanced Metals — 5016.T — 80–85
+Merck KGaA — MRK.DE — 84
+Cadence — CDNS — 84
+Kokusai Electric — 6525.T — 83
+Entegris — ENTG — 82
+Lasertec — 6920.T — 82
+ULVAC — 6728.T — 82
+Onto Innovation — ONTO — 82
+Canon — 7751.T — 81
+Asahi Kasei — 3407.T — 80
+Shibaura Mechatronics — 6590.T — 80
+70–79: Strong Bottleneck / Higher Small-Cap Hunting Zone
+Unimicron — 3037.TW — 79
+Ibiden — 4062.T — 79
+GlobalWafers — 6488.TW — 78
+Fujifilm — 4901.T — 78
+Scientech — 3583.TW — 78
+Technoprobe — TPRO.MI — 78
+Ajinomoto — 2802.T — 77
+Siltronic — WAF.DE — 77
+MKS Instruments — MKSI — 77
+Hoya — 7741.T — 78
+Nan Ya PCB — 8046.TW — 76
+Taiwan Puritic — 6826.TWO — 76
+Air Liquide — AI.PA — 76
+Topco Scientific — 5434.TWO — 72–76
+Marketech International — 6196.TW — 75
+Kinsus — 3189.TW — 75
+Linde — LIN — 75
+VAT Group — VACN.SW — 75
+Advanced Energy — AEIS — 74
+Organo — 6368.T — 74
+Dai Nippon Printing — 7912.T — 74
+Toppan Holdings — 7911.T — 74
+AT&S — ATS.VI — 73
+United Integrated Services — 2404.TW — 73
+FormFactor — FORM — 73
+Air Products — APD — 74
+Sumitomo Chemical — 4005.T — 74
+Daifuku — 6383.T — 72
+Atlas Copco — ATCO-A.ST — 72
+Photronics — PLAB — 72
+Amkor — AMKR — 72
+ASE Technology — ASX / 3711.TW — 71
+Jentech Precision — 3653.TW — 71
+CTCI — 9933.TW — 70
+Horiba — 6856.T — 70
+ADEKA — 4401.T — 70
+60–69: Important, More Replaceable, or Less Pure
+Kanto Denka Kogyo — 4047.T — 69
+KYEC — 2449.TW — 69
+Dacin Construction — 2535.TW — 69
+Taiwan Mask Corp. — 2338.TW — 68
+LCY Chemical — 1704.TW — 68
+China Steel Structure — 2013.TW — 68
+ChipMOS — IMOS / 8150.TW — 68
+Stella Chemifa — 4109.T — 67
+Fujimi — 5384.T — 67
+Greatek — 2441.TW — 67
+Tung Ho Steel — 2006.TW — 67
+All Ring Tech — 6187.TWO — 66
+C Sun Manufacturing — 2467.TW — 65
+Daikin Industries — 6367.T — 65
+Kurita Water — 6370.T — 64
+Veolia — VIE.PA — 62
+Xylem — XYL — 61
+Azenta — AZTA — 60–62
+Best Bottleneck Buckets for Alpha
+1. Highest-quality compounders
+
+ASML, AMAT, LRCX, KLAC, TEL, ASMI, SNPS, CDNS
+
+These are elite businesses, but many are already institutionally owned, well understood, and often expensive. Great long-term names. Not always asymmetric from here.
+
+2. Best “boring but critical” names
+
+SCREEN, Ebara, Kokusai, ULVAC, JX Advanced Metals, Resonac, Merck, Entegris, Tokyo Ohka, Shin-Etsu, SUMCO
+
+This is the classic pick-and-shovel layer. Less memeable, more durable.
+
+3. Best smaller-player hunting ground
+
+Taiwan Puritic, Marketech, Scientech, Jentech, Topco Scientific, All Ring, C Sun, United Integrated Services, Organo, Technoprobe, Shibaura Mechatronics
+
+This is where the asymmetric work should focus next. The downside: liquidity, Taiwan/Japan disclosure friction, and brutal chart volatility. The upside: these are not as “fully processed” by U.S. investors.
+
+4. Best CoWoS / advanced packaging basket
+
+DISCO, Onto, Advantest, Shibaura, Asahi Kasei, Unimicron, Ibiden, Nan Ya PCB, Kinsus, Ajinomoto, Technoprobe, Amkor, ASE
+
+This is probably the hottest sub-chain tied to TSMC right now. Advanced packaging capacity has been repeatedly identified as a critical supply-chain vulnerability, especially for AI accelerators needing 2.5D/HBM integration.
+
+Private / Excluded but Important
+
+Public-only means we exclude several critical companies even though they matter:
+
+Zeiss SMT — EUV optics/mirrors; owned by Carl Zeiss Foundation, not public.
+Trumpf — EUV CO₂ laser source chain, private.
+JSR — critical photoresist, but taken private.
+Namics — TSMC advanced packaging award winner, private.
+NuFlare — mask writers; delisted/private under Toshiba/JIC structure.
+Murata Machinery / Muratec — TSMC fab automation award winner, private.
+Chang Chun Petrochemical — TSMC award winner, not public.
+SK Siltron — wafer supplier, not separately public.
+
+These are real bottlenecks, just not investable as public pure-plays.
+
+Macro Overlay
+
+Regime for this theme: Risk-On / Neutral leaning Risk-On. AI capex is still the dominant semiconductor demand driver, and TSMC’s 2nm, A16/A14 roadmap plus CoWoS/3DFabric expansion keeps the supplier chain structurally supported. But the easy money in semicap leaders is not guaranteed from here because positioning is crowded and valuations in the obvious names are not “hidden gem” anymore.
+
+Social Sentiment Overlay
+
+Sentiment: Bullish
+Temperature: Hot in ASML/CoWoS, warm in advanced packaging, still under-followed in local Taiwan/Japan facilities suppliers
+Crowding risk: High in ASML/AMAT/LRCX/KLAC; medium in DISCO/Onto/Advantest; lower in Taiwan Puritic/Scientech/Jentech/All Ring/Topco.
+
+Trade Grade
+
+Theme Grade: A- / 84
+
+Not an automatic buy today — this is a watchlist construction map, not a blind entry signal. The best asymmetric hunting is likely in the smaller direct TSMC suppliers and CoWoS/materials names, not the already-mega-crowded semicap generals.
+
+Position Size
+
+For a portfolio basket, I’d cap initial exposure at:
+
+Core semicap leaders: 3–5% total basket
+Advanced packaging basket: 3–6%
+Small Taiwan/Japan supplier basket: 2–4% max until liquidity/technicals confirm
+Single small-cap supplier: usually ≤0.5–1.0% unless chart + fundamentals are both screaming
+Portfolio Risk Check
+
+Do not own ten companies that are all secretly the same trade. ASML + AMAT + LRCX + KLAC + TEL + DISCO + Advantest + Onto is basically one giant “semicap/TSMC capex stays hot” bet. Correlation risk is real. The market will treat them like cousins at a family reunion: maybe different personalities, same bloodline.
+
+Biggest Risk to Thesis
+
+The biggest risk is not “TSMC stops being important.” That is not the issue. The risk is capex digestion: if AI demand pauses, TSMC slows capacity adds, CoWoS supply catches up, or customers digest inventory, the supplier stocks can compress hard even while the long-term thesis remains intact. That is how good themes still punch you in the mouth.

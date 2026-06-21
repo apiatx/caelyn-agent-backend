@@ -1,0 +1,89 @@
+Do not regenerate curated anchor Python files yet.
+Do not use Claude/OpenAI/web search.
+Do not summarize the research.
+Do not compress the source files into tables.
+
+Goal:
+Create full source markdown files for the remaining original Chain Reaction / Bottlenecks anchors.
+
+Important anchor change:
+We are no longer using SPCX as only SpaceX.
+
+Instead, create a broader anchor:
+
+X / X Ecosystem
+
+X means the full Elon company ecosystem:
+
+SpaceX
+Tesla
+xAI
+
+Do not confuse this anchor with the stock ticker X.
+This is an anchor key/category for the Chain Reaction page, not a ticker.
+
+The six source files to create or overwrite are:
+
+backend/services/playbook/curated_sources/x_bottleneck_map.md
+backend/services/playbook/curated_sources/nvda_bottleneck_map.md
+backend/services/playbook/curated_sources/goog_bottleneck_map.md
+backend/services/playbook/curated_sources/anthropic_bottleneck_map.md
+backend/services/playbook/curated_sources/openai_bottleneck_map.md
+backend/services/playbook/curated_sources/tsm_bottleneck_map.md
+
+The x_bottleneck_map.md file should contain the full research response for the combined X ecosystem:
+
+SpaceX bottlenecks
+Tesla bottlenecks
+xAI bottlenecks
+shared Elon ecosystem bottlenecks where relevant
+
+If the pasted X source has separate sections for SpaceX, Tesla, and xAI, preserve those sections exactly.
+
+Do not split SpaceX/Tesla/xAI into three separate anchors in this pass.
+They should be one combined anchor:
+
+anchor_key: X
+anchor_name: X Ecosystem
+display label: X
+subtitle/description: SpaceX / Tesla / xAI
+
+Other anchors in this source-file pass:
+
+NVDA / NVIDIA
+GOOG / Google / Alphabet
+ANTHROPIC / Anthropic
+OPENAI / OpenAI
+TSM / TSMC
+
+I am going to paste the full research responses below. Your job in this pass is only to save the full pasted research into source markdown files.
+
+Important:
+Each .md file should contain the full original GPT research response for that anchor.
+
+Do not append to an existing compressed file.
+Do not keep a shortened table above the full research.
+Do not rewrite it.
+Do not paraphrase it.
+Do not remove narrative sections.
+Do not remove layer explanations.
+Do not remove smaller-player sections.
+Do not remove exclusions.
+Do not remove bottleneck thesis/risk/trade-lens sections.
+
+Replace the entire file content with the full pasted source for that anchor.
+
+After creating the files, verify each one:
+
+Report:
+
+file path
+exists yes/no
+character count
+first 5 lines
+last 5 lines
+detected anchor
+detected major headings
+whether the file appears full or compressed/truncated
+
+Stop after this verification. Do not update curated Python data files in this pass.

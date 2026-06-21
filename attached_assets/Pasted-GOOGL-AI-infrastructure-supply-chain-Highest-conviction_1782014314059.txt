@@ -1,0 +1,382 @@
+GOOGL AI infrastructure supply chain.
+Highest-conviction bottlenecks are:
+
+Custom TPU silicon / ASICs
+TSMC advanced nodes + advanced packaging
+HBM
+Liquid cooling
+Power / grid / electrical equipment
+Optics / networking
+Server ODMs / rack integration
+PCBs, substrates, connectors, and MEP construction
+
+The “obvious” names are crowded. The better alpha is likely in the second-order chokepoints: cooling parts, PCB/substrate, advanced packaging overflow, power gear, optical components, and data-center construction.
+
+Scoring key
+
+Bottleneck Score = 100 max
+
+Weighted by:
+
+Factor	Weight
+Criticality to Google AI/cloud capex	35
+Scarcity / lead-time / supplier concentration	25
+Confirmed or credible Google linkage	25
+Public-market purity / investability	15
+
+Directness labels:
+
+Label	Meaning
+Confirmed	Google relationship disclosed or reported directly
+Reported / likely	Credible reporting, industry checks, or known platform linkage
+Critical upstream	Necessary upstream layer, even if Google buys indirectly
+Ecosystem	Exposed to same buildout but direct Google linkage weaker
+Top GOOGL public bottlenecks, ranked
+Tier 1 — true choke points
+Rank	Company	Ticker	Layer	Score	Directness	Why it matters
+1	Broadcom	AVGO	TPU ASIC / custom silicon / networking	99	Confirmed	Broadcom reportedly signed a long-term agreement with Google to develop and supply future custom AI chips and rack components through 2031. This is the cleanest public GOOGL bottleneck.
+2	Taiwan Semi	TSM / 2330.TW	Advanced foundry / CoWoS / logic	98	Critical upstream	If Google TPUs scale, TSMC is the fab and packaging bottleneck behind the scenes. No TSMC capacity, no TPU flood.
+3	SK Hynix	000660.KS	HBM	95	Critical upstream	HBM is one of the hardest AI accelerator bottlenecks. TrendForce has SK Hynix leading HBM share while HBM3e/HBM4 demand stays tight.
+4	Samsung Electronics	005930.KS	HBM / memory / foundry	93	Critical upstream	Samsung is the only player with scale across HBM, DRAM, NAND, and foundry. Also reportedly trying to regain share in HBM for AI customers including Google.
+5	Micron	MU	HBM / DRAM / NAND	91	Critical upstream	Smaller than SK Hynix/Samsung in HBM, but scarcity makes every qualified HBM supplier valuable. U.S.-listed purest HBM scarcity play.
+6	ASML	ASML	EUV lithography	90	Critical upstream	The entire advanced-node stack depends on ASML EUV tools. Not Google-specific, but absolutely bottleneck-specific.
+7	Envicool	002837.SZ	Liquid cooling / CDUs	89	Reported	Reuters reported Google procurement discussions with Envicool, including CDUs built to Google specifications. This is one of the best smaller direct-ish cooling names.
+8	Schneider Electric	SU.PA / SBGSY	Power + cooling + energy management	88	Ecosystem / likely	Core AI data-center infrastructure supplier; also partnered with Foxconn for next-gen AI data-center power/cooling infrastructure.
+9	Eaton	ETN	Switchgear / UPS / electrical distribution	87	Ecosystem	Data-center electrification bottleneck. Less “sexy,” more “can the building turn on?” which is usually where the money hides.
+10	Vertiv	VRT	Power / thermal / liquid cooling	86	Ecosystem	One of the cleanest public AI data-center power/cooling bottlenecks. Crowded, but still strategically central.
+11	Hon Hai / Foxconn	2317.TW / HNHPF	Servers / racks / manufacturing	85	Reported / ecosystem	Foxconn has historical Google server component exposure and is now tied into AI infrastructure manufacturing with Schneider.
+12	NextEra Energy	NEE	Power / energy infrastructure	85	Confirmed	Google and NextEra announced a partnership around multiple gigawatts of data-center capacity and energy infrastructure.
+13	AES Corp.	AES	Power / co-located energy	84	Confirmed	Reuters reported AES signed a 20-year agreement with Google for a Texas data-center power project.
+14	Inventec	2356.TW	TPU / ASIC servers	83	Reported / likely	Reported as a key Google TPU/ASIC server supplier. Smaller, less obvious, very relevant.
+15	Zhongji Innolight	300308.SZ	Optical transceivers	82	Reported / ecosystem	One of the key Chinese optical transceiver names tied to AI data-center demand; Reuters lists Innolight in the Google-related Asian supplier ecosystem.
+Tier 2 — core bottleneck beneficiaries
+Company	Ticker	Layer	Score	Directness	Why it matters
+Applied Materials	AMAT	Semicap	82	Critical upstream	Advanced-node and packaging tool exposure.
+Lam Research	LRCX	Semicap	81	Critical upstream	Etch/deposition bottleneck for advanced silicon.
+KLA	KLAC	Inspection / metrology	81	Critical upstream	Yield is oxygen for advanced chips. KLA sells oxygen tanks.
+Lumentum	LITE	Lasers / optical components	81	Reported / ecosystem	Historically tied to Google optics; also reported exposure to Google TPU optical-switch hardware.
+Coherent	COHR	Optical transceivers / lasers	80	Ecosystem	Core supplier into AI data-center optical networking.
+Amkor	AMKR	Advanced packaging / OSAT	80	Critical upstream	Packaging overflow matters as CoWoS stays tight. U.S.-listed way to play advanced packaging.
+ASE Technology	ASX / 3711.TW	Advanced packaging / OSAT	80	Critical upstream	Largest OSAT complex; key packaging ecosystem player.
+Tokyo Electron	8035.T	Semicap	79	Critical upstream	Another advanced-node tool gatekeeper.
+Unimicron	3037.TW	ABF substrates / PCB	79	Critical upstream	AI chips need advanced substrates. Boring until there are not enough of them.
+Ibiden	4062.T	ABF substrates	78	Critical upstream	One of the key high-end substrate players.
+Victory Giant Technology	300476.SZ	PCBs	78	Reported	Reuters specifically said Victory Giant counts Nvidia and Google as clients.
+Eoptolink	300502.SZ	Optical transceivers	77	Reported / ecosystem	Key 800G/1.6T optical module supplier; Reuters lists it in Google-related supplier context.
+Auras Technology	3324.TWO	Thermal / cooling modules	76	Reported	Reuters identified Auras as a major supplier of relevant parts for Google in Asia.
+Delta Electronics	2308.TW	Power supplies / thermal	76	Reported / ecosystem	Core power/thermal supplier for data centers; Reuters also cited Delta-related suppliers in Google’s Asian cooling chain.
+ABB	ABBN.SW	Electrification / power gear	76	Ecosystem	AI data centers are electrical infrastructure wrapped around GPUs/TPUs.
+Synopsys	SNPS	EDA / IP	75	Critical upstream	Custom silicon design depends on EDA. Indirect, but unavoidable.
+Cadence	CDNS	EDA / IP	75	Critical upstream	Same logic as SNPS; less visible, essential.
+Marvell	MRVL	DSP / custom silicon / networking	75	Ecosystem	Not the cleanest Google-specific name, but central to AI networking silicon.
+Prysmian	PRY.MI	Power/fiber/subsea cable	74	Ecosystem	Data-center and subsea-network cable capacity.
+Nokia	NOK	Optical transport / Infinera	74	Ecosystem	Nokia’s Infinera acquisition expanded its optical networking position, with Reuters noting better ability to sell equipment to hyperscalers including Alphabet.
+Ciena	CIEN	Optical transport / DCI	73	Ecosystem	Long-haul and data-center interconnect backbone.
+Arm Holdings	ARM	CPU IP	72	Confirmed	Google Axion is built on Arm Neoverse V2.
+MediaTek	2454.TW	ASIC / silicon partner	72	Reported / potential	Reported as tied to Google custom chip efforts, but less confirmed than Broadcom.
+Quanta Computer / QCT	2382.TW	Servers / racks	72	Ecosystem / likely	Major hyperscaler server ODM.
+Wiwynn	6669.TW	Cloud servers	72	Ecosystem / likely	North American cloud server exposure; likely beneficiary of hyperscaler AI demand.
+Wistron	3231.TW	Servers / racks	71	Ecosystem	AI server/rack manufacturing exposure.
+Celestica	CLS	Hardware manufacturing / servers	70	Ecosystem	Public North American manufacturing exposure to AI infrastructure.
+Fabrinet	FN	Optical manufacturing	70	Ecosystem	Manufactures optical components/modules at scale.
+Credo	CRDO	Active electrical cables / SerDes	70	Ecosystem	AI cluster connectivity bottleneck; not Google-specific, but exactly in the data-center interconnect lane.
+Long-tail public suppliers by layer
+
+This is where smaller players live. Some are not confirmed Google vendors, but they sit in the layers Google’s buildout stresses.
+
+1. Custom silicon / accelerators / CPUs
+Company	Ticker	Score	Directness	Notes
+Broadcom	AVGO	99	Confirmed	The big dog. TPU/custom ASIC gatekeeper.
+MediaTek	2454.TW	72	Reported / potential	Potential Google ASIC partner; watch carefully.
+Arm	ARM	72	Confirmed	Axion CPU IP.
+Nvidia	NVDA	68	Confirmed ecosystem	Google Cloud also offers Nvidia GPUs; less specific to Google’s TPU supply chain.
+AMD	AMD	63	Ecosystem	GPU/CPU alternative supplier in cloud infrastructure.
+Intel	INTC	60	Ecosystem	CPU/server silicon, possible foundry optionality.
+
+Google’s Ironwood TPU uses eight HBM3E stacks per chip and scales to massive pod configurations, which is why HBM, packaging, networking, and cooling all matter downstream.
+
+2. Foundry, semicap, EDA, and test
+Company	Ticker	Score	Layer
+Taiwan Semi	TSM	98	Foundry / advanced packaging
+ASML	ASML	90	EUV lithography
+Applied Materials	AMAT	82	Deposition / process tools
+Lam Research	LRCX	81	Etch / deposition
+KLA	KLAC	81	Inspection / metrology
+Tokyo Electron	8035.T	79	Semicap tools
+Synopsys	SNPS	75	EDA / IP
+Cadence	CDNS	75	EDA / IP
+Advantest	6857.T	69	Semiconductor test
+Teradyne	TER	68	Semiconductor test
+Siemens	SIE.DE	65	EDA / industrial automation
+FormFactor	FORM	60	Probe cards / test
+Camtek	CAMT	59	Inspection / metrology
+Onto Innovation	ONTO	58	Inspection / process control
+3. HBM, DRAM, NAND, and storage
+Company	Ticker	Score	Layer
+SK Hynix	000660.KS	95	HBM
+Samsung Electronics	005930.KS	93	HBM / DRAM / NAND
+Micron	MU	91	HBM / DRAM / NAND
+Kioxia	285A.T	57	NAND
+Western Digital	WDC	58	HDD / NAND
+Seagate	STX	58	HDD
+Rambus	RMBS	57	Memory interface IP
+Pure Storage	PSTG	52	Enterprise storage
+NetApp	NTAP	51	Enterprise storage
+4. Advanced packaging, substrates, PCBs
+Company	Ticker	Score	Notes
+TSMC	TSM	98	CoWoS / advanced packaging anchor
+Amkor	AMKR	80	OSAT / packaging overflow
+ASE Technology	ASX / 3711.TW	80	OSAT / advanced packaging
+Unimicron	3037.TW	79	ABF substrate
+Ibiden	4062.T	78	ABF substrate
+Victory Giant	300476.SZ	78	PCB; reported Google/Nvidia client
+Kinsus	3189.TW	53	Substrate
+Nan Ya PCB	8046.TW	53	PCB / substrate
+Shennan Circuits	002916.SZ	53	PCB
+WUS Printed Circuit	002463.SZ	53	PCB
+Compeq	2313.TW	52	PCB
+Tripod Technology	3044.TW	52	PCB
+Gold Circuit	2368.TW	52	PCB
+Taiwan PCB Techvest	8213.TW	51	PCB
+
+This layer is underappreciated because investors love saying “AI chip” and hate saying “substrate availability.” Unfortunately, the substrate does not care about your vibes.
+
+5. Server ODMs, racks, and integration
+Company	Ticker	Score	Directness
+Hon Hai / Foxconn	2317.TW	85	Reported / ecosystem
+Inventec	2356.TW	83	Reported / likely
+Quanta / QCT	2382.TW	72	Ecosystem
+Wiwynn	6669.TW	72	Ecosystem
+Wistron	3231.TW	71	Ecosystem
+Celestica	CLS	70	Ecosystem
+Flex	FLEX	70	Ecosystem
+Lenovo	0992.HK	60	Reuters supplier context
+Supermicro	SMCI	60	AI server ecosystem
+MiTAC	3706.TW	59	Server ODM
+Compal	2324.TW	59	Server/ODM
+Gigabyte	2376.TW	58	Servers
+Pegatron	4938.TW	58	Hardware manufacturing
+6. Networking, optical transceivers, lasers, and subsea/backbone
+
+Google’s internal network scale is insane: its Jupiter data-center network work has targeted massive bandwidth expansion and power/capex improvements through optical switching and SDN. That makes optics and switching a real bottleneck layer, not a side quest.
+
+Company	Ticker	Score	Layer
+Broadcom	AVGO	99	Switch ASICs / custom silicon
+Marvell	MRVL	75	Networking silicon / DSP
+Nokia	NOK	74	Optical transport
+Ciena	CIEN	73	Optical transport / DCI
+Lumentum	LITE	81	Lasers / optical components
+Coherent	COHR	80	Lasers / transceivers
+Innolight	300308.SZ	82	Optical transceivers
+Eoptolink	300502.SZ	77	Optical transceivers
+Fabrinet	FN	70	Optical manufacturing
+Credo	CRDO	70	AEC / interconnect
+Astera Labs	ALAB	69	PCIe/CXL retimers
+Arista Networks	ANET	68	Data-center switching
+Cisco	CSCO	67	Networking
+Amphenol	APH	67	Connectors / interconnect
+TE Connectivity	TEL	66	Connectors
+MACOM	MTSI	56	Optical/RF semis
+Semtech	SMTC	55	Signal integrity / optical components
+Applied Optoelectronics	AAOI	52	Optical modules
+Accelink	002281.SZ	51	Optical modules
+Corning	GLW	51	Fiber / glass
+NEC	6701.T	50	Subsea cable systems
+Nexans	NEX.PA	50	Power/fiber cable
+Prysmian	PRY.MI	74	Power/fiber/subsea cable
+7. Liquid cooling and thermal
+
+This is probably the most important “smaller player” layer. Reuters reported Google’s cooling supply conversations directly, including Envicool and Asian component suppliers.
+
+Company	Ticker	Score	Directness
+Envicool	002837.SZ	89	Reported Google talks
+Schneider Electric	SU.PA	88	Ecosystem
+Vertiv	VRT	86	Ecosystem
+Auras Technology	3324.TWO	76	Reported supplier context
+Delta Electronics	2308.TW	76	Reported / ecosystem
+Delta Asia	6762.TWO	73	Reported supplier context
+Ecolab / CoolIT pending	ECL	63	Pending acquisition exposure
+Modine	MOD	63	Data-center thermal
+Nidec	6594.T	63	Fans / motors / thermal
+Johnson Controls	JCI	62	HVAC / controls
+Carrier	CARR	62	HVAC / cooling
+Trane Technologies	TT	62	Cooling / HVAC
+Daikin	6367.T	62	Cooling
+Lingyi iTech	002600.SZ	61	Reuters supplier context
+Feilong Auto Components	002536.SZ	60	Reuters supplier context
+Lenovo	0992.HK	60	Reuters supplier context
+8. Power, grid, switchgear, backup power
+
+This is the biggest second-order bottleneck. AI data centers are becoming power plants with servers attached. Google has signed large energy deals with public companies like NextEra and AES, while Alphabet itself warns that global energy supply has become constrained by AI compute demand.
+
+Company	Ticker	Score	Layer
+NextEra Energy	NEE	85	Power / data-center energy infrastructure
+AES Corp.	AES	84	Power / co-located energy
+Schneider Electric	SU.PA	88	Electrical / power management
+Eaton	ETN	87	Switchgear / electrical
+Vertiv	VRT	86	Power / UPS / thermal
+ABB	ABBN.SW	76	Electrification
+Powell Industries	POWL	66	Switchgear
+Hubbell	HUBB	65	Electrical products
+GE Vernova	GEV	65	Grid / turbines / power
+Siemens Energy	ENR.DE	65	Grid / turbines
+Legrand	LR.PA	64	Data-center electrical
+nVent	NVT	64	Enclosures / electrical
+Xcel Energy	XEL	64	Utility / clean power
+Mitsubishi Electric	6503.T	62	Electrical / power
+Hitachi	6501.T	62	Grid / power systems
+LS Electric	010120.KS	61	Electrical equipment
+HD Hyundai Electric	267260.KS	60	Transformers
+Hyosung Heavy Industries	298040.KS	60	Transformers
+Caterpillar	CAT	59	Backup generation
+Cummins	CMI	59	Backup generation
+Bloom Energy	BE	58	Fuel cells / on-site power
+Fluence	FLNC	57	Grid-scale batteries
+Tesla Energy	TSLA	56	Storage
+Constellation Energy	CEG	56	Nuclear / power
+Vistra	VST	56	Power generation
+Talen Energy	TLN	55	Power generation
+NRG Energy	NRG	55	Power generation
+First Solar	FSLR	54	Solar supply
+Nextracker	NXT	53	Solar trackers
+Shoals	SHLS	52	Solar electrical balance-of-system
+CG Power	CGPOWER.NS	58	Transformers
+Transformers & Rectifiers India	TRIL.NS	57	Transformers
+Bharat Heavy Electricals	BHEL.NS	57	Power equipment
+9. Construction, MEP, EPC, and data-center buildout
+
+Alphabet says technical infrastructure buildout has timelines from months to years. That means construction execution is itself a bottleneck.
+
+Company	Ticker	Score	Layer
+EMCOR	EME	64	Electrical/mechanical infrastructure
+Comfort Systems USA	FIX	63	Mechanical / modular construction
+Quanta Services	PWR	62	Grid / electrical construction
+IES Holdings	IESC	61	Electrical contracting / data centers
+MYR Group	MYRG	60	Electrical construction
+Primoris	PRIM	60	Infrastructure / energy construction
+MasTec	MTZ	60	Infrastructure / power
+Sterling Infrastructure	STRL	59	Infrastructure
+Jacobs	J	58	Engineering
+AECOM	ACM	57	Engineering / construction
+Tetra Tech	TTEK	56	Engineering / infrastructure
+Cleanest public GOOGL bottleneck basket
+
+If I had to narrow this into a serious diligence list, not a museum exhibit:
+
+Confirmed / closest to Google
+Company	Score
+Broadcom	99
+Envicool	89
+NextEra	85
+AES	84
+Inventec	83
+Victory Giant	78
+Auras	76
+Delta Electronics	76
+Arm	72
+Highest-quality structural upstream
+Company	Score
+TSMC	98
+SK Hynix	95
+Samsung	93
+Micron	91
+ASML	90
+Schneider	88
+Eaton	87
+Vertiv	86
+Amkor	80
+ASE	80
+Smaller-player alpha hunting zone
+Company	Score	Why interesting
+Envicool	89	Direct Google cooling chatter; smaller than obvious U.S. cooling names
+Victory Giant	78	PCB supplier with reported Google/Nvidia client exposure
+Auras	76	Cooling component supplier named in Google-related Reuters reporting
+Eoptolink	77	Optical transceiver bottleneck
+Innolight	82	AI optics leader
+Inventec	83	Reported Google TPU server supplier
+Unimicron	79	ABF substrate leverage
+Ibiden	78	ABF substrate leverage
+Powell	66	Switchgear bottleneck
+EMCOR	64	Data-center electrical/mechanical buildout
+Comfort Systems	63	Mechanical/HVAC construction
+Credo	70	AI cluster connectivity
+Fabrinet	70	Optical manufacturing
+Lumentum	81	Optical switch / laser exposure
+Coherent	80	Optical transceivers / lasers
+Macro Overlay
+
+Regime: Neutral-to-Risk-On, but crowded.
+
+SPY and QQQ were positive on the latest available market close, VIX was around the mid-teens, and the AI/semi earnings bid remains intact; however, rates are still restrictive, the Fed remains data-dependent, and AI-infra names are no longer hidden under a rock.
+
+The macro read: the theme is right, but entry discipline matters. Chasing every AI infra name after vertical moves is how portfolios get turned into tuition payments.
+
+Social Sentiment Overlay
+
+Sentiment lean: Bullish
+Temperature: Hot to euphoric
+Crowding risk: High in AVGO, TSM, HBM, VRT, ETN, power-grid winners
+Less crowded: Envicool, Auras, Victory Giant, Inventec, ABF substrate names, smaller MEP/electrical contractors
+
+Public X/Substack chatter is heavily focused on Google TPUs, Broadcom, CoWoS, HBM, substrates, and optical networking. That confirms the theme, but also means the easy names are watched. The edge is increasingly in supplier verification + valuation + timing, not just “AI infra good.”
+
+Trade Grade
+
+GOOGL supply-chain theme grade: A / 86
+Trade grade today without individual charts: B / 74
+
+Why the split? The structural thesis is excellent. The tactical trade is harder because many names have already rerated hard. No chart, no valuation check, no stop = no trade.
+
+Position Size
+
+For a new basket, I would not shotgun 40 names. That’s fake diversification with extra paperwork.
+
+A clean aggressive structure:
+
+Bucket	Allocation idea
+Core confirmed bottlenecks: AVGO, TSM, HBM triopoly	35–45% of basket
+Power/cooling: ETN, VRT, Schneider, Envicool, AES/NEE	25–30%
+Optics/networking: LITE, COHR, Innolight, Eoptolink, CRDO	15–20%
+Smaller high-upside suppliers: Victory Giant, Auras, Inventec, Unimicron, Amkor/ASE	15–20%
+
+For actual portfolio risk: treat this as one correlated AI-infrastructure factor, not 20 separate bets. Correlation adjustment matters. AVGO + TSM + MU + VRT + ETN + CRDO are all different tickers, but in a risk-off AI capex scare, they will trade like cousins at the same family reunion.
+
+Portfolio Risk Check
+
+Current max new risk should be normal-regime sizing, not full-send euphoria mode.
+
+Trade quality	Max stop-defined portfolio risk
+A+	up to 2.0%
+A	up to 1.5%
+B	up to 1.0%
+C	≤0.5%
+D/F	0%
+
+For this theme, I’d only size A/B setups after checking:
+
+Price above key moving averages
+Breakout or clean pullback to support
+Relative strength vs QQQ
+Volume confirmation
+Valuation not already stupid
+No immediate dilution / capex / margin landmine
+Biggest Risk to Thesis
+
+The biggest risk is not “AI goes away.” That’s lazy.
+
+The real risks:
+
+Google slows capex growth after a digestion cycle.
+TPU economics disappoint versus Nvidia GPU clusters.
+Supplier margins get competed down as Google dual-sources.
+TSMC/HBM/CoWoS constraints ease, killing scarcity premium.
+Power interconnection delays push data-center timelines out.
+China/Taiwan geopolitical risk hits the Asian supplier stack.
+Crowding risk: the thesis is right, but everyone already owns it.
+Final take
+
+The best GOOGL public bottleneck names by purity are:
+
+AVGO, TSM, SK Hynix, Samsung, MU, ASML, Envicool, ETN, VRT, Schneider, Foxconn, NEE, AES, Inventec, Innolight, LITE, COHR, AMKR, ASE, Unimicron, Ibiden, Victory Giant, Eoptolink, Auras, Delta Electronics, CRDO, FN, EMCOR, FIX, POWL.
+
+The most asymmetric hunting ground is probably not the mega-caps anymore. It’s the small/mid-cap supply chain around cooling, substrates, PCBs, optical modules, power gear, and construction capacity. That’s where the market still sometimes looks at a mission-critical bottleneck and says, “cool little industrial company,” like an idiot with a Bloomberg terminal.
