@@ -1,15 +1,15 @@
-# Microsoft AI Supply-Chain Bottleneck Map — Public Companies Only
+Microsoft AI supply-chain bottleneck map — public companies only
 
-Bias: structurally bullish on Microsoft's AI infrastructure supply chain, but selective. The real edge is not "Microsoft uses AI." Everyone knows that. The edge is identifying the public companies sitting in the physical choke points Microsoft cannot brute-force overnight.
+Bias: structurally bullish on Microsoft’s AI infrastructure supply chain, but selective. The real edge is not “Microsoft uses AI.” Everyone knows that. The edge is identifying the public companies sitting in the physical choke points Microsoft cannot brute-force overnight.
 
-Microsoft is still in a capacity-constrained capex supercycle: it said customer demand remains above supply, with capex heavily tied to short-lived assets like GPUs/CPUs, and previously guided roughly $80B FY2025 AI-enabled datacenter investment. Translation: Microsoft's bottleneck is not revenue demand; it is compute + power + networking + datacenter execution.
+Microsoft is still in a capacity-constrained capex supercycle: it said customer demand remains above supply, with capex heavily tied to short-lived assets like GPUs/CPUs, and previously guided roughly $80B FY2025 AI-enabled datacenter investment. Translation: Microsoft’s bottleneck is not revenue demand; it is compute + power + networking + datacenter execution.
 
-Bottleneck score: 100 = hardest to replace, most capacity-constrained, most critical to Microsoft's AI/cloud buildout.
-Directness: Confirmed = Microsoft/Azure disclosed or directly linked; Reported = credible public reporting; Upstream = critical supplier to Microsoft's suppliers; Thematic = public company in the relevant bottleneck layer, not confirmed Microsoft-specific.
+Bottleneck score: 100 = hardest to replace, most capacity-constrained, most critical to Microsoft’s AI/cloud buildout.
+Directness: Confirmed = Microsoft/Azure disclosed or directly linked; Reported = credible public reporting; Upstream = critical supplier to Microsoft’s suppliers; Thematic = public company in the relevant bottleneck layer, not confirmed Microsoft-specific.
 
-## The Microsoft bottleneck stack
+The Microsoft bottleneck stack
 
-Microsoft's true stack looks like this:
+Microsoft’s true stack looks like this:
 
 Azure AI demand / OpenAI / Copilot / GitHub / enterprise cloud
 → AI accelerators: Nvidia, AMD, Maia
@@ -20,10 +20,9 @@ Azure AI demand / OpenAI / Copilot / GitHub / enterprise cloud
 → land, leased capacity, colocation, cloud backstops
 → storage + consumer devices/gaming lower-priority supply chains
 
-Microsoft's Azure GB200 VMs use Nvidia Grace/Blackwell systems; Azure MI300X VMs use AMD Instinct MI300X; Microsoft's Maia chips use TSMC advanced process nodes and HBM-class memory. That gives the first-order choke points: Nvidia/AMD → TSMC → HBM → packaging → networking → power.
+Microsoft’s Azure GB200 VMs use Nvidia Grace/Blackwell systems; Azure MI300X VMs use AMD Instinct MI300X; Microsoft’s Maia chips use TSMC advanced process nodes and HBM-class memory. That gives the first-order choke points: Nvidia/AMD → TSMC → HBM → packaging → networking → power.
 
-## Top public-company bottlenecks for Microsoft
-
+Top public-company bottlenecks for Microsoft
 Rank	Score	Company / Ticker	Layer	Directness	Why it matters
 1	100	Nvidia / NVDA	AI GPUs, GB200/NVL racks	Confirmed	Core Azure Blackwell supplier. Highest irreplaceability.
 2	98	TSMC / TSM	Advanced foundry + CoWoS	Confirmed / Upstream	Builds Microsoft Maia and most AI accelerators; CoWoS remains a critical AI packaging constraint.
@@ -41,7 +40,7 @@ Rank	Score	Company / Ticker	Layer	Directness	Why it matters
 14	85	Vertiv / VRT	Liquid cooling + power infrastructure	Thematic	AI rack power/cooling bottleneck; major Nvidia Blackwell-era cooling beneficiary.
 15	85	Lumen / LUMN	Fiber/network capacity	Confirmed	Microsoft selected Lumen to expand network capacity for AI workloads.
 16	84	Nokia / NOK	Azure datacenter routers/switches	Confirmed	Five-year expansion supplying Microsoft Azure datacenter networking across 30+ countries.
-17	83	CoreWeave / CRWV	Leased GPU cloud capacity	Reported / Backstop	Microsoft has been CoreWeave's largest customer; CoreWeave supplies scarce Nvidia GPU capacity.
+17	83	CoreWeave / CRWV	Leased GPU cloud capacity	Reported / Backstop	Microsoft has been CoreWeave’s largest customer; CoreWeave supplies scarce Nvidia GPU capacity.
 18	82	Applied Materials / AMAT	Semiconductor equipment	Upstream	Key advanced wafer/packaging equipment supplier.
 19	82	Wiwynn / 6669.TW	AI servers / immersion cooling	Reported / Confirmed R&D	CSP server ODM with Microsoft exposure; partnered with Microsoft on two-phase immersion cooling tests.
 20	81	Quanta / 2382.TW	AI servers, racks, QCT	Upstream	Major Nvidia HGX/AI server ODM.
@@ -55,9 +54,7 @@ Rank	Score	Company / Ticker	Layer	Directness	Why it matters
 28	78	KLA / KLAC	Process control/metrology	Upstream	Yield control for advanced nodes and memory.
 29	78	Tokyo Electron / 8035.T, TOELY	Semiconductor equipment	Upstream	Key tool supplier into TSMC/Samsung/Intel fabs.
 30	77	Arm / ARM	CPU IP	Confirmed / Upstream	Azure Cobalt CPUs use Arm Neoverse design.
-
-## Layer 1 — AI accelerators, CPUs, and custom silicon
-
+Layer 1 — AI accelerators, CPUs, and custom silicon
 Score	Company	Ticker	Role for Microsoft	Directness
 100	Nvidia	NVDA	Azure GB200/Blackwell GPU systems; primary AI training/inference capacity	Confirmed
 91	AMD	AMD	Azure MI300X VMs; EPYC server CPUs; Xbox custom SoCs	Confirmed
@@ -73,8 +70,7 @@ Score	Company	Ticker	Role for Microsoft	Directness
 
 Read-through: Nvidia is still the king bottleneck, but Microsoft is actively diversifying with AMD MI300X and internal Maia/Cobalt chips. The bottleneck does not disappear; it just moves upstream into TSMC, HBM, advanced packaging, substrates, and networking.
 
-## Layer 2 — Foundry, advanced packaging, HBM, substrates
-
+Layer 2 — Foundry, advanced packaging, HBM, substrates
 Score	Company	Ticker	Bottleneck role	Directness
 98	TSMC	TSM	Advanced node + CoWoS packaging	Confirmed / Upstream
 96	SK hynix	000660.KS	HBM leader, key Nvidia AI memory supplier	Upstream
@@ -93,10 +89,9 @@ Score	Company	Ticker	Bottleneck role	Directness
 66	Shin-Etsu Chemical	4063.T	Wafers/materials	Upstream
 65	SUMCO	3436.T	Silicon wafers	Upstream
 
-HBM and CoWoS are the "quiet killers." Microsoft can sign billion-dollar AI commitments all day, but if HBM stacks, CoWoS slots, substrates, and EUV tools are constrained, capacity does not magically appear because Satya yelled "Copilot" into a conference room. TSMC has emphasized CoWoS' continuing role, while HBM demand remains structurally tight as Nvidia/AMD/custom ASIC roadmaps consume memory capacity.
+HBM and CoWoS are the “quiet killers.” Microsoft can sign billion-dollar AI commitments all day, but if HBM stacks, CoWoS slots, substrates, and EUV tools are constrained, capacity does not magically appear because Satya yelled “Copilot” into a conference room. TSMC has emphasized CoWoS’ continuing role, while HBM demand remains structurally tight as Nvidia/AMD/custom ASIC roadmaps consume memory capacity.
 
-## Layer 3 — Semiconductor equipment and fab enablers
-
+Layer 3 — Semiconductor equipment and fab enablers
 Score	Company	Ticker	Bottleneck role	Directness
 95	ASML	ASML	EUV lithography monopoly	Upstream
 82	Applied Materials	AMAT	Deposition, materials engineering, packaging tools	Upstream
@@ -112,10 +107,9 @@ Score	Company	Ticker	Bottleneck role	Directness
 64	Onto Innovation	ONTO	Process control/inspection	Upstream
 62	Kulicke & Soffa	KLIC	Packaging equipment	Upstream
 
-ASML is the apex predator here. If advanced lithography capacity is tight, everything downstream waits in line. Reuters recently reported ASML's CEO warning of prolonged semiconductor supply tightness because of AI demand.
+ASML is the apex predator here. If advanced lithography capacity is tight, everything downstream waits in line. Reuters recently reported ASML’s CEO warning of prolonged semiconductor supply tightness because of AI demand.
 
-## Layer 4 — AI servers, racks, ODMs, and manufacturing
-
+Layer 4 — AI servers, racks, ODMs, and manufacturing
 Score	Company	Ticker	Role	Directness
 82	Wiwynn	6669.TW	CSP AI servers; Microsoft immersion cooling collaboration	Reported / Confirmed R&D
 81	Quanta Computer / QCT	2382.TW	AI servers/racks, Nvidia HGX ODM	Upstream
@@ -132,10 +126,9 @@ Score	Company	Ticker	Role	Directness
 59	Compal	2324.TW	PC/device ODM	Upstream
 58	Luxshare Precision	002475.SZ	Electronics manufacturing, Xbox supply-chain reports	Reported / Device
 
-This is the layer where smaller names matter. Microsoft's own server designs still need ODM manufacturing, rack integration, thermals, power shelves, cabling, and deployment execution. Wiwynn is especially relevant because Microsoft publicly worked with it on two-phase immersion cooling tests, and public reporting ties Wiwynn to major CSP clients including Microsoft. Nvidia also lists Taiwan ODMs like Foxconn, Inventec, Quanta, and Wistron around HGX reference architectures.
+This is the layer where smaller names matter. Microsoft’s own server designs still need ODM manufacturing, rack integration, thermals, power shelves, cabling, and deployment execution. Wiwynn is especially relevant because Microsoft publicly worked with it on two-phase immersion cooling tests, and public reporting ties Wiwynn to major CSP clients including Microsoft. Nvidia also lists Taiwan ODMs like Foxconn, Inventec, Quanta, and Wistron around HGX reference architectures.
 
-## Layer 5 — AI networking, Ethernet switching, routers, optical interconnects
-
+Layer 5 — AI networking, Ethernet switching, routers, optical interconnects
 Score	Company	Ticker	Role	Directness
 94	Arista	ANET	1.6T Ethernet AI networking for Azure Maia/Fairwater	Confirmed
 90	Broadcom	AVGO	Tomahawk/Jericho switch silicon, NIC/DSP ecosystem	Upstream
@@ -155,10 +148,9 @@ Score	Company	Ticker	Role	Directness
 62	Fujitsu	6702.T	Optical/network systems	Upstream
 61	MediaTek	2454.TW	Microsoft MOSAIC optical cable proof-of-concept	Confirmed / Early
 
-This is one of the best Microsoft-specific bottleneck layers. Arista is explicitly tied to Azure Maia/Fairwater 1.6T Ethernet. Nokia has a five-year Azure datacenter router/switch expansion. Lumen was selected to expand network capacity for Microsoft's AI workloads. Microsoft is also pushing hollow-core fiber and future MicroLED optical cable work, with Corning/Heraeus/MediaTek-type ecosystem read-throughs.
+This is one of the best Microsoft-specific bottleneck layers. Arista is explicitly tied to Azure Maia/Fairwater 1.6T Ethernet. Nokia has a five-year Azure datacenter router/switch expansion. Lumen was selected to expand network capacity for Microsoft’s AI workloads. Microsoft is also pushing hollow-core fiber and future MicroLED optical cable work, with Corning/Heraeus/MediaTek-type ecosystem read-throughs.
 
-## Layer 6 — Datacenter power, UPS, grid, transformers, electrical equipment
-
+Layer 6 — Datacenter power, UPS, grid, transformers, electrical equipment
 Score	Company	Ticker	Role	Directness
 92	Constellation Energy	CEG	Nuclear power for Microsoft datacenter demand	Confirmed
 88	Eaton	ETN	UPS, electrical gear, grid-interactive datacenter power	Confirmed
@@ -182,8 +174,7 @@ Score	Company	Ticker	Role	Directness
 
 Power is not a side quest; it is now the main boss. Microsoft has direct public energy agreements with Constellation, Brookfield, Qcells, and AES, while Eaton is a direct Microsoft UPS partner. This is why AI infrastructure is becoming a grid equipment trade, not just a GPU trade.
 
-## Layer 7 — Liquid cooling, thermal management, mechanical systems
-
+Layer 7 — Liquid cooling, thermal management, mechanical systems
 Score	Company	Ticker	Role	Directness
 85	Vertiv	VRT	AI datacenter power + liquid cooling	Thematic
 87	Schneider Electric	SU.PA / SBGSY	Cooling/power systems	Confirmed / Thematic
@@ -197,10 +188,9 @@ Score	Company	Ticker	Role	Directness
 55	SPX Technologies	SPXC	HVAC/cooling equipment	Thematic
 52	Asetek	ASTK.CO	Liquid cooling niche	Smaller / Thematic
 
-Microsoft's Fairwater-style AI datacenters are built around closed-loop liquid cooling, and the Blackwell generation pushes rack power density into levels where legacy air cooling becomes increasingly silly. This layer is crowded, but still structurally important.
+Microsoft’s Fairwater-style AI datacenters are built around closed-loop liquid cooling, and the Blackwell generation pushes rack power density into levels where legacy air cooling becomes increasingly silly. This layer is crowded, but still structurally important.
 
-## Layer 8 — Fiber, leased capacity, colocation, and cloud backstops
-
+Layer 8 — Fiber, leased capacity, colocation, and cloud backstops
 Score	Company	Ticker	Role	Directness
 85	Lumen	LUMN	AI network capacity / high-capacity fiber	Confirmed
 83	CoreWeave	CRWV	GPU cloud capacity supplier/backstop	Reported
@@ -215,8 +205,7 @@ Score	Company	Ticker	Role	Directness
 
 This layer matters because Microsoft can be both builder and buyer. Public reporting has tied Microsoft heavily to CoreWeave revenue, and recent reporting also points to Microsoft using AWS for GitHub capacity pressure. Nebius has also been publicly reported as serving major clients including Microsoft.
 
-## Layer 9 — Storage: SSDs, NAND, HDDs, controllers
-
+Layer 9 — Storage: SSDs, NAND, HDDs, controllers
 Score	Company	Ticker	Role	Directness
 86	Samsung Electronics	005930.KS	NAND/DRAM/SSD	Upstream
 86	Micron	MU	NAND/DRAM/HBM	Upstream
@@ -229,10 +218,9 @@ Score	Company	Ticker	Role	Directness
 58	Pure Storage	PSTG	Enterprise flash systems	Thematic
 55	NetApp	NTAP	Enterprise storage	Thematic
 
-Storage is a lower score than GPU/HBM/networking, but don't ignore it. AI datacenters are pressuring NAND and SSD controller supply too; Silicon Motion recently warned that AI datacenters are absorbing a massive share of NAND supply.
+Storage is a lower score than GPU/HBM/networking, but don’t ignore it. AI datacenters are pressuring NAND and SSD controller supply too; Silicon Motion recently warned that AI datacenters are absorbing a massive share of NAND supply.
 
-## Layer 10 — Microsoft devices, Xbox, Surface, edge hardware
-
+Layer 10 — Microsoft devices, Xbox, Surface, edge hardware
 Score	Company	Ticker	Role	Directness
 91	AMD	AMD	Xbox custom SoCs; server CPUs/GPUs	Confirmed
 70	Qualcomm	QCOM	Surface Snapdragon X devices	Confirmed
@@ -248,37 +236,37 @@ Score	Company	Ticker	Role	Directness
 54	Lite-On	2301.TW	Power supplies/components	Upstream
 54	Delta Electronics	2308.TW	Power supplies / thermal / electronics	Upstream
 
-Surface and Xbox matter, but they are not the main bottleneck story anymore. Microsoft's supply-chain gravity has shifted from consumer hardware to AI datacenter infrastructure. Qualcomm now matters more for Surface AI PCs, while AMD remains central through Xbox silicon and Azure compute.
+Surface and Xbox matter, but they are not the main bottleneck story anymore. Microsoft’s supply-chain gravity has shifted from consumer hardware to AI datacenter infrastructure. Qualcomm now matters more for Surface AI PCs, while AMD remains central through Xbox silicon and Azure compute.
 
-## Best asymmetric research clusters
+Best asymmetric research clusters
 
-Not buy ratings — this is where I'd focus deeper work.
+Not buy ratings — this is where I’d focus deeper work.
 
-### 1. Confirmed Microsoft choke points
+1. Confirmed Microsoft choke points
 
 NVDA, TSM, ANET, AMD, ETN, CEG, LUMN, NOK, CRWV, Wiwynn
 
 These have the cleanest Microsoft linkage. NVDA/TSM are obvious but huge. The smaller/less-obvious ones are LUMN, Wiwynn, Nokia, Eaton, and CoreWeave.
 
-### 2. Upstream bottlenecks Microsoft cannot avoid
+2. Upstream bottlenecks Microsoft cannot avoid
 
 SK hynix, Micron, Samsung, ASML, Broadcom, Ibiden, Unimicron, Coherent, Lumentum, Innolight, Fabrinet, Eoptolink
 
-This is where the supply chain gets interesting. Microsoft might not directly buy every part, but Azure capacity still depends on these layers. This is "picks and shovels for the picks and shovels," which sounds ridiculous until it makes money.
+This is where the supply chain gets interesting. Microsoft might not directly buy every part, but Azure capacity still depends on these layers. This is “picks and shovels for the picks and shovels,” which sounds ridiculous until it makes money.
 
-### 3. Power/cooling/grid bottlenecks
+3. Power/cooling/grid bottlenecks
 
 CEG, ETN, Schneider, Vertiv, Brookfield, AES, Qcells/Hanwha, GE Vernova, ABB, Legrand, nVent, Modine, Hammond, Powell
 
 This is the second-order AI trade. If GPUs are the engines, power/cooling is the oxygen. No oxygen, no dragon.
 
-### 4. Smaller-cap / less-crowded watchlist names
+4. Smaller-cap / less-crowded watchlist names
 
 Wiwynn, Lumen, Fabrinet, Eoptolink, Innolight, Modine, nVent, Hammond Power, Powell, Silicon Motion, Phison, Celestica
 
-These are the names I'd screen hardest for valuation, revenue acceleration, backlog, margin inflection, and Stage 2 technical setups.
+These are the names I’d screen hardest for valuation, revenue acceleration, backlog, margin inflection, and Stage 2 technical setups.
 
-## Trade-grade view of the theme
+Trade-grade view of the theme
 
 Theme grade: A- / 86
 
@@ -295,6 +283,4 @@ Position size: no blanket position. For a single confirmed A setup after chart/v
 
 Invalidation for the thesis: Microsoft capex cuts, Azure demand falling below supply, Nvidia/HBM oversupply, power-grid project cancellations, or a major rotation out of AI infrastructure. The biggest practical risk is valuation: great bottleneck, bad entry. Classic investor faceplant.
 
-## Bottom line
-
-Microsoft's most critical public supply-chain bottlenecks are NVDA → TSMC/CoWoS → HBM → Arista/Broadcom/Nokia/Lumen optics/networking → Eaton/Schneider/Vertiv/CEG power stack → ODM/rack builders like Wiwynn/Quanta/Foxconn/CoreWeave. The best hunting ground for asymmetry is probably not Microsoft itself; it is the underfollowed public suppliers in the physical bottleneck layers Microsoft is forced to fund.
+Bottom line: Microsoft’s most critical public supply-chain bottlenecks are NVDA → TSMC/CoWoS → HBM → Arista/Broadcom/Nokia/Lumen optics/networking → Eaton/Schneider/Vertiv/CEG power stack → ODM/rack builders like Wiwynn/Quanta/Foxconn/CoreWeave. The best hunting ground for asymmetry is probably not Microsoft itself; it is the underfollowed public suppliers in the physical bottleneck layers Microsoft is forced to fund.

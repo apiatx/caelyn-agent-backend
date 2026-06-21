@@ -1,12 +1,12 @@
-# AMD Critical Supply-Chain Bottleneck Map — Public Companies Only
+AMD critical supply-chain bottleneck map — public companies only
 
-Bias: AMD's real bottleneck stack is TSMC + CoWoS/SoIC + HBM + ABF substrates + ATMP/test + rack-scale deployment. Consumer motherboard/AIB names matter, but they are not the bottleneck. The power-law lesson applies here: a small number of chokepoints drive most of the strategic value, not the giant vendor list.
+Bias: AMD’s real bottleneck stack is TSMC + CoWoS/SoIC + HBM + ABF substrates + ATMP/test + rack-scale deployment. Consumer motherboard/AIB names matter, but they are not the bottleneck. The power-law lesson applies here: a small number of chokepoints drive most of the strategic value, not the giant vendor list.
 
-Important caveat: this is not a buy rating. A high bottleneck score means "hard to replace / capacity-constrained / critical to AMD's roadmap," not "cheap stock." Some names are direct AMD suppliers; others are upstream suppliers to AMD's foundries, HBM vendors, packaging partners, or server ecosystem.
+Important caveat: this is not a buy rating. A high bottleneck score means “hard to replace / capacity-constrained / critical to AMD’s roadmap,” not “cheap stock.” Some names are direct AMD suppliers; others are upstream suppliers to AMD’s foundries, HBM vendors, packaging partners, or server ecosystem.
 
-AMD directly says it relies on TSMC for 7nm-or-smaller microprocessor/GPU wafers, GlobalFoundries for 12/14nm HPC wafers, and TSMC/UMC/Samsung for programmable-logic ICs. AMD also names ATMP reliance and says Tongfu Microelectronics, SPIL/ASE, and KYEC provide packaging/test services. MI350X is built on TSMC 3nm/6nm, with 288GB HBM3E and 8TB/s memory bandwidth, so HBM and advanced packaging are not optional side quests; they are the boss level. TSMC's CoWoS integrates logic chiplets with HBM cubes on silicon interposers for AI/HPC packages.
+AMD directly says it relies on TSMC for 7nm-or-smaller microprocessor/GPU wafers, GlobalFoundries for 12/14nm HPC wafers, and TSMC/UMC/Samsung for programmable-logic ICs. AMD also names ATMP reliance and says Tongfu Microelectronics, SPIL/ASE, and KYEC provide packaging/test services. MI350X is built on TSMC 3nm/6nm, with 288GB HBM3E and 8TB/s memory bandwidth, so HBM and advanced packaging are not optional side quests; they are the boss level. TSMC’s CoWoS integrates logic chiplets with HBM on large interposers for AI/HPC, which is exactly the kind of packaging AMD needs for Instinct-class accelerators.
 
-## Bottleneck scoring key
+Bottleneck scoring key
 
 90–100: existential chokepoint for AMD AI/datacenter roadmap.
 80–89: direct high-value manufacturing/packaging/test bottleneck.
@@ -15,8 +15,7 @@ AMD directly says it relies on TSMC for 7nm-or-smaller microprocessor/GPU wafers
 40–59: meaningful second-order supply-chain enabler.
 <40: relevant but less scarce, more replaceable, or mostly downstream.
 
-## Ranked public-only AMD supply-chain bottleneck list
-
+Ranked public-only AMD supply-chain bottleneck list
 Rank	Company	Ticker	Layer	AMD relevance	Bottleneck score
 1	TSMC	TSM / 2330.TW	Leading-edge foundry + CoWoS/SoIC	Core AMD wafer and AI packaging dependency	100
 2	Samsung Electronics	005930.KS	HBM, DDR5, foundry, PLD wafers	HBM3E/next-gen HBM4 supplier; AMD also names Samsung for programmable logic ICs	94
@@ -27,7 +26,7 @@ Rank	Company	Ticker	Layer	AMD relevance	Bottleneck score
 7	King Yuan Electronics / KYEC	2449.TW	Test / ATMP	AMD-named test/ATMP provider	84
 8	Ibiden	4062.T	ABF / advanced substrates	High-end AI/HPC package substrates; scarce capacity	83
 9	Unimicron	3037.TW	ABF / IC substrates	Major AI/HPC substrate supplier	82
-10	ASML	ASML / ASML.AS	EUV lithography	Upstream to TSMC/Samsung/SK/Micron leading-edge capacity; ASML says EUV enables mass production of the world's most advanced chips	81
+10	ASML	ASML / ASML.AS	EUV lithography	Upstream to TSMC/Samsung/SK/Micron leading-edge capacity; ASML says EUV enables mass production of the world’s most advanced chips	81
 11	Amkor	AMKR	OSAT / advanced packaging	Major packaging alternative; important if AMD diversifies beyond TSMC/ASE/Tongfu	80
 12	Kinsus Interconnect	3189.TW	ABF / CoWoS substrates	Reported supplier to AMD/Micron and verified in advanced packaging ecosystem; smaller, higher-beta substrate choke	79
 13	Ajinomoto	2802.T	ABF film	ABF resin film is foundational for high-end substrates	78
@@ -125,66 +124,65 @@ Rank	Company	Ticker	Layer	AMD relevance	Bottleneck score
 105	Arm Holdings	ARM	IP	Relevant to AMD/Xilinx adaptive SoC ecosystem, not core x86/Instinct	20
 106	Rambus	RMBS	Memory interface IP	DDR/HBM interface IP ecosystem; indirect	20
 
-AMD's official AIB/OE partner list includes public names like Acer, ASUS, ASRock, Biostar, Gigabyte, MSI, and PowerColor/TUL, while private/regional partners like Sapphire and XFX are excluded here because the user asked for public-only. AMD also says authorized distributors can sell CPU, GPU, server, embedded, Instinct, cooling, and memory products, but distribution is much more replaceable than wafers/HBM/packaging, so those names score lower.
+AMD’s official AIB/OE partner list includes public names like Acer, ASUS, ASRock, Biostar, Gigabyte, MSI, and PowerColor/TUL, while private/regional partners like Sapphire and XFX are excluded here because the user asked for public-only. AMD also says authorized distributors can sell CPU, GPU, server, embedded, Instinct, cooling, and memory products, but distribution is much more replaceable than wafers/HBM/packaging, so those names score lower.
 
-## Layer-by-Layer Bottleneck Map
-
-### 1. Design / EDA / IP
+Layer-by-layer bottleneck map
+1. Design / EDA / IP
 
 Key public names: Synopsys, Cadence, Siemens, Arm, Rambus.
 Bottleneck read: necessary but not AMD-specific enough to be the best equity angle. EDA is mission-critical, but AMD is not captive to one public EDA name in the same way it is captive to TSMC/HBM/CoWoS. Reuters notes Synopsys counts AMD as a customer, and Cadence is one of the dominant EDA firms benefiting from complex AI-chip design demand.
 
-### 2. Wafer fabrication
+2. Wafer fabrication
 
 Key public names: TSMC, GlobalFoundries, UMC, Samsung Electronics.
 Bottleneck read: TSMC is the single highest bottleneck. AMD explicitly says TSMC produces its 7nm-or-smaller microprocessor/GPU wafers, while GF supports 12/14nm HPC wafers and UMC/Samsung are used for programmable logic ICs.
 
-### 3. HBM / memory
+3. HBM / memory
 
 Key public names: Samsung Electronics, Micron, SK hynix.
-Bottleneck read: AMD's AI accelerator competitiveness is gated by HBM capacity and power efficiency. Micron confirmed its HBM3E 36GB 12-high product is integrated into AMD MI350 Series platforms. Reuters reported Samsung and AMD signed an MOU for HBM4 supply for MI455X and DDR5 for 6th-gen EPYC, while Samsung is already a primary HBM supplier for MI350X/MI355X; Reuters also cited Counterpoint share estimates of SK hynix ~57% and Samsung ~22% in HBM.
+Bottleneck read: AMD’s AI accelerator competitiveness is gated by HBM capacity and power efficiency. Micron confirmed its HBM3E 36GB 12-high product is integrated into AMD MI350 Series platforms. Reuters reported Samsung and AMD signed an MOU for HBM4 supply for MI455X and DDR5 for 6th-gen EPYC, while Samsung is already a primary HBM supplier for MI350X/MI355X; Reuters also cited Counterpoint share estimates of SK hynix ~57% and Samsung ~22% in HBM.
 
-### 4. Advanced packaging / CoWoS / SoIC / ATMP
+4. Advanced packaging / CoWoS / SoIC / ATMP
 
 Key public names: TSMC, ASE/SPIL, Tongfu, KYEC, Amkor, JCET, Powertech, ChipMOS, Sigurd, Unisem.
-Bottleneck read: this is AMD's "can we actually ship Instinct volume?" layer. AMD names Tongfu, SPIL/ASE, and KYEC in its ATMP disclosures. TSMC's CoWoS is the highest-end constraint because it places logic chiplets and HBM together on silicon interposers for AI/HPC packages.
+Bottleneck read: this is AMD’s “can we actually ship Instinct volume?” layer. AMD names Tongfu, SPIL/ASE, and KYEC in its ATMP disclosures. TSMC’s CoWoS is the highest-end constraint because it places logic chiplets and HBM together on silicon interposers for AI/HPC packages.
 
-### 5. ABF substrates / package substrates
+5. ABF substrates / package substrates
 
 Key public names: Ibiden, Unimicron, Kinsus, Nan Ya PCB, AT&S, Samsung Electro-Mechanics, Daeduck, Ajinomoto.
 Bottleneck read: underappreciated and more interesting than most people realize. Kinsus is especially worth watching because Nikkei/FT reported it is a supplier to AMD and Micron and one of a small set of high-end chip-substrate suppliers tied to advanced packaging demand.
 
-### 6. Fab equipment / process control / materials
+6. Fab equipment / process control / materials
 
 Key public names: ASML, AMAT, LRCX, KLAC, TEL, ASMI, SCREEN, Lasertec, Entegris, Shin-Etsu, SUMCO, GlobalWafers, Siltronic, Hoya, Toppan, DNP, Photronics.
-Bottleneck read: these are mostly TSMC/Samsung/SK/Micron enablers, not direct AMD suppliers. Still critical. ASML's EUV systems make mass production of the world's most advanced chips possible, and AMD's advanced nodes depend on fabs with that capability.
+Bottleneck read: these are mostly TSMC/Samsung/SK/Micron enablers, not direct AMD suppliers. Still critical. ASML’s EUV systems make mass production of the world’s most advanced chips possible, and AMD’s advanced nodes depend on fabs with that capability.
 
-### 7. HBM equipment / bonding / test
+7. HBM equipment / bonding / test
 
 Key public names: Hanmi, ASMPT, BESI, DISCO, Advantest, Teradyne, Techwing, ISC, Leeno, TSE, FormFactor, Cohu.
-Bottleneck read: this is the "small public-company rabbit hole" layer. Hanmi/ASMPT/BESI/DISCO/Advantest-style names are not AMD vendors in the filing sense, but if HBM packaging/test capacity is tight, these names become leverage points. The Elec reported Hanmi supplies TC bonders used in HBM production, with Techwing, Zeus, and Auros also tied to HBM back-end equipment.
+Bottleneck read: this is the “small public-company rabbit hole” layer. Hanmi/ASMPT/BESI/DISCO/Advantest-style names are not AMD vendors in the filing sense, but if HBM packaging/test capacity is tight, these names become leverage points. The Elec reported Hanmi supplies TC bonders used in HBM production, with Techwing, Zeus, and Auros also tied to HBM back-end equipment.
 
-### 8. Server OEM / ODM / rack integration
+8. Server OEM / ODM / rack integration
 
 Key public names: HPE, Supermicro, Dell, Lenovo, Gigabyte, ASUS, Quanta, Wiwynn, Wistron, Inventec, Hon Hai/Foxconn, Celestica, Jabil, Sanmina, Flex.
 Bottleneck read: AMD can design great chips and still lose the deployment war if rack-scale platforms are late. Supermicro confirmed liquid- and air-cooled systems with MI350 GPUs, dual EPYC 9005 CPUs, 8-GPU servers, and 2.304TB HBM3E per 8-GPU server. AMD and HPE also announced HPE will adopt AMD Helios rack-scale architecture worldwide in 2026, integrating MI455X GPUs, EPYC Venice CPUs, Pensando NICs, ROCm, and a Broadcom-collaborative scale-up Ethernet switch using UALoE.
 
-### 9. Data-center power, cooling, interconnect
+9. Data-center power, cooling, interconnect
 
 Key public names: Broadcom, Marvell, Astera, Credo, Amphenol, Vertiv, Delta, Schneider, Eaton, Modine, nVent, Legrand, Lite-On, AcBel, Chicony Power.
-Bottleneck read: downstream but increasingly strategic. Helios makes Broadcom more relevant to AMD's AI rack story because the HPE scale-up switch is being developed with Broadcom. Power/cooling names are not AMD suppliers in a narrow chip sense, but they gate how fast AMD-based clusters can be deployed.
+Bottleneck read: downstream but increasingly strategic. Helios makes Broadcom more relevant to AMD’s AI rack story because the HPE scale-up switch is being developed with Broadcom. Power/cooling names are not AMD suppliers in a narrow chip sense, but they gate how fast AMD-based clusters can be deployed.
 
-## Highest-signal "don't ignore these" smaller/public bottleneck names
+Highest-signal “don’t ignore these” smaller/public bottleneck names
 
 The most interesting non-mega-cap public names in the AMD chain:
 
 Kinsus, Tongfu Microelectronics, KYEC, Amkor, Unimicron, Ibiden, AT&S, Nan Ya PCB, Hanmi Semiconductor, ASMPT, BESI, Techwing, ISC, Leeno, TSE, FormFactor, Cohu, Chroma ATE, Towa, Elite Material, ITEQ.
 
-That's where the smaller-player asymmetry could live. The obvious mega-caps are still critical, but the market usually sees them. Smaller substrate/test/bonding names are where the "wait, this boring thing is suddenly a chokepoint" re-rating can happen.
+That’s where the smaller-player asymmetry could live. The obvious mega-caps are still critical, but the market usually sees them. Smaller substrate/test/bonding names are where the “wait, this boring thing is suddenly a chokepoint” re-rating can happen.
 
-## Public-only exclusions worth noting
+Public-only exclusions worth noting
 
-These matter to AMD's ecosystem but are not included in the scored public list:
+These matter to AMD’s ecosystem but are not included in the scored public list:
 
 Company	Why excluded
 Shinko Electric	Highly relevant substrate/packaging player, but delisted from TSE on June 6, 2025.
@@ -195,9 +193,8 @@ UTAC	OSAT, private.
 Molex	Connector supplier, owned by Koch; private.
 Samtec	Private interconnect company.
 ZT Systems	AMD acquired it; no longer public/private standalone equity angle.
+Biggest risk to the AMD bottleneck thesis
 
-## Biggest risk to the AMD bottleneck thesis
-
-AMD's biggest supply-chain risk is not one thing breaking; it is synchronized scarcity across TSMC allocation, HBM, CoWoS, ABF substrates, and liquid-cooled rack deployment. If any one of those slips, Instinct revenue ramps can be delayed. If all improve together, AMD has a much cleaner path to converting AI demand into shipped revenue.
+AMD’s biggest supply-chain risk is not one thing breaking; it is synchronized scarcity across TSMC allocation, HBM, CoWoS, ABF substrates, and liquid-cooled rack deployment. If any one of those slips, Instinct revenue ramps can be delayed. If all improve together, AMD has a much cleaner path to converting AI demand into shipped revenue.
 
 Trade lens: no automatic buy. The most investable bottleneck bucket is probably HBM + ABF substrates + ATMP/test + rack deployment, because those are where scarcity can create pricing power and re-ratings. The lowest-quality bucket is generic consumer AIB/motherboard exposure. Good brands, weak bottleneck.

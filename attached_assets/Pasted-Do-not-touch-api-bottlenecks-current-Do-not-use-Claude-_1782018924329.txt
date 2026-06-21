@@ -1,0 +1,80 @@
+Do not touch /api/bottlenecks/current.
+Do not use Claude/OpenAI/web search.
+Do not summarize.
+Do not compress.
+Do not append full research underneath the existing compressed files.
+
+Goal:
+Replace the incomplete/compressed source markdown files for the Phase 2 anchors with the full original research responses.
+
+Anchors to repair:
+
+AAPL / Apple
+AMD / Advanced Micro Devices
+AVGO / Broadcom
+MSFT / Microsoft
+META / Meta
+AMZN / Amazon
+
+Current problem:
+The existing source markdown files are compressed summaries/tables. Example: the AMD file has the ranked list, but it does not preserve the full research response, layer-by-layer bottleneck reads, thesis, caveats, smaller-player discussion, exclusions, risk thesis, and trade lens.
+
+The .md source files should be full audit/source files, not shortened parsed tables.
+
+Files to overwrite entirely:
+
+backend/services/playbook/curated_sources/aapl_bottleneck_map.md
+backend/services/playbook/curated_sources/amd_bottleneck_map.md
+backend/services/playbook/curated_sources/avgo_bottleneck_map.md
+backend/services/playbook/curated_sources/msft_bottleneck_map.md
+backend/services/playbook/curated_sources/meta_bottleneck_map.md
+backend/services/playbook/curated_sources/amzn_bottleneck_map.md
+
+Important:
+For each file:
+
+replace the entire file content
+do not append
+do not keep the compressed summary above the full source
+do not paraphrase
+do not rewrite
+do not remove narrative sections
+do not remove layer explanations
+do not remove smaller-player sections
+do not remove exclusions
+do not remove bottleneck thesis/risk/trade-lens sections
+
+Use the full source responses I provide in this task as the source of truth.
+
+If you can access the attached full source files in this Replit task, read them and write them into the matching markdown files.
+
+If you cannot access a full source for any anchor, stop and report exactly which anchor source is missing. Do not create a fake full source from memory.
+
+Verification only after writing:
+For each repaired file, report:
+
+file path
+exists yes/no
+character count before
+character count after
+first 5 lines after repair
+last 5 lines after repair
+detected anchor
+detected major headings
+whether it appears full or still compressed/truncated
+
+Stop after verification.
+
+Do not update:
+
+_aapl.py
+_amd.py
+_avgo.py
+_msft.py
+_meta.py
+_amzn.py
+route handlers
+frontend files
+API response shape
+
+This pass is source-file repair only.

@@ -1,8 +1,7 @@
-# Amazon Critical Supply Chain Map by Layer
+Amazon Critical Supply Chain Map by Layer
+1. AWS AI Compute / Accelerators
 
-## 1. AWS AI Compute / Accelerators
-
-AWS is now explicitly a dual-track AI compute shop: Nvidia for frontier GPU capacity and Trainium/Inferentia for internal/custom cost control. AWS P6 instances use Nvidia GB200/GB300 systems, while AWS Trainium is Amazon's in-house accelerator family.
+AWS is now explicitly a dual-track AI compute shop: Nvidia for frontier GPU capacity and Trainium/Inferentia for internal/custom cost control. AWS P6 instances use Nvidia GB200/GB300 systems, while AWS Trainium is Amazon’s in-house accelerator family.
 
 Score	Company	Ticker	Layer	Confidence	Why it matters
 98	Nvidia	NVDA	GPU accelerators	C	AWS P6 depends on Nvidia Blackwell/GB200/GB300 capacity. Still the highest-quality compute bottleneck.
@@ -17,11 +16,11 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 76	Intel	INTC	CPU / foundry optionality	E/U	AWS still uses Intel instances, but not the strategic AI bottleneck today.
 76	Arm Holdings	ARM	CPU IP	U	AWS Graviton is Arm-based; critical IP, but Amazon has in-house design leverage.
 
-Key nuance: Trainium is strategically important because it can reduce Amazon's dependence on Nvidia, but the custom silicon supply chain still runs through scarce design, foundry, packaging, memory, and server assembly capacity. Reports tie Trainium v3 development to Alchip/Marvell, TSMC 3nm/CoWoS, and Wiwynn server assembly.
+Key nuance: Trainium is strategically important because it can reduce Amazon’s dependence on Nvidia, but the custom silicon supply chain still runs through scarce design, foundry, packaging, memory, and server assembly capacity. Reports tie Trainium v3 development to Alchip/Marvell, TSMC 3nm/CoWoS, and Wiwynn server assembly.
 
-## 2. Advanced Packaging / HBM / Semi Equipment
+2. Advanced Packaging / HBM / Semi Equipment
 
-This is the "you can't ship GPUs if the plumbing is clogged" layer.
+This is the “you can’t ship GPUs if the plumbing is clogged” layer.
 
 Score	Company	Ticker	Layer	Confidence	Why it matters
 96	TSMC	TSM / 2330.TW	Foundry + CoWoS	U/P	Most important non-Nvidia semiconductor bottleneck.
@@ -44,8 +43,7 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 76	Nan Ya PCB	8046.TW	PCB/substrates	U	AI server board and substrate supply chain.
 75	Kinsus	3189.TW	Substrates	U	Smaller substrate exposure.
 74	Disco	6146.T	Wafer dicing/grinding	U	Critical back-end semiconductor process equipment.
-
-## 3. AI Servers / ODMs / Hardware Assembly
+3. AI Servers / ODMs / Hardware Assembly
 
 Amazon designs a lot internally, but someone still has to build the boxes. Taiwan ODMs matter because global AI server capacity is concentrated there.
 
@@ -62,9 +60,9 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 66	HPE	HPE	Servers / networking	E	Enterprise/HPC supplier, not core AWS internal bottleneck.
 66	Lenovo	0992.HK	Servers	E	Global server supply, lower direct Amazon confidence.
 
-Taiwan's AI server ecosystem is important because manufacturing concentration itself becomes a bottleneck during GPU platform transitions. Reuters has noted Taiwan's dominant role in global server and AI server shipments.
+Taiwan’s AI server ecosystem is important because manufacturing concentration itself becomes a bottleneck during GPU platform transitions. Reuters has noted Taiwan’s dominant role in global server and AI server shipments.
 
-## 4. Fiber / Optical Networking / Data-Center Network Silicon
+4. Fiber / Optical Networking / Data-Center Network Silicon
 
 This is one of the most underappreciated Amazon-specific layers. Amazon signed a multiyear, multibillion-dollar agreement with Corning for optical fiber, cable, and connectivity solutions for data centers. That is direct bottleneck evidence, not vibes in a trench coat.
 
@@ -85,9 +83,9 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 66	Cisco	CSCO	Networking	E	Broad enterprise/cloud networking, less AWS-specific bottleneck.
 63	CommScope	COMM	Fiber/cabling	E	Infrastructure exposure; more replaceable.
 
-Amazon is also redesigning network architecture itself. AWS's Random Network Graph work is aimed at cutting networking cost and complexity while maintaining high performance, which increases the value of the suppliers that can support dense, efficient, high-throughput fabrics.
+Amazon is also redesigning network architecture itself. AWS’s Random Network Graph work is aimed at cutting networking cost and complexity while maintaining high performance, which increases the value of the suppliers that can support dense, efficient, high-throughput fabrics.
 
-## 5. Power, Grid, Cooling, Electrical Gear
+5. Power, Grid, Cooling, Electrical Gear
 
 This is the biggest physical bottleneck. GPUs are useless without power. Data centers do not run on hopes, vibes, and a 120V outlet from Home Depot.
 
@@ -107,7 +105,7 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 78	nVent	NVT	Enclosures/electrical protection	U/E	Data-center electrical infrastructure.
 77	Hubbell	HUBB	Electrical equipment	U/E	Grid/electrical components.
 76	Powell Industries	POWL	Switchgear	U/E	Smaller public switchgear bottleneck. Worth serious research.
-76	Hammond Power Solutions	HPS.A / HMDPF	Transformers	U/E	Smaller transformer bottleneck; exactly the "boring but scarce" bucket.
+76	Hammond Power Solutions	HPS.A / HMDPF	Transformers	U/E	Smaller transformer bottleneck; exactly the “boring but scarce” bucket.
 74	Rolls-Royce	RR.L / RYCEY	Backup power/gensets	U/E	Data-center backup power exposure.
 72	Atkore	ATKR	Electrical conduit/infrastructure	U/E	Construction/electrical infrastructure.
 78	Caterpillar	CAT	Backup generators	U/E	Data-center backup power.
@@ -123,7 +121,7 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 
 Bloom/AEP deserve special mention because fuel cells are one way Amazon can partially route around grid interconnection delays. AEP Ohio received approval for onsite fuel-cell power at AWS and Cologix facilities using Bloom systems; AWS has also had proposed/active fuel-cell data-center projects.
 
-## 6. Renewable Energy / Clean Power PPAs
+6. Renewable Energy / Clean Power PPAs
 
 Amazon is a monster corporate buyer of renewables. This matters because AWS growth increasingly depends on securing long-duration power contracts before competitors do.
 
@@ -137,11 +135,11 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 66	EDP Renováveis	EDPR.LS	Renewables	E/U	Corporate PPA ecosystem.
 65	RWE	RWE.DE	Renewables/power	E/U	European power/renewables exposure.
 
-Amazon/Iberdrola and Amazon/ENGIE are confirmed large renewable PPA relationships, and AES has been cited as part of Amazon's renewable contract portfolio.
+Amazon/Iberdrola and Amazon/ENGIE are confirmed large renewable PPA relationships, and AES has been cited as part of Amazon’s renewable contract portfolio.
 
-## 7. Data-Center Construction / Electrical Labor / Materials
+7. Data-Center Construction / Electrical Labor / Materials
 
-This layer is less Amazon-specific, but it is still a bottleneck because everyone is trying to build AI data centers at the same time. Labor, substations, transformers, electrical contracting, steel, concrete, and permitting can all become the "one missing screw that delays a $5B campus."
+This layer is less Amazon-specific, but it is still a bottleneck because everyone is trying to build AI data centers at the same time. Labor, substations, transformers, electrical contracting, steel, concrete, and permitting can all become the “one missing screw that delays a $5B campus.”
 
 Score	Company	Ticker	Layer	Confidence	Why it matters
 76	Quanta Services	PWR	Grid/electrical construction	U/E	Transmission/substation labor bottleneck.
@@ -157,8 +155,7 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 58	Vulcan Materials	VMC	Aggregates	E	Construction materials.
 58	Martin Marietta	MLM	Aggregates	E	Construction materials.
 57	CRH	CRH	Cement/aggregates	E	Construction materials.
-
-## 8. Fulfillment, Delivery, Air Cargo, Freight
+8. Fulfillment, Delivery, Air Cargo, Freight
 
 Amazon has turned logistics into both an internal capability and an external service. Amazon Supply Chain Services now offers freight, warehousing, fulfillment, and parcel delivery to other businesses, and Amazon Air flights are operated by public and private partners.
 
@@ -189,9 +186,9 @@ Rivian is the cleanest public-company logistics bottleneck because it is a direc
 
 Important exclusion: ATSG used to be public, but it was taken private by Stonepeak and no longer trades on Nasdaq, so it is excluded from the public-only list.
 
-## 9. Warehouse Automation / Robotics / Scanning
+9. Warehouse Automation / Robotics / Scanning
 
-Amazon's biggest warehouse robotics bottleneck is mostly internal because Amazon owns the Kiva/Amazon Robotics platform. External suppliers matter more in conveyors, sortation, sensors, machine vision, scanners, motors, and controls.
+Amazon’s biggest warehouse robotics bottleneck is mostly internal because Amazon owns the Kiva/Amazon Robotics platform. External suppliers matter more in conveyors, sortation, sensors, machine vision, scanners, motors, and controls.
 
 Score	Company	Ticker	Layer	Confidence	Why it matters
 64	Honeywell	HON	Fulfillment automation / conveyors	C	Honeywell Intelligrated has documented Amazon fulfillment-center automation work.
@@ -205,9 +202,9 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 45	Symbotic	SYM	Warehouse automation	E	Strong automation company, but not an Amazon supplier; more competitor/benchmark.
 44	AutoStore	AUTO.OL	Warehouse automation	E	Useful automation exposure, but not core Amazon supplier.
 
-Honeywell is the only one here I'd treat as direct supplier evidence rather than broad ecosystem inference.
+Honeywell is the only one here I’d treat as direct supplier evidence rather than broad ecosystem inference.
 
-## 10. Packaging / Labels / Consumables
+10. Packaging / Labels / Consumables
 
 Packaging matters because Amazon ships absurd volume, but it is not the highest-quality bottleneck. It is fragmented, price-competitive, and Amazon has spent years reducing packaging intensity.
 
@@ -229,13 +226,11 @@ Score	Company	Ticker	Layer	Confidence	Why it matters
 43	Ranpak	PACK	Paper packaging systems	E	Smaller paper-based void-fill/packaging automation.
 43	UFP Technologies	UFPT	Protective packaging/materials	E	Niche protective packaging.
 42	AptarGroup	ATR	Packaging components	E	Lower Amazon-specific directness.
-
-## Highest-Quality Amazon Bottleneck Watchlist
+Highest-Quality Amazon Bottleneck Watchlist
 
 These are the names I would prioritize for deeper investing work, not blindly buy.
 
-### Tier 1: True AWS bottlenecks
-
+Tier 1: True AWS bottlenecks
 Rank	Company	Ticker	Bottleneck
 1	Nvidia	NVDA	GPU allocation
 2	TSMC	TSM	Foundry + advanced packaging
@@ -247,9 +242,7 @@ Rank	Company	Ticker	Bottleneck
 8	Marvell	MRVL	Trainium/custom silicon/interconnect
 9	SK Hynix	000660.KS	HBM
 10	Schneider / Eaton / Vertiv	SU.PA / ETN / VRT	AI data-center electrical + cooling
-
-### Tier 2: Smaller/less-obvious public names worth digging into
-
+Tier 2: Smaller/less-obvious public names worth digging into
 Company	Ticker	Why it is interesting
 Alchip	3661.TW	Smaller AI ASIC design bottleneck tied to hyperscaler custom silicon.
 Wiwynn	6669.TW	Hyperscaler AI server assembly; direct AWS reporting angle.
@@ -262,46 +255,44 @@ Fabrinet	FN	Optical manufacturing bottleneck.
 Sun Country	SNCY	Direct Amazon Air operator, smaller public logistics name.
 Cargojet	CJT.TO	Amazon Air operator; Canada-listed.
 Ranpak	PACK	Smaller paper-packaging systems name; lower-quality bottleneck but overlooked.
-
-## What Amazon Is Most Exposed To
-
-### 1. Power is the scariest bottleneck
+What Amazon Is Most Exposed To
+1. Power is the scariest bottleneck
 
 Amazon can buy servers faster than utilities can build interconnection capacity. The highest-quality physical choke points are Talen, GE Vernova, AEP/Bloom, Schneider, Eaton, Vertiv, Powell, Hammond, Quanta Services, EMCOR.
 
-### 2. Nvidia is still unavoidable
+2. Nvidia is still unavoidable
 
 Trainium helps Amazon reduce Nvidia dependence, but it does not eliminate the need for Nvidia GPUs, HBM, CoWoS, and AI server manufacturing. AWS P6 is Nvidia-based, and AWS is still building around Nvidia for top-end AI workloads.
 
-### 3. Custom silicon creates a second supply chain
+3. Custom silicon creates a second supply chain
 
 Trainium makes Alchip, Marvell, TSMC, Wiwynn, memory suppliers, and packaging suppliers strategically more important. This is where smaller public names can hide.
 
-### 4. Corning is the cleanest direct fiber winner
+4. Corning is the cleanest direct fiber winner
 
 The Corning-Amazon agreement is exactly the type of direct bottleneck signal you want: multiyear, multibillion-dollar, tied to AWS data-center expansion.
 
-### 5. Retail/logistics matters, but it is lower asymmetry
+5. Retail/logistics matters, but it is lower asymmetry
 
 Rivian and Sun Country are real direct Amazon suppliers, but logistics is more replaceable than AI compute/power. Packaging is even more replaceable.
 
-## Biggest Risk to the Thesis
+Biggest Risk to the Thesis
 
 The biggest risk is overpaying for obvious AI-infrastructure winners after the market already crowned them kings. Bottleneck quality does not automatically equal stock upside. A company can be critical and still be a bad trade if valuation, chart, and expectations are stretched.
 
-## Portfolio Risk Check
+Portfolio Risk Check
 
 I would not buy this as a giant basket. Too much correlation. The clean approach is:
 
 Core bottlenecks: 3–5 names max
 Speculative smaller bottlenecks: 2–4 names max
 Wait for technical setups: no breakout/pullback/invalidation = no trade
-Avoid duplicate exposure: Schneider + Eaton + Vertiv + Powell + Hammond all move on the same data-center power theme. Great theme, but don't accidentally buy the same horse five times wearing different hats.
+Avoid duplicate exposure: Schneider + Eaton + Vertiv + Powell + Hammond all move on the same data-center power theme. Great theme, but don’t accidentally buy the same horse five times wearing different hats.
 
-## Final Take
+Final Take
 
 For Amazon specifically, the best bottleneck stack is:
 
 TLN / GEV / GLW / NVDA / TSM / MRVL / Alchip / Wiwynn / SK Hynix / ETN / VRT / Schneider / BE / AEP / POWL / HPS.A / CRDO / ALAB / FN / RIVN / SNCY.
 
-The highest-upside hunting ground is probably not the mega-caps everyone already owns. It is the second-order layer: custom ASIC design, AI server ODMs, power equipment, transformers/switchgear, thermal management, and optical connectivity. That is where Amazon's capex becomes someone else's revenue ramp.
+The highest-upside hunting ground is probably not the mega-caps everyone already owns. It is the second-order layer: custom ASIC design, AI server ODMs, power equipment, transformers/switchgear, thermal management, and optical connectivity. That is where Amazon’s capex becomes someone else’s revenue ramp.
