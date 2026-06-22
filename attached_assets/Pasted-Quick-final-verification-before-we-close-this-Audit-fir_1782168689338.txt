@@ -1,0 +1,82 @@
+Quick final verification before we close this. Audit first. Do not change code unless one of these checks fails.
+
+I need confirmation on two things:
+
+1. `_tf_start_str(tf)` / curve slicing is fully dynamic and not hardcoded.
+2. No additional external API calls were added for the Themes page toggles. The toggles should reuse the same existing Themes backend endpoint/LKG/cache path and should not trigger new FMP/yfinance/Tradier calls per toggle or hover.
+
+Expected behavior:
+
+* The LKG stores full available history only.
+* On every request, `get_theme_rs_data(..., timeframe)` calls `_apply_curves_for_tf(payload, tf)`.
+* `_apply_curves_for_tf` uses `_tf_start_str(tf)` to calculate the start window dynamically.
+* For 1Y/5Y/30D/7D, the start date should be computed from either:
+
+  1. the latest available curve date, preferred, or
+  2. current date, acceptable but less ideal.
+* It should not permanently store a sliced 1Y or 5Y curve in LKG.
+* It should not return fixed dates like 2025-06-13 forever.
+
+Please show the `_tf_start_str` implementation and confirm:
+
+* 7D subtracts dynamically from latest available date/current date
+* 30D subtracts dynamically
+* YTD uses Jan 1 of the current/latest data year
+* 1Y subtracts one year dynamically
+* 5Y subtracts five years dynamically
+
+API-call / toggle audit:
+
+* Confirm the Themes page uses the same existing backend route for:
+
+  * Market Performance
+  * Relative Strength
+  * Performance Curve
+* Confirm changing Themes page toggles only changes query params / selected timeframe / frontend view state.
+* Confirm hover tooltips do not make network calls.
+* Confirm Performance Curve timeframe toggles do not trigger fresh external provider calls.
+* Confirm Relative Strength timeframe toggles do not trigger fresh external provider calls beyond the existing backend route/cache path.
+* Confirm Market Performance table is not causing separate historical fetches.
+* Confirm members[] and performance_curve[] are served from the existing payload/LKG/cache and not fetched on demand.
+
+Validation steps:
+
+1. Restart backend with logs visible.
+2. Hit the existing Themes endpoint once for each timeframe:
+
+   * 7D
+   * 30D
+   * YTD
+   * 1Y
+   * 5Y
+3. While doing this, check logs for any new external calls to:
+
+   * FMP historical endpoints
+   * yfinance history
+   * Tradier quotes/options
+   * any other provider
+4. Expected result:
+
+   * Endpoint responses change by timeframe.
+   * `performance_curve` is sliced/rebased dynamically.
+   * No fresh provider fetches occur just because the timeframe changes.
+   * It should read from already-warmed LKG/cache.
+5. Open the frontend Themes page and switch:
+
+   * Market Performance
+   * Relative Strength
+   * Performance Curve
+   * all timeframe toggles
+   * hover RS bars
+   * hover Performance Curve lines
+6. Confirm browser network tab shows only the existing Themes API route changing params where expected, and no extra hidden routes or provider-style calls.
+
+If this passes, do not change code. Just report:
+
+* `_tf_start_str` implementation
+* whether start dates are dynamic
+* whether LKG stores full history only
+* whether slicing/rebasing happens at serve time
+* exact frontend/backend route(s) used by the toggles
+* whether any external API calls were observed
+* final verdict: safe / not safe
