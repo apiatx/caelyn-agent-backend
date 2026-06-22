@@ -1,0 +1,70 @@
+Backend Replit follow-up — make theme RS cache invalidation stale-safe after admin edits
+
+The admin theme membership and leader backend logic is good, but there is one cache safety issue to fix before frontend relies on it.
+
+Problem:
+During validation, after cache/LKG invalidation, /api/themes/relative-strength temporarily returned only 2 themes because the FMP guard blocked a full recompute. The report says this is a dev artifact, but the pattern is dangerous in production too if FMP/rate/data issues happen.
+
+Admin edits should not destroy the last good 60-theme LKG/cache before a fresh complete replacement is available.
+
+Goal:
+Make admin edit cache invalidation stale-safe.
+
+Current risky behavior:
+
+* Admin add/remove/leader edit calls invalidate_theme_rs_cache()
+* Existing TTL cache and LKG file are deleted
+* Next request recomputes
+* If recompute is partial/guarded/fails, Themes API can return partial theme universe and possibly write a bad LKG
+
+Required behavior:
+
+1. Do not delete the last good 60-theme LKG before a successful fresh 60-theme recompute is available.
+2. After admin edits, rebuild or mark cache dirty, but preserve stale-good data until a complete replacement exists.
+3. If fresh recompute fails or returns partial theme count, serve stale-good LKG/cache with a flag if available.
+4. Never overwrite a 60-theme LKG with a partial 2-theme result.
+5. Admin theme-basket endpoint can reflect edits immediately, but the public relative-strength endpoint should not degrade the whole page to partial output.
+6. Normal Themes API should keep returning 60 themes whenever a valid stale cache exists.
+7. Do not change theme membership semantics.
+8. Do not change Watchlist behavior.
+9. Do not change performance math.
+
+Audit first:
+
+1. Find invalidate_theme_rs_cache().
+2. Find where LKG file is read/written.
+3. Find where partial compute results are persisted.
+4. Find whether there is already a minimum theme-count guard or snapshot-quality guard.
+5. Find whether cache_status can expose stale/dirty/refresh_pending.
+
+Preferred implementation:
+
+* Replace destructive invalidation with stale-safe invalidation:
+
+  * mark dirty/invalidate TTL keys
+  * keep LKG on disk
+  * recompute in foreground or background
+  * only replace LKG if result has expected theme count, e.g. 60/60, or meets an existing quality threshold
+* If recompute returns partial, keep old LKG and log warning.
+* Public endpoint should prefer stale-good LKG over partial fresh output.
+
+Validation required:
+
+1. Start with valid 60-theme LKG/cache.
+2. Add MRAM to memory_storage.
+3. Confirm admin theme-basket endpoint immediately shows MRAM.
+4. Simulate FMP guard/recompute failure or partial result.
+5. Confirm /api/themes/relative-strength still returns 60 themes from stale-good cache/LKG.
+6. Confirm partial 2-theme output does not overwrite good LKG.
+7. Restore normal compute and confirm fresh result eventually includes MRAM in memory_storage.
+8. Confirm leader endpoints still work.
+9. Confirm Watchlist files untouched.
+
+Deliverable:
+Report:
+
+* Root cause of stale LKG deletion issue.
+* Files changed.
+* New stale-safe invalidation strategy.
+* Whether LKG is preserved until replacement is complete.
+* Validation proving partial recompute cannot poison the Themes page.
