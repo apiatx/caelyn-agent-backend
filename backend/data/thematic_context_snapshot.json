@@ -6,7 +6,7 @@
       "score": 93.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (92/100) vs theme universe with broad participation (67% advancing). Outperforming SPY +1.8%, QQQ +1.8",
+        "Top-percentile RS (92/100) vs theme universe with broad participation (60% advancing). Outperforming SPY +1.8%, QQQ +1.8",
         "X consensus: 2 tickers mentioned"
       ],
       "related_etfs": [
@@ -18,7 +18,7 @@
       "related_tickers": [
         "FORM",
         "SNDK",
-        "PSTG"
+        "NVEC"
       ]
     },
     {
@@ -230,7 +230,7 @@
     },
     {
       "name": "Industrials",
-      "score": 61.7,
+      "score": 61.8,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (62/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
@@ -306,7 +306,7 @@
       "score": 20.9,
       "source": "theme_rs_service",
       "evidence": [
-        "Bottom-quartile RS (21/100) vs 51-theme universe. SPY delta -1.7%, QQQ delta -1.6%. Breadth 0% \u2014 minimal buying pressure"
+        "Bottom-quartile RS (21/100) vs 51-theme universe. SPY delta -1.7%, QQQ delta -1.7%. Breadth 0% \u2014 minimal buying pressure"
       ],
       "related_etfs": [
         "IGV",
@@ -347,7 +347,7 @@
     {
       "sector": "Industrials",
       "ticker": "PH",
-      "score": 61.7,
+      "score": 61.8,
       "posture": "improving"
     }
   ],
@@ -378,7 +378,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-22T20:19:52.620437+00:00",
+  "last_updated": "2026-06-22T20:29:58.308796+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -389,5 +389,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1782159592.6205957
+  "_saved_at": 1782160198.3092034
 }
