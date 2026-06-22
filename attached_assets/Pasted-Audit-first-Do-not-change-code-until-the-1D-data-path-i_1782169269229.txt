@@ -1,0 +1,87 @@
+Audit first. Do not change code until the 1D data path is confirmed.
+
+Issue:
+On Themes → Performance Curve, the 1D button currently shows a random longer date range instead of granular price/performance movement over the past 24h. 1D must not reuse the daily LKG curve. It needs intraday timestamped points.
+
+Goals:
+
+1. Fix 1D Performance Curve so it shows true intraday performance over the past 24h / latest trading session window.
+2. Preserve the existing daily curve behavior for 7D, 30D, YTD, 1Y, and 5Y.
+3. Do not add provider calls per frontend toggle or hover.
+4. Do not create a new theme universe or route unless absolutely necessary.
+
+Audit:
+
+* Find the existing Themes route serving:
+  GET /api/themes/relative-strength?timeframe=...
+* Confirm what the backend currently returns for timeframe=1D:
+
+  * performance_curve length
+  * first point
+  * last point
+  * whether it is empty, stale, or accidentally falling back to another timeframe
+* Find whether the backend already stores intraday quote snapshots, intraday bars, or theme/proxy ETF intraday data anywhere.
+* Find whether the current theme curve is based on:
+
+  * proxy ETF histories
+  * member stock histories
+  * both
+* Confirm whether there is any existing intraday cache route/store/helper that can be reused.
+
+Expected 1D behavior:
+
+* timeframe=1D should return timestamped intraday points, not daily dates.
+* Point shape can stay compatible if possible:
+  { date: "2026-06-22T14:35:00-04:00", value_pct: 1.23 }
+* Points should be ordered oldest → newest.
+* Values should be normalized so the first visible intraday point starts at 0%.
+* X-axis should later render as time labels like 9:30, 10:15, 11:00, etc.
+* If market is closed, use the latest available trading session / last 24h of available intraday points.
+* If no intraday data is available, return an empty 1D performance_curve and a clear metadata reason. Do not fall back to 7D/1Y/5Y curves.
+
+Provider-call constraints:
+
+* Do not fetch intraday data on every 1D click.
+* Do not fetch intraday data on hover.
+* If intraday data does not already exist, add only a cadence-limited cache/warmup path.
+* Acceptable cadence: every 5–15 minutes during market hours, or reuse existing quote refresh cadence if already present.
+* Prefer proxy/theme ETF intraday bars over every constituent stock if that is how daily curves are already approximated.
+* Avoid call explosion. If using FMP/yfinance/Tradier intraday bars, cache results aggressively.
+* The frontend 1D toggle must only read from the existing Themes endpoint/cache.
+
+Implementation guidance:
+
+* Keep daily LKG full-history curve for 7D/30D/YTD/1Y/5Y.
+* Add a separate 1D/intraday curve source or cache.
+* Do not store 1D intraday data inside the same daily LKG field if that would pollute daily timeframe behavior.
+* Either:
+  A) attach `performance_curve` with intraday timestamped points when timeframe=1D, or
+  B) attach `performance_curve_1d` and have the wrapper map it into `performance_curve` only for timeframe=1D.
+* For 1D, do not call `_slice_and_rebase_curve()` on daily history.
+* Add explicit guard:
+  if tf == "1D": use intraday curve path only.
+
+Validation:
+
+* Call the existing endpoint:
+  /api/themes/relative-strength?timeframe=1D&classification=themes
+* For one theme, print:
+
+  * point count
+  * first timestamp
+  * last timestamp
+  * first value_pct
+  * last value_pct
+* Confirm timestamps are intraday / recent, not 2025/2026 daily month labels.
+* Confirm 7D/30D/YTD/1Y/5Y still work as before.
+* Watch backend logs while switching frontend 1D/7D/30D/YTD/1Y/5Y.
+* Confirm no provider calls fire just because the user toggles.
+* If a cache warmup is needed, confirm it is cadence-limited and not per user click.
+
+Report:
+
+* Whether existing intraday data existed.
+* Which source 1D uses.
+* Whether any new external API calls were added.
+* If yes, exactly when they run and how they are rate-limited/cached.
+* Final sample response for 1D.

@@ -558,6 +558,72 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
         return []
 
 
+async def _fetch_intraday_bars(sym: str) -> list[dict]:
+    """
+    Fetch Tradier 5-min intraday bars for today's market session.
+    Returns [{date: ISO-timestamp (Eastern), close: float}] oldest→newest.
+    Cached 10 min per symbol per trading day — safe to call from the 60-s 1D
+    warmup loop without hammering the Tradier rate-limit bucket.
+    """
+    from datetime import date as _d, datetime, timezone, timedelta as _td
+
+    sym   = sym.upper()
+    today = _d.today().isoformat()
+    cache_key = f"theme_rs:intraday_5min:{sym}:{today}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    key = _tradier_key()
+    if not key:
+        return []
+
+    base = _tradier_base()
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(
+                f"{base}/markets/timesales",
+                headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                params={
+                    "symbol":         sym,
+                    "interval":       "5min",
+                    "start":          f"{today} 09:30",
+                    "end":            f"{today} 16:05",
+                    "session_filter": "open",
+                },
+            )
+        if resp.status_code != 200:
+            return []
+
+        data   = resp.json()
+        series = data.get("series") or {}
+        raw    = series.get("data") or []
+        if isinstance(raw, dict):
+            raw = [raw]
+
+        _EDT = timezone(_td(hours=-4))   # EDT; close enough for intraday display
+        bars_out: list[dict] = []
+        for t in raw:
+            ts  = t.get("timestamp")
+            cls = t.get("close")
+            if ts is None or cls is None:
+                continue
+            try:
+                dt_str = datetime.fromtimestamp(int(ts), tz=_EDT).isoformat()
+                bars_out.append({"date": dt_str, "close": float(cls)})
+            except Exception:
+                continue
+
+        bars_out.sort(key=lambda b: b["date"])
+        if bars_out:
+            cache.set(cache_key, bars_out, 600)   # 10-min TTL
+        return bars_out
+
+    except Exception as exc:
+        print(f"[THEME_RS][intraday] {sym}: {exc}")
+        return []
+
+
 async def _fetch_proxy_history(symbol: str, days: int = 400) -> tuple[list[dict], str]:
     """
     FMP (primary) → Tradier daily (fallback) → yfinance (emergency).
@@ -878,6 +944,57 @@ def _build_perf_curve(
     return points
 
 
+def _build_intraday_perf_curve(
+    proxy_syms: list[str],
+    intraday_bars: dict[str, list[dict]],
+    max_pts: int = 78,   # 6.5h / 5min = 78 bars per full session
+) -> list[dict]:
+    """
+    Build a normalized equal-weight intraday performance curve from 5-min bars.
+    Each proxy ETF is normalized to its own first-bar close (value_pct = 0).
+    Returns [{date: ISO-timestamp, value_pct: float}] oldest→newest.
+    Returns [] if no intraday bars are available (market closed / no data).
+    Only called when tf == "1D" — does not touch the daily LKG curve.
+    """
+    sym_norm: dict[str, dict[str, float]] = {}
+    for sym in proxy_syms:
+        bars = intraday_bars.get(sym, [])
+        if len(bars) < 2:
+            continue
+        try:
+            base_close = float(bars[0]["close"])
+        except (TypeError, ValueError):
+            continue
+        if not base_close:
+            continue
+        sym_norm[sym] = {
+            b["date"]: round((float(b["close"]) / base_close - 1) * 100, 3)
+            for b in bars
+        }
+
+    if not sym_norm:
+        return []
+
+    all_ts = sorted({dt for nd in sym_norm.values() for dt in nd})
+    points: list[dict] = []
+    for dt in all_ts:
+        vals = [sym_norm[s][dt] for s in sym_norm if dt in sym_norm[s]]
+        if vals:
+            points.append({"date": dt, "value_pct": round(sum(vals) / len(vals), 3)})
+
+    if not points:
+        return []
+
+    if len(points) > max_pts:
+        step = max(1, len(points) // max_pts)
+        last = points[-1]
+        points = points[::step]
+        if points[-1]["date"] != last["date"]:
+            points.append(last)
+
+    return points
+
+
 def _pct_rank(value: Optional[float], universe: list[Optional[float]]) -> float:
     valid = [v for v in universe if v is not None]
     if value is None or not valid:
@@ -973,6 +1090,7 @@ async def _build_theme_row(
     stock_perfs: dict[str, Optional[float]],   # sym → tf-return (may be None)
     stock_sources: dict[str, str],             # sym → discovery_source
     leaders: dict[str, dict] | None = None,   # theme_id → {leader_symbol, source}
+    intraday_bars: dict[str, list[dict]] | None = None,  # sym → 5-min bars; 1D only
 ) -> Optional[dict]:
     """
     Build one theme row for the given timeframe.
@@ -1109,7 +1227,12 @@ async def _build_theme_row(
         breadth = round(up / len(sym_perfs) * 100, 1)
 
     # ── Performance curve (normalized daily series for the selected TF) ─────────
-    perf_curve = _build_perf_curve(proxy_syms, tf, histories)
+    if tf == "1D":
+        # Use intraday 5-min bars for the 1D curve; daily bars are not available
+        # for 1D compute and would produce a multi-month daily series instead.
+        perf_curve = _build_intraday_perf_curve(proxy_syms, intraday_bars or {})
+    else:
+        perf_curve = _build_perf_curve(proxy_syms, tf, histories)
 
     # ── Weinstein Stage Analysis ───────────────────────────────────────────────
     stage_data: dict = {}
@@ -1309,18 +1432,42 @@ async def _compute(tf: str) -> list[dict]:
     quotes = await _fetch_all_quotes(quote_syms)
 
     # ── 3. Fetch proxy + benchmark history (FMP primary → Tradier → yfinance) ─
+    # 1D skips daily history entirely — intraday curve uses Tradier timesales.
     # 5Y needs at least 1250 bars; yfinance "5y" period gives ~1260 bars.
     # Other TFs need ~400 days at most — "2y" from yfinance is more than enough.
-    proxy_hist_days = 1900 if tf == "5Y" else 400
-    print(f"[THEME_RS] Fetching proxy history for {len(proxy_syms_with_dram)} symbols (days={proxy_hist_days}) …")
-    hist_tasks = [_fetch_proxy_history(s, days=proxy_hist_days) for s in proxy_syms_with_dram]
-    hist_results = await asyncio.gather(*hist_tasks, return_exceptions=True)
     histories: dict[str, tuple[list[dict], str]] = {}
-    for sym, result in zip(proxy_syms_with_dram, hist_results):
-        if isinstance(result, tuple):
-            histories[sym] = result
-        else:
+    intraday_bars: dict[str, list[dict]] = {}
+
+    if tf == "1D":
+        for sym in proxy_syms_with_dram:
             histories[sym] = ([], "unavailable")
+        print(f"[THEME_RS] 1D: skipping proxy daily history (intraday curve uses timesales)")
+        # Batch-fetch 5-min intraday bars for all unique proxy ETFs across all themes.
+        # Cached 10 min — safe on the 60-s warmup cadence (only ~40-60 unique symbols).
+        uniq_proxies = list(dict.fromkeys(
+            sym
+            for meta in THEME_RS_UNIVERSE.values()
+            for sym in meta["proxy_symbols"]
+        ))
+        print(f"[THEME_RS] 1D: fetching intraday bars for {len(uniq_proxies)} proxy ETFs …")
+        intra_tasks   = [_fetch_intraday_bars(s) for s in uniq_proxies]
+        intra_results = await asyncio.gather(*intra_tasks, return_exceptions=True)
+        non_empty = 0
+        for sym, result in zip(uniq_proxies, intra_results):
+            if isinstance(result, list) and result:
+                intraday_bars[sym] = result
+                non_empty += 1
+        print(f"[THEME_RS] 1D: intraday bars received for {non_empty}/{len(uniq_proxies)} ETFs")
+    else:
+        proxy_hist_days = 1900 if tf == "5Y" else 400
+        print(f"[THEME_RS] Fetching proxy history for {len(proxy_syms_with_dram)} symbols (days={proxy_hist_days}) …")
+        hist_tasks = [_fetch_proxy_history(s, days=proxy_hist_days) for s in proxy_syms_with_dram]
+        hist_results = await asyncio.gather(*hist_tasks, return_exceptions=True)
+        for sym, result in zip(proxy_syms_with_dram, hist_results):
+            if isinstance(result, tuple):
+                histories[sym] = result
+            else:
+                histories[sym] = ([], "unavailable")
 
     # ── 4. Discover all dynamic universe stocks across all themes ─────────────
     # We need ETF holdings per theme's primary proxy — gather now to dedup
@@ -1402,6 +1549,7 @@ async def _compute(tf: str) -> list[dict]:
             row = await _build_theme_row(
                 theme_id, meta, quotes, histories, tf, stock_perfs, stock_src_map,
                 leaders=leaders,
+                intraday_bars=intraday_bars,
             )
             if row:
                 rows.append(row)
@@ -1671,7 +1819,22 @@ def _apply_curves_for_tf(payload: dict, tf: str) -> dict:
     """
     start = _tf_start_str(tf)
     if not start:
-        return payload  # 1D — no curve; return unchanged
+        # 1D: keep curve only when it was built by a fresh intraday compute —
+        # those points have ISO timestamps ("2026-06-22T09:35:00-04:00").
+        # LKG / stale payloads carry bare daily date strings ("2021-04-09");
+        # serving those as a "today" intraday curve would produce 200-300 wrong
+        # daily points.  Clear any non-intraday curve so the frontend shows
+        # an empty chart (then gets the real intraday data once the 1D warmup
+        # completes, ~60 s after startup or first request).
+        def _is_intraday_curve(c: list) -> bool:
+            return bool(c) and "T" in str((c[0] or {}).get("date", ""))
+
+        new_themes_1d = [
+            theme if _is_intraday_curve(theme.get("performance_curve") or [])
+            else {**theme, "performance_curve": []}
+            for theme in payload.get("themes", [])
+        ]
+        return {**payload, "themes": new_themes_1d}
 
     new_themes = [
         {
