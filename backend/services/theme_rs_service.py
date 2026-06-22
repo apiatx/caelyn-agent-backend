@@ -1493,6 +1493,34 @@ async def get_theme_rs_data(
 
 # ── Admin / telemetry ──────────────────────────────────────────────────────────
 
+def invalidate_theme_rs_cache() -> None:
+    """
+    Clear all in-memory RS caches and delete the LKG disk file.
+    Call this after any admin edit to the theme universe (ticker overrides,
+    watchlist update, etc.) so the next GET returns fresh computed data.
+
+    Safe to call from sync or async context — no I/O except file deletion.
+    """
+    # Clear in-memory TTL cache for every timeframe
+    for tf in ("1D", "7D", "30D", "YTD", "1Y", "5Y"):
+        key = f"{_CACHE_KEY}:{tf}"
+        try:
+            cache.delete(key)
+        except Exception:
+            pass
+        _last_computed[tf] = 0.0
+
+    # Delete LKG so cold compute runs on next request
+    try:
+        if _LKG_PATH.exists():
+            _LKG_PATH.unlink()
+            print("[THEME_RS] LKG deleted by invalidate_theme_rs_cache()")
+    except Exception as exc:
+        print(f"[THEME_RS] Warning: could not delete LKG: {exc}")
+
+    print("[THEME_RS] Cache invalidated — next request will cold-compute")
+
+
 def get_theme_rs_status() -> dict:
     """
     Return a diagnostic snapshot for admin/status endpoints.

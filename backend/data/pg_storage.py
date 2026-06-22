@@ -487,6 +487,29 @@ def init_tables():
             )
         """)
 
+        # ── Dev-admin theme ticker overrides (many-to-many) ────────────────
+        # PK is (theme_id, symbol) — same symbol can exist in multiple themes.
+        # action='add'    → force-include symbol in that theme's basket
+        # action='remove' → force-exclude symbol from that theme's basket
+        # These overrides win over base universe + watchlist seeds.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.theme_ticker_overrides (
+                theme_id    TEXT        NOT NULL,
+                symbol      TEXT        NOT NULL,
+                action      TEXT        NOT NULL CHECK (action IN ('add', 'remove')),
+                source      TEXT        NOT NULL DEFAULT 'manual_admin',
+                note        TEXT,
+                created_by  TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (theme_id, symbol)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_theme_ticker_overrides_theme
+            ON public.theme_ticker_overrides (theme_id)
+        """)
+
         # ── Chart Radar saved views ────────────────────────────────────────────
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.chart_radar_views (
@@ -2141,6 +2164,155 @@ def volmc_snapshot_save(watchlist_id: str, current_payload: dict) -> bool:
         return True
     except Exception as exc:
         print(f"[PG] volmc_snapshot_save error wl={watchlist_id}: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+# ── Theme ticker overrides CRUD ────────────────────────────────────────────────
+
+def get_theme_ticker_overrides(theme_id: str | None = None) -> list[dict]:
+    """
+    Return all manual theme-ticker overrides, optionally filtered by theme_id.
+    Each row: {theme_id, symbol, action, source, note, created_by, created_at, updated_at}
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor() as cur:
+            if theme_id:
+                cur.execute(
+                    "SELECT theme_id, symbol, action, source, note, created_by, "
+                    "created_at, updated_at "
+                    "FROM public.theme_ticker_overrides "
+                    "WHERE theme_id = %s ORDER BY symbol ASC",
+                    (theme_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT theme_id, symbol, action, source, note, created_by, "
+                    "created_at, updated_at "
+                    "FROM public.theme_ticker_overrides "
+                    "ORDER BY theme_id ASC, symbol ASC"
+                )
+            rows = cur.fetchall()
+        return [
+            {
+                "theme_id":   r[0],
+                "symbol":     r[1],
+                "action":     r[2],
+                "source":     r[3],
+                "note":       r[4],
+                "created_by": r[5],
+                "created_at": r[6].isoformat() if r[6] else None,
+                "updated_at": r[7].isoformat() if r[7] else None,
+            }
+            for r in rows
+        ]
+    except Exception as exc:
+        print(f"[PG] get_theme_ticker_overrides error: {exc}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def upsert_theme_ticker_override(
+    theme_id: str,
+    symbol: str,
+    action: str,
+    source: str = "manual_admin",
+    note: str | None = None,
+    created_by: str | None = None,
+) -> bool:
+    """
+    Insert or update a (theme_id, symbol) override row.
+    action must be 'add' or 'remove'.
+    Returns True on success.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.theme_ticker_overrides
+                    (theme_id, symbol, action, source, note, created_by, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (theme_id, symbol) DO UPDATE SET
+                    action     = EXCLUDED.action,
+                    source     = EXCLUDED.source,
+                    note       = EXCLUDED.note,
+                    created_by = EXCLUDED.created_by,
+                    updated_at = NOW()
+                """,
+                (theme_id, symbol, action, source, note, created_by),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[PG] upsert_theme_ticker_override error: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def bulk_upsert_theme_ticker_overrides(edits: list[dict]) -> dict:
+    """
+    Bulk upsert a list of override edits.
+    Each edit: {theme_id, symbol, action, source?, note?, created_by?}
+    Returns {succeeded: int, failed: int, errors: list[str]}
+    """
+    succeeded = 0
+    failed = 0
+    errors: list[str] = []
+    for edit in edits:
+        ok = upsert_theme_ticker_override(
+            theme_id=edit["theme_id"],
+            symbol=edit["symbol"],
+            action=edit["action"],
+            source=edit.get("source", "manual_admin"),
+            note=edit.get("note"),
+            created_by=edit.get("created_by"),
+        )
+        if ok:
+            succeeded += 1
+        else:
+            failed += 1
+            errors.append(f"{edit['theme_id']}:{edit['symbol']}")
+    return {"succeeded": succeeded, "failed": failed, "errors": errors}
+
+
+def delete_theme_ticker_override(theme_id: str, symbol: str) -> bool:
+    """
+    Delete a (theme_id, symbol) override row, restoring default universe behavior
+    for that pair only. Does not affect any other theme's membership for the symbol.
+    Returns True if a row was deleted, False if not found or on error.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM public.theme_ticker_overrides "
+                "WHERE theme_id = %s AND symbol = %s",
+                (theme_id, symbol),
+            )
+            deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+    except Exception as exc:
+        print(f"[PG] delete_theme_ticker_override error: {exc}")
         try:
             conn.rollback()
         except Exception:

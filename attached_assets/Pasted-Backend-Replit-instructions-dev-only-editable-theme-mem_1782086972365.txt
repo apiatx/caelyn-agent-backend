@@ -1,0 +1,202 @@
+Backend Replit instructions — dev-only editable theme memberships, many-to-many
+
+Goal:
+Create a dev-only backend feature that lets the dev/admin manually add or remove tickers from theme baskets. These edits must persist in Neon and be applied to the universal Themes page/theme universe. A ticker can belong to multiple themes.
+
+Important:
+This must be a many-to-many membership system.
+
+Do not model this as:
+
+* symbol → one theme
+* ticker.primary_theme
+* one category per ticker
+* global remove ticker from all themes
+
+Correct model:
+
+* theme_id + symbol is the membership pair.
+* The same symbol can exist in multiple theme_id baskets.
+* Removing a ticker from one theme only removes it from that specific theme.
+* Adding a ticker to one theme does not remove it from any other theme.
+
+Audit first:
+
+1. Find current theme universe files:
+
+   * theme_rs_universe.py
+   * theme_merge_layer.py
+   * theme_rs_service.py
+   * routes/themes.py
+     or whatever the actual current files are.
+2. Find current Neon/Postgres storage helper patterns.
+3. Find existing auth/admin/dev-only protection patterns.
+4. Find current Watchlist CSV upload / AI enrichment flow.
+5. Find any existing watchlist category override storage.
+6. Do not write code until the storage model and override application point are clear.
+
+Persistence requirement:
+Manual theme edits should persist in Neon and survive server restarts/deploys. Do not try to edit backend source files from the frontend.
+
+Add a Neon table or equivalent existing migration pattern:
+
+theme_ticker_overrides:
+
+* theme_id text not null
+* symbol text not null
+* action text not null check action in ('add', 'remove')
+* source text default 'manual_admin'
+* note text nullable
+* created_by text nullable
+* created_at timestamp default now()
+* updated_at timestamp default now()
+* primary key (theme_id, symbol)
+
+Important:
+Do not create a unique constraint on symbol alone.
+The primary key must allow the same symbol across multiple themes.
+
+Semantics:
+
+1. action = 'add'
+
+   * Add symbol to that specific theme_id basket.
+   * Does not remove it from any other theme.
+2. action = 'remove'
+
+   * Exclude symbol from that specific theme_id basket, even if it exists in base universe/watchlist seeds.
+   * Does not remove it from any other theme.
+3. Clearing/deleting an override should restore default behavior for that theme_id + symbol pair.
+
+Apply order:
+For each theme:
+
+1. Start with base theme universe symbols.
+2. Apply watchlist/dev seed merge.
+3. Apply manual overrides:
+
+   * remove symbols where action='remove' for that theme_id
+   * add symbols where action='add' for that theme_id
+4. Deduplicate within that theme only.
+5. Preserve same symbol membership in other themes.
+
+Manual override priority:
+Manual admin overrides must win over:
+
+* backend base universe
+* watchlist seeds
+* CSV AI categorization
+* future watchlist enrichment
+
+CSV AI enrichment rule:
+The AI should only categorize new tickers added by CSV. It must not overwrite existing manual theme overrides. If a ticker already has manual theme memberships, those memberships stay. Since tickers can belong to multiple themes, AI output should not force a ticker into only one category.
+
+API endpoints:
+Add dev/admin-only endpoints under an existing admin/auth pattern, for example:
+
+GET /api/themes/admin/memberships
+
+* returns all manual overrides
+* include theme_id, display_name, symbol, action, source, note, timestamps
+
+POST /api/themes/admin/memberships
+body:
+{
+"theme_id": "ai_networking",
+"symbol": "ANET",
+"action": "add",
+"note": "manual dev classification"
+}
+
+* validates theme_id exists
+* validates symbol format
+* uppercases symbol
+* upserts theme_id + symbol action
+* invalidates/rebuilds theme universe cache
+
+POST /api/themes/admin/memberships/bulk
+body:
+{
+"edits": [
+{"theme_id": "ai_networking", "symbol": "ANET", "action": "add"},
+{"theme_id": "semiconductors", "symbol": "ANET", "action": "add"},
+{"theme_id": "clean_energy", "symbol": "RUN", "action": "remove"}
+]
+}
+
+* supports adding same symbol to multiple themes
+
+DELETE /api/themes/admin/memberships/{theme_id}/{symbol}
+
+* clears manual override for that theme_id + symbol
+* restores default universe behavior for that pair
+* does not remove symbol from other themes
+
+Add optional endpoint:
+GET /api/themes/admin/theme-basket/{theme_id}
+
+* returns final basket with source breakdown:
+
+  * base_symbols
+  * watchlist_seed_symbols
+  * manual_added_symbols
+  * manual_removed_symbols
+  * final_theme_holdings
+  * final_performance_symbols
+  * representative_symbol
+
+Backend behavior after edit:
+
+1. The normal Themes API should reflect the edit without requiring a deploy.
+2. Either rebuild the in-memory enriched universe or apply overrides at row-build time.
+3. Clear/invalidate relevant LKG/cache entries so stale rows do not hide the edit.
+4. Do not create a new data fetch storm.
+5. Any newly added ticker can enter the normal existing quote/history warmup path, but do not fetch every theme live per request.
+6. Performance calculations should include manually added symbols in the same merged performance basket.
+7. Expanded theme_holdings should include manually added symbols.
+8. Removing a symbol from a theme should remove it from that theme’s performance basket and theme_holdings only.
+
+Dev-only protection:
+
+1. These admin endpoints must not be public.
+2. Use existing admin/dev auth pattern.
+3. If no clear admin guard exists, audit and propose the safest existing guard before writing.
+4. Do not expose this editor to normal users.
+
+Validation required:
+
+1. Add ANET to ai_networking and semiconductors.
+
+   * ANET appears in both themes.
+   * No global dedupe removes it from either.
+2. Remove ANET from ai_networking.
+
+   * ANET disappears from ai_networking only.
+   * ANET remains in semiconductors.
+3. Add a ticker to Power / Cooling.
+
+   * It appears in theme_holdings.
+   * It enters performance_symbols/proxy_symbols for that theme.
+4. Remove a base symbol from Substrates / Packaging.
+
+   * It disappears from that theme only.
+   * Clearing the override restores it.
+5. Existing Watchlist page behavior remains unchanged.
+6. Normal Themes API still returns 60 themes.
+7. representative_symbol remains chart-only.
+8. holdings_display_mode logic remains intact.
+9. CSV AI enrichment does not overwrite manual overrides.
+10. No Watchlist files are modified unless strictly necessary for the CSV AI override guard, and audit/prove that first.
+
+Deliverable:
+Report:
+
+* Files audited.
+* Files changed.
+* Table/migration created.
+* Admin endpoints created.
+* Exact many-to-many uniqueness constraint.
+* How manual overrides are applied.
+* How caches are invalidated.
+* Validation proving same ticker can belong to multiple themes.
+* Confirmation Watchlist page behavior was not broken.

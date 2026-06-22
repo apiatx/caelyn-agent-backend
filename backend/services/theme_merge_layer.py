@@ -240,29 +240,68 @@ def _load_watchlist_theme_tickers() -> dict[str, list[str]]:
 
 # ── Core enrichment ────────────────────────────────────────────────────────────
 
+def _load_theme_ticker_overrides() -> dict[str, dict]:
+    """
+    Load manual admin overrides from Neon.
+    Returns {theme_id: {"add": [symbols...], "remove": [symbols...]}}
+    Failures are non-fatal — returns empty dict on any error.
+    """
+    try:
+        from data.pg_storage import get_theme_ticker_overrides
+        rows = get_theme_ticker_overrides()
+        result: dict[str, dict] = {}
+        for row in rows:
+            tid = row["theme_id"]
+            if tid not in result:
+                result[tid] = {"add": [], "remove": []}
+            result[tid][row["action"]].append(row["symbol"])
+        if result:
+            log.info(
+                f"[THEME_MERGE] Loaded manual overrides: "
+                f"{sum(len(v['add']) for v in result.values())} adds, "
+                f"{sum(len(v['remove']) for v in result.values())} removes "
+                f"across {len(result)} themes"
+            )
+        return result
+    except Exception as exc:
+        log.warning(f"[THEME_MERGE] Could not load theme_ticker_overrides from Neon: {exc}")
+        return {}
+
+
 def _build_enriched_universe(
     base: dict,
     watchlist_tickers: dict[str, list[str]],
+    manual_overrides: dict[str, dict] | None = None,
 ) -> tuple[dict, dict[str, list[str]]]:
     """
     Deep-copy base THEME_RS_UNIVERSE and enrich matching themes.
 
-    CRITICAL: watchlist tickers are added to proxy_symbols for ALL theme types.
-    proxy_symbols is the ONLY field read by _compute_theme_perf (the performance
-    engine). candidate_symbols is only used for leader/laggard discovery.
+    Apply order per theme:
+      1. Start with BASE proxy_symbols / candidate_symbols.
+      2. Apply watchlist/dev seed merge (watchlist_tickers).
+      3. Apply manual admin overrides (manual_overrides):
+           action='remove' → exclude from that theme only (does not affect other themes)
+           action='add'    → force-include in that theme's basket
+      4. Deduplicate within each theme only.
 
-    Existing proxy_symbols are NEVER removed — the final set is the union.
+    CRITICAL: proxy_symbols is the ONLY field read by _compute_theme_perf.
+    candidate_symbols is used exclusively for leader/laggard discovery.
+    Existing symbols are NEVER removed except by explicit admin override.
 
-    Also stamps representative_symbol + representative_symbol_source onto EVERY
-    theme (derived from _REPRESENTATIVE_ETF_MAP or BASE proxy_symbols[0]).
-    This field is for display/TradingView only and is separate from performance.
+    Also stamps representative_symbol, representative_symbol_source,
+    holdings_display_mode, manual_added_symbols, and manual_removed_symbols
+    onto EVERY theme.
 
     Returns (enriched_universe, {theme_id: [net_new_proxy_tickers]})
     """
+    if manual_overrides is None:
+        manual_overrides = {}
+
     enriched = copy.deepcopy(base)
     # Track net-new proxy additions per theme for the debug endpoint
     net_new_proxy: dict[str, list[str]] = {}
 
+    # ── Step 2: Watchlist seed merge ─────────────────────────────────────────
     for theme_id, wl_tickers in watchlist_tickers.items():
         if theme_id not in enriched:
             log.debug(f"[THEME_MERGE] theme_id '{theme_id}' not in base universe — skipped")
@@ -294,7 +333,48 @@ def _build_enriched_universe(
             net_new_proxy[theme_id] = new_proxy
             log.info(
                 f"[THEME_MERGE] {theme_id} ({meta['proxy_type']}): "
-                f"+{len(new_proxy)} proxy ticker(s) → {new_proxy}"
+                f"+{len(new_proxy)} watchlist proxy ticker(s) → {new_proxy}"
+            )
+
+    # ── Step 3: Manual admin overrides (highest priority) ───────────────────
+    # Overrides are applied after watchlist merge so they win over everything.
+    # Removing a symbol removes it from THIS theme only — no cross-theme side effects.
+    # The same symbol can be in multiple themes with independent override rows.
+    for theme_id, actions in manual_overrides.items():
+        if theme_id not in enriched:
+            log.debug(f"[THEME_MERGE] override theme_id '{theme_id}' not in universe — skipped")
+            continue
+        meta = enriched[theme_id]
+        proxy_set = set(meta.get("proxy_symbols",     []))
+        cand_set  = set(meta.get("candidate_symbols", []))
+
+        add_syms    = sorted(set(actions.get("add",    [])))
+        remove_syms = sorted(set(actions.get("remove", [])))
+
+        # Remove (from THIS theme only)
+        proxy_set -= set(remove_syms)
+        cand_set  -= set(remove_syms)
+
+        # Add (to THIS theme only)
+        proxy_set |= set(add_syms)
+        cand_set  |= set(add_syms)
+
+        meta["proxy_symbols"]     = sorted(proxy_set)
+        meta["candidate_symbols"] = sorted(cand_set)
+
+        # Stamp for debug introspection and holdings_display_mode logic
+        meta["manual_added_symbols"]   = add_syms
+        meta["manual_removed_symbols"] = remove_syms
+
+        # Recompute watchlist_seeds: remove any seeds that were manually excluded
+        if remove_syms:
+            existing_seeds = set(meta.get("watchlist_seeds", []))
+            meta["watchlist_seeds"] = sorted(existing_seeds - set(remove_syms))
+
+        if add_syms or remove_syms:
+            log.info(
+                f"[THEME_MERGE] {theme_id}: manual override +{len(add_syms)} "
+                f"-{len(remove_syms)}"
             )
 
     # ── Stamp representative_symbol + holdings_display_mode on EVERY theme ───────
@@ -326,11 +406,18 @@ def _build_enriched_universe(
         #
         # NOTE: watchlist_seeds is populated earlier in this same function's merge loop,
         # so it is available here even though _build_theme_row never exposes it in the API.
-        ptype = meta.get("proxy_type", "etf")
-        wl_seeds = meta.get("watchlist_seeds", [])
+        ptype          = meta.get("proxy_type", "etf")
+        wl_seeds       = meta.get("watchlist_seeds", [])
+        manual_added   = meta.get("manual_added_symbols", [])
+        # Use "theme_basket" when the theme has ANY curated content:
+        #   • custom/hybrid/basket proxy_type — manually curated stock baskets
+        #   • watchlist_seeds non-empty — ETF themes enriched from dev watchlist
+        #   • manual_added_symbols non-empty — admin-added tickers for this theme
         meta["holdings_display_mode"] = (
             "theme_basket"
-            if (ptype in ("custom", "hybrid", "basket") or len(wl_seeds) > 0)
+            if (ptype in ("custom", "hybrid", "basket")
+                or len(wl_seeds) > 0
+                or len(manual_added) > 0)
             else "etf_holdings"
         )
 
@@ -340,7 +427,13 @@ def _build_enriched_universe(
 # ── Module-level initialisation (runs once at import time) ─────────────────────
 
 def _build() -> tuple[dict, dict[str, list[str]]]:
-    """Build the enriched universe. Falls back to base on any failure."""
+    """
+    Build the enriched universe. Apply order:
+      1. Base THEME_RS_UNIVERSE
+      2. Watchlist/dev seed merge
+      3. Manual admin overrides (Neon — highest priority)
+    Falls back gracefully on any failure.
+    """
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
     except ImportError as exc:
@@ -348,16 +441,14 @@ def _build() -> tuple[dict, dict[str, list[str]]]:
         return {}, {}
 
     watchlist_tickers = _load_watchlist_theme_tickers()
-    if not watchlist_tickers:
-        log.info("[THEME_MERGE] No watchlist data — stamping representative symbols only")
-        # Still run _build_enriched_universe with empty watchlist so that
-        # representative_symbol is stamped on every theme (the enrichment loop
-        # is a no-op when watchlist_tickers is empty, but the representative
-        # stamp pass still executes).
-        merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, {})
+    manual_overrides  = _load_theme_ticker_overrides()
+
+    if not watchlist_tickers and not manual_overrides:
+        log.info("[THEME_MERGE] No watchlist/override data — stamping representative symbols only")
+        merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, {}, {})
         return merged, net_new
 
-    merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, watchlist_tickers)
+    merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, watchlist_tickers, manual_overrides)
     log.info(
         f"[THEME_MERGE] Enriched universe built: {len(merged)} themes, "
         f"{len(net_new)} enriched, "
