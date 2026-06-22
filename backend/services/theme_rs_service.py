@@ -113,9 +113,11 @@ _last_computed: dict[str, float] = {tf: 0.0 for tf in ("1D", "7D", "30D", "YTD",
 # ── Stale-safe LKG constants & state ──────────────────────────────────────────
 # Minimum theme count a fresh result must have to be allowed to overwrite the LKG.
 # Partial results (e.g. FMP guard, rate-limit, data outage) produce < this count
-# and must never poison the last-good snapshot.  51 themes is the full universe;
-# 48 gives ~6 % tolerance for legitimate universe shrinkage while blocking partials.
-_MIN_LKG_THEME_FLOOR: int = 48
+# and must never poison the last-good snapshot.
+# Derived dynamically: floor = 94 % of the current active universe size, so
+# future theme additions/removals never require editing a magic constant.
+_EXPECTED_THEME_COUNT: int = len(THEME_RS_UNIVERSE)
+_MIN_LKG_THEME_FLOOR: int = max(1, int(_EXPECTED_THEME_COUNT * 0.94))
 
 # Set True by invalidate_theme_rs_cache() after an admin universe edit.
 # Cleared when a fresh full-count LKG is successfully written.
@@ -1736,6 +1738,7 @@ def get_theme_rs_status() -> dict:
         "lkg_path":                 str(_LKG_PATH),
         "lkg_exists":               _LKG_PATH.exists(),
         "lkg_theme_count":          len(lkg_rows) if lkg_rows else 0,
+        "expected_theme_count":     _EXPECTED_THEME_COUNT,
         "lkg_theme_floor":          _MIN_LKG_THEME_FLOOR,
         "admin_refresh_pending":    _ADMIN_DIRTY,
         "refresh_ts_path":          str(_REFRESH_TS_PATH),
