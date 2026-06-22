@@ -1,0 +1,131 @@
+BACKEND REPLIT INSTRUCTIONS — remove broad/duplicative themes everywhere
+
+Goal:
+Remove these themes completely from the universal theme universe and any downstream Options Flow Sectors aggregation:
+
+* Small Caps
+* Equal-Weighted S&P 500
+* Tech Equal-Weight
+* Tech Mega Caps
+* Speculative Tech
+* Growth Stocks
+* IBD 50
+* Microcaps
+
+Expected theme_ids:
+
+* small_caps
+* equal_weight_sp500
+* tech_equal_weight
+* tech_mega_caps
+* speculative_tech
+* growth_stocks
+* ibd50
+* microcaps
+
+Critical goal:
+These should not appear on:
+
+1. Themes page
+2. Themes API
+3. Options Flow → Sectors tab
+4. Theme options-flow sector/theme/ticker aggregation
+5. Theme RS warmup/proxy/candidate universe
+6. Theme representative/tv symbol maps
+7. Theme admin basket/debug endpoints
+
+Also make sure we are not wasting API calls on them anymore.
+
+Audit first:
+
+1. Search for all eight theme_ids and display names across backend:
+
+   * theme_rs_universe.py
+   * theme_merge_layer.py
+   * theme_rs_service.py
+   * options_flow_sectors.py
+   * options_theme_supplement.py
+   * routes/themes.py
+   * routes/options_flow_sectors.py
+   * any representative ETF map
+   * any tv_symbol map
+   * any sector mapping
+   * any LKG/cache seed file
+2. Identify all proxy_symbols/candidate_symbols unique to those removed themes.
+3. Identify symbols that also belong to remaining active themes.
+4. Do not remove a ticker globally if it still belongs to another remaining theme.
+5. Confirm whether any manual theme_ticker_overrides rows exist for these theme_ids.
+6. Confirm whether any theme_leader_overrides rows exist for these theme_ids.
+
+Required backend behavior:
+
+1. Remove the eight themes from the base theme universe.
+2. Remove them from representative_symbol maps and tv_symbol maps.
+3. Remove them from any sector mapping used by Options Flow Sectors.
+4. Remove them from theme merge/enrichment output.
+5. Remove them from admin theme list/debug endpoints.
+6. Remove or ignore any Neon override rows for those removed theme_ids:
+
+   * theme_ticker_overrides
+   * theme_leader_overrides
+     Prefer cleanup/deletion if safe.
+7. Remove them from Themes RS LKG safely.
+8. Invalidate Themes RS cache/LKG using the existing stale-safe path.
+9. Invalidate Options Flow Sectors cache.
+10. Ensure options supplement scan universe no longer includes tickers solely because of these removed themes.
+11. Do not remove/scavenge supplement/master cached data for tickers that are still used by active themes, Watchlist, or Options Screener.
+12. Do not touch Watchlist page behavior.
+13. Do not re-enable live Watchlist dependency.
+14. Do not reintroduce live ETF holdings calls.
+
+API call requirement:
+If a ticker was only present because of one of the removed themes, it should no longer be scheduled by:
+
+* theme RS proxy/history warmup
+* theme quote/proxy fetches
+* options-flow sector supplement scanner
+
+If that same ticker is still present in another active theme or existing options screener/watchlist universe, it can remain.
+
+Validation required:
+
+1. GET /api/themes/relative-strength returns 51 themes if only these 8 are removed from the current 59.
+2. None of the removed theme_ids appear in:
+
+   * /api/themes/list
+   * /api/themes/relative-strength
+   * /api/themes/merge-debug if available
+   * /api/options-flow/sectors
+   * /api/options-flow/sectors/debug
+3. Removed display names do not appear:
+
+   * Small Caps
+   * Equal-Weighted S&P 500
+   * Tech Equal-Weight
+   * Tech Mega Caps
+   * Speculative Tech
+   * Growth Stocks
+   * IBD 50
+   * Microcaps
+4. No representative_symbol/tv_symbol map contains removed theme_ids.
+5. Options Flow Sectors does not include these themes under any sector.
+6. options supplement pending queue does not include symbols solely from removed themes.
+7. Theme RS LKG/cache returns 51 valid active themes, not stale 59.
+8. Real performance values remain for active themes.
+9. Manual theme add/remove still works for active themes.
+10. Same ticker can still belong to multiple remaining themes.
+11. Watchlist files untouched.
+12. Existing Options Flow Screener unchanged.
+
+Deliverable:
+Report:
+
+* Files audited.
+* Files changed.
+* Exact theme_ids removed.
+* Theme count before/after.
+* Which unique symbols were removed from theme-driven API work.
+* Which overlapping symbols remained because they belong to active themes.
+* Cache/LKG invalidation performed.
+* Validation proving no removed themes appear on Themes or Options Flow Sectors.
+* Confirmation Watchlist untouched.

@@ -310,18 +310,6 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["crude oil price", "OPEC", "global growth", "USD"],
     },
 
-    "equal_weight_sp500": {
-        "classification": "theme",
-        "parent_sector":  None,
-        "display_name": "Equal-Weighted S&P 500",
-        "proxy_type": "etf",
-        "proxy_symbols": ["RSP"],
-        "candidate_symbols": [],
-        "sector_tags": ["Broad Market"],
-        "keywords": ["S&P 500", "equal weight", "diversified", "broad market"],
-        "macro_sensitivities": ["interest rates", "earnings growth", "economic cycle"],
-    },
-
     # ── F ──────────────────────────────────────────────────────────────────────
     # SECTOR: Financials (existing entry reclassified)
     "financials": {
@@ -362,18 +350,6 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["real yields", "USD", "inflation", "geopolitical risk"],
     },
 
-    "growth_stocks": {
-        "classification": "theme",
-        "parent_sector":  None,
-        "display_name": "Growth Stocks",
-        "proxy_type": "etf",
-        "proxy_symbols": ["IWF", "IVW", "VUG", "QQQ"],
-        "candidate_symbols": [],
-        "sector_tags": ["Technology", "Consumer Discretionary"],
-        "keywords": ["growth", "high growth", "momentum", "tech growth", "expansion"],
-        "macro_sensitivities": ["real rates", "risk appetite", "EPS growth", "multiple expansion"],
-    },
-
     # ── H ──────────────────────────────────────────────────────────────────────
     # SECTOR: Healthcare (existing entry reclassified)
     "healthcare": {
@@ -402,18 +378,6 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     },
 
     # ── I ──────────────────────────────────────────────────────────────────────
-    "ibd50": {
-        "classification": "theme",
-        "parent_sector":  None,
-        "display_name": "IBD 50",
-        "proxy_type": "etf",
-        "proxy_symbols": ["FFTY"],
-        "candidate_symbols": [],
-        "sector_tags": ["Growth", "Momentum"],
-        "keywords": ["IBD 50", "momentum", "growth leaders", "breakouts", "CAN SLIM"],
-        "macro_sensitivities": ["risk appetite", "earnings growth", "market breadth"],
-    },
-
     # SECTOR: Industrials (existing entry reclassified)
     "industrials": {
         "classification": "sector",
@@ -533,18 +497,6 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "sector_tags": ["Materials", "Mining"],
         "keywords": ["metals", "mining", "steel", "iron ore", "diversified miners"],
         "macro_sensitivities": ["China infrastructure", "global growth", "commodity cycle"],
-    },
-
-    "microcaps": {
-        "classification": "theme",
-        "parent_sector":  None,
-        "display_name": "Microcaps",
-        "proxy_type": "etf",
-        "proxy_symbols": ["IWC", "FDM"],
-        "candidate_symbols": [],
-        "sector_tags": ["Broad Market", "Small Cap"],
-        "keywords": ["microcap", "small company", "speculative", "illiquid"],
-        "macro_sensitivities": ["risk appetite", "liquidity conditions", "M&A activity"],
     },
 
     # ── O ──────────────────────────────────────────────────────────────────────
@@ -760,18 +712,6 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["gold price", "industrial demand", "real yields", "solar growth"],
     },
 
-    "small_caps": {
-        "classification": "theme",
-        "parent_sector":  None,
-        "display_name": "Small Caps",
-        "proxy_type": "etf",
-        "proxy_symbols": ["IWM", "IJR", "VB"],
-        "candidate_symbols": [],
-        "sector_tags": ["Broad Market"],
-        "keywords": ["small cap", "Russell 2000", "domestic economy", "risk-on"],
-        "macro_sensitivities": ["domestic growth", "credit conditions", "risk appetite", "USD"],
-    },
-
     "software": {
         "classification": "sub_theme",
         "parent_sector":  "technology",
@@ -832,46 +772,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "aliases": ["space_economy"],
     },
 
-    "speculative_tech": {
-        "classification": "theme",
-        "parent_sector":  "technology",
-        "display_name": "Speculative Tech",
-        "proxy_type": "etf",
-        "proxy_symbols": ["ARKK", "ARKW", "ARKQ"],
-        "candidate_symbols": ["PLTR", "COIN", "TSLA", "ROKU"],
-        "sector_tags": ["Technology", "Innovation"],
-        "keywords": ["speculative", "disruptive", "high-beta", "innovation", "ARK"],
-        "macro_sensitivities": ["risk appetite", "interest rates", "AI hype cycle", "liquidity"],
-    },
-
     # ── T ──────────────────────────────────────────────────────────────────────
-    "tech_equal_weight": {
-        "classification": "theme",
-        "parent_sector":  "technology",
-        "display_name": "Tech Equal-Weight",
-        "proxy_type": "etf",
-        # RYT = Invesco S&P 500 Equal Weight Technology ETF (primary per spec)
-        # QQEW = First Trust NASDAQ-100 Equal Weighted Index ETF
-        "proxy_symbols": ["RYT", "QQEW"],
-        "candidate_symbols": [],
-        "sector_tags": ["Technology"],
-        "keywords": ["tech equal weight", "equal weight", "diversified tech"],
-        "macro_sensitivities": ["interest rates", "AI adoption", "earnings breadth"],
-    },
-
-    "tech_mega_caps": {
-        "classification": "sub_theme",
-        "parent_sector":  "technology",
-        "display_name": "Tech Mega Caps",
-        "proxy_type": "basket",
-        # MAGS = Roundhill Magnificent Seven ETF (primary per spec)
-        "proxy_symbols": ["MAGS", "QQQ"],
-        "candidate_symbols": ["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA"],
-        "sector_tags": ["Technology", "Consumer Discretionary"],
-        "keywords": ["mega cap", "Magnificent 7", "FAANG", "big tech"],
-        "macro_sensitivities": ["AI capex", "antitrust risk", "interest rates", "ad market"],
-    },
-
     # SECTOR: Technology (new entry)
     "technology": {
         "classification": "sector",

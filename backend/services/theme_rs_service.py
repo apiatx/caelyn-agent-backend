@@ -113,9 +113,9 @@ _last_computed: dict[str, float] = {tf: 0.0 for tf in ("1D", "7D", "30D", "YTD",
 # ── Stale-safe LKG constants & state ──────────────────────────────────────────
 # Minimum theme count a fresh result must have to be allowed to overwrite the LKG.
 # Partial results (e.g. FMP guard, rate-limit, data outage) produce < this count
-# and must never poison the last-good snapshot.  60 themes is the full universe;
-# 55 gives ~8 % tolerance for legitimate universe shrinkage while blocking partials.
-_MIN_LKG_THEME_FLOOR: int = 55
+# and must never poison the last-good snapshot.  51 themes is the full universe;
+# 48 gives ~6 % tolerance for legitimate universe shrinkage while blocking partials.
+_MIN_LKG_THEME_FLOOR: int = 48
 
 # Set True by invalidate_theme_rs_cache() after an admin universe edit.
 # Cleared when a fresh full-count LKG is successfully written.
