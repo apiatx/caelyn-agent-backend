@@ -784,8 +784,13 @@ def _compute_theme_perf(
     histories: dict[str, tuple[list[dict], str]],
 ) -> tuple[Optional[float], list[str], dict[str, str]]:
     """
-    Compute theme return for a timeframe.
-    Returns (median_return_pct, used_proxies, source_health).
+    Compute theme return for a timeframe using equal-weight arithmetic mean.
+
+    Formula:  sum(valid_symbol_returns) / count(valid_symbol_returns)
+    Missing/no-data symbols are excluded from both numerator and denominator.
+    Returns None only when no valid symbols exist.
+
+    Returns (mean_return_pct, used_proxies, source_health).
     """
     vals: list[float]        = []
     used: list[str]          = []
@@ -803,7 +808,7 @@ def _compute_theme_perf(
     if not vals:
         return None, [], health
 
-    return round(statistics.median(vals), 2), used, health
+    return round(sum(vals) / len(vals), 2), used, health
 
 
 def _pct_rank(value: Optional[float], universe: list[Optional[float]]) -> float:
@@ -923,6 +928,12 @@ async def _build_theme_row(
     tf_ret, used_proxies, source_health = _compute_theme_perf(
         proxy_syms, tf, quotes, histories
     )
+    # Per-symbol returns for the primary timeframe (same data used in _compute_theme_perf).
+    # Stored so callers can verify the equal-weight average calculation without timing drift.
+    per_symbol_returns: dict[str, Optional[float]] = {
+        sym: _perf_for_timeframe(histories.get(sym, ([], ""))[0], tf, quotes.get(sym, {}))
+        for sym in proxy_syms
+    }
     # All-timeframe performance for RS scoring
     all_perf: dict[str, Optional[float]] = {}
     for frame in _TIMEFRAME_BARS:
@@ -1058,6 +1069,11 @@ async def _build_theme_row(
         "proxy_symbols":         proxy_syms,
         "proxy_symbols_used":    used_proxies,
         "proxy_source_health":   source_health,
+        "performance_method":        "equal_weight_average",
+        "performance_symbol_count":  len(proxy_syms),
+        "valid_symbol_count":        len(used_proxies),
+        "skipped_symbol_count":      len(proxy_syms) - len(used_proxies),
+        "per_symbol_returns":        per_symbol_returns,
         "price":                 round(lead_price, 2) if lead_price else None,
         "lead_proxy":            lead_sym,
         "timeframe":             tf,

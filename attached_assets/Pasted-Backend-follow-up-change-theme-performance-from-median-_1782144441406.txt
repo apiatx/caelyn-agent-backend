@@ -1,0 +1,63 @@
+Backend follow-up — change theme performance from median to equal-weight average
+
+The audit confirmed theme performance currently uses:
+
+statistics.median(per_symbol_returns)
+
+But the intended behavior is equal-weight average percentage change across the tracked theme basket.
+
+Goal:
+Change Themes page performance calculation for 1D, 7D, 30D, YTD, 1Y, and 5Y from median return to arithmetic mean return across valid tracked symbols.
+
+Important:
+
+* representative_symbol / tv_symbol remains chart-only.
+* theme_holdings remains saved/imported theme universe + manual/watchlist snapshot additions/removals.
+* performance_symbols/proxy_symbols remains the performance basket.
+* Missing symbols should still be skipped, not counted as zero.
+* Do not change Watchlist behavior.
+* Do not re-enable live Watchlist dependency.
+* Do not reintroduce live ETF holdings fetches.
+* Do not change manual add/remove/leader semantics.
+
+Required behavior:
+
+1. _compute_theme_perf() should calculate:
+   sum(valid_symbol_returns) / count(valid_symbol_returns)
+2. Round the same way as before.
+3. Missing/no-data symbols are excluded from denominator.
+4. Return null/None only if no valid symbols exist.
+5. Add or update debug metadata to report:
+
+   * performance_method: "equal_weight_average"
+   * performance_symbol_count
+   * valid_symbol_count
+   * skipped_symbol_count
+6. Ensure no code path still reports median unless explicitly named historical/debug.
+
+Validation:
+For at least 5 themes:
+
+* memory_storage
+* ai_networking
+* substrates_packaging
+* datacenter_infra
+* clean_energy
+
+Show:
+
+* performance symbols
+* per-symbol 1D returns
+* arithmetic average calculation
+* API returned 1D value
+* confirm they match
+
+Also validate:
+
+1. Public Themes API returns 60 themes.
+2. Real performance values are not placeholder.
+3. Manual add/remove still changes that theme only.
+4. Same ticker can belong to multiple themes.
+5. representative_symbol/tv_symbol do not affect performance unless they are also actually in proxy_symbols.
+6. Watchlist page untouched.
+7. Live Watchlist updates do not change Themes page.
