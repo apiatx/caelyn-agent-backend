@@ -102,6 +102,46 @@ _DEV_USER_ID      = "default"
 # Rules: never CUSTOM, never a watchlist-added individual stock,
 # separate from the performance basket.
 
+# Exchange prefix lookup for TradingView chart symbols.
+# TradingView uses "AMEX" for NYSE Arca ETFs and "NASDAQ" for NASDAQ-listed ones.
+# Any ticker NOT in this map is returned bare — TradingView auto-resolves US tickers.
+_TV_ETF_EXCHANGE_MAP: dict[str, str] = {
+    # ── NASDAQ-listed ETFs ─────────────────────────────────────────────────────
+    "SMH":  "NASDAQ", "SOXX": "NASDAQ", "ICLN": "NASDAQ", "GRID": "NASDAQ",
+    "QTUM": "NASDAQ", "ROBO": "NASDAQ", "DTCR": "NASDAQ", "BOTZ": "NASDAQ",
+    "CIBR": "NASDAQ", "FINX": "NASDAQ", "BLOK": "NASDAQ", "IBB":  "NASDAQ",
+    "SKYY": "NASDAQ", "HACK": "NASDAQ", "PSCT": "NASDAQ", "PAVE": "NASDAQ",
+    "QCLN": "NASDAQ",
+    # ── AMEX / NYSE Arca ETFs ──────────────────────────────────────────────────
+    "MOO":  "AMEX", "DBA":  "AMEX", "VEGI": "AMEX", "KBE":  "AMEX",
+    "XBI":  "AMEX", "ARKG": "AMEX", "XLB":  "AMEX", "XLC":  "AMEX",
+    "XLF":  "AMEX", "XLI":  "AMEX", "XLK":  "AMEX", "XLP":  "AMEX",
+    "XLU":  "AMEX", "XLRE": "AMEX", "XLY":  "AMEX", "XLV":  "AMEX",
+    "XLE":  "AMEX", "ITA":  "AMEX", "URA":  "AMEX", "COPX": "AMEX",
+    "LIT":  "AMEX", "REMX": "AMEX", "KRE":  "AMEX", "ITB":  "AMEX",
+    "IHI":  "AMEX", "TAN":  "AMEX", "XME":  "AMEX", "XRT":  "AMEX",
+    "IWM":  "AMEX", "GLD":  "AMEX", "SLV":  "AMEX", "VCX":  "AMEX",
+    "ARKX": "AMEX", "ARKK": "AMEX", "ARKF": "AMEX", "BATT": "AMEX",
+    "FCG":  "AMEX", "IWC":  "AMEX", "IGV":  "AMEX", "IYT":  "AMEX",
+    "OIH":  "AMEX", "XOP":  "AMEX", "RSP":  "AMEX", "FFTY": "AMEX",
+    "KIE":  "AMEX", "XLRE": "AMEX", "MAGS": "AMEX", "IWF":  "AMEX",
+    "XLC":  "AMEX", "DRAM": "AMEX",
+}
+
+
+def _make_tv_symbol(ticker: str) -> str:
+    """Return a TradingView-ready 'EXCHANGE:TICKER' string for theme chart symbols.
+
+    Uses _TV_ETF_EXCHANGE_MAP for known ETFs; falls back to bare ticker for anything
+    else (TradingView auto-resolves US-listed stocks and ETFs without an exchange prefix).
+    """
+    t = ticker.strip().upper()
+    if ":" in t:
+        return t  # already exchange-prefixed
+    exchange = _TV_ETF_EXCHANGE_MAP.get(t)
+    return f"{exchange}:{t}" if exchange else t
+
+
 _REPRESENTATIVE_ETF_MAP: dict[str, str] = {
     # ── Custom basket themes (no ETF in base proxy_symbols) ──────────────────
     "ai_networking":        "SMH",    # basket of stocks; SMH is the nearest ETF proxy
@@ -393,6 +433,9 @@ def _build_enriched_universe(
         rep_sym, rep_src = _get_representative_symbol(theme_id, base_meta)
         meta["representative_symbol"]        = rep_sym
         meta["representative_symbol_source"] = rep_src
+        # tv_symbol: exchange-prefixed TradingView chart symbol derived from
+        # representative_symbol.  Used by the frontend TradingView widget embed.
+        meta["tv_symbol"] = _make_tv_symbol(rep_sym)
         # holdings_display_mode: always "theme_basket".
         # The frontend shows proxy_symbols directly as the curated basket for every
         # theme. "etf_holdings" mode required a live FMP ETF-holdings fetch which

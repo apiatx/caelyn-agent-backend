@@ -1036,6 +1036,10 @@ async def _build_theme_row(
         # Separate from the performance basket (proxy_symbols).
         "representative_symbol":        meta.get("representative_symbol", meta["proxy_type"].upper()),
         "representative_symbol_source": meta.get("representative_symbol_source", "fallback_stock"),
+        # tv_symbol: exchange-prefixed TradingView chart symbol.
+        # Derived from representative_symbol + exchange lookup stamped by theme_merge_layer.
+        # Falls back to bare representative_symbol (TradingView auto-resolves US tickers).
+        "tv_symbol":                    meta.get("tv_symbol") or meta.get("representative_symbol", ""),
         # holdings_display_mode: how the frontend should populate the expanded table.
         #   "theme_basket" — show theme_holdings directly (custom/hybrid themes).
         #   "etf_holdings" — fetch ETF holdings for representative_symbol (ETF themes).
