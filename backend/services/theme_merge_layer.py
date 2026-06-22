@@ -453,10 +453,18 @@ def _build_enriched_universe(
 def _build() -> tuple[dict, dict[str, list[str]]]:
     """
     Build the enriched universe. Apply order:
-      1. Base THEME_RS_UNIVERSE
-      2. Watchlist/dev seed merge
-      3. Manual admin overrides (Neon — highest priority)
+      1. Base THEME_RS_UNIVERSE (static definitions in theme_rs_universe.py)
+      2. Manual overrides from Neon theme_ticker_overrides (highest priority):
+           source='manual_admin'            — dev/admin theme editor additions/removals
+           source='watchlist_snapshot_seed' — frozen snapshot of historical watchlist seeds
+                                              (materialized 2026-06-22; no longer live-fetched)
     Falls back gracefully on any failure.
+
+    NOTE: Live Watchlist reads (_load_watchlist_theme_tickers) are intentionally disabled.
+    The Themes page is universal/curated; normal Watchlist CSV uploads, AI categorization,
+    and user edits must NOT automatically alter the Themes universe.
+    To add a ticker to a theme, use the admin theme editor (/api/themes/admin/memberships),
+    which writes to theme_ticker_overrides (source='manual_admin').
     """
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
@@ -464,11 +472,15 @@ def _build() -> tuple[dict, dict[str, list[str]]]:
         log.error(f"[THEME_MERGE] Cannot import THEME_RS_UNIVERSE: {exc}")
         return {}, {}
 
-    watchlist_tickers = _load_watchlist_theme_tickers()
+    # Intentionally NOT calling _load_watchlist_theme_tickers() here.
+    # The Themes page is decoupled from live Watchlist storage.
+    # Historical watchlist seeds are persisted as source='watchlist_snapshot_seed'
+    # in theme_ticker_overrides and loaded below via _load_theme_ticker_overrides().
+    watchlist_tickers: dict[str, list[str]] = {}
     manual_overrides  = _load_theme_ticker_overrides()
 
-    if not watchlist_tickers and not manual_overrides:
-        log.info("[THEME_MERGE] No watchlist/override data — stamping representative symbols only")
+    if not manual_overrides:
+        log.info("[THEME_MERGE] No override data — stamping representative symbols only")
         merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, {}, {})
         return merged, net_new
 

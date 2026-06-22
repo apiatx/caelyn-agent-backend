@@ -1,0 +1,138 @@
+Backend Replit instructions — verify theme performance math and freeze Themes page from future Watchlist updates
+
+There are two backend tasks:
+
+1. Confirm the Themes page performance math.
+2. Decouple/freeze the universal Themes page from future Watchlist CSV/upload AI changes.
+
+Do not touch frontend files.
+Do not touch Watchlist page behavior.
+Do not reintroduce live ETF holdings fetches.
+Do not change performance math unless the audit proves it is wrong.
+
+Task 1 — confirm performance math
+
+Goal:
+Confirm that 1D, 7D, 30D, YTD, 1Y, and 5Y theme performance values are calculated from the average percentage change of the tracked theme basket symbols, not from representative_symbol/tv_symbol.
+
+Important model:
+
+* representative_symbol / tv_symbol = chart only.
+* theme_holdings = saved/imported theme universe + watchlist snapshot/manual additions/removals.
+* proxy_symbols/performance_symbols = symbols used for theme performance average.
+* leader_symbol = manual leader only.
+* representative_symbol must not drive performance.
+
+Audit:
+
+1. Inspect _compute_theme_perf().
+2. Inspect _build_theme_row().
+3. Inspect how proxy_symbols/performance_symbols are passed into performance calculation.
+4. Confirm whether the calculation is equal-weight average of symbol returns.
+5. Confirm missing symbols are skipped rather than counted as zero, unless existing intended behavior says otherwise.
+6. Confirm representative_symbol/tv_symbol is not used for performance math.
+
+Validation:
+For at least 5 themes:
+
+* memory_storage
+* ai_networking
+* substrates_packaging
+* datacenter_infra
+* clean_energy
+
+Report:
+
+* performance_symbols used
+* per-symbol returns for 1D and 7D
+* final calculated average
+* value returned by /api/themes/relative-strength
+* confirm they match
+
+Optional helpful debug field:
+If non-invasive, add debug-only fields to /api/themes/merge-debug or admin basket endpoint:
+
+* performance_method: "equal_weight_average"
+* performance_symbol_count
+* performance_symbols
+  Do not clutter the normal public UI payload unless already appropriate.
+
+Task 2 — freeze Themes page from future Watchlist changes
+
+Current risk:
+The theme merge layer has used the dev account Watchlist taxonomy as a seed. That was useful to bootstrap the universal Themes page, but going forward, normal Watchlist updates / CSV uploads / AI enrichment must NOT automatically change the universal Themes page.
+
+Required behavior:
+
+1. The Themes page is universal and curated.
+2. Future Watchlist CSV uploads and AI categorization should update the Watchlist page only.
+3. Future Watchlist updates should not automatically add/remove tickers from the Themes page.
+4. The dev/admin theme editor remains the explicit way to modify theme membership.
+5. Manual admin overrides remain persistent in Neon.
+6. Same ticker can still belong to multiple themes.
+7. Manual overrides still win over everything.
+
+Audit:
+
+1. Find where theme_merge_layer reads dev watchlist/watchlist_seeds/category_overrides.
+2. Identify whether it reads live Watchlist storage on every startup/rebuild.
+3. Identify how current watchlist-derived seeds are represented in the enriched theme universe.
+4. Identify current CSV upload / AI enrichment flow and confirm it does not need to change unless it currently feeds the Themes universe automatically.
+
+Required fix:
+Decouple theme_merge_layer from live Watchlist storage.
+
+Preferred approach:
+
+1. Materialize the current watchlist-derived theme seeds into a persistent curated theme seed source:
+
+   * Neon table, static backend config, or existing theme_ticker_overrides source.
+2. After materialization, theme_merge_layer should load theme seeds from this curated/persisted source, not from the live user Watchlist table.
+3. Future Watchlist uploads should not alter the Themes universe unless the dev/admin explicitly uses the theme editor or a future explicit “promote to theme universe” action.
+
+Acceptable storage options:
+Option A — use existing theme_ticker_overrides:
+
+* Insert current watchlist-seeded memberships as action='add', source='watchlist_snapshot_seed'
+* These become curated theme universe seeds.
+* Do not tie them to future Watchlist changes.
+
+Option B — create a separate table:
+theme_universe_seeds:
+
+* theme_id text not null
+* symbol text not null
+* source text not null
+* note text nullable
+* created_at timestamptz default now()
+* primary key (theme_id, symbol, source)
+
+Either is fine, but keep semantics clear:
+
+* Watchlist snapshot seed = curated historical seed.
+* Live Watchlist = user watchlist data, not a live dependency.
+
+Validation:
+
+1. Current Themes page still returns 60 themes.
+2. Current watchlist-derived symbols still remain in theme baskets after decoupling.
+3. Change a Watchlist ticker/category or simulate a CSV AI categorization update.
+4. Confirm Themes page does NOT change.
+5. Add a ticker through dev/admin theme editor.
+6. Confirm Themes page DOES change.
+7. Remove ticker through dev/admin theme editor.
+8. Confirm only that theme changes.
+9. Same ticker can still belong to multiple themes.
+10. Watchlist page behavior unchanged.
+
+Deliverable:
+Report:
+
+* Exact performance formula confirmed.
+* Proof representative_symbol/tv_symbol does not affect performance.
+* Where live Watchlist dependency existed.
+* How current Watchlist seeds were materialized/frozen.
+* Proof future Watchlist updates do not change Themes page.
+* Proof admin editor still changes Themes page.
+* Files changed.
+* Watchlist files untouched.
