@@ -1,0 +1,98 @@
+BACKEND FOLLOW-UP — restore representative chart symbols in Themes API
+
+The expanded holdings issue is fixed, but the theme-level TradingView charts are now hidden because the frontend reports:
+
+* backend returns `tv_symbol: null`
+* backend returns no usable `representative_symbol`
+* frontend therefore sets `tvSymbol = ""`
+* chart is hidden for all 60 themes
+
+That is not acceptable. The chart should not be hidden. Every theme should still have a representative chart ticker.
+
+Goal:
+Restore a valid representative chart symbol on every theme row returned by:
+
+GET /api/themes/relative-strength
+
+Critical distinction:
+
+* representative_symbol / tv_symbol = chart only
+* theme_holdings = saved/imported theme universe
+* performance_symbols/proxy_symbols = performance basket
+* leader_symbol = manual leader inside theme
+* Do not use representative_symbol for holdings
+* Do not use representative_symbol for performance math
+
+Audit first:
+
+1. Inspect the live `/api/themes/relative-strength` response.
+2. Confirm whether each row includes:
+
+   * representative_symbol
+   * tv_symbol
+   * lead_proxy
+   * proxy_symbols
+   * theme_holdings
+3. Compare this to the previous working backend state where `representative_symbol` existed.
+4. Find where `representative_symbol` was lost:
+
+   * emergency LKG writer?
+   * `_build_theme_row()` return dict?
+   * `_lkg_payload()` / `_make_payload()`?
+   * fallback/emergency universe path?
+5. Confirm whether `theme_merge_layer.py` still stamps representative symbols correctly.
+
+Required behavior:
+
+1. Every theme row must include a valid `representative_symbol`.
+2. Prefer also include `tv_symbol` as exchange-prefixed TradingView symbol if the backend already has/knows the exchange mapping.
+3. If backend does not own exchange mapping, return at least `representative_symbol`, and let frontend map it.
+4. `representative_symbol` must never be:
+
+   * null
+   * empty string
+   * `CUSTOM`
+   * `ETF`
+   * theme_id like `ai_networking`
+   * internal slug like `datacenter_infra`
+5. `representative_symbol` should be the same chart proxy logic previously validated:
+
+   * substrates_packaging → SOXX
+   * ai_networking → SMH
+   * semicap_equipment → SOXX
+   * power_cooling → GRID
+   * quantum → QTUM
+   * photonics_lasers → ROBO
+   * datacenter_infra → DTCR
+   * clean_energy → ICLN
+   * uranium_nuclear → URA
+   * defense → ITA
+   * memory_storage → SMH
+6. `theme_holdings` must remain saved theme universe, not ETF holdings fetch.
+7. `holdings_display_mode` can remain `theme_basket`.
+8. Performance math must remain unchanged.
+9. Manual add/remove/leader must remain unchanged.
+10. Watchlist page must remain untouched.
+
+Validation required:
+
+1. `/api/themes/relative-strength` returns 60 themes.
+2. 60/60 rows have valid `representative_symbol`.
+3. 0 rows have representative_symbol equal to theme_id/internal slug.
+4. 0 rows have representative_symbol null/empty/CUSTOM/ETF.
+5. The 10 expected example mappings above pass.
+6. Expanded holdings still show saved theme universe.
+7. No live ETF holdings fetch is required.
+8. Real performance values remain.
+9. Manual editor still works.
+10. LKG/fallback paths preserve representative_symbol too.
+11. Watchlist files untouched.
+
+Deliverable:
+Report:
+
+* Where representative_symbol was lost.
+* Fields restored on the API row.
+* 10 example theme_id → representative_symbol mappings.
+* Confirmation LKG rows include representative_symbol.
+* Confirmation performance/holdings/editor paths unchanged.
