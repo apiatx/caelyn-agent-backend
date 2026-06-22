@@ -1,0 +1,113 @@
+BACKEND REPLIT EMERGENCY FIX — Themes page only showing 2 themes
+
+Critical production bug:
+The live Themes page is only showing 2 themes: Space Economy and Pre-IPO. This is unacceptable. The public Themes API is serving a partial 2-theme result after the recent cache/LKG/admin-refresh changes.
+
+Do not treat this as a dev artifact. It is visible in the app UI right now.
+
+Goal:
+Restore /api/themes/relative-strength to 60 themes immediately and make it impossible for the public endpoint to serve a 2-theme partial snapshot again.
+
+Audit first, but fast:
+
+1. Hit the live endpoint:
+   GET /api/themes/relative-strength?timeframe=1D&classification=all
+2. Log:
+
+   * number of themes returned
+   * source/cache_status
+   * admin_refresh_pending
+   * lkg_theme_count
+   * lkg_theme_floor
+   * whether response came from in-memory TTL cache, LKG, or fresh compute
+3. Hit:
+   GET /api/themes/relative-strength/status
+   or whatever status endpoint exists.
+4. Inspect current on-disk LKG file:
+
+   * path
+   * theme count
+   * timestamp
+   * whether it has only 2 themes
+5. Inspect in-memory TTL cache for all 6 timeframes:
+
+   * 1D
+   * 7D
+   * 30D
+   * YTD
+   * 1Y
+   * 5Y
+     Confirm whether any cached payload contains fewer than 55 themes.
+
+Likely root cause:
+A 2-theme partial result was already written to LKG or is still sitting in memory cache. The new stale-safe guard may prevent future writes, but the current bad partial cache/LKG is still being served. Also verify the public endpoint is not allowed to serve partial fresh output directly when count < lkg_theme_floor.
+
+Immediate required repair:
+
+1. Purge any in-memory TTL cache payload with theme_count < 55.
+2. Delete or quarantine the poisoned 2-theme LKG file if it exists.
+3. Force a full rebuild/refresh of the Themes RS payload.
+4. Verify the live public endpoint returns 60 themes again.
+5. If full rebuild is blocked by FMP guard/data outage:
+
+   * do NOT serve 2 themes.
+   * return the last valid 60-theme snapshot if available.
+   * if no valid 60-theme LKG exists, build a safe 60-theme fallback from ENRICHED_THEME_RS_UNIVERSE with available/cached performance values and placeholders only where unavoidable.
+   * The UI must never collapse to 2 visible themes.
+
+Permanent fix:
+
+1. Public /api/themes/relative-strength must never return a payload with fewer than the expected floor, currently 55, unless there is truly no universe available.
+2. _save_lkg() already has a count guard, but also guard:
+
+   * in-memory TTL cache writes
+   * direct fresh response path
+   * LKG read path
+   * stale-while-revalidate response path
+3. If fresh compute returns <55 themes:
+
+   * do not save it
+   * do not put it into TTL cache
+   * do not return it to the public endpoint if a 60-theme stale payload or universe fallback exists
+   * log a clear warning
+4. If LKG on disk has <55 themes:
+
+   * treat it as poisoned/invalid
+   * do not serve it
+   * quarantine/delete it
+5. If in-memory TTL cache has <55 themes:
+
+   * treat it as poisoned/invalid
+   * evict it
+6. Admin basket endpoint can stay immediate/fresh.
+7. Admin edits can mark refresh pending, but they must not cause the public Themes table to collapse to a partial universe.
+
+Validation required:
+
+1. Before fix, prove live endpoint currently returns 2 themes.
+2. After repair, live endpoint returns 60 themes.
+3. Reload frontend Themes page and confirm 60 themes visible.
+4. Confirm all classifications still work:
+
+   * Themes
+   * Sectors
+   * All
+5. Confirm status endpoint reports:
+
+   * lkg_theme_count >= 55 or valid fallback
+   * admin_refresh_pending correctly
+6. Simulate a partial compute result with 2 themes.
+7. Confirm it is:
+
+   * not saved to LKG
+   * not saved to TTL cache
+   * not returned publicly
+8. Confirm admin add/remove still works:
+
+   * admin basket endpoint updates immediately
+   * public endpoint stays 60 rows while refresh pending
+9. Confirm leader endpoints still work.
+10. Confirm Watchlist files untouched.
+
+Important:
+Do not spend time on frontend until the backend endpoint is fixed. The frontend is just rendering what the public API gives it. The API must not serve a 2-theme universe.

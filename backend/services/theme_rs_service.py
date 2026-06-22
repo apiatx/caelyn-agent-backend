@@ -166,11 +166,29 @@ def _load_lkg() -> Optional[list[dict]]:
         if not _LKG_PATH.exists():
             return None
         raw = json.loads(_LKG_PATH.read_text())
+        rows: Optional[list] = None
         if isinstance(raw, list) and raw:
-            return raw
+            rows = raw
         # v2_5y format: {"_schema": ..., "rows": [...]}
-        if isinstance(raw, dict) and isinstance(raw.get("rows"), list) and raw["rows"]:
-            return raw["rows"]
+        elif isinstance(raw, dict) and isinstance(raw.get("rows"), list) and raw["rows"]:
+            rows = raw["rows"]
+        if rows is None:
+            return None
+        # Count guard: treat a sub-floor LKG as poisoned — quarantine and ignore.
+        # This handles the case where a partial result was written before the count
+        # guard existed, or the file was corrupted in some other way.
+        if len(rows) < _MIN_LKG_THEME_FLOOR:
+            print(
+                f"[THEME_RS] LKG on disk has only {len(rows)} themes "
+                f"(< floor {_MIN_LKG_THEME_FLOOR}) — quarantining as poisoned"
+            )
+            try:
+                quarantine = _LKG_PATH.with_suffix(".json.poisoned")
+                _LKG_PATH.replace(quarantine)
+            except Exception as qe:
+                print(f"[THEME_RS] LKG quarantine error: {qe}")
+            return None
+        return rows
     except Exception as e:
         print(f"[THEME_RS] LKG load error: {e}")
     return None
@@ -1315,6 +1333,19 @@ async def _locked_refresh(tf: str, force: bool = False) -> None:
         try:
             rows = await _compute(tf)
             if rows:
+                # ── Count guard: never write a partial result to TTL cache or LKG ──
+                # Partial results occur when FMP is blocked/rate-limited/outaged.
+                # Without this guard the TTL cache would serve 2 themes every 60s
+                # even though the LKG has 60 good themes.
+                if len(rows) < _MIN_LKG_THEME_FLOOR:
+                    existing_lkg = _load_lkg()
+                    if existing_lkg and len(existing_lkg) >= _MIN_LKG_THEME_FLOOR:
+                        print(
+                            f"[THEME_RS] {tf} PARTIAL result ({len(rows)} themes "
+                            f"< floor {_MIN_LKG_THEME_FLOOR}) — NOT written to "
+                            f"TTL cache or LKG (existing LKG has {len(existing_lkg)} themes)"
+                        )
+                        return   # keep existing TTL cache empty → next request serves LKG
                 payload = _make_payload(rows, tf)
                 cache.set(f"{_CACHE_KEY}:{tf}", payload, _ttl_for_timeframe(tf))
                 _save_lkg(rows)
@@ -1481,7 +1512,19 @@ async def get_theme_rs_data(
     if not force:
         hit = cache.get(cache_key)
         if hit is not None:
-            return _apply_classification_filter(_add_freshness(hit), classification)
+            # Evict poisoned payloads that slipped in before the count guard existed.
+            if len(hit.get("themes", [])) < _MIN_LKG_THEME_FLOOR:
+                print(
+                    f"[THEME_RS] {tf} evicting poisoned TTL cache "
+                    f"({len(hit.get('themes', []))} themes < floor {_MIN_LKG_THEME_FLOOR})"
+                )
+                try:
+                    cache.delete(cache_key)
+                except Exception:
+                    pass
+                # Fall through to LKG / recompute paths below
+            else:
+                return _apply_classification_filter(_add_freshness(hit), classification)
 
     # ── 2/3. Cache miss — check if refresh already in progress ────────────────
     lock = _get_lock(tf)
@@ -1527,6 +1570,30 @@ async def get_theme_rs_data(
         try:
             rows = await _compute(tf)
             if rows:
+                # ── Count guard: partial result must not be cached or returned ────
+                if len(rows) < _MIN_LKG_THEME_FLOOR:
+                    # Prefer a stale-good LKG over serving a partial universe.
+                    # Re-load in case _locked_refresh updated it since we last checked.
+                    fresh_lkg = _load_lkg()
+                    if fresh_lkg and len(fresh_lkg) >= _MIN_LKG_THEME_FLOOR:
+                        print(
+                            f"[THEME_RS] {tf} cold compute partial ({len(rows)} themes "
+                            f"< floor {_MIN_LKG_THEME_FLOOR}) — serving LKG "
+                            f"({len(fresh_lkg)} themes) instead"
+                        )
+                        return _apply_classification_filter(
+                            _lkg_payload(fresh_lkg, tf, source="lkg_partial_compute_guard"),
+                            classification,
+                        )
+                    # No valid LKG either — return partial uncached (last resort).
+                    print(
+                        f"[THEME_RS] {tf} cold compute partial ({len(rows)} themes) "
+                        f"and no valid LKG — returning partial (not cached)"
+                    )
+                    return _apply_classification_filter(
+                        _lkg_payload(rows, tf, source="partial_no_lkg"), classification
+                    )
+                # Full result — write to TTL cache and LKG
                 payload = _make_payload(rows, tf)
                 cache.set(cache_key, payload, _ttl_for_timeframe(tf))
                 _save_lkg(rows)
