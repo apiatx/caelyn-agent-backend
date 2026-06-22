@@ -69,6 +69,10 @@ from services.sector_rotation.providers import (
 
 _CACHE_KEY       = "themes:relative_strength:v1"
 _LKG_PATH        = Path(__file__).parent.parent / "data" / "themes_rs_lkg.json"
+# Compact disk file for 1D intraday curves — survives restarts and off-hours.
+# Stores {session_date, generated_at, curves: {theme_id: [{date, value_pct}]}}.
+# Written after every successful 1D compute that has non-empty intraday data.
+_1D_LKG_PATH     = Path(__file__).parent.parent / "data" / "themes_rs_1d_lkg.json"
 # Bump this whenever a new timeframe or field is added to theme rows.
 # warmup_theme_rs() uses it to skip seeding new TF caches from old LKG rows.
 _LKG_SCHEMA_VER  = "v2_5y"
@@ -97,6 +101,10 @@ _ETF_HOLDINGS_TOP_N = 10
 
 # Semaphore for FMP history calls (parallel bursting within rate-limit)
 _FMP_HIST_SEM = asyncio.Semaphore(25)
+# Semaphore for Tradier intraday timesales calls (raw httpx, bypasses TRADIER_LIMITER).
+# Caps the burst on the first cold-start fetch (222 unique proxy symbols).
+# Per-symbol 10-min cache means only ~1 burst per 10-min window during market hours.
+_INTRADAY_SEM = asyncio.Semaphore(20)
 
 # ── Per-timeframe TTL constants ────────────────────────────────────────────────
 _TTL_1D_MARKET   = 60      # 1 minute  — 1D during market hours (Tradier, real-time)
@@ -272,6 +280,68 @@ def _save_lkg(data: list[dict]) -> None:
             )
     except Exception as e:
         print(f"[THEME_RS] LKG save error: {e}")
+
+
+# ── 1D intraday LKG (durable across restarts & off-hours) ─────────────────────
+
+def _save_1d_lkg(rows: list[dict]) -> None:
+    """
+    Persist intraday performance_curve for all 1D themes to disk.
+
+    Only writes when at least _MIN_LKG_THEME_FLOOR themes have a non-empty curve
+    whose first date contains "T" (i.e. is a real intraday ISO timestamp).
+    This prevents a market-closed empty-curve run from overwriting a good snapshot.
+
+    Format: compact JSON — {session_date, generated_at, curves: {theme_id: [pts]}}
+    """
+    from datetime import date as _d
+    curves: dict[str, list] = {}
+    for row in rows:
+        curve = row.get("performance_curve") or []
+        if curve and "T" in str((curve[0] or {}).get("date", "")):
+            tid = row.get("theme_id")
+            if tid:
+                curves[tid] = curve
+
+    if len(curves) < _MIN_LKG_THEME_FLOOR:
+        return  # market closed / pre-market — don't overwrite a good snapshot
+
+    data = {
+        "session_date": _d.today().isoformat(),
+        "generated_at": time.time(),
+        "curves":       curves,
+    }
+    tmp = _1D_LKG_PATH.with_suffix(".json.tmp")
+    try:
+        _1D_LKG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with tmp.open("w") as f:
+            json.dump(data, f, separators=(",", ":"))
+        tmp.replace(_1D_LKG_PATH)
+        print(
+            f"[THEME_RS] 1D intraday LKG saved "
+            f"({len(curves)} themes, session={data['session_date']})"
+        )
+    except Exception as exc:
+        print(f"[THEME_RS] 1D intraday LKG save error: {exc}")
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _load_1d_lkg() -> Optional[dict]:
+    """Load the 1D intraday LKG from disk. Returns None if absent or corrupt."""
+    if not _1D_LKG_PATH.exists():
+        return None
+    try:
+        with _1D_LKG_PATH.open() as f:
+            data = json.load(f)
+        if not isinstance(data.get("curves"), dict):
+            return None
+        return data
+    except Exception as exc:
+        print(f"[THEME_RS] 1D intraday LKG load error: {exc}")
+        return None
 
 
 # ── Refresh timestamp persistence ─────────────────────────────────────────────
@@ -580,18 +650,19 @@ async def _fetch_intraday_bars(sym: str) -> list[dict]:
 
     base = _tradier_base()
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            resp = await client.get(
-                f"{base}/markets/timesales",
-                headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-                params={
-                    "symbol":         sym,
-                    "interval":       "5min",
-                    "start":          f"{today} 09:30",
-                    "end":            f"{today} 16:05",
-                    "session_filter": "open",
-                },
-            )
+        async with _INTRADAY_SEM:   # ≤20 concurrent Tradier timesales calls
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                resp = await client.get(
+                    f"{base}/markets/timesales",
+                    headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                    params={
+                        "symbol":         sym,
+                        "interval":       "5min",
+                        "start":          f"{today} 09:30",
+                        "end":            f"{today} 16:05",
+                        "session_filter": "open",
+                    },
+                )
         if resp.status_code != 200:
             return []
 
@@ -1618,6 +1689,8 @@ async def _locked_refresh(tf: str, force: bool = False) -> None:
                 payload = _make_payload(rows, tf)
                 cache.set(f"{_CACHE_KEY}:{tf}", payload, _ttl_for_timeframe(tf))
                 _save_lkg(rows)
+                if tf == "1D":
+                    _save_1d_lkg(rows)   # durable intraday curve persistence
                 _last_computed[tf] = time.time()
                 _save_refresh_ts(tf, _last_computed[tf])   # persist across restarts
                 print(
@@ -1692,10 +1765,44 @@ async def warmup_theme_rs() -> None:
             if tf == "5Y" and not has_5y_lkg:
                 print("[THEME_RS] Startup: skipping 5Y cache seed (pre-5Y LKG)")
                 continue
+            # 1D is seeded separately below from the intraday LKG so we don't
+            # fill the 1D slot with daily date strings that would need clearing.
+            if tf == "1D":
+                continue
             if cache.get(cache_key) is None:
                 seed = _lkg_payload(lkg, tf, source="lkg_startup")
                 seed["_cache_set_at"] = time.time()
                 cache.set(cache_key, seed, 120)
+
+        # ── 1D: seed from the intraday LKG if available ───────────────────────
+        # This provides last-session intraday curves immediately on restart /
+        # after-hours / weekends without waiting for the background 1D warmup.
+        lkg_1d = _load_1d_lkg()
+        if lkg_1d and isinstance(lkg_1d.get("curves"), dict):
+            curves_by_id = lkg_1d["curves"]
+            # Inject persisted intraday curves into the daily LKG rows.
+            rows_1d = [
+                {**row, "performance_curve": curves_by_id.get(row.get("theme_id", ""), [])}
+                for row in lkg
+            ]
+            seed_1d = _lkg_payload(rows_1d, "1D", source="lkg_1d_startup")
+            seed_1d["_cache_set_at"] = time.time()
+            # TTL: 60s if market open (background refresh fires soon),
+            #       3600s if off-hours (last-session curves serve until next open)
+            cache.set(f"{_CACHE_KEY}:1D", seed_1d, _ttl_for_timeframe("1D"))
+            print(
+                f"[THEME_RS] Startup: 1D cache seeded from intraday LKG "
+                f"(session={lkg_1d.get('session_date', '?')}, "
+                f"{len(curves_by_id)} themes with curves)"
+            )
+        else:
+            # No intraday LKG yet — seed 1D with daily LKG (curves will be
+            # cleared to [] by _apply_curves_for_tf until first intraday compute)
+            if cache.get(f"{_CACHE_KEY}:1D") is None:
+                seed_1d = _lkg_payload(lkg, "1D", source="lkg_startup")
+                seed_1d["_cache_set_at"] = time.time()
+                cache.set(f"{_CACHE_KEY}:1D", seed_1d, 120)
+            print("[THEME_RS] Startup: no 1D intraday LKG — 1D curves empty until first market-hours compute")
     else:
         print("[THEME_RS] Startup: no LKG found — cold start, background warmup will populate")
 
