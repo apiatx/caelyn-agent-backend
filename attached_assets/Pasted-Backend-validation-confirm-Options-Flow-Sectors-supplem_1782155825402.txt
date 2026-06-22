@@ -1,0 +1,60 @@
+Backend validation — confirm Options Flow Sectors supplement scan is actually progressing
+
+The Sectors tab now shows ticker symbols correctly, but many sectors/themes/tickers still have no options flow data. The UI currently shows many pending scan tickers.
+
+Need to confirm whether this is normal warmup or a stuck supplement scanner.
+
+Audit/validate only first. Do not change code unless the scan is stuck.
+
+Check:
+
+1. GET /api/options-flow/sectors
+2. GET /api/options-flow/sectors/debug
+3. Record:
+
+   * theme_universe_total
+   * theme_tickers_with_data
+   * pending_scan
+   * supplement_fresh_count
+   * supplement_lkg_count
+   * no_options_confirmed
+   * coverage_pct
+   * last_supplement_scan_at
+   * next_supplement_scan_at
+   * last_20_scanned_symbols
+   * next_20_pending_symbols
+
+Expected behavior:
+
+* Supplement scanner should run about every 5 minutes.
+* Batch size should be about 20 symbols.
+* pending_scan should decrease over time.
+* supplement_fresh_count or supplement_lkg_count should increase over time.
+* theme_tickers_with_data should generally increase, except when the batch hits no-options/unsupported names.
+* No Tradier calls should happen from the /api/options-flow/sectors request path.
+
+Validation:
+
+1. Capture coverage now.
+2. Wait for the next scheduled supplement batch.
+3. Capture coverage again.
+4. Confirm scan progress:
+
+   * last_supplement_scan_at changed
+   * last_20_scanned_symbols updated
+   * pending_scan decreased or no_options_confirmed increased
+   * supplement_fresh_count increased if scanned symbols had options flow
+5. Confirm server logs show supplement loop activity.
+6. Confirm no duplicate scans for tickers already in master cache.
+7. Confirm Pre-IPO/VCX absent.
+
+If the numbers are not moving:
+
+* inspect why _theme_options_supplement_loop is not running
+* inspect rate limiter saturation
+* inspect exceptions inside supplement scan batch
+* inspect whether pending queue is being regenerated incorrectly
+* inspect whether supplement results are written to disk LKG after each batch
+
+Deliverable:
+Report whether the Sectors tab is simply warming or the supplement scanner is stuck. Include before/after coverage numbers.
