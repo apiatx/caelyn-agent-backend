@@ -997,8 +997,8 @@ async def _build_theme_row(
             "discovery_sources": disc_sources.get(sym, []),
         }
 
-    leaders  = [_make_entry(s, r, ds) for s, r, ds in sym_perfs[:3]]
-    laggards = [_make_entry(s, r, ds) for s, r, ds in sym_perfs[-3:][::-1]]
+    top_leaders  = [_make_entry(s, r, ds) for s, r, ds in sym_perfs[:3]]
+    top_laggards = [_make_entry(s, r, ds) for s, r, ds in sym_perfs[-3:][::-1]]
 
     # ── Breadth (% advancing in the requested timeframe) ──────────────────────
     breadth: Optional[float] = None
@@ -1039,10 +1039,12 @@ async def _build_theme_row(
         # holdings_display_mode: how the frontend should populate the expanded table.
         #   "theme_basket" — show theme_holdings directly (custom/hybrid themes).
         #   "etf_holdings" — fetch ETF holdings for representative_symbol (ETF themes).
-        "holdings_display_mode":        meta.get("holdings_display_mode", "etf_holdings"),
-        # theme_holdings: explicit basket for theme_basket mode.
-        #   For etf_holdings mode this is empty — frontend uses representative_symbol.
-        "theme_holdings": sorted(proxy_syms) if meta.get("holdings_display_mode") == "theme_basket" else [],
+        # Always use theme_basket — the pre-computed proxy_syms are sent directly to
+        # the frontend so it never needs to fetch live ETF holdings from FMP.
+        # "etf_holdings" mode caused "ETF holdings unavailable on current data plan"
+        # errors whenever the FMP ETF endpoint was rate-limited or plan-blocked.
+        "holdings_display_mode":        "theme_basket",
+        "theme_holdings":               sorted(proxy_syms),
         # leader_symbol / leader_source:
         #   Manual admin-selected stock ticker that represents this theme's current leader.
         #   Separate from representative_symbol (ETF/proxy for TradingView chart).
@@ -1068,8 +1070,8 @@ async def _build_theme_row(
         "pct_from_50d":          pct_from_50d,
         "trend_accel_20d":       trend_accel,
         "leader_universe_source": universe_src_label,
-        "leaders":               leaders,
-        "laggards":              laggards,
+        "leaders":               top_leaders,
+        "laggards":              top_laggards,
         "last_updated":          datetime.now(timezone.utc).isoformat(),
         # Filled in by _score_and_state:
         "rs_score":              None,

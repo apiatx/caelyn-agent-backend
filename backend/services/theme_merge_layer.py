@@ -393,33 +393,14 @@ def _build_enriched_universe(
         rep_sym, rep_src = _get_representative_symbol(theme_id, base_meta)
         meta["representative_symbol"]        = rep_sym
         meta["representative_symbol_source"] = rep_src
-        # Determine holdings_display_mode:
-        # Use "theme_basket" (show proxy_symbols as the curated basket) when:
-        #   • proxy_type is custom or hybrid — hand-curated stock baskets
-        #   • proxy_type is basket — explicitly curated mix (e.g. memory_storage,
-        #     tech_mega_caps) that should show the basket, not ETF constituent lists
-        #   • watchlist_seeds is non-empty — ETF-type themes enriched with watchlist
-        #     individual stocks (e.g. datacenter_infra, clean_energy, defense, fintech,
-        #     uranium_nuclear). Showing the representative ETF's full holdings would hide
-        #     the curated additions and display unrelated constituent stocks.
-        # Use "etf_holdings" only for truly pure ETF themes with no curated additions.
-        #
-        # NOTE: watchlist_seeds is populated earlier in this same function's merge loop,
-        # so it is available here even though _build_theme_row never exposes it in the API.
-        ptype          = meta.get("proxy_type", "etf")
-        wl_seeds       = meta.get("watchlist_seeds", [])
-        manual_added   = meta.get("manual_added_symbols", [])
-        # Use "theme_basket" when the theme has ANY curated content:
-        #   • custom/hybrid/basket proxy_type — manually curated stock baskets
-        #   • watchlist_seeds non-empty — ETF themes enriched from dev watchlist
-        #   • manual_added_symbols non-empty — admin-added tickers for this theme
-        meta["holdings_display_mode"] = (
-            "theme_basket"
-            if (ptype in ("custom", "hybrid", "basket")
-                or len(wl_seeds) > 0
-                or len(manual_added) > 0)
-            else "etf_holdings"
-        )
+        # holdings_display_mode: always "theme_basket".
+        # The frontend shows proxy_symbols directly as the curated basket for every
+        # theme. "etf_holdings" mode required a live FMP ETF-holdings fetch which
+        # failed on restricted data plans ("ETF holdings unavailable on current data
+        # plan"). Since every theme already has a pre-computed proxy_symbols basket
+        # (ETF proxies for sector themes, hand-curated stocks for custom/hybrid),
+        # there is no reason to delegate holdings population to the frontend.
+        meta["holdings_display_mode"] = "theme_basket"
 
     return enriched, net_new_proxy
 

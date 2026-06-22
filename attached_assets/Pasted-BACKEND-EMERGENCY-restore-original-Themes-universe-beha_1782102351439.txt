@@ -1,0 +1,98 @@
+BACKEND EMERGENCY — restore original Themes universe behavior, keep only minimal watchlist merge
+
+The Themes page is broken after the recent theme merge/editor changes. Current symptoms:
+
+* expanded rows show “ETF holdings unavailable on current data plan”
+* TradingView widgets say “Chart Unavailable”
+* theme rows have shown internal theme_ids instead of proper tickers/names
+* performance has shown placeholder-looking tiny values
+* the original saved theme universe / imported ETF holdings behavior was working before
+
+We need to stop overcomplicating this and restore the original Themes behavior.
+
+Core requirement:
+The Themes page should work exactly like it did before the recent representative_symbol / etf_holdings / theme_basket refactor, except:
+
+1. Watchlist tickers may be added into the appropriate existing theme baskets.
+2. Duplicate/overlapping theme names may be canonicalized.
+3. Manual admin add/remove overrides may persist.
+4. Manual leader support may persist only if it does not break the original Themes page.
+
+Do not rely on live ETF holdings from FMP.
+Do not show “ETF holdings unavailable on current data plan.”
+Do not treat representative_symbol as the source of holdings.
+Do not replace the saved theme universe with placeholder/fallback data.
+
+Audit first:
+
+1. Identify the last known working path for the expanded Themes universe before the recent changes.
+
+   * Where were saved ETF holdings / imported theme constituents stored?
+   * Which endpoint returned them?
+   * Which service function expanded ETF/theme proxies into constituent tickers?
+2. Identify exactly where the new message is generated:
+
+   * “ETF holdings unavailable on current data plan. Showing saved theme universe.”
+3. Identify why TradingView charts now say “Chart Unavailable.”
+
+   * Is the chart receiving theme_id instead of ticker?
+   * Is it receiving an empty symbol?
+   * Is exchange-prefix mapping broken?
+4. Identify whether /api/themes/relative-strength is currently returning placeholder/dummy performance values.
+5. Identify whether the public endpoint is serving a fallback universe instead of the real historical/performance payload.
+
+Immediate repair:
+
+1. Restore the original saved theme universe / imported constituent path for expanded holdings.
+2. Remove/disable the frontend-facing “ETF holdings unavailable on current data plan” state from the Themes page contract.
+3. Ensure every theme row still includes the fields the frontend used successfully before:
+
+   * display_name
+   * theme_id
+   * classification
+   * performance
+   * score/status/stage/trend
+   * the original ticker/proxy/chart field used before
+   * saved universe / holdings data used before
+4. Keep manual/watchlist additions layered on top of the original universe, not replacing it.
+5. Keep manual removals layered on top of the original universe.
+6. If a theme has a saved constituent universe, return it as the expanded theme universe.
+7. Do not fetch live ETF holdings from FMP.
+8. Do not use fake placeholder performance values to fill 60 rows unless clearly marked as an emergency fallback and not written to cache.
+
+Simplify the model:
+
+* chart_symbol or representative_symbol: chart only
+* theme_universe / theme_holdings: saved/imported constituent universe plus watchlist/manual additions/removals
+* performance_symbols: same true tracked symbols used for average performance
+* leader_symbol: optional, does not affect chart or performance
+
+Important:
+Do not use holdings_display_mode to send the frontend down a live ETF holdings fetch path. For now, the frontend should be able to render the saved theme universe for every theme that has one.
+
+Validation required:
+
+1. Public /api/themes/relative-strength returns 60 real themes.
+2. Performance values are real, not placeholder +0.01/+0.02 across everything.
+3. Expanded Memory & Storage shows the saved universe/basket.
+4. Expanded Substrates / Packaging shows AMKR/ASX and any true saved additions, not SOXX holdings unless those are intentionally part of that theme.
+5. Expanded broad ETF-backed themes show the original saved/imported universe that worked before, not an unavailable message.
+6. TradingView chart fields are valid and non-empty.
+7. Manual add/remove still works:
+
+   * add ticker to one theme
+   * visible immediately in that theme’s universe
+   * same ticker can also exist in another theme
+8. Manual leader does not break anything.
+9. No 2-theme partial snapshots are served or cached.
+10. Watchlist page untouched.
+
+Deliverable:
+Report:
+
+* The exact original saved universe path restored.
+* The exact broken path removed/disabled.
+* Why charts were unavailable.
+* Proof the API returns real 60-theme data.
+* Proof expanded holdings use saved universe, not live FMP ETF holdings.
+* Proof performance is real again.
