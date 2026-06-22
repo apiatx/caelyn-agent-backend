@@ -706,6 +706,16 @@ try:
 except Exception as _themes_err:
     print(f"[THEMES_RS] Router unavailable (non-fatal): {_themes_err}")
 
+# ── Options Flow Sectors router (/api/options-flow/sectors) ──────────────────
+# Net options flow aggregated by Sector → Theme → Ticker.
+# Zero new Tradier calls — reads from existing master screener cache.
+try:
+    from routes.options_flow_sectors import router as _opts_sectors_router
+    app.include_router(_opts_sectors_router)
+    print("[OPTIONS_SECTORS] Router registered at /api/options-flow/sectors")
+except Exception as _opts_sectors_err:
+    print(f"[OPTIONS_SECTORS] Router unavailable (non-fatal): {_opts_sectors_err}")
+
 # ── Portfolio categorize-themes router (/api/portfolio/categorize-themes) ─────
 # LLM-powered classifier: assigns unclassified portfolio tickers to named
 # investment themes, persists to data/llm_theme_overrides.json, and invalidates

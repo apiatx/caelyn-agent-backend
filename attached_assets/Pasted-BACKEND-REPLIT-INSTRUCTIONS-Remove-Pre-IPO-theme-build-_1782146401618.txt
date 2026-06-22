@@ -1,0 +1,293 @@
+BACKEND REPLIT INSTRUCTIONS — Remove Pre-IPO theme + build Net Options Flow by Sector/Theme/Ticker
+
+There are two backend tasks:
+
+1. Remove the Pre-IPO theme completely and make sure it no longer triggers any market-data/API work.
+2. Add a new cached Net Options Flow aggregation system grouped by Sector → Theme → Ticker, reusing existing Tradier options-flow data wherever possible.
+
+Critical constraints:
+
+* Audit first. Do not write code until the current Options Flow pipeline, scheduler, cache, and theme universe are understood.
+* Do not change the existing Options Flow screener endpoint/logic/UI contract. The current Options Flow page works; the new Sectors view must be additive.
+* Do not create duplicate Tradier calls for tickers already scanned by the existing Options Flow/watchlist pipeline.
+* Do not fetch options flow live on page request.
+* Do not use extra Tradier calls except for theme universe tickers that are not already part of the existing options scan universe.
+* Keep within Tradier limits and existing rate limiter.
+* Theme universe membership must stay synced with manual theme add/remove edits.
+* Future Watchlist updates must not auto-change the Themes universe. The Themes universe is now curated/admin-controlled.
+* Same ticker can belong to multiple themes.
+* Do not touch Watchlist page behavior.
+
+Task 1 — Remove Pre-IPO theme
+
+Audit first:
+
+1. Find `pre_ipo` / `Pre-IPO` / `VCX` in:
+
+   * theme_rs_universe.py
+   * theme_merge_layer.py
+   * theme_rs_service.py
+   * ALL_PROXY_SYMBOLS / ALL_CANDIDATE_SYMBOLS
+   * representative symbol maps
+   * tv_symbol maps
+   * any LKG/cache warmup universe
+   * frontend-facing theme response
+2. Confirm whether `VCX` currently triggers:
+
+   * FMP history fetch
+   * Tradier quote fetch
+   * Tradier options scan
+   * theme RS compute
+3. Confirm whether `pre_ipo` exists only on Themes page or anywhere else.
+
+Required behavior:
+
+1. Remove `pre_ipo` from the universal theme universe.
+2. Remove `VCX` from theme proxy/performance/representative/tv symbol maps unless it is used elsewhere intentionally.
+3. Clear/invalidate Themes RS cache/LKG safely so the public endpoint returns 59 themes, not stale 60 including Pre-IPO.
+4. Do not remove unrelated sectors/themes.
+5. Confirm no FMP/Tradier call is scheduled for `VCX` because of the Themes page.
+
+Validation:
+
+* `/api/themes/relative-strength` returns 59 themes.
+* `pre_ipo` absent from all classifications.
+* `VCX` absent from theme proxy/candidate/performance symbols.
+* no theme warmup includes `VCX`.
+* Watchlist untouched.
+
+Task 2 — Net Options Flow aggregation
+
+Goal:
+Create a cached backend endpoint that powers a new Options Flow page tab called “Sectors”.
+
+This endpoint should show:
+
+1. Sector-level net options flow.
+2. Click sector → themes in that sector.
+3. Click theme → tickers in that theme.
+4. Each level should include:
+
+   * call premium dollars
+   * put premium dollars
+   * net premium dollars
+   * net bias: bullish / bearish / neutral
+   * put/call ratio
+   * ticker count / contributing ticker count
+   * updated_at / data freshness
+
+Definitions:
+Audit existing Options Flow data first. Use existing fields if they already exist.
+
+Preferred money-flow formula:
+
+* call_premium_total = sum call option premium dollars
+* put_premium_total = sum put option premium dollars
+* raw_net_call_minus_put = call_premium_total - put_premium_total
+
+If existing flow data includes buy/sell side/aggressor:
+
+* bullish_premium = bought calls + sold puts
+* bearish_premium = bought puts + sold calls
+* signed_net_flow = bullish_premium - bearish_premium
+
+If side/aggressor is unavailable or unreliable:
+
+* use raw_net_call_minus_put
+* expose `net_flow_method = "call_minus_put_premium"`
+
+For put/call ratio:
+
+* money_put_call_ratio = put_premium_total / call_premium_total where call_premium_total > 0
+* also expose average_ticker_put_call_ratio if existing ticker-level PCR is already calculated
+* do not use contract count PCR if premium-dollar PCR is available, unless clearly named
+
+Important:
+Do not just show put/call ratio. We need dollar flow:
+
+* calls dollars
+* puts dollars
+* net dollars
+* net direction
+
+Theme membership:
+Use the curated Themes page universe:
+
+* theme_id
+* display_name
+* classification
+* theme_holdings / performance_symbols
+* manual admin additions/removals
+* pre_ipo removed
+
+Do not read live Watchlist categories for this feature. The Themes universe is already frozen/curated.
+
+Many-to-many rule:
+A ticker can belong to multiple themes.
+
+Theme aggregation:
+
+* If ticker belongs to multiple themes, it contributes to each theme it belongs to.
+
+Sector aggregation:
+Avoid accidental double-counting inside a sector.
+Recommended rule:
+
+* sector totals should be computed from unique tickers in that sector.
+* if a ticker appears in multiple themes inside the same sector, count it once at sector level.
+* theme totals can still include the ticker in each theme.
+* expose `sector_total_method = "unique_ticker_sum"` so the frontend understands sector totals may not equal sum of visible theme cards when overlaps exist.
+
+Audit existing options pipeline:
+Find:
+
+1. Existing Options Flow routes.
+2. Existing Tradier options scan scheduler.
+3. Existing options screener/master cache.
+4. Existing per-ticker endpoint.
+5. Existing option premium fields.
+6. Existing side/aggressor/bought/sold fields if any.
+7. Existing watchlist options universe.
+8. Existing rate limiter.
+9. Existing LKG/disk/Neon cache for options flow.
+10. How often watchlist options are scanned.
+11. Whether existing scanner already dedupes symbols.
+
+Required backend architecture:
+
+1. Build a unified options-flow symbol universe:
+
+   * existing watchlist options scan symbols
+   * plus curated theme universe tickers not already scanned
+2. Deduplicate symbols before scheduling Tradier calls.
+3. Reuse existing cached options-flow data for any symbol already scanned.
+4. Only newly needed theme-only tickers should be added to the recurring scan universe.
+5. Do not fetch options flow for all theme tickers on page load.
+6. Do not create a second independent Tradier scan loop if an existing scheduler/cache can be extended.
+7. Use existing rate limiter and TTL/LKG patterns.
+8. If a ticker has no options data or no Tradier options support, mark:
+
+   * options_available = false
+   * reason if available
+   * exclude from premium totals
+9. Newly added/removed theme tickers through admin theme editor must update the Net Flow universe.
+10. Cache invalidation should be targeted and safe:
+
+* admin theme basket edit should update membership immediately
+* options data refresh should happen via scheduler/cache, not blocking the admin edit response
+
+Add backend endpoint(s):
+Preferred:
+
+GET /api/options-flow/sectors
+
+Response shape:
+{
+"as_of": "...",
+"source": "cache|lkg|live_cache",
+"net_flow_method": "signed_premium" | "call_minus_put_premium",
+"put_call_ratio_method": "premium_dollars",
+"sector_total_method": "unique_ticker_sum",
+"tradier_calls_reused": number,
+"tradier_calls_added_for_theme_only_symbols": number,
+"sectors": [
+{
+"sector_id": "technology",
+"sector_name": "Technology",
+"call_premium": 123456,
+"put_premium": 65432,
+"net_premium": 58024,
+"put_call_ratio": 0.53,
+"bias": "bullish",
+"ticker_count": 40,
+"contributing_ticker_count": 31,
+"themes": [
+{
+"theme_id": "ai_networking",
+"theme_name": "AI Networking",
+"call_premium": 12345,
+"put_premium": 6789,
+"net_premium": 5556,
+"put_call_ratio": 0.55,
+"bias": "bullish",
+"ticker_count": 6,
+"contributing_ticker_count": 5,
+"tickers": [
+{
+"symbol": "ANET",
+"call_premium": 1000,
+"put_premium": 500,
+"net_premium": 500,
+"put_call_ratio": 0.5,
+"bias": "bullish",
+"flow_count": 12,
+"options_available": true,
+"updated_at": "..."
+}
+]
+}
+]
+}
+]
+}
+
+Also add optional debug endpoint:
+GET /api/options-flow/sectors/debug
+Should show:
+
+* existing options scan universe count
+* theme options universe count
+* overlap count
+* added theme-only count
+* unsupported/no-options tickers
+* symbols scheduled for future scan
+* last scan timestamps
+
+Sector mapping:
+Audit if theme universe already has sector/category metadata.
+If not, create a static curated `theme_id -> sector_id/sector_name` map.
+Do not use FMP sector dynamically for the theme group if it produces inconsistent theme grouping.
+The UI needs sector → theme → ticker.
+
+Remove Pre-IPO from this mapping too.
+
+Validation:
+
+1. Existing Options Flow screener endpoint still works unchanged.
+2. New `/api/options-flow/sectors` returns sector tree.
+3. No duplicate Tradier calls for existing watchlist options symbols.
+4. Count and list of new theme-only option symbols is reported.
+5. Tradier rate limiter is used.
+6. No page-load live Tradier scan.
+7. Add a ticker to a theme through admin theme editor:
+
+   * it appears in theme universe
+   * it appears in options sector universe
+   * options scan universe includes it if not already tracked
+8. Remove ticker from a theme:
+
+   * removed from that theme’s options aggregation
+   * remains in other themes if it belongs there
+9. Same ticker in multiple themes contributes to each theme.
+10. Sector level dedupes repeated ticker within same sector.
+11. No `pre_ipo` / `VCX`.
+12. Watchlist page untouched.
+13. Existing Options Flow page behavior untouched.
+
+Deliverable:
+Report:
+
+* Files audited.
+* Files changed.
+* How Pre-IPO/VCX was removed.
+* Existing options cache/scanner reused.
+* New endpoint shape.
+* Net flow formula used.
+* Put/call ratio formula used.
+* Sector mapping source.
+* Tradier call impact:
+
+  * existing reused symbols
+  * new theme-only symbols
+  * scan cadence
+* Validation proving no duplicate calls.

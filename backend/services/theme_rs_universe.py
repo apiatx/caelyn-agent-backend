@@ -622,18 +622,6 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
         "macro_sensitivities": ["AI data center buildout", "power grid demand", "industrial capex"],
     },
 
-    "pre_ipo": {
-        "classification": "sub_theme",
-        "parent_sector":  "technology",
-        "display_name": "Pre-IPO",
-        "proxy_type": "custom",
-        "proxy_symbols": ["VCX"],
-        "candidate_symbols": ["VCX"],
-        "sector_tags": ["Technology", "Private Markets"],
-        "keywords": ["pre-IPO", "private equity", "venture capital", "unicorn", "Anthropic", "OpenAI", "SpaceX", "Databricks", "Anduril", "Stripe", "Fundrise Innovation Fund"],
-        "macro_sensitivities": ["AI investment cycle", "IPO market conditions", "venture capital sentiment", "tech valuations"],
-    },
-
     # ── Q ──────────────────────────────────────────────────────────────────────
     "quantum": {
         "classification": "sub_theme",

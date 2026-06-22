@@ -947,7 +947,7 @@ async def _build_theme_row(
         if meta.get("proxy_type") != "custom":
             return None
         # Custom theme: still include row even when price data is unavailable
-        # (e.g. private-fund proxy like VCX).  Performance fields will be None.
+        # (e.g. a custom basket with no standard ETF proxy).  Performance fields will be None.
 
     # ── Representative price ───────────────────────────────────────────────────
     lead_sym   = None

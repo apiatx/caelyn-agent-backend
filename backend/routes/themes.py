@@ -64,6 +64,11 @@ def _invalidate_caches() -> None:
         invalidate_theme_rs_cache()
     except Exception as exc:
         print(f"[THEMES_ADMIN] invalidate_theme_rs_cache error: {exc}")
+    try:
+        from data.options_flow_sectors import invalidate_sectors_cache
+        invalidate_sectors_cache()
+    except Exception as exc:
+        print(f"[THEMES_ADMIN] invalidate_sectors_cache error: {exc}")
 
 
 # ── Public read endpoints ──────────────────────────────────────────────────────

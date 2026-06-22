@@ -120,7 +120,7 @@ _TV_ETF_EXCHANGE_MAP: dict[str, str] = {
     "XLE":  "AMEX", "ITA":  "AMEX", "URA":  "AMEX", "COPX": "AMEX",
     "LIT":  "AMEX", "REMX": "AMEX", "KRE":  "AMEX", "ITB":  "AMEX",
     "IHI":  "AMEX", "TAN":  "AMEX", "XME":  "AMEX", "XRT":  "AMEX",
-    "IWM":  "AMEX", "GLD":  "AMEX", "SLV":  "AMEX", "VCX":  "AMEX",
+    "IWM":  "AMEX", "GLD":  "AMEX", "SLV":  "AMEX",
     "ARKX": "AMEX", "ARKK": "AMEX", "ARKF": "AMEX", "BATT": "AMEX",
     "FCG":  "AMEX", "IWC":  "AMEX", "IGV":  "AMEX", "IYT":  "AMEX",
     "OIH":  "AMEX", "XOP":  "AMEX", "RSP":  "AMEX", "FFTY": "AMEX",
@@ -147,7 +147,6 @@ _REPRESENTATIVE_ETF_MAP: dict[str, str] = {
     "ai_networking":        "SMH",    # basket of stocks; SMH is the nearest ETF proxy
     "photonics_lasers":     "ROBO",   # no photonics ETF; robotics ETF is closest
     "power_cooling":        "GRID",   # power-infrastructure ETF
-    "pre_ipo":              "VCX",    # private-equity proxy; VCX is the only option
     "quantum":              "QTUM",   # dedicated quantum/AI ETF
     "semicap_equipment":    "SOXX",   # SOXX already in proxy_symbols
     "substrates_packaging": "SOXX",   # semis packaging → SOXX
