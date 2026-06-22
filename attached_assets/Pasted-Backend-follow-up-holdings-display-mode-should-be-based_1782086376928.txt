@@ -1,0 +1,98 @@
+Backend follow-up — holdings_display_mode should be based on true basket/enrichment, not only proxy_type
+
+Good fix on separating representative_symbol from theme holdings. But the current holdings_display_mode rule is still too broad:
+
+custom/hybrid → theme_basket
+etf/basket → etf_holdings
+
+That is not fully correct.
+
+A theme can have proxy_type = etf but still be watchlist-enriched or manually curated. In that case, the expanded view should show the true theme basket, not the full holdings of the representative ETF.
+
+Core rule:
+Only use ETF holdings when the theme is truly ETF-only and has no curated/manual/watchlist-added basket.
+
+Required behavior:
+
+1. representative_symbol remains chart-only.
+2. performance_symbols/proxy_symbols remain the merged performance basket.
+3. theme_holdings/display_symbols should show the true symbols the theme is tracking.
+4. holdings_display_mode should be:
+
+   * "theme_basket" when the theme has curated/manual symbols, watchlist-added symbols, source_type = merged/watchlist_enriched/watchlist_only, or proxy_type = custom/hybrid/basket where basket is manually curated.
+   * "etf_holdings" only when the theme is truly ETF-only and the ETF holdings are intentionally the theme representation.
+5. Do not rely only on proxy_type.
+6. Do not show ETF constituent holdings for a representative ETF unless holdings_display_mode = etf_holdings.
+7. Do not change performance math.
+8. Do not touch Watchlist files.
+
+Audit first:
+
+1. For every theme, identify:
+
+   * theme_id
+   * proxy_type
+   * representative_symbol
+   * original tracker symbols
+   * watchlist_added_symbols
+   * final proxy_symbols/performance_symbols
+   * current holdings_display_mode
+   * current theme_holdings
+2. Identify all themes where proxy_type = etf or basket but watchlist_added_symbols is non-empty.
+3. Identify all themes where proxy_type = basket and the basket is manually curated.
+4. Confirm whether those themes currently show ETF holdings incorrectly.
+
+Correct mode logic:
+Use "theme_basket" if any of these are true:
+
+* watchlist_added_symbols.length > 0
+* source_type is merged/watchlist_enriched/watchlist_only
+* proxy_type is custom
+* proxy_type is hybrid
+* proxy_type is basket and the symbols are manually curated
+* display_symbols/theme_holdings were explicitly provided
+
+Use "etf_holdings" only if:
+
+* no watchlist_added_symbols
+* no manually curated display_symbols
+* the theme is intentionally represented by ETF holdings
+* representative_symbol is an ETF
+* expanded holdings are meant to show that ETF’s holdings
+
+Expected examples that should be theme_basket:
+
+* substrates_packaging → AMKR, ASX
+* ai_networking → ALAB, ANET, AVGO, CRDO, MRVL
+* semicap_equipment → ACLS, AEHR, KLAC, ONTO, SMH, SOXX, TRT
+* power_cooling → ETN, GEV, SEI, TT, VRT
+* photonics_lasers → AAOI, COHR, FN, IPGP, LITE
+* datacenter_infra → existing tracker symbols + watchlist-added symbols like ADEA, BTDR, CIFR, IREN, VRT, WULF, etc.
+* clean_energy → existing tracker symbols + watchlist-added symbols like ARRY, BE, ENPH, FSLR, etc.
+* uranium_nuclear → URA/URNM/NLR plus ASPI, IMSR, OKLO, SMR
+* defense → ITA/PPA/XAR plus AIR, AVAV, CODA, KTOS, etc.
+* fintech → ARKF/FINX/IPAY plus CRCL, INV
+* memory_storage → DRAM/SMH/SOXX plus MU, SIMO, STX, WDC
+
+Expected examples that can remain etf_holdings:
+Only broad ETF-only themes with no curated/watchlist additions, such as broad sectors or index proxies, assuming existing behavior intended that.
+
+Validation required:
+
+1. GET /api/themes/relative-strength still returns 60 themes.
+2. representative_symbol remains populated for all 60.
+3. performance values remain unchanged.
+4. Any theme with watchlist_added_symbols uses holdings_display_mode = theme_basket.
+5. Any manual/custom/basket theme uses holdings_display_mode = theme_basket.
+6. ETF holdings are only used for true ETF-only themes.
+7. Expanded holdings for Data Center Infrastructure, Clean Energy, Uranium & Nuclear Energy, Defense, Fintech, and Memory & Storage show the true merged basket, not full ETF holdings.
+8. Watchlist files untouched.
+
+Deliverable:
+Report:
+
+* Count of theme_basket themes vs etf_holdings themes.
+* List of all themes switched from etf_holdings to theme_basket.
+* 10 examples showing representative_symbol, holdings_display_mode, theme_holdings, and performance_symbols.
+* Confirmation performance math unchanged.
+* Confirmation Watchlist files untouched.
