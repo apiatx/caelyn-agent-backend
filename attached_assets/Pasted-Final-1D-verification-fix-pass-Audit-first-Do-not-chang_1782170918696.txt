@@ -1,0 +1,84 @@
+Final 1D verification/fix pass. Audit first. Do not change code unless one of these checks fails.
+
+The previous fix correctly stopped 1D from showing stale daily multi-month curves. Good. But I need two more things verified/fixed before this is safe:
+
+1. 1D should not be blank after-hours/weekends/restarts.
+2. The new intraday implementation must not create a provider-call explosion.
+
+Expected 1D behavior:
+
+* During market hours: 1D Performance Curve shows intraday timestamped points for the current trading session.
+* After market close: show the latest completed trading session from cache/LKG, not [].
+* On weekends/holidays: show the latest completed trading session from cache/LKG, not [].
+* After backend restart: still show the latest persisted 1D intraday curve if available, not [].
+* Only return [] if there is genuinely no cached/latest-session intraday data available, and include a clear metadata reason.
+
+Audit/fix requirements:
+
+A) Latest-session fallback
+
+* Confirm whether 1D intraday curves are persisted anywhere durable, separate from the daily LKG.
+* If they are only cached in memory for 10 minutes, that is not enough.
+* Add or reuse a separate 1D intraday LKG/cache slot that stores:
+
+  * classification
+  * theme/proxy source
+  * latest_session_date
+  * generated_at
+  * rows with intraday `performance_curve`
+* Do not store intraday curves inside the daily full-history `performance_curve` field in a way that pollutes 7D/30D/YTD/1Y/5Y.
+* Keep the daily LKG full-history behavior unchanged.
+* On timeframe=1D:
+
+  * try current-session intraday cache first
+  * if unavailable/market closed/no bars, fallback to latest persisted 1D session
+  * if no persisted session exists, return [] with metadata reason
+
+B) Provider-call safety
+
+* Show exactly how many unique proxy symbols the 1D intraday path attempts to fetch.
+* Confirm whether calls are fired concurrently via `asyncio.gather`.
+* If concurrency is unbounded, fix it.
+* Add a semaphore or existing rate limiter so Tradier timesales calls cannot burst above safe limits.
+* Do not fetch all proxy ETFs on every 1D click.
+* Do not fetch on hover.
+* Confirm the 1D refresh is cadence-limited, e.g. every 5–15 minutes during market hours, and served from cache between refreshes.
+* If a frontend toggle calls `/api/themes/relative-strength?timeframe=1D`, it should read from cache/stale-while-revalidate, not synchronously blast providers.
+
+C) Scope control
+
+* Prefer the same proxy symbols already used by the Themes daily curve.
+* Do not switch to constituent-level intraday fetching unless already cached elsewhere.
+* Do not add FMP/yfinance fallback calls on every request.
+* Do not add new routes unless absolutely necessary.
+
+Validation:
+
+1. With logs visible, call:
+   `/api/themes/relative-strength?timeframe=1D&classification=theme`
+2. Confirm returned 1D curves use ISO timestamps with `T`, not daily date strings.
+3. Confirm first value_pct is 0.0 or near 0.0.
+4. Confirm after-hours/weekend behavior:
+
+   * current session unavailable should fallback to latest persisted 1D session
+   * should not return stale daily curves
+   * should not return blank if a latest 1D session exists
+5. Restart backend and call 1D again:
+
+   * should still return latest persisted 1D session if available
+6. Toggle frontend 1D/7D/30D/YTD/1Y/5Y while watching logs:
+
+   * no provider calls on hover
+   * no provider calls on every toggle when cache is warm
+   * any refresh is cadence-limited
+7. Confirm 7D/30D/YTD/1Y/5Y are unaffected.
+
+Report back:
+
+* whether 1D intraday data is persisted durably or memory-only
+* number of Tradier timesales calls needed for one full 1D refresh
+* whether those calls are throttled
+* refresh cadence
+* fallback behavior after close/weekend/restart
+* sample 1D response with first/last timestamp
+* final verdict: safe / not safe
