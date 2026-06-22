@@ -392,9 +392,11 @@ def _fmp_key() -> str:
     return os.getenv("FMP_API_KEY", "")
 
 
-# Maximum calendar days to request; 1400 days ≈ 5.5 years → covers 5Y trading
-# timeframe (needs ~1250 trading days) with a comfortable buffer.
-_FMP_HIST_RANGE_DAYS = 1400
+# Maximum calendar days to request.
+# 5Y needs ~1250 trading bars; 1900 cal days × 252/365 ≈ 1311 trading bars —
+# comfortable buffer above the 1250-bar threshold.
+# (Previous value of 1400 cal days only yielded ~966 trading bars — insufficient.)
+_FMP_HIST_RANGE_DAYS = 1900
 
 
 async def _fetch_fmp_daily_history(symbol: str) -> list[dict]:
@@ -556,20 +558,23 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
         return []
 
 
-async def _fetch_proxy_history(symbol: str) -> tuple[list[dict], str]:
+async def _fetch_proxy_history(symbol: str, days: int = 400) -> tuple[list[dict], str]:
     """
     FMP (primary) → Tradier daily (fallback) → yfinance (emergency).
     Returns (bars, source_name).
+
+    days: lookback in calendar days passed to Tradier / yfinance fallbacks.
+    FMP uses _FMP_HIST_RANGE_DAYS regardless (already long enough for 5Y).
     """
     bars = await _fetch_fmp_daily_history(symbol)
     if bars:
         return bars, "fmp"
 
-    bars = await _fetch_tradier_daily_history(symbol)
+    bars = await _fetch_tradier_daily_history(symbol, days=days)
     if bars:
         return bars, "tradier_hist"
 
-    bars = await fetch_etf_history(symbol, days=400)
+    bars = await fetch_etf_history(symbol, days=days)
     if bars:
         return bars, "yfinance"
 
@@ -813,6 +818,80 @@ def _compute_theme_perf(
     return round(sum(vals) / len(vals), 2), used, health
 
 
+def _build_perf_curve(
+    proxy_syms: list[str],
+    tf: str,
+    histories: dict[str, tuple[list[dict], str]],
+    max_points: int = 252,
+) -> list[dict]:
+    """
+    Build a normalized equal-weight performance curve for the given timeframe.
+
+    Each proxy symbol is normalized to its own start price (value_pct=0 at
+    first available bar), then the daily values are averaged equal-weight.
+    Returns [{date, value_pct}, ...] ordered oldest → newest.
+    Downsamples to max_points via uniform stride if the raw series is longer.
+    No new API calls — uses the already-fetched histories dict.
+    """
+    from datetime import date as _d, timedelta as _td
+    today = _d.today()
+    if tf == "7D":
+        start = today - _td(days=12)
+    elif tf == "30D":
+        start = today - _td(days=35)
+    elif tf == "YTD":
+        start = _d(today.year, 1, 1)
+    elif tf == "1Y":
+        start = today - _td(days=380)
+    elif tf == "5Y":
+        start = today - _td(days=1900)
+    else:
+        return []  # 1D curve not useful as a series
+
+    start_str = start.isoformat()
+
+    # Normalize each proxy to its own start-of-range close
+    sym_norm: dict[str, dict[str, float]] = {}
+    for sym in proxy_syms:
+        bars, _ = histories.get(sym, ([], ""))
+        in_range = [b for b in bars if b["date"] >= start_str]
+        if len(in_range) < 2:
+            continue
+        try:
+            base_close = float(in_range[0]["close"])
+        except (TypeError, ValueError):
+            continue
+        if not base_close:
+            continue
+        sym_norm[sym] = {
+            b["date"]: round((float(b["close"]) / base_close - 1) * 100, 3)
+            for b in in_range
+        }
+
+    if not sym_norm:
+        return []
+
+    all_dates = sorted({dt for nd in sym_norm.values() for dt in nd})
+    points: list[dict] = []
+    for dt in all_dates:
+        vals = [sym_norm[s][dt] for s in sym_norm if dt in sym_norm[s]]
+        if vals:
+            points.append({"date": dt, "value_pct": round(sum(vals) / len(vals), 3)})
+
+    if not points:
+        return []
+
+    # Downsample for long TFs so the payload stays manageable
+    if len(points) > max_points:
+        step = max(1, len(points) // max_points)
+        last = points[-1]
+        points = points[::step]
+        if points[-1]["date"] != last["date"]:
+            points.append(last)
+
+    return points
+
+
 def _pct_rank(value: Optional[float], universe: list[Optional[float]]) -> float:
     valid = [v for v in universe if v is not None]
     if value is None or not valid:
@@ -936,6 +1015,30 @@ async def _build_theme_row(
         sym: _perf_for_timeframe(histories.get(sym, ([], ""))[0], tf, quotes.get(sym, {}))
         for sym in proxy_syms
     }
+
+    # ── Tooltip member data (proxy symbols with current quote + TF return) ──────
+    # Use `is not None` guards throughout — `or` would silently drop 0.0 values.
+    members_out: list[dict] = []
+    for sym in proxy_syms[:12]:
+        q     = quotes.get(sym, {})
+        # Tradier uses "last"; FMP/Finnhub use "price"; yfinance uses "close".
+        price = next(
+            (q[k] for k in ("price", "last", "close") if q.get(k) is not None),
+            None,
+        )
+        # Tradier uses "change_percentage"; FMP uses "changesPercentage".
+        chg = next(
+            (q[k] for k in ("change_percentage", "change_pct", "change_1d_pct", "changesPercentage")
+             if q.get(k) is not None),
+            None,
+        )
+        members_out.append({
+            "symbol":     sym,
+            "price":      round(float(price), 2) if price is not None else None,
+            "change_pct": round(float(chg),   2) if chg   is not None else None,
+            "return_pct": per_symbol_returns.get(sym),
+        })
+
     # All-timeframe performance for RS scoring
     all_perf: dict[str, Optional[float]] = {}
     for frame in _TIMEFRAME_BARS:
@@ -1019,6 +1122,9 @@ async def _build_theme_row(
         up = sum(1 for _, r, _ in sym_perfs if r > 0)
         breadth = round(up / len(sym_perfs) * 100, 1)
 
+    # ── Performance curve (normalized daily series for the selected TF) ─────────
+    perf_curve = _build_perf_curve(proxy_syms, tf, histories)
+
     # ── Weinstein Stage Analysis ───────────────────────────────────────────────
     stage_data: dict = {}
     try:
@@ -1076,6 +1182,8 @@ async def _build_theme_row(
         "valid_symbol_count":        len(used_proxies),
         "skipped_symbol_count":      len(proxy_syms) - len(used_proxies),
         "per_symbol_returns":        per_symbol_returns,
+        "members":               members_out,
+        "performance_curve":     perf_curve,
         "price":                 round(lead_price, 2) if lead_price else None,
         "lead_proxy":            lead_sym,
         "timeframe":             tf,
@@ -1215,8 +1323,11 @@ async def _compute(tf: str) -> list[dict]:
     quotes = await _fetch_all_quotes(quote_syms)
 
     # ── 3. Fetch proxy + benchmark history (FMP primary → Tradier → yfinance) ─
-    print(f"[THEME_RS] Fetching proxy history for {len(proxy_syms_with_dram)} symbols …")
-    hist_tasks = [_fetch_proxy_history(s) for s in proxy_syms_with_dram]
+    # 5Y needs at least 1250 bars; yfinance "5y" period gives ~1260 bars.
+    # Other TFs need ~400 days at most — "2y" from yfinance is more than enough.
+    proxy_hist_days = 1900 if tf == "5Y" else 400
+    print(f"[THEME_RS] Fetching proxy history for {len(proxy_syms_with_dram)} symbols (days={proxy_hist_days}) …")
+    hist_tasks = [_fetch_proxy_history(s, days=proxy_hist_days) for s in proxy_syms_with_dram]
     hist_results = await asyncio.gather(*hist_tasks, return_exceptions=True)
     histories: dict[str, tuple[list[dict], str]] = {}
     for sym, result in zip(proxy_syms_with_dram, hist_results):

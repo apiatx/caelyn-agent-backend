@@ -1,0 +1,80 @@
+Audit first. Do not rewrite the Themes page architecture and do not invent replacement routes unless absolutely necessary.
+
+Goal: Fix Themes page market performance data so:
+1. 5Y price change % works everywhere it is shown, or is hidden only if truly impossible.
+2. Relative Strength tooltip can display readable white text plus ticker cards for the theme.
+3. Performance Curve uses actual historical time-series data, not lookback labels like 1D/7D/30D/YTD/1Y/5Y as x-axis points.
+
+Important constraints:
+- Preserve existing Themes page endpoints, services, constants, and data paths.
+- Use the same theme membership source currently powering the Themes page / canonical theme universe.
+- Use the same aggregation method already used for 1D/7D/30D/YTD/1Y theme returns where possible. Extend it to 5Y rather than creating a conflicting scoring model.
+- Do not create a new theme universe.
+- Do not add LLM calls.
+- Do not make per-render historical API calls.
+- Use existing Neon/cache infrastructure where available.
+- FMP paid plan supports up to 5 years of historical data, but historical calls still need to be cached aggressively.
+
+Backend audit steps:
+1. Find the current route(s) serving the Themes page Market Performance, Relative Strength, and Performance Curve data.
+2. Find where 1D, 7D, 30D, YTD, and 1Y theme performance values are computed.
+3. Find why 5Y currently renders as null / dash.
+4. Find what theme constituent/member data already exists in the response or nearby services.
+5. Find current cache/store helpers for historical price data and theme snapshots.
+
+Fix requirements:
+
+A) 5Y return
+- Add a real 5Y percent change field to the existing theme performance response.
+- Use the existing theme-level aggregation pattern. If current returns are simple average of constituent returns, keep that. If weighted, keep that.
+- Compute 5Y from actual historical price/chg data, not from current 1Y/YTD fields.
+- For each symbol, compare current/latest price to the closest available trading date approximately 5 years ago.
+- If a symbol does not have 5Y history, exclude that symbol from the 5Y calculation.
+- Add metadata internally or in debug output if useful: 5y_member_count, 5y_missing_count.
+- If fewer than a reasonable minimum of constituents have valid 5Y data, return null for that theme, but do not break the page.
+- Do not hardcode “—”.
+- Add/adjust validation so the 5Y column is populated for themes with enough history.
+
+B) Relative Strength tooltip support
+- Ensure the Relative Strength response includes enough data for the frontend tooltip to show ticker cards for the hovered theme.
+- Reuse existing theme constituents.
+- Return a compact member list for each theme, ideally:
+  {
+    symbol,
+    name/company if already available,
+    latest price/change if already available,
+    lookback return for the selected RS window if already available
+  }
+- Do not fetch new quote data solely for tooltip cards unless the data is already in existing caches.
+- Limit tooltip members to a sensible number, e.g. top 8-12 by contribution/performance, plus total member count.
+
+C) Performance Curve time series
+- Add or fix the existing backend response so Performance Curve receives true historical series:
+  {
+    theme,
+    color/status fields as existing,
+    points: [
+      { date: "YYYY-MM-DD", value_pct: number }
+    ]
+  }
+- The selected lookback should determine the date range:
+  - 7D = trading days from roughly 7 calendar days ago to current
+  - 30D = from roughly 30 calendar days ago
+  - YTD = from Jan 1/current year
+  - 1Y = from roughly one year ago
+  - 5Y = from roughly five years ago
+- The series should be ordered oldest → newest.
+- Values should be normalized performance from the first available date in the selected range:
+  value_pct = ((theme_value_on_date / theme_value_at_start) - 1) * 100
+- Do not use bucket labels as data points.
+- Aggregate constituent daily performance into a theme curve using the same weighting/averaging philosophy as the rest of the Themes page.
+- Cache symbol historical prices and/or computed theme series in Neon or existing cache layer.
+- Avoid fetching full 5Y data for all 40 themes on every request. Prefer cached historical data, lazy build, daily refresh, or selected/top themes only depending on current architecture.
+
+Validation:
+- Start backend.
+- Hit the existing Themes market performance endpoint and confirm 5Y is numeric for themes with valid history.
+- Hit the Relative Strength data endpoint and confirm each hovered theme can access member/ticker data.
+- Hit the Performance Curve data endpoint and confirm x-axis data is real dates, ordered oldest to newest.
+- Confirm no route breaks, no massive API loop, and no hardcoded theme list replacement.
+- Provide exact changed files and a sample response snippet for one theme.

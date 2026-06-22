@@ -182,7 +182,7 @@ def _yfinance_history_sync(ticker: str, days: int = 400) -> list[dict]:
         return hit
     try:
         import yfinance as yf
-        period = "2y" if days > 252 else "1y"
+        period = "5y" if days > 1200 else "2y" if days > 252 else "1y"
         tk   = yf.Ticker(ticker)
         hist = tk.history(period=period, auto_adjust=True)
         if hist.empty:
