@@ -1,0 +1,75 @@
+Backend validation follow-up — confirm Options Flow Sectors scans actual theme tickers, not just ETF proxies
+
+Good implementation. Before frontend builds the Sectors UI, do one final validation pass.
+
+Concern:
+The report says the prefilter injects “curated theme proxy symbols (ETF proxies first).” For the new Sectors tab, the core requirement is stock-level theme flow. The endpoint must aggregate options flow from actual theme holdings/performance symbols, not only ETF/representative proxy symbols.
+
+Please validate:
+
+1. Universe source
+
+   * Confirm the options-flow sector universe is built from `theme_holdings` / `performance_symbols` / true curated theme basket symbols.
+   * Confirm `representative_symbol` / `tv_symbol` are not used as the only options-flow universe.
+   * Confirm ETF proxies can be included only if they are actually part of the theme basket, but they must not replace the underlying theme tickers.
+
+2. Actual stock examples
+   Confirm these symbols appear in `/api/options-flow/sectors/debug` and/or `/api/options-flow/sectors` with scan_status = live / supplement / pending / no_options:
+
+   * ANET
+   * ALAB
+   * MRVL
+   * AMKR
+   * ASX
+   * MU
+   * WDC
+   * VRT
+   * PENG
+   * IREN
+   * RKLB
+   * ENPH
+
+3. Theme grouping examples
+   Confirm:
+
+   * AI Networking includes ALAB, ANET, AVGO, CRDO, MRVL, OCC
+   * Substrates / Packaging includes AMKR and ASX
+   * Memory & Storage includes MU, WDC, SIMO, STX, etc.
+   * Data Center Infrastructure includes IREN, VRT, PENG, WULF, CIFR, etc.
+   * Clean Energy includes ENPH, FSLR, ARRY, RUN, etc.
+
+4. API-call impact
+
+   * Confirm `/api/options-flow/sectors` itself makes zero Tradier calls.
+   * Confirm theme-only symbols are scanned only by the slow supplement loop.
+   * Confirm already-scanned watchlist symbols are reused from existing cache.
+   * Confirm no duplicate scan happens when a ticker belongs to multiple themes.
+
+5. Formula sanity
+   Confirm:
+
+   * call_premium and put_premium are derived from the existing options master/supplement records correctly.
+   * net_premium = call_premium - put_premium, unless signed/aggressor flow is available and explicitly used.
+   * put_call_ratio = put_premium / call_premium.
+   * sector totals dedupe tickers within a sector.
+   * theme totals can include the same ticker in multiple themes.
+
+6. Pre-IPO removal
+   Confirm:
+
+   * no pre_ipo
+   * no VCX
+   * no scan scheduled because of removed Pre-IPO theme
+
+Deliverable:
+Report 10 concrete ticker rows from `/api/options-flow/sectors`, including:
+
+* symbol
+* theme
+* sector
+* scan_status
+* call_premium
+* put_premium
+* net_premium
+* put_call_ratio
+* source: master or supplement or pending/no_options
