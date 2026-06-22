@@ -1,0 +1,121 @@
+BACKEND FOLLOW-UP — add theme-only symbols to existing options scan universe, no duplicate Tradier calls
+
+Good first pass. Pre-IPO removal is complete and /api/options-flow/sectors exists.
+
+But the Sectors endpoint currently marks theme-only tickers that are not already in the existing options master cache as:
+
+options_available: false
+
+That is not fully complete. The requirement was:
+
+* reuse existing Tradier options calls for watchlist/options-screener symbols
+* do not duplicate calls for symbols already scanned
+* add only the extra theme-universe tickers that are not currently tracked into the existing recurring options scan universe
+* never fetch options live on page request
+
+Goal:
+Extend the existing options scan/scheduler universe so curated Themes-page tickers that are not already scanned get picked up by the same cached Tradier options pipeline.
+
+Critical constraints:
+
+1. Do not create a second Tradier scanner.
+2. Do not fetch options data from /api/options-flow/sectors request path.
+3. Do not duplicate calls for symbols already in the existing options scanner/master cache.
+4. Use the existing Tradier rate limiter.
+5. Respect current Tradier API budget.
+6. Keep the existing Options Flow screener unchanged.
+7. Watchlist page untouched.
+8. Pre-IPO/VCX must stay removed.
+
+Audit first:
+
+1. Find the existing options scan universe builder.
+2. Find the recurring scheduler/precompute job.
+3. Find where the existing watchlist/options screener symbols are deduped.
+4. Find where options_master_screener_v1 cache is written.
+5. Find how unsupported/no-options symbols are cached or skipped.
+6. Find current scan cadence and rate limiter.
+7. Compare:
+
+   * existing options scan universe symbols
+   * curated theme universe symbols
+   * overlap
+   * theme-only symbols not currently scanned
+
+Required behavior:
+
+1. Build one deduped options scan universe:
+   existing_options_scan_symbols ∪ curated_theme_universe_symbols
+2. For symbols already scanned, reuse existing cached data.
+3. For theme-only symbols, add them to the same recurring scheduler/precompute path.
+4. Do not request all theme-only symbols immediately on page load.
+5. If needed, add a throttled queue/batch for theme-only symbols using the same Tradier limiter.
+6. Cache unsupported/no-options tickers so they do not get retried aggressively.
+7. When dev/admin adds a ticker to a theme:
+
+   * invalidate sector aggregation cache immediately
+   * include ticker in options scan universe
+   * next scheduled options scan should pick it up
+8. When dev/admin removes a ticker from a theme:
+
+   * remove it from that theme aggregation
+   * do not remove the ticker from scan universe if it is still needed by Watchlist or another theme
+9. Same ticker can belong to multiple themes.
+10. Sector totals should dedupe repeated ticker inside the same sector.
+
+Endpoint behavior:
+GET /api/options-flow/sectors should still be cache-only. It should show:
+
+* existing cached options data when available
+* options_available=false only if unsupported, no options, or not scanned yet
+* scan_status / freshness fields if useful:
+
+  * cached
+  * pending_scan
+  * unsupported
+  * no_recent_flow
+
+Debug endpoint should report:
+
+* existing_options_scan_count
+* theme_universe_symbol_count
+* overlap_count
+* theme_only_symbol_count
+* newly_added_to_scan_count
+* pending_theme_only_scan_symbols
+* unsupported_symbol_count
+* no_options_symbol_count
+* last_scan_at
+* next_scan_hint if available
+
+Validation:
+
+1. Existing Options Flow screener still works unchanged.
+2. Existing options scan universe count before/after is reported.
+3. Theme-only tickers are added to the recurring scan universe.
+4. No duplicate Tradier calls for symbols already scanned.
+5. No Tradier calls from /api/options-flow/sectors request path.
+6. Rate limiter is used.
+7. Add a ticker to a theme through admin editor:
+
+   * appears in theme basket
+   * appears in options sector universe
+   * is scheduled/scanned if not already tracked
+8. Remove ticker from theme:
+
+   * removed from that theme aggregation
+   * remains in other themes if applicable
+9. Pre-IPO/VCX absent.
+10. Watchlist files untouched.
+
+Deliverable:
+Report:
+
+* Existing scan universe count.
+* Theme universe count.
+* Overlap count.
+* Theme-only added count.
+* Scan cadence / throttling.
+* How duplicate Tradier calls are avoided.
+* How unsupported/no-options symbols are cached.
+* Validation proof.
