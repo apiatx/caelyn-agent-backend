@@ -6,16 +6,21 @@ Data sources (in priority order):
      The master screener precomputes unusual-options flow every ~39 s.
      Tagged _source="live" in the combined dict.
 
-  2. options_theme_supplement_v1
-     A slow background loop (_theme_options_supplement_loop) scans theme
-     proxy symbols NOT already in the master cache, in batches of 6 every
-     10 minutes.  Tagged _source="supplement".
+  2. options_theme_supplement_v1  (fresh, this session)
+     _theme_options_supplement_loop scans theme proxy symbols NOT in the
+     master cache, in batches of 20 every 5 minutes.
+     Tagged _source="supplement".
 
-  3. options_no_options_tracking:v1
+  3. options_supplement_lkg_v1  (disk-loaded at startup)
+     Supplement data from previous sessions, persisted to disk and loaded
+     at startup.  Tagged _source="supplement_lkg".
+     Ensures coverage does not reset to near-zero after restart.
+
+  4. options_no_options_tracking:v1
      Symbols confirmed by Stage-1 expiry checks to have NO tradeable options.
-     These show scan_status="no_options" with options_available=False.
+     scan_status="no_options", options_available=False.
 
-  4. Pending — symbols not yet reached by either scan.
+  5. Pending — symbols not yet reached by any scan pass.
 
 Zero new Tradier calls are made from this module — it is a pure aggregation
 layer on top of what the background scanners already computed.
@@ -28,6 +33,13 @@ Derivation (for reference):
   put_call_ratio = put_premium / call_premium
 
 Sector totals use UNIQUE ticker dedup across themes in the same sector.
+
+scan_status values:
+  "live"           — master screener cache (unusual-flow threshold met)
+  "supplement"     — supplement loop, current session (fresh)
+  "supplement_lkg" — supplement loop, previous session (disk-loaded at startup)
+  "no_options"     — Stage-1 confirmed: no tradeable options expirations
+  "pending"        — not yet reached by any scan pass
 """
 from __future__ import annotations
 
@@ -111,10 +123,11 @@ def _build_ticker_node(
     Build a per-ticker options-flow node.
 
     scan_status values:
-      "live"        — data from the master screener cache (unusual-flow tickers)
-      "supplement"  — data from the slow supplement scan loop
-      "no_options"  — Stage-1 confirmed: no tradeable options expirations
-      "pending"     — not yet reached by any scan pass
+      "live"           — master screener cache (unusual-flow threshold met)
+      "supplement"     — supplement loop, current session (fresh)
+      "supplement_lkg" — supplement loop, previous session (disk LKG loaded at startup)
+      "no_options"     — Stage-1 confirmed: no tradeable options expirations
+      "pending"        — not yet reached by any scan pass
     """
     row = cache_by_ticker.get(sym)
     if row:
@@ -279,11 +292,12 @@ def build_sector_tree(
         for sym in (meta.get("proxy_symbols") or []):
             all_theme_syms.add(sym.upper())
 
-    scan_syms        = set(combined_ticker_data.keys())
     live_syms        = {s for s, r in combined_ticker_data.items() if r.get("_source") == "live"}
-    supplement_syms  = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement"}
-    theme_in_scan    = scan_syms & all_theme_syms
-    pending_syms     = all_theme_syms - scan_syms - no_options_syms
+    fresh_supp_syms  = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement"}
+    lkg_supp_syms    = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement_lkg"}
+    supplement_syms  = fresh_supp_syms | lkg_supp_syms
+    theme_in_scan    = (live_syms | supplement_syms) & all_theme_syms
+    pending_syms     = all_theme_syms - theme_in_scan - no_options_syms
 
     # Build sector display-name map
     sector_names = dict(_SECTOR_DISPLAY_NAMES)
@@ -311,6 +325,24 @@ def build_sector_tree(
         )
     )
 
+    # Extended coverage metadata
+    _batch_size  = 20
+    _cadence_min = 5
+    coverage_pct = round(len(theme_in_scan) / max(len(all_theme_syms), 1) * 100, 1)
+    est_minutes  = round(len(pending_syms) / _batch_size * _cadence_min, 1) if pending_syms else 0
+
+    # Supplement timing from module tracking
+    last_scan_at = None
+    next_scan_at = None
+    try:
+        from data.options_theme_supplement import _next_scan_at as _nsa
+        from data.cache import cache as _c
+        _fs = _c.get("options_theme_supplement_v1") or {}
+        last_scan_at = _fs.get("last_scan_at")
+        next_scan_at = _nsa or None
+    except Exception:
+        pass
+
     return {
         "as_of":                         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source":                        "master_and_supplement_cache",
@@ -318,12 +350,18 @@ def build_sector_tree(
         "put_call_ratio_method":         "premium_dollars",
         "sector_total_method":           "unique_ticker_sum",
         "scan_coverage": {
-            "master_scan_tickers":       len(live_syms),
-            "supplement_scan_tickers":   len(supplement_syms),
-            "no_options_confirmed":      len(no_options_syms & all_theme_syms),
-            "pending_scan":              len(pending_syms),
             "theme_universe_total":      len(all_theme_syms),
-            "theme_tickers_with_data":   len(theme_in_scan),
+            "master_count":              len(live_syms & all_theme_syms),
+            "supplement_fresh_count":    len(fresh_supp_syms & all_theme_syms),
+            "supplement_lkg_count":      len(lkg_supp_syms & all_theme_syms),
+            "supplement_count":          len(supplement_syms & all_theme_syms),
+            "no_options_count":          len(no_options_syms & all_theme_syms),
+            "pending_count":             len(pending_syms),
+            "tickers_with_data":         len(theme_in_scan),
+            "coverage_pct":              coverage_pct,
+            "estimated_full_coverage_minutes": est_minutes,
+            "last_supplement_scan_at":   last_scan_at,
+            "next_supplement_scan_at":   next_scan_at,
         },
         "sectors": sector_nodes,
     }

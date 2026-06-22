@@ -392,6 +392,12 @@ async def lifespan(app):
     _load_prefilter_from_disk()    # Warm per-tab prefilter cache (backward compat)
     _load_master_lkg_from_disk()       # Warm master screener LKG — serves on first request
     _load_master_prefilter_from_disk() # Warm master prefilter — skips cold build on restart
+    # Warm supplement LKG — theme-only options data persisted from previous sessions
+    try:
+        from data.options_theme_supplement import _load_supplement_lkg_from_disk as _load_supp_lkg
+        _load_supp_lkg()
+    except Exception as _supp_lkg_err:
+        print(f"[STARTUP] Supplement LKG load failed (non-fatal): {_supp_lkg_err}")
     asyncio.create_task(_master_screener_loop())
     asyncio.create_task(_theme_options_supplement_loop())
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
@@ -11898,8 +11904,8 @@ async def _theme_options_supplement_loop():
     from data.tradier_flow_engine import TradierFlowEngine
     from data.options_flow_engine import ETF_SET as _ETF_SET
 
-    _BATCH_SIZE  = 6
-    _CYCLE_SLEEP = 600   # 10 minutes
+    _BATCH_SIZE  = 20
+    _CYCLE_SLEEP = 300   # 5 minutes — 20 syms × ~2 calls = ~8 calls/min (<8% budget)
     _scan_cursor = 0
     _local_expiry: dict = {}   # separate from master screener expiry cache
 
@@ -11911,7 +11917,7 @@ async def _theme_options_supplement_loop():
         except: return 0
 
     # Initial delay: give master screener time to warm up first
-    await asyncio.sleep(150)
+    await asyncio.sleep(60)
     print("[THEME_SUPP] Theme options supplement loop started")
 
     while True:
@@ -11991,6 +11997,13 @@ async def _theme_options_supplement_loop():
 
             # Persist no-options info discovered in this batch's Stage-1 sweep
             _upd_no_opts(_local_expiry)
+
+            # Update tracking state for debug endpoint
+            try:
+                from data.options_theme_supplement import update_scan_tracking as _upd_tracking
+                _upd_tracking(batch, _ts.time() + _CYCLE_SLEEP)
+            except Exception:
+                pass
 
         except Exception as _exc:
             print(f"[THEME_SUPP] Cycle error: {_exc}")

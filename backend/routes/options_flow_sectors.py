@@ -5,7 +5,7 @@ GET /api/options-flow/sectors/debug
 Net Options Flow aggregated by Sector → Theme → Ticker.
 
 Zero new Tradier calls — reads exclusively from the existing master
-screener cache populated by the background scanner.
+screener cache and supplement caches populated by background scanners.
 """
 from __future__ import annotations
 
@@ -45,8 +45,15 @@ async def options_flow_sectors(
     Theme totals include every ticker in the basket, even if it also
     appears in a sibling theme.
 
-    Tickers not yet scanned by the options scanner are included with
-    options_available=false and null premium fields.
+    scan_status values per ticker:
+      "live"           — master screener cache hit (unusual-flow threshold met)
+      "supplement"     — supplement loop, current session
+      "supplement_lkg" — supplement loop, previous session (loaded from disk at startup)
+      "no_options"     — confirmed no tradeable options
+      "pending"        — not yet scanned
+
+    Tickers not yet scanned are included with options_available=false and null premium fields.
+    Coverage improves automatically as the background supplement loop runs (batch=20, every 5 min).
     """
     try:
         from data.options_flow_sectors import get_sector_flow
@@ -72,15 +79,23 @@ async def options_flow_sectors_debug(
     """
     Diagnostics for the sectors aggregation.
 
-    Returns scan coverage broken down by master / supplement / no_options /
-    pending, plus the supplement module stats and sectors cache TTL status.
+    Returns:
+      - scan coverage (master / supplement_fresh / supplement_lkg / no_options / pending)
+      - supplement persistence status (disk path, exists, ticker count)
+      - next 20 pending symbols
+      - last 20 scanned symbols
+      - batch size / cadence / estimated full-coverage ETA
+      - sectors cache status
+      - theme count and pre_ipo/VCX confirmation
     """
     try:
         from data.cache import cache
         from data.options_theme_supplement import (
             get_supplement_stats,
+            get_supplement_debug_info,
             get_no_options_symbols,
             get_theme_only_symbols_for_supplement,
+            _SUPPLEMENT_LKG_DISK_PATH,
         )
         from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
 
@@ -102,26 +117,55 @@ async def options_flow_sectors_debug(
                 theme_tickers.add(sym.upper())
 
         no_opts   = get_no_options_symbols()
-        pending   = get_theme_only_symbols_for_supplement()
         supp_stat = get_supplement_stats()
+        debug_inf = get_supplement_debug_info()
+
+        # Supplement cache layers
+        fresh_snap = cache.get("options_theme_supplement_v1") or {}
+        lkg_snap   = cache.get("options_supplement_lkg_v1") or {}
+        fresh_count = len(fresh_snap.get("ticker_data", {}))
+        lkg_count   = len(lkg_snap.get("ticker_data", {}))
+
+        # Overall coverage
+        all_supp_syms = (
+            set(fresh_snap.get("ticker_data", {}).keys())
+            | set(lkg_snap.get("ticker_data", {}).keys())
+        )
+        covered = (master_tickers | all_supp_syms) & theme_tickers
+        pending_count = len(theme_tickers - covered - (no_opts & theme_tickers))
 
         return JSONResponse(content={
-            "master_cache_warm":             master_snap is not None,
-            "master_cache_source":           (master_snap or {}).get("source", "unknown"),
-            "sectors_cache_warm":            cache.get("options_flow_sectors:v1") is not None,
-            "theme_count":                   len(ENRICHED_THEME_RS_UNIVERSE),
+            "master_cache_warm":         master_snap is not None,
+            "master_cache_source":       (master_snap or {}).get("source", "unknown"),
+            "sectors_cache_warm":        cache.get("options_flow_sectors:v1") is not None,
+            "theme_count":               len(ENRICHED_THEME_RS_UNIVERSE),
+            "pre_ipo_present":           any("pre_ipo" in tid for tid in ENRICHED_THEME_RS_UNIVERSE),
             "scan_coverage": {
-                "master_scan_tickers":       len(master_tickers),
-                "theme_universe_total":      len(theme_tickers),
-                "tickers_in_both":           len(master_tickers & theme_tickers),
-                "no_options_confirmed":      len(no_opts & theme_tickers),
-                "pending_supplement_scan":   len(pending),
-                "supplement_scanned":        supp_stat.get("supplement_scanned_count", 0),
-                "supplement_last_scan_at":   supp_stat.get("supplement_last_scan_at"),
-                "extra_theme_seeds_for_inject": supp_stat.get("extra_theme_seeds_for_inject", 0),
+                "theme_universe_total":       len(theme_tickers),
+                "master_count":               len(master_tickers & theme_tickers),
+                "supplement_fresh_count":     fresh_count,
+                "supplement_lkg_count":       lkg_count,
+                "supplement_total_count":     len(all_supp_syms & theme_tickers),
+                "no_options_confirmed":       len(no_opts & theme_tickers),
+                "pending_count":              pending_count,
+                "tickers_with_data":          len(covered),
+                "coverage_pct":              round(len(covered) / max(len(theme_tickers), 1) * 100, 1),
+                "estimated_full_coverage_minutes": debug_inf.get("estimated_full_coverage_minutes"),
+                "supplement_last_scan_at":   fresh_snap.get("last_scan_at"),
+                "next_scan_at":              debug_inf.get("next_scan_at"),
+                "batch_size":                debug_inf.get("batch_size", 20),
+                "cadence_seconds":           debug_inf.get("cadence_seconds", 300),
             },
-            "no_options_confirmed_symbols":  sorted(no_opts & theme_tickers),
-            "pending_supplement_symbols":    pending,
+            "supplement_persistence": {
+                "disk_lkg_exists":           debug_inf.get("disk_lkg_exists"),
+                "disk_lkg_path":             debug_inf.get("disk_lkg_path"),
+                "fresh_in_memory":           fresh_count > 0,
+                "lkg_in_memory":             lkg_count > 0,
+                "lkg_loaded_at":             debug_inf.get("lkg_loaded_at"),
+            },
+            "last_20_scanned_symbols":   debug_inf.get("last_scanned_symbols", []),
+            "next_20_pending_symbols":   debug_inf.get("next_pending_symbols", []),
+            "no_options_confirmed_symbols": sorted(no_opts & theme_tickers),
             "options_scan_not_in_any_theme": sorted(master_tickers - theme_tickers),
         })
     except Exception as exc:

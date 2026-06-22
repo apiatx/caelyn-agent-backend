@@ -1,0 +1,128 @@
+BACKEND REPLIT FOLLOW-UP — Net Flow Sectors coverage is too cold; persist and warm supplement scan
+
+The Sectors tab technically loads, but it is not usable yet. The UI shows only 17 / 230 theme tickers with options data and 213 pending. That means most sectors/themes look empty even though the themes have tickers.
+
+Current header:
+
+* Master scan tickers: 24
+* Supplement scan tickers: 9
+* Pending scan: 213
+* Theme universe total: 230
+* Theme tickers with data: 17
+
+This is not good enough for launch. “It will fill over 7 hours” is too cold, especially after restart.
+
+Goal:
+Make the Options Flow Sectors endpoint useful immediately after startup by persisting supplement results and warming theme-only options data faster, without duplicate Tradier calls and without page-load Tradier calls.
+
+Critical constraints:
+
+1. Do not fetch Tradier from `/api/options-flow/sectors` request path.
+2. Do not duplicate calls for symbols already in the master options cache.
+3. Reuse existing Tradier limiter.
+4. Keep within Tradier API limits.
+5. Do not change existing Options Flow Screener behavior.
+6. Watchlist page untouched.
+7. Pre-IPO/VCX stays removed.
+
+Audit first:
+
+1. Inspect current supplement cache:
+
+   * is it memory-only?
+   * does it survive restart?
+   * does it have disk/Neon LKG?
+2. Inspect current supplement loop:
+
+   * batch size
+   * cadence
+   * startup delay
+   * symbol ordering
+   * no-options skip cache
+3. Inspect how master options cache persists.
+4. Inspect whether supplement results are written to same durable cache pattern as master/LKG.
+5. Confirm current reason UI sees only 9 supplement tickers after restart.
+
+Required backend improvements:
+
+1. Persist supplement results to disk or Neon LKG.
+
+   * Supplement scan data should survive server restart.
+   * `/api/options-flow/sectors` should load master + supplement LKG immediately.
+2. Do not reset theme-only coverage to near-zero on restart.
+3. Add a bounded warmup/backfill mode:
+
+   * after master screener warms, scan theme-only pending symbols in controlled batches.
+   * use existing Tradier limiter.
+   * no page-load calls.
+4. Increase initial coverage speed safely.
+
+   * Current 6 symbols / 10 minutes means ~7 hours for 222 names. Too slow.
+   * Propose a safe batch/cadence based on actual call cost and limiter.
+   * Example: 10–20 symbols every 5 minutes if within budget, or separate off-hours aggressive warmup.
+5. Prioritize symbols:
+
+   * themes currently visible/high-priority first if available
+   * stocks with options support / US-listed / liquid names first
+   * no-options/unsupported names should be cached and skipped for 24h+
+6. Add `scan_coverage` detail:
+
+   * total_theme_symbols
+   * master_count
+   * supplement_count
+   * pending_count
+   * no_options_count
+   * coverage_pct
+   * estimated_full_coverage_minutes
+   * last_supplement_scan_at
+   * next_supplement_scan_at
+7. Add debug endpoint data:
+
+   * next 20 pending symbols
+   * last 20 scanned symbols
+   * supplement cache persistence status
+   * no-options cache count
+8. Ensure manual theme edits sync:
+
+   * add ticker to theme → enters supplement scan universe if not already tracked
+   * remove ticker from theme → removed from aggregation, not necessarily from cache if used elsewhere
+   * same ticker in multiple themes remains one scan/cache entry
+
+Endpoint behavior:
+
+* `/api/options-flow/sectors` should show pending tickers, but the system should not stay at 17 / 230 coverage for long.
+* If supplement LKG has historical data, use it immediately.
+* `scan_status` should distinguish:
+
+  * live/master
+  * supplement_fresh
+  * supplement_lkg
+  * pending_scan
+  * no_options
+  * unsupported
+
+Validation required:
+
+1. Restart server.
+2. Immediately call `/api/options-flow/sectors`.
+3. Confirm supplement data is loaded from durable cache if available.
+4. Confirm coverage does not reset to near-zero after restart once supplement cache exists.
+5. Confirm no Tradier calls happen from request path.
+6. Confirm warmup loop starts after master warm.
+7. Confirm coverage increases after each supplement batch.
+8. Confirm no duplicate calls for overlapping tickers.
+9. Confirm no-options tickers are skipped on subsequent loops.
+10. Confirm Pre-IPO/VCX absent.
+11. Existing Screener unchanged.
+12. Watchlist untouched.
+
+Deliverable:
+Report:
+
+* Root cause of low 17/230 coverage.
+* Whether supplement cache was memory-only.
+* Persistence implemented.
+* New warmup cadence and estimated full coverage time.
+* Tradier call impact.
+* Before/after scan coverage.
+* Validation proving request path makes zero Tradier calls.

@@ -1,7 +1,7 @@
 """
 Theme options supplement.
 
-Manages three concerns for the options-by-sector feature:
+Manages four concerns for the options-by-sector feature:
 
   1. Theme seed injection
      get_theme_proxy_symbols_for_supplement() — theme proxy symbols NOT in
@@ -14,32 +14,52 @@ Manages three concerns for the options-by-sector feature:
      (zero extra Tradier calls) and persists symbols confirmed to have no
      tradeable options to a 24-hour cache entry.
 
-  3. Supplemental scan cache
-     Results from _theme_options_supplement_loop (main.py) are stored in
-     options_theme_supplement_v1.  update_supplement_cache() merges new
-     results into the existing entry so only the tickers in each batch
-     are replaced.
+  3. Supplemental scan cache  (two layers)
+     a. Fresh layer  — options_theme_supplement_v1 (4h TTL, in-memory)
+        update_supplement_cache() merges new results; also writes disk LKG.
+     b. LKG layer    — options_supplement_lkg_v1  (4h TTL, in-memory)
+        _load_supplement_lkg_from_disk() populates this at startup from
+        backend/data/options_supplement_lkg_v1.json so supplement data
+        survives server restarts.
+
+     Row _source values:
+       "supplement"      — scanned this session (fresh, current loop)
+       "supplement_lkg"  — loaded from disk LKG (previous session)
 
   4. Combined data accessor
-     get_combined_ticker_data() merges master screener cache + supplement
-     cache into one {ticker: row} dict.  Master cache entries always win.
+     get_combined_ticker_data() merges master + fresh supplement + LKG
+     supplement into one {ticker: row} dict.  Priority: live > supplement
+     > supplement_lkg.
 
 No new Tradier clients are created here.  All scan calls share the existing
 TradierFlowEngine instance and _TRADIER_GLOBAL_SEM rate limiter.
 """
 from __future__ import annotations
 
+import json as _json
+import pathlib as _pathlib
 import time
 from typing import Optional
 
-_NO_OPTIONS_CACHE_KEY = "options_no_options_tracking:v1"
-_NO_OPTIONS_CACHE_TTL = 86400        # 24 h — confirmed no-options status is stable
+_SUPPLEMENT_LKG_DISK_PATH    = _pathlib.Path(__file__).resolve().parent / "options_supplement_lkg_v1.json"
+_SUPPLEMENT_LKG_DISK_MAX_AGE = 86400   # 24 h — reject snapshots older than this
 
-_SUPPLEMENT_CACHE_KEY = "options_theme_supplement_v1"
-_SUPPLEMENT_CACHE_TTL = 1800         # 30 min — supplement data freshness window
+_NO_OPTIONS_CACHE_KEY  = "options_no_options_tracking:v1"
+_NO_OPTIONS_CACHE_TTL  = 86400   # 24 h
+
+_SUPPLEMENT_CACHE_KEY  = "options_theme_supplement_v1"
+_SUPPLEMENT_CACHE_TTL  = 14400   # 4 h — accumulates across batches within a session
+
+_SUPPLEMENT_LKG_CACHE_KEY = "options_supplement_lkg_v1"
+_SUPPLEMENT_LKG_CACHE_TTL = 14400   # 4 h — disk data loaded at startup
+
+# ── Loop tracking (updated by main.py loop via update_scan_tracking()) ────────
+_last_scanned_symbols: list[str] = []
+_next_scan_at: float = 0.0
 
 # ── Static seed dedup (lazy) ──────────────────────────────────────────────────
 _static_seed_set: Optional[set] = None
+
 
 def _get_static_seeds() -> set[str]:
     global _static_seed_set
@@ -86,8 +106,6 @@ def get_theme_proxy_symbols_for_supplement(max_symbols: int = 60) -> list[str]:
             if sym in seen or sym in static_seeds:
                 continue
             seen.add(sym)
-            # Identify ETF proxies: themes with proxy_type="etf" or all-alpha
-            # 3-5 char symbols (common ETF ticker pattern).
             is_etf = (
                 meta.get("proxy_type") == "etf"
                 or (3 <= len(sym) <= 5 and sym.isalpha())
@@ -97,8 +115,7 @@ def get_theme_proxy_symbols_for_supplement(max_symbols: int = 60) -> list[str]:
             else:
                 stock_proxies.append(sym)
 
-    result = etf_proxies + stock_proxies
-    return result[:max_symbols]
+    return (etf_proxies + stock_proxies)[:max_symbols]
 
 
 def _get_master_tickers() -> set[str]:
@@ -122,11 +139,11 @@ def _get_master_tickers() -> set[str]:
 
 def get_theme_only_symbols_for_supplement() -> list[str]:
     """
-    Return theme proxy symbols that are NOT in the current master screener
-    cache AND NOT confirmed as no-options.
+    Return theme proxy symbols NOT in the master screener cache AND NOT
+    confirmed as no-options AND NOT already in supplement caches.
 
-    These are the candidates the _theme_options_supplement_loop should
-    scan next, sorted alphabetically (deterministic rolling cursor).
+    Sorted alphabetically for a deterministic rolling cursor.
+    Prioritises symbols not yet in any supplement layer.
     """
     try:
         from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
@@ -139,10 +156,77 @@ def get_theme_only_symbols_for_supplement() -> list[str]:
         for sym in (meta.get("proxy_symbols") or [])
     }
 
-    master_syms = _get_master_tickers()
-    no_opts     = get_no_options_symbols()
+    master_syms   = _get_master_tickers()
+    no_opts       = get_no_options_symbols()
+    supplement    = set(get_supplement_data_by_ticker().keys())
 
-    return sorted(all_syms - master_syms - no_opts)
+    return sorted(all_syms - master_syms - no_opts - supplement)
+
+
+# ── Disk LKG persistence ──────────────────────────────────────────────────────
+
+def _save_supplement_lkg_to_disk(ticker_data: dict) -> None:
+    """
+    Atomically persist supplement ticker_data to disk.  Same atomic-rename
+    pattern as _save_master_lkg_to_disk in main.py.
+
+    Called after every supplement batch so data survives server restarts.
+    """
+    if not ticker_data:
+        return
+    try:
+        now = time.time()
+        payload = {
+            "ticker_data":  ticker_data,
+            "saved_at":     now,
+            "ticker_count": len(ticker_data),
+        }
+        tmp = _SUPPLEMENT_LKG_DISK_PATH.with_suffix(".json.tmp")
+        _SUPPLEMENT_LKG_DISK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(_json.dumps(payload, default=str), encoding="utf-8")
+        tmp.replace(_SUPPLEMENT_LKG_DISK_PATH)
+        print(f"[SUPP_LKG] Persisted {len(ticker_data)} supplement tickers to disk")
+    except Exception as exc:
+        print(f"[SUPP_LKG] Disk write failed (non-fatal): {exc}")
+
+
+def _load_supplement_lkg_from_disk() -> None:
+    """
+    Load supplement LKG from disk at startup.  Synchronous — call before
+    any request is served so the sectors endpoint has data immediately.
+
+    Rows are tagged _source='supplement_lkg' to distinguish from fresh
+    session scans.  Loaded into _SUPPLEMENT_LKG_CACHE_KEY (4h in-memory TTL).
+    """
+    if not _SUPPLEMENT_LKG_DISK_PATH.exists():
+        print("[SUPP_LKG] No disk LKG — supplement data builds from scratch this session")
+        return
+    try:
+        now = time.time()
+        payload = _json.loads(_SUPPLEMENT_LKG_DISK_PATH.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            print("[SUPP_LKG] Disk LKG: not a dict — skipping")
+            return
+        saved_at = payload.get("saved_at", 0)
+        age_s = int(now - saved_at)
+        if age_s > _SUPPLEMENT_LKG_DISK_MAX_AGE:
+            print(f"[SUPP_LKG] Disk LKG too old ({age_s}s > {_SUPPLEMENT_LKG_DISK_MAX_AGE}s) — skipping")
+            return
+        ticker_data: dict = payload.get("ticker_data", {})
+        if not ticker_data:
+            print("[SUPP_LKG] Disk LKG: empty ticker_data — skipping")
+            return
+        # Tag all rows as supplement_lkg so sectors endpoint can distinguish
+        tagged = {sym: {**row, "_source": "supplement_lkg"} for sym, row in ticker_data.items()}
+        from data.cache import cache
+        cache.set(
+            _SUPPLEMENT_LKG_CACHE_KEY,
+            {"ticker_data": tagged, "loaded_at": now, "saved_at": saved_at},
+            _SUPPLEMENT_LKG_CACHE_TTL,
+        )
+        print(f"[SUPP_LKG] Loaded {len(tagged)} supplement tickers from disk (age={age_s}s)")
+    except Exception as exc:
+        print(f"[SUPP_LKG] Disk load failed (non-fatal): {exc}")
 
 
 # ── No-options tracking ───────────────────────────────────────────────────────
@@ -195,29 +279,43 @@ def update_no_options_from_expiry_cache(expiry_cache: dict) -> None:
 # ── Supplement cache ──────────────────────────────────────────────────────────
 
 def get_supplement_data_by_ticker() -> dict[str, dict]:
-    """Return {ticker: options_row} from the supplement cache."""
+    """
+    Return {ticker: options_row} merging fresh session scans + disk LKG.
+
+    Priority: fresh supplement (this session) > LKG supplement (disk-loaded).
+    Both layers are keyed separately so fresh data can be cleanly identified.
+    """
     try:
         from data.cache import cache
-        supp = cache.get(_SUPPLEMENT_CACHE_KEY) or {}
-        return supp.get("ticker_data", {})
+        # Start with LKG (disk-loaded at startup, supplement_lkg tagged)
+        lkg_snap  = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        combined  = dict(lkg_snap.get("ticker_data", {}))
+        # Fresh session results override LKG
+        fresh_snap = cache.get(_SUPPLEMENT_CACHE_KEY) or {}
+        for sym, row in fresh_snap.get("ticker_data", {}).items():
+            combined[sym] = row   # fresh always wins
+        return combined
     except Exception:
         return {}
 
 
 def update_supplement_cache(results: list[dict]) -> None:
     """
-    Merge new supplement scan results into the supplement cache.
+    Merge new supplement scan results into the fresh supplement cache and
+    persist to disk LKG.
 
     Existing entries for tickers NOT in the new batch are preserved until
-    the supplement TTL expires.  New/updated entries replace old ones.
-    Each row is tagged with _source="supplement" and _cached_at timestamp.
+    the TTL expires.  New/updated entries replace old ones.  Each row is
+    tagged _source='supplement' and _cached_at timestamp.
+
+    Also calls _save_supplement_lkg_to_disk() so data survives restarts.
     """
     if not results:
         return
     try:
         from data.cache import cache
-        existing = cache.get(_SUPPLEMENT_CACHE_KEY) or {"ticker_data": {}, "cached_at": 0}
-        ticker_data: dict = existing.get("ticker_data", {})
+        existing   = cache.get(_SUPPLEMENT_CACHE_KEY) or {"ticker_data": {}, "cached_at": 0}
+        ticker_data: dict = dict(existing.get("ticker_data", {}))
         now = time.time()
         for row in results:
             sym = (row.get("ticker") or "").upper()
@@ -228,18 +326,30 @@ def update_supplement_cache(results: list[dict]) -> None:
             {"ticker_data": ticker_data, "cached_at": now, "last_scan_at": now},
             _SUPPLEMENT_CACHE_TTL,
         )
+        # Persist all accumulated fresh data to disk LKG
+        _save_supplement_lkg_to_disk(ticker_data)
     except Exception as exc:
         print(f"[THEME_SUPP] Supplement cache update error: {exc}")
+
+
+# ── Loop tracking ─────────────────────────────────────────────────────────────
+
+def update_scan_tracking(batch: list[str], next_at: float) -> None:
+    """Called by the supplement loop after each batch to record tracking state."""
+    global _last_scanned_symbols, _next_scan_at
+    _last_scanned_symbols = (batch + _last_scanned_symbols)[:20]
+    _next_scan_at = next_at
 
 
 # ── Combined data accessor ────────────────────────────────────────────────────
 
 def get_combined_ticker_data() -> dict[str, dict]:
     """
-    Merge master screener cache + supplement cache into one {ticker: row} dict.
+    Merge master screener cache + fresh supplement + supplement LKG into one
+    {ticker: row} dict.
 
-    Master cache rows are tagged with _source="live" and always take
-    precedence over supplement rows.
+    Priority:
+      live > supplement (fresh) > supplement_lkg (disk-loaded)
     """
     try:
         from data.cache import cache
@@ -258,23 +368,26 @@ def get_combined_ticker_data() -> dict[str, dict]:
 
         for sym, row in get_supplement_data_by_ticker().items():
             if sym not in combined:
-                combined[sym] = row   # already tagged _source="supplement"
+                combined[sym] = row   # already tagged by layer
 
         return combined
     except Exception:
         return {}
 
 
-# ── Debug stats ───────────────────────────────────────────────────────────────
+# ── Debug helpers ─────────────────────────────────────────────────────────────
 
 def get_supplement_stats() -> dict:
-    """Diagnostic stats shown by /api/options-flow/sectors/debug."""
+    """Diagnostic stats shown by /api/options-flow/sectors/debug (legacy compat)."""
     try:
         from data.cache import cache
 
         no_opts_raw: dict = cache.get(_NO_OPTIONS_CACHE_KEY) or {}
-        supp_raw = cache.get(_SUPPLEMENT_CACHE_KEY) or {}
-        supp_tickers = supp_raw.get("ticker_data", {})
+        fresh_snap  = cache.get(_SUPPLEMENT_CACHE_KEY) or {}
+        lkg_snap    = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        fresh_tickers = fresh_snap.get("ticker_data", {})
+        lkg_tickers   = lkg_snap.get("ticker_data", {})
+        all_supp      = set(fresh_tickers) | set(lkg_tickers)
 
         all_theme_syms: set[str] = set()
         try:
@@ -289,16 +402,68 @@ def get_supplement_stats() -> dict:
         theme_only  = all_theme_syms - master_syms
 
         return {
-            "theme_universe_symbol_count":   len(all_theme_syms),
-            "master_scan_ticker_count":      len(master_syms),
-            "overlap_count":                 len(all_theme_syms & master_syms),
-            "theme_only_symbol_count":       len(theme_only),
-            "no_options_confirmed_count":    len(no_opts_raw),
-            "supplement_scanned_count":      len(supp_tickers),
-            "pending_scan_count":            len(theme_only - set(no_opts_raw) - set(supp_tickers)),
-            "supplement_last_scan_at":       supp_raw.get("last_scan_at"),
-            "static_seed_count":             len(_get_static_seeds()),
-            "extra_theme_seeds_for_inject":  len(get_theme_proxy_symbols_for_supplement()),
+            "theme_universe_symbol_count":  len(all_theme_syms),
+            "master_scan_ticker_count":     len(master_syms),
+            "overlap_count":                len(all_theme_syms & master_syms),
+            "theme_only_symbol_count":      len(theme_only),
+            "no_options_confirmed_count":   len(no_opts_raw),
+            "supplement_fresh_count":       len(fresh_tickers),
+            "supplement_lkg_count":         len(lkg_tickers),
+            "supplement_scanned_count":     len(all_supp),
+            "pending_scan_count":           len(theme_only - set(no_opts_raw) - all_supp),
+            "supplement_last_scan_at":      fresh_snap.get("last_scan_at"),
+            "static_seed_count":            len(_get_static_seeds()),
+            "extra_theme_seeds_for_inject": len(get_theme_proxy_symbols_for_supplement()),
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def get_supplement_debug_info() -> dict:
+    """
+    Extended debug info for the /api/options-flow/sectors/debug endpoint.
+    Includes next 20 pending, last 20 scanned, persistence status.
+    """
+    try:
+        from data.cache import cache
+
+        no_opts_raw: dict = cache.get(_NO_OPTIONS_CACHE_KEY) or {}
+        fresh_snap  = cache.get(_SUPPLEMENT_CACHE_KEY) or {}
+        lkg_snap    = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        fresh_tickers = fresh_snap.get("ticker_data", {})
+        lkg_tickers   = lkg_snap.get("ticker_data", {})
+        all_supp      = set(fresh_tickers) | set(lkg_tickers)
+
+        all_theme_syms: set[str] = set()
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+            for meta in ENRICHED_THEME_RS_UNIVERSE.values():
+                for sym in (meta.get("proxy_symbols") or []):
+                    all_theme_syms.add(sym.upper())
+        except Exception:
+            pass
+
+        master_syms  = _get_master_tickers()
+        pending_syms = sorted(all_theme_syms - master_syms - set(no_opts_raw) - all_supp)
+        batch_size   = 20
+        cadence_min  = 5
+
+        return {
+            "supplement_fresh_count":           len(fresh_tickers),
+            "supplement_lkg_count":             len(lkg_tickers),
+            "supplement_total_count":           len(all_supp),
+            "no_options_confirmed_count":       len(no_opts_raw),
+            "pending_count":                    len(pending_syms),
+            "disk_lkg_exists":                  _SUPPLEMENT_LKG_DISK_PATH.exists(),
+            "disk_lkg_path":                    str(_SUPPLEMENT_LKG_DISK_PATH),
+            "last_scanned_symbols":             list(_last_scanned_symbols),
+            "next_pending_symbols":             pending_syms[:20],
+            "next_scan_at":                     _next_scan_at or None,
+            "supplement_last_scan_at":          fresh_snap.get("last_scan_at"),
+            "lkg_loaded_at":                    lkg_snap.get("loaded_at"),
+            "batch_size":                       batch_size,
+            "cadence_seconds":                  cadence_min * 60,
+            "estimated_full_coverage_minutes":  round(len(pending_syms) / batch_size * cadence_min, 1),
         }
     except Exception as exc:
         return {"error": str(exc)}
