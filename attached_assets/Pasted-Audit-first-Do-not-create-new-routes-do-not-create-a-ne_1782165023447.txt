@@ -1,0 +1,88 @@
+Audit first. Do not create new routes, do not create a new theme universe, and do not rewrite the Themes system.
+
+Frontend diagnosis confirmed:
+
+* 7D curve: 8 points, starts 2026-06-10 → correct
+* 30D curve: 24 points, starts 2026-05-18 → correct
+* YTD curve: 117 points, starts 2026-01-02 → correct
+* 1Y curve: 262 points, starts 2021-04-09 → wrong
+* 5Y curve: 262 points, starts 2021-04-09 → correct for 5Y
+* 1Y and 5Y are currently identical. This is a backend data contract bug.
+
+Goal:
+Fix the existing Themes backend response so `performance_curve` is timeframe-specific for 1Y and 5Y.
+
+Expected behavior:
+
+* `timeframe=7D` returns recent short-window curve.
+* `timeframe=30D` returns roughly one-month curve.
+* `timeframe=YTD` starts near Jan 1 of the current year.
+* `timeframe=1Y` starts roughly one year ago, not 2021.
+* `timeframe=5Y` starts roughly five years ago.
+* Every returned curve should be ordered oldest → newest.
+* Every returned curve should be normalized/rebased so the first returned point starts at or near 0%.
+
+Audit:
+
+1. Find the existing Themes endpoint serving `performance_curve`.
+2. Find `_build_perf_curve()` or equivalent helper added in the last backend pass.
+3. Find how the selected `timeframe` query param is passed into curve building.
+4. Find why `1Y` is using the same date window as `5Y`.
+5. Check whether the bug is:
+
+   * timeframe mapping error,
+   * cache key missing timeframe,
+   * LKG serving one 5Y curve for both 1Y and 5Y,
+   * or downsampling logic accidentally collapsing 1Y/5Y into the same returned array.
+
+Fix requirements:
+
+* Preserve existing route and response shape.
+* Do not add new external API calls if raw/historical data is already available.
+* Do not add LLM calls.
+* Do not replace existing theme membership or scoring logic.
+* Fix only the timeframe-specific curve generation/serving path.
+
+Implementation guidance:
+
+* If building from raw symbol histories:
+
+  * Apply the selected timeframe start date before normalizing.
+  * For 1Y, filter raw points to roughly one year ago → latest.
+  * For 5Y, filter raw points to roughly five years ago → latest.
+  * Normalize after filtering, not before.
+* If serving from a stored full-history curve:
+
+  * Slice to the selected timeframe window.
+  * Rebase the sliced curve so the first visible point becomes 0%.
+  * Use:
+    rebased = (((1 + current_value_pct / 100) / (1 + start_value_pct / 100)) - 1) * 100
+* Make sure cache keys include timeframe where applicable.
+* Do not allow a 5Y cached curve to satisfy a 1Y request unless it is sliced and rebased first.
+
+Validation:
+Call the existing Themes endpoint for:
+
+* timeframe=7D
+* timeframe=30D
+* timeframe=YTD
+* timeframe=1Y
+* timeframe=5Y
+
+For the same theme, print:
+
+* point count
+* first date
+* last date
+* first value_pct
+* last value_pct
+
+Expected validation:
+
+* 1Y first date should be around one year ago.
+* 1Y point count should be materially different from 5Y.
+* 1Y final value should roughly match that theme’s 1Y return.
+* 5Y should still start around five years ago.
+* 7D/30D/YTD should remain correct.
+* No API call explosion.
+* No frontend changes required after this unless response shape changes, which it should not.

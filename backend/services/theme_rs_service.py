@@ -820,52 +820,38 @@ def _compute_theme_perf(
 
 def _build_perf_curve(
     proxy_syms: list[str],
-    tf: str,
+    tf: str,        # retained for call-site compatibility; not used for date filtering
     histories: dict[str, tuple[list[dict], str]],
-    max_points: int = 252,
+    max_points: int = 1300,
 ) -> list[dict]:
     """
-    Build a normalized equal-weight performance curve for the given timeframe.
+    Build a normalized equal-weight performance curve using ALL available history.
 
-    Each proxy symbol is normalized to its own start price (value_pct=0 at
-    first available bar), then the daily values are averaged equal-weight.
+    Each proxy symbol is normalized to its own oldest available close
+    (value_pct = 0 at the first bar), then daily values are averaged equal-weight.
     Returns [{date, value_pct}, ...] ordered oldest → newest.
-    Downsamples to max_points via uniform stride if the raw series is longer.
+
+    Stores the full available history — TF-specific slicing and rebasing is
+    applied at serve time by _apply_curves_for_tf() so that a single stored
+    curve can correctly answer any TF window (1Y, 5Y, 30D, etc.) without
+    cache-key collisions and without the LKG ever poisoning a 1Y response
+    with a 5Y curve.
     No new API calls — uses the already-fetched histories dict.
     """
-    from datetime import date as _d, timedelta as _td
-    today = _d.today()
-    if tf == "7D":
-        start = today - _td(days=12)
-    elif tf == "30D":
-        start = today - _td(days=35)
-    elif tf == "YTD":
-        start = _d(today.year, 1, 1)
-    elif tf == "1Y":
-        start = today - _td(days=380)
-    elif tf == "5Y":
-        start = today - _td(days=1900)
-    else:
-        return []  # 1D curve not useful as a series
-
-    start_str = start.isoformat()
-
-    # Normalize each proxy to its own start-of-range close
     sym_norm: dict[str, dict[str, float]] = {}
     for sym in proxy_syms:
         bars, _ = histories.get(sym, ([], ""))
-        in_range = [b for b in bars if b["date"] >= start_str]
-        if len(in_range) < 2:
+        if len(bars) < 2:
             continue
         try:
-            base_close = float(in_range[0]["close"])
+            base_close = float(bars[0]["close"])
         except (TypeError, ValueError):
             continue
         if not base_close:
             continue
         sym_norm[sym] = {
             b["date"]: round((float(b["close"]) / base_close - 1) * 100, 3)
-            for b in in_range
+            for b in bars
         }
 
     if not sym_norm:
@@ -881,7 +867,7 @@ def _build_perf_curve(
     if not points:
         return []
 
-    # Downsample for long TFs so the payload stays manageable
+    # Keep all bars up to max_points — serve-time slicing needs the full range.
     if len(points) > max_points:
         step = max(1, len(points) // max_points)
         last = points[-1]
@@ -1611,12 +1597,104 @@ def _apply_classification_filter(payload: dict, classification: str) -> dict:
     }
 
 
-async def get_theme_rs_data(
+def _tf_start_str(tf: str) -> Optional[str]:
+    """Return the ISO date string marking the start of the given TF window.
+
+    Returns None for 1D (no historical curve needed).
+    Windows intentionally overshoot slightly (e.g. 380d for 1Y) to capture
+    the calendar-year boundary without clipping weekend/holiday gaps.
+    """
+    from datetime import date as _d, timedelta as _td
+    today = _d.today()
+    if tf == "7D":   return (today - _td(days=12)).isoformat()
+    if tf == "30D":  return (today - _td(days=35)).isoformat()
+    if tf == "YTD":  return _d(today.year, 1, 1).isoformat()
+    if tf == "1Y":   return (today - _td(days=380)).isoformat()
+    if tf == "5Y":   return (today - _td(days=1900)).isoformat()
+    return None  # 1D — no curve
+
+
+def _slice_and_rebase_curve(
+    points: list[dict],
+    start_str: str,
+    max_pts: int = 252,
+) -> list[dict]:
+    """
+    Slice a full-history normalized curve to [start_str, latest] and rebase so
+    the first returned point has value_pct = 0.
+
+    Rebasing uses the compounding formula so the sliced curve is self-consistent:
+        rebased = ((1 + raw/100) / (1 + base/100) - 1) * 100
+    where base is the value_pct of the first point in the slice.
+
+    Downsamples to max_pts via uniform stride after rebasing.
+    """
+    sliced = [p for p in points if p["date"] >= start_str]
+    if not sliced:
+        return []
+
+    base_factor = 1.0 + sliced[0]["value_pct"] / 100.0
+    if not base_factor:
+        return []
+
+    rebased = [
+        {
+            "date": p["date"],
+            "value_pct": round(
+                ((1.0 + p["value_pct"] / 100.0) / base_factor - 1.0) * 100.0, 3
+            ),
+        }
+        for p in sliced
+    ]
+
+    if len(rebased) > max_pts:
+        step = max(1, len(rebased) // max_pts)
+        last = rebased[-1]
+        rebased = rebased[::step]
+        if rebased[-1]["date"] != last["date"]:
+            rebased.append(last)
+
+    return rebased
+
+
+def _apply_curves_for_tf(payload: dict, tf: str) -> dict:
+    """
+    Return a new payload dict where performance_curve in every theme row has
+    been sliced and rebased to the requested TF window.
+
+    The cache and LKG always store the full-history curve built during whatever
+    TF compute last ran (could be 5Y with ~1260 pts).  This function applies
+    the correct date window at serve time, so a 1Y request always gets a ~252-pt
+    1Y curve even if the only cached data was computed for 5Y.
+
+    Creates shallow copies of theme dicts — the cached payload is never mutated.
+    """
+    start = _tf_start_str(tf)
+    if not start:
+        return payload  # 1D — no curve; return unchanged
+
+    new_themes = [
+        {
+            **theme,
+            "performance_curve": _slice_and_rebase_curve(
+                theme.get("performance_curve") or [], start
+            ),
+        }
+        for theme in payload.get("themes", [])
+    ]
+    return {**payload, "themes": new_themes}
+
+
+async def _get_theme_rs_data_raw(
     timeframe: str = "30D",
     force: bool = False,
     classification: str = "all",
 ) -> dict:
     """
+    Internal implementation — returns cache/LKG payload with the full-history
+    performance_curve stored as-built (no TF-specific slicing applied here).
+    Call get_theme_rs_data() instead, which wraps this with _apply_curves_for_tf.
+
     Returns full themes-RS payload dict (optionally filtered by classification).
 
     classification: "all" | "sector" | "theme" | "sub_theme"
@@ -1756,6 +1834,24 @@ async def get_theme_rs_data(
                     classification,
                 )
             raise
+
+
+async def get_theme_rs_data(
+    timeframe: str = "30D",
+    force: bool = False,
+    classification: str = "all",
+) -> dict:
+    """
+    Public entry point for the themes RS endpoint.
+
+    Calls _get_theme_rs_data_raw() (cache/LKG/compute), then applies
+    _apply_curves_for_tf() to slice and rebase performance_curve to the
+    requested TF window before returning.  This ensures a 1Y request always
+    receives a 1Y curve, even when the stored full-history curve was built
+    during a 5Y compute pass.
+    """
+    result = await _get_theme_rs_data_raw(timeframe, force, classification)
+    return _apply_curves_for_tf(result, timeframe.upper())
 
 
 # ── Admin / telemetry ──────────────────────────────────────────────────────────
