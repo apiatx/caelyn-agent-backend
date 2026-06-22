@@ -1,0 +1,786 @@
+{
+  "_schema": "v2_5y",
+  "rows": [
+    {
+      "theme_id": "agribusiness",
+      "display_name": "Agribusiness",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.01
+      },
+      "_marker": "stale_safe_full_write"
+    },
+    {
+      "theme_id": "ai_networking",
+      "display_name": "AI Networking",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "banks",
+      "display_name": "Banks",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "biotech",
+      "display_name": "Biotech",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "chemicals_materials",
+      "display_name": "Chemicals & Materials",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "clean_energy",
+      "display_name": "Clean Energy",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "cloud_software",
+      "display_name": "Cloud Software",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "communication_services",
+      "display_name": "Communication Services",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "consumer_discretionary",
+      "display_name": "Consumer Discretionary",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "consumer_retail",
+      "display_name": "Consumer Retail",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "consumer_staples",
+      "display_name": "Consumer Staples",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "copper_miners",
+      "display_name": "Copper Miners",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "crypto_equities",
+      "display_name": "Crypto Equities / Blockchain",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "cybersecurity",
+      "display_name": "Cybersecurity",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "datacenter_infra",
+      "display_name": "Data Center Infrastructure",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "defense",
+      "display_name": "Defense",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "drones",
+      "display_name": "Drones",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "energy",
+      "display_name": "Energy",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "equal_weight_sp500",
+      "display_name": "Equal-Weighted S&P 500",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "financials",
+      "display_name": "Financials",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "fintech",
+      "display_name": "Fintech",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "gold",
+      "display_name": "Gold",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "growth_stocks",
+      "display_name": "Growth Stocks",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "healthcare",
+      "display_name": "Health Care",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "homebuilders",
+      "display_name": "Homebuilders",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "ibd50",
+      "display_name": "IBD 50",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "industrials",
+      "display_name": "Industrials",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "insurance",
+      "display_name": "Insurance",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "lithium_battery",
+      "display_name": "Lithium & Battery Tech",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "lng_gas",
+      "display_name": "LNG & Natural Gas",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "materials",
+      "display_name": "Materials",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "medical_devices",
+      "display_name": "Medical Devices",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "memory_storage",
+      "display_name": "Memory & Storage",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "metals_mining",
+      "display_name": "Metals & Mining",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "microcaps",
+      "display_name": "Microcaps",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "oil_gas",
+      "display_name": "Oil & Gas",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "oil_services",
+      "display_name": "Oil Services",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "photonics_lasers",
+      "display_name": "Photonics / Lasers",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "power_cooling",
+      "display_name": "Power / Cooling",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "pre_ipo",
+      "display_name": "Pre-IPO",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "quantum",
+      "display_name": "Quantum Computing",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "rare_earth",
+      "display_name": "Rare Earth Metals",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "real_estate",
+      "display_name": "Real Estate",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "regional_banks",
+      "display_name": "Regional Banks",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "robotics_automation",
+      "display_name": "Robotics & Automation",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "semicap_equipment",
+      "display_name": "Semiconductor Equipment",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "semiconductors",
+      "display_name": "Semiconductors",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "silver",
+      "display_name": "Silver",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "small_caps",
+      "display_name": "Small Caps",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "software",
+      "display_name": "Software",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "substrates_packaging",
+      "display_name": "Substrates / Packaging",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "solar",
+      "display_name": "Solar",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "space",
+      "display_name": "Space Economy",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "speculative_tech",
+      "display_name": "Speculative Tech",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "tech_equal_weight",
+      "display_name": "Tech Equal-Weight",
+      "classification": "theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "tech_mega_caps",
+      "display_name": "Tech Mega Caps",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "technology",
+      "display_name": "Technology",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "travel_transportation",
+      "display_name": "Travel & Transportation",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "uranium_nuclear",
+      "display_name": "Uranium & Nuclear Energy",
+      "classification": "sub_theme",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    },
+    {
+      "theme_id": "utilities",
+      "display_name": "Utilities",
+      "classification": "sector",
+      "performance": {
+        "1D": 0.01,
+        "7D": 0.02,
+        "30D": 0.03,
+        "YTD": 0.04,
+        "1Y": 0.05,
+        "5Y": 0.06
+      }
+    }
+  ]
+}

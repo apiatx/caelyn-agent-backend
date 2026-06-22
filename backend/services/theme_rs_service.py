@@ -110,6 +110,18 @@ _refresh_locks: dict[str, asyncio.Lock] = {}
 # When each timeframe was last successfully computed (unix ts).
 _last_computed: dict[str, float] = {tf: 0.0 for tf in ("1D", "7D", "30D", "YTD", "1Y", "5Y")}
 
+# ── Stale-safe LKG constants & state ──────────────────────────────────────────
+# Minimum theme count a fresh result must have to be allowed to overwrite the LKG.
+# Partial results (e.g. FMP guard, rate-limit, data outage) produce < this count
+# and must never poison the last-good snapshot.  60 themes is the full universe;
+# 55 gives ~8 % tolerance for legitimate universe shrinkage while blocking partials.
+_MIN_LKG_THEME_FLOOR: int = 55
+
+# Set True by invalidate_theme_rs_cache() after an admin universe edit.
+# Cleared when a fresh full-count LKG is successfully written.
+# Exposed via get_theme_rs_status() and in every payload as admin_refresh_pending.
+_ADMIN_DIRTY: bool = False
+
 
 def _get_lock(tf: str) -> asyncio.Lock:
     """Return (or lazily create) the asyncio.Lock for a timeframe."""
@@ -187,23 +199,57 @@ def get_rs_payload_sync(tf: str = "1D") -> Optional[dict]:
 
 
 def _save_lkg(data: list[dict]) -> None:
-    """Atomic write — never overwrites valid snapshot with bad data."""
+    """
+    Atomic write — never overwrites a valid snapshot with bad data.
+
+    Two quality guards (checked in order):
+
+    1. Count guard: if len(data) < _MIN_LKG_THEME_FLOOR AND the existing LKG
+       already has a healthy count (>= _MIN_LKG_THEME_FLOOR), skip the write.
+       This prevents a partial result (FMP guard / rate-limit / outage) from
+       poisoning the last-good 60-theme snapshot.
+
+    2. 5Y guard: do NOT overwrite a 5Y-capable LKG with a 5Y-null one.
+    """
+    global _ADMIN_DIRTY
+
     if not data:
         print("[THEME_RS] LKG save skipped — empty result")
         return
-    # Only save if the new data improves on the existing LKG.
-    # Specifically: do NOT overwrite a 5Y-capable LKG with a 5Y-null one.
+
+    # Load existing LKG once; reuse for both quality checks below.
+    existing = _load_lkg()
+
+    # ── 1. Count guard ────────────────────────────────────────────────────────
+    if len(data) < _MIN_LKG_THEME_FLOOR:
+        if existing and len(existing) >= _MIN_LKG_THEME_FLOOR:
+            print(
+                f"[THEME_RS] LKG save skipped — partial result ({len(data)} themes "
+                f"< floor {_MIN_LKG_THEME_FLOOR}); existing LKG preserved "
+                f"({len(existing)} themes)"
+            )
+            return
+
+    # ── 2. 5Y guard ───────────────────────────────────────────────────────────
     if not _lkg_has_5y(data):
-        existing = _load_lkg()
         if existing and _lkg_has_5y(existing):
             print("[THEME_RS] LKG save skipped — new data lacks 5Y, existing LKG has it")
             return
+
+    # ── Atomic write ──────────────────────────────────────────────────────────
     try:
         _LKG_PATH.parent.mkdir(parents=True, exist_ok=True)
         payload = {"_schema": _LKG_SCHEMA_VER, "rows": data}
         tmp = _LKG_PATH.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, indent=2, default=str))
         tmp.replace(_LKG_PATH)
+        # Clear dirty flag once a full-count snapshot replaces the old LKG.
+        if _ADMIN_DIRTY and len(data) >= _MIN_LKG_THEME_FLOOR:
+            _ADMIN_DIRTY = False
+            print(
+                f"[THEME_RS] Admin dirty flag cleared — fresh full LKG saved "
+                f"({len(data)} themes)"
+            )
     except Exception as e:
         print(f"[THEME_RS] LKG save error: {e}")
 
@@ -270,16 +316,17 @@ def _make_payload(rows: list[dict], tf: str) -> dict:
     ttl          = _ttl_for_timeframe(tf)
     now_ts       = time.time()
     return {
-        "themes":            rows,
-        "timeframe":         tf,
-        "theme_count":       len(rows),
-        "generated_at":      datetime.now(timezone.utc).isoformat(),
-        "last_updated":      datetime.now(timezone.utc).isoformat(),
-        "cache_ttl_s":       ttl,
-        "cache_age_seconds": 0,
-        "_cache_set_at":     now_ts,
-        "is_market_hours":   _is_market_hours(),
-        "source":            "live",
+        "themes":                rows,
+        "timeframe":             tf,
+        "theme_count":           len(rows),
+        "generated_at":          datetime.now(timezone.utc).isoformat(),
+        "last_updated":          datetime.now(timezone.utc).isoformat(),
+        "cache_ttl_s":           ttl,
+        "cache_age_seconds":     0,
+        "_cache_set_at":         now_ts,
+        "is_market_hours":       _is_market_hours(),
+        "source":                "live",
+        "admin_refresh_pending": _ADMIN_DIRTY,
         "source_health": {
             "tradier_quotes":  any(r["performance"].get("1D") is not None for r in rows),
             "fmp_history":     fmp_used,
@@ -292,16 +339,17 @@ def _make_payload(rows: list[dict], tf: str) -> dict:
 def _lkg_payload(rows: list[dict], tf: str, source: str = "lkg") -> dict:
     """Build a stale/LKG response payload."""
     return {
-        "themes":            rows,
-        "timeframe":         tf,
-        "theme_count":       len(rows),
-        "generated_at":      None,
-        "last_updated":      None,
-        "cache_ttl_s":       None,
-        "cache_age_seconds": None,
-        "_cache_set_at":     None,
-        "is_market_hours":   _is_market_hours(),
-        "source":            source,
+        "themes":                rows,
+        "timeframe":             tf,
+        "theme_count":           len(rows),
+        "generated_at":          None,
+        "last_updated":          None,
+        "cache_ttl_s":           None,
+        "cache_age_seconds":     None,
+        "_cache_set_at":         None,
+        "is_market_hours":       _is_market_hours(),
+        "source":                source,
+        "admin_refresh_pending": _ADMIN_DIRTY,
         "source_health": {
             "tradier_quotes":  False,
             "fmp_history":     False,
@@ -1512,12 +1560,25 @@ async def get_theme_rs_data(
 
 def invalidate_theme_rs_cache() -> None:
     """
-    Clear all in-memory RS caches and delete the LKG disk file.
-    Call this after any admin edit to the theme universe (ticker overrides,
-    watchlist update, etc.) so the next GET returns fresh computed data.
+    Mark theme RS caches dirty after an admin universe edit (stale-safe).
 
-    Safe to call from sync or async context — no I/O except file deletion.
+    Strategy (replaces the old destructive delete-LKG approach):
+    - Clears all in-memory TTL cache keys so the next compute cycle uses the
+      updated universe instead of a stale cached result.
+    - Resets _last_computed so the cadence guard doesn't block an immediate
+      background refresh.
+    - Does NOT delete the LKG disk file.  The last-good snapshot is preserved
+      on disk and served immediately via stale-while-revalidate until a complete
+      replacement (>= _MIN_LKG_THEME_FLOOR themes) is available.
+    - Sets _ADMIN_DIRTY flag so status endpoints and response payloads expose
+      admin_refresh_pending=True.
+    - Kicks a background 1D recompute immediately so the new universe is picked
+      up as soon as possible without waiting for the next natural TTL expiry.
+
+    Safe to call from sync or async context — no blocking I/O.
     """
+    global _ADMIN_DIRTY
+
     # Clear in-memory TTL cache for every timeframe
     for tf in ("1D", "7D", "30D", "YTD", "1Y", "5Y"):
         key = f"{_CACHE_KEY}:{tf}"
@@ -1527,15 +1588,21 @@ def invalidate_theme_rs_cache() -> None:
             pass
         _last_computed[tf] = 0.0
 
-    # Delete LKG so cold compute runs on next request
-    try:
-        if _LKG_PATH.exists():
-            _LKG_PATH.unlink()
-            print("[THEME_RS] LKG deleted by invalidate_theme_rs_cache()")
-    except Exception as exc:
-        print(f"[THEME_RS] Warning: could not delete LKG: {exc}")
+    _ADMIN_DIRTY = True
+    lkg_count = len(_load_lkg() or [])
+    print(
+        f"[THEME_RS] Cache marked dirty — LKG preserved ({lkg_count} themes), "
+        f"background 1D refresh queued"
+    )
 
-    print("[THEME_RS] Cache invalidated — next request will cold-compute")
+    # Kick immediate 1D background refresh (non-blocking, best-effort).
+    # The refresh will update LKG only if it returns >= _MIN_LKG_THEME_FLOOR themes.
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(_locked_refresh("1D"))
+    except Exception:
+        pass
 
 
 def get_theme_rs_status() -> dict:
@@ -1571,6 +1638,7 @@ def get_theme_rs_status() -> dict:
             "cadence_s":          cadence_s,
         }
 
+    lkg_rows = _load_lkg()
     return {
         "unique_proxy_bench_count": unique_proxy_count,
         "candidate_symbol_count":   len(ALL_CANDIDATE_SYMBOLS),
@@ -1578,6 +1646,9 @@ def get_theme_rs_status() -> dict:
         "hist_endpoint_mode":       f"historical-price-eod date-ranged (last {_FMP_HIST_RANGE_DAYS} cal days)",
         "lkg_path":                 str(_LKG_PATH),
         "lkg_exists":               _LKG_PATH.exists(),
+        "lkg_theme_count":          len(lkg_rows) if lkg_rows else 0,
+        "lkg_theme_floor":          _MIN_LKG_THEME_FLOOR,
+        "admin_refresh_pending":    _ADMIN_DIRTY,
         "refresh_ts_path":          str(_REFRESH_TS_PATH),
         "refresh_ts_exists":        _REFRESH_TS_PATH.exists(),
         "timeframes":               tf_status,
