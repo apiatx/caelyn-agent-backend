@@ -393,6 +393,7 @@ async def lifespan(app):
     _load_master_lkg_from_disk()       # Warm master screener LKG — serves on first request
     _load_master_prefilter_from_disk() # Warm master prefilter — skips cold build on restart
     asyncio.create_task(_master_screener_loop())
+    asyncio.create_task(_theme_options_supplement_loop())
     # Tradier precompute loop removed — Options Flow now uses TradierFlowEngine directly
     asyncio.create_task(_polygon_options_ingestion_loop())
     asyncio.create_task(_macro_precompute_loop())
@@ -11699,6 +11700,25 @@ async def _master_screener_loop():
                 except Exception as _te:
                     print(f"[MASTER_SCREENER] Dynamic thematic injection skipped: {_te}")
 
+                # ── Curated theme universe seed injection ─────────────────
+                # Add theme proxy symbols not already in the static seeds.
+                # ETF proxies are prioritised (better options liquidity);
+                # hard-capped at 60 so the Tradier batch-quote pre-fetch
+                # stays fast.  High-activity theme tickers will reach Stage 2
+                # naturally; low-activity ones are handled by the supplement loop.
+                try:
+                    from data.options_theme_supplement import get_theme_proxy_symbols_for_supplement as _get_theme_seeds
+                    _theme_extra = _get_theme_seeds(max_symbols=60)
+                    if _theme_extra:
+                        _prev_len = len(_cycle_seeds)
+                        _cycle_seeds = list(dict.fromkeys([*_cycle_seeds, *_theme_extra]))
+                        print(
+                            f"[MASTER_SCREENER] Curated theme seeds added: "
+                            f"+{len(_cycle_seeds) - _prev_len} → {len(_cycle_seeds)} total seeds"
+                        )
+                except Exception as _thseed_err:
+                    print(f"[MASTER_SCREENER] Curated theme seed injection skipped: {_thseed_err}")
+
                 prefilter_data = await engine.build_prefilter_snapshot(
                     _cycle_seeds, tab="master",
                 )
@@ -11824,9 +11844,159 @@ async def _master_screener_loop():
             _tb.print_exc()
             print(f"[MASTER_SCREENER] Cycle error: {_exc}")
 
+        # ── Persist no-options info from Stage-1 expiry cache ──────────────
+        # Zero extra Tradier calls — uses data already gathered in Stage 1.
+        try:
+            from data.options_theme_supplement import update_no_options_from_expiry_cache as _upd_no_opts
+            _upd_no_opts(_master_expiry_cache)
+        except Exception:
+            pass
+
         await asyncio.sleep(_MASTER_CYCLE_SLEEP)
 
 
+
+
+async def _theme_options_supplement_loop():
+    """
+    Slow supplemental options scan for curated theme proxy symbols that are
+    not already covered by the master screener results.
+
+    Cadence  : up to 6 symbols every 10 minutes.
+    Rate use : ~6 × 4 Tradier calls / 10 min ≈ 2.4 calls/min  (<2.2% budget).
+
+    Uses the same _TRADIER_GLOBAL_SEM and data_service.tradier as the master
+    screener — no second Tradier client.  Results go to options_theme_supplement_v1
+    (separate from the master cache).  The sectors endpoint merges both caches.
+    """
+    global _TRADIER_GLOBAL_SEM
+
+    import traceback as _tb_s
+    import time as _ts
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _init_event.wait, 60)
+
+    if data_service is None or not data_service.tradier:
+        print("[THEME_SUPP] Tradier unavailable — supplement scan disabled")
+        return
+
+    # Wait for master screener to initialise the shared semaphore
+    _ws = _ts.time()
+    while _TRADIER_GLOBAL_SEM is None:
+        if _ts.time() - _ws > 120:
+            print("[THEME_SUPP] Semaphore not ready after 120 s — supplement scan disabled")
+            return
+        await asyncio.sleep(3)
+
+    from data.options_theme_supplement import (
+        get_theme_only_symbols_for_supplement  as _get_pending,
+        update_supplement_cache                as _update_supp,
+        update_no_options_from_expiry_cache    as _upd_no_opts,
+    )
+    from data.options_enricher import enrich_ticker_rows
+    from data.tradier_flow_engine import TradierFlowEngine
+    from data.options_flow_engine import ETF_SET as _ETF_SET
+
+    _BATCH_SIZE  = 6
+    _CYCLE_SLEEP = 600   # 10 minutes
+    _scan_cursor = 0
+    _local_expiry: dict = {}   # separate from master screener expiry cache
+
+    def _sf(v):
+        try: return float(v) if v is not None else None
+        except: return None
+    def _si(v):
+        try: return int(v) if v is not None else 0
+        except: return 0
+
+    # Initial delay: give master screener time to warm up first
+    await asyncio.sleep(150)
+    print("[THEME_SUPP] Theme options supplement loop started")
+
+    while True:
+        try:
+            pending = _get_pending()
+            if not pending:
+                await asyncio.sleep(_CYCLE_SLEEP)
+                continue
+
+            _scan_cursor = _scan_cursor % len(pending)
+            batch = pending[_scan_cursor: _scan_cursor + _BATCH_SIZE]
+            _scan_cursor += _BATCH_SIZE
+
+            if not batch:
+                await asyncio.sleep(_CYCLE_SLEEP)
+                continue
+
+            print(f"[THEME_SUPP] Scanning batch [{_scan_cursor}/{len(pending)}]: {batch}")
+
+            # Pre-fetch Tradier quotes — Stage 1 needs a price to proceed
+            candidates = []
+            try:
+                raw_q = await data_service.tradier.get_quotes(batch)
+                qmap = {(q.get("symbol") or "").upper(): q for q in (raw_q or []) if isinstance(q, dict)}
+                for sym in batch:
+                    sym_u = sym.upper()
+                    q = qmap.get(sym_u) or {}
+                    price = _sf(q.get("last"))
+                    if price:
+                        candidates.append({
+                            "ticker":               sym_u,
+                            "price":                price,
+                            "change_pct":           _sf(q.get("change_percentage")),
+                            "volume":               _si(q.get("volume")),
+                            "category":             "etf" if sym_u in _ETF_SET else "stock",
+                            "source_score":         5.0,
+                            "source_hits":          ["theme_supplement"],
+                            "reasons":              ["theme_basket_inclusion"],
+                            "prefilter_score":      5.0,
+                            "profile":              {},
+                            "technicals":           {},
+                            "stock_relative_volume": None,
+                            "liquidity_dollars":    None,
+                            "liquidity_supported":  False,
+                        })
+            except Exception as _qe:
+                print(f"[THEME_SUPP] Quote prefetch error: {_qe}")
+
+            if not candidates:
+                await asyncio.sleep(_CYCLE_SLEEP)
+                continue
+
+            # TradierFlowEngine: master_stage2_limit defaults to 0
+            # (set to 30 only by UnifiedOptionsEngine), so all Stage-1
+            # survivors are chain-fetched here.
+            engine = TradierFlowEngine(data_service)
+            engine._shared_sem  = _TRADIER_GLOBAL_SEM
+            engine._expiry_cache = _local_expiry
+
+            screener_data = await engine.run_live_scan(
+                None,
+                prefilter_snapshot={
+                    "candidates":       candidates,
+                    "macro":            {},
+                    "degraded_sources": [],
+                },
+                tab="master",
+            )
+
+            results = screener_data.get("tickers", [])
+            if results:
+                enrich_ticker_rows(results)
+                _update_supp(results)
+                print(f"[THEME_SUPP] Batch done: {len(results)}/{len(batch)} tickers with options data")
+            else:
+                print(f"[THEME_SUPP] Batch done: 0/{len(batch)} produced data (low activity or no options)")
+
+            # Persist no-options info discovered in this batch's Stage-1 sweep
+            _upd_no_opts(_local_expiry)
+
+        except Exception as _exc:
+            print(f"[THEME_SUPP] Cycle error: {_exc}")
+            _tb_s.print_exc()
+
+        await asyncio.sleep(_CYCLE_SLEEP)
 
 
 _OPTIONS_DEFAULT_TICKERS = _OPTIONS_MEGACAP_SEEDS

@@ -72,14 +72,16 @@ async def options_flow_sectors_debug(
     """
     Diagnostics for the sectors aggregation.
 
-    Returns:
-      - whether the master screener cache is warm
-      - ticker counts in the master cache vs theme universe
-      - which theme-universe tickers are NOT yet in the options scan
-      - the sectors cache TTL status
+    Returns scan coverage broken down by master / supplement / no_options /
+    pending, plus the supplement module stats and sectors cache TTL status.
     """
     try:
         from data.cache import cache
+        from data.options_theme_supplement import (
+            get_supplement_stats,
+            get_no_options_symbols,
+            get_theme_only_symbols_for_supplement,
+        )
         from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
 
         master_snap = (
@@ -99,18 +101,28 @@ async def options_flow_sectors_debug(
             for sym in (meta.get("proxy_symbols") or []):
                 theme_tickers.add(sym.upper())
 
-        sectors_cached = cache.get("options_flow_sectors:v1") is not None
+        no_opts   = get_no_options_symbols()
+        pending   = get_theme_only_symbols_for_supplement()
+        supp_stat = get_supplement_stats()
 
         return JSONResponse(content={
-            "master_cache_warm":                 master_snap is not None,
-            "master_cache_source":               (master_snap or {}).get("source", "unknown"),
-            "master_scan_ticker_count":          len(master_tickers),
-            "theme_universe_ticker_count":       len(theme_tickers),
-            "tickers_in_both":                   len(master_tickers & theme_tickers),
-            "theme_only_tickers_no_options":     sorted(theme_tickers - master_tickers),
-            "options_scan_not_in_any_theme":     sorted(master_tickers - theme_tickers),
-            "sectors_cache_warm":                sectors_cached,
-            "theme_count":                       len(ENRICHED_THEME_RS_UNIVERSE),
+            "master_cache_warm":             master_snap is not None,
+            "master_cache_source":           (master_snap or {}).get("source", "unknown"),
+            "sectors_cache_warm":            cache.get("options_flow_sectors:v1") is not None,
+            "theme_count":                   len(ENRICHED_THEME_RS_UNIVERSE),
+            "scan_coverage": {
+                "master_scan_tickers":       len(master_tickers),
+                "theme_universe_total":      len(theme_tickers),
+                "tickers_in_both":           len(master_tickers & theme_tickers),
+                "no_options_confirmed":      len(no_opts & theme_tickers),
+                "pending_supplement_scan":   len(pending),
+                "supplement_scanned":        supp_stat.get("supplement_scanned_count", 0),
+                "supplement_last_scan_at":   supp_stat.get("supplement_last_scan_at"),
+                "extra_theme_seeds_for_inject": supp_stat.get("extra_theme_seeds_for_inject", 0),
+            },
+            "no_options_confirmed_symbols":  sorted(no_opts & theme_tickers),
+            "pending_supplement_symbols":    pending,
+            "options_scan_not_in_any_theme": sorted(master_tickers - theme_tickers),
         })
     except Exception as exc:
         import traceback
