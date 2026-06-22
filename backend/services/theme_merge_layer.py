@@ -475,22 +475,37 @@ ENRICHED_ALL_CANDIDATE_SYMBOLS: list[str] = sorted(
 
 def refresh_enriched_universe() -> None:
     """
-    Intentional in-place refresh of the module-level enriched universe.
-    Safe to call after a watchlist update (e.g. from an admin endpoint).
+    True in-place mutation of the module-level enriched universe dicts/lists.
+
+    WHY IN-PLACE:
+      Other modules (e.g. theme_rs_service) do:
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as THEME_RS_UNIVERSE
+      Python binds that name to the dict OBJECT at import time. If we rebind the
+      module global (ENRICHED_THEME_RS_UNIVERSE = new_dict), the other module's
+      alias still points to the OLD object and never sees updated data until restart.
+
+      Using .clear() + .update() mutates the SAME object in-place, so all existing
+      aliases everywhere see the fresh data immediately — no restart required.
     """
-    global ENRICHED_THEME_RS_UNIVERSE, ENRICHED_ALL_PROXY_SYMBOLS, \
-           ENRICHED_ALL_CANDIDATE_SYMBOLS, _net_new_proxy
-    ENRICHED_THEME_RS_UNIVERSE, _net_new_proxy = _build()
-    ENRICHED_ALL_PROXY_SYMBOLS = sorted(
+    global _net_new_proxy
+    new_uni, new_net_new = _build()
+
+    # Dict: mutate in-place so module-level aliases in other modules stay live
+    ENRICHED_THEME_RS_UNIVERSE.clear()
+    ENRICHED_THEME_RS_UNIVERSE.update(new_uni)
+    _net_new_proxy = new_net_new
+
+    # Lists: slice-assignment mutates in-place for the same reason
+    ENRICHED_ALL_PROXY_SYMBOLS[:] = sorted(
         set(sym for v in ENRICHED_THEME_RS_UNIVERSE.values()
             for sym in v.get("proxy_symbols", []))
     )
-    ENRICHED_ALL_CANDIDATE_SYMBOLS = sorted(
+    ENRICHED_ALL_CANDIDATE_SYMBOLS[:] = sorted(
         set(sym for v in ENRICHED_THEME_RS_UNIVERSE.values()
             for sym in v.get("candidate_symbols", []))
         - {""}
     )
-    log.info("[THEME_MERGE] Enriched universe refreshed")
+    log.info("[THEME_MERGE] Enriched universe refreshed (in-place, %d themes)", len(ENRICHED_THEME_RS_UNIVERSE))
 
 
 def get_merge_debug_info() -> dict:

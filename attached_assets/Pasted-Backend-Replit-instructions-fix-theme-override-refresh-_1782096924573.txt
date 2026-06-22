@@ -1,0 +1,166 @@
+Backend Replit instructions — fix theme override refresh + add persistent theme leader
+
+We have 3 fixes. Audit first before changing code.
+
+Current issue:
+The frontend admin editor says a ticker was added to a theme, but the ticker does not appear in the theme basket after the mutation. Example: adding MRAM to Memory & Storage returned success, but MRAM did not appear in the expanded Theme Basket.
+
+Also needed:
+Dev/admin must be able to mark one ticker inside a theme basket as that theme’s leader. This must persist in Neon. A ticker can belong to multiple themes, but each theme should have at most one selected manual leader.
+
+Important existing model:
+
+* Theme membership is many-to-many: theme_id + symbol.
+* Same ticker can belong to multiple themes.
+* Removing from one theme must not remove from another.
+* representative_symbol remains chart-only ETF/proxy.
+* theme_leader_symbol should be separate from representative_symbol.
+* Do not replace representative_symbol with leader_symbol.
+* Do not change Watchlist behavior.
+* Do not change performance math.
+
+Fix 1 — audit add/remove not visually appearing:
+Audit the full mutation path:
+
+1. POST /api/themes/admin/memberships response body.
+2. Whether refresh_enriched_universe() is actually called after write.
+3. Whether invalidate_theme_rs_cache() actually clears in-memory + LKG data.
+4. Whether GET /api/themes/admin/theme-basket/{theme_id} immediately reflects the change.
+5. Whether GET /api/themes/relative-strength immediately reflects the change in:
+
+   * theme_holdings
+   * proxy_symbols/performance_symbols
+   * holdings_display_mode
+6. Verify with MRAM → memory_storage or another ticker/theme pair.
+
+Required backend behavior:
+After adding a ticker to a theme:
+
+* admin theme-basket endpoint must immediately show the ticker in final_theme_holdings/theme_holdings.
+* normal /api/themes/relative-strength must show it after cache invalidation/recompute.
+* no deploy/restart required.
+* no global dedupe across themes.
+
+If the backend is already correct and this is frontend stale state, prove it with endpoint responses.
+
+Fix 2 — persistent theme leader:
+Add persistent dev/admin theme leader support.
+
+Preferred storage:
+Create a Neon table, or equivalent existing migration pattern:
+
+theme_leader_overrides:
+
+* theme_id text primary key
+* leader_symbol text not null
+* source text default 'manual_admin'
+* note text nullable
+* created_by text nullable
+* created_at timestamptz default now()
+* updated_at timestamptz default now()
+
+Rules:
+
+1. One manual leader per theme.
+2. Same symbol can be leader for multiple themes if manually chosen.
+3. leader_symbol should normally be a member of that theme’s final basket.
+4. If user marks a symbol leader and it is not currently in the theme basket, either:
+
+   * reject with 400 and explain symbol must be in the theme basket first,
+   * or add it to that theme automatically, but only if explicitly implemented and documented.
+     Prefer rejection unless existing UI flow requires auto-add.
+5. Removing a ticker that is currently the manual leader should either:
+
+   * clear the leader for that theme,
+   * or reject removal until leader is changed.
+     Prefer clearing leader automatically and return that in response.
+6. Clearing/deleting the leader restores default behavior.
+
+Add admin endpoints:
+GET /api/themes/admin/leaders
+
+* returns all manual leaders
+
+POST /api/themes/admin/leaders
+body:
+{
+"theme_id": "memory_storage",
+"leader_symbol": "MRAM",
+"note": "manual dev selected leader"
+}
+
+* validates admin JWT/API key using existing safe admin guard
+* validates theme_id exists
+* validates symbol format
+* validates symbol is in final theme basket, unless you explicitly auto-add
+* upserts leader for that theme
+* invalidates theme caches
+
+DELETE /api/themes/admin/leaders/{theme_id}
+
+* clears manual leader for this theme only
+* invalidates theme caches
+
+Extend existing debug/admin basket endpoint:
+GET /api/themes/admin/theme-basket/{theme_id}
+Should return:
+
+* theme_id
+* display_name
+* representative_symbol
+* holdings_display_mode
+* base_symbols
+* watchlist_seed_symbols
+* manual_added_symbols
+* manual_removed_symbols
+* final_theme_holdings
+* final_performance_symbols
+* manual_leader_symbol
+* effective_leader_symbol
+* leader_source: manual / automatic / none
+
+Extend normal Themes API row:
+Each theme row should include:
+
+* leader_symbol or theme_leader_symbol
+* leader_source
+
+Do not confuse:
+
+* representative_symbol = ETF/proxy TradingView chart for whole theme
+* leader_symbol = selected stock/ticker leader inside basket
+* lead_proxy = backend price/history mechanic if still used
+* theme_holdings = visible basket
+
+Leader default behavior:
+If no manual leader exists, preserve current behavior. Do not invent a new scorer unless already available. Just return null or existing automatic leader if one already exists.
+
+Validation required:
+
+1. Add MRAM to memory_storage.
+2. Confirm GET /api/themes/admin/theme-basket/memory_storage immediately includes MRAM.
+3. Confirm GET /api/themes/relative-strength eventually/immediately includes MRAM in memory_storage.theme_holdings after cache invalidation.
+4. Mark MRAM as leader for memory_storage.
+5. Confirm admin basket endpoint returns manual_leader_symbol = MRAM.
+6. Confirm normal Themes API row returns leader_symbol/theme_leader_symbol = MRAM.
+7. Add MRAM to another theme too.
+8. Confirm MRAM can exist in both themes.
+9. Mark MRAM leader in another theme if desired.
+10. Confirm leader is per-theme, not global.
+11. Remove MRAM from memory_storage.
+12. Confirm only memory_storage changes; other theme membership remains.
+13. Confirm leader behavior on remove is correct/documented.
+14. Watchlist files untouched.
+15. Performance math unchanged except added/removed symbols participating in the existing basket calculation.
+
+Deliverable:
+Report:
+
+* Root cause of add-success-but-not-visible.
+* Whether backend or frontend stale state caused it.
+* Files changed.
+* Table/migration created for leaders.
+* Endpoints added.
+* API fields added.
+* Cache invalidation behavior.
+* Validation results proving many-to-many membership and per-theme leader.

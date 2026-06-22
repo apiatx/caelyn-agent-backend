@@ -510,6 +510,22 @@ def init_tables():
             ON public.theme_ticker_overrides (theme_id)
         """)
 
+        # ── Dev-admin theme leader overrides (one leader per theme) ────────────
+        # PK is theme_id — each theme has at most one manual leader symbol.
+        # Same symbol can be leader for multiple different themes.
+        # Clearing this row restores default (no manual leader) behavior.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.theme_leader_overrides (
+                theme_id      TEXT        PRIMARY KEY,
+                leader_symbol TEXT        NOT NULL,
+                source        TEXT        NOT NULL DEFAULT 'manual_admin',
+                note          TEXT,
+                created_by    TEXT,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
         # ── Chart Radar saved views ────────────────────────────────────────────
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.chart_radar_views (
@@ -2313,6 +2329,124 @@ def delete_theme_ticker_override(theme_id: str, symbol: str) -> bool:
         return deleted
     except Exception as exc:
         print(f"[PG] delete_theme_ticker_override error: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+# ── Theme leader overrides CRUD ────────────────────────────────────────────────
+
+def get_all_theme_leaders() -> list[dict]:
+    """
+    Return all manual theme-leader overrides.
+    Each row: {theme_id, leader_symbol, source, note, created_by, created_at, updated_at}
+    """
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT theme_id, leader_symbol, source, note, created_by, "
+                "created_at, updated_at "
+                "FROM public.theme_leader_overrides "
+                "ORDER BY theme_id ASC"
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "theme_id":      r[0],
+                "leader_symbol": r[1],
+                "source":        r[2],
+                "note":          r[3],
+                "created_by":    r[4],
+                "created_at":    r[5].isoformat() if r[5] else None,
+                "updated_at":    r[6].isoformat() if r[6] else None,
+            }
+            for r in rows
+        ]
+    except Exception as exc:
+        print(f"[PG] get_all_theme_leaders error: {exc}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
+def get_theme_leaders_map() -> dict[str, dict]:
+    """
+    Return {theme_id: {leader_symbol, source, note}} for all themes.
+    Efficient bulk read — use in _compute() to avoid per-theme queries.
+    """
+    rows = get_all_theme_leaders()
+    return {r["theme_id"]: r for r in rows}
+
+
+def upsert_theme_leader(
+    theme_id: str,
+    leader_symbol: str,
+    source: str = "manual_admin",
+    note: str | None = None,
+    created_by: str | None = None,
+) -> bool:
+    """
+    Insert or update the manual leader for a theme (PK = theme_id, one per theme).
+    Returns True on success.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.theme_leader_overrides
+                    (theme_id, leader_symbol, source, note, created_by, updated_at)
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (theme_id) DO UPDATE SET
+                    leader_symbol = EXCLUDED.leader_symbol,
+                    source        = EXCLUDED.source,
+                    note          = EXCLUDED.note,
+                    created_by    = EXCLUDED.created_by,
+                    updated_at    = NOW()
+                """,
+                (theme_id, leader_symbol, source, note, created_by),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        print(f"[PG] upsert_theme_leader error: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def delete_theme_leader(theme_id: str) -> bool:
+    """
+    Remove the manual leader override for a theme.
+    Returns True if a row was deleted, False if none existed.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM public.theme_leader_overrides WHERE theme_id = %s",
+                (theme_id,),
+            )
+            deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+    except Exception as exc:
+        print(f"[PG] delete_theme_leader error: {exc}")
         try:
             conn.rollback()
         except Exception:

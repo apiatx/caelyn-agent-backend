@@ -6,12 +6,16 @@ GET  /api/themes/relative-strength/refresh  (force-refresh cache, same params)
 GET  /api/themes/list                        (static theme registry)
 GET  /api/themes/merge-debug                 (dev/admin diagnostic)
 
-Admin (dev-only, X-API-Key required):
-GET    /api/themes/admin/memberships                        list all overrides
+Admin (dev-only, X-API-Key OR admin JWT required):
+GET    /api/themes/admin/memberships                        list all ticker overrides
 POST   /api/themes/admin/memberships                        add/remove a single ticker
 POST   /api/themes/admin/memberships/bulk                   bulk add/remove
-DELETE /api/themes/admin/memberships/{theme_id}/{symbol}    clear an override
-GET    /api/themes/admin/theme-basket/{theme_id}            basket breakdown
+DELETE /api/themes/admin/memberships/{theme_id}/{symbol}    clear a ticker override
+GET    /api/themes/admin/theme-basket/{theme_id}            basket breakdown + leader
+
+GET    /api/themes/admin/leaders                            list all manual leaders
+POST   /api/themes/admin/leaders                            set/update a theme leader
+DELETE /api/themes/admin/leaders/{theme_id}                 clear a theme leader
 """
 from __future__ import annotations
 
@@ -84,17 +88,14 @@ async def themes_relative_strength(
       return_pct, performance (1D/7D/30D/YTD/1Y),
       rs_score, rs_vs_spy, rs_vs_qqq,
       state (active/emerging/neutral/weakening/dead_zone), state_reason,
-      leaders, laggards, breadth_pct, momentum_rank, last_updated.
+      leaders, laggards, breadth_pct, momentum_rank, last_updated,
+      leader_symbol, leader_source.
 
     classification filter:
       all       → all 60 rows (11 SPDR sectors + 49 themes/sub-themes) [default]
       sector    → exactly 11 SPDR broad sector rows
       theme     → broad cross-sector/factor theme rows
       sub_theme → narrow industry sub-theme rows
-
-    No LLM calls. 1D cached 60s market hours / 3600s off-hours.
-    7D/30D/YTD/1Y cached 900s market hours / 3600s off-hours.
-    LKG persisted to disk — page loads work after restart.
     """
     tf  = timeframe.upper()
     clf = classification.lower()
@@ -191,14 +192,12 @@ async def themes_list(
     }
 
 
-# ── Admin / dev-only endpoints ─────────────────────────────────────────────────
+# ── Admin / dev-only endpoints — ticker overrides ─────────────────────────────
 #
-# Protected by X-API-Key matching AGENT_API_KEY (same as screener admin routes).
-# Many-to-many: PK is (theme_id, symbol). The same symbol can belong to multiple
-# themes simultaneously. Removing it from one theme does not touch any other theme.
+# Protected by X-API-Key matching AGENT_API_KEY OR valid admin Bearer JWT.
+# Many-to-many: PK is (theme_id, symbol). Same symbol can belong to N themes.
 #
-# Apply order in the enriched universe:
-#   1. Base universe  →  2. Watchlist seeds  →  3. Manual overrides  (wins)
+# Apply order: base universe → watchlist seeds → manual overrides (manual wins)
 
 
 class MembershipEdit(BaseModel):
@@ -243,11 +242,7 @@ async def admin_list_memberships(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     theme_id: Optional[str] = Query(None, description="Filter by theme_id"),
 ):
-    """
-    [Admin] List all manual theme-ticker overrides.
-    Includes theme_id, display_name, symbol, action, source, note, timestamps.
-    Optionally filter by ?theme_id=<id>.
-    """
+    """[Admin] List all manual theme-ticker overrides."""
     err = _check_admin(request, x_api_key)
     if err:
         return err
@@ -259,15 +254,14 @@ async def admin_list_memberships(
 
     rows = get_theme_ticker_overrides(theme_id=theme_id)
 
-    # Enrich with display_name from enriched universe
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
     for row in rows:
         meta = _uni.get(row["theme_id"], {})
         row["display_name"] = meta.get("display_name", row["theme_id"])
 
     return {
-        "overrides":    rows,
-        "override_count": len(rows),
+        "overrides":       rows,
+        "override_count":  len(rows),
         "filter_theme_id": theme_id,
     }
 
@@ -281,13 +275,13 @@ async def admin_upsert_membership(
     """
     [Admin] Add or remove a ticker from a theme basket.
 
-    action='add':    Force-include symbol in theme_id basket. Does NOT remove it from
-                     any other theme.
-    action='remove': Force-exclude symbol from theme_id basket only. Does NOT remove it
-                     from any other theme.
+    action='add':    Force-include symbol in theme_id basket only.
+    action='remove': Force-exclude symbol from theme_id basket only.
 
-    Upserts on (theme_id, symbol) — sending the same pair again updates the action.
-    Rebuilds the enriched universe and invalidates RS cache immediately.
+    If action='remove' and the symbol is currently the manual leader for this theme,
+    the leader override is also cleared automatically (returned in response).
+
+    Upserts on (theme_id, symbol). Rebuilds enriched universe + invalidates RS cache.
     """
     err = _check_admin(request, x_api_key)
     if err:
@@ -297,8 +291,7 @@ async def admin_upsert_membership(
     if body.theme_id not in _uni:
         raise HTTPException(
             status_code=404,
-            detail=f"theme_id '{body.theme_id}' not found in universe. "
-                   f"Valid ids: {sorted(_uni.keys())}",
+            detail=f"theme_id '{body.theme_id}' not found in universe.",
         )
 
     try:
@@ -317,16 +310,32 @@ async def admin_upsert_membership(
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to write override to Neon")
 
+    leader_cleared = False
+    if body.action == "remove":
+        try:
+            from data.pg_storage import get_theme_leaders_map, delete_theme_leader
+            lmap = get_theme_leaders_map()
+            current_leader = lmap.get(body.theme_id, {}).get("leader_symbol")
+            if current_leader == body.symbol:
+                delete_theme_leader(body.theme_id)
+                leader_cleared = True
+        except Exception as _le:
+            print(f"[THEMES_ADMIN] leader auto-clear check error: {_le}")
+
     _invalidate_caches()
 
     return {
-        "ok":       True,
-        "theme_id": body.theme_id,
-        "symbol":   body.symbol,
-        "action":   body.action,
-        "note":     body.note,
-        "message":  f"Override saved. '{body.symbol}' {body.action}ed in '{body.theme_id}' only. "
-                    f"Universe rebuilt and RS cache cleared.",
+        "ok":            True,
+        "theme_id":      body.theme_id,
+        "symbol":        body.symbol,
+        "action":        body.action,
+        "note":          body.note,
+        "leader_cleared": leader_cleared,
+        "message": (
+            f"Override saved. '{body.symbol}' {body.action}ed in '{body.theme_id}' only. "
+            + ("Manual leader for this theme was also cleared. " if leader_cleared else "")
+            + "Universe rebuilt and RS cache cleared."
+        ),
     }
 
 
@@ -337,17 +346,8 @@ async def admin_bulk_memberships(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
     """
-    [Admin] Bulk add/remove tickers across themes.
-
-    Supports adding the same symbol to multiple themes (many-to-many).
-    Each edit is independent — removing from one theme does not affect other themes.
-
-    Example:
-      {"edits": [
-        {"theme_id": "ai_networking",  "symbol": "ANET", "action": "add"},
-        {"theme_id": "semiconductors", "symbol": "ANET", "action": "add"},
-        {"theme_id": "clean_energy",   "symbol": "RUN",  "action": "remove"}
-      ]}
+    [Admin] Bulk add/remove tickers across themes (many-to-many).
+    Same symbol can be added to multiple themes independently.
     """
     err = _check_admin(request, x_api_key)
     if err:
@@ -356,10 +356,7 @@ async def admin_bulk_memberships(
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
     unknown_themes = [e.theme_id for e in body.edits if e.theme_id not in _uni]
     if unknown_themes:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Unknown theme_id(s): {unknown_themes}",
-        )
+        raise HTTPException(status_code=404, detail=f"Unknown theme_id(s): {unknown_themes}")
 
     try:
         from data.pg_storage import bulk_upsert_theme_ticker_overrides
@@ -399,9 +396,9 @@ async def admin_delete_membership(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
     """
-    [Admin] Clear the manual override for (theme_id, symbol).
-    Restores default universe behavior for that pair only.
-    Does NOT remove the symbol from any other theme.
+    [Admin] Clear the manual override for (theme_id, symbol). Restores default behavior.
+    Does NOT affect any other theme. If this symbol was the manual leader for this theme,
+    the leader override is also cleared automatically.
     """
     err = _check_admin(request, x_api_key)
     if err:
@@ -417,16 +414,31 @@ async def admin_delete_membership(
 
     deleted = delete_theme_ticker_override(theme_id=theme_id, symbol=symbol)
 
+    leader_cleared = False
     if deleted:
+        try:
+            from data.pg_storage import get_theme_leaders_map, delete_theme_leader
+            lmap = get_theme_leaders_map()
+            current_leader = lmap.get(theme_id, {}).get("leader_symbol")
+            if current_leader == symbol:
+                delete_theme_leader(theme_id)
+                leader_cleared = True
+        except Exception as _le:
+            print(f"[THEMES_ADMIN] leader auto-clear check error: {_le}")
         _invalidate_caches()
 
     return {
-        "ok":       True,
-        "deleted":  deleted,
-        "theme_id": theme_id,
-        "symbol":   symbol,
+        "ok":            True,
+        "deleted":       deleted,
+        "theme_id":      theme_id,
+        "symbol":        symbol,
+        "leader_cleared": leader_cleared,
         "message": (
-            f"Override for '{symbol}' in '{theme_id}' cleared. Default universe behavior restored."
+            (
+                f"Override for '{symbol}' in '{theme_id}' cleared."
+                + (" Manual leader also cleared." if leader_cleared else "")
+                + " Default universe behavior restored."
+            )
             if deleted
             else f"No override found for '{symbol}' in '{theme_id}' — nothing changed."
         ),
@@ -440,10 +452,13 @@ async def admin_theme_basket(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
     """
-    [Admin] Return a full source breakdown of a theme's basket.
-    Shows exactly which symbols came from base universe, watchlist seeds,
-    manual overrides, and which are manually excluded.
-    Also shows final_theme_holdings and final_performance_symbols.
+    [Admin] Full source breakdown of a theme's basket including leader state.
+
+    Returns:
+      theme_id, display_name, representative_symbol, holdings_display_mode,
+      base_symbols, watchlist_seed_symbols, manual_added_symbols, manual_removed_symbols,
+      final_theme_holdings, final_performance_symbols,
+      manual_leader_symbol, effective_leader_symbol, leader_source
     """
     err = _check_admin(request, x_api_key)
     if err:
@@ -473,20 +488,194 @@ async def admin_theme_basket(
     final_proxy     = sorted(meta.get("proxy_symbols", []))
     holdings_mode   = meta.get("holdings_display_mode", "etf_holdings")
 
+    manual_leader_sym: Optional[str] = None
+    leader_src = "none"
+    try:
+        from data.pg_storage import get_theme_leaders_map
+        lmap = get_theme_leaders_map()
+        entry = lmap.get(theme_id)
+        if entry:
+            manual_leader_sym = entry["leader_symbol"]
+            leader_src = "manual"
+    except Exception:
+        pass
+
     return {
         "theme_id":                theme_id,
         "display_name":            meta.get("display_name", ""),
         "proxy_type":              meta.get("proxy_type", ""),
         "representative_symbol":   meta.get("representative_symbol", ""),
         "holdings_display_mode":   holdings_mode,
-        # ── Source breakdown ────────────────────────────────────────────────
         "base_symbols":            base_proxy,
         "watchlist_seed_symbols":  watchlist_seeds,
         "manual_added_symbols":    manual_added,
         "manual_removed_symbols":  manual_removed,
-        # ── Final state ─────────────────────────────────────────────────────
-        # final_theme_holdings = what the expanded holdings table shows
-        "final_theme_holdings": sorted(final_proxy) if holdings_mode == "theme_basket" else [],
-        # final_performance_symbols = what _compute_theme_perf uses
+        "final_theme_holdings":    sorted(final_proxy) if holdings_mode == "theme_basket" else [],
         "final_performance_symbols": final_proxy,
+        "manual_leader_symbol":    manual_leader_sym,
+        "effective_leader_symbol": manual_leader_sym,
+        "leader_source":           leader_src,
+    }
+
+
+# ── Admin / dev-only endpoints — theme leaders ────────────────────────────────
+#
+# One manual leader per theme (PK = theme_id).
+# Same symbol can be leader for multiple different themes.
+# leader_symbol is a stock ticker inside the theme basket, not the ETF representative_symbol.
+
+
+class LeaderEdit(BaseModel):
+    theme_id:      str
+    leader_symbol: str
+    note:          Optional[str] = None
+    created_by:    Optional[str] = "admin"
+
+    @field_validator("theme_id")
+    @classmethod
+    def validate_theme_id(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("theme_id must not be empty")
+        return v
+
+    @field_validator("leader_symbol")
+    @classmethod
+    def validate_leader_symbol(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not _SYM_RE.match(v):
+            raise ValueError(f"Invalid symbol format: '{v}'")
+        return v
+
+
+@router.get("/admin/leaders")
+async def admin_list_leaders(
+    request: Request,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """[Admin] List all manual theme leaders."""
+    err = _check_admin(request, x_api_key)
+    if err:
+        return err
+
+    try:
+        from data.pg_storage import get_all_theme_leaders
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage unavailable: {exc}")
+
+    leaders = get_all_theme_leaders()
+
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+    for row in leaders:
+        meta = _uni.get(row["theme_id"], {})
+        row["display_name"] = meta.get("display_name", row["theme_id"])
+
+    return {"leaders": leaders, "leader_count": len(leaders)}
+
+
+@router.post("/admin/leaders")
+async def admin_set_leader(
+    request: Request,
+    body: LeaderEdit,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """
+    [Admin] Set or update the manual leader for a theme.
+
+    Rules:
+      - One leader per theme (upserts on theme_id).
+      - Same symbol can be leader for multiple themes (no global uniqueness).
+      - leader_symbol MUST already be present in final_performance_symbols for
+        this theme. If not, returns 400 — add the ticker to the basket first.
+      - representative_symbol is NOT changed (ETF/proxy chart symbol is separate).
+
+    Invalidates theme caches after write.
+    """
+    err = _check_admin(request, x_api_key)
+    if err:
+        return err
+
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+    if body.theme_id not in _uni:
+        raise HTTPException(
+            status_code=404,
+            detail=f"theme_id '{body.theme_id}' not found in universe.",
+        )
+
+    meta        = _uni[body.theme_id]
+    final_syms  = set(meta.get("proxy_symbols", []))
+    if body.leader_symbol not in final_syms:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{body.leader_symbol}' is not in the final basket for '{body.theme_id}'. "
+                f"Current basket: {sorted(final_syms)}. "
+                f"Add it via POST /api/themes/admin/memberships first."
+            ),
+        )
+
+    try:
+        from data.pg_storage import upsert_theme_leader
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage unavailable: {exc}")
+
+    ok = upsert_theme_leader(
+        theme_id=body.theme_id,
+        leader_symbol=body.leader_symbol,
+        source="manual_admin",
+        note=body.note,
+        created_by=body.created_by,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to write leader to Neon")
+
+    _invalidate_caches()
+
+    return {
+        "ok":            True,
+        "theme_id":      body.theme_id,
+        "leader_symbol": body.leader_symbol,
+        "note":          body.note,
+        "message": (
+            f"Leader set. '{body.leader_symbol}' is now the manual leader for '{body.theme_id}'. "
+            f"RS cache cleared — leader_symbol will appear in the next Themes API response."
+        ),
+    }
+
+
+@router.delete("/admin/leaders/{theme_id}")
+async def admin_clear_leader(
+    request: Request,
+    theme_id: str,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """
+    [Admin] Clear the manual leader for a theme. Restores default behavior (leader_source='none').
+    Does NOT remove the symbol from the basket. Does NOT affect any other theme.
+    """
+    err = _check_admin(request, x_api_key)
+    if err:
+        return err
+
+    theme_id = theme_id.strip().lower()
+
+    try:
+        from data.pg_storage import delete_theme_leader
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage unavailable: {exc}")
+
+    deleted = delete_theme_leader(theme_id)
+
+    if deleted:
+        _invalidate_caches()
+
+    return {
+        "ok":      True,
+        "deleted": deleted,
+        "theme_id": theme_id,
+        "message": (
+            f"Manual leader for '{theme_id}' cleared. Default leader behavior restored."
+            if deleted
+            else f"No manual leader found for '{theme_id}' — nothing changed."
+        ),
     }

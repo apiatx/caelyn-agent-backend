@@ -834,6 +834,7 @@ async def _build_theme_row(
     tf: str,
     stock_perfs: dict[str, Optional[float]],   # sym → tf-return (may be None)
     stock_sources: dict[str, str],             # sym → discovery_source
+    leaders: dict[str, dict] | None = None,   # theme_id → {leader_symbol, source}
 ) -> Optional[dict]:
     """
     Build one theme row for the given timeframe.
@@ -976,6 +977,12 @@ async def _build_theme_row(
         # theme_holdings: explicit basket for theme_basket mode.
         #   For etf_holdings mode this is empty — frontend uses representative_symbol.
         "theme_holdings": sorted(proxy_syms) if meta.get("holdings_display_mode") == "theme_basket" else [],
+        # leader_symbol / leader_source:
+        #   Manual admin-selected stock ticker that represents this theme's current leader.
+        #   Separate from representative_symbol (ETF/proxy for TradingView chart).
+        #   leader_source: "manual" = admin-set, "none" = no manual leader set.
+        "leader_symbol":  (leaders or {}).get(theme_id, {}).get("leader_symbol"),
+        "leader_source":  "manual" if (leaders or {}).get(theme_id) else "none",
         "proxy_symbols":         proxy_syms,
         "proxy_symbols_used":    used_proxies,
         "proxy_source_health":   source_health,
@@ -1193,11 +1200,21 @@ async def _compute(tf: str) -> list[dict]:
         stock_src_map[sym] = "tradier_batch" if tf == "1D" else src
 
     # ── 7. Build each theme row ────────────────────────────────────────────────
+    # Load manual leader overrides once (bulk read — one Neon query for all themes).
+    # Failures are non-fatal: leaders defaults to {} and rows get leader_source="none".
+    leaders: dict[str, dict] = {}
+    try:
+        from data.pg_storage import get_theme_leaders_map
+        leaders = get_theme_leaders_map()
+    except Exception as _ldr_err:
+        print(f"[THEME_RS] Warning: could not load theme leaders: {_ldr_err}")
+
     rows: list[dict] = []
     for theme_id, meta in THEME_RS_UNIVERSE.items():
         try:
             row = await _build_theme_row(
-                theme_id, meta, quotes, histories, tf, stock_perfs, stock_src_map
+                theme_id, meta, quotes, histories, tf, stock_perfs, stock_src_map,
+                leaders=leaders,
             )
             if row:
                 rows.append(row)
