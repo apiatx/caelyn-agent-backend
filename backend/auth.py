@@ -109,6 +109,66 @@ def create_token(user_id: str, remember_me: bool = False) -> str:
 def verify_token(token: str) -> dict:
     """Verify and decode a JWT token. Returns payload dict or raises JWTError."""
     return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+
+
+def require_admin_user_or_api_key(request, api_key: str | None) -> "JSONResponse | None":
+    """
+    Dual-path admin guard for browser-safe protected endpoints.
+
+    Accepts EITHER:
+      1. X-API-Key header matching AGENT_API_KEY  — for scripts / internal validation
+      2. Authorization: Bearer <JWT> where jwt.sub == AUTH_USERNAME  — for browser frontend
+
+    Returns None if the caller is authorised.
+    Returns a JSONResponse(401) if neither path succeeds.
+
+    Never exposes AGENT_API_KEY, ADMIN_PASSWORD, JWT_SECRET_KEY, or AUTH_USERNAME
+    to the client — all checks are server-side only.
+
+    Usage (in a route):
+        from auth import require_admin_user_or_api_key
+        err = require_admin_user_or_api_key(request, x_api_key)
+        if err:
+            return err
+    """
+    from fastapi.responses import JSONResponse as _JSONResponse
+
+    # ── Path 1: X-API-Key (scripts, backend validation) ───────────────────────
+    try:
+        from config import AGENT_API_KEY
+    except Exception:
+        AGENT_API_KEY = None
+
+    if AGENT_API_KEY and api_key == AGENT_API_KEY:
+        return None
+
+    # ── Path 2: Bearer JWT (browser session) ──────────────────────────────────
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[len("Bearer "):].strip()
+        try:
+            payload = verify_token(token)
+            subject = payload.get("sub", "")
+            if subject and subject == AUTH_USERNAME:
+                return None
+            # JWT is valid but belongs to a non-admin user
+            return _JSONResponse(
+                status_code=403,
+                content={"error": "Forbidden — admin access only"},
+            )
+        except Exception:
+            pass
+
+    # ── Neither path succeeded ─────────────────────────────────────────────────
+    return _JSONResponse(
+        status_code=401,
+        content={
+            "error": (
+                "Unauthorised — provide a valid X-API-Key header (scripts) "
+                "or an Authorization: Bearer <JWT> from an admin session (browser)"
+            )
+        },
+    )
 def validate_credentials(username: str, password: str) -> bool:
     """
     Validate username and password against environment-stored credentials.

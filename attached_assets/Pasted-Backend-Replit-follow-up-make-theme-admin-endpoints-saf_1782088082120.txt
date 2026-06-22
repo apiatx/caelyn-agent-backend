@@ -1,0 +1,71 @@
+Backend Replit follow-up — make theme admin endpoints safe for frontend dev-only UI
+
+The many-to-many theme_ticker_overrides implementation is good and the validation passed.
+
+Before frontend builds the dev-only editor, fix/auth-audit one thing:
+
+Current admin endpoints use X-API-Key / AGENT_API_KEY. That is fine for backend validation/scripts, but the browser frontend must not expose AGENT_API_KEY.
+
+Goal:
+Make the theme admin membership endpoints safely callable by the dev/admin frontend UI without putting AGENT_API_KEY in client-side code.
+
+Audit first:
+
+1. Inspect existing frontend auth/JWT/session flow.
+2. Inspect backend auth.py and any existing admin/dev-only route guards.
+3. Inspect whether the logged-in dev account can be identified server-side.
+4. Inspect whether any frontend admin tools already call protected backend admin routes.
+5. Do not remove the existing X-API-Key guard if scripts/validation use it.
+
+Required behavior:
+
+1. Keep the existing X-API-Key admin access path for scripts/internal validation.
+2. Add a safe browser-compatible admin guard for the theme admin endpoints.
+3. The browser should authenticate using the existing app auth/session/JWT mechanism, not a bundled secret.
+4. Normal users must receive 401/403 on:
+
+   * GET /api/themes/admin/memberships
+   * POST /api/themes/admin/memberships
+   * POST /api/themes/admin/memberships/bulk
+   * DELETE /api/themes/admin/memberships/{theme_id}/{symbol}
+   * GET /api/themes/admin/theme-basket/{theme_id}
+5. Dev/admin logged-in user should be allowed.
+6. Do not expose AGENT_API_KEY, ADMIN_PASSWORD, JWT_SECRET_KEY, or any secret to frontend JS.
+
+Acceptable implementation patterns:
+
+* Existing JWT claims/admin user check, if available.
+* Existing authenticated username/email check against configured dev/admin username, if already used elsewhere.
+* Server-side-only proxy route, if that is the project’s normal pattern.
+* Shared helper such as require_admin_user_or_api_key(), if clean.
+
+Do not:
+
+* Do not put AGENT_API_KEY in VITE env or frontend bundle.
+* Do not rely on localStorage role flags alone.
+* Do not make these endpoints public.
+* Do not change theme override semantics.
+* Do not change Watchlist behavior.
+* Do not change performance math.
+
+Validation required:
+
+1. X-API-Key path still works.
+2. Logged-in dev/admin browser session can call admin endpoints.
+3. Normal logged-in user cannot call admin endpoints.
+4. Unauthenticated user cannot call admin endpoints.
+5. Theme override validations still pass:
+
+   * same ticker can belong to multiple themes
+   * removing from one theme does not remove from another
+   * clearing override restores default
+6. Normal Themes API still returns 60 themes.
+7. Watchlist files untouched.
+
+Deliverable:
+Report:
+
+* Auth guard used.
+* Whether X-API-Key path was preserved.
+* How frontend should call the endpoints safely.
+* Validation results.

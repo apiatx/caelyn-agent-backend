@@ -33,22 +33,19 @@ _SYM_RE = __import__("re").compile(r"^[A-Z0-9\.\-]{1,12}$")
 
 
 # ── Admin guard ────────────────────────────────────────────────────────────────
+# Dual-path: X-API-Key for scripts, Bearer JWT for browser frontend.
+# Lives in auth.py so other routers can reuse it without circular imports.
 
-def _check_admin_key(api_key: Optional[str]) -> Optional[JSONResponse]:
+def _check_admin(request: Request, api_key: Optional[str]) -> Optional[JSONResponse]:
     """
-    Mirror the existing _check_admin_key pattern from screener_hub.py.
-    Uses AGENT_API_KEY from config — same key that protects screener admin routes.
+    Thin wrapper around auth.require_admin_user_or_api_key().
+    Accepts EITHER:
+      1. X-API-Key: <AGENT_API_KEY>   — scripts / backend validation (preserved)
+      2. Authorization: Bearer <JWT>  — browser session where jwt.sub == AUTH_USERNAME
+    Returns None if authorised, JSONResponse(401/403) otherwise.
     """
-    try:
-        from config import AGENT_API_KEY
-    except Exception:
-        AGENT_API_KEY = None
-    if AGENT_API_KEY and api_key != AGENT_API_KEY:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Invalid or missing API key — X-API-Key header required"},
-        )
-    return None
+    from auth import require_admin_user_or_api_key
+    return require_admin_user_or_api_key(request, api_key)
 
 
 def _invalidate_caches() -> None:
@@ -242,6 +239,7 @@ class BulkMembershipBody(BaseModel):
 
 @router.get("/admin/memberships")
 async def admin_list_memberships(
+    request: Request,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     theme_id: Optional[str] = Query(None, description="Filter by theme_id"),
 ):
@@ -250,7 +248,7 @@ async def admin_list_memberships(
     Includes theme_id, display_name, symbol, action, source, note, timestamps.
     Optionally filter by ?theme_id=<id>.
     """
-    err = _check_admin_key(x_api_key)
+    err = _check_admin(request, x_api_key)
     if err:
         return err
 
@@ -276,6 +274,7 @@ async def admin_list_memberships(
 
 @router.post("/admin/memberships")
 async def admin_upsert_membership(
+    request: Request,
     body: MembershipEdit,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
@@ -290,7 +289,7 @@ async def admin_upsert_membership(
     Upserts on (theme_id, symbol) — sending the same pair again updates the action.
     Rebuilds the enriched universe and invalidates RS cache immediately.
     """
-    err = _check_admin_key(x_api_key)
+    err = _check_admin(request, x_api_key)
     if err:
         return err
 
@@ -333,6 +332,7 @@ async def admin_upsert_membership(
 
 @router.post("/admin/memberships/bulk")
 async def admin_bulk_memberships(
+    request: Request,
     body: BulkMembershipBody,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
@@ -349,7 +349,7 @@ async def admin_bulk_memberships(
         {"theme_id": "clean_energy",   "symbol": "RUN",  "action": "remove"}
       ]}
     """
-    err = _check_admin_key(x_api_key)
+    err = _check_admin(request, x_api_key)
     if err:
         return err
 
@@ -393,6 +393,7 @@ async def admin_bulk_memberships(
 
 @router.delete("/admin/memberships/{theme_id}/{symbol}")
 async def admin_delete_membership(
+    request: Request,
     theme_id: str,
     symbol: str,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
@@ -402,7 +403,7 @@ async def admin_delete_membership(
     Restores default universe behavior for that pair only.
     Does NOT remove the symbol from any other theme.
     """
-    err = _check_admin_key(x_api_key)
+    err = _check_admin(request, x_api_key)
     if err:
         return err
 
@@ -434,6 +435,7 @@ async def admin_delete_membership(
 
 @router.get("/admin/theme-basket/{theme_id}")
 async def admin_theme_basket(
+    request: Request,
     theme_id: str,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
@@ -443,7 +445,7 @@ async def admin_theme_basket(
     manual overrides, and which are manually excluded.
     Also shows final_theme_holdings and final_performance_symbols.
     """
-    err = _check_admin_key(x_api_key)
+    err = _check_admin(request, x_api_key)
     if err:
         return err
 
