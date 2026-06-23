@@ -38,6 +38,7 @@ Refresh safety:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import statistics
@@ -131,6 +132,20 @@ _MIN_LKG_THEME_FLOOR: int = max(1, int(_EXPECTED_THEME_COUNT * 0.94))
 # Cleared when a fresh full-count LKG is successfully written.
 # Exposed via get_theme_rs_status() and in every payload as admin_refresh_pending.
 _ADMIN_DIRTY: bool = False
+
+
+# ── Basket membership helpers ───────────────────────────────────────────────────
+
+def _basket_hash(symbols: list[str]) -> str:
+    """
+    Deterministic 6-char hash of a proxy-symbol basket.
+
+    Normalised: uppercase, stripped, deduplicated, sorted, joined with '|'.
+    Used to detect basket membership changes across LKG snapshots so stale
+    curves are never served when a theme's proxy_symbols list has changed.
+    """
+    key = "|".join(sorted({s.strip().upper() for s in symbols if s}))
+    return hashlib.sha1(key.encode()).hexdigest()[:6]
 
 
 def _get_lock(tf: str) -> asyncio.Lock:
@@ -292,16 +307,21 @@ def _save_1d_lkg(rows: list[dict]) -> None:
     whose first date contains "T" (i.e. is a real intraday ISO timestamp).
     This prevents a market-closed empty-curve run from overwriting a good snapshot.
 
-    Format: compact JSON — {session_date, generated_at, curves: {theme_id: [pts]}}
+    Format: compact JSON — {session_date, generated_at, curves: {theme_id: {curve, basket_hash}}}
+    basket_hash is stored per-theme so warmup can skip curves whose proxy_symbols
+    have since changed (new ticker added / removed by admin or static-file edit).
     """
     from datetime import date as _d
-    curves: dict[str, list] = {}
+    curves: dict[str, dict] = {}
     for row in rows:
         curve = row.get("performance_curve") or []
         if curve and "T" in str((curve[0] or {}).get("date", "")):
             tid = row.get("theme_id")
             if tid:
-                curves[tid] = curve
+                curves[tid] = {
+                    "curve":       curve,
+                    "basket_hash": _basket_hash(row.get("proxy_symbols") or []),
+                }
 
     if len(curves) < _MIN_LKG_THEME_FLOOR:
         return  # market closed / pre-market — don't overwrite a good snapshot
@@ -1302,8 +1322,15 @@ async def _build_theme_row(
         # Use intraday 5-min bars for the 1D curve; daily bars are not available
         # for 1D compute and would produce a multi-month daily series instead.
         perf_curve = _build_intraday_perf_curve(proxy_syms, intraday_bars or {})
+        # Coverage: a symbol "has data" when it has ≥2 intraday bars.
+        _bars_map   = intraday_bars or {}
+        _covered    = [s for s in proxy_syms if len(_bars_map.get(s, [])) >= 2]
+        _missing    = [s for s in proxy_syms if len(_bars_map.get(s, [])) < 2]
     else:
         perf_curve = _build_perf_curve(proxy_syms, tf, histories)
+        # Coverage: a symbol "has data" when its history list is non-empty.
+        _covered    = [s for s in proxy_syms if (histories.get(s) or ([], ""))[0]]
+        _missing    = [s for s in proxy_syms if not (histories.get(s) or ([], ""))[0]]
 
     # ── Weinstein Stage Analysis ───────────────────────────────────────────────
     stage_data: dict = {}
@@ -1364,6 +1391,24 @@ async def _build_theme_row(
         "per_symbol_returns":        per_symbol_returns,
         "members":               members_out,
         "performance_curve":     perf_curve,
+        # ── Curve coverage metadata ────────────────────────────────────────────
+        # basket_hash: deterministic 6-char hash of proxy_symbols.
+        #   Changes whenever tickers are added or removed from this theme's basket.
+        #   The 1D intraday LKG stores this per-theme; on restart the warmup
+        #   discards curves whose stored hash differs from the current basket.
+        "basket_hash":            _basket_hash(proxy_syms),
+        # curve_total_symbols: total proxy_symbols in the basket.
+        "curve_total_symbols":    len(proxy_syms),
+        # curve_covered_symbols: how many basket symbols contributed data for this TF.
+        #   1D: symbols with ≥2 intraday bars.
+        #   7D+: symbols with non-empty daily history.
+        "curve_covered_symbols":  len(_covered),
+        # curve_missing_symbols: basket tickers with no data for this TF.
+        #   Empty list when all symbols have data.
+        "curve_missing_symbols":  _missing,
+        # curve_partial: True when ≥1 symbol missing but the curve was still built
+        #   from the remaining symbols. False when all symbols present or curve empty.
+        "curve_partial":          bool(_missing) and bool(perf_curve),
         "price":                 round(lead_price, 2) if lead_price else None,
         "lead_proxy":            lead_sym,
         "timeframe":             tf,
@@ -1780,11 +1825,38 @@ async def warmup_theme_rs() -> None:
         lkg_1d = _load_1d_lkg()
         if lkg_1d and isinstance(lkg_1d.get("curves"), dict):
             curves_by_id = lkg_1d["curves"]
-            # Inject persisted intraday curves into the daily LKG rows.
-            rows_1d = [
-                {**row, "performance_curve": curves_by_id.get(row.get("theme_id", ""), [])}
-                for row in lkg
-            ]
+            # Inject persisted intraday curves — validate basket_hash per theme
+            # so curves built from a different proxy_symbols set are discarded.
+            rows_1d: list[dict] = []
+            stale_count = 0
+            for row in lkg:
+                tid = row.get("theme_id", "")
+                stored = curves_by_id.get(tid)
+                if stored is None:
+                    # New theme not yet in the LKG — leave curve empty.
+                    rows_1d.append({**row, "performance_curve": []})
+                    continue
+                # Support both old format (bare list) and new format ({curve, basket_hash}).
+                if isinstance(stored, list):
+                    rows_1d.append({**row, "performance_curve": stored})
+                    continue
+                stored_curve = stored.get("curve", [])
+                stored_hash  = stored.get("basket_hash")
+                current_hash = _basket_hash(
+                    THEME_RS_UNIVERSE.get(tid, {}).get("proxy_symbols", [])
+                )
+                if stored_hash and stored_hash != current_hash:
+                    # Basket changed since LKG was written — discard stale curve.
+                    stale_count += 1
+                    rows_1d.append({**row, "performance_curve": []})
+                else:
+                    rows_1d.append({**row, "performance_curve": stored_curve})
+
+            if stale_count:
+                print(
+                    f"[THEME_RS] Startup: 1D LKG: {stale_count} theme(s) skipped "
+                    f"(basket changed since snapshot)"
+                )
             seed_1d = _lkg_payload(rows_1d, "1D", source="lkg_1d_startup")
             seed_1d["_cache_set_at"] = time.time()
             # TTL: 60s if market open (background refresh fires soon),
@@ -1793,7 +1865,7 @@ async def warmup_theme_rs() -> None:
             print(
                 f"[THEME_RS] Startup: 1D cache seeded from intraday LKG "
                 f"(session={lkg_1d.get('session_date', '?')}, "
-                f"{len(curves_by_id)} themes with curves)"
+                f"{len(curves_by_id)} themes with curves, {stale_count} stale)"
             )
         else:
             # No intraday LKG yet — seed 1D with daily LKG (curves will be

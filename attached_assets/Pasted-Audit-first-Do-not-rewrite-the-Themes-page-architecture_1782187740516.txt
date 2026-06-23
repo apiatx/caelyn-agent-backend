@@ -1,0 +1,174 @@
+Audit first. Do not rewrite the Themes page architecture. Do not invent a replacement performance curve system. Preserve the existing endpoint/path and cache architecture unless the audit proves it is impossible.
+
+Problem:
+After adding more stock tickers to theme baskets on the Themes page, the Performance Curve toggle shows:
+
+`No performance curve data for 1D — try a different timeframe`
+
+The app needs to dynamically update when a developer adds/removes tickers from a theme basket.
+
+Expected behavior:
+When a ticker is added to a theme basket/source list, the performance curve should automatically use the new current basket membership without manual cache clearing.
+
+This applies especially to 1D.
+
+Core issue to audit:
+The performance curve is likely cached by theme/timeframe only, or the curve/history cache is not invalidated when theme membership changes.
+
+Find and audit:
+
+* the source of theme basket symbols used by Themes page
+* the performance curve endpoint/service
+* 1D performance curve logic
+* cache keys for performance curves
+* cache keys for per-symbol histories
+* any disk/Neon/in-memory LKG used for theme performance curves
+* any startup warmers/schedulers for theme performance
+* the frontend response field that triggers `No performance curve data for 1D`
+
+Do not add new provider calls blindly.
+Do not call every ticker on every page load.
+Do not replace the current curve logic with a new system.
+
+Required fix:
+Performance curve cache keys must include the current theme membership.
+
+For each theme, compute a deterministic membership signature:
+
+* normalize symbols
+* uppercase symbols
+* remove duplicates
+* sort symbols
+* hash/join into `membership_hash`
+
+Example:
+`theme_membership_hash = hash(sorted_unique_symbols.join("|"))`
+
+Then include this in the performance curve cache key:
+
+`theme_id + timeframe + membership_hash`
+
+This ensures:
+
+* adding a ticker invalidates the old curve cache automatically
+* removing a ticker invalidates the old curve cache automatically
+* renaming/reordering the source list does not invalidate unnecessarily
+* no manual cache clear is needed
+
+Important:
+Do not key only by theme name and timeframe.
+
+Dynamic symbol source:
+The performance curve must use the same current theme basket symbol list that powers the Themes UI.
+
+Do not use:
+
+* stale hardcoded old universe
+* separate old symbol map
+* cached symbol list without membership versioning
+* ETF proxy list as replacement for actual basket membership
+
+If multiple theme universes exist, audit which one the Themes page is actually using and ensure the curve uses that same canonical source.
+
+1D behavior:
+For 1D, newly added symbols may not have warmed intraday/history data yet.
+
+Do not fail the entire theme curve because some newly added tickers are missing history.
+
+Instead:
+
+* build the curve from symbols with valid 1D data
+* report missing/unavailable symbols in metadata
+* warm/fetch missing symbols through the existing controlled path if that path already exists
+* return partial curve when at least one valid symbol has usable data
+
+Do not show `No performance curve data` when partial valid data exists.
+
+Response metadata should include something like:
+
+* total_symbols
+* symbols_with_curve_data
+* missing_symbols
+* membership_hash
+* cache_status
+* partial: true/false
+
+If zero symbols have valid 1D data:
+Return a meaningful warming/no-data state, not a misleading generic failure.
+
+Example:
+`No 1D curve data available yet for this updated theme basket. Missing intraday data for X/Y symbols.`
+
+But if any valid symbols exist, return the curve.
+
+Provider/cost rules:
+Use existing provider/history cache paths.
+
+Do not introduce a per-render fetch storm.
+
+If missing histories need to be fetched:
+
+* use existing rate limiter
+* use existing history service
+* use existing LKG behavior
+* cap concurrency
+* do not block page load on all symbols if expensive
+* queue/background warm where the architecture already supports it
+
+1D source rules:
+Use the existing intended 1D data source.
+
+If the app already has a Tradier intraday/timesales path for 1D, use that path for 1D.
+
+Do not accidentally use daily historical candles for 1D if the existing architecture expects intraday.
+
+Cache invalidation:
+When membership_hash changes:
+
+* old curve cache should be ignored
+* new curve should compute/warm using new symbol list
+* old per-symbol histories can still be reused where valid
+* do not delete useful per-symbol history caches unnecessarily
+
+Important distinction:
+Invalidate the aggregate curve cache, not all symbol histories.
+
+Symbol-level LKG:
+For newly added symbols:
+
+* if symbol history exists, use it immediately
+* if not, mark missing and warm it
+* do not make the whole theme empty
+
+Frontend compatibility:
+Preserve the current response shape if possible.
+
+If adding metadata, make it additive only.
+
+Do not break existing frontend curve rendering.
+
+Validation:
+
+1. Pick an existing theme basket.
+2. Add a new ticker to the source theme basket.
+3. Restart/reload as needed.
+4. Confirm backend sees the new ticker in the theme’s current symbol list.
+5. Confirm membership_hash changes.
+6. Confirm old aggregate curve cache is not reused.
+7. Confirm 1D performance curve does not show `No performance curve data` if at least one ticker has valid curve data.
+8. Confirm missing new ticker data does not blank the whole curve.
+9. Confirm response metadata shows total symbols / covered symbols / missing symbols.
+10. Confirm 5D/1M/etc still work.
+11. Confirm no new API storm occurs.
+12. Confirm provider rate limits are respected.
+13. Confirm no unrelated Themes page logic changes.
+14. Confirm Watchlist page is untouched.
+15. Confirm no console/backend errors.
+
+After audit, report:
+
+* exact current cache key
+* exact symbol source used by the curve
+* whether 1D uses intraday or daily history
+* why the newly added ticker caused empty/no-data
+* exact fix applied
