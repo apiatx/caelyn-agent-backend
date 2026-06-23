@@ -476,6 +476,105 @@ def _add_freshness(payload: dict) -> dict:
     return payload
 
 
+def _validate_basket_hashes(
+    payload: dict,
+    *,
+    kick_refresh_tf: Optional[str] = None,
+) -> tuple[dict, int]:
+    """
+    Validate per-theme basket_hash for every row in a cached or LKG payload.
+
+    Applied at every cache-serving path so stale curve data is never returned
+    to the frontend when the theme basket membership has changed.
+
+    Decision matrix per row:
+    ┌──────────────────────┬───────────────┬──────────────────────────────────────┐
+    │ stored basket_hash   │ == current?   │ outcome                              │
+    ├──────────────────────┼───────────────┼──────────────────────────────────────┤
+    │ present              │ yes           │ curve_status="current" — serve as-is │
+    │ present              │ no  (mismatch)│ performance_curve=[]                 │
+    │                      │               │ curve_status="stale_membership"       │
+    │                      │               │ basket_hash refreshed to current     │
+    │ absent (old-format)  │ N/A           │ curve_status="stale_legacy_lkg"      │
+    │                      │               │ basket_hash stamped with current     │
+    │                      │               │ data still served (backward compat)  │
+    └──────────────────────┴───────────────┴──────────────────────────────────────┘
+
+    Returns (patched_payload, stale_count) where stale_count counts only confirmed
+    hash-mismatch rows (absent-hash rows not counted in stale_count).
+
+    When kick_refresh_tf is set and any row is stale or legacy, schedules an
+    immediate _locked_refresh to replace the payload — bypassing the normal TTL
+    gate so membership changes surface in the very next request cycle.
+    """
+    themes = payload.get("themes", [])
+    if not themes:
+        return payload, 0
+
+    stale_count  = 0
+    legacy_count = 0
+    patched_rows: list[dict] = []
+
+    for row in themes:
+        tid          = row.get("theme_id", "")
+        meta         = THEME_RS_UNIVERSE.get(tid) or {}
+        current_syms = meta.get("proxy_symbols", [])
+        current_hash = _basket_hash(current_syms)
+        stored_hash  = row.get("basket_hash")
+
+        if stored_hash is None:
+            # Old-format row — no hash stored (pre-membership-hash LKG snapshot).
+            # Serve the data as-is (may still be correct) but flag clearly.
+            legacy_count += 1
+            patched_rows.append({
+                **row,
+                "basket_hash":  current_hash,
+                "curve_status": "stale_legacy_lkg",
+            })
+
+        elif stored_hash != current_hash:
+            # Confirmed mismatch — basket changed since this row was computed.
+            # Do NOT serve stale curve data; return empty so the frontend can
+            # show a warming/pending state instead of a wrong-membership chart.
+            stale_count += 1
+            patched_rows.append({
+                **row,
+                "performance_curve":     [],
+                "basket_hash":           current_hash,
+                "curve_status":          "stale_membership",
+                "curve_total_symbols":   len(current_syms),
+                "curve_covered_symbols": 0,
+                "curve_missing_symbols": sorted(current_syms),
+                "curve_partial":         False,
+            })
+
+        else:
+            # Hash matches — basket is current-membership.
+            patched_rows.append({**row, "curve_status": "current"})
+
+    patched_payload = {
+        **payload,
+        "themes":                 patched_rows,
+        "theme_count":            len(patched_rows),
+        "basket_hash_validated":  True,
+        "stale_membership_count": stale_count,
+        "legacy_lkg_count":       legacy_count,
+    }
+
+    # Bypass TTL — schedule an immediate background recompute whenever any row
+    # is stale (confirmed mismatch) or legacy (no hash available for validation).
+    # The lock check inside _locked_refresh makes duplicate kicks safe (no-op).
+    if kick_refresh_tf and (stale_count > 0 or legacy_count > 0):
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(_locked_refresh(kick_refresh_tf))
+        except Exception:
+            pass
+
+    return patched_payload, stale_count
+
+
 # ── FMP historical price provider ──────────────────────────────────────────────
 
 def _fmp_key() -> str:
@@ -2079,7 +2178,11 @@ async def _get_theme_rs_data_raw(
                     pass
                 # Fall through to LKG / recompute paths below
             else:
-                return _apply_classification_filter(_add_freshness(hit), classification)
+                # Validate basket_hash for every theme row before serving.
+                # kick_refresh_tf=tf bypasses the active TTL when any row is stale
+                # or legacy (no hash) — a background recompute fires immediately.
+                validated, _sc = _validate_basket_hashes(hit, kick_refresh_tf=tf)
+                return _apply_classification_filter(_add_freshness(validated), classification)
 
     # ── 2/3. Cache miss — check if refresh already in progress ────────────────
     lock = _get_lock(tf)
@@ -2089,16 +2192,17 @@ async def _get_theme_rs_data_raw(
         # Someone is already computing — serve stale immediately
         if lkg_rows:
             print(f"[THEME_RS] {tf} served from LKG — refresh already in progress")
-            return _apply_classification_filter(
-                _lkg_payload(lkg_rows, tf, source="lkg_refresh_in_progress"),
-                classification,
-            )
+            # Validate basket_hash; no kick_refresh_tf — refresh already running.
+            _lkg = _lkg_payload(lkg_rows, tf, source="lkg_refresh_in_progress")
+            validated, _ = _validate_basket_hashes(_lkg)
+            return _apply_classification_filter(validated, classification)
         # No stale available — wait for the active refresh to finish
         print(f"[THEME_RS] {tf} waiting for in-progress refresh (no LKG available)")
         async with lock:
             hit = cache.get(cache_key)
             if hit is not None:
-                return _apply_classification_filter(_add_freshness(hit), classification)
+                validated, _ = _validate_basket_hashes(hit)
+                return _apply_classification_filter(_add_freshness(validated), classification)
             # Refresh failed or produced no data — return error-safe empty
             return _apply_classification_filter(
                 _lkg_payload([], tf, source="no_data"), classification
@@ -2108,10 +2212,10 @@ async def _get_theme_rs_data_raw(
     if lkg_rows and not force:
         asyncio.create_task(_locked_refresh(tf))
         print(f"[THEME_RS] {tf} kicked background refresh — returning LKG immediately")
-        return _apply_classification_filter(
-            _lkg_payload(lkg_rows, tf, source="lkg_stale_revalidating"),
-            classification,
-        )
+        # Validate basket_hash; no kick_refresh_tf — background refresh already queued.
+        _lkg = _lkg_payload(lkg_rows, tf, source="lkg_stale_revalidating")
+        validated, _ = _validate_basket_hashes(_lkg)
+        return _apply_classification_filter(validated, classification)
 
     # ── 4/5. Cold start or forced — compute synchronously ────────────────────
     async with lock:
@@ -2119,7 +2223,8 @@ async def _get_theme_rs_data_raw(
         if not force:
             hit = cache.get(cache_key)
             if hit is not None:
-                return _apply_classification_filter(_add_freshness(hit), classification)
+                validated, _ = _validate_basket_hashes(hit)
+                return _apply_classification_filter(_add_freshness(validated), classification)
 
         print(f"[THEME_RS] {tf} cold compute (force={force})")
         try:
@@ -2136,10 +2241,9 @@ async def _get_theme_rs_data_raw(
                             f"< floor {_MIN_LKG_THEME_FLOOR}) — serving LKG "
                             f"({len(fresh_lkg)} themes) instead"
                         )
-                        return _apply_classification_filter(
-                            _lkg_payload(fresh_lkg, tf, source="lkg_partial_compute_guard"),
-                            classification,
-                        )
+                        _lkg = _lkg_payload(fresh_lkg, tf, source="lkg_partial_compute_guard")
+                        validated, _ = _validate_basket_hashes(_lkg)
+                        return _apply_classification_filter(validated, classification)
                     # No valid LKG either — return partial uncached (last resort).
                     print(
                         f"[THEME_RS] {tf} cold compute partial ({len(rows)} themes) "
@@ -2157,10 +2261,9 @@ async def _get_theme_rs_data_raw(
 
             # Empty result — return LKG or empty
             if lkg_rows:
-                return _apply_classification_filter(
-                    _lkg_payload(lkg_rows, tf, source="lkg_compute_empty"),
-                    classification,
-                )
+                _lkg = _lkg_payload(lkg_rows, tf, source="lkg_compute_empty")
+                validated, _ = _validate_basket_hashes(_lkg)
+                return _apply_classification_filter(validated, classification)
             return _apply_classification_filter(
                 _lkg_payload([], tf, source="no_data"), classification
             )
@@ -2171,10 +2274,9 @@ async def _get_theme_rs_data_raw(
             print(f"[THEME_RS] {tf} compute error: {exc} — falling back to LKG")
             lkg_rows2 = _load_lkg()
             if lkg_rows2:
-                return _apply_classification_filter(
-                    _lkg_payload(lkg_rows2, tf, source="lkg_compute_error"),
-                    classification,
-                )
+                _lkg = _lkg_payload(lkg_rows2, tf, source="lkg_compute_error")
+                validated, _ = _validate_basket_hashes(_lkg)
+                return _apply_classification_filter(validated, classification)
             raise
 
 
