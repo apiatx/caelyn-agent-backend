@@ -1,0 +1,112 @@
+Backend fix required. Audit first, then fix. Do not touch frontend. Do not create new routes. Do not add provider calls per toggle.
+
+Frontend/browser audit confirmed the exact live request:
+
+GET /api/themes/relative-strength?timeframe=7D&classification=all
+
+The Express proxy forwards verbatim to FastAPI:
+
+/api/themes/relative-strength?timeframe=7D&classification=all
+
+Actual response from both browser and direct FastAPI hit:
+
+source: lkg_stale_revalidating
+theme count: 51
+first theme: memory_storage
+performance_curve.length: 2
+points:
+
+* { date: "2026-06-12", value_pct: 0.0 }
+* { date: "2026-06-22", value_pct: 19.213 }
+
+Conclusion:
+Frontend is correct. Backend is still serving a stale durable LKG with weekly-spaced performance_curve points. The prior yfinance `interval="1d"` fix may be correct, but the live durable `themes_rs_lkg.json` has not been overwritten with a daily-bar full-history curve.
+
+Goal:
+Force a controlled rebuild of the full-history durable Themes RS LKG using daily bars, then verify the exact live URL returns daily 7D points.
+
+Audit:
+
+1. Inspect the current durable LKG file, likely:
+   backend/data/themes_rs_lkg.json
+2. For `memory_storage`, print:
+
+   * performance_curve.length
+   * first 10 dates
+   * last 15 dates
+   * gaps between recent dates
+3. Confirm whether the LKG still contains weekly-spaced dates.
+4. Confirm whether `_save_lkg()` is being called after the new daily-bar compute.
+5. Confirm whether `_save_lkg()` rejects the recomputed payload because of:
+
+   * 5Y-capability guard
+   * schema/version mismatch
+   * min theme floor
+   * all_perf["5Y"] missing
+   * cadence guard
+   * cache source path returning before write
+6. Confirm whether only 7D/30D/YTD/1Y cadence guards were reset. If the durable LKG only gets overwritten by a 5Y-capable/full-history compute, resetting 7D alone is insufficient.
+7. Confirm whether the 5Y/full-history cadence guard must be reset too.
+8. Confirm whether the LKG schema/cache key should be bumped to invalidate the old weekly curve.
+
+Fix requirements:
+
+* Preserve the existing route:
+  /api/themes/relative-strength
+* Preserve response shape.
+* Preserve 1D intraday behavior and `themes_rs_1d_lkg.json`.
+* Preserve 30D/YTD/1Y/5Y daily curve behavior.
+* Do not add new routes.
+* Do not add provider calls per frontend toggle.
+* Do not fetch on hover.
+* Do not create a new theme universe.
+
+Implementation:
+
+* Make sure yfinance history fetch uses:
+  interval="1d"
+  and a cache key that cannot reuse old weekly data.
+* Force one controlled rebuild of the durable full-history LKG after this fix.
+* The rebuild should write `themes_rs_lkg.json` with daily-spaced `performance_curve` points.
+* If `_save_lkg()` only allows 5Y-capable payloads, trigger/reset the 5Y/full-history compute path, not just 7D.
+* If the old LKG keeps winning because of schema/source logic, bump the LKG schema/version or explicitly invalidate the old LKG.
+* Do not let a temporary in-memory 7D response be considered success. The durable LKG must be updated.
+
+Validation using the exact live URL:
+
+1. Restart backend.
+2. Hit exactly:
+   /api/themes/relative-strength?timeframe=7D&classification=all
+3. Confirm response for `memory_storage`:
+
+   * source can be lkg/lkg_stale_revalidating, but the LKG itself must now contain daily points
+   * performance_curve.length should be roughly 5–7 points
+   * dates should include daily trading dates, not just two weekly endpoints
+   * first value_pct should be 0.0
+4. Hit:
+   /api/themes/relative-strength?timeframe=30D&classification=all
+   /api/themes/relative-strength?timeframe=YTD&classification=all
+   /api/themes/relative-strength?timeframe=1Y&classification=all
+   /api/themes/relative-strength?timeframe=5Y&classification=all
+   /api/themes/relative-strength?timeframe=1D&classification=all
+5. Confirm:
+
+   * 1D still returns intraday ISO timestamps from `themes_rs_1d_lkg.json`
+   * 7D returns daily points
+   * 30D/YTD/1Y/5Y still work
+6. Watch logs while hitting the exact URL after the rebuild:
+
+   * no provider calls should fire just because the frontend toggles 7D
+   * provider calls should only happen during the controlled rebuild/background refresh
+7. Report:
+
+   * old durable LKG recent dates
+   * new durable LKG recent dates
+   * exact response source
+   * exact 7D point count for `memory_storage`
+   * exact 7D dates returned
+   * whether 5Y/full-history compute was forced
+   * whether schema/cache version was bumped
+   * whether any new provider calls were added per toggle
+
+Do not declare this fixed from a different URL, different classification, or temporary in-memory response. The exact browser URL above must return daily 7D points.
