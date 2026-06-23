@@ -1,0 +1,75 @@
+Audit first. Do not add new provider calls and do not create a new route.
+
+Issue:
+Themes → Performance Curve → 7D currently renders mostly straight lines because the backend only returns ~2 points for 7D. The 7D curve should show each available trading day over the past 7 calendar days / latest 7D window, using the daily history we already fetch/cache. No new FMP/yfinance/Tradier calls should be added per toggle.
+
+Goal:
+
+* timeframe=7D should return daily points for each available trading day in the last 7 calendar days.
+* Expected point count should usually be around 5–7 points, depending on weekends/holidays/data availability.
+* It should not return only 2 points unless there are genuinely only 2 daily bars available.
+* No extra external provider calls on frontend toggle.
+* Preserve 1D intraday behavior.
+* Preserve 30D/YTD/1Y/5Y behavior.
+
+Audit:
+
+1. Call the existing endpoint:
+   `/api/themes/relative-strength?timeframe=7D&classification=all`
+2. For one top theme, print:
+
+   * performance_curve.length
+   * all dates returned
+   * first value_pct
+   * last value_pct
+3. Find whether the 7D slice is being built from:
+
+   * full daily raw curve, or
+   * already-downsampled weekly/long-history curve
+4. Find where downsampling happens:
+
+   * `_build_perf_curve`
+   * `_slice_and_rebase_curve`
+   * LKG write path
+   * serve-time wrapper
+5. Confirm whether the full-history LKG stores daily points or already-downsampled points.
+
+Fix requirements:
+
+* The LKG/full-history curve should preserve enough daily points so 7D can slice real daily observations.
+* Do not downsample before LKG in a way that destroys short-window detail.
+* Downsample only at serve time for long windows like 1Y/5Y if needed.
+* For 7D specifically:
+
+  * slice from full daily curve
+  * rebase first visible point to 0%
+  * return all available daily points in the 7D window
+  * do not downsample 7D
+* If the current full-history LKG only has weekly/downsampled points, update the builder so future LKG writes preserve daily points. If needed, trigger one controlled refresh using the already-approved existing compute path, not per frontend click.
+
+Important:
+
+* Do not add new provider calls for the 7D frontend toggle.
+* Do not fetch intraday data for 7D.
+* Do not use 1D intraday cache for 7D.
+* 7D should use the existing daily history/proxy curve system.
+* No hover network calls.
+
+Validation:
+
+* Hit 7D endpoint and confirm one top theme returns roughly 5–7 daily points.
+* Dates should be daily trading dates, ordered oldest → newest.
+* first value_pct should be 0.0 or near 0.0.
+* 7D chart should no longer be mostly straight two-point lines.
+* 1D still returns intraday ISO timestamp points.
+* 30D/YTD/1Y/5Y still work.
+* Watch logs while toggling 7D in frontend:
+
+  * no FMP/yfinance/Tradier calls should fire because of the toggle.
+* Report:
+
+  * old 7D point count
+  * new 7D point count
+  * sample dates
+  * whether any external provider calls were added
+  * final verdict safe/not safe

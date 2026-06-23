@@ -176,7 +176,7 @@ async def fetch_etf_quotes() -> dict[str, dict]:
 
 def _yfinance_history_sync(ticker: str, days: int = 400) -> list[dict]:
     """Synchronous yfinance fetch — run in executor."""
-    cache_key = f"sr_yf_hist:{ticker}:{days}"
+    cache_key = f"sr_yf_hist:{ticker}:{days}:1d"
     hit = cache.get(cache_key)
     if hit is not None:
         return hit
@@ -184,7 +184,7 @@ def _yfinance_history_sync(ticker: str, days: int = 400) -> list[dict]:
         import yfinance as yf
         period = "5y" if days > 1200 else "2y" if days > 252 else "1y"
         tk   = yf.Ticker(ticker)
-        hist = tk.history(period=period, auto_adjust=True)
+        hist = tk.history(period=period, interval="1d", auto_adjust=True)
         if hist.empty:
             return []
         rows = []
