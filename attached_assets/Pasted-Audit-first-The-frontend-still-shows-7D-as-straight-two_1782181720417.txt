@@ -1,0 +1,66 @@
+Audit first. The frontend still shows 7D as straight two-point lines, despite the prior backend report saying 7D now returns 7 daily points. Do not change chart styling yet. Find the actual data mismatch.
+
+Step 1 — Browser truth check:
+
+* Open Themes → Performance Curve → 7D.
+* In browser Network tab, inspect the exact request URL for the Themes endpoint.
+* Record:
+
+  * full URL
+  * `timeframe`
+  * `classification`
+  * response `source`
+  * first visible/selected theme id/name
+  * that theme’s `performance_curve.length`
+  * every `performance_curve[].date`
+* If the browser response has only 2 points, this is backend/cache/LKG, not frontend.
+* If the browser response has 5–7 points but the chart still draws 2-point lines, this is frontend transform/selection/cache.
+
+Step 2 — Backend compare using the exact same URL:
+
+* Hit the exact browser URL from the backend shell/curl.
+* Confirm whether the response matches the browser.
+* Do not test a different classification or different query param and call it validated.
+
+Likely backend issue to check:
+
+* The old durable LKG may still contain weekly-spaced 5Y curves.
+* Previous fix reset 7D/30D/YTD/1Y cadence guards, but if `_save_lkg()` only allows 5Y-capable payloads to overwrite the durable LKG, then a 7D/30D/1Y recompute may not actually replace `themes_rs_lkg.json`.
+* Check whether the actual `backend/data/themes_rs_lkg.json` still has weekly-spaced `performance_curve` dates.
+* Check whether `source=lkg` or `source=lkg_stale_revalidating` is serving the old weekly curve.
+* Check whether 5Y cadence guard also needs to be reset so the full-history LKG is rebuilt with `interval="1d"` bars.
+* Check whether the LKG schema/version/cache key needs to be bumped to invalidate the old weekly curve.
+
+Expected durable fix:
+
+* The full-history LKG must store daily-spaced points, not weekly-spaced points.
+* 5Y can still be downsampled at serve time if needed, but 7D must be sliced from daily points.
+* Do not downsample before storing LKG in a way that destroys 7D detail.
+* If necessary, force one controlled rebuild of the 5Y/full-history LKG using the existing compute path after the yfinance `interval="1d"` fix.
+* Do not add provider calls per frontend toggle.
+* Do not add new routes.
+* Do not change the frontend until the browser response is confirmed.
+
+If browser response has 5–7 points:
+
+* Inspect LineGraphView selected theme rows.
+* Confirm selected/default themes are using the current 7D response, not stale React Query data.
+* Confirm `queryKey` includes curve timeframe and classification.
+* Confirm lineData uses all `performance_curve` points for 7D.
+* Add a temporary console log:
+
+  * curveTf
+  * rows.length
+  * selectedThemes
+  * first selected theme curve length
+  * first selected theme dates
+* Fix frontend only if the API response is correct but chart transform is dropping points.
+
+Validation:
+
+* Browser Network response for 7D must show roughly 5–7 daily trading dates for the same themes being drawn.
+* The chart must visually show those daily points, not only start/end.
+* 1D must still show intraday timestamps.
+* 30D/YTD/1Y/5Y must still work.
+* No provider calls should fire just because the user toggles 7D.
+* Report the exact browser URL, response source, point count, and sample dates before declaring done.
