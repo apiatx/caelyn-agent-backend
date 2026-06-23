@@ -1,0 +1,65 @@
+Frontend-only polish. Do not touch backend. Do not add API/provider calls. Do not change curve logic.
+
+Problem:
+Backend now returns curve membership metadata for Theme performance curves, including:
+
+* curve_status
+* basket_hash
+* curve_total_symbols
+* curve_covered_symbols
+* curve_missing_symbols
+* curve_partial
+
+The frontend currently may still show the generic message:
+
+`No performance curve data for 1D — try a different timeframe`
+
+That is misleading when the curve is empty because the theme basket changed and the backend is rebuilding.
+
+Goal:
+Update the Themes page Performance Curve empty/partial states to use the new backend metadata.
+
+Use curve_status:
+
+* `current`
+* `stale_membership`
+* `stale_legacy_lkg`
+
+Behavior:
+
+If `performance_curve` is empty and `curve_status === "stale_membership"`:
+Show:
+`Theme basket changed. Rebuilding 1D performance curve…`
+
+Subtext:
+`The curve will update once the new basket data is warmed.`
+
+If `performance_curve` is empty and `curve_status === "stale_legacy_lkg"`:
+Show:
+`Refreshing legacy curve data for the current theme basket…`
+
+If `performance_curve` has data and `curve_partial === true`:
+Still render the curve.
+Add a small warning/metadata line:
+`Partial curve: {curve_covered_symbols}/{curve_total_symbols} symbols covered`
+
+If `curve_missing_symbols` exists and is not huge, optionally show:
+`Missing: A, B, C`
+
+If no curve exists and there is no stale/legacy status:
+Keep the normal empty state:
+`No performance curve data for 1D — try a different timeframe`
+
+Do not hide valid partial curves.
+Do not show the generic no-data message when backend says the basket changed.
+Do not trigger new fetches from the frontend.
+Do not add provider calls.
+
+Validation:
+
+1. When backend returns `curve_status: stale_membership`, frontend shows a rebuilding message.
+2. When backend returns `curve_status: stale_legacy_lkg`, frontend shows a legacy-refresh message.
+3. When backend returns partial curve data, frontend renders the curve and shows coverage metadata.
+4. Generic no-data message only appears for true no-data cases.
+5. No new API/provider calls are added.
+6. No console errors.
