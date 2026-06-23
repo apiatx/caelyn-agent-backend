@@ -1,0 +1,77 @@
+Follow-up audit/fix. Do not rewrite the theme performance architecture. Preserve existing endpoint paths and cache structure.
+
+The previous fix added basket_hash validation for 1D disk LKG, which is good, but the original requirement is not fully satisfied unless the active aggregate response cache is also membership-aware.
+
+Problem:
+After a developer adds/removes tickers from a theme basket, the Themes performance curve must update dynamically. It cannot keep serving a stale cached response for the old membership just because the TTL has not expired.
+
+Audit these exact cache layers:
+
+1. 1D disk LKG
+2. in-memory theme RS rows/cache
+3. off-hours/startup seeded response cache
+4. endpoint-level response cache
+5. any TTL cache keyed only by timeframe/source/classification
+
+Required behavior:
+Any aggregate theme performance row/curve cache must be invalidated or bypassed when the current theme basket membership hash differs from the hash used to build the cached row.
+
+Do not only validate disk LKG at startup.
+
+Add/verify:
+
+* every freshly computed theme row includes `basket_hash`
+* every cached theme row/response stores `basket_hash`
+* when serving cached rows, compare cached row basket_hash to current THEME_RS_UNIVERSE theme basket hash
+* if mismatch, treat that theme row as stale and recompute or return partial/warming state for that theme
+* do not serve stale old-membership curve data
+
+Important:
+Cache key should include:
+
+* timeframe
+* source/classification if applicable
+* theme id
+* basket_hash
+
+At minimum, cache validation must compare basket_hash before using cached curve rows.
+
+Old-format LKG:
+Current implementation accepts old bare-list LKG entries for backward compatibility. That is okay only if it does not hide membership changes.
+
+Refine rule:
+
+* If LKG entry has basket_hash, validate it strictly.
+* If LKG entry has no basket_hash, allow it only as temporary backward compatibility when no fresher computed row exists.
+* But if current computed cache/row expects basket_hash support, do not let old-format bare-list LKG override or mask the need for a fresh compute.
+* Prefer marking old-format 1D LKG as `partial/stale_legacy_lkg` metadata so it is not mistaken for valid current-membership data.
+
+Current response issue:
+The audit said startup-seeded response has a 3600s off-hours TTL. That means after a basket change, the frontend may still see stale/no-data until background compute finishes.
+
+Fix:
+When current basket_hash differs from cached basket_hash, bypass the 3600s TTL for that theme/timeframe.
+
+Validation:
+
+1. Add a ticker to a theme basket.
+2. Restart/reload if needed.
+3. Hit the Themes performance endpoint immediately.
+4. Confirm current theme’s basket_hash changed.
+5. Confirm stale aggregate cached row is not served.
+6. Confirm 1D curve either:
+
+   * recomputes with the new basket, or
+   * returns partial curve with metadata showing missing newly-added symbols
+7. Confirm the frontend no longer shows generic `No performance curve data for 1D` when partial valid curve data exists.
+8. Confirm old per-symbol history caches are reused.
+9. Confirm no provider fetch storm occurs.
+10. Confirm Watchlist is untouched.
+
+Report back:
+
+* exact aggregate cache key before
+* exact aggregate cache key after
+* whether cached rows are now basket_hash validated before serving
+* how old-format LKG is handled
+* whether 3600s off-hours TTL is bypassed on membership mismatch
