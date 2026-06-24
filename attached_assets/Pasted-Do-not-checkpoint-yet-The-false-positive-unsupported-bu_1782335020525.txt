@@ -1,0 +1,104 @@
+Do not checkpoint yet. The false-positive unsupported bug is fixed, but the user-facing issue is not fixed.
+
+Current state:
+
+* confirmed_unsupported_count: 54 — good, colon-prefix foreign only.
+* no-colon false positives: 0 — good.
+* fresh_count: 93 — improved but not enough.
+* stale_count: 46 — still okay-ish but should drain.
+* transient_failure_count: 109 — NOT acceptable.
+* Cause reported: cold-start burst quote batch returned partial results, causing normal US tickers to become `not_in_tradier_coverage`.
+
+Problem:
+A partial quote batch response is not proof the symbol is not in Tradier coverage. It is a provider/batch/rate/transient problem. We should not leave 109 normal US tickers blank for 30 minutes.
+
+Hard constraints:
+
+* Do NOT raise Tradier rate limit.
+* Do NOT call options chain for obvious foreign/colon-prefix symbols.
+* Do NOT mark normal US tickers as unsupported due to quote batch partial response.
+* Do NOT wait 30 minutes to retry a batch partial response.
+* Do NOT bypass limiter/coalescing/in-flight guard.
+* Do NOT make Sectors live-scan watchlist-overlap symbols.
+
+Required fix:
+
+1. Separate `not_in_tradier_coverage` into two distinct cases:
+   A. `unsupported_foreign_or_otc`
+
+   * colon-prefix foreign/OTC or explicit unsupported metadata
+   * 24h TTL
+   * no Tradier options calls
+     B. `quote_batch_partial_or_missing`
+   * standard US ticker missing from a quote batch response
+   * transient
+   * short TTL, preferably 60–180 seconds
+   * immediate paced retry queue
+   * not counted as final missing/unavailable
+
+2. For standard US symbols:
+
+   * If quote batch returns no quote for a symbol, do not classify as `not_in_tradier_coverage`.
+   * Queue it into a quote retry batch with smaller batch size.
+   * Retry through existing Tradier limiter.
+   * Suggested retry strategy:
+
+     * batch size 10–25
+     * 15–30s spacing
+     * max 2–3 quote retry attempts per symbol per refresh cycle
+   * Only after repeated misses should it become `quote_unavailable_transient`, not unsupported.
+
+3. Do not require quote preflight to decide options eligibility if the symbol has existing valid options LKG/master data:
+
+   * If a standard US ticker has prior `data_available=True` LKG/master row, it is optionable enough to attempt options refresh.
+   * Do not block chain refresh just because quote preflight failed during a burst.
+   * Use quote only for price/context if available.
+   * Options chain can still be refreshed from expirations/chains.
+
+4. Refresh the 109 current transient failures:
+
+   * `force_refresh=true` should evict `quote_batch_partial_or_missing` / old `not_in_tradier_coverage` transient entries immediately.
+   * It should enqueue standard US retry candidates now, not in 30 minutes.
+   * Foreign/colon-prefix symbols must remain skipped.
+
+5. Diagnostics:
+   Add/confirm:
+
+   * `quote_batch_partial_count`
+   * `quote_retry_queued_count`
+   * `quote_retry_attempted_count`
+   * `quote_retry_succeeded_count`
+   * `quote_retry_failed_count`
+   * `standard_us_transient_count`
+   * `standard_us_missing_after_retry_count`
+   * `standard_us_with_prior_lkg_count`
+   * `standard_us_prior_lkg_refreshed_without_quote_count`
+
+6. Validation:
+   A. Call:
+   `/api/watchlist/23eec278-074a-4706-a62a-c35d38b384ea/options-signals?force_refresh=true`
+   B. Wait for quote retry + options drain completion.
+   C. Re-call without force.
+   D. Report:
+
+   * total symbols
+   * colon-prefix unsupported count
+   * standard US count
+   * fresh_count
+   * stale_count
+   * standard_us_transient_count
+   * quote_batch_partial_count
+   * quote_retry_succeeded_count
+   * standard_us_missing_after_retry_count
+   * exact remaining standard US missing tickers
+   * last_429_at
+     E. Acceptance:
+   * confirmed unsupported remains 54.
+   * no false unsupported normal US tickers.
+   * standard US transient failures drop materially from 109 without waiting 30 minutes.
+   * fresh_count increases materially from 93.
+   * no Tradier 429s.
+   * Sectors still has `watchlist_overlap_live_calls = 0`.
+
+Important:
+The issue is not classification anymore. The issue is that a cold-start quote batch partial response is being converted into blank UI rows. Fix the retry/pacing path so normal US optionable tickers get scanned.
