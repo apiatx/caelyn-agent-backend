@@ -45,6 +45,10 @@ _QUOTE_RETRY_BATCH_SZ   = 15    # symbols per quote-retry batch
 _QUOTE_RETRY_SLEEP_SEC  = 20    # seconds between quote-retry batches
 _QUOTE_RETRY_MAX_ATT    = 3     # max retry attempts per symbol per cycle
 
+# ── Freshness SLA thresholds ──────────────────────────────────────────────────
+_SLA_FRESH_AGE_S = 900    # 15 min  — target freshness boundary
+_SLA_WARN_AGE_S  = 3600   # 60 min  — SLA breach threshold during market hours
+
 
 # ── Portfolio disk LKG (survives restarts + outside-market-hours) ──────────
 # Written whenever a live scan produces data_available=True rows.
@@ -101,6 +105,20 @@ def _is_stale_lkg(row: dict) -> bool:
     """True when the LKG row has no saved_at timestamp OR is older than _STALE_LKG_REFRESH_AGE."""
     age = _lkg_age_seconds(row)
     return age is None or age > _STALE_LKG_REFRESH_AGE
+
+
+def _is_market_hours_et() -> bool:
+    """True when US equity markets are likely open (Mon–Fri 09:30–16:00 ET).
+    Conservative: returns True if timezone detection fails."""
+    try:
+        import datetime as _dt
+        import zoneinfo as _zi
+        _et = _dt.datetime.now(_zi.ZoneInfo("America/New_York"))
+        if _et.weekday() >= 5:          # Saturday=5, Sunday=6
+            return False
+        return _dt.time(9, 30) <= _et.time() <= _dt.time(16, 0)
+    except Exception:
+        return True
 
 
 def _classify_watchlist_sym(r: dict, is_stale: bool) -> str:
@@ -959,30 +977,43 @@ except ImportError:
 _WL_INFLIGHT_SYMS: set[str] = set()  # kept for backward-compat; new code uses global guard
 
 
-def _normalize_to_watchlist_row(sym: str, r: dict, is_stale: bool) -> dict:
+def _normalize_to_watchlist_row(
+    sym: str, r: dict, is_stale: bool, market_hours: bool = True
+) -> dict:
     """Project an internal options row into the watchlist-signal field shape."""
+    _lkg_age = _lkg_age_seconds(r) if r.get("from_lkg") else None
+    _stale_over_sla = bool(
+        _lkg_age is not None and _lkg_age >= _SLA_WARN_AGE_S
+        and market_hours and is_stale
+    )
+    _priority = "high" if _stale_over_sla else ("normal" if is_stale else None)
     return {
-        "ticker":                     sym,
-        "options_score":              r.get("score"),
-        "options_signal":             r.get("signal"),
-        "options_put_call_ratio":     r.get("p_c"),
-        "options_iv":                 r.get("iv"),
-        "options_expected_move":      r.get("em"),
-        "options_volume":             r.get("vol"),
-        "options_open_interest":      r.get("open_interest"),
-        "options_call_volume":        r.get("call_volume"),
-        "options_put_volume":         r.get("put_volume"),
-        "options_updated_at":         r.get("_updated_at") or r.get("_lkg_saved_at"),
-        "options_source":             r.get("source"),
-        "options_stale":              is_stale,
-        "options_unavailable_reason": r.get("unavailable_reason"),
-        "options_data_available":     r.get("data_available", False),
-        "options_risk_score":         r.get("risk_score"),
-        "options_risk_level":         r.get("risk_level"),
-        "options_confidence":         r.get("confidence"),
-        "options_put_call_direction":  r.get("put_call_direction"),
-        "options_classification":     _classify_watchlist_sym(r, is_stale),
-        "options_lkg_age_seconds":    _lkg_age_seconds(r) if r.get("from_lkg") else None,
+        "ticker":                              sym,
+        "options_score":                       r.get("score"),
+        "options_signal":                      r.get("signal"),
+        "options_put_call_ratio":              r.get("p_c"),
+        "options_iv":                          r.get("iv"),
+        "options_expected_move":               r.get("em"),
+        "options_volume":                      r.get("vol"),
+        "options_open_interest":               r.get("open_interest"),
+        "options_call_volume":                 r.get("call_volume"),
+        "options_put_volume":                  r.get("put_volume"),
+        "options_updated_at":                  r.get("_updated_at") or r.get("_lkg_saved_at"),
+        "options_source":                      r.get("source"),
+        "options_stale":                       is_stale,
+        "options_unavailable_reason":          r.get("unavailable_reason"),
+        "options_data_available":              r.get("data_available", False),
+        "options_risk_score":                  r.get("risk_score"),
+        "options_risk_level":                  r.get("risk_level"),
+        "options_confidence":                  r.get("confidence"),
+        "options_put_call_direction":          r.get("put_call_direction"),
+        "options_classification":              _classify_watchlist_sym(r, is_stale),
+        "options_lkg_age_seconds":             _lkg_age,
+        "options_last_successful_refresh_at":  r.get("_lkg_saved_at") or r.get("_updated_at"),
+        "stale_over_sla":                      _stale_over_sla,
+        "retry_pending":                       r.get("retry_pending"),
+        "refresh_queued":                      bool(r.get("retry_pending") or r.get("from_lkg")),
+        "refresh_priority":                    _priority,
     }
 
 
@@ -1479,10 +1510,20 @@ async def scan_watchlist_options(
                            "from_lkg": True, "retry_pending": True,
                            "retry_reason": _cached_reason}
                     cache.set(per_key, hit, _CACHE_PER_TICKER_TTL)
+                    # Restored from disk LKG — queue for background refresh if stale
+                    if _is_stale_lkg(hit) and sym not in stale_lkg_to_refresh \
+                            and not _is_opts_inflight(sym):
+                        stale_lkg_to_refresh.append(sym)
 
         if hit and isinstance(hit, dict):
             results[sym] = hit
             memory_hits += 1
+            # Memory hit on a stale LKG row (e.g. from a previous force_refresh that
+            # loaded disk LKG into memory cache) — ensure refresh is queued.
+            if hit.get("from_lkg") and _is_stale_lkg(hit) \
+                    and sym not in stale_lkg_to_refresh \
+                    and not _is_opts_inflight(sym):
+                stale_lkg_to_refresh.append(sym)
         elif sym in master_by_ticker:
             norm = _normalize_master_row(sym, master_by_ticker[sym])
             cache.set(per_key, norm, _CACHE_PER_TICKER_TTL)
@@ -1641,6 +1682,7 @@ async def scan_watchlist_options(
     # the drain just refreshed them; their memory-cache entry may have expired
     # (300s TTL) before the user re-called, so disk LKG re-served it as from_lkg.
     _FRESH_LKG_THRESHOLD = 1800  # 30 min — LKG entries younger than this are current
+    _market_hours = _is_market_hours_et()
     signals: dict[str, dict] = {}
     _stale_set: set[str] = set(uncached) | set(inflight) | {
         s for s, r in results.items()
@@ -1652,7 +1694,7 @@ async def scan_watchlist_options(
     for sym in syms:
         r = results[sym]
         is_stale = sym in _stale_set
-        signals[sym] = _normalize_to_watchlist_row(sym, r, is_stale)
+        signals[sym] = _normalize_to_watchlist_row(sym, r, is_stale, market_hours=_market_hours)
 
     # 6. Extended diagnostics
     from collections import Counter as _Counter
@@ -1747,6 +1789,61 @@ async def scan_watchlist_options(
         if ":" not in _s and _r.get("from_lkg") and _r.get("data_available")
     )
 
+    # ── Freshness SLA metrics ────────────────────────────────────────────────
+    # Collect (sym, lkg_age_s) for every data_available row that came from LKG.
+    _sla_stale_ages: list[tuple[str, float]] = []
+    for _s, _r in results.items():
+        if not _r.get("data_available"):
+            continue
+        _age = _lkg_age_seconds(_r) if _r.get("from_lkg") else None
+        if _age is not None:
+            _sla_stale_ages.append((_s, _age))
+
+    _stale_u15_cnt    = sum(1 for _, a in _sla_stale_ages if a < _SLA_FRESH_AGE_S)
+    _stale_15_60_cnt  = sum(1 for _, a in _sla_stale_ages if _SLA_FRESH_AGE_S <= a < _SLA_WARN_AGE_S)
+    _stale_over60_cnt = sum(1 for _, a in _sla_stale_ages if a >= _SLA_WARN_AGE_S)
+
+    # SLA-breach symbols: standard US, stale ≥ 60 min, during market hours only.
+    _sla_breach_syms: list[str] = sorted(
+        _s for _s, _a in _sla_stale_ages
+        if _a >= _SLA_WARN_AGE_S and ":" not in _s
+    ) if _market_hours else []
+
+    _sorted_stale_ages = sorted(a for _, a in _sla_stale_ages)
+    _oldest_stale_age_s = _sorted_stale_ages[-1] if _sorted_stale_ages else None
+    _median_stale_age_s = (
+        _sorted_stale_ages[len(_sorted_stale_ages) // 2] if _sorted_stale_ages else None
+    )
+
+    # High-priority refresh: SLA-breached symbols are already in stale_lkg_to_refresh
+    # (because _STALE_LKG_REFRESH_AGE == _SLA_WARN_AGE_S == 3600s).
+    _hp_refresh_queued = len(_sla_breach_syms)
+
+    # User-facing standard-US coverage breakdown
+    _std_us_displayable = sum(
+        1 for _s, _r in results.items()
+        if ":" not in _s and _r.get("data_available")
+    )
+    _std_us_pending_no_values = sum(
+        1 for _s, _r in results.items()
+        if ":" not in _s
+        and not _r.get("data_available")
+        and (_r.get("unavailable_reason") or "") in ("scan_pending", "scan_in_progress")
+    )
+    _std_us_confirmed_no_opts = sum(
+        1 for _s, _r in results.items()
+        if ":" not in _s
+        and (_r.get("unavailable_reason") or "") in ("no_options", "no_expirations")
+    )
+    _std_us_stale_over_sla = sum(1 for _s in _sla_breach_syms if ":" not in _s)
+
+    # scan_pending symbols for diagnostics
+    _scan_pending_syms: list[str] = sorted(
+        _s for _s, _r in results.items()
+        if ":" not in _s
+        and (_r.get("unavailable_reason") or "") in ("scan_pending", "scan_in_progress")
+    )
+
     elapsed_ms = round((_tm.monotonic() - _t0) * 1000, 1)
 
     # Format module-level timestamps for JSON
@@ -1810,6 +1907,24 @@ async def scan_watchlist_options(
             "last_full_watchlist_refresh_started_at":   _fmt_ts(_WL_LAST_REFRESH_STARTED_AT),
             "last_full_watchlist_refresh_completed_at": _fmt_ts(_WL_LAST_REFRESH_COMPLETED_AT),
             "force_refresh_applied":               force_refresh,
+            # ── Freshness SLA diagnostics ─────────────────────────────────────────
+            "market_hours":                        _market_hours,
+            "fresh_options_count":                 _fresh_cnt,
+            "stale_under_15m_count":               _stale_u15_cnt,
+            "stale_15m_to_60m_count":              _stale_15_60_cnt,
+            "stale_over_60m_count":                _stale_over60_cnt,
+            "oldest_stale_age_seconds":            round(_oldest_stale_age_s, 0) if _oldest_stale_age_s else None,
+            "median_stale_age_seconds":            round(_median_stale_age_s, 0) if _median_stale_age_s else None,
+            "stale_over_sla_symbols":              _sla_breach_syms,
+            "high_priority_refresh_queued_count":  _hp_refresh_queued,
+            "scan_pending_count":                  len(_scan_pending_syms),
+            "scan_pending_symbols":                _scan_pending_syms,
+            "last_successful_options_refresh_at":  _fmt_ts(_WL_LATEST_SUCCESSFUL_REFRESH_AT),
+            # ── User-facing standard-US coverage breakdown ────────────────────────
+            "standard_us_displayable_with_values": _std_us_displayable,
+            "standard_us_pending_no_values":       _std_us_pending_no_values,
+            "standard_us_confirmed_no_options":    _std_us_confirmed_no_opts,
+            "standard_us_stale_over_sla":          _std_us_stale_over_sla,
             # ── Timing ───────────────────────────────────────────────────
             "generated_at":                   _dt.datetime.utcnow().isoformat() + "Z",
             "ttl_seconds":                    _CACHE_PER_TICKER_TTL,
