@@ -1,0 +1,111 @@
+Good progress. The stale-while-revalidate behavior is correct, but stale data cannot become the steady-state. Add/validate strict freshness SLAs and report actual LKG ages.
+
+Current good state:
+
+* data_available_count: 200
+* transient_failure_count: 0
+* standard_us_truly_blank: 0
+* supplement_overlap_live_scans: 0
+* no 429s
+* AMD restored from LKG instead of blank
+
+Remaining concern:
+Rows like AMD, AAOI, KLAC, TXN, TEL, TER are now served from `portfolio_opts_lkg_disk` with `stale=True`. That is fine only if the data is recent. It is not acceptable if the data is hours/days old.
+
+Desired policy:
+
+1. Quotes:
+
+   * target freshness: 30–60 seconds
+   * max acceptable: 2–5 minutes
+
+2. Watchlist options signals:
+
+   * target freshness: 5–15 minutes
+   * absolute max stale age during market hours: 60 minutes
+
+3. LKG fallback:
+
+   * may be served during restart/rate-limit/temporary failures
+   * must be immediately queued for refresh
+   * should not remain stale longer than 60 minutes during market hours unless Tradier is failing repeatedly
+   * if over 60 minutes, mark `stale_over_sla=true` and queue high-priority refresh
+
+Required diagnostics:
+In `/api/watchlist/{id}/options-signals`, add/report:
+
+* `fresh_options_count`
+* `stale_under_15m_count`
+* `stale_15m_to_60m_count`
+* `stale_over_60m_count`
+* `oldest_stale_age_seconds`
+* `median_stale_age_seconds`
+* `stale_over_sla_symbols`
+* `high_priority_refresh_queued_count`
+* `scan_pending_count`
+* `scan_pending_symbols`
+* `last_successful_options_refresh_at`
+
+For every signal row, include:
+
+* `options_lkg_age_seconds`
+* `options_last_successful_refresh_at`
+* `stale_over_sla`
+* `retry_pending`
+* `refresh_queued`
+* `refresh_priority`
+
+Required behavior:
+
+1. If a standard US ticker has stale LKG older than 60 minutes during market hours:
+
+   * keep displaying the last-good row
+   * mark `stale_over_sla=true`
+   * queue it for high-priority refresh
+   * do not let lower-priority supplement/theme work jump ahead of it
+
+2. If a standard US ticker has no prior LKG, like MRVL:
+
+   * it should be `scan_pending` only temporarily
+   * it must be queued for paced retry
+   * it should not sit pending indefinitely
+   * report exact remaining scan_pending symbols after drain
+
+3. Do not count a standard US ticker as “not blank” just because it has `scan_pending`.
+   For user-facing coverage, report:
+
+   * `standard_us_displayable_with_values`
+   * `standard_us_pending_no_values`
+   * `standard_us_confirmed_no_options`
+   * `standard_us_stale_over_sla`
+
+Validation:
+
+1. Force refresh Primary watchlist.
+2. Wait for all drains/retries to finish.
+3. Re-call endpoint.
+4. Report:
+
+   * total symbols
+   * standard US count
+   * unsupported foreign/colon-prefix count
+   * standard_us_displayable_with_values
+   * standard_us_pending_no_values
+   * fresh_options_count
+   * stale_under_15m_count
+   * stale_15m_to_60m_count
+   * stale_over_60m_count
+   * oldest_stale_age_seconds
+   * stale_over_sla_symbols
+   * scan_pending_symbols
+   * MRVL status specifically
+   * AMD status specifically
+   * last_429_at
+
+Acceptance:
+
+* No stale options row older than 60 minutes during market hours unless explicitly marked `stale_over_sla` and high-priority queued.
+* MRVL or any other standard US optionable ticker should not remain pending indefinitely.
+* AMD/MRVL/AAOI/KLAC/TXN/TEL/TER should show values or a clear high-priority pending state, not silent blanks.
+* supplement_overlap_live_scans stays 0.
+* no Tradier 429s.
