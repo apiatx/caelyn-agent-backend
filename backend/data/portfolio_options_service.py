@@ -116,8 +116,10 @@ def _classify_watchlist_sym(r: dict, is_stale: bool) -> str:
     reason = r.get("unavailable_reason") or ""
     if reason in ("no_options", "no_expirations"):
         return "confirmed_no_options"
-    if reason in ("otc_or_foreign_unsupported", "not_in_tradier_coverage"):
+    if reason == "otc_or_foreign_unsupported":
         return "unsupported_foreign_or_otc"
+    if reason == "not_in_tradier_coverage":
+        return "transient_failure"
     if reason == "scan_in_progress":
         return "inflight_refresh"
     if reason in ("scan_pending", "stale_lkg_queued"):
@@ -1006,7 +1008,6 @@ async def _drain_deferred_watchlist(
                     ttl = (
                         _UNAVAIL_TTL_CONFIRMED
                         if reason in ("no_options", "no_expirations",
-                                      "not_in_tradier_coverage",
                                       "otc_or_foreign_unsupported")
                         else _UNAVAIL_TTL_TRANSIENT
                     )
@@ -1125,12 +1126,11 @@ async def _drain_stale_lkg(
                     _reason = (_res.get("_reason") or
                                _res.get("unavailable_reason") or
                                "unknown_provider_error")
-                    _otc = _is_otc_or_foreign(_sym) or "otc" in _reason or "not_in_tradier" in _reason
+                    _otc = _is_otc_or_foreign(_sym) or "otc" in _reason
                     _row = _unavail_row(_sym, _reason, optionable=None if _otc else False)
                     _ttl = (
                         _UNAVAIL_TTL_CONFIRMED
                         if _reason in ("no_options", "no_expirations",
-                                       "not_in_tradier_coverage",
                                        "otc_or_foreign_unsupported")
                         else _UNAVAIL_TTL_TRANSIENT
                     )
@@ -1268,7 +1268,8 @@ async def scan_watchlist_options(
         if hit and isinstance(hit, dict) and force_refresh:
             _is_lkg_entry    = hit.get("from_lkg") or hit.get("source") == "portfolio_opts_lkg_disk"
             _is_transient    = hit.get("unavailable_reason") in (
-                "provider_rate_limited", "no_chain_returned", "scan_pending"
+                "provider_rate_limited", "no_chain_returned", "scan_pending",
+                "not_in_tradier_coverage"
             )
             if _is_lkg_entry or _is_transient:
                 hit = None  # evict → fall through to uncached path
@@ -1347,7 +1348,6 @@ async def scan_watchlist_options(
                         ttl = (
                             _UNAVAIL_TTL_CONFIRMED
                             if reason in ("no_options", "no_expirations",
-                                          "not_in_tradier_coverage",
                                           "otc_or_foreign_unsupported")
                             else _UNAVAIL_TTL_TRANSIENT
                         )
@@ -1437,14 +1437,14 @@ async def scan_watchlist_options(
             _da_false += 1
             _rsn = _r.get("unavailable_reason") or "unknown"
             _reason_ctr[_rsn] += 1
-            if _rsn in ("no_options", "no_expirations", "not_in_tradier_coverage",
-                        "otc_or_foreign_unsupported"):
+            if _rsn in ("no_options", "no_expirations", "otc_or_foreign_unsupported"):
                 _no_opts_cnt += 1
-            if _rsn in ("otc_or_foreign_unsupported", "not_in_tradier_coverage"):
+            if _rsn == "otc_or_foreign_unsupported":
                 _confirmed_unsup_cnt += 1
             if _rsn in ("no_options", "no_expirations"):
                 _confirmed_noopts_cnt += 1
-            if _rsn in ("provider_rate_limited", "no_chain_returned") or \
+            if _rsn in ("provider_rate_limited", "no_chain_returned",
+                        "not_in_tradier_coverage") or \
                     _rsn.startswith("unknown_provider_error"):
                 _transient_cnt += 1
         # classification breakdown for diagnostics
