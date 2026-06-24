@@ -1,25 +1,5 @@
 [
   {
-    "scan_ts": "2026-05-25T04:34:27.234022+00:00",
-    "accounts_count": 16,
-    "batch_count": 2,
-    "batches_returned": 2,
-    "sections_ok": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "sections_missing": [],
-    "lkg_sections_used": [],
-    "ticker_count": 34,
-    "mention_records": 12,
-    "consensus_picks": 30,
-    "top_tickers": 30,
-    "cache_write_status": "written_clean",
-    "error": null
-  },
-  {
     "scan_ts": "2026-05-27T13:38:14.254417+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -594,6 +574,26 @@
     "lkg_sections_used": [],
     "ticker_count": 50,
     "mention_records": 13,
+    "consensus_picks": 10,
+    "top_tickers": 10,
+    "cache_write_status": "written_clean",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-06-23T15:20:06.243713+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 45,
+    "mention_records": 15,
     "consensus_picks": 10,
     "top_tickers": 10,
     "cache_write_status": "written_clean",

@@ -1,0 +1,185 @@
+Audit first. The current Tradier backend appears to have a rate limiter, but not a fully coordinated request scheduler across quote calls and options-specific calls. This is causing outdated/incomplete options data and possible competition between near-real-time price quote calls and option expiration/chain calls.
+
+Goal:
+Build or refactor toward one unified Tradier market-data request scheduler/orchestrator so quotes and options calls are evenly spaced, cached, deduped, prioritized, and shared across the whole app.
+
+Hard constraints:
+
+* Do NOT raise Tradier limit above current controlled cap.
+* Do NOT create a second limiter.
+* Do NOT bypass existing `tradier_provider._TradierRateLimiter`.
+* Do NOT change trading endpoint limits.
+* Do NOT break main Options Flow screener/search.
+* Do NOT break Portfolio Terminal options.
+* Do NOT break Watchlist options.
+* Do NOT make Sectors/Themes fire large live scans on page load.
+* Preserve existing paths where possible. Refactor around them; do not invent replacement systems.
+
+Audit checklist:
+
+1. Find every place in backend that calls Tradier:
+
+   * quotes
+   * batch quotes
+   * option expirations
+   * option chains
+   * options screener
+   * portfolio options
+   * watchlist options
+   * sectors/themes options
+   * ticker popups
+2. For each call site, document:
+
+   * endpoint/method used
+   * cache key
+   * TTL
+   * whether it checks LKG
+   * whether it has in-flight dedupe
+   * whether it goes through `_TradierRateLimiter`
+   * whether it runs on page load, background job, or user action
+3. Confirm whether quote calls and options calls share the same limiter window.
+4. Confirm whether options calls can starve quotes, or quotes can starve options.
+5. Confirm whether the same symbol option chain can be requested concurrently by multiple pages.
+6. Confirm why only about half of dev watchlist tickers currently show options data:
+
+   * unsupported/no options
+   * stale LKG
+   * queue starvation
+   * failed scans
+   * cache TTL expiry
+   * duplicate in-flight behavior
+   * sector scanner stealing capacity
+7. Add temporary diagnostics if needed before refactor.
+
+Required architecture:
+Create one central Tradier market-data scheduler/orchestrator. Do not create independent page-level scanners.
+
+Suggested module:
+`backend/services/tradier_request_scheduler.py`
+or extend existing `tradier_provider.py` if that is cleaner.
+
+Core behavior:
+
+1. All Tradier market-data requests must pass through one scheduler:
+
+   * quotes
+   * batch quotes
+   * option expirations
+   * option chains
+   * any other `/markets` call
+
+2. Scheduler must enforce:
+
+   * global cap using existing `_TradierRateLimiter`
+   * priority lane
+   * cache-first behavior
+   * request coalescing
+   * per-symbol in-flight dedupe
+   * stale-while-revalidate
+   * diagnostics
+
+3. Priority lanes:
+
+   * `P0_USER_ACTION`: user-clicked ticker popup, active Options Flow search
+   * `P1_VISIBLE_QUOTES`: currently visible page quote hydration
+   * `P2_VISIBLE_OPTIONS`: Portfolio/Watchlist visible options rows
+   * `P3_BACKGROUND_OPTIONS`: watchlist/theme warming
+   * `P4_AGGREGATION`: Sectors/Themes derived refresh
+
+4. Request coalescing:
+   If a request for the same logical key is already queued/running, callers must await or reuse the same result.
+   Example keys:
+
+   * `quote:{symbol}`
+   * `batch_quote:{sorted_symbols_hash}`
+   * `options_expirations:{symbol}`
+   * `options_chain:{symbol}:{expiration}`
+   * `options_signal:{symbol}`
+
+5. Options-symbol shared cache:
+   Create one shared options signal resolver used by Portfolio, Watchlist, Sectors, and Themes:
+
+   * cache key can remain `portfolio_opts:{sym}` for backward compatibility
+   * internally treat it as shared symbol-level cache
+   * read memory cache first
+   * read master screener snapshot
+   * read disk LKG
+   * read unavailable/no-options cache
+   * only live scan if allowed by scope/priority
+
+6. Replace watchlist-only in-flight guard:
+   Current `_WL_INFLIGHT_SYMS` should become a global options-symbol in-flight guard, not watchlist-only.
+   It must block duplicate scans from:
+
+   * Portfolio
+   * Watchlist
+   * Sectors
+   * Themes
+   * Options Flow helper paths
+   * ticker popups where appropriate
+
+7. Cache TTL rules:
+   Use different TTLs by data type:
+
+   * quote cache: short TTL, whatever current app expects
+   * options signal fresh TTL: 5–15 minutes
+   * options LKG: usable even if stale, with age metadata
+   * unavailable/no-options symbols: 30–60 minutes, not 60 seconds
+   * sector/theme aggregation snapshot: derived and cached, 5–15 minutes
+     Make TTLs constants or env-configurable with safe defaults.
+
+8. Sectors/Themes behavior:
+   Sectors and Themes must not directly live-scan watchlist-overlap symbols.
+   They should aggregate from shared options signal rows.
+   They may enqueue only a small number of theme-only missing symbols at low priority.
+   Page requests must return cached/LKG aggregation immediately.
+
+9. Quote behavior:
+   Quote requests should be batched wherever possible.
+   Repeated visible quote hydration should reuse canonical quote cache.
+   Quotes should have a reserved budget so options scans cannot starve visible page prices.
+
+10. Budget/fairness:
+    Implement a simple fairness policy if possible:
+
+* reserve some capacity for visible quotes/user actions
+* background options cannot consume the entire 110/min
+* sectors/themes are lowest priority
+  If full priority scheduler is too large for one pass, do the minimal safe version:
+* central in-flight dedupe
+* central cache-first options resolver
+* background options batch cap
+* sectors read-only aggregation by default
+
+Diagnostics:
+Add `/api/debug/tradier-scheduler-status` or extend existing debug endpoint with:
+
+* configured market-data rpm
+* calls used in current rolling window
+* queued requests by priority
+* in-flight requests by type
+* cache hit/miss counts by type
+* options symbols fresh/stale/unavailable counts
+* duplicate requests coalesced
+* background requests deferred
+* last 429 timestamp/count
+* last completed watchlist options scan time
+* last completed sector aggregation time
+
+Validation:
+
+1. Warm dev watchlist options.
+2. Confirm all optionable watchlist symbols eventually get fresh options rows.
+3. Confirm unavailable/no-options symbols are cached and do not re-scan every minute.
+4. Load Watchlist, Portfolio, Options Flow, and Sectors repeatedly.
+5. Confirm duplicate option scans for the same symbol are coalesced.
+6. Confirm Sectors does not live-scan watchlist-overlap symbols.
+7. Confirm visible quotes still update.
+8. Confirm no Tradier 429s.
+9. Confirm logs show even spacing through the global scheduler.
+10. Confirm Options Flow main screener/search shape unchanged.
+11. Confirm Portfolio Terminal shape unchanged.
+12. Confirm Watchlist options endpoint shape unchanged.
+
+Important:
+This is not a “raise rate limit” fix. This is a shared scheduling, cache, dedupe, and priority fix. The app should behave like one Tradier client, not ten pages all politely fighting each other.
