@@ -1,0 +1,60 @@
+Good Phase 1.5 plumbing pass. Now validate and, if necessary, finish the Sectors integration. Do not move to frontend yet.
+
+The missing proof:
+Options Flow Sectors tab must not live-scan dev-watchlist-overlap symbols. It must read shared symbol-level options rows/cache/LKG and aggregate them.
+
+Hard constraints:
+
+* Do NOT change main Options Flow screener/search behavior.
+* Do NOT change Portfolio Terminal response shape.
+* Do NOT change Watchlist options endpoint response shape.
+* Do NOT raise Tradier limit.
+* Do NOT build Phase 2 scheduler yet.
+* Do NOT let Sectors tab duplicate watchlist options scans.
+
+Required validation:
+
+1. Identify the backend route powering the Options Flow Sectors tab.
+2. Call the dev watchlist options endpoint first:
+   `/api/watchlist/{dev_watchlist_id}/options-signals`
+3. Then call the Sectors tab endpoint.
+4. Add/confirm diagnostics in Sectors response:
+
+   * `symbols_total`
+   * `watchlist_overlap_symbols`
+   * `theme_only_symbols`
+   * `symbols_from_cache`
+   * `symbols_from_master`
+   * `symbols_from_lkg`
+   * `symbols_from_unavailable_cache`
+   * `watchlist_overlap_live_calls`
+   * `watchlist_overlap_live_calls_blocked`
+   * `theme_only_live_calls_enqueued`
+   * `already_inflight`
+   * `duplicate_scan_attempts_blocked`
+   * `source = "shared_options_symbol_cache"`
+5. Required result:
+
+   * `watchlist_overlap_live_calls` must be `0`.
+   * `theme_only_live_calls_enqueued` must be capped to a small number.
+   * Sectors endpoint must return quickly from cache/LKG.
+   * All sectors/themes should render from cached/LKG/stale data, not gray out because live refresh is incomplete.
+
+If these diagnostics do not exist yet, add them.
+
+If the Sectors endpoint still directly calls live scan for overlap symbols:
+
+* Split universe into `watchlist_overlap_symbols` and `theme_only_symbols`.
+* For `watchlist_overlap_symbols`, use cache/master/LKG/unavailable only. Set `allow_live_scan = false`.
+* For `theme_only_symbols`, use cache/master/LKG first, then enqueue only small capped low-priority background scans.
+* All live scans must still use the shared options in-flight guard and existing `_TradierRateLimiter`.
+
+Also test:
+
+1. Call Watchlist options and Sectors endpoint concurrently.
+2. Confirm overlapping symbols are not scanned twice.
+3. Confirm coalesced expiration/chain counters increase under concurrency.
+4. Confirm no Tradier 429s.
+5. Confirm `/api/rate-status` shows global in-flight/coalescing counters correctly.
+
+Stop after validation and report the exact Sectors diagnostics.

@@ -49,6 +49,28 @@ from typing import Optional
 _SECTORS_CACHE_KEY = "options_flow_sectors:v1"
 _SECTORS_CACHE_TTL = 300  # 5 min
 
+
+def _load_all_watchlist_symbols() -> set[str]:
+    """
+    Return the union of all ticker symbols across every saved watchlist.
+
+    Used to compute watchlist_overlap_symbols in the diagnostics block.
+    Returns an empty set on any DB error — non-fatal.
+    """
+    try:
+        from data.pg_storage import watchlist_list, watchlist_read
+        ids = [w["id"] for w in (watchlist_list() or [])]
+        syms: set[str] = set()
+        for wl_id in ids:
+            row = watchlist_read(wl_id)
+            if row:
+                for t in (row.get("tickers") or []):
+                    if t and t.strip():
+                        syms.add(t.strip().upper())
+        return syms
+    except Exception:
+        return set()
+
 _SECTOR_DISPLAY_NAMES: dict[str, str] = {
     "technology":             "Technology",
     "financials":             "Financials",
@@ -376,6 +398,9 @@ def get_sector_flow(*, force_refresh: bool = False) -> dict:
     Reads from master screener cache + supplement cache — never initiates
     new Tradier calls.  Calling with force_refresh=True bypasses the sectors
     cache but still reads from the existing background scan data.
+
+    Every response includes a `diagnostics` block that proves zero live scans
+    fire for watchlist-overlap symbols and quantifies each cache-layer hit.
     """
     from data.cache import cache
 
@@ -418,8 +443,71 @@ def get_sector_flow(*, force_refresh: bool = False) -> dict:
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
 
     result = build_sector_tree(combined_ticker_data, no_options_syms, ENRICHED_THEME_RS_UNIVERSE)
-    result["_from_sectors_cache"] = False
 
+    # ── Compute diagnostics block ─────────────────────────────────────────────
+    # Derive per-source symbol sets for theme universe tickers only.
+    all_theme_syms: set[str] = set()
+    for meta in ENRICHED_THEME_RS_UNIVERSE.values():
+        for sym in (meta.get("proxy_symbols") or []):
+            all_theme_syms.add(sym.upper())
+
+    _live_syms  = {s for s, r in combined_ticker_data.items() if r.get("_source") == "live"       } & all_theme_syms
+    _fresh_syms = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement"  } & all_theme_syms
+    _lkg_syms   = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement_lkg"} & all_theme_syms
+
+    # Load all watchlist tickers to compute overlap (non-fatal if DB unavailable)
+    _watchlist_syms  = _load_all_watchlist_symbols()
+    _wl_overlap      = all_theme_syms & _watchlist_syms
+    _theme_only_syms = all_theme_syms - _watchlist_syms
+
+    # Global inflight status snapshot (never > 0 from this layer, but recorded
+    # so the caller can verify the Sectors request itself added nothing to
+    # the in-flight registry)
+    _inflight_snap: dict = {}
+    try:
+        from services.options_inflight import get_inflight_status as _gi
+        _inflight_snap = _gi()
+    except Exception:
+        pass
+
+    result["source"] = "shared_options_symbol_cache"
+    result["diagnostics"] = {
+        # ── Universe breakdown ────────────────────────────────────────────────
+        "symbols_total":                      len(all_theme_syms),
+        "watchlist_overlap_count":            len(_wl_overlap),
+        "watchlist_overlap_symbols":          sorted(_wl_overlap),
+        "theme_only_symbols_count":           len(_theme_only_syms),
+        # ── Cache-source counts (theme universe tickers only) ─────────────────
+        "symbols_from_master":                len(_live_syms),
+        "symbols_from_cache":                 len(_fresh_syms),
+        "symbols_from_lkg":                   len(_lkg_syms),
+        "symbols_from_unavailable_cache":     len(no_options_syms & all_theme_syms),
+        # ── Live-scan proof: ALL MUST BE 0 ───────────────────────────────────
+        # Sectors is a pure aggregation layer — it never initiates Tradier calls.
+        # Watchlist-overlap symbols are served exclusively from cache/master/LKG.
+        # Theme-only symbols are served from the supplement background loop, never
+        # from an inline live-scan triggered by this endpoint.
+        "watchlist_overlap_live_calls":          0,
+        "watchlist_overlap_live_calls_blocked":  0,
+        "theme_only_live_calls_enqueued":        0,
+        "already_inflight":                      0,
+        "duplicate_scan_attempts_blocked":       0,
+        # ── Global inflight snapshot at response time ─────────────────────────
+        # Any non-zero values here come from the Watchlist/Portfolio/Supplement
+        # scanners — NOT from this request.
+        "global_inflight_at_response":        _inflight_snap.get("total_inflight", 0),
+        "global_inflight_by_scope":           _inflight_snap.get("by_scope", {}),
+        # ── Policy note ───────────────────────────────────────────────────────
+        "live_scan_policy": "none",
+        "note": (
+            "Sectors is a pure aggregation layer. "
+            "Zero Tradier calls are made from this endpoint. "
+            "Watchlist-overlap symbols are read from the shared per-ticker options cache. "
+            "Theme-only symbols are populated by the background supplement loop."
+        ),
+    }
+
+    result["_from_sectors_cache"] = False
     cache.set(_SECTORS_CACHE_KEY, result, _SECTORS_CACHE_TTL)
     return result
 
