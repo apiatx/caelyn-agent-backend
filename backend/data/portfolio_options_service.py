@@ -502,10 +502,17 @@ def _compute_pullback_risk(row: dict) -> dict:
 
 def _is_otc_or_foreign(sym: str) -> bool:
     """
-    Heuristic: OTC/foreign tickers often end in 'F' (foreign) or
-    have 5+ chars with unusual suffixes (SIVEF, SLOIF, IQEPF, FPLSF).
-    Tradier response is the authoritative check — this only pre-classifies.
+    Preflight classifier: returns True for symbols that Tradier options APIs
+    will never serve — no need to call get_option_expirations/get_option_chain.
+
+    Matches:
+      • EXCHANGE:TICKER format  (AIM:ENSI, ASX:AXE, OTC:ATEYY, TSX:FLT, …)
+        — the colon is the authoritative signal; any exchange prefix is foreign/OTC
+      • 5+ char tickers ending in F/K/Y
+        — common OTC pink-sheet suffixes (IQEPF, HGRAF, KRKNF, SIVEF, etc.)
     """
+    if ":" in sym:
+        return True
     if len(sym) >= 5 and sym[-1] in ("F", "K", "Y"):
         return True
     return False
@@ -533,31 +540,45 @@ async def _scan_one_symbol(
                 # Tradier returned no expirations → confirmed no options chain
                 return {"_sym": sym, "_reason": "no_expirations"}
 
-            chain_tasks = [
-                asyncio.wait_for(
-                    tradier.get_option_chain(sym, exp), timeout=_SCAN_TIMEOUT_CHAIN
-                )
-                for exp in expirations[:2]
-            ]
-            chains = await asyncio.gather(*chain_tasks, return_exceptions=True)
-
+            # Try first 2 expirations; if both empty, try next 2 before giving up.
+            # Near-term expirations can be thin/empty on some names — trying up to
+            # 4 avoids false no_chain_returned for legit US optionable stocks.
             calls_all, puts_all = [], []
             oi_total = 0
             call_oi  = 0
             put_oi   = 0
-            for ch in chains:
-                if isinstance(ch, Exception) or not isinstance(ch, dict):
-                    continue
-                for c in ch.get("calls", []):
-                    calls_all.append(c)
-                    _c_oi = _si(c.get("open_interest") or c.get("openInterest"))
-                    oi_total += _c_oi
-                    call_oi  += _c_oi
-                for p in ch.get("puts", []):
-                    puts_all.append(p)
-                    _p_oi = _si(p.get("open_interest") or p.get("openInterest"))
-                    oi_total += _p_oi
-                    put_oi   += _p_oi
+            first_chain = {}
+
+            for _batch_start in range(0, min(4, len(expirations)), 2):
+                _batch_exps = expirations[_batch_start:_batch_start + 2]
+                _chain_tasks = [
+                    asyncio.wait_for(
+                        tradier.get_option_chain(sym, exp), timeout=_SCAN_TIMEOUT_CHAIN
+                    )
+                    for exp in _batch_exps
+                ]
+                _chains = await asyncio.gather(*_chain_tasks, return_exceptions=True)
+
+                for ch in _chains:
+                    if isinstance(ch, Exception) or not isinstance(ch, dict):
+                        continue
+                    _ch_calls = ch.get("calls", [])
+                    _ch_puts  = ch.get("puts",  [])
+                    if not first_chain and (_ch_calls or _ch_puts):
+                        first_chain = ch
+                    for c in _ch_calls:
+                        calls_all.append(c)
+                        _c_oi = _si(c.get("open_interest") or c.get("openInterest"))
+                        oi_total += _c_oi
+                        call_oi  += _c_oi
+                    for p in _ch_puts:
+                        puts_all.append(p)
+                        _p_oi = _si(p.get("open_interest") or p.get("openInterest"))
+                        oi_total += _p_oi
+                        put_oi   += _p_oi
+
+                if calls_all or puts_all:
+                    break  # found contracts — no need to try more expirations
 
             if not calls_all and not puts_all:
                 return {"_sym": sym, "_reason": "no_chain_returned"}
@@ -576,8 +597,8 @@ async def _scan_one_symbol(
             iv_current = round(sum(iv_vals) / len(iv_vals), 4) if iv_vals else None
 
             # ATM straddle expected move (front expiration only)
+            # first_chain is set in the expiration-retry loop above to the first chain with contracts
             expected_move_raw = None
-            first_chain = chains[0] if chains and not isinstance(chains[0], Exception) else {}
             fc_calls = first_chain.get("calls", []) if isinstance(first_chain, dict) else []
             fc_puts  = first_chain.get("puts",  []) if isinstance(first_chain, dict) else []
             atm_c = min(fc_calls, key=lambda c: abs((c.get("strike") or 0) - price), default=None) if fc_calls else None
@@ -1024,6 +1045,13 @@ async def _drain_stale_lkg(
         # Skip only if a genuinely fresh (non-LKG) scan result is already present
         still_needed = []
         for s in batch:
+            # Never spend Tradier calls on foreign/OTC symbols even in LKG drain
+            if _is_otc_or_foreign(s):
+                _pk = _per_ticker_cache_key(s)
+                if not cache.get(_pk):
+                    _fr = _unavail_row(s, "otc_or_foreign_unsupported", optionable=None)
+                    cache.set(_pk, _fr, _UNAVAIL_TTL_CONFIRMED)
+                continue
             cached = cache.get(_per_ticker_cache_key(s))
             if (cached and isinstance(cached, dict)
                     and cached.get("data_available")
@@ -1089,7 +1117,9 @@ async def _drain_stale_lkg(
                 _sym, _res = _item
                 _pk = _per_ticker_cache_key(_sym)
                 if _res.get("data_available"):
-                    cache.set(_pk, _res, _CACHE_PER_TICKER_TTL)
+                    # Use 2× TTL so drain-written entries outlast typical API
+                    # call intervals (drain takes 2-3 min; 300s may expire first).
+                    cache.set(_pk, _res, _CACHE_PER_TICKER_TTL * 2)
                     _fresh_available[_sym] = _res
                 else:
                     _reason = (_res.get("_reason") or
@@ -1218,6 +1248,20 @@ async def scan_watchlist_options(
 
     for sym in syms:
         per_key = _per_ticker_cache_key(sym)
+
+        # ── Foreign/OTC preflight ────────────────────────────────────────────
+        # EXCHANGE:TICKER format (AIM:, ASX:, OTC:, TSX:, …) and common OTC
+        # suffixes are NEVER served by Tradier options APIs.  Classify them
+        # immediately and cache with 24h TTL so no quote/chain calls are spent.
+        if _is_otc_or_foreign(sym):
+            hit = cache.get(per_key)
+            if not (hit and isinstance(hit, dict)):
+                hit = _unavail_row(sym, "otc_or_foreign_unsupported", optionable=None)
+                cache.set(per_key, hit, _UNAVAIL_TTL_CONFIRMED)
+            results[sym] = hit
+            memory_hits += 1
+            continue
+
         hit = cache.get(per_key)
 
         # force_refresh: ignore stale LKG and transient-failure cached rows
@@ -1351,9 +1395,18 @@ async def scan_watchlist_options(
         )
 
     # 5. Build normalised signal map
+    # "Stale" means the data is OLD — not just that it came from disk LKG.
+    # LKG entries written within the last 30 min are treated as current because
+    # the drain just refreshed them; their memory-cache entry may have expired
+    # (300s TTL) before the user re-called, so disk LKG re-served it as from_lkg.
+    _FRESH_LKG_THRESHOLD = 1800  # 30 min — LKG entries younger than this are current
     signals: dict[str, dict] = {}
     _stale_set: set[str] = set(uncached) | set(inflight) | {
-        s for s, r in results.items() if r.get("from_lkg")
+        s for s, r in results.items()
+        if r.get("from_lkg") and (
+            _lkg_age_seconds(r) is None or
+            _lkg_age_seconds(r) > _FRESH_LKG_THRESHOLD
+        )
     }
     for sym in syms:
         r = results[sym]
