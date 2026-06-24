@@ -3,11 +3,10 @@
   "active_themes": [
     {
       "name": "Memory & Storage",
-      "score": 87.6,
+      "score": 87.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (87/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +511.8%, QQQ +",
-        "X consensus: 1 ticker mentioned"
+        "Top-percentile RS (87/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +511.8%, QQQ +"
       ],
       "related_etfs": [
         "MRAM",
@@ -23,10 +22,11 @@
     },
     {
       "name": "Data Center Infrastructure",
-      "score": 85.6,
+      "score": 86.1,
       "source": "theme_rs_service",
       "evidence": [
-        "Top-percentile RS (86/100) vs theme universe. Outperforming SPY +238.8%, QQQ +209.3%. Breadth 25%."
+        "Top-percentile RS (86/100) vs theme universe. Outperforming SPY +238.8%, QQQ +209.3%. Breadth 25%.",
+        "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
         "ADEA",
@@ -79,11 +79,11 @@
     },
     {
       "name": "Semiconductors",
-      "score": 76.0,
+      "score": 75.5,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (74/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +192.5%, QQQ +",
-        "X consensus: 3 tickers mentioned"
+        "X consensus: 2 tickers mentioned"
       ],
       "related_etfs": [
         "AMD",
@@ -350,7 +350,7 @@
     }
   ],
   "risk_notes": [],
-  "last_updated": "2026-06-24T14:58:43.505380+00:00",
+  "last_updated": "2026-06-24T15:24:28.629497+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -361,5 +361,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1782313123.50543
+  "_saved_at": 1782314668.6295445
 }

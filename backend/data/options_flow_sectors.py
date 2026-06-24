@@ -451,9 +451,10 @@ def get_sector_flow(*, force_refresh: bool = False) -> dict:
         for sym in (meta.get("proxy_symbols") or []):
             all_theme_syms.add(sym.upper())
 
-    _live_syms  = {s for s, r in combined_ticker_data.items() if r.get("_source") == "live"       } & all_theme_syms
-    _fresh_syms = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement"  } & all_theme_syms
-    _lkg_syms   = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement_lkg"} & all_theme_syms
+    _live_syms        = {s for s, r in combined_ticker_data.items() if r.get("_source") == "live"            } & all_theme_syms
+    _fresh_syms       = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement"       } & all_theme_syms
+    _lkg_syms         = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement_lkg"   } & all_theme_syms
+    _wl_cache_syms    = {s for s, r in combined_ticker_data.items() if r.get("_source") == "watchlist_cache"  } & all_theme_syms
 
     # Load all watchlist tickers to compute overlap (non-fatal if DB unavailable)
     _watchlist_syms  = _load_all_watchlist_symbols()
@@ -481,6 +482,10 @@ def get_sector_flow(*, force_refresh: bool = False) -> dict:
         "symbols_from_master":                len(_live_syms),
         "symbols_from_cache":                 len(_fresh_syms),
         "symbols_from_lkg":                   len(_lkg_syms),
+        # watchlist_cache = per-ticker portfolio_opts:{sym} entries bridged from
+        # the Watchlist/Portfolio scanner before the supplement loop covers them.
+        # Goes to 0 once the supplement loop catches up (that is the steady-state).
+        "symbols_from_watchlist_cache":       len(_wl_cache_syms),
         "symbols_from_unavailable_cache":     len(no_options_syms & all_theme_syms),
         # ── Live-scan proof: ALL MUST BE 0 ───────────────────────────────────
         # Sectors is a pure aggregation layer — it never initiates Tradier calls.

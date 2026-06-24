@@ -1,0 +1,114 @@
+Good. Sectors is now proven to be a pure aggregation layer and not duplicating Tradier calls. Do not change Sectors scanning behavior.
+
+Now audit why shared options symbol coverage/freshness is still poor.
+
+Observed validation:
+
+* `/api/options-flow/sectors` source = `shared_options_symbol_cache`
+* `watchlist_overlap_live_calls = 0`
+* `theme_only_live_calls_enqueued = 0`
+* `global_inflight_at_response = 50` from watchlist scope
+* No Tradier 429s
+* But Sectors only had:
+
+  * `symbols_from_master = 6`
+  * `symbols_from_lkg = 33`
+  * `symbols_from_cache = 0`
+* Sectors watchlist overlap was only 111 / 232 symbols, not the expected ~90%.
+
+Goals:
+
+1. Figure out why watchlist options coverage only appears partial/stale.
+2. Figure out why Sectors universe overlap with dev watchlist is only 111/232.
+3. Improve shared options-symbol cache freshness without making Sectors live-scan.
+
+Hard constraints:
+
+* Do NOT make Sectors live-scan.
+* Do NOT change Options Flow main screener/search.
+* Do NOT raise Tradier rate limit.
+* Do NOT remove global in-flight/coalescing protections.
+* Do NOT break Portfolio/Watchlist endpoint shapes.
+
+Audit checklist:
+
+1. Watchlist coverage:
+
+   * Call `/api/watchlist/{dev_watchlist_id}/options-signals`.
+   * Count:
+
+     * total symbols
+     * data_available true
+     * data_available false
+     * stale true
+     * source breakdown: cache/master/LKG/live/unavailable/no-options
+     * symbols currently in-flight
+     * symbols deferred
+     * symbols permanently unsupported/no-options
+   * Report exact top reasons unavailable.
+
+2. Watchlist scan completion:
+
+   * After first call enqueues 50, wait until background scans drain.
+   * Re-call endpoint.
+   * Confirm whether next 50 enqueue.
+   * Repeat until either:
+
+     * all optionable symbols have fresh/cache rows, or
+     * remaining symbols are confirmed no-options/unavailable.
+   * If the endpoint only ever enqueues 50 and then stops without progressing through deferred symbols, fix that.
+
+3. Cache write audit:
+
+   * Confirm live scan results write to `portfolio_opts:{sym}`.
+   * Confirm unavailable/no-options rows also write to cache with proper TTL.
+   * Confirm LKG writes include successful long-tail watchlist scans.
+   * Confirm Sectors can read those rows after Watchlist warms them.
+
+4. Sectors universe overlap:
+
+   * Print/export the 232 Sectors symbols.
+   * Print/export the 302 dev watchlist symbols.
+   * Compute:
+
+     * overlap symbols
+     * sector-only symbols
+     * watchlist-only symbols
+   * Identify why sector-only count is 121.
+   * For each sector-only symbol, include source:
+
+     * theme universe
+     * supplement list
+     * hardcoded sector map
+     * stale historical list
+   * Confirm whether Sectors should actually use all 121 sector-only symbols or should be limited to dev-watchlist + curated theme additions.
+
+5. Freshness policy:
+
+   * For optionable watchlist symbols, target fresh TTL should be 5–15 minutes.
+   * For no-options confirmed symbols, TTL can be 24h.
+   * For transient unavailable/rate-limit/timeout, TTL should be 30–60 minutes.
+   * Sectors should show stale/LKG data with age, not gray out.
+
+6. Diagnostics to add if missing:
+   Watchlist options response should include:
+
+   * `data_available_count`
+   * `data_unavailable_count`
+   * `stale_count`
+   * `fresh_count`
+   * `source_breakdown`
+   * `unavailable_reason_breakdown`
+   * `deferred_symbols_count`
+   * `inflight_symbols_count`
+   * `no_options_cached_count`
+   * `next_refresh_candidates_count`
+
+7. Validation:
+
+   * Warm watchlist options over multiple calls until no more optionable symbols are deferred.
+   * Then call Sectors.
+   * Confirm Sectors `symbols_from_cache/master/lkg` improves.
+   * Confirm Sectors still has `watchlist_overlap_live_calls = 0`.
+   * Confirm no Tradier 429s.
+   * Confirm Options Flow main screener and Portfolio remain unchanged.

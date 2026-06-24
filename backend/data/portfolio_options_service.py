@@ -869,6 +869,71 @@ def _normalize_to_watchlist_row(sym: str, r: dict, is_stale: bool) -> dict:
     }
 
 
+async def _drain_deferred_watchlist(
+    deferred_syms: list[str],
+    tradier,
+    cache,
+    master_snap: dict | None,
+) -> None:
+    """
+    Progressive background drain for symbols deferred beyond max_live_scan.
+
+    Scans in batches of _MAX_SYMBOLS with a 35-second sleep between batches so
+    the global Tradier rate-limiter bucket has time to refill after the initial
+    burst from the main scan.  Never blocks the HTTP response — always called
+    via asyncio.create_task().
+
+    The global in-flight guard ensures that if a concurrent request or the
+    supplement loop already claimed a symbol, it is skipped cleanly.
+    """
+    import asyncio as _aio
+
+    _INTER_BATCH_SLEEP = 35  # seconds between deferred batches
+
+    for i in range(0, len(deferred_syms), _MAX_SYMBOLS):
+        batch = deferred_syms[i : i + _MAX_SYMBOLS]
+
+        # Skip symbols already cached since this task was created
+        still_needed = [
+            s for s in batch if not cache.get(_per_ticker_cache_key(s))
+        ]
+        if not still_needed:
+            if i + _MAX_SYMBOLS < len(deferred_syms):
+                await _aio.sleep(5)   # small gap even for cache-hit batches
+            continue
+
+        claimed, _blocked = _claim_opts_many(still_needed, "watchlist_drain")
+        if not claimed:
+            if i + _MAX_SYMBOLS < len(deferred_syms):
+                await _aio.sleep(5)
+            continue
+
+        try:
+            scan_out = await scan_portfolio_options(
+                claimed, tradier, cache, master_snap=master_snap
+            )
+            by_sym = scan_out.get("by_symbol", {}) if isinstance(scan_out, dict) else {}
+            for _s, _row in by_sym.items():
+                if _row.get("data_available"):
+                    continue   # already written by scan_portfolio_options
+                _pk = _per_ticker_cache_key(_s)
+                if not cache.get(_pk):
+                    reason = _row.get("unavailable_reason", "")
+                    ttl = (
+                        86400   # 24h confirmed no-options
+                        if reason in ("no_options", "no_expirations", "not_in_tradier_coverage")
+                        else 1800   # 30min transient/rate-limit
+                    )
+                    cache.set(_pk, _row, ttl)
+        except Exception as _e:
+            print(f"[WATCHLIST_OPTS_DRAIN] batch {i//25+1} error: {_e}")
+        finally:
+            _release_opts_many(claimed, "watchlist_drain")
+
+        if i + _MAX_SYMBOLS < len(deferred_syms):
+            await _aio.sleep(_INTER_BATCH_SLEEP)
+
+
 async def scan_watchlist_options(
     symbols: list[str],
     tradier,
@@ -1047,30 +1112,86 @@ async def scan_watchlist_options(
             _batch = _to_scan[_i : _i + _MAX_SYMBOLS]
             _aio.create_task(_bg_batch_scan(_batch))
 
+        # Progressive drain: if more symbols are deferred beyond max_live_scan,
+        # kick off a background task that scans them in batches of _MAX_SYMBOLS
+        # with a 35-second sleep between batches so the rate-limiter bucket
+        # refills before each subsequent burst.
+        if _deferred > 0:
+            _deferred_syms = uncached[max_live_scan:]
+            _aio.create_task(
+                _drain_deferred_watchlist(_deferred_syms, tradier, cache, master_snap)
+            )
+            print(
+                f"[WATCHLIST_OPTIONS_DRAIN] Queued progressive drain: "
+                f"{len(_deferred_syms)} symbols in "
+                f"{-(-len(_deferred_syms) // _MAX_SYMBOLS)} batches"
+            )
+
     # 5. Build normalised signal map
     signals: dict[str, dict] = {}
+    _stale_set: set[str] = set(uncached) | set(inflight) | {
+        s for s, r in results.items() if r.get("from_lkg")
+    }
     for sym in syms:
         r = results[sym]
-        is_stale = sym in uncached or sym in inflight or bool(r.get("from_lkg"))
+        is_stale = sym in _stale_set
         signals[sym] = _normalize_to_watchlist_row(sym, r, is_stale)
+
+    # 6. Extended diagnostics
+    from collections import Counter as _Counter
+    _src_ctr: _Counter = _Counter()
+    _reason_ctr: _Counter = _Counter()
+    _da_true  = 0
+    _da_false = 0
+    _no_opts_cnt = 0
+    for _sym, _r in results.items():
+        _src_ctr[_r.get("source", "unknown")] += 1
+        if _r.get("data_available"):
+            _da_true += 1
+        else:
+            _da_false += 1
+            _rsn = _r.get("unavailable_reason") or "unknown"
+            _reason_ctr[_rsn] += 1
+            if _rsn in ("no_options", "no_expirations", "not_in_tradier_coverage",
+                        "otc_or_foreign_unsupported"):
+                _no_opts_cnt += 1
+
+    _stale_cnt = sum(1 for s in syms if s in _stale_set)
+    _fresh_cnt = sum(1 for s in syms
+                     if results[s].get("data_available") and s not in _stale_set)
 
     elapsed_ms = round((_tm.monotonic() - _t0) * 1000, 1)
 
     return {
         "signals": signals,
         "options_meta": {
-            "scope":                      "watchlist",
-            "symbols_requested":          len(syms),
-            "cache_hits":                 cache_hits,
-            "master_hits":                master_hits,
-            "lkg_hits":                   lkg_hits,
-            "cache_misses":               len(uncached),
-            "live_calls_enqueued":        enqueued,
-            "already_inflight":           len(inflight),
-            "scan_in_progress":           len(inflight),   # alias kept for compat
-            "rate_limited_or_deferred":   _deferred,
-            "generated_at":               _dt.datetime.utcnow().isoformat() + "Z",
-            "ttl_seconds":                _CACHE_PER_TICKER_TTL,
-            "elapsed_ms":                 elapsed_ms,
+            "scope":                          "watchlist",
+            "symbols_requested":              len(syms),
+            # ── Cache layer hits ──────────────────────────────────────────
+            "cache_hits":                     cache_hits,
+            "master_hits":                    master_hits,
+            "lkg_hits":                       lkg_hits,
+            "cache_misses":                   len(uncached),
+            # ── Availability breakdown ────────────────────────────────────
+            "data_available_count":           _da_true,
+            "data_unavailable_count":         _da_false,
+            "stale_count":                    _stale_cnt,
+            "fresh_count":                    _fresh_cnt,
+            # ── Source / reason breakdowns ────────────────────────────────
+            "source_breakdown":               dict(_src_ctr.most_common()),
+            "unavailable_reason_breakdown":   dict(_reason_ctr.most_common()),
+            # ── Scan queue state ──────────────────────────────────────────
+            "live_calls_enqueued":            enqueued,
+            "deferred_symbols_count":         _deferred,
+            "inflight_symbols_count":         len(inflight),
+            "already_inflight":               len(inflight),
+            "scan_in_progress":               len(inflight),   # kept for compat
+            "rate_limited_or_deferred":       _deferred,       # kept for compat
+            "no_options_cached_count":        _no_opts_cnt,
+            "next_refresh_candidates_count":  len(uncached) - _deferred,
+            # ── Timing ───────────────────────────────────────────────────
+            "generated_at":                   _dt.datetime.utcnow().isoformat() + "Z",
+            "ttl_seconds":                    _CACHE_PER_TICKER_TTL,
+            "elapsed_ms":                     elapsed_ms,
         },
     }

@@ -345,11 +345,19 @@ def update_scan_tracking(batch: list[str], next_at: float) -> None:
 
 def get_combined_ticker_data() -> dict[str, dict]:
     """
-    Merge master screener cache + fresh supplement + supplement LKG into one
-    {ticker: row} dict.
+    Merge master screener cache + fresh supplement + supplement LKG + shared
+    per-ticker portfolio options cache into one {ticker: row} dict.
 
     Priority:
-      live > supplement (fresh) > supplement_lkg (disk-loaded)
+      live > supplement (fresh) > supplement_lkg > watchlist_cache
+
+    The watchlist_cache layer bridges portfolio_opts:{sym} keys written by the
+    Watchlist and Portfolio Terminal scanners.  This makes every watchlist-scanned
+    options row immediately visible to the Sectors aggregation layer without any
+    additional Tradier calls — pure cache reads.
+
+    Only theme-universe symbols that are still uncovered after the first three
+    layers are checked against the per-ticker cache.
     """
     try:
         from data.cache import cache
@@ -369,6 +377,27 @@ def get_combined_ticker_data() -> dict[str, dict]:
         for sym, row in get_supplement_data_by_ticker().items():
             if sym not in combined:
                 combined[sym] = row   # already tagged by layer
+
+        # ── Watchlist-cache bridge ────────────────────────────────────────────
+        # For theme-universe symbols still missing from master+supplement, check
+        # the shared per-ticker portfolio options cache (portfolio_opts:{sym}).
+        # This lets one Watchlist scan warm the Sectors view for free.
+        # Zero Tradier calls — read-only cache access.
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+            from data.portfolio_options_service import _per_ticker_cache_key
+
+            for meta in ENRICHED_THEME_RS_UNIVERSE.values():
+                for sym in (meta.get("proxy_symbols") or []):
+                    sym = sym.upper()
+                    if sym in combined:
+                        continue
+                    row = cache.get(_per_ticker_cache_key(sym))
+                    if row and isinstance(row, dict) and row.get("data_available"):
+                        combined[sym] = {**row, "_source": "watchlist_cache"}
+        except Exception:
+            pass
+        # ─────────────────────────────────────────────────────────────────────
 
         return combined
     except Exception:
