@@ -1,0 +1,142 @@
+Fix the remaining Watchlist options coverage issue. Do not blame after-hours; it is currently market hours and many normal US optionable stocks are still missing options data.
+
+Problem:
+The Primary watchlist has 302 tickers, including foreign/OTC names. We should not spend Tradier options calls on obvious foreign/OTC symbols because they will not return useful options data. But beyond those, there are still roughly 50–60+ normal US/non-foreign/non-OTC tickers with existing options chains that are showing blank/missing options data. That is unacceptable.
+
+Hard constraints:
+
+* Do NOT raise Tradier rate limit.
+* Do NOT make Sectors live-scan watchlist-overlap symbols.
+* Do NOT bypass the global Tradier limiter, coalescing, or in-flight guard.
+* Do NOT spend options-chain calls on obvious foreign/OTC unsupported symbols.
+* Do NOT classify normal US optionable stocks as final unavailable without proving no expirations.
+* Do NOT use “after-hours” as an explanation; validate against current market session accurately.
+
+Required audit:
+
+1. Get the full 302-symbol Primary watchlist.
+2. Split into clear buckets:
+
+   * `foreign_prefixed_symbols` like `AIM:`, `ASX:`, `CSE:`, `EPA:`, `ETR:`, `LSE:`, `STO:`, `TSX:`, etc.
+   * `known_otc_or_unsupported_symbols` using existing metadata if available.
+   * `standard_us_symbols`
+3. Confirm foreign/OTC buckets are skipped before Tradier options calls.
+
+   * They should be marked `unsupported_foreign_or_otc`.
+   * They should get 24h TTL.
+   * They should not call `get_option_expirations` or `get_option_chain`.
+4. For `standard_us_symbols`, compute:
+
+   * total standard US symbols
+   * fresh options rows
+   * stale options rows
+   * confirmed no-options
+   * transient failures
+   * missing/blank rows
+5. Export the exact list of standard US tickers that are missing options data.
+   For each ticker include:
+
+   * ticker
+   * exchange/metadata if available
+   * options_classification
+   * options_unavailable_reason
+   * options_source
+   * options_lkg_age_seconds
+   * had_expirations
+   * expiration_count
+   * selected_expiration
+   * chain_request_status
+   * chain_contract_count
+   * last_attempt_at
+
+Critical fix areas:
+
+1. Foreign/OTC prefilter:
+
+   * Add a preflight filter before options scanning.
+   * Do not rely on discovering foreign/OTC unsupported via failed Tradier calls.
+   * Obvious prefixed foreign tickers should be skipped immediately.
+   * Use existing watchlist/company metadata if available.
+   * Be careful not to accidentally skip valid US symbols.
+
+2. Expiration selection:
+   Audit how `_scan_one_symbol` chooses expiration.
+   For normal US optionable stocks:
+
+   * Call `get_option_expirations(symbol)`.
+   * If expirations are returned, do not classify as no-options.
+   * Pick a valid near-term liquid expiration.
+   * If nearest expiration chain is empty, try the next 1–3 expirations before classifying transient failure.
+   * Many stocks have weekly/monthly expirations where the nearest one can be thin or weird.
+   * Do not stop after one empty chain if other expirations exist.
+
+3. Chain response parsing:
+   Audit Tradier chain response parsing.
+   Confirm:
+
+   * contracts are parsed whether response returns a single object or list.
+   * call/put fields are handled correctly.
+   * zero volume does not mean no contract.
+   * open_interest-only contracts can still be usable.
+   * chain_contract_count is counted before filters.
+   * any filters for volume/OI/strike do not accidentally filter out the entire chain before data availability is determined.
+
+4. Classification:
+
+   * `no_expirations` = confirmed no-options, 24h TTL.
+   * `foreign/OTC/prefix unsupported` = unsupported, 24h TTL, no Tradier options call.
+   * `expirations exist but chain empty for one expiration` = try more expirations.
+   * `expirations exist but all checked chains empty/error` = transient failure, not final no-options.
+   * `provider_rate_limited` = transient failure and must retry later.
+   * normal US symbols should not remain blank if expirations/chains exist.
+
+5. Force refresh:
+   Use `force_refresh=true` to retest only:
+
+   * standard US missing symbols
+   * transient failures
+   * stale LKG rows older than TTL
+     Do not force refresh foreign/OTC unsupported symbols.
+
+Required validation:
+A. During current market hours:
+
+* Call `/api/watchlist/23eec278-074a-4706-a62a-c35d38b384ea/options-signals?force_refresh=true`
+* Wait for drain completion.
+* Re-call without force.
+
+B. Report:
+
+* total symbols: 302
+* foreign/OTC skipped count
+* standard US symbols count
+* standard US fresh options count
+* standard US stale count
+* standard US confirmed no-options count
+* standard US transient failure count
+* standard US missing/blank count
+* exact standard US missing ticker list
+* last_429_at
+* Tradier calls avoided by foreign/OTC prefilter
+
+C. Pick at least 10 known normal US missing tickers from the missing list and validate directly through the same Tradier provider path:
+
+* expirations returned?
+* how many expirations?
+* which expiration was selected?
+* chain contract count?
+* why did scan not produce options row?
+  Fix the root cause, not the label.
+
+Acceptance criteria:
+
+* Foreign/OTC/prefixed symbols are skipped without wasting options API calls.
+* Normal US optionable stocks with expirations/chains should produce options rows.
+* Standard US missing/blank count should drop materially.
+* `provider_rate_limited` should not remain a final blank state.
+* `no_chain_returned` should not be final unless multiple expirations were tried and all failed.
+* No Tradier 429s.
+* Sectors still has `watchlist_overlap_live_calls = 0`.
+* Supplement overlap live scans remain 0 in normal state.
+
+Do not move to Themes or frontend until the standard US missing ticker list is explained and fixed.
