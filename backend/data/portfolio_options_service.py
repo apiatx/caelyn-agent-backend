@@ -40,6 +40,10 @@ _SCAN_TIMEOUT_CHAIN    = 5.0
 _STALE_LKG_REFRESH_AGE = 3600  # LKG rows older than 1h are queued for background re-scan
 _UNAVAIL_TTL_CONFIRMED  = 86400  # 24h: OTC, not in coverage, confirmed no-options
 _UNAVAIL_TTL_TRANSIENT  = 1800   # 30min: rate-limit, empty chain (transient)
+_UNAVAIL_TTL_PARTIAL    = 120    # 2min:  quote batch miss for standard US ticker
+_QUOTE_RETRY_BATCH_SZ   = 15    # symbols per quote-retry batch
+_QUOTE_RETRY_SLEEP_SEC  = 20    # seconds between quote-retry batches
+_QUOTE_RETRY_MAX_ATT    = 3     # max retry attempts per symbol per cycle
 
 
 # ── Portfolio disk LKG (survives restarts + outside-market-hours) ──────────
@@ -118,7 +122,7 @@ def _classify_watchlist_sym(r: dict, is_stale: bool) -> str:
         return "confirmed_no_options"
     if reason == "otc_or_foreign_unsupported":
         return "unsupported_foreign_or_otc"
-    if reason == "not_in_tradier_coverage":
+    if reason in ("not_in_tradier_coverage", "quote_batch_partial_or_missing"):
         return "transient_failure"
     if reason == "scan_in_progress":
         return "inflight_refresh"
@@ -135,6 +139,13 @@ import time as _wl_time
 _WL_LAST_REFRESH_STARTED_AT:    float | None = None
 _WL_LAST_REFRESH_COMPLETED_AT:  float | None = None
 _WL_LATEST_SUCCESSFUL_REFRESH_AT: float | None = None
+
+# ── Quote-retry state (reset on server restart) ─────────────────────────────
+_WL_QUOTE_RETRY_QUEUE:    set[str]       = set()
+_WL_QUOTE_RETRY_ATTEMPTS: dict[str, int] = {}
+_WL_QUOTE_RETRY_STATS: dict = {
+    "queued_total": 0, "attempted": 0, "succeeded": 0, "failed": 0,
+}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -768,8 +779,20 @@ async def scan_portfolio_options(
             q     = quote_map.get(sym, {})
             price = float(q.get("last") or 0)
             if price <= 0:
-                reason = "otc_or_foreign_unsupported" if _is_otc_or_foreign(sym) else "not_in_tradier_coverage"
-                return sym, {"_sym": sym, "_reason": reason}
+                if _is_otc_or_foreign(sym):
+                    return sym, {"_sym": sym, "_reason": "otc_or_foreign_unsupported"}
+                # Standard US ticker — quote missing from batch (possible burst partial miss).
+                # Scan the options chain anyway: IV, volume, put/call ratio are all
+                # quote-independent. ATM expected-move is skipped when price=0.
+                res = await _scan_one_symbol(sym, 0.0, tradier, sem)
+                provider_calls += 3
+                if res.get("data_available"):
+                    return sym, {**res, "quote_price_missing": True}
+                _chain_reason = res.get("_reason") or ""
+                # Preserve definitive chain-level outcomes; only ambiguous misses get partial marker
+                if _chain_reason in ("no_expirations", "no_chain_returned", "provider_rate_limited"):
+                    return sym, {"_sym": sym, "_reason": _chain_reason}
+                return sym, {"_sym": sym, "_reason": "quote_batch_partial_or_missing"}
             res = await _scan_one_symbol(sym, price, tradier, sem)
             provider_calls += 3  # ~1 expirations + 2 chains per ticker
             return sym, res
@@ -1009,6 +1032,8 @@ async def _drain_deferred_watchlist(
                         _UNAVAIL_TTL_CONFIRMED
                         if reason in ("no_options", "no_expirations",
                                       "otc_or_foreign_unsupported")
+                        else _UNAVAIL_TTL_PARTIAL
+                        if reason == "quote_batch_partial_or_missing"
                         else _UNAVAIL_TTL_TRANSIENT
                     )
                     cache.set(_pk, _row, ttl)
@@ -1100,10 +1125,16 @@ async def _drain_stale_lkg(
                 _q  = _quote_map.get(_sym, {})
                 _px = float(_q.get("last") or 0)
                 if _px <= 0:
-                    _reason = ("otc_or_foreign_unsupported"
-                               if _is_otc_or_foreign(_sym)
-                               else "not_in_tradier_coverage")
-                    return _sym, {"_sym": _sym, "_reason": _reason}
+                    if _is_otc_or_foreign(_sym):
+                        return _sym, {"_sym": _sym, "_reason": "otc_or_foreign_unsupported"}
+                    # Standard US ticker — scan chain anyway with price=0
+                    _res = await _scan_one_symbol(_sym, 0.0, tradier, _sem)
+                    if _res.get("data_available"):
+                        return _sym, {**_res, "quote_price_missing": True}
+                    _cr = _res.get("_reason") or ""
+                    if _cr in ("no_expirations", "no_chain_returned", "provider_rate_limited"):
+                        return _sym, {"_sym": _sym, "_reason": _cr}
+                    return _sym, {"_sym": _sym, "_reason": "quote_batch_partial_or_missing"}
                 _res = await _scan_one_symbol(_sym, _px, tradier, _sem)
                 return _sym, _res
 
@@ -1132,6 +1163,8 @@ async def _drain_stale_lkg(
                         _UNAVAIL_TTL_CONFIRMED
                         if _reason in ("no_options", "no_expirations",
                                        "otc_or_foreign_unsupported")
+                        else _UNAVAIL_TTL_PARTIAL
+                        if _reason == "quote_batch_partial_or_missing"
                         else _UNAVAIL_TTL_TRANSIENT
                     )
                     cache.set(_pk, _row, _ttl)
@@ -1154,6 +1187,106 @@ async def _drain_stale_lkg(
 
     _WL_LAST_REFRESH_COMPLETED_AT = _wl_time.time()
     print(f"[WATCHLIST_LKG_REFRESH] Complete: {len(stale_syms)} stale LKG symbols processed")
+
+
+async def _drain_quote_retry(
+    syms_to_retry: list[str],
+    tradier,
+    cache,
+    master_snap: dict | None,
+) -> None:
+    """
+    Paced quote-retry background task for standard US tickers that returned no quote
+    from the initial burst scan (reason: quote_batch_partial_or_missing).
+
+    Retries in small batches (≤15 symbols, 20s spacing) so the Tradier rate-limiter
+    bucket refills between bursts.  Routes through the existing Tradier rate limiter —
+    no second limiter or bypass.
+
+    If a quote is found  → immediately scans options chain with real price.
+    Still no quote       → refreshes the 120s partial TTL (retried next API call).
+    """
+    import asyncio as _aio
+
+    _sem = _aio.Semaphore(_SCAN_SEM)
+
+    for i in range(0, len(syms_to_retry), _QUOTE_RETRY_BATCH_SZ):
+        _batch = syms_to_retry[i: i + _QUOTE_RETRY_BATCH_SZ]
+
+        # Skip symbols already refreshed since this task was created
+        _still_need = [
+            s for s in _batch
+            if not (cache.get(_per_ticker_cache_key(s)) or {}).get("data_available")
+        ]
+        if not _still_need:
+            if i + _QUOTE_RETRY_BATCH_SZ < len(syms_to_retry):
+                await _aio.sleep(5)
+            continue
+
+        try:
+            _raw_q = await _aio.wait_for(
+                tradier.get_quotes(_still_need), timeout=_SCAN_TIMEOUT_QUOTE
+            )
+        except Exception:
+            _raw_q = []
+
+        _qmap: dict[str, dict] = {
+            (q.get("symbol") or "").upper(): q
+            for q in (_raw_q or []) if q.get("symbol")
+        }
+
+        _got_quote = [s for s in _still_need if float((_qmap.get(s) or {}).get("last") or 0) > 0]
+        _no_quote  = [s for s in _still_need if s not in _got_quote]
+
+        _WL_QUOTE_RETRY_STATS["attempted"] += len(_still_need)
+        _WL_QUOTE_RETRY_STATS["succeeded"] += len(_got_quote)
+        _WL_QUOTE_RETRY_STATS["failed"]    += len(_no_quote)
+
+        # For symbols that now have a quote: scan options chain with real price
+        if _got_quote:
+            _claimed, _ = _claim_opts_many(_got_quote, "quote_retry")
+            if _claimed:
+                try:
+                    async def _retry_chain(_sym: str) -> None:
+                        _pk  = _per_ticker_cache_key(_sym)
+                        _px  = float((_qmap.get(_sym) or {}).get("last") or 0)
+                        _res = await _scan_one_symbol(_sym, _px, tradier, _sem)
+                        if _res.get("data_available"):
+                            cache.set(_pk, _res, _CACHE_PER_TICKER_TTL)
+                            _save_portfolio_lkg({_sym: _res})
+                        else:
+                            _rr  = _res.get("_reason") or "unknown_provider_error"
+                            _row = _unavail_row(_sym, _rr, optionable=False)
+                            _ttl = (
+                                _UNAVAIL_TTL_CONFIRMED
+                                if _rr in ("no_options", "no_expirations",
+                                           "otc_or_foreign_unsupported")
+                                else _UNAVAIL_TTL_PARTIAL
+                                if _rr == "quote_batch_partial_or_missing"
+                                else _UNAVAIL_TTL_TRANSIENT
+                            )
+                            cache.set(_pk, _row, _ttl)
+                    await _aio.gather(*[_retry_chain(s) for s in _claimed],
+                                      return_exceptions=True)
+                finally:
+                    _release_opts_many(_claimed, "quote_retry")
+
+        # For symbols still missing quote: refresh the 120s TTL so retry happens soon
+        for s in _no_quote:
+            _WL_QUOTE_RETRY_ATTEMPTS[s] = _WL_QUOTE_RETRY_ATTEMPTS.get(s, 0) + 1
+            _pk = _per_ticker_cache_key(s)
+            if not (cache.get(_pk) or {}).get("data_available"):
+                _row = _unavail_row(s, "quote_batch_partial_or_missing", optionable=False)
+                cache.set(_pk, _row, _UNAVAIL_TTL_PARTIAL)
+
+        if i + _QUOTE_RETRY_BATCH_SZ < len(syms_to_retry):
+            await _aio.sleep(_QUOTE_RETRY_SLEEP_SEC)
+
+    print(
+        f"[QUOTE_RETRY] done: {len(syms_to_retry)} symbols | "
+        f"succeeded={_WL_QUOTE_RETRY_STATS['succeeded']} "
+        f"failed={_WL_QUOTE_RETRY_STATS['failed']}"
+    )
 
 
 async def scan_watchlist_options(
@@ -1269,7 +1402,7 @@ async def scan_watchlist_options(
             _is_lkg_entry    = hit.get("from_lkg") or hit.get("source") == "portfolio_opts_lkg_disk"
             _is_transient    = hit.get("unavailable_reason") in (
                 "provider_rate_limited", "no_chain_returned", "scan_pending",
-                "not_in_tradier_coverage"
+                "not_in_tradier_coverage", "quote_batch_partial_or_missing"
             )
             if _is_lkg_entry or _is_transient:
                 hit = None  # evict → fall through to uncached path
@@ -1349,9 +1482,21 @@ async def scan_watchlist_options(
                             _UNAVAIL_TTL_CONFIRMED
                             if reason in ("no_options", "no_expirations",
                                           "otc_or_foreign_unsupported")
+                            else _UNAVAIL_TTL_PARTIAL
+                            if reason == "quote_batch_partial_or_missing"
                             else _UNAVAIL_TTL_TRANSIENT
                         )
                         cache.set(_pk, _row, ttl)
+                # Queue paced quote-retry for standard US symbols missing from quote batch
+                _partial_syms = [
+                    _s for _s, _row in by_sym.items()
+                    if (_row.get("unavailable_reason") or "") == "quote_batch_partial_or_missing"
+                ]
+                if _partial_syms:
+                    _WL_QUOTE_RETRY_STATS["queued_total"] += len(_partial_syms)
+                    _aio.create_task(
+                        _drain_quote_retry(_partial_syms, tradier, cache, master_snap)
+                    )
                 if _any_fresh:
                     _WL_LATEST_SUCCESSFUL_REFRESH_AT = _wl_time.time()
             except Exception as _bge:
@@ -1444,7 +1589,8 @@ async def scan_watchlist_options(
             if _rsn in ("no_options", "no_expirations"):
                 _confirmed_noopts_cnt += 1
             if _rsn in ("provider_rate_limited", "no_chain_returned",
-                        "not_in_tradier_coverage") or \
+                        "not_in_tradier_coverage",
+                        "quote_batch_partial_or_missing") or \
                     _rsn.startswith("unknown_provider_error"):
                 _transient_cnt += 1
         # classification breakdown for diagnostics
@@ -1467,6 +1613,30 @@ async def scan_watchlist_options(
     )
     # retry_suppressed: transient failures still in 30-min TTL cache (not re-queued)
     _retry_suppressed = max(0, _transient_cnt - _retry_queued)
+
+    # ── Quote-retry and standard-US diagnostics ─────────────────────────────
+    _quote_batch_partial_cnt = sum(
+        1 for _r in results.values()
+        if (_r.get("unavailable_reason") or "") == "quote_batch_partial_or_missing"
+    )
+    _quote_chain_ok_no_price_cnt = sum(
+        1 for _r in results.values()
+        if _r.get("data_available") and _r.get("quote_price_missing")
+    )
+    _std_us_transient_cnt = sum(
+        1 for _s, _r in results.items()
+        if ":" not in _s and (
+            (_r.get("unavailable_reason") or "") in (
+                "provider_rate_limited", "no_chain_returned",
+                "not_in_tradier_coverage", "quote_batch_partial_or_missing"
+            ) or (_r.get("unavailable_reason") or "").startswith("unknown_provider_error")
+        )
+    )
+    _std_us_missing_after_retry_cnt = _quote_batch_partial_cnt
+    _std_us_with_prior_lkg_cnt = sum(
+        1 for _s, _r in results.items()
+        if ":" not in _s and _r.get("from_lkg") and _r.get("data_available")
+    )
 
     elapsed_ms = round((_tm.monotonic() - _t0) * 1000, 1)
 
@@ -1512,6 +1682,17 @@ async def scan_watchlist_options(
             "confirmed_no_options_count":          _confirmed_noopts_cnt,
             "transient_failure_count":             _transient_cnt,
             "stale_lkg_refresh_candidates_count":  len(stale_lkg_to_refresh),
+            # ── Quote-retry diagnostics ───────────────────────────────
+            "quote_batch_partial_count":                    _quote_batch_partial_cnt,
+            "quote_chain_ok_no_price_count":                _quote_chain_ok_no_price_cnt,
+            "quote_retry_queued_count":                     _WL_QUOTE_RETRY_STATS["queued_total"],
+            "quote_retry_attempted_count":                  _WL_QUOTE_RETRY_STATS["attempted"],
+            "quote_retry_succeeded_count":                  _WL_QUOTE_RETRY_STATS["succeeded"],
+            "quote_retry_failed_count":                     _WL_QUOTE_RETRY_STATS["failed"],
+            "standard_us_transient_count":                  _std_us_transient_cnt,
+            "standard_us_missing_after_retry_count":        _std_us_missing_after_retry_cnt,
+            "standard_us_with_prior_lkg_count":             _std_us_with_prior_lkg_cnt,
+            "standard_us_prior_lkg_refreshed_without_quote_count": _quote_chain_ok_no_price_cnt,
             "stale_lkg_queued_count":              _stale_lkg_queued,
             "retry_queued_count":                  _retry_queued,
             "retry_suppressed_count":              _retry_suppressed,
