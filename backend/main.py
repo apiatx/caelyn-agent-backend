@@ -12039,11 +12039,22 @@ async def _theme_options_supplement_loop():
 
             if _overlap_in_batch:
                 try:
-                    from data.portfolio_options_service import _per_ticker_cache_key as _ptck
+                    from data.portfolio_options_service import (
+                        _per_ticker_cache_key as _ptck,
+                        _load_portfolio_lkg as _load_wl_lkg,
+                    )
                     from data.cache import cache as _opts_cache
+                    _wl_disk_lkg = _load_wl_lkg()
                     for _s in _overlap_in_batch:
-                        _row = _opts_cache.get(_ptck(_s.upper()))
+                        _su = _s.upper()
+                        _row = _opts_cache.get(_ptck(_su))
                         if _row and isinstance(_row, dict) and _row.get("data_available"):
+                            # Watchlist memory cache has good data — skip live scan
+                            _overlap_cache_hits.append(_s)
+                        elif _wl_disk_lkg.get(_su, {}).get("data_available"):
+                            # Watchlist disk LKG has prior good data — skip live scan.
+                            # The supplement loop may only gap-fill when NO last-good
+                            # watchlist-owned row exists AND no refresh is in-flight.
                             _overlap_cache_hits.append(_s)
                         else:
                             _overlap_needs_scan.append(_s)

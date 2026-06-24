@@ -594,6 +594,14 @@ async def _scan_one_symbol(
                     break  # found contracts — no need to try more expirations
 
             if not calls_all and not puts_all:
+                _exp_count   = len(expirations)
+                _tried_count = min(4, _exp_count)
+                _exps_tried  = expirations[:_tried_count]
+                print(
+                    f"[OPTS_SCAN_DEBUG] {sym}: no_chain_returned | "
+                    f"exp_total={_exp_count} tried={_tried_count} "
+                    f"exps_tried={_exps_tried} price={price}"
+                )
                 return {"_sym": sym, "_reason": "no_chain_returned"}
 
             call_vol  = sum(_si(c.get("volume")) for c in calls_all)
@@ -1028,6 +1036,23 @@ async def _drain_deferred_watchlist(
                 _pk = _per_ticker_cache_key(_s)
                 if not cache.get(_pk):
                     reason = _row.get("unavailable_reason", "")
+                    # Stale-while-revalidate: transient failures must never blank
+                    # a row that has prior good disk LKG data.
+                    _is_transient_fail = reason in (
+                        "provider_rate_limited", "no_chain_returned",
+                        "quote_batch_partial_or_missing"
+                    ) and ":" not in _s
+                    if _is_transient_fail:
+                        _prior_lkg = _load_portfolio_lkg().get(_s, {})
+                        if _prior_lkg.get("data_available"):
+                            cache.set(_pk, {
+                                **_prior_lkg,
+                                "source":        "portfolio_opts_lkg_disk",
+                                "from_lkg":      True,
+                                "retry_pending": True,
+                                "retry_reason":  reason,
+                            }, _CACHE_PER_TICKER_TTL)
+                            continue
                     ttl = (
                         _UNAVAIL_TTL_CONFIRMED
                         if reason in ("no_options", "no_expirations",
@@ -1158,6 +1183,23 @@ async def _drain_stale_lkg(
                                _res.get("unavailable_reason") or
                                "unknown_provider_error")
                     _otc = _is_otc_or_foreign(_sym) or "otc" in _reason
+                    # Stale-while-revalidate: transient failures must never blank a row
+                    # that has prior good disk LKG data — restore it instead.
+                    _is_transient_fail = _reason in (
+                        "provider_rate_limited", "no_chain_returned",
+                        "quote_batch_partial_or_missing"
+                    ) and not _otc
+                    if _is_transient_fail:
+                        _prior_lkg = _load_portfolio_lkg().get(_sym, {})
+                        if _prior_lkg.get("data_available"):
+                            cache.set(_pk, {
+                                **_prior_lkg,
+                                "source":        "portfolio_opts_lkg_disk",
+                                "from_lkg":      True,
+                                "retry_pending": True,
+                                "retry_reason":  _reason,
+                            }, _CACHE_PER_TICKER_TTL * 2)
+                            continue
                     _row = _unavail_row(_sym, _reason, optionable=None if _otc else False)
                     _ttl = (
                         _UNAVAIL_TTL_CONFIRMED
@@ -1256,6 +1298,22 @@ async def _drain_quote_retry(
                             _save_portfolio_lkg({_sym: _res})
                         else:
                             _rr  = _res.get("_reason") or "unknown_provider_error"
+                            # Stale-while-revalidate: never blank a row with prior LKG
+                            _is_transient_rr = _rr in (
+                                "provider_rate_limited", "no_chain_returned",
+                                "quote_batch_partial_or_missing"
+                            )
+                            if _is_transient_rr:
+                                _prior = _load_portfolio_lkg().get(_sym, {})
+                                if _prior.get("data_available"):
+                                    cache.set(_pk, {
+                                        **_prior,
+                                        "source":        "portfolio_opts_lkg_disk",
+                                        "from_lkg":      True,
+                                        "retry_pending": True,
+                                        "retry_reason":  _rr,
+                                    }, _CACHE_PER_TICKER_TTL)
+                                    return
                             _row = _unavail_row(_sym, _rr, optionable=False)
                             _ttl = (
                                 _UNAVAIL_TTL_CONFIRMED
@@ -1407,6 +1465,21 @@ async def scan_watchlist_options(
             if _is_lkg_entry or _is_transient:
                 hit = None  # evict → fall through to uncached path
 
+        # Stale-while-revalidate: if memory has a transient failure but disk LKG
+        # has prior good data, serve the LKG row (retry_pending=True) — never blank.
+        # This handles the case where a background scan wrote a failure to memory
+        # after a burst-rate-limit, hiding the fact that prior good data exists.
+        if hit and isinstance(hit, dict) and not hit.get("data_available") and ":" not in sym:
+            _cached_reason = hit.get("unavailable_reason") or ""
+            if _cached_reason in ("provider_rate_limited", "no_chain_returned",
+                                  "quote_batch_partial_or_missing"):
+                _lkg_candidate = disk_lkg.get(sym, {})
+                if _lkg_candidate.get("data_available"):
+                    hit = {**_lkg_candidate, "source": "portfolio_opts_lkg_disk",
+                           "from_lkg": True, "retry_pending": True,
+                           "retry_reason": _cached_reason}
+                    cache.set(per_key, hit, _CACHE_PER_TICKER_TTL)
+
         if hit and isinstance(hit, dict):
             results[sym] = hit
             memory_hits += 1
@@ -1478,6 +1551,23 @@ async def scan_watchlist_options(
                     _pk = _per_ticker_cache_key(_s)
                     if not cache.get(_pk):
                         reason = _row.get("unavailable_reason", "")
+                        # Stale-while-revalidate: transient failures must never blank
+                        # a row that has prior good disk LKG data.
+                        _is_transient_fail = reason in (
+                            "provider_rate_limited", "no_chain_returned",
+                            "quote_batch_partial_or_missing"
+                        ) and ":" not in _s
+                        if _is_transient_fail:
+                            _prior_lkg = _load_portfolio_lkg().get(_s, {})
+                            if _prior_lkg.get("data_available"):
+                                cache.set(_pk, {
+                                    **_prior_lkg,
+                                    "source":        "portfolio_opts_lkg_disk",
+                                    "from_lkg":      True,
+                                    "retry_pending": True,
+                                    "retry_reason":  reason,
+                                }, _CACHE_PER_TICKER_TTL)
+                                continue
                         ttl = (
                             _UNAVAIL_TTL_CONFIRMED
                             if reason in ("no_options", "no_expirations",
@@ -1487,15 +1577,21 @@ async def scan_watchlist_options(
                             else _UNAVAIL_TTL_TRANSIENT
                         )
                         cache.set(_pk, _row, ttl)
-                # Queue paced quote-retry for standard US symbols missing from quote batch
-                _partial_syms = [
+                # Queue paced retry for transient-failed standard US symbols that
+                # have NO prior LKG (symbols WITH LKG are served stale above and
+                # retried by _drain_stale_lkg once rate-limiter capacity returns).
+                _retry_syms = [
                     _s for _s, _row in by_sym.items()
-                    if (_row.get("unavailable_reason") or "") == "quote_batch_partial_or_missing"
+                    if (_row.get("unavailable_reason") or "") in (
+                        "provider_rate_limited", "no_chain_returned",
+                        "quote_batch_partial_or_missing"
+                    ) and ":" not in _s
+                    and not _load_portfolio_lkg().get(_s, {}).get("data_available")
                 ]
-                if _partial_syms:
-                    _WL_QUOTE_RETRY_STATS["queued_total"] += len(_partial_syms)
+                if _retry_syms:
+                    _WL_QUOTE_RETRY_STATS["queued_total"] += len(_retry_syms)
                     _aio.create_task(
-                        _drain_quote_retry(_partial_syms, tradier, cache, master_snap)
+                        _drain_quote_retry(_retry_syms, tradier, cache, master_snap)
                     )
                 if _any_fresh:
                     _WL_LATEST_SUCCESSFUL_REFRESH_AT = _wl_time.time()
@@ -1632,7 +1728,20 @@ async def scan_watchlist_options(
             ) or (_r.get("unavailable_reason") or "").startswith("unknown_provider_error")
         )
     )
-    _std_us_missing_after_retry_cnt = _quote_batch_partial_cnt
+    # Truly blank: standard US, no data available, no LKG fallback, no retry_pending,
+    # and a recoverable transient reason (not a permanent confirmed-unavailable state).
+    _std_us_missing_after_retry_cnt = sum(
+        1 for _s, _r in results.items()
+        if ":" not in _s
+        and not _r.get("data_available")
+        and not _r.get("from_lkg")
+        and not _r.get("retry_pending")
+        and (_r.get("unavailable_reason") or "") in (
+            "provider_rate_limited", "no_chain_returned",
+            "not_in_tradier_coverage", "quote_batch_partial_or_missing",
+            "unknown_provider_error",
+        )
+    )
     _std_us_with_prior_lkg_cnt = sum(
         1 for _s, _r in results.items()
         if ":" not in _s and _r.get("from_lkg") and _r.get("data_available")
