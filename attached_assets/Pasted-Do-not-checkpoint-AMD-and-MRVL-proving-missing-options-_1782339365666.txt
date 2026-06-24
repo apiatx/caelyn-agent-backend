@@ -1,0 +1,83 @@
+Do not checkpoint. AMD and MRVL proving missing options data means the Watchlist options endpoint is still wrong.
+
+AMD and MRVL absolutely have options chains/options flow. If they are blank, the system is treating a failed refresh attempt as the current truth instead of serving last known good/master data.
+
+Current bad examples:
+
+* AMD → options_data_available false, reason no_chain_returned
+* MRVL → options_data_available false, reason provider_rate_limited
+
+This is not acceptable.
+
+Required fix:
+
+1. Live refresh failures must never overwrite or hide a prior successful options row.
+
+   * If `portfolio_opts:{sym}` has prior data_available=true, keep serving it.
+   * If disk LKG has prior data_available=true, keep serving it.
+   * If master Options Flow snapshot has that symbol, use it.
+   * Mark it stale/updating/retry_pending, but do not blank it.
+
+2. `force_refresh=true` must use stale-while-revalidate.
+
+   * Do not evict good data before replacement data exists.
+   * Force refresh should enqueue a refresh and keep serving last good value.
+   * Only replace the row when a new successful scan completes.
+   * If refresh fails with provider_rate_limited/no_chain_returned, retain prior good row and attach retry diagnostics.
+
+3. Provider rate limit is not a symbol unavailable state.
+
+   * `provider_rate_limited` should mean queued/retry_pending.
+   * It should not set `options_data_available=false` if prior data exists.
+   * It should not create a blank Watchlist row.
+
+4. `no_chain_returned` for standard liquid names like AMD must be investigated.
+   For AMD specifically, log:
+
+   * expirations returned
+   * expiration_count
+   * all expirations tried
+   * selected_expiration
+   * raw chain response status
+   * raw contract count before filtering
+   * parsed contract count after parsing
+   * filtered contract count after filters
+   * cache key used
+   * whether chain response was empty, parse-failed, or filtered to zero
+
+5. Retry chain fetching correctly:
+
+   * If expirations exist and first chain is empty, try next 3–5 expirations.
+   * Do not classify as no_chain_returned after one weak/empty expiration.
+   * For liquid tickers like AMD/MRVL, a no_chain_returned result should be treated as transient and should not hide prior good data.
+
+6. Master Options Flow fallback:
+
+   * The main Options Flow screener already has liquid options names.
+   * Watchlist options endpoint should check/use the master options snapshot before returning blank for liquid names.
+   * If AMD/MRVL appear in master Options Flow data, Watchlist should display that row, not blank.
+
+7. Validation:
+
+   * Force refresh Primary watchlist.
+   * Wait for drain.
+   * Re-call endpoint.
+   * Specifically report AMD, MRVL, AAOI, KLAC, TXN, TEL, TER, INTC, MU, SMCI:
+
+     * options_data_available
+     * options_score
+     * options_signal
+     * options_source
+     * options_stale
+     * options_classification
+     * options_unavailable_reason
+     * retry_pending
+     * last_good_source
+   * AMD and MRVL must show either fresh data or stale last-good/master data.
+   * They must not be blank because of no_chain_returned/provider_rate_limited.
+   * Standard US missing/blank count should be near zero except true no-options symbols.
+   * No Tradier 429s.
+   * Sectors still has watchlist_overlap_live_calls = 0.
+
+Core rule:
+For standard US optionable tickers, failed refresh means “keep last good value and retry,” not “blank the row.”
