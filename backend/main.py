@@ -9901,6 +9901,7 @@ async def compare_watchlist_options(
 async def watchlist_options_signals(
     request: Request,
     watchlist_id: str,
+    force_refresh: bool = Query(False),
     api_key: str = Header(None, alias="X-API-Key"),
 ):
     """
@@ -9974,10 +9975,11 @@ async def watchlist_options_signals(
     _tradier    = data_service.tradier if data_service else None
 
     result = await _scan_wl_opts(
-        symbols     = tickers,
-        tradier     = _tradier,
-        cache       = _cache,
-        master_snap = master_snap,
+        symbols       = tickers,
+        tradier       = _tradier,
+        cache         = _cache,
+        master_snap   = master_snap,
+        force_refresh = force_refresh,
     )
 
     print(

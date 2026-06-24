@@ -1,0 +1,124 @@
+Stop calling the Watchlist options feature complete. The runtime payload proves the data is stale/incomplete.
+
+Observed payload:
+
+* symbols_requested: 302
+* data_available_count: 220
+* data_unavailable_count: 82
+* stale_count: 212
+* fresh_count: 8
+* source_breakdown:
+
+  * portfolio_opts_lkg_disk: 212
+  * portfolio_scoped_options_screener: 90
+* unavailable_reason_breakdown:
+
+  * not_in_tradier_coverage: 48
+  * provider_rate_limited: 16
+  * no_chain_returned: 12
+  * otc_or_foreign_unsupported: 6
+
+Problem:
+The UI still looks unchanged because most displayed options rows are stale/LKG and a large chunk still shows blanks. Code paths existing is not enough. The backend must actively freshen optionable watchlist symbols and distinguish true unsupported symbols from transient failures.
+
+Hard constraints:
+
+* Do NOT change Options Flow main screener/search behavior.
+* Do NOT make Sectors live-scan watchlist-overlap symbols.
+* Do NOT raise Tradier limit.
+* Do NOT bypass the global Tradier limiter/coalescing/in-flight guard.
+* Do NOT mark stale June 18 LKG rows as “complete.”
+* Do NOT treat provider rate limits or temporary no-chain responses as final no-options.
+
+Required backend fix:
+
+1. Add a clear symbol classification to `/api/watchlist/{id}/options-signals`:
+
+   * `fresh_option_data`
+   * `stale_option_data`
+   * `confirmed_no_options`
+   * `unsupported_foreign_or_otc`
+   * `transient_failure`
+   * `queued_for_refresh`
+   * `inflight_refresh`
+   * `needs_retry`
+
+2. Change refresh logic:
+
+   * Any row from `portfolio_opts_lkg_disk` older than the options freshness TTL should be queued for refresh unless:
+
+     * symbol is confirmed unsupported foreign/OTC, or
+     * symbol has confirmed no options.
+   * Do not let stale LKG rows sit forever just because they exist.
+   * `fresh_count` should climb substantially after the background drain completes.
+
+3. Handle unavailable reasons correctly:
+
+   * `not_in_tradier_coverage` and `otc_or_foreign_unsupported` can be cached 24h.
+   * `provider_rate_limited` must be treated as transient failure and retried later, not final blank.
+   * `no_chain_returned` must be investigated:
+
+     * If expirations endpoint returns no expirations, classify as confirmed no-options.
+     * If expirations exist but chain fetch returns empty/error, classify as transient failure and retry.
+     * Do not cache `no_chain_returned` as final no-options unless proven.
+
+4. Freshness target:
+   For the Primary 302-symbol watchlist, after one warming sequence:
+
+   * `deferred_symbols_count` should be 0.
+   * `inflight_symbols_count` should be 0.
+   * `provider_rate_limited` should not remain as a final unavailable reason.
+   * Fresh rows should be much higher than 8.
+   * Stale LKG rows should only remain for symbols that could not refresh after a valid retry path, with a clear reason.
+   * Confirmed unsupported/no-options should be explicit, not generic blank.
+
+5. Add better diagnostics:
+   In `options_meta`, add:
+
+   * `optionable_symbols_count`
+   * `confirmed_unsupported_count`
+   * `confirmed_no_options_count`
+   * `transient_failure_count`
+   * `stale_lkg_refresh_candidates_count`
+   * `stale_lkg_queued_count`
+   * `retry_queued_count`
+   * `retry_suppressed_count`
+   * `oldest_lkg_age_seconds`
+   * `latest_successful_refresh_at`
+   * `last_full_watchlist_refresh_started_at`
+   * `last_full_watchlist_refresh_completed_at`
+
+6. Add a manual backend refresh endpoint or parameter if not already present:
+
+   * Example: `POST /api/watchlist/{id}/options-signals/refresh`
+   * Or `GET /api/watchlist/{id}/options-signals?force_refresh=true`
+   * This should not block the response forever.
+   * It should enqueue stale optionable symbols through the existing global limiter/in-flight guard and return progress diagnostics.
+
+7. Validation sequence:
+   A. Cold call:
+
+   * Call `/api/watchlist/23eec278-074a-4706-a62a-c35d38b384ea/options-signals`
+   * Capture full options_meta.
+     B. Force/warm refresh:
+   * Trigger refresh/warming for stale optionable symbols.
+   * Wait for drain completion.
+     C. Re-call endpoint:
+   * Confirm `fresh_count` increased meaningfully from 8.
+   * Confirm `stale_count` dropped meaningfully from 212.
+   * Confirm `provider_rate_limited` does not remain final.
+   * Confirm `no_chain_returned` is split into confirmed no-options vs transient chain failure.
+     D. Check `/api/options-flow/sectors?refresh=true`:
+   * Confirm Sectors still does not live-scan overlap symbols.
+   * Confirm Sectors benefits from fresh watchlist rows.
+     E. Confirm no Tradier 429s.
+
+8. Frontend display is not the root issue yet.
+   Do not say “frontend works” while backend rows are stale. First make backend freshness real.
+
+Final acceptance criteria:
+
+* The Primary watchlist should not show mostly stale June 18 LKG options data.
+* The only blank/No opts rows should be true unsupported/no-options symbols.
+* Transient failures must retry.
+* The user should see materially more fresh options values after warming, not the same stale/blank table.

@@ -37,6 +37,9 @@ _SCAN_SEM              = 6     # max concurrent Tradier chain call batches
 _SCAN_TIMEOUT_QUOTE    = 8.0
 _SCAN_TIMEOUT_EXP      = 4.0
 _SCAN_TIMEOUT_CHAIN    = 5.0
+_STALE_LKG_REFRESH_AGE = 3600  # LKG rows older than 1h are queued for background re-scan
+_UNAVAIL_TTL_CONFIRMED  = 86400  # 24h: OTC, not in coverage, confirmed no-options
+_UNAVAIL_TTL_TRANSIENT  = 1800   # 30min: rate-limit, empty chain (transient)
 
 
 # ── Portfolio disk LKG (survives restarts + outside-market-hours) ──────────
@@ -73,6 +76,63 @@ def _save_portfolio_lkg(results: dict[str, dict]) -> None:
         _PORTFOLIO_LKG_DISK.write_text(json.dumps(updated, default=str))
     except Exception as exc:
         print(f"[PORTFOLIO_OPTS_LKG] save error: {exc}")
+
+
+# ── LKG age / classification helpers ──────────────────────────────────────
+
+def _lkg_age_seconds(row: dict) -> float | None:
+    """Return how many seconds old a disk-LKG row is, or None if no timestamp."""
+    import datetime as _dt2
+    ts = row.get("_lkg_saved_at")
+    if not ts:
+        return None
+    try:
+        saved = _dt2.datetime.fromisoformat(str(ts).rstrip("Z"))
+        return (_dt2.datetime.utcnow() - saved).total_seconds()
+    except Exception:
+        return None
+
+
+def _is_stale_lkg(row: dict) -> bool:
+    """True when the LKG row has no saved_at timestamp OR is older than _STALE_LKG_REFRESH_AGE."""
+    age = _lkg_age_seconds(row)
+    return age is None or age > _STALE_LKG_REFRESH_AGE
+
+
+def _classify_watchlist_sym(r: dict, is_stale: bool) -> str:
+    """
+    Return one of the eight canonical classification labels for a watchlist symbol.
+      fresh_option_data        — live/master data, within TTL
+      stale_option_data        — data_available row but from old LKG disk
+      confirmed_no_options     — Tradier confirmed no options chain (no_expirations)
+      unsupported_foreign_or_otc — OTC/foreign, not covered by Tradier
+      transient_failure        — temporary: rate-limit, empty chain, unknown error
+      queued_for_refresh       — scan_pending or recently enqueued
+      inflight_refresh         — background scan currently running
+      needs_retry              — transient failure but still inside short-TTL suppression
+    """
+    if r.get("data_available"):
+        return "stale_option_data" if is_stale else "fresh_option_data"
+    reason = r.get("unavailable_reason") or ""
+    if reason in ("no_options", "no_expirations"):
+        return "confirmed_no_options"
+    if reason in ("otc_or_foreign_unsupported", "not_in_tradier_coverage"):
+        return "unsupported_foreign_or_otc"
+    if reason == "scan_in_progress":
+        return "inflight_refresh"
+    if reason in ("scan_pending", "stale_lkg_queued"):
+        return "queued_for_refresh"
+    if reason in ("provider_rate_limited", "no_chain_returned", "unknown_provider_error") or \
+            reason.startswith("unknown_provider_error:"):
+        return "transient_failure"
+    return "needs_retry"
+
+
+# ── Module-level refresh tracking ──────────────────────────────────────────
+import time as _wl_time
+_WL_LAST_REFRESH_STARTED_AT:    float | None = None
+_WL_LAST_REFRESH_COMPLETED_AT:  float | None = None
+_WL_LATEST_SUCCESSFUL_REFRESH_AT: float | None = None
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -470,7 +530,8 @@ async def _scan_one_symbol(
                 tradier.get_option_expirations(sym), timeout=_SCAN_TIMEOUT_EXP
             )
             if not expirations:
-                return {"_sym": sym, "_reason": "no_chain_returned"}
+                # Tradier returned no expirations → confirmed no options chain
+                return {"_sym": sym, "_reason": "no_expirations"}
 
             chain_tasks = [
                 asyncio.wait_for(
@@ -866,6 +927,8 @@ def _normalize_to_watchlist_row(sym: str, r: dict, is_stale: bool) -> dict:
         "options_risk_level":         r.get("risk_level"),
         "options_confidence":         r.get("confidence"),
         "options_put_call_direction":  r.get("put_call_direction"),
+        "options_classification":     _classify_watchlist_sym(r, is_stale),
+        "options_lkg_age_seconds":    _lkg_age_seconds(r) if r.get("from_lkg") else None,
     }
 
 
@@ -920,9 +983,11 @@ async def _drain_deferred_watchlist(
                 if not cache.get(_pk):
                     reason = _row.get("unavailable_reason", "")
                     ttl = (
-                        86400   # 24h confirmed no-options
-                        if reason in ("no_options", "no_expirations", "not_in_tradier_coverage")
-                        else 1800   # 30min transient/rate-limit
+                        _UNAVAIL_TTL_CONFIRMED
+                        if reason in ("no_options", "no_expirations",
+                                      "not_in_tradier_coverage",
+                                      "otc_or_foreign_unsupported")
+                        else _UNAVAIL_TTL_TRANSIENT
                     )
                     cache.set(_pk, _row, ttl)
         except Exception as _e:
@@ -934,6 +999,133 @@ async def _drain_deferred_watchlist(
             await _aio.sleep(_INTER_BATCH_SLEEP)
 
 
+async def _drain_stale_lkg(
+    stale_syms: list[str],
+    tradier,
+    cache,
+    master_snap: dict | None,
+) -> None:
+    """
+    Background refresh for stale LKG rows (data_available=True but old timestamp).
+
+    Uses a DIRECT live-scan path — bypasses scan_portfolio_options (which is
+    cache-first and would re-serve the stale LKG from disk).  Replicates the
+    uncached branch of scan_portfolio_options: quote batch → semaphore-gated
+    chain scans → write results to memory cache + disk LKG.
+    """
+    import asyncio as _aio
+    global _WL_LAST_REFRESH_COMPLETED_AT, _WL_LATEST_SUCCESSFUL_REFRESH_AT
+
+    _INTER_BATCH_SLEEP = 35
+
+    for i in range(0, len(stale_syms), _MAX_SYMBOLS):
+        batch = stale_syms[i : i + _MAX_SYMBOLS]
+
+        # Skip only if a genuinely fresh (non-LKG) scan result is already present
+        still_needed = []
+        for s in batch:
+            cached = cache.get(_per_ticker_cache_key(s))
+            if (cached and isinstance(cached, dict)
+                    and cached.get("data_available")
+                    and not cached.get("from_lkg")):
+                continue  # fresh live result already replaced this LKG row
+            still_needed.append(s)
+
+        if not still_needed:
+            if i + _MAX_SYMBOLS < len(stale_syms):
+                await _aio.sleep(5)
+            continue
+
+        claimed, _blocked = _claim_opts_many(still_needed, "watchlist_lkg_refresh")
+        if not claimed:
+            if i + _MAX_SYMBOLS < len(stale_syms):
+                await _aio.sleep(5)
+            continue
+
+        try:
+            # Evict memory cache so the next scan_watchlist_options call won't
+            # see the old from_lkg=True row.
+            for _s in claimed:
+                try:
+                    cache.delete(_per_ticker_cache_key(_s))
+                except Exception:
+                    pass
+
+            # ── Direct live scan (bypasses cache + disk LKG fallback) ──────────
+            try:
+                _raw_quotes = await _aio.wait_for(
+                    tradier.get_quotes(claimed), timeout=_SCAN_TIMEOUT_QUOTE
+                )
+            except Exception:
+                _raw_quotes = []
+
+            _quote_map: dict[str, dict] = {}
+            for _q in (_raw_quotes or []):
+                _qs = (_q.get("symbol") or "").upper()
+                if _qs:
+                    _quote_map[_qs] = _q
+
+            _sem = _aio.Semaphore(_SCAN_SEM)
+
+            async def _do_lkg_scan(_sym: str) -> tuple[str, dict]:
+                _q  = _quote_map.get(_sym, {})
+                _px = float(_q.get("last") or 0)
+                if _px <= 0:
+                    _reason = ("otc_or_foreign_unsupported"
+                               if _is_otc_or_foreign(_sym)
+                               else "not_in_tradier_coverage")
+                    return _sym, {"_sym": _sym, "_reason": _reason}
+                _res = await _scan_one_symbol(_sym, _px, tradier, _sem)
+                return _sym, _res
+
+            _scan_items = await _aio.gather(
+                *[_do_lkg_scan(s) for s in claimed], return_exceptions=True
+            )
+
+            _fresh_available: dict[str, dict] = {}
+            for _item in _scan_items:
+                if isinstance(_item, Exception):
+                    continue
+                _sym, _res = _item
+                _pk = _per_ticker_cache_key(_sym)
+                if _res.get("data_available"):
+                    cache.set(_pk, _res, _CACHE_PER_TICKER_TTL)
+                    _fresh_available[_sym] = _res
+                else:
+                    _reason = (_res.get("_reason") or
+                               _res.get("unavailable_reason") or
+                               "unknown_provider_error")
+                    _otc = _is_otc_or_foreign(_sym) or "otc" in _reason or "not_in_tradier" in _reason
+                    _row = _unavail_row(_sym, _reason, optionable=None if _otc else False)
+                    _ttl = (
+                        _UNAVAIL_TTL_CONFIRMED
+                        if _reason in ("no_options", "no_expirations",
+                                       "not_in_tradier_coverage",
+                                       "otc_or_foreign_unsupported")
+                        else _UNAVAIL_TTL_TRANSIENT
+                    )
+                    cache.set(_pk, _row, _ttl)
+
+            if _fresh_available:
+                _save_portfolio_lkg(_fresh_available)
+                _WL_LATEST_SUCCESSFUL_REFRESH_AT = _wl_time.time()
+                print(
+                    f"[WATCHLIST_LKG_REFRESH] batch {i // _MAX_SYMBOLS + 1}: "
+                    f"{len(_fresh_available)} fresh / {len(claimed)} scanned"
+                )
+
+        except Exception as _e:
+            print(f"[WATCHLIST_LKG_REFRESH] batch {i // _MAX_SYMBOLS + 1} error: {_e}")
+        finally:
+            _release_opts_many(claimed, "watchlist_lkg_refresh")
+
+        if i + _MAX_SYMBOLS < len(stale_syms):
+            await _aio.sleep(_INTER_BATCH_SLEEP)
+
+    _WL_LAST_REFRESH_COMPLETED_AT = _wl_time.time()
+    print(f"[WATCHLIST_LKG_REFRESH] Complete: {len(stale_syms)} stale LKG symbols processed")
+
+
 async def scan_watchlist_options(
     symbols: list[str],
     tradier,
@@ -941,6 +1133,7 @@ async def scan_watchlist_options(
     master_snap: dict | None = None,
     *,
     max_live_scan: int = 50,
+    force_refresh: bool = False,
 ) -> dict:
     """
     Cache-first options signal lookup for all watchlist tickers.
@@ -1011,9 +1204,14 @@ async def scan_watchlist_options(
     # 3. Cache-first pass — NO _MAX_SYMBOLS cap
     # Priority: per-ticker memory cache → master snap → disk LKG
     #           → in-flight registry (already running) → truly uncached
-    results:       dict[str, dict] = {}
-    uncached:      list[str]       = []   # genuinely cold, needs enqueue
-    inflight:      list[str]       = []   # in _WL_INFLIGHT_SYMS, skip enqueue
+    # force_refresh=True evicts stale LKG rows and transient-failure cache entries
+    # so they fall through to uncached and get re-queued for a live scan.
+    global _WL_LAST_REFRESH_STARTED_AT, _WL_LAST_REFRESH_COMPLETED_AT, _WL_LATEST_SUCCESSFUL_REFRESH_AT
+
+    results:             dict[str, dict] = {}
+    uncached:            list[str]       = []   # genuinely cold, needs enqueue
+    inflight:            list[str]       = []   # in _WL_INFLIGHT_SYMS, skip enqueue
+    stale_lkg_to_refresh: list[str]     = []   # LKG rows old enough to background-refresh
     memory_hits  = 0
     master_hits  = 0
     lkg_hits     = 0
@@ -1021,6 +1219,16 @@ async def scan_watchlist_options(
     for sym in syms:
         per_key = _per_ticker_cache_key(sym)
         hit = cache.get(per_key)
+
+        # force_refresh: ignore stale LKG and transient-failure cached rows
+        if hit and isinstance(hit, dict) and force_refresh:
+            _is_lkg_entry    = hit.get("from_lkg") or hit.get("source") == "portfolio_opts_lkg_disk"
+            _is_transient    = hit.get("unavailable_reason") in (
+                "provider_rate_limited", "no_chain_returned", "scan_pending"
+            )
+            if _is_lkg_entry or _is_transient:
+                hit = None  # evict → fall through to uncached path
+
         if hit and isinstance(hit, dict):
             results[sym] = hit
             memory_hits += 1
@@ -1035,6 +1243,9 @@ async def scan_watchlist_options(
             cache.set(per_key, row, _CACHE_PER_TICKER_TTL)
             results[sym] = row
             lkg_hits += 1
+            # If old, queue background refresh (serves stale row now, fresh later)
+            if _is_stale_lkg(row):
+                stale_lkg_to_refresh.append(sym)
         elif _is_opts_inflight(sym) or sym in _WL_INFLIGHT_SYMS:
             # Background scan already queued/running (global or module-level guard).
             # Return placeholder; do NOT re-enqueue.
@@ -1050,14 +1261,6 @@ async def scan_watchlist_options(
     _to_scan  = uncached[:max_live_scan]
     _deferred = max(0, len(uncached) - max_live_scan)
     enqueued  = 0
-
-    # TTLs for unavailable rows:
-    #   _UNAVAIL_CACHE_TTL_TRANSIENT — transient errors (rate-limit timeout, network):
-    #     30 minutes so we don't spam re-enqueue on every page load after a Tradier blip.
-    #   _UNAVAIL_CACHE_TTL_CONFIRMED — confirmed no-options (OTC, no coverage):
-    #     24h via the shared no-options tracking from options_theme_supplement.
-    _UNAVAIL_CACHE_TTL_TRANSIENT = 1800   # 30 min — was 60s (too short, caused re-scan spam)
-    _UNAVAIL_CACHE_TTL_CONFIRMED = 86400  # 24h  — same as options_theme_supplement.py
 
     if _to_scan and tradier:
         # Claim symbols through the global guard.  Symbols already claimed by
@@ -1076,29 +1279,37 @@ async def scan_watchlist_options(
 
         _to_scan = _claimed  # only scan what we actually claimed
         enqueued = len(_to_scan)
+        _WL_LAST_REFRESH_STARTED_AT = _wl_time.time()
 
         async def _bg_batch_scan(_batch: list[str]) -> None:
+            global _WL_LATEST_SUCCESSFUL_REFRESH_AT
             try:
                 scan_out = await scan_portfolio_options(
                     _batch, tradier, cache, master_snap=master_snap
                 )
                 # scan_portfolio_options only caches data_available=True rows.
-                # For unavailable rows (OTC, no coverage, timeout) write a longer
-                # TTL entry so repeat page loads don't re-enqueue the same symbols
-                # every minute.
+                # For unavailable rows write a TTL based on permanence:
+                #   confirmed (OTC / no coverage / no expirations) → 24h
+                #   transient (rate-limit / empty chain)           → 30min
                 by_sym = scan_out.get("by_symbol", {}) if isinstance(scan_out, dict) else {}
+                _any_fresh = False
                 for _s, _row in by_sym.items():
                     if _row.get("data_available"):
+                        _any_fresh = True
                         continue   # already cached by scan_portfolio_options
                     _pk = _per_ticker_cache_key(_s)
                     if not cache.get(_pk):
                         reason = _row.get("unavailable_reason", "")
                         ttl = (
-                            _UNAVAIL_CACHE_TTL_CONFIRMED
-                            if reason in ("no_options", "no_expirations")
-                            else _UNAVAIL_CACHE_TTL_TRANSIENT
+                            _UNAVAIL_TTL_CONFIRMED
+                            if reason in ("no_options", "no_expirations",
+                                          "not_in_tradier_coverage",
+                                          "otc_or_foreign_unsupported")
+                            else _UNAVAIL_TTL_TRANSIENT
                         )
                         cache.set(_pk, _row, ttl)
+                if _any_fresh:
+                    _WL_LATEST_SUCCESSFUL_REFRESH_AT = _wl_time.time()
             except Exception as _bge:
                 print(f"[WATCHLIST_OPTIONS_BG] batch scan error ({_batch}): {_bge}")
             finally:
@@ -1127,6 +1338,18 @@ async def scan_watchlist_options(
                 f"{-(-len(_deferred_syms) // _MAX_SYMBOLS)} batches"
             )
 
+    # 4b. Background refresh for stale LKG rows (separate from uncached drain)
+    _stale_lkg_queued = 0
+    if stale_lkg_to_refresh and tradier:
+        _aio.create_task(
+            _drain_stale_lkg(stale_lkg_to_refresh, tradier, cache, master_snap)
+        )
+        _stale_lkg_queued = len(stale_lkg_to_refresh)
+        print(
+            f"[WATCHLIST_LKG_REFRESH] Queued {_stale_lkg_queued} stale LKG symbols "
+            f"for background refresh"
+        )
+
     # 5. Build normalised signal map
     signals: dict[str, dict] = {}
     _stale_set: set[str] = set(uncached) | set(inflight) | {
@@ -1139,15 +1362,24 @@ async def scan_watchlist_options(
 
     # 6. Extended diagnostics
     from collections import Counter as _Counter
-    _src_ctr: _Counter = _Counter()
+    _src_ctr:    _Counter = _Counter()
     _reason_ctr: _Counter = _Counter()
+    _class_ctr:  _Counter = _Counter()
     _da_true  = 0
     _da_false = 0
-    _no_opts_cnt = 0
+    _no_opts_cnt         = 0
+    _confirmed_unsup_cnt = 0
+    _confirmed_noopts_cnt = 0
+    _transient_cnt       = 0
+    _oldest_lkg_age: float | None = None
     for _sym, _r in results.items():
         _src_ctr[_r.get("source", "unknown")] += 1
         if _r.get("data_available"):
             _da_true += 1
+            if _r.get("from_lkg"):
+                _age = _lkg_age_seconds(_r)
+                if _age is not None:
+                    _oldest_lkg_age = max(_oldest_lkg_age or 0.0, _age)
         else:
             _da_false += 1
             _rsn = _r.get("unavailable_reason") or "unknown"
@@ -1155,12 +1387,42 @@ async def scan_watchlist_options(
             if _rsn in ("no_options", "no_expirations", "not_in_tradier_coverage",
                         "otc_or_foreign_unsupported"):
                 _no_opts_cnt += 1
+            if _rsn in ("otc_or_foreign_unsupported", "not_in_tradier_coverage"):
+                _confirmed_unsup_cnt += 1
+            if _rsn in ("no_options", "no_expirations"):
+                _confirmed_noopts_cnt += 1
+            if _rsn in ("provider_rate_limited", "no_chain_returned") or \
+                    _rsn.startswith("unknown_provider_error"):
+                _transient_cnt += 1
+        # classification breakdown for diagnostics
+        _is_stale_sym = _sym in _stale_set
+        _class_ctr[_classify_watchlist_sym(_r, _is_stale_sym)] += 1
 
     _stale_cnt = sum(1 for s in syms if s in _stale_set)
     _fresh_cnt = sum(1 for s in syms
                      if results[s].get("data_available") and s not in _stale_set)
+    _optionable_cnt = sum(
+        1 for _r in results.values()
+        if _r.get("data_available") or _r.get("optionable") is True
+    )
+    # retry_queued: transient-failure symbols just added to uncached queue
+    _retry_queued = sum(
+        1 for s in _to_scan
+        if results.get(s, {}).get("unavailable_reason") in (
+            "provider_rate_limited", "no_chain_returned"
+        )
+    )
+    # retry_suppressed: transient failures still in 30-min TTL cache (not re-queued)
+    _retry_suppressed = max(0, _transient_cnt - _retry_queued)
 
     elapsed_ms = round((_tm.monotonic() - _t0) * 1000, 1)
+
+    # Format module-level timestamps for JSON
+    def _fmt_ts(t: float | None) -> str | None:
+        if t is None:
+            return None
+        import datetime as _dt2
+        return _dt2.datetime.utcfromtimestamp(t).isoformat() + "Z"
 
     return {
         "signals": signals,
@@ -1177,6 +1439,8 @@ async def scan_watchlist_options(
             "data_unavailable_count":         _da_false,
             "stale_count":                    _stale_cnt,
             "fresh_count":                    _fresh_cnt,
+            # ── Classification breakdown ──────────────────────────────────
+            "classification_breakdown":       dict(_class_ctr.most_common()),
             # ── Source / reason breakdowns ────────────────────────────────
             "source_breakdown":               dict(_src_ctr.most_common()),
             "unavailable_reason_breakdown":   dict(_reason_ctr.most_common()),
@@ -1189,6 +1453,20 @@ async def scan_watchlist_options(
             "rate_limited_or_deferred":       _deferred,       # kept for compat
             "no_options_cached_count":        _no_opts_cnt,
             "next_refresh_candidates_count":  len(uncached) - _deferred,
+            # ── New required diagnostics ──────────────────────────────────
+            "optionable_symbols_count":           _optionable_cnt,
+            "confirmed_unsupported_count":         _confirmed_unsup_cnt,
+            "confirmed_no_options_count":          _confirmed_noopts_cnt,
+            "transient_failure_count":             _transient_cnt,
+            "stale_lkg_refresh_candidates_count":  len(stale_lkg_to_refresh),
+            "stale_lkg_queued_count":              _stale_lkg_queued,
+            "retry_queued_count":                  _retry_queued,
+            "retry_suppressed_count":              _retry_suppressed,
+            "oldest_lkg_age_seconds":              round(_oldest_lkg_age, 0) if _oldest_lkg_age else None,
+            "latest_successful_refresh_at":        _fmt_ts(_WL_LATEST_SUCCESSFUL_REFRESH_AT),
+            "last_full_watchlist_refresh_started_at":   _fmt_ts(_WL_LAST_REFRESH_STARTED_AT),
+            "last_full_watchlist_refresh_completed_at": _fmt_ts(_WL_LAST_REFRESH_COMPLETED_AT),
+            "force_refresh_applied":               force_refresh,
             # ── Timing ───────────────────────────────────────────────────
             "generated_at":                   _dt.datetime.utcnow().isoformat() + "Z",
             "ttl_seconds":                    _CACHE_PER_TICKER_TTL,
