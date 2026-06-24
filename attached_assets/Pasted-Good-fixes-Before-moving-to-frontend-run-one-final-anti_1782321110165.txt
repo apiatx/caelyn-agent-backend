@@ -1,0 +1,70 @@
+Good fixes. Before moving to frontend, run one final anti-duplication validation around the theme supplement loop.
+
+Concern:
+The report says that in steady-state the supplement loop covers the same symbols and `symbols_from_watchlist_cache` returns to 0. That may be okay if supplement is using shared cache-first rows. But it is not okay if supplement is independently live-scanning dev-watchlist-overlap symbols that Watchlist already owns.
+
+Do not change architecture unless validation fails.
+
+Validation goal:
+Prove the supplement loop does not duplicate Watchlist options scans for overlap symbols after cache TTLs or during background refresh.
+
+Required checks:
+
+1. Print/export:
+
+   * dev watchlist symbols
+   * supplement/theme proxy symbols
+   * overlap symbols
+   * supplement-only symbols
+
+2. For supplement loop scans, log/counter by symbol:
+
+   * `symbol`
+   * `is_dev_watchlist_overlap`
+   * `cache_hit_before_live_scan`
+   * `source_used`
+   * `live_scan_started`
+   * `blocked_by_global_inflight`
+   * `blocked_because_watchlist_overlap`
+   * `scope`
+
+3. Required metrics in `/api/rate-status` or supplement diagnostics:
+
+   * `supplement_symbols_total`
+   * `supplement_watchlist_overlap_symbols`
+   * `supplement_only_symbols`
+   * `supplement_overlap_cache_hits`
+   * `supplement_overlap_live_scans`
+   * `supplement_overlap_live_scans_blocked`
+   * `supplement_only_live_scans`
+   * `supplement_duplicate_scans_blocked`
+
+4. Expected result:
+
+   * `supplement_overlap_live_scans` should be `0`, or clearly justified only when there is no fresh/cache/LKG Watchlist-owned row and no Watchlist scan is scheduled.
+   * Preferred policy: supplement should live-scan only supplement-only/theme-only symbols.
+   * Watchlist-overlap symbols should be read from shared cache/master/LKG/watchlist rows, not refreshed independently by supplement.
+
+5. Run sequence:
+   A. Restart server cold.
+   B. Call `/api/watchlist/{dev_watchlist_id}/options-signals`.
+   C. Wait for drain to complete.
+   D. Call `/api/options-flow/sectors?refresh=true`.
+   E. Let supplement loop run once.
+   F. Re-check diagnostics.
+   G. Repeat Sectors call.
+   H. Confirm:
+
+   * `watchlist_overlap_live_calls = 0`
+   * `supplement_overlap_live_scans = 0` or explicitly justified
+   * no Tradier 429s
+   * deferred remains 0
+   * no-options cache prevents foreign/OTC retries
+
+6. If validation fails:
+   Patch supplement loop so it splits:
+
+   * `watchlist_overlap_symbols`: cache/master/LKG/read-only only, no live scan
+   * `theme_only_symbols`: cache-first, then capped low-priority live scan
+
+Do not move to frontend until this is proven.

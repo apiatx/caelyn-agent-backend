@@ -57,6 +57,24 @@ _SUPPLEMENT_LKG_CACHE_TTL = 14400   # 4 h — disk data loaded at startup
 _last_scanned_symbols: list[str] = []
 _next_scan_at: float = 0.0
 
+# ── Anti-duplication diagnostics (updated each batch by update_supplement_diag)
+# Tracks how the supplement loop handles watchlist-overlap vs theme-only symbols.
+# Lifetime counters increment across all batches since server start; snapshot
+# fields reflect the most recent batch only.
+_SUPP_DIAG: dict = {
+    # ── Snapshot (latest batch) ──────────────────────────────────────────────
+    "supplement_symbols_total":              0,    # len(pending) at last cycle
+    "supplement_watchlist_overlap_symbols":  [],   # overlap syms in last batch
+    "supplement_only_symbols":               [],   # theme-only syms in last batch
+    # ── Lifetime counters ────────────────────────────────────────────────────
+    "supplement_overlap_cache_hits":         0,    # skipped — fresh portfolio_opts cache
+    "supplement_overlap_live_scans":         0,    # gap-fill live scans for overlap syms
+    "supplement_overlap_live_scans_blocked": 0,    # overlap syms blocked by inflight guard
+    "supplement_only_live_scans":            0,    # live scans for theme-only syms
+    "supplement_duplicate_scans_blocked":    0,    # total inflight-guard blocks
+    "last_updated_at":                       None,
+}
+
 # ── Static seed dedup (lazy) ──────────────────────────────────────────────────
 _static_seed_set: Optional[set] = None
 
@@ -333,6 +351,35 @@ def update_supplement_cache(results: list[dict]) -> None:
 
 
 # ── Loop tracking ─────────────────────────────────────────────────────────────
+
+def update_supplement_diag(diag: dict) -> None:
+    """
+    Merge one batch's anti-duplication stats into the module-level _SUPP_DIAG.
+
+    Snapshot fields (supplement_symbols_total, supplement_watchlist_overlap_symbols,
+    supplement_only_symbols) are replaced each call.  Lifetime counters are
+    incremented.  Called by the supplement loop in main.py after the cache-first
+    filter runs but before the live scan.
+    """
+    import time as _t
+    global _SUPP_DIAG
+    # Snapshot — replace each batch
+    _SUPP_DIAG["supplement_symbols_total"]             = diag.get("supplement_symbols_total", 0)
+    _SUPP_DIAG["supplement_watchlist_overlap_symbols"] = diag.get("supplement_watchlist_overlap_symbols", [])
+    _SUPP_DIAG["supplement_only_symbols"]              = diag.get("supplement_only_symbols", [])
+    # Lifetime — accumulate
+    _SUPP_DIAG["supplement_overlap_cache_hits"]         += diag.get("supplement_overlap_cache_hits", 0)
+    _SUPP_DIAG["supplement_overlap_live_scans"]         += diag.get("supplement_overlap_live_scans", 0)
+    _SUPP_DIAG["supplement_overlap_live_scans_blocked"] += diag.get("supplement_overlap_live_scans_blocked", 0)
+    _SUPP_DIAG["supplement_only_live_scans"]            += diag.get("supplement_only_live_scans", 0)
+    _SUPP_DIAG["supplement_duplicate_scans_blocked"]    += diag.get("supplement_duplicate_scans_blocked", 0)
+    _SUPP_DIAG["last_updated_at"]                        = _t.time()
+
+
+def get_supplement_diag() -> dict:
+    """Return a copy of the current anti-duplication diagnostics."""
+    return dict(_SUPP_DIAG)
+
 
 def update_scan_tracking(batch: list[str], next_at: float) -> None:
     """Called by the supplement loop after each batch to record tracking state."""

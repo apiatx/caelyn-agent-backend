@@ -5020,6 +5020,13 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
     except Exception:
         coalescing_data = {"error": "coalescing status unavailable"}
 
+    # ── Supplement loop anti-duplication diagnostics ──────────────────────────
+    try:
+        from data.options_theme_supplement import get_supplement_diag as _get_supp_diag
+        supplement_loop_diag = _get_supp_diag()
+    except Exception:
+        supplement_loop_diag = {"error": "supplement diag unavailable"}
+
     return {
         "tradier": {
             **tradier_status,
@@ -5029,6 +5036,7 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
         },
         "options_inflight": inflight_data,
         "coalescing": coalescing_data,
+        "supplement_loop": supplement_loop_diag,
         "unmanaged_tradier_paths": {
             "count": len(unmanaged_tradier_paths),
             "paths": unmanaged_tradier_paths,
@@ -12002,6 +12010,75 @@ async def _theme_options_supplement_loop():
 
             batch = _batch_claimed
             if not batch:
+                await asyncio.sleep(_CYCLE_SLEEP)
+                continue
+            # ─────────────────────────────────────────────────────────────────
+
+            # ── Cache-first filter for watchlist-overlap symbols ──────────────
+            # Policy: supplement SHOULD NOT live-scan overlap symbols that the
+            # Watchlist scanner already refreshed (fresh portfolio_opts:{sym}
+            # cache entry with data_available=True).  It MAY gap-fill them when
+            # the Watchlist scanner hasn't gotten there yet.
+            #
+            # This prevents sequential duplicate Tradier calls (the inflight
+            # guard only blocks concurrent ones).
+            _wl_syms: set[str] = set()
+            try:
+                from data.options_flow_sectors import _load_all_watchlist_symbols as _load_wl
+                _wl_syms = _load_wl()
+            except Exception:
+                pass
+
+            _overlap_in_batch    = [s for s in batch if s.upper() in _wl_syms]
+            _theme_only_in_batch = [s for s in batch if s.upper() not in _wl_syms]
+
+            _overlap_cache_hits: list[str] = []
+            _overlap_needs_scan: list[str] = []
+
+            if _overlap_in_batch:
+                try:
+                    from data.portfolio_options_service import _per_ticker_cache_key as _ptck
+                    from data.cache import cache as _opts_cache
+                    for _s in _overlap_in_batch:
+                        _row = _opts_cache.get(_ptck(_s.upper()))
+                        if _row and isinstance(_row, dict) and _row.get("data_available"):
+                            _overlap_cache_hits.append(_s)
+                        else:
+                            _overlap_needs_scan.append(_s)
+                except Exception:
+                    _overlap_needs_scan.extend(_overlap_in_batch)
+            # no overlap: nothing to filter
+            _supp_diag_payload = {
+                "supplement_symbols_total":              len(pending),
+                "supplement_watchlist_overlap_symbols":  sorted(s.upper() for s in _overlap_in_batch),
+                "supplement_only_symbols":               sorted(s.upper() for s in _theme_only_in_batch),
+                "supplement_overlap_cache_hits":         len(_overlap_cache_hits),
+                "supplement_overlap_live_scans":         len(_overlap_needs_scan),
+                "supplement_overlap_live_scans_blocked": len(
+                    [s for s in (_batch_blocked if isinstance(_batch_blocked, list) else [])
+                     if s.upper() in _wl_syms]
+                ),
+                "supplement_only_live_scans":            len(_theme_only_in_batch),
+                "supplement_duplicate_scans_blocked":    len(
+                    _batch_blocked if isinstance(_batch_blocked, list) else []
+                ),
+            }
+            try:
+                from data.options_theme_supplement import update_supplement_diag as _upd_supp_diag
+                _upd_supp_diag(_supp_diag_payload)
+            except Exception:
+                pass
+
+            if _overlap_cache_hits:
+                print(
+                    f"[THEME_SUPP] {len(_overlap_cache_hits)} overlap syms skipped "
+                    f"(fresh watchlist cache): {_overlap_cache_hits}"
+                )
+
+            # Rebuild batch: theme-only + overlap symbols that need gap-fill
+            batch = _theme_only_in_batch + _overlap_needs_scan
+            if not batch:
+                print("[THEME_SUPP] All batch symbols already covered by watchlist cache — skipping scan")
                 await asyncio.sleep(_CYCLE_SLEEP)
                 continue
             # ─────────────────────────────────────────────────────────────────

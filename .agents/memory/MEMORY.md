@@ -18,3 +18,4 @@
 - [Options sectors supplement scan](options-sectors-supplement.md) — theme-only symbols get scanned by _theme_options_supplement_loop (6/10min); combined data in get_combined_ticker_data(); scan_status field: live/supplement/no_options/pending
 - [Theme RS 5Y history fix](themes-rs-5y-fix.md) — FMP_BLOCK_FULL_HISTORICAL=true means yfinance is the source; days>1200 → "5y" period needed; _fetch_proxy_history must accept days param; cadence guard reset via theme_rs_refresh_ts.json
 - [Options cache bridge watchlist→Sectors](options-cache-bridge.md) — get_combined_ticker_data() must read portfolio_opts:{sym} as 4th layer; supplement loop covers overlap symbols in steady-state; bridge fires in cold window
+- [Supplement loop anti-duplication](supplement-anti-duplication.md) — supplement loop has cache-first filter for watchlist-overlap symbols; _SUPP_DIAG tracks lifetime counters; exposed via rate-status supplement_loop field
