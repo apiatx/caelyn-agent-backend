@@ -17,3 +17,4 @@
 - [Bottlenecks static curated anchors](bottlenecks-static-curated.md) — LLM research routes disabled; 12 static anchor maps in curated_anchor_bottlenecks.py; manual CRUD via manual_anchor_bottlenecks_store.py; screener API via get_multi_anchor_screener()
 - [Options sectors supplement scan](options-sectors-supplement.md) — theme-only symbols get scanned by _theme_options_supplement_loop (6/10min); combined data in get_combined_ticker_data(); scan_status field: live/supplement/no_options/pending
 - [Theme RS 5Y history fix](themes-rs-5y-fix.md) — FMP_BLOCK_FULL_HISTORICAL=true means yfinance is the source; days>1200 → "5y" period needed; _fetch_proxy_history must accept days param; cadence guard reset via theme_rs_refresh_ts.json
+- [Options cache bridge watchlist→Sectors](options-cache-bridge.md) — get_combined_ticker_data() must read portfolio_opts:{sym} as 4th layer; supplement loop covers overlap symbols in steady-state; bridge fires in cold window
