@@ -4969,7 +4969,7 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
     if not _jwt_or_key(request, api_key):
         raise HTTPException(status_code=403, detail="Invalid or missing API key.")
 
-    from data.tradier_provider import TRADIER_LIMITER
+    from data.tradier_provider import TRADIER_LIMITER, TradierProvider
     tradier_status = TRADIER_LIMITER.status()
 
     bypass_services = [
@@ -4982,16 +4982,60 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
         "catalyst_calendar_service.py",
     ]
 
+    # ── Unmanaged (bypass) Tradier paths still in theme_rs_service.py ────────
+    unmanaged_tradier_paths = [
+        {
+            "module": "services/theme_rs_service.py",
+            "function": "_tradier_quotes_batch",
+            "endpoint": "/markets/quotes",
+            "mechanism": "raw httpx + own Semaphore(20)",
+            "note": "Intentional isolation for 1D intraday warmup; does NOT count against TRADIER_LIMITER",
+        },
+        {
+            "module": "services/theme_rs_service.py",
+            "function": "_fetch_intraday_bars",
+            "endpoint": "/markets/timesales",
+            "mechanism": "raw httpx + own Semaphore(20)",
+            "note": "Intentional isolation for 1D theme RS curves",
+        },
+        {
+            "module": "services/theme_rs_service.py",
+            "function": "_fetch_tradier_daily_history",
+            "endpoint": "/markets/history",
+            "mechanism": "raw httpx",
+            "note": "Daily bar fallback; bypasses TRADIER_LIMITER",
+        },
+    ]
+
+    # ── Options in-flight status ──────────────────────────────────────────────
+    try:
+        from services.options_inflight import get_inflight_status as _inflight_status
+        inflight_data = _inflight_status()
+    except Exception:
+        inflight_data = {"error": "options_inflight module unavailable"}
+
+    # ── Coalescing counters ───────────────────────────────────────────────────
+    try:
+        coalescing_data = TradierProvider.get_coalescing_status()
+    except Exception:
+        coalescing_data = {"error": "coalescing status unavailable"}
+
     return {
         "tradier": {
             **tradier_status,
-            "limit_note": "120/min production hard cap; limiter set to 100/min leaving 20/min for bypass services",
+            "limit_note": "110/min cap; bypass services make additional unaccounted calls",
             "bypass_services": bypass_services,
-            "bypass_note": f"{len(bypass_services)} services call Tradier directly and are not counted here",
+            "bypass_note": f"{len(bypass_services)} legacy services call Tradier directly and are not counted here",
+        },
+        "options_inflight": inflight_data,
+        "coalescing": coalescing_data,
+        "unmanaged_tradier_paths": {
+            "count": len(unmanaged_tradier_paths),
+            "paths": unmanaged_tradier_paths,
+            "note": "These paths bypass TRADIER_LIMITER. Phase 2 scheduler will unify them.",
         },
         "fmp": {
-            "note": "No rate limiter — FMP calls are scattered across services as direct httpx calls with per-endpoint caching",
-            "plan_note": "Add limiter if you see FMP 429s in logs; limit depends on your FMP plan tier",
+            "note": "No rate limiter — FMP calls use per-endpoint caching; add limiter if 429s appear",
         },
     }
 
@@ -11935,6 +11979,33 @@ async def _theme_options_supplement_loop():
                 await asyncio.sleep(_CYCLE_SLEEP)
                 continue
 
+            # ── Global in-flight guard ────────────────────────────────────────
+            # Skip symbols already being scanned by Watchlist / Portfolio so no
+            # duplicate Tradier calls fire for the same symbol concurrently.
+            # Safe defaults — ensure finally can always reference these names.
+            _batch_claimed: list[str] = []
+            _release_opts = None
+            try:
+                from services.options_inflight import (
+                    claim_many   as _claim_opts,
+                    release_many as _release_opts,
+                )
+                _batch_claimed, _batch_blocked = _claim_opts(batch, "supplement")
+                if _batch_blocked:
+                    print(
+                        f"[THEME_SUPP] {len(_batch_blocked)} symbols already in-flight "
+                        f"(skipped): {_batch_blocked}"
+                    )
+            except Exception:
+                _batch_claimed = list(batch)
+                _release_opts  = None
+
+            batch = _batch_claimed
+            if not batch:
+                await asyncio.sleep(_CYCLE_SLEEP)
+                continue
+            # ─────────────────────────────────────────────────────────────────
+
             print(f"[THEME_SUPP] Scanning batch [{_scan_cursor}/{len(pending)}]: {batch}")
 
             # Pre-fetch Tradier quotes — Stage 1 needs a price to proceed
@@ -12008,6 +12079,13 @@ async def _theme_options_supplement_loop():
         except Exception as _exc:
             print(f"[THEME_SUPP] Cycle error: {_exc}")
             _tb_s.print_exc()
+        finally:
+            # Always release global in-flight claims for this batch, even on error.
+            try:
+                if _batch_claimed and _release_opts is not None:
+                    _release_opts(_batch_claimed, "supplement")
+            except Exception:
+                pass
 
         await asyncio.sleep(_CYCLE_SLEEP)
 

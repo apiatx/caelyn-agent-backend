@@ -1,0 +1,120 @@
+Proceed with a contained Phase 1.5, not the full Phase 2 scheduler yet.
+
+Do not build the full P0–P4 priority scheduler in this pass. The goal is to stop duplicate options scans, improve cache reuse, and prove the Sectors tab is no longer competing with Watchlist for the same option symbols.
+
+Hard constraints:
+
+* Do NOT raise Tradier rate limit.
+* Do NOT create a second limiter.
+* Do NOT bypass `_TradierRateLimiter`.
+* Do NOT change Options Flow main screener/search response shape.
+* Do NOT change Portfolio Terminal response shape.
+* Do NOT change Watchlist options endpoint response shape.
+* Do NOT build a full new scheduler module yet unless absolutely necessary.
+* Preserve existing paths and refactor around them.
+
+Implement Phase 1.5:
+
+1. Promote `_WL_INFLIGHT_SYMS` into a shared/global options-symbol in-flight guard.
+
+   * Rename conceptually away from Watchlist-only.
+   * Suggested names:
+
+     * `_OPTIONS_INFLIGHT_SYMS`
+     * `is_options_inflight(sym)`
+     * `claim_options_inflight(sym, scope)`
+     * `release_options_inflight(sym, scope)`
+   * This guard must be used by Watchlist, Portfolio scans, Sectors tab, theme supplement, and any shared options scan helpers before live option scan work begins.
+   * Scope should be logged for diagnostics.
+
+2. Add future-based coalescing to TradierProvider option calls.
+
+   * Add coalescing for `get_option_expirations(symbol)`.
+   * Add coalescing for `get_option_chain(symbol, expiration)`.
+   * If two coroutines request the same expiration or chain key simultaneously, only one Tradier request should fire; the others await/reuse the same future.
+   * Track `coalesced_expiration_requests` and `coalesced_chain_requests`.
+
+3. Standardize unavailable/no-options caching.
+
+   * The theme supplement already has 24h no-options tracking.
+   * Make portfolio/watchlist/shared options scan use the same concept or a compatible TTL.
+   * Do not keep confirmed unavailable rows at 60 seconds. That causes repeated waste.
+   * Use 24h if confidently “no options,” or at least 30–60 minutes if merely “temporary unavailable/error.”
+   * Return stale/unavailable metadata clearly.
+
+4. Make Options Flow Sectors tab use shared symbol-level options data.
+
+   * Sectors should aggregate from existing symbol rows first:
+
+     * `portfolio_opts:{sym}`
+     * master screener cache
+     * disk LKG
+     * no-options/unavailable cache
+     * watchlist options rows/snapshot if available
+   * For symbols that overlap the dev saved watchlist, Sectors must not live-scan them.
+   * Add explicit diagnostic:
+
+     * `watchlist_overlap_live_calls_blocked`
+   * Target/proof:
+
+     * For Sectors endpoint, `watchlist_overlap_live_calls = 0`.
+
+5. Theme-only symbols:
+
+   * Theme-only symbols may be eligible for live scan only after cache/LKG lookup.
+   * Cap live enqueue to a small number per request/window, e.g. 10–25.
+   * Use the shared global options-symbol in-flight guard.
+   * No duplicate enqueue if already in-flight.
+
+6. Add diagnostics.
+   Extend `/api/rate-status` or add a lightweight debug endpoint with:
+
+   * current Tradier RPM cap
+   * current limiter window usage
+   * shared options in-flight count
+   * in-flight symbols by scope
+   * coalesced expiration request count
+   * coalesced chain request count
+   * duplicate options scans blocked
+   * no-options cache hits
+   * options rows from cache/master/LKG/live
+   * last Tradier 429 timestamp/count
+   * unmanaged Tradier paths detected, including `theme_rs_service.py` raw httpx paths if still bypassing limiter
+
+7. Do not refactor `theme_rs_service.py` fully in this pass.
+   But do add diagnostics/warnings that these raw-httpx Tradier paths bypass the central limiter:
+
+   * `_tradier_quotes_batch`
+   * `_fetch_intraday_bars`
+   * `_fetch_tradier_daily_history`
+     This is not “solved” yet if they still bypass the limiter. Mark them clearly as unmanaged Tradier traffic.
+
+8. Validation:
+   A. Warm dev watchlist options:
+
+   * Call `/api/watchlist/{dev_watchlist_id}/options-signals`.
+   * Confirm optionable watchlist symbols fill from cache/master/LKG/live as expected.
+   * Confirm unavailable/no-options symbols are cached with the longer TTL.
+
+   B. Load Options Flow Sectors:
+
+   * Confirm it reads watchlist-overlap symbols from shared cache/LKG.
+   * Confirm `watchlist_overlap_live_calls = 0`.
+   * Confirm `theme_only_live_calls_enqueued` is capped.
+   * Confirm all sectors render, even stale.
+
+   C. Duplicate scan test:
+
+   * Trigger Watchlist options and Sectors close together.
+   * Confirm overlapping symbols are not scanned twice.
+   * Confirm coalesced expiration/chain counters increase when concurrent requests happen.
+
+   D. Regression:
+
+   * Main Options Flow screener/search unchanged.
+   * Portfolio options unchanged.
+   * Watchlist options unchanged.
+   * No Tradier 429s.
+   * Logs show all option live calls still go through `_TradierRateLimiter`.
+
+Stop after Phase 1.5 validation. Do not begin full Phase 2 scheduler until these metrics prove duplicate options calls are eliminated.

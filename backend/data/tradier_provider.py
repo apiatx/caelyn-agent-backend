@@ -29,6 +29,18 @@ _TIMESALES_TTL = 120      # intraday ticks
 
 _TIMEOUT = 12  # seconds per request
 
+# ── Future-based request coalescing ───────────────────────────────────────────
+# When two coroutines simultaneously request the same expiration list or chain,
+# only one Tradier call fires.  The second awaits the first's Future.
+# Keys are evicted from the dict in the finally block of the owning coroutine.
+_EXPIRY_FUTURES: dict[str, "asyncio.Future[list[str]]"] = {}
+_CHAIN_FUTURES:  dict[str, "asyncio.Future[dict]"]     = {}
+
+# Lifetime counters — read by /api/rate-status
+_coalesced_expiry_count: int = 0
+_coalesced_chain_count:  int = 0
+_last_429_at: float | None   = None  # epoch seconds
+
 
 # ── Process-wide Tradier rate limiter ─────────────────────────────────────────
 # Tradier production: ~120 req/min for market-data endpoints.
@@ -163,6 +175,9 @@ class TradierProvider:
                 if resp.status_code == 200:
                     return resp.json()
                 if resp.status_code == 429:
+                    import time as _t
+                    global _last_429_at
+                    _last_429_at = _t.time()
                     retry_after = int(resp.headers.get("Retry-After", "5"))
                     print(
                         f"[TRADIER] 429 rate limited on {path} — "
@@ -185,29 +200,73 @@ class TradierProvider:
         """Return current rate limiter status — calls in last 60s, headroom, etc."""
         return TRADIER_LIMITER.status()
 
+    @staticmethod
+    def get_coalescing_status() -> dict:
+        """Return coalescing counters and active in-flight futures (for /api/rate-status)."""
+        import time as _t
+        return {
+            "coalesced_expiry_requests_lifetime": _coalesced_expiry_count,
+            "coalesced_chain_requests_lifetime":  _coalesced_chain_count,
+            "active_expiry_futures":  len(_EXPIRY_FUTURES),
+            "active_chain_futures":   len(_CHAIN_FUTURES),
+            "last_429_at":            _last_429_at,
+            "last_429_ago_s":         (
+                round(_t.time() - _last_429_at) if _last_429_at else None
+            ),
+        }
+
     # ── Option Expirations ──────────────────────────────────────────────
     async def get_option_expirations(self, symbol: str) -> list[str]:
-        """Return list of expiration date strings (YYYY-MM-DD)."""
+        """
+        Return list of expiration date strings (YYYY-MM-DD).
+
+        Coalescing: if another coroutine is already fetching expirations for
+        this symbol, awaits the same Future rather than firing a duplicate call.
+        The owning coroutine writes the result and clears the Future entry.
+        """
+        global _coalesced_expiry_count
         symbol = symbol.upper()
         cache_key = f"tradier:expirations:{symbol}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
-        data = await self._get("/markets/options/expirations", {
-            "symbol": symbol,
-            "includeAllRoots": "true",
-        })
-        if not data:
-            return []
+        # In-flight coalescing
+        if symbol in _EXPIRY_FUTURES:
+            _coalesced_expiry_count += 1
+            try:
+                return await asyncio.shield(_EXPIRY_FUTURES[symbol])
+            except Exception:
+                return []
 
-        expirations = data.get("expirations", {})
-        dates = expirations.get("date", []) if isinstance(expirations, dict) else []
-        if isinstance(dates, str):
-            dates = [dates]  # single expiration returned as string
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        _EXPIRY_FUTURES[symbol] = fut
+        try:
+            data = await self._get("/markets/options/expirations", {
+                "symbol": symbol,
+                "includeAllRoots": "true",
+            })
+            if not data:
+                if not fut.done():
+                    fut.set_result([])
+                return []
 
-        cache.set(cache_key, dates, _EXPIRATIONS_TTL)
-        return dates
+            expirations = data.get("expirations", {})
+            dates = expirations.get("date", []) if isinstance(expirations, dict) else []
+            if isinstance(dates, str):
+                dates = [dates]  # single expiration returned as string
+
+            cache.set(cache_key, dates, _EXPIRATIONS_TTL)
+            if not fut.done():
+                fut.set_result(dates)
+            return dates
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        finally:
+            _EXPIRY_FUTURES.pop(symbol, None)
 
     # ── Option Strikes ──────────────────────────────────────────────────
     async def get_option_strikes(self, symbol: str, expiration: str) -> list[float]:
@@ -241,70 +300,96 @@ class TradierProvider:
         Returns {"calls": [...], "puts": [...], "baseSymbol": symbol}
         Each contract has: symbol, strike, bid, ask, last, volume, openInterest,
                           delta, gamma, theta, vega, rho, mid_iv, bid_iv, ask_iv, smv_vol
+
+        Coalescing: if another coroutine is already fetching the same chain key,
+        awaits the same Future rather than firing a duplicate Tradier call.
         """
+        global _coalesced_chain_count
         symbol = symbol.upper()
         cache_key = f"tradier:chain:{symbol}:{expiration}"
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
 
-        data = await self._get("/markets/options/chains", {
-            "symbol": symbol,
-            "expiration": expiration,
-            "greeks": "true",
-        })
-        if not data:
-            return {"calls": [], "puts": [], "baseSymbol": symbol}
+        coalesce_key = f"{symbol}:{expiration}"
+        if coalesce_key in _CHAIN_FUTURES:
+            _coalesced_chain_count += 1
+            try:
+                return await asyncio.shield(_CHAIN_FUTURES[coalesce_key])
+            except Exception:
+                return {"calls": [], "puts": [], "baseSymbol": symbol}
 
-        options = data.get("options", {})
-        raw_list = options.get("option", []) if isinstance(options, dict) else []
-        if isinstance(raw_list, dict):
-            raw_list = [raw_list]  # single contract
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        _CHAIN_FUTURES[coalesce_key] = fut
 
-        calls = []
-        puts = []
-        for opt in raw_list:
-            greeks = opt.get("greeks") or {}
-            contract = {
-                "symbol": opt.get("symbol"),
-                "strike": _safe_float(opt.get("strike")),
-                "bid": _safe_float(opt.get("bid")),
-                "ask": _safe_float(opt.get("ask")),
-                "last": _safe_float(opt.get("last")),
-                "volume": _safe_int(opt.get("volume")),
-                "openInterest": _safe_int(opt.get("open_interest")),
-                "delta": _safe_float(greeks.get("delta")),
-                "gamma": _safe_float(greeks.get("gamma")),
-                "theta": _safe_float(greeks.get("theta")),
-                "vega": _safe_float(greeks.get("vega")),
-                "rho": _safe_float(greeks.get("rho")),
-                "iv": _safe_float(greeks.get("mid_iv")),
-                "bid_iv": _safe_float(greeks.get("bid_iv")),
-                "ask_iv": _safe_float(greeks.get("ask_iv")),
-                "smv_vol": _safe_float(greeks.get("smv_vol")),
-                "greeks_updated_at": greeks.get("updated_at"),
-                # Extra Tradier fields
-                "option_type": opt.get("option_type"),  # "call" or "put"
-                "expiration_date": opt.get("expiration_date"),
-                "trade_date": opt.get("trade_date"),
-                "change": _safe_float(opt.get("change")),
-                "change_percentage": _safe_float(opt.get("change_percentage")),
-                "average_volume": _safe_int(opt.get("average_volume")),
-                "last_volume": _safe_int(opt.get("last_volume")),
-                "open": _safe_float(opt.get("open")),
-                "high": _safe_float(opt.get("high")),
-                "low": _safe_float(opt.get("low")),
-                "close": _safe_float(opt.get("close")),
-            }
+        try:
+            data = await self._get("/markets/options/chains", {
+                "symbol": symbol,
+                "expiration": expiration,
+                "greeks": "true",
+            })
+            if not data:
+                empty = {"calls": [], "puts": [], "baseSymbol": symbol}
+                if not fut.done():
+                    fut.set_result(empty)
+                return empty
 
-            if opt.get("option_type") == "call":
-                calls.append(contract)
-            else:
-                puts.append(contract)
+            options = data.get("options", {})
+            raw_list = options.get("option", []) if isinstance(options, dict) else []
+            if isinstance(raw_list, dict):
+                raw_list = [raw_list]  # single contract
 
-        result = {"calls": calls, "puts": puts, "baseSymbol": symbol, "expiration": expiration}
-        cache.set(cache_key, result, _CHAIN_TTL)
-        return result
+            calls = []
+            puts = []
+            for opt in raw_list:
+                greeks = opt.get("greeks") or {}
+                contract = {
+                    "symbol": opt.get("symbol"),
+                    "strike": _safe_float(opt.get("strike")),
+                    "bid": _safe_float(opt.get("bid")),
+                    "ask": _safe_float(opt.get("ask")),
+                    "last": _safe_float(opt.get("last")),
+                    "volume": _safe_int(opt.get("volume")),
+                    "openInterest": _safe_int(opt.get("open_interest")),
+                    "delta": _safe_float(greeks.get("delta")),
+                    "gamma": _safe_float(greeks.get("gamma")),
+                    "theta": _safe_float(greeks.get("theta")),
+                    "vega": _safe_float(greeks.get("vega")),
+                    "rho": _safe_float(greeks.get("rho")),
+                    "iv": _safe_float(greeks.get("mid_iv")),
+                    "bid_iv": _safe_float(greeks.get("bid_iv")),
+                    "ask_iv": _safe_float(greeks.get("ask_iv")),
+                    "smv_vol": _safe_float(greeks.get("smv_vol")),
+                    "greeks_updated_at": greeks.get("updated_at"),
+                    "option_type": opt.get("option_type"),
+                    "expiration_date": opt.get("expiration_date"),
+                    "trade_date": opt.get("trade_date"),
+                    "change": _safe_float(opt.get("change")),
+                    "change_percentage": _safe_float(opt.get("change_percentage")),
+                    "average_volume": _safe_int(opt.get("average_volume")),
+                    "last_volume": _safe_int(opt.get("last_volume")),
+                    "open": _safe_float(opt.get("open")),
+                    "high": _safe_float(opt.get("high")),
+                    "low": _safe_float(opt.get("low")),
+                    "close": _safe_float(opt.get("close")),
+                }
+                if opt.get("option_type") == "call":
+                    calls.append(contract)
+                else:
+                    puts.append(contract)
+
+            result = {"calls": calls, "puts": puts, "baseSymbol": symbol, "expiration": expiration}
+            cache.set(cache_key, result, _CHAIN_TTL)
+            if not fut.done():
+                fut.set_result(result)
+            return result
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        finally:
+            _CHAIN_FUTURES.pop(coalesce_key, None)
 
     # ── Alias for OptionsFlowEngine compatibility ───────────────────────
 

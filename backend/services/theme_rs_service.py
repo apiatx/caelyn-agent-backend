@@ -697,6 +697,10 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
     Tradier /markets/history — secondary historical provider.
     Returns sorted {date, close} bars.
     Cached 1h.
+
+    [TRADIER_UNMANAGED] This function uses a raw httpx call and does NOT go
+    through TRADIER_LIMITER.  Calls are visible in /api/rate-status under
+    unmanaged_tradier_paths.  Phase 2 will route this through the limiter.
     """
     sym = symbol.upper()
     cache_key = f"tdier_hist:{sym}:{days}"
@@ -753,6 +757,10 @@ async def _fetch_intraday_bars(sym: str) -> list[dict]:
     Returns [{date: ISO-timestamp (Eastern), close: float}] oldest→newest.
     Cached 10 min per symbol per trading day — safe to call from the 60-s 1D
     warmup loop without hammering the Tradier rate-limit bucket.
+
+    [TRADIER_UNMANAGED] Uses raw httpx gated by _INTRADAY_SEM (≤20 concurrent).
+    Intentionally isolated from TRADIER_LIMITER for the 1D RS warmup pipeline.
+    Visible in /api/rate-status under unmanaged_tradier_paths.
     """
     from datetime import date as _d, datetime, timezone, timedelta as _td
 

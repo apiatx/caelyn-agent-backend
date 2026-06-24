@@ -825,7 +825,23 @@ async def scan_portfolio_options(
 # regardless of how long the Tradier rate-limiter queues the calls.
 # This replaces the previous 90-second cache-key approach which could expire
 # during a long cold scan on a large watchlist.
-_WL_INFLIGHT_SYMS: set[str] = set()
+# Legacy module-level reference kept for any internal references within this file;
+# the actual tracking now lives in services.options_inflight (global, cross-module).
+# New code should import from services.options_inflight directly.
+try:
+    from services.options_inflight import (
+        is_options_inflight   as _is_opts_inflight,
+        claim_many            as _claim_opts_many,
+        release_many          as _release_opts_many,
+    )
+    _GLOBAL_INFLIGHT_AVAILABLE = True
+except ImportError:
+    _GLOBAL_INFLIGHT_AVAILABLE = False
+    _is_opts_inflight  = lambda sym: False          # type: ignore[assignment]
+    _claim_opts_many   = lambda syms, scope: (syms, [])  # type: ignore[assignment]
+    _release_opts_many = lambda syms, scope: None   # type: ignore[assignment]
+
+_WL_INFLIGHT_SYMS: set[str] = set()  # kept for backward-compat; new code uses global guard
 
 
 def _normalize_to_watchlist_row(sym: str, r: dict, is_stale: bool) -> dict:
@@ -954,9 +970,9 @@ async def scan_watchlist_options(
             cache.set(per_key, row, _CACHE_PER_TICKER_TTL)
             results[sym] = row
             lkg_hits += 1
-        elif sym in _WL_INFLIGHT_SYMS:
-            # Background scan already queued/running — return placeholder,
-            # do NOT re-enqueue.  Registry cleared only in batch finally block.
+        elif _is_opts_inflight(sym) or sym in _WL_INFLIGHT_SYMS:
+            # Background scan already queued/running (global or module-level guard).
+            # Return placeholder; do NOT re-enqueue.
             inflight.append(sym)
             results[sym] = _unavail_row(sym, "scan_in_progress")
         else:
@@ -970,19 +986,31 @@ async def scan_watchlist_options(
     _deferred = max(0, len(uncached) - max_live_scan)
     enqueued  = 0
 
-    # Short-TTL for confirmed-unavailable rows (no Tradier coverage, OTC, etc.)
-    # Prevents re-enqueueing the same failing symbols on every page load.
-    # Much shorter than _CACHE_PER_TICKER_TTL (300s) so that transient failures
-    # (rate-limit timeouts) are retried after a minute, not after 5 minutes.
-    _UNAVAIL_CACHE_TTL = 60   # 60s — retry unavailable symbols after 1 minute
+    # TTLs for unavailable rows:
+    #   _UNAVAIL_CACHE_TTL_TRANSIENT — transient errors (rate-limit timeout, network):
+    #     30 minutes so we don't spam re-enqueue on every page load after a Tradier blip.
+    #   _UNAVAIL_CACHE_TTL_CONFIRMED — confirmed no-options (OTC, no coverage):
+    #     24h via the shared no-options tracking from options_theme_supplement.
+    _UNAVAIL_CACHE_TTL_TRANSIENT = 1800   # 30 min — was 60s (too short, caused re-scan spam)
+    _UNAVAIL_CACHE_TTL_CONFIRMED = 86400  # 24h  — same as options_theme_supplement.py
 
     if _to_scan and tradier:
-        enqueued = len(_to_scan)
+        # Claim symbols through the global guard.  Symbols already claimed by
+        # another scope (supplement loop, portfolio scan) are excluded so no
+        # duplicate scan fires.
+        _claimed, _already_inflight = _claim_opts_many(_to_scan, "watchlist")
+        _WL_INFLIGHT_SYMS.update(_claimed)  # backward-compat mirror
 
-        # Register all symbols as in-flight BEFORE creating tasks so that
-        # any concurrent request hitting this function after create_task but
-        # before the coroutine starts will also see them as in-flight.
-        _WL_INFLIGHT_SYMS.update(_to_scan)
+        if _already_inflight:
+            # Move globally-in-flight symbols to inflight list so they get
+            # scan_in_progress placeholder and are not re-enqueued.
+            for _s in _already_inflight:
+                if _s not in inflight:
+                    inflight.append(_s)
+                    results[_s] = _unavail_row(_s, "scan_in_progress")
+
+        _to_scan = _claimed  # only scan what we actually claimed
+        enqueued = len(_to_scan)
 
         async def _bg_batch_scan(_batch: list[str]) -> None:
             try:
@@ -990,20 +1018,27 @@ async def scan_watchlist_options(
                     _batch, tradier, cache, master_snap=master_snap
                 )
                 # scan_portfolio_options only caches data_available=True rows.
-                # For unavailable rows (OTC, no coverage, timeout) we write a
-                # short-TTL entry so repeat page loads don't re-enqueue the same
-                # symbols while they are known-unavailable.
+                # For unavailable rows (OTC, no coverage, timeout) write a longer
+                # TTL entry so repeat page loads don't re-enqueue the same symbols
+                # every minute.
                 by_sym = scan_out.get("by_symbol", {}) if isinstance(scan_out, dict) else {}
                 for _s, _row in by_sym.items():
                     if _row.get("data_available"):
                         continue   # already cached by scan_portfolio_options
                     _pk = _per_ticker_cache_key(_s)
-                    if not cache.get(_pk):   # don't overwrite if it appeared elsewhere
-                        cache.set(_pk, _row, _UNAVAIL_CACHE_TTL)
+                    if not cache.get(_pk):
+                        reason = _row.get("unavailable_reason", "")
+                        ttl = (
+                            _UNAVAIL_CACHE_TTL_CONFIRMED
+                            if reason in ("no_options", "no_expirations")
+                            else _UNAVAIL_CACHE_TTL_TRANSIENT
+                        )
+                        cache.set(_pk, _row, ttl)
             except Exception as _bge:
                 print(f"[WATCHLIST_OPTIONS_BG] batch scan error ({_batch}): {_bge}")
             finally:
-                # Discard only this batch's symbols — other batches may still run
+                # Release from both the global guard and legacy module set
+                _release_opts_many(_batch, "watchlist")
                 for _s in _batch:
                     _WL_INFLIGHT_SYMS.discard(_s)
 
