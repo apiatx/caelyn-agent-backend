@@ -121,6 +121,12 @@ def _is_market_hours_et() -> bool:
         return True
 
 
+def _compute_syms_hash(syms_iter) -> str:
+    """8-char hex hash of the sorted symbol set — changes whenever tickers are added/removed."""
+    import hashlib
+    return hashlib.sha256(",".join(sorted(syms_iter)).encode()).hexdigest()[:8]
+
+
 def _classify_watchlist_sym(r: dict, is_stale: bool) -> str:
     """
     Return one of the eight canonical classification labels for a watchlist symbol.
@@ -164,6 +170,12 @@ _WL_QUOTE_RETRY_ATTEMPTS: dict[str, int] = {}
 _WL_QUOTE_RETRY_STATS: dict = {
     "queued_total": 0, "attempted": 0, "succeeded": 0, "failed": 0,
 }
+
+# ── Per-watchlist symbol-set tracking (add/remove detection) ─────────────────
+# Keyed by watchlist_id → frozenset of symbols from the last call.
+# Compared on every scan_watchlist_options call to report adds/removes without
+# requiring a restart.  Not persisted — resets to {} on server restart.
+_WL_PREV_SYMS: dict[str, frozenset[str]] = {}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -1386,6 +1398,7 @@ async def scan_watchlist_options(
     *,
     max_live_scan: int = 50,
     force_refresh: bool = False,
+    watchlist_id: str | None = None,
 ) -> dict:
     """
     Cache-first options signal lookup for all watchlist tickers.
@@ -1425,6 +1438,23 @@ async def scan_watchlist_options(
     _t0 = _tm.monotonic()
 
     syms = [s.upper() for s in (symbols or []) if s.strip()]
+
+    # ── Per-watchlist symbol-set change tracking ──────────────────────────────
+    # Detect adds/removes by comparing current syms against the previous call's
+    # set for this watchlist_id.  No restart required — state lives in _WL_PREV_SYMS.
+    _syms_set = frozenset(syms)
+    _syms_hash = _compute_syms_hash(_syms_set)
+    _active_us_count = sum(1 for s in syms if ":" not in s)
+    if watchlist_id:
+        _prev_syms = _WL_PREV_SYMS.get(watchlist_id)
+        _syms_added   = sorted(_syms_set - _prev_syms) if _prev_syms is not None else []
+        _syms_removed = sorted(_prev_syms - _syms_set) if _prev_syms is not None else []
+        _WL_PREV_SYMS[watchlist_id] = _syms_set
+    else:
+        _prev_syms = None
+        _syms_added = []
+        _syms_removed = []
+
     _empty_meta = {
         "scope":                      "watchlist",
         "symbols_requested":          0,
@@ -1844,6 +1874,14 @@ async def scan_watchlist_options(
         and (_r.get("unavailable_reason") or "") in ("scan_pending", "scan_in_progress")
     )
 
+    # Orphaned cache entries: symbols removed from this watchlist that still
+    # have live per-ticker memory cache entries (will expire naturally).
+    _orphaned_cnt = 0
+    if _syms_removed:
+        for _rs in _syms_removed:
+            if cache.get(_per_ticker_cache_key(_rs)):
+                _orphaned_cnt += 1
+
     elapsed_ms = round((_tm.monotonic() - _t0) * 1000, 1)
 
     # Format module-level timestamps for JSON
@@ -1925,6 +1963,18 @@ async def scan_watchlist_options(
             "standard_us_pending_no_values":       _std_us_pending_no_values,
             "standard_us_confirmed_no_options":    _std_us_confirmed_no_opts,
             "standard_us_stale_over_sla":          _std_us_stale_over_sla,
+            # ── Symbol-set change tracking (add/remove without restart) ──────────
+            "watchlist_symbols_hash":          _syms_hash,
+            "symbols_added_since_last_call":   _syms_added,
+            "symbols_removed_since_last_call": _syms_removed,
+            "active_watchlist_symbols_count":  _active_us_count,
+            "orphaned_cache_symbols_count":    _orphaned_cnt,
+            "refresh_queue_by_scope": {
+                "uncached_scan_queued":     len(_to_scan),
+                "stale_lkg_refresh_queued": len(stale_lkg_to_refresh),
+                "deferred_background":      _deferred,
+                "quote_retry_lifetime":     _WL_QUOTE_RETRY_STATS["queued_total"],
+            },
             # ── Timing ───────────────────────────────────────────────────
             "generated_at":                   _dt.datetime.utcnow().isoformat() + "Z",
             "ttl_seconds":                    _CACHE_PER_TICKER_TTL,

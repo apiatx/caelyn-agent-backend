@@ -1,0 +1,101 @@
+Good. Now validate dynamic ticker add/remove behavior. Do not add new architecture yet. Prove the current shared Tradier/watchlist options path handles changing watchlists correctly without restart.
+
+Goal:
+When I add or remove tickers from the watchlist, the options system should adapt dynamically:
+
+* new tickers enter the quote/options refresh cycle automatically
+* removed tickers stop being refreshed for that watchlist
+* removed tickers do not continue appearing in Watchlist options response
+* stale LKG for removed tickers does not keep driving Watchlist/Sectors aggregation incorrectly
+* no restart required
+
+Hard constraints:
+
+* Do NOT hardcode symbol counts.
+* Do NOT assume Primary watchlist always has 302 symbols.
+* Do NOT scan foreign/colon-prefix symbols.
+* Do NOT bypass existing Tradier limiter/in-flight/coalescing.
+* Do NOT make Sectors live-scan watchlist-overlap symbols.
+* Preserve existing endpoint shapes.
+
+Validation plan:
+
+1. Capture current baseline:
+
+   * Primary watchlist ID
+   * current ticker count
+   * current `/api/watchlist/{id}/options-signals` symbols_requested
+   * current keys in `signals`
+   * current options_meta:
+
+     * standard_us_displayable_with_values
+     * standard_us_pending_no_values
+     * confirmed_unsupported_count
+     * stale_lkg_queued_count
+     * scan_pending_count
+
+2. Add one known standard US optionable ticker not currently in the Primary watchlist.
+   Use a test ticker that definitely has options and is not already present.
+   Do this through the same existing watchlist edit path/API the app uses, not by hacking cache files.
+
+3. Re-call:
+   `/api/watchlist/{id}/options-signals`
+   without restarting.
+   Confirm:
+
+   * symbols_requested increased by 1
+   * new ticker appears in `signals`
+   * new ticker is classified as queued/scan_pending initially if no cache exists
+   * new ticker enters the background refresh path
+   * after drain, new ticker has options_data_available=true or a clear valid reason
+   * no direct foreign/unsupported skip unless appropriate
+
+4. Remove that test ticker through the normal watchlist edit path/API.
+
+5. Re-call:
+   `/api/watchlist/{id}/options-signals`
+   without restarting.
+   Confirm:
+
+   * symbols_requested returns to baseline
+   * removed ticker no longer appears in `signals`
+   * removed ticker is not in scan_pending_symbols
+   * removed ticker is not in stale_over_sla_symbols for that watchlist
+   * removed ticker is not queued for watchlist-scope refresh anymore
+
+6. Cache behavior:
+
+   * It is okay if the removed ticker’s historical `portfolio_opts:{sym}` or disk LKG remains as global reusable cache.
+   * It is NOT okay for removed ticker to remain in the Primary watchlist response.
+   * It is NOT okay for removed ticker to keep being refreshed under watchlist scope.
+   * If another page/scope still needs it, that page/scope may request it separately.
+
+7. Sectors/Theme aggregation check:
+   After add/remove, call:
+   `/api/options-flow/sectors?refresh=true`
+   Confirm:
+
+   * Sectors still reads shared cache only
+   * watchlist_overlap_live_calls = 0
+   * overlap counts update if the added/removed ticker belongs to the sector universe
+   * removed watchlist ticker is not treated as watchlist-overlap unless still present in watchlist
+
+8. Diagnostics to add if missing:
+   In options_meta, include:
+
+   * `watchlist_symbol_version` or `watchlist_symbols_hash`
+   * `symbols_added_since_last_call`
+   * `symbols_removed_since_last_call`
+   * `active_watchlist_symbols_count`
+   * `orphaned_cache_symbols_count` if trackable
+   * `refresh_queue_by_scope`
+
+Acceptance criteria:
+
+* Add/remove works without backend restart.
+* New standard US optionable tickers enter the refresh queue automatically.
+* Removed tickers disappear from watchlist response immediately.
+* Removed tickers stop being refreshed by watchlist scope.
+* Existing global cache/LKG can remain, but it does not pollute current watchlist responses.
+* No Tradier 429s.
+* Sectors still does not live-scan overlap symbols.

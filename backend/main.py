@@ -9980,6 +9980,7 @@ async def watchlist_options_signals(
         cache         = _cache,
         master_snap   = master_snap,
         force_refresh = force_refresh,
+        watchlist_id  = watchlist_id,
     )
 
     print(
