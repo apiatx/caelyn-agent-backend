@@ -47,7 +47,7 @@ import time
 from typing import Optional
 
 _SECTORS_CACHE_KEY = "options_flow_sectors:v1"
-_SECTORS_CACHE_TTL = 300  # 5 min
+_SECTORS_CACHE_TTL = 60   # 1 min — short so supplement updates are visible quickly
 
 
 def _load_all_watchlist_symbols() -> set[str]:
@@ -99,11 +99,18 @@ def _ticker_call_put(row: dict) -> tuple[float, float]:
     """
     Return (call_premium_dollars, put_premium_dollars).
 
-    Uses the mathematically exact derivation:
-      premium × (call_flow_pct / 100) and premium × (put_flow_pct / 100)
-
-    Falls back to 50/50 split only when flow_pct fields are missing.
+    Priority:
+      1. Direct call_premium / put_premium fields (stored by some writers)
+      2. premium × (call_flow_pct / 100) derivation (enrich_ticker_rows output)
+      3. 50/50 split of premium (last resort)
     """
+    # 1. Direct fields — some row writers store these explicitly
+    direct_call = _safe_float(row.get("call_premium"))
+    direct_put  = _safe_float(row.get("put_premium"))
+    if direct_call is not None and direct_put is not None:
+        return direct_call, direct_put
+
+    # 2. Derived from enriched premium split
     prem     = _safe_float(row.get("premium")) or 0.0
     call_pct = _safe_float(row.get("call_flow_pct"))
     put_pct  = _safe_float(row.get("put_flow_pct"))
@@ -240,21 +247,35 @@ def _build_ticker_node(
         else:
             bias_val = None
 
+        # Determine whether to display zero-flow values (0.0) vs null (unknown).
+        # Zero-flow display means "chain was scanned, no unusual flow detected".
+        # Null display means "data not yet available / scan pending".
+        #
+        # Cases that emit 0.0:
+        #   1. neutral_no_unusual_flow (fresh): chain was scanned this session, no unusual flow.
+        #   2. stale_lkg where scan_result=="neutral_no_unusual_flow": previous-session neutral
+        #      scan — we know options exist and flow was zero, even though data is stale.
+        _stale_was_neutral = (
+            state == "stale_lkg"
+            and scan_result == "neutral_no_unusual_flow"
+        )
+        _neutral_confirmed = (state == "neutral_no_unusual_flow") or _stale_was_neutral
+
         return {
             "symbol":            sym,
             "ticker_state":      state,
-            "call_premium":      round(call_p, 2) if has_prem else None,
-            "put_premium":       round(put_p, 2)  if has_prem else None,
-            "net_premium":       round(net_p, 2)  if has_prem else None,
-            "put_call_ratio":    _pcr(call_p, put_p),
+            "call_premium":      round(call_p, 2) if has_prem else (0.0 if _neutral_confirmed else None),
+            "put_premium":       round(put_p, 2)  if has_prem else (0.0 if _neutral_confirmed else None),
+            "net_premium":       round(net_p, 2)  if has_prem else (0.0 if _neutral_confirmed else None),
+            "put_call_ratio":    _pcr(call_p, put_p) if has_prem else None,
             "bias":              bias_val,
-            "total_volume":      row.get("total_volume"),
-            "heat_score":        row.get("heat_score"),
+            "total_volume":      row.get("total_volume") if row.get("total_volume") is not None else (0 if _neutral_confirmed else None),
+            "heat_score":        row.get("heat_score") if row.get("heat_score") is not None else (0.0 if _neutral_confirmed else None),
             "side_bias":         row.get("side_bias"),
             "options_available": state in _OPTIONS_CONFIRMED_STATES,
             "scan_status":       source,
             "scan_result":       scan_result,
-            "updated_at":        row.get("updated_at") or row.get("cached_at"),
+            "updated_at":        row.get("updated_at") or row.get("cached_at") or row.get("_cached_at"),
         }
 
     if sym in no_options_syms:
@@ -306,11 +327,16 @@ def _build_theme_node(
     proxy_syms   = [s.upper() for s in (meta.get("proxy_symbols") or [])]
     ticker_nodes = [_build_ticker_node(sym, cache_by_ticker, no_options_syms) for sym in proxy_syms]
 
-    # Flow totals from all rows with actual premium data (unusual flow + stale LKG)
-    total_call = sum(t["call_premium"] or 0 for t in ticker_nodes if t.get("call_premium"))
-    total_put  = sum(t["put_premium"]  or 0 for t in ticker_nodes if t.get("put_premium"))
+    # Flow totals — use is-not-None guard so neutral rows (0.0) are counted,
+    # not falsy-filtered. Neutral/zero rows don't change the total but are
+    # still "represented" in the universe.
+    total_call = sum(t["call_premium"] for t in ticker_nodes if t.get("call_premium") is not None)
+    total_put  = sum(t["put_premium"]  for t in ticker_nodes if t.get("put_premium")  is not None)
     total_net  = total_call - total_put
     has_data   = (total_call + total_put) > 0
+    # Volume: sum non-None values from tickers that have real volume data
+    total_vol_vals = [t["total_volume"] for t in ticker_nodes if t.get("total_volume") is not None]
+    total_vol      = sum(total_vol_vals) if total_vol_vals else None
 
     # State counts across all proxy tickers
     state_counts: dict[str, int] = {}
@@ -320,8 +346,8 @@ def _build_theme_node(
 
     # Represented = any state that isn't generic_pending (some info is known)
     represented = [t for t in ticker_nodes if t.get("ticker_state") != "generic_pending"]
-    # Tickers contributing premium (for average net flow calculation)
-    flow_nodes  = [t for t in ticker_nodes if t.get("call_premium") or t.get("put_premium")]
+    # Tickers contributing non-zero premium (for average net flow calculation)
+    flow_nodes  = [t for t in ticker_nodes if (t.get("call_premium") or 0) + (t.get("put_premium") or 0) > 0]
     avg_net     = round(total_net / len(flow_nodes), 2) if flow_nodes else None
 
     return {
@@ -333,6 +359,7 @@ def _build_theme_node(
         "net_premium":                   round(total_net, 2)  if has_data else None,
         "total_net_flow":                round(total_net, 2)  if has_data else None,
         "average_net_flow":              avg_net,
+        "total_volume":                  total_vol,
         "put_call_ratio":                _pcr(total_call, total_put),
         "bias":                          _bias(total_call, total_put) if has_data else None,
         "ticker_count":                  len(proxy_syms),
@@ -369,6 +396,7 @@ def _build_sector_node(
 
     sector_call  = 0.0
     sector_put   = 0.0
+    sector_vol   = 0
     flow_count   = 0
     state_counts: dict[str, int] = {}
 
@@ -382,6 +410,9 @@ def _build_sector_node(
                 sector_call += c
                 sector_put  += p
                 flow_count  += 1
+                v = row.get("total_volume")
+                if v is not None:
+                    sector_vol += int(v)
 
     sector_net   = sector_call - sector_put
     has_data     = flow_count > 0
@@ -406,6 +437,7 @@ def _build_sector_node(
         "put_premium":                   round(sector_put, 2)  if has_data else None,
         "net_premium":                   round(sector_net, 2)  if has_data else None,
         "total_net_flow":                round(sector_net, 2)  if has_data else None,
+        "total_volume":                  sector_vol if has_data else None,
         "average_net_flow":              avg_net,
         "put_call_ratio":                _pcr(sector_call, sector_put),
         "bias":                          _bias(sector_call, sector_put) if has_data else None,

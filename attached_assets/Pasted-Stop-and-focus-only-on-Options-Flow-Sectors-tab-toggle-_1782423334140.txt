@@ -1,0 +1,268 @@
+Stop and focus only on Options Flow → Sectors tab/toggle.
+
+Do not change the Options Flow → Screener tab/toggle.
+
+Important distinction:
+The Options Flow Screener tab is market-wide unusual-flow discovery. It should keep working exactly as it does now and should not be limited to the saved backend theme/ticker universe.
+
+The Options Flow Sectors tab is different. It should operate on the saved backend sector/theme/ticker universe and roll up options flow through this hierarchy:
+
+1. Individual stock options flow data
+2. Theme total and average flow derived from the stocks in that theme
+3. Sector total and average flow derived from the themes/stocks in that sector
+
+Current UI path:
+
+* Options Flow page defaults to `Sectors`.
+* Sectors view shows sector cards with total net flow.
+* Clicking a sector shows theme cards inside that sector.
+* Clicking a theme shows the individual stock rows inside that theme.
+
+Current bug:
+The sector/theme cards show some aggregate flow, but when drilling into a theme, most individual stock rows have no actual options data:
+
+* call is dash/zero
+* put is dash/zero
+* P/C is dash
+* volume is zero/dash
+* status may say Supplement/Pending, but the stock row itself does not have real call/put flow data
+
+This is not acceptable.
+
+The requirement:
+Every stock row in a theme should have its own options flow fields when optionable:
+
+* call volume or call premium, consistent with the existing Sectors metric definition
+* put volume or put premium, consistent with the existing Sectors metric definition
+* net flow
+* put/call ratio
+* total options volume / premium where available
+* status/state
+* updated timestamp/source
+
+Then theme cards should be derived by summing/averaging those stock-level values.
+
+Then sector cards should be derived by summing/averaging the theme/stock-level values.
+
+Do not let sector/theme cards use aggregate values that cannot be traced back to populated stock rows.
+
+Audit/fix target:
+
+* `/api/options-flow/sectors`
+* `options_flow_sectors.py`
+* Sectors backfill loop
+* supplement/master/shared options row writers consumed by Sectors
+* theme drilldown ticker rows
+* stock → theme → sector aggregation logic
+
+Do not touch:
+
+* Options Flow Screener tab/toggle behavior
+* market-wide unusual-flow screener universe
+* Screener scoring logic
+* global Tradier RPM
+* frontend response shape except additive/backward-compatible fields
+* Sectors aggregation-only rule for watchlist overlap
+* TradierProvider/limiter/coalescing architecture
+
+Step 1 — Prove whether stock rows contain real flow fields
+For a sector like Technology and a theme like Data Center Infrastructure, inspect the actual API response rows.
+
+Report for each ticker row:
+
+* symbol
+* status/state
+* source
+* call value
+* put value
+* net flow
+* P/C
+* volume
+* updated timestamp
+* whether the values came from chain scan, LKG, supplement, master, pending-chain, or unsupported/no-options
+
+Specifically check examples visible in the UI:
+
+* ADEA
+* AKAM
+* BTDR
+* BZAI
+* CEG
+* CIFR
+* CLSK
+* DELL
+* DTCR
+* EQIX
+* ETN
+
+If a row says `Supplement` but call/put/net/volume are zero or dash, explain why.
+
+Step 2 — Fix stock-level row writing
+For every optionable stock in the saved Sectors universe, the Sectors-specific backfill should produce or hydrate a stock-level row.
+
+Valid row states:
+
+1. `bullish_flow`
+
+   * chain scanned successfully
+   * stock has bullish/unusual flow
+   * stock row includes call/put/net/P/C/volume metrics
+
+2. `bearish_flow`
+
+   * chain scanned successfully
+   * stock has bearish/unusual flow
+   * stock row includes call/put/net/P/C/volume metrics
+
+3. `mixed_flow`
+
+   * chain scanned successfully
+   * stock has mixed flow
+   * stock row includes call/put/net/P/C/volume metrics
+
+4. `neutral_no_unusual_flow`
+
+   * chain scanned successfully
+   * no unusual bullish/bearish flow found
+   * stock row still includes call/put/net/P/C/volume metrics from the scanned chain, even if values are low/zero
+
+5. `optionable_pending_chain`
+
+   * expirations confirmed non-empty
+   * chain not scanned yet, deferred, or incomplete
+   * stock row should be represented, but call/put/net fields may be null/dash until chain scan completes
+
+6. `confirmed_no_options`
+
+   * expirations endpoint returned a real empty result
+   * not a deferral or failed call
+
+7. `unsupported_foreign_otc`
+
+   * skipped by eligibility rules
+
+8. `deferred_retry`
+
+   * budget deferral or transient provider failure
+   * must not poison no-options cache
+
+9. `stale_lkg`
+
+   * prior successful row exists
+   * row should still show previous call/put/net/P/C/volume values from LKG
+
+Critical correction:
+A row cannot be considered fully populated just because it has a state label. The stock row needs actual options metrics if the chain was scanned successfully.
+
+Step 3 — Fix rollup math
+The Sectors tab must roll up from stock rows upward.
+
+For each stock:
+
+* compute/store call value
+* compute/store put value
+* compute/store net flow
+* compute/store P/C
+* compute/store volume
+* compute/store state
+
+For each theme:
+
+* total_call = sum(stock.call)
+* total_put = sum(stock.put)
+* total_net_flow = sum(stock.net_flow)
+* average_net_flow = average(stock.net_flow) across represented optionable stocks
+* P/C = total_put / total_call, or whatever existing metric definition uses
+* counts by state:
+
+  * bullish
+  * bearish
+  * mixed
+  * neutral
+  * optionable_pending_chain
+  * confirmed_no_options
+  * unsupported
+  * stale_lkg
+  * deferred_retry
+
+For each sector:
+
+* total_call = sum(theme.total_call) or sum(all stock.call)
+* total_put = sum(theme.total_put) or sum(all stock.put)
+* total_net_flow = sum(theme.total_net_flow)
+* average_net_flow = average(stock.net_flow) across represented optionable stocks
+* counts by state
+
+Important:
+Do not calculate sector/theme flow from only tickers with unusual flow.
+Do not drop neutral/no-flow stocks from aggregation.
+Do not drop stale LKG stocks from aggregation.
+Do not show sector/theme totals that cannot be traced to populated stock rows.
+
+Step 4 — Verify the display text is not misleading
+The UI currently says things like:
+
+* `1 / 26 tickers with flow`
+* `5 / 10 tickers with flow`
+
+Clarify whether that means:
+
+* tickers with bullish/bearish unusual flow only, or
+* tickers with actual options data available.
+
+For this Sectors tab, the user needs coverage of all optionable tickers. If the denominator is all theme tickers, the numerator should not only count unusual-flow tickers unless the label clearly says “with unusual flow.”
+
+Preferred metrics:
+
+* `X / Y represented`
+* `A with active flow`
+* `B neutral`
+* `C pending scan`
+* `D no options/unsupported`
+
+Step 5 — Validation
+Use the actual UI hierarchy:
+
+A. Default Sectors view:
+
+* every sector card appears
+* every sector has total call, total put, total net flow, average net flow
+* every sector has a state even if neutral/pending-heavy
+
+B. Click Technology:
+
+* every Technology theme card appears
+* each theme has total call, total put, total net flow, average net flow
+* themes are not blank just because they lack unusual flow
+
+C. Click Data Center Infrastructure:
+
+* all theme stocks appear
+* optionable stocks eventually show stock-level call/put/net/P/C/volume values
+* pending-chain names are explicitly labeled as pending chain, not generic blank
+* stale LKG rows show previous values
+
+D. Coverage:
+
+* represented_percent should reach 99%+ for optionable supported tickers
+* generic pending should approach zero after the Sectors backfill completes
+* known optionable names like AMAT, DELL, INTC, WDC, TER must not be false no-options
+
+E. Persistence:
+
+* after Sectors backfill completes, restart server
+* immediately hit `/api/options-flow/sectors`
+* stock rows, theme rollups, and sector rollups should remain populated from LKG
+
+F. Safety:
+
+* no Options Flow Screener changes
+* no 429s
+* no unmanaged Tradier calls
+* `watchlist_overlap_live_calls=0`
+
+Acceptance criteria:
+This is fixed only when the Sectors tab drilldown works all the way down:
+sector → theme → stock.
+
+The stock rows must carry the actual options metrics, and the theme/sector totals must be derived from those stock rows.

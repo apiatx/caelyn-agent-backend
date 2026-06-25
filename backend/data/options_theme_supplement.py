@@ -189,21 +189,47 @@ def _save_supplement_lkg_to_disk(ticker_data: dict) -> None:
     pattern as _save_master_lkg_to_disk in main.py.
 
     Called after every supplement batch so data survives server restarts.
+
+    MERGE STRATEGY: fresh supplement rows WIN over any existing disk entry for
+    the same symbol (new scan data is always more current).  Old disk entries
+    for symbols NOT in the current in-memory batch are PRESERVED so coverage
+    accumulates across restarts rather than shrinking each time the server is
+    restarted before a full pass completes.
+
+    Entries older than _SUPPLEMENT_LKG_DISK_MAX_AGE are pruned on save.
     """
     if not ticker_data:
         return
     try:
         now = time.time()
+        merged: dict = {}
+
+        # Load existing disk entries first (old data as base)
+        if _SUPPLEMENT_LKG_DISK_PATH.exists():
+            try:
+                old_payload = _json.loads(
+                    _SUPPLEMENT_LKG_DISK_PATH.read_text(encoding="utf-8")
+                )
+                if isinstance(old_payload, dict):
+                    old_age = now - old_payload.get("saved_at", 0)
+                    if old_age <= _SUPPLEMENT_LKG_DISK_MAX_AGE:
+                        merged = dict(old_payload.get("ticker_data", {}))
+            except Exception:
+                pass  # corrupt file — start fresh
+
+        # Fresh supplement rows override matching old entries
+        merged.update(ticker_data)
+
         payload = {
-            "ticker_data":  ticker_data,
+            "ticker_data":  merged,
             "saved_at":     now,
-            "ticker_count": len(ticker_data),
+            "ticker_count": len(merged),
         }
         tmp = _SUPPLEMENT_LKG_DISK_PATH.with_suffix(".json.tmp")
         _SUPPLEMENT_LKG_DISK_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(_json.dumps(payload, default=str), encoding="utf-8")
         tmp.replace(_SUPPLEMENT_LKG_DISK_PATH)
-        print(f"[SUPP_LKG] Persisted {len(ticker_data)} supplement tickers to disk")
+        print(f"[SUPP_LKG] Persisted {len(merged)} supplement tickers to disk ({len(ticker_data)} fresh)")
     except Exception as exc:
         print(f"[SUPP_LKG] Disk write failed (non-fatal): {exc}")
 
@@ -269,13 +295,29 @@ def update_no_options_from_expiry_cache(expiry_cache: dict) -> None:
 
     expiry_cache format:  {ticker: ([exp_strings, ...], checked_at_float)}
     An empty expirations list means the ticker has no tradeable options.
+
+    IMPORTANT: Only writes confirmed_no_options during active market sessions
+    (premarket / regular / postmarket).  During off_hours or weekend, Tradier
+    commonly returns empty chains for fully optionable stocks — trusting those
+    results would cause false confirmed_no_options for tickers like AKAM, DELL.
     """
     if not expiry_cache:
         return
     try:
         from data.cache import cache
+        from data.tradier_market_session import get_session as _get_session
+        # Only confirm "no options" during regular market hours (09:30-16:00 ET).
+        # Options chains are only tradeable during regular session; pre-market,
+        # post-market, off-hours and weekends all return empty chains for tickers
+        # that are fully optionable — trusting them causes false confirmed_no_options.
+        if _get_session() != "regular":
+            return
         existing: dict = cache.get(_NO_OPTIONS_CACHE_KEY) or {}
         now     = time.time()
+        # Also load supplement + LKG caches once to protect tickers with
+        # existing options data from being falsely confirmed as no-options.
+        _fresh_td = (cache.get(_SUPPLEMENT_CACHE_KEY) or {}).get("ticker_data", {})
+        _lkg_td   = (cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}).get("ticker_data", {})
         changed = False
         for sym, entry in expiry_cache.items():
             if not isinstance(entry, (list, tuple)) or len(entry) < 1:
@@ -283,6 +325,11 @@ def update_no_options_from_expiry_cache(expiry_cache: dict) -> None:
             exps = entry[0]
             if isinstance(exps, list) and len(exps) == 0:
                 if sym not in existing:
+                    # Extra guard: if the ticker already has supplement data
+                    # (it was seen as optionable in a prior scan), don't add
+                    # it — a single empty-expiry scan is not enough evidence.
+                    if _fresh_td.get(sym) or _lkg_td.get(sym):
+                        continue
                     existing[sym] = {
                         "confirmed_at": entry[1] if len(entry) > 1 else now,
                         "updated_at":   now,
@@ -332,18 +379,52 @@ def update_supplement_cache(results: list[dict]) -> None:
         return
     try:
         from data.cache import cache
-        existing   = cache.get(_SUPPLEMENT_CACHE_KEY) or {"ticker_data": {}, "cached_at": 0}
-        ticker_data: dict = dict(existing.get("ticker_data", {}))
+        fresh_snap = cache.get(_SUPPLEMENT_CACHE_KEY) or {"ticker_data": {}, "cached_at": 0}
+        ticker_data: dict = dict(fresh_snap.get("ticker_data", {}))
+        # Also read the LKG cache once so we can protect tickers that only exist
+        # there (e.g. after a restart, before the first backfill batch completes).
+        _lkg_snap    = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        _lkg_td: dict = _lkg_snap.get("ticker_data", {})
         now = time.time()
+        _COVERAGE_ONLY = frozenset({"neutral_no_unusual_flow", "optionable_pending_chain"})
         for row in results:
             sym = (row.get("ticker") or "").upper()
-            if sym:
-                ticker_data[sym] = {**row, "_source": "supplement", "_cached_at": now}
+            if not sym:
+                continue
+            new_scan_result = row.get("scan_result", "")
+
+            # ── Guard 1: never write confirmed_no_options for a ticker that has
+            # ANY existing data (fresh supplement or LKG).  Off-market Tradier calls
+            # return empty chains for optionable stocks, producing false positives.
+            # confirmed_no_options should only tag genuinely option-less tickers on
+            # their FIRST scan ever (no prior record in any cache layer).
+            if new_scan_result == "confirmed_no_options":
+                if ticker_data.get(sym) or _lkg_td.get(sym):
+                    continue   # preserve existing row, discard false positive
+
+            # ── Guard 2: never overwrite a row with real premium data with a
+            # zero-premium neutral/pending coverage row.  Coverage rows tag state
+            # only — they must not erase confirmed unusual-flow data.
+            if new_scan_result in _COVERAGE_ONLY:
+                cur = ticker_data.get(sym) or _lkg_td.get(sym)
+                if cur:
+                    existing_prem = (cur.get("premium") or 0.0)
+                    if existing_prem > 0 or cur.get("call_premium") or cur.get("put_premium"):
+                        continue   # keep the existing row with real flow data
+
+            ticker_data[sym] = {**row, "_source": "supplement", "_cached_at": now}
         cache.set(
             _SUPPLEMENT_CACHE_KEY,
             {"ticker_data": ticker_data, "cached_at": now, "last_scan_at": now},
             _SUPPLEMENT_CACHE_TTL,
         )
+        # Invalidate sectors cache so the next request rebuilds from fresh data.
+        # Without this, the 60-second sectors cache serves stale all-null data
+        # even after the supplement loop has populated real options rows.
+        try:
+            cache.delete("options_flow_sectors:v1")
+        except Exception:
+            pass
         # Persist all accumulated fresh data to disk LKG
         _save_supplement_lkg_to_disk(ticker_data)
     except Exception as exc:
