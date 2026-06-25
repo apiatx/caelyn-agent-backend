@@ -1,0 +1,115 @@
+Proceed with Phase 4A planning only: active page priority for quote demand.
+
+Do not implement yet. Do not build active options priority yet. Do not build a new scheduler. Do not change endpoint shapes. Preserve the existing TradierProvider, global limiter, lane budget, cache/coalescing, and Phase 1–3 behavior.
+
+Current state:
+
+* Phase 1 closed unmanaged Tradier callers.
+* Phase 2 added market-hours gating for options-heavy loops.
+* Phase 3 added lane budget guardrails.
+* Remaining gap: no active page priority and no unified symbol demand registry.
+
+Goal for Phase 4A:
+Add a lightweight active quote-demand registry so active/visible page symbols are prioritized inside the existing `quotes` lane.
+
+Important:
+This is quote priority only.
+Do not prioritize option chains yet.
+Do not scan every ticker’s options chain because a page is open.
+
+Desired behavior:
+
+1. When user visits a page, the endpoint registers visible quote symbols as active demand.
+2. Registration includes:
+
+   * symbol
+   * scope/page
+   * data_type = quote
+   * visible_now = true
+   * priority score
+   * expires_at / TTL
+3. Endpoint returns cached/LKG quote rows immediately.
+4. Refresh happens through the existing shared TradierProvider / quote lane.
+5. The same symbol appearing on multiple pages should merge scopes and raise priority, not create duplicate calls.
+6. Background quote refresh should process active visible symbols before low-priority universe symbols.
+7. Active demand expires automatically after a short TTL if the page is not revisited/refreshed.
+8. No direct page-visit Tradier burst outside the shared provider/lane budget.
+
+Pages/scopes to include in the plan:
+
+* Watchlist
+* Portfolio
+* Themes
+* Options Flow
+* Options Flow Sectors
+* Social
+* Screener
+* Strategy
+* ticker popup/search
+
+Planning questions:
+
+1. Where is the best place to create the active quote-demand registry?
+
+   * existing cache module?
+   * new small `quote_demand_registry.py`?
+   * existing realtime quotes service?
+   * avoid new scheduler unless necessary
+
+2. Which current endpoints already know their visible symbols?
+   For each page/scope, report:
+
+   * endpoint
+   * where symbols are available
+   * whether symbols are full page universe or visible subset
+   * how many symbols could be registered
+   * whether frontend needs to pass visible rows, or backend already knows enough
+
+3. How should active quote priority feed into existing quote refresh?
+
+   * Can `realtime_quotes_service` sort missing/stale symbols by demand priority?
+   * Can it pull active registry symbols first before general background universe?
+   * Can it avoid duplicate calls through existing quote cache?
+
+4. What TTL should active demand use?
+   Suggested:
+
+   * active visible page demand TTL: 60–120 seconds
+   * popup/search demand TTL: 30–60 seconds
+   * background/non-visible demand lower priority
+
+5. What diagnostics should be added?
+   Add/extend `/api/rate-status` or related endpoint with:
+
+   * active_quote_demand_count
+   * active_quote_symbols_by_scope
+   * top_active_quote_symbols
+   * active_quote_queue_depth
+   * active_quote_expired_count
+   * duplicate_quote_demands_merged
+   * quote_refresh_order_sample
+   * quote_lane_deferred_due_budget
+   * active_quote_hits_from_cache
+   * active_quote_live_fetches
+
+6. What should not change?
+
+   * no endpoint response shape changes
+   * no new quote cache namespace
+   * no direct raw Tradier calls
+   * no active options priority yet
+   * no unified full symbol registry yet unless absolutely necessary
+   * no raised Tradier RPM
+
+7. Final planning output:
+   Provide:
+
+   * minimal file-change plan
+   * endpoint/scope registration map
+   * how demand priority merges by symbol
+   * how quote refresh order changes
+   * diagnostics to add
+   * validation plan
+   * risks
+
+Do not implement until this plan is approved.
