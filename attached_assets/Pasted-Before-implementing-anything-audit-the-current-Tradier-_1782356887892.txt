@@ -1,0 +1,162 @@
+Before implementing anything, audit the current Tradier data flow end-to-end. Do not write code yet except temporary inspection scripts/logging if needed. I need to understand what already exists and what needs to be adapted.
+
+Goal:
+Map exactly how Tradier quote and options data currently works across the app, including Watchlist, Portfolio, Themes, Options Flow, Options Flow Sectors, Social, Screener, Strategy, ticker popup/search, and any background jobs.
+
+Questions to answer:
+
+1. Current Tradier call sites
+   Find every backend code path that calls Tradier or raw Tradier URLs:
+
+* quote calls
+* option expiration calls
+* option chain calls
+* timesales/history calls
+* any raw httpx requests to Tradier
+* any frontend/proxy routes that indirectly trigger Tradier
+
+For each call site, report:
+
+* file/function
+* endpoint called
+* whether it uses `TradierProvider`
+* whether it uses the global limiter
+* whether it uses shared cache/coalescing
+* whether it can run on page visit
+* whether it can run in background
+* which page/feature owns it
+
+2. Current background behavior
+   Do we currently have a background Tradier rotation loop?
+   If yes:
+
+* where is it started?
+* what symbols does it use?
+* how often does it run?
+* does it run pre-market/market/post-market only?
+* does it use dynamic symbols from DB/ticker universe?
+* does it include watchlist/portfolio/themes/social/screener/strategy symbols?
+* does it include Options Flow screener?
+* does it stop/slow outside market hours?
+
+If no true rotation exists, say that clearly.
+
+3. Current page-visit behavior
+   For each page, determine whether visiting the page triggers Tradier work:
+
+* Watchlist
+* Portfolio
+* Themes
+* Options Flow
+* Options Flow Sectors
+* Social
+* Screener
+* Strategy
+* ticker popup/search
+
+For each page, report:
+
+* does it call a backend endpoint that triggers Tradier?
+* does it only read cached data?
+* does it enqueue background refresh?
+* does it burst-scan symbols?
+* does it use shared canonical rows?
+* does it duplicate another page’s work?
+
+4. Current symbol universe
+   Find the existing ticker repo/hub/universe source.
+   Report:
+
+* where it lives
+* how tickers are added/removed
+* whether it includes dev watchlist tickers
+* whether it includes user watchlists
+* whether it includes portfolio holdings
+* whether it includes themes page tickers
+* whether it includes social/screener/strategy tickers
+* whether it includes Options Flow/Sectors symbols
+* whether it distinguishes foreign/OTC/unsupported symbols
+
+5. Current quote system
+   Audit quote data:
+
+* where quote cache lives
+* TTL/current freshness behavior
+* batch size
+* retry behavior for partial quote responses
+* whether all pages share the same quote row
+* whether active visible pages get priority today
+* whether quote failures can blank prior good data
+
+6. Current options system
+   Audit options data:
+
+* where expiration cache lives
+* where chain cache lives
+* where per-symbol options signal rows live
+* whether Options Flow screener output is reusable by Watchlist/Themes/Portfolio
+* whether Watchlist/Portfolio/Themes/Sectors share `portfolio_opts:{sym}`
+* whether failed refreshes can overwrite prior good data
+* whether stale rows are queued for refresh
+* whether foreign/colon-prefix/OTC names are skipped before Tradier calls
+
+7. Current priority/budget behavior
+   Do we currently have any concept of:
+
+* active page priority
+* visible ticker priority
+* Options Flow reserved budget
+* quote budget vs options budget
+* retry/maintenance budget
+* per-scope queue depth
+* duplicate scan prevention across scopes
+
+If yes, document where.
+If no, say no.
+
+8. Scalability/gating recommendation
+   Given current Tradier limits, recommend whether active page priority should be:
+
+* dev/admin only for now
+* enabled for quotes only
+* enabled for options only with strict visible-row caps
+* disabled until higher-rate options API
+* controlled by env flags
+
+Include suggested env flags if useful:
+
+* `ENABLE_ACTIVE_PAGE_PRIORITY`
+* `ACTIVE_PRIORITY_DEV_ONLY`
+* `ACTIVE_OPTIONS_VISIBLE_LIMIT`
+* `OPTIONS_FLOW_RESERVED_RPM`
+* `QUOTE_RESERVED_RPM`
+* `MAINTENANCE_RESERVED_RPM`
+
+9. Desired target, but do not implement yet
+   Compare current state to this target:
+
+* two central work types: quote work and options work
+* pages are not separate Tradier scanners
+* pages register demand/scope/priority
+* all pages read shared cached quote/options rows
+* same ticker appearing on multiple pages raises priority, not duplicate scans
+* active pages include Watchlist, Portfolio, Themes, Options Flow, Sectors, Social, Screener, Strategy, and ticker popup/search
+* Options Flow screener gets reserved near-real-time budget
+* foreign/OTC names do not waste options calls
+* failed refresh never hides prior good data
+
+10. Final audit output
+    Provide:
+
+* table of all current Tradier call sites
+* table of page behavior: cached only vs enqueue vs live scan
+* table of current caches and TTLs
+* table of background loops/jobs
+* diagram or bullet flow of current quote path
+* diagram or bullet flow of current options path
+* list of duplication risks
+* list of unmanaged Tradier paths
+* recommendation: adapt existing provider vs build new module
+* minimum safe implementation plan after audit
+
+Do not implement until this audit is reported and approved.
