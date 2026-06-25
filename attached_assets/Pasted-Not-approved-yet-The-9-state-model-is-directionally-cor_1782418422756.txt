@@ -1,0 +1,121 @@
+Not approved yet. The 9-state model is directionally correct, but the Sectors tab is still not meeting the product requirement.
+
+Do not close this while coverage is 2.6% and expected 99% coverage takes ~3 hours.
+
+Important:
+Do not change the Options Flow Screener tab/toggle.
+The Screener tab is market-wide unusual-flow discovery and should remain separate.
+
+This task is only about Options Flow → Sectors.
+
+Sectors requirement:
+The Sectors tab must cover the saved backend sector/theme/ticker universe.
+
+Required rollup:
+
+1. Individual theme stock options flow/state
+2. Theme-level:
+
+   * total net flow
+   * average net flow
+   * bullish/bearish/mixed/neutral/pending/unsupported counts
+3. Sector-level:
+
+   * total net flow
+   * average net flow
+   * bullish/bearish/mixed/neutral/pending/unsupported counts
+
+Current problem:
+The new 9-state model is good, but the coverage path is still too slow. A 6-symbol batch every ~5 minutes is not acceptable for a ~226-symbol Sectors universe. This means the Sectors tab remains mostly blank/unusable after restart.
+
+Fix direction:
+Add or adapt a Sectors-specific coverage/backfill workflow for the saved sector/theme/ticker universe.
+
+Constraints:
+
+* Do not change Options Flow Screener behavior.
+* Do not change frontend response shape except additive fields if needed.
+* Do not bypass TradierProvider.
+* Do not raise global Tradier RPM.
+* Do not route-trigger a giant live burst from `/api/options-flow/sectors`.
+* Do not let failed/deferred calls poison `confirmed_no_options`.
+* Keep last-good/LKG visible.
+
+Expected behavior:
+
+* `/api/options-flow/sectors` should immediately return all sectors/themes/tickers with explicit state rows.
+* Symbols without completed chain scan should show `optionable_pending_chain` or `deferred_retry`, not vanish.
+* A background Sectors coverage/backfill process should scan the saved universe through existing provider/budget lanes until 99%+ optionable coverage is reached.
+* Coverage should build materially faster than 3 hours. Target should be closer to one active session warmup cycle, ideally under 20–30 minutes for ~226 symbols, subject to Tradier budget.
+* Once coverage is built, LKG should make restart coverage immediate.
+
+Required state model:
+
+* bullish_flow
+* bearish_flow
+* mixed_flow
+* neutral_no_unusual_flow
+* optionable_pending_chain
+* confirmed_no_options
+* unsupported_foreign_otc
+* deferred_retry
+* stale_lkg
+
+Important correctness:
+
+* True `neutral_no_unusual_flow` only after a successful chain scan.
+* Expirations confirmed but chain not scanned = `optionable_pending_chain`.
+* Budget-deferred or failed provider call = `deferred_retry`, not `confirmed_no_options`.
+* Empty expirations from a real successful response = `confirmed_no_options`.
+
+Required diagnostics:
+For `/api/options-flow/sectors`, report:
+
+* total sectors
+* total themes
+* total tickers in saved Sectors universe
+* optionable_expected
+* represented_count
+* represented_percent
+* chain_scanned_count
+* optionable_pending_chain_count
+* true_neutral_no_unusual_flow_count
+* bullish_count
+* bearish_count
+* mixed_count
+* confirmed_no_options_count
+* unsupported_count
+* deferred_retry_count
+* stale_lkg_count
+* generic_pending_count
+
+Also report per theme and per sector:
+
+* total tickers
+* represented count
+* total net flow
+* average net flow
+* bullish/bearish/mixed/neutral/pending/unsupported counts
+
+Acceptance criteria:
+
+* 99%+ of optionable US tickers in the saved Sectors universe are represented by a real state row.
+* Every sector has a visible options state.
+* Every sector has total and average net flow.
+* Every theme has total and average net flow.
+* Neutral/no-flow tickers are included.
+* Generic pending is near zero except truly unattempted symbols.
+* Known optionable names like AMAT, DELL, INTC, WDC, TER are not falsely no-options.
+* No 429s.
+* No Options Flow Screener behavior changes.
+* LKG persists high coverage after restart.
+
+Persistence test:
+After coverage reaches target:
+
+1. Confirm LKG files contain the state rows.
+2. Restart server.
+3. Immediately hit `/api/options-flow/sectors`.
+4. Confirm high coverage remains immediately after restart.
+
+Do not proceed to new features until Sectors meets these criteria.
