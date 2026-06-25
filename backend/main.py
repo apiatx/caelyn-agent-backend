@@ -4972,17 +4972,14 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
     from data.tradier_provider import TRADIER_LIMITER, TradierProvider
     tradier_status = TRADIER_LIMITER.status()
 
+    # ── Remaining unmanaged (bypass) Tradier paths ───────────────────────────
+    # Phase 1 cleaned: social, catalyst, whale, discovery, sector-rotation,
+    # watchlist-topup. The following are intentional isolations or not yet migrated.
     bypass_services = [
-        "sector_rotation/providers.py",
-        "playbook/discovery_enrichment.py",
         "congressional_trading_service.py",
         "insider_activity_service.py",
-        "whale_watch_service.py",
-        "social_screener_service.py",
-        "catalyst_calendar_service.py",
     ]
 
-    # ── Unmanaged (bypass) Tradier paths still in theme_rs_service.py ────────
     unmanaged_tradier_paths = [
         {
             "module": "services/theme_rs_service.py",
@@ -5004,6 +5001,13 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
             "endpoint": "/markets/history",
             "mechanism": "raw httpx",
             "note": "Daily bar fallback; bypasses TRADIER_LIMITER",
+        },
+        {
+            "module": "services/watchlist_quote_cache.py",
+            "function": "_fetch_batch_direct",
+            "endpoint": "/markets/quotes",
+            "mechanism": "raw httpx",
+            "note": "Startup-only fallback fires only when data_service not yet initialised; suppressed once warm",
         },
     ]
 
@@ -5027,12 +5031,42 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
     except Exception:
         supplement_loop_diag = {"error": "supplement diag unavailable"}
 
+    # ── Market session classification ─────────────────────────────────────────
+    try:
+        from data.tradier_market_session import get_session_info as _get_sess_info
+        session_info = _get_sess_info()
+    except Exception:
+        session_info = {"tradier_market_session": "unknown", "is_tradier_active_session": None}
+
+    # ── Loop diagnostics (master screener + supplement) ───────────────────────
+    try:
+        import data.loop_diagnostics as _loop_diag_mod
+        loop_diag = _loop_diag_mod.get_loop_diag()
+    except Exception:
+        loop_diag = {}
+
+    # ── last_429_at from TradierProvider module ───────────────────────────────
+    try:
+        import data.tradier_provider as _td_mod
+        _last_429_at_ts = getattr(_td_mod, "_last_429_at", None)
+    except Exception:
+        _last_429_at_ts = None
+
     return {
+        # ── Session & loop health (Phase 2) ──────────────────────────────────
+        **session_info,
+        **loop_diag,
+        "calls_used_last_60s": tradier_status.get("calls_last_60s"),
+        "last_429_at": _last_429_at_ts,
+        # ── Tradier rate-limiter ──────────────────────────────────────────────
         "tradier": {
             **tradier_status,
-            "limit_note": "110/min cap; bypass services make additional unaccounted calls",
+            "limit_note": "110/min cap; theme_rs_service.py uses its own Semaphore(20) pool separately",
             "bypass_services": bypass_services,
-            "bypass_note": f"{len(bypass_services)} legacy services call Tradier directly and are not counted here",
+            "bypass_note": (
+                f"{len(bypass_services)} services still call Tradier directly "
+                f"(congressional, insider — not yet migrated)"
+            ),
         },
         "options_inflight": inflight_data,
         "coalescing": coalescing_data,
@@ -5040,7 +5074,6 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
         "unmanaged_tradier_paths": {
             "count": len(unmanaged_tradier_paths),
             "paths": unmanaged_tradier_paths,
-            "note": "These paths bypass TRADIER_LIMITER. Phase 2 scheduler will unify them.",
         },
         "fmp": {
             "note": "No rate limiter — FMP calls use per-endpoint caching; add limiter if 429s appear",
@@ -11721,8 +11754,28 @@ async def _master_screener_loop():
 
     _MASTER_CYCLE_SLEEP = 5   # seconds between cycles; rate limiter controls Tradier throughput
 
+    from data.tradier_market_session import get_session as _get_ms_session
+    import data.loop_diagnostics as _ld_ms
+
+    _MASTER_OFFHOURS_SLEEP = 1200  # 20 min off-hours/weekends; chains don't change overnight
+
     while True:
+        _ms_session = _get_ms_session()
+        _ms_is_active = _ms_session not in ("off_hours", "weekend")
+
+        if not _ms_is_active:
+            _ms_next = _time.time() + _MASTER_OFFHOURS_SLEEP
+            _ld_ms.update_master_loop("maintenance", next_run_at=_ms_next)
+            _ld_ms.increment_suppressed(1)
+            print(
+                f"[MASTER_SCREENER] Off-hours ({_ms_session}) — skipping scan, "
+                f"sleeping {_MASTER_OFFHOURS_SLEEP // 60} min. LKG cache serves stale data."
+            )
+            await asyncio.sleep(_MASTER_OFFHOURS_SLEEP)
+            continue
+
         t_cycle = _time.time()
+        _ld_ms.update_master_loop("active")
         try:
             engine = UnifiedOptionsEngine(data_service)
             engine._shared_sem = _TRADIER_GLOBAL_SEM
@@ -11913,6 +11966,12 @@ async def _master_screener_loop():
         except Exception:
             pass
 
+        _ms_done = _time.time()
+        _ld_ms.update_master_loop(
+            "active",
+            last_run_at=_ms_done,
+            next_run_at=_ms_done + _MASTER_CYCLE_SLEEP,
+        )
         await asyncio.sleep(_MASTER_CYCLE_SLEEP)
 
 
@@ -11959,10 +12018,14 @@ async def _theme_options_supplement_loop():
     from data.tradier_flow_engine import TradierFlowEngine
     from data.options_flow_engine import ETF_SET as _ETF_SET
 
-    _BATCH_SIZE  = 20
-    _CYCLE_SLEEP = 300   # 5 minutes — 20 syms × ~2 calls = ~8 calls/min (<8% budget)
+    _BATCH_SIZE          = 20
+    _ACTIVE_CYCLE_SLEEP  = 300    # 5 min during pre/regular/post-market
+    _OFFHOURS_SUPP_SLEEP = 2400   # 40 min during off-hours/weekends
     _scan_cursor = 0
     _local_expiry: dict = {}   # separate from master screener expiry cache
+
+    from data.tradier_market_session import get_session as _get_supp_session
+    import data.loop_diagnostics as _ld_supp
 
     def _sf(v):
         try: return float(v) if v is not None else None
@@ -11976,10 +12039,25 @@ async def _theme_options_supplement_loop():
     print("[THEME_SUPP] Theme options supplement loop started")
 
     while True:
+        _supp_sess = _get_supp_session()
+        _supp_is_active = _supp_sess not in ("off_hours", "weekend")
+
+        if not _supp_is_active:
+            _supp_next = _ts.time() + _OFFHOURS_SUPP_SLEEP
+            _ld_supp.update_supplement_loop("maintenance", next_run_at=_supp_next)
+            _ld_supp.increment_suppressed(1)
+            print(
+                f"[THEME_SUPP] Off-hours ({_supp_sess}) — skipping scan, "
+                f"sleeping {_OFFHOURS_SUPP_SLEEP // 60} min."
+            )
+            await asyncio.sleep(_OFFHOURS_SUPP_SLEEP)
+            continue
+
+        _ld_supp.update_supplement_loop("active")
         try:
             pending = _get_pending()
             if not pending:
-                await asyncio.sleep(_CYCLE_SLEEP)
+                await asyncio.sleep(_ACTIVE_CYCLE_SLEEP)
                 continue
 
             _scan_cursor = _scan_cursor % len(pending)
@@ -11987,7 +12065,7 @@ async def _theme_options_supplement_loop():
             _scan_cursor += _BATCH_SIZE
 
             if not batch:
-                await asyncio.sleep(_CYCLE_SLEEP)
+                await asyncio.sleep(_ACTIVE_CYCLE_SLEEP)
                 continue
 
             # ── Global in-flight guard ────────────────────────────────────────
@@ -12013,7 +12091,7 @@ async def _theme_options_supplement_loop():
 
             batch = _batch_claimed
             if not batch:
-                await asyncio.sleep(_CYCLE_SLEEP)
+                await asyncio.sleep(_ACTIVE_CYCLE_SLEEP)
                 continue
             # ─────────────────────────────────────────────────────────────────
 
@@ -12093,7 +12171,7 @@ async def _theme_options_supplement_loop():
             batch = _theme_only_in_batch + _overlap_needs_scan
             if not batch:
                 print("[THEME_SUPP] All batch symbols already covered by watchlist cache — skipping scan")
-                await asyncio.sleep(_CYCLE_SLEEP)
+                await asyncio.sleep(_ACTIVE_CYCLE_SLEEP)
                 continue
             # ─────────────────────────────────────────────────────────────────
 
@@ -12129,7 +12207,7 @@ async def _theme_options_supplement_loop():
                 print(f"[THEME_SUPP] Quote prefetch error: {_qe}")
 
             if not candidates:
-                await asyncio.sleep(_CYCLE_SLEEP)
+                await asyncio.sleep(_ACTIVE_CYCLE_SLEEP)
                 continue
 
             # TradierFlowEngine: master_stage2_limit defaults to 0
@@ -12163,7 +12241,7 @@ async def _theme_options_supplement_loop():
             # Update tracking state for debug endpoint
             try:
                 from data.options_theme_supplement import update_scan_tracking as _upd_tracking
-                _upd_tracking(batch, _ts.time() + _CYCLE_SLEEP)
+                _upd_tracking(batch, _ts.time() + _ACTIVE_CYCLE_SLEEP)
             except Exception:
                 pass
 
@@ -12178,7 +12256,13 @@ async def _theme_options_supplement_loop():
             except Exception:
                 pass
 
-        await asyncio.sleep(_CYCLE_SLEEP)
+        _supp_done = _ts.time()
+        _ld_supp.update_supplement_loop(
+            "active",
+            last_run_at=_supp_done,
+            next_run_at=_supp_done + _ACTIVE_CYCLE_SLEEP,
+        )
+        await asyncio.sleep(_ACTIVE_CYCLE_SLEEP)
 
 
 _OPTIONS_DEFAULT_TICKERS = _OPTIONS_MEGACAP_SEEDS
