@@ -1,0 +1,83 @@
+Before Phase 3, quickly confirm one possible wording/logic issue from the Phase 2 report.
+
+The report says:
+“Off-hours gate fires on not in {"off_hours", "weekend"}”
+
+That sounds reversed. Please confirm the actual code condition is equivalent to:
+`if not is_tradier_active_session: skip options-heavy scan and sleep`
+
+Expected:
+
+* premarket / regular / postmarket → active loop runs
+* off_hours / weekend → maintenance/sleep, no heavy options chain scans
+
+If that is confirmed, proceed with Phase 3 planning only — budget/reserved capacity. Do not implement active page priority yet.
+
+Phase 3 goal:
+Add explicit budget/reserved capacity diagnostics and guardrails around the existing Tradier limiter so no one loop starves the others during active sessions.
+
+Do not build a new scheduler. Do not change endpoint shapes. Do not raise Tradier RPM.
+
+Target:
+The existing 110 RPM Tradier market-data cap should be partitioned logically across work types during active sessions.
+
+Suggested initial active-session budget:
+
+* quotes / page quote needs: 30 RPM
+* Options Flow master screener: 40 RPM
+* watchlist / portfolio / visible saved-symbol options refresh: 25 RPM
+* theme supplement / sectors maintenance / stale LKG retries: 10 RPM
+* reserve / emergency / popup headroom: 5 RPM
+
+Do not hardcode these if avoidable. Prefer env-configurable defaults:
+
+* `TRADIER_QUOTE_RPM_BUDGET=30`
+* `TRADIER_OPTIONS_FLOW_RPM_BUDGET=40`
+* `TRADIER_SAVED_OPTIONS_RPM_BUDGET=25`
+* `TRADIER_MAINTENANCE_RPM_BUDGET=10`
+* `TRADIER_RESERVED_RPM_BUDGET=5`
+
+Required behavior:
+
+1. All work still goes through existing TradierProvider/global limiter.
+2. Budget is a scheduling/guardrail layer, not a second rate limiter fighting the first.
+3. If a lane exceeds its budget:
+
+   * it should queue/defer, not call Tradier anyway.
+   * it should keep serving last-good/LKG data.
+4. Options Flow keeps reserved near-real-time capacity.
+5. Quotes cannot be starved by option-chain loops.
+6. Watchlist/Portfolio/Theme stale refresh cannot be starved forever.
+7. Maintenance/retry work runs, but cannot consume the whole account.
+8. Manual/user popup work should have small reserved headroom.
+
+Required diagnostics:
+Extend `/api/rate-status` with:
+
+* `tradier_budget_enabled`
+* `budget_by_lane`
+* `calls_last_60s_by_lane`
+* `deferred_by_lane`
+* `lane_saturation`
+* `options_flow_budget_used`
+* `quote_budget_used`
+* `saved_options_budget_used`
+* `maintenance_budget_used`
+* `reserved_budget_used`
+* `budget_rejections_or_deferrals`
+* `oldest_deferred_by_lane`
+* `last_budget_reset_at`
+
+Phase 3 should start with an audit/plan of where each current loop maps:
+
+* quote paths → quote lane
+* master screener → options_flow lane
+* watchlist/portfolio options refresh → saved_options lane
+* theme supplement/stale LKG/retry → maintenance lane
+* ticker popup/manual refresh → reserved/emergency lane
+
+Do not implement active page priority yet.
+Do not implement dynamic visible symbol registration yet.
+Do not build a new scheduler yet.
+
+After planning, report the exact minimal implementation needed.
