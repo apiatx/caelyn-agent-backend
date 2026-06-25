@@ -1256,7 +1256,7 @@ class CaelynTerminalProvider:
         if not syms or not self.tradier:
             return {}
         from data.tradier_budget import lane as _hist_lane
-        with _hist_lane("quotes"):
+        with _hist_lane("maintenance"):
             tasks = [self.tradier.get_history(sym, "daily", start) for sym in syms]
             results = await asyncio.gather(*tasks, return_exceptions=True)
         return {

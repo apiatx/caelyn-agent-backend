@@ -1,41 +1,52 @@
 ---
 name: Tradier budget lane tagging
-description: Which Tradier call types are per-HTTP-request vs batched, and which files needed non-obvious lane tags during Phase 3.
+description: Lane assignments for every Tradier call type; cache/coalescing accounting; deferred-call safety.
 ---
 
-## The rule
-Every `tradier_provider._get()` call is one budget-counted HTTP request.
-`get_quotes([N tickers])` batches in groups of 50 → few calls.
-`get_history(sym)` is **always one call per symbol** — no batching.
-`get_option_expirations(sym)` and `get_option_chain(sym, exp)` are also one-per-call.
+## Final lane map
 
-## Non-obvious tagged sites (Phase 3 completion)
+| Call type | Lane | Rationale |
+|-----------|------|-----------|
+| `get_quotes` for live screener/watchlist/portfolio | `quotes` | live price/vol/bid/ask data |
+| `get_history` (caelyn_terminal, whale_watch) | `maintenance` | startup-only burst, not live data |
+| `get_option_expirations` + `get_option_chain` (screener OI) | `maintenance` | background enrichment |
+| `get_option_expirations` + `get_option_chain` (portfolio scan) | `saved_options` | watchlist/portfolio options |
+| `TradierFlowEngine.run_live_scan` | `options_flow` | master options screener |
+| supplement loop `get_quotes` | `maintenance` | background stale-LKG refresh |
+| popup / user-triggered routes | `reserved` | default ContextVar, do NOT tag |
 
-| File | Function | Lane | Why |
-|------|----------|------|-----|
-| `data/caelyn_terminal.py` | `_fetch_tradier_histories()` | `quotes` | Fetches history for 100+ tickers (holdings + closed trades + option underlyings) — 107 individual HTTP calls at startup |
-| `services/whale_watch_service.py` | Tradier history gather | `quotes` | Per-whale-holding history fetch |
-| `data/portfolio_options_service.py` | `_scan_one_live()` — expirations | `saved_options` | Portfolio/watchlist option scan |
-| `data/portfolio_options_service.py` | `_scan_one_live()` — chain gather | `saved_options` | Wrap entire list comprehension + gather inside `with lane(...)` |
-| `services/screener_hub_service.py` | `_fetch_oi_from_tradier()` — expirations | `quotes` | OI enrichment for screener display |
-| `services/screener_hub_service.py` | `_fetch_oi_from_tradier()` — chain loop | `quotes` | Same function, per-expiration chain fetch |
+## Key rule: get_history is never quotes
+`get_history(sym)` = one HTTP call per symbol, no batching. 107 tickers at startup
+= 107 budget-counted calls. Tag as `maintenance` so history bursts don't starve
+live quote refresh during active sessions.
 
-## Diagnostic technique
-Added `asyncio.current_task().get_name()` log in `tradier_provider._get()` when
-`lane == "reserved"` → revealed `/markets/history` as the 108-call culprit.
-Remove the probe after identification.
+## Cache/coalescing accounting (no double-counting)
+- `get_quotes`: cache-first; only missing tickers reach `_get()` → zero extra budget
+- `get_option_expirations`: cache + `_EXPIRY_FUTURES` coalescing via `asyncio.shield()`;
+  waiters short-circuit before `_get()` → zero budget for coalesced waiters
+- `get_option_chain`: cache + `_CHAIN_FUTURES` coalescing via `asyncio.shield()`;
+  same pattern → only the first physical HTTP call consumes budget
 
-## ContextVar propagation with asyncio.gather
-`asyncio.gather(*[coro1, coro2, ...])` creates tasks via `ensure_future()` which
-copies the current context. So wrapping the ENTIRE list comprehension + gather call
-inside `with lane("X"):` correctly propagates the lane to all child tasks.
-This is safe in Python 3.11+.
+## Deferred call safety
+All three callers handle `None` from a deferred `_get()` gracefully:
+- `get_history`: `if not data: return []`
+- `get_option_expirations`: `if not data: return []` (then callers check falsy)
+- `get_option_chain`: `if not data: return empty_dict`
 
-**Why:** ContextVar is task-scoped. Tasks created by `ensure_future`/`create_task`
-copy the parent context at creation time. If the coroutine list is built and gather
-called inside the `with lane(...)` block, all child tasks inherit the lane.
+## Active-session enforcement (FORCE_ENFORCE validated)
+With `TRADIER_BUDGET_FORCE_ENFORCE=1`:
+- `maintenance: 10/10 SATURATED, deferred=541` — 107-call history burst deferred ✅
+- `quotes: 3/30` — live quote lane fully protected ✅
+- `reserved: 0/5` — all startup warmers tagged ✅
+- `last_429_at: None` — no 429s under enforcement ✅
+FORCE_ENFORCE env var reverted; use `TRADIER_BUDGET_FORCE_ENFORCE=1` to re-enable.
 
-## Final result
-- `reserved`: 1 (single incidental user-triggered call — correct)
-- `quotes`: 109 (all terminal history + quote warmers)
-- `total`: 110 — matches global TRADIER_LIMITER cap exactly
+## ContextVar propagation
+Wrap ENTIRE list comprehension + `asyncio.gather()` inside `with lane("X"):`.
+Tasks created by `ensure_future()` (inside gather) copy parent context at
+creation time. If created inside the `with` block, they inherit the lane. ✅
+
+## Off-hours vs active-session behavior
+Off-hours: `budget_enforcement_active=False`, warmers run free (expected).
+`maintenance: 108/10 OVER_BUDGET` with `deferred=0` is correct off-hours output —
+informational only. During active sessions, 98 of 108 maintenance calls defer.

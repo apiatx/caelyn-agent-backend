@@ -1,0 +1,81 @@
+Phase 3 is close, but do not checkpoint as fully complete yet. The reserved-lane leak is fixed, but lane hygiene needs one cleanup pass and active-session enforcement still needs proof.
+
+Good:
+
+* reserved lane is down to 1/5 RPM
+* major untagged get_history burst was found
+* no new scheduler/cache namespace
+* endpoint shapes preserved
+* global limiter still caps at 110 RPM
+
+Issues to fix/validate:
+
+1. Do not use the quote lane as a dumping ground for historical calls.
+   Current final state:
+   `quotes 109/30 RPM ← caelyn history (107 calls) + quote warmers`
+
+`get_history(sym)` for 107 tickers is not the same as current quote refresh. The quote lane should protect live price/volume/bid/ask quote needs. Historical/returns calls should not starve true quotes during active sessions.
+
+Please choose the safest minimal fix:
+
+* either add a small `history` / `analytics` lane, env-configurable, or
+* map Caelyn Terminal / Whale Watch historical `get_history` bursts to `maintenance`, or
+* prove those history calls are only active-visible/user-triggered and cannot starve quote refresh.
+
+Do not overbuild. Minimal lane hygiene only.
+
+2. Screener Hub options-chain calls should not be tagged as quotes.
+   Current report says:
+   `screener_hub_service._fetch_oi_from_tradier() get_option_expirations/get_option_chain loop → quotes`
+
+That is options work, not quote work.
+
+Retag this to one of:
+
+* `saved_options` if it supports visible/saved screener rows,
+* `maintenance` if it is background OI enrichment,
+  but not `quotes`.
+
+3. Active-session enforcement must be validated.
+   Most validation happened off-hours with budget enforcement inactive. Please simulate or safely force active-session enforcement and confirm:
+
+* `budget_enforcement_active: true`
+* quote lane defers at its budget
+* options_flow lane defers at its budget
+* saved_options lane defers at its budget
+* maintenance lane defers at its budget
+* reserved lane defers at its budget
+* deferred calls serve LKG/last-good instead of blanking
+* no Tradier 429s
+
+4. Confirm cache/coalescing accounting:
+
+* cache hits do not consume budget
+* coalesced option-chain waiters do not consume budget multiple times
+* only physical Tradier HTTP calls are recorded
+
+5. Final desired lane map:
+
+* current quote calls: `quotes`
+* historical/returns calls: `history` or `maintenance`, not `quotes`, unless clearly active-visible
+* master Options Flow screener: `options_flow`
+* watchlist/portfolio options refresh: `saved_options`
+* theme supplement / stale LKG / background retries: `maintenance`
+* popup/manual/user-triggered one-offs: `reserved`
+
+6. Validate `/api/rate-status` after cleanup:
+   Report:
+
+* budget_by_lane
+* calls_last_60s_by_lane
+* deferred_by_lane
+* lane_saturation
+* budget_rejections_or_deferrals
+* last_429_at
+* any lane over budget
+* whether enforcement is active or off-hours disabled
+
+Do not build active page priority yet.
+Do not build a new scheduler.
+Do not change endpoint shapes.
+Do not raise Tradier RPM.

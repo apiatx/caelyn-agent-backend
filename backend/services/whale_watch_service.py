@@ -1573,7 +1573,7 @@ async def _get_historical_returns_async(tickers: list[str]) -> dict[str, dict]:
         _ds = getattr(_main, "data_service", None)
         if _ds and getattr(_ds, "tradier", None):
             from data.tradier_budget import lane as _ww_lane
-            with _ww_lane("quotes"):
+            with _ww_lane("maintenance"):
                 histories = await asyncio.gather(
                     *[_ds.tradier.get_history(t, "daily", start_str, today_str)
                       for t in all_tickers],
