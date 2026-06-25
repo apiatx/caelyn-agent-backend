@@ -12260,7 +12260,7 @@ async def _theme_options_supplement_loop():
             engine._expiry_cache = _local_expiry
 
             from data.tradier_budget import lane as _supp_lane2
-            with _supp_lane2("maintenance"):
+            with _supp_lane2("maintenance"):   # supplement background scan
                 screener_data = await engine.run_live_scan(
                     None,
                     prefilter_snapshot={

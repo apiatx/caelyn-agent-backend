@@ -841,7 +841,7 @@ async def _fetch_tradier_oi_for_symbol(
     """
     try:
         from data.tradier_budget import lane as _oi_lane
-        with _oi_lane("maintenance"):
+        with _oi_lane("saved_options"):   # OI enrichment is screener background data, not supplement
             expirations: list[str] = await asyncio.wait_for(
                 provider.get_option_expirations(symbol),
                 timeout=timeout_per_call,
@@ -859,7 +859,7 @@ async def _fetch_tradier_oi_for_symbol(
     for exp in near_exps:
         try:
             from data.tradier_budget import lane as _oi2_lane
-            with _oi2_lane("maintenance"):
+            with _oi2_lane("saved_options"):   # OI chain fetch — screener background data
                 chain: dict = await asyncio.wait_for(
                     provider.get_option_chain(symbol, exp),
                     timeout=timeout_per_call,

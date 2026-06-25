@@ -29,6 +29,17 @@ def _finnhub_key() -> str:
     return os.getenv("FINNHUB_API_KEY", "")
 
 
+def _tradier_key() -> str:
+    """Raw Tradier API key — used by theme_rs_service for unmanaged history calls."""
+    return os.getenv("TRADIER_API_KEY", "")
+
+
+def _tradier_base() -> str:
+    """Tradier base URL — sandbox or production."""
+    _sandbox = os.getenv("TRADIER_SANDBOX", "false").lower() in ("1", "true", "yes")
+    return "https://sandbox.tradier.com/v1" if _sandbox else "https://api.tradier.com/v1"
+
+
 def _normalize_tradier_quote(sym: str, q: dict) -> dict:
     """
     Map Tradier quote fields to the canonical sector-rotation output contract:

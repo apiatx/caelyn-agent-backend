@@ -18,10 +18,10 @@ Lanes
   quotes         TRADIER_QUOTE_RPM_BUDGET=30   equity quote calls
   options_flow   TRADIER_OPTIONS_FLOW_RPM_BUDGET=40   master screener chains
   saved_options  TRADIER_SAVED_OPTIONS_RPM_BUDGET=25  watchlist/portfolio options
-  maintenance    TRADIER_MAINTENANCE_RPM_BUDGET=10    supplement/stale-LKG/gap-fill
+  maintenance    TRADIER_MAINTENANCE_RPM_BUDGET=20    supplement/stale-LKG/gap-fill
   reserved       TRADIER_RESERVED_RPM_BUDGET=5        popup/manual/untagged (default)
 
-Sum of defaults = 110 = global TRADIER_MARKET_DATA_RPM cap.
+Sum of defaults = 120 = global TRADIER_MARKET_DATA_RPM cap.
 """
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ BUDGETS: dict[str, int] = {
     "quotes":        _env_int("TRADIER_QUOTE_RPM_BUDGET",         30),
     "options_flow":  _env_int("TRADIER_OPTIONS_FLOW_RPM_BUDGET",  40),
     "saved_options": _env_int("TRADIER_SAVED_OPTIONS_RPM_BUDGET", 25),
-    "maintenance":   _env_int("TRADIER_MAINTENANCE_RPM_BUDGET",   10),
+    "maintenance":   _env_int("TRADIER_MAINTENANCE_RPM_BUDGET",   20),
     "reserved":      _env_int("TRADIER_RESERVED_RPM_BUDGET",       5),
 }
 

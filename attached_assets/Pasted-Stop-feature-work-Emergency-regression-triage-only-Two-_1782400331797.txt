@@ -1,0 +1,162 @@
+Stop feature work. Emergency regression triage only.
+
+Two user-visible regressions appeared after Phase 3/4A:
+
+1. Themes page: Market Performance panel shows “Failed to load data.”
+2. Options Flow page → Sectors tab/toggle: only ~2 stocks / ~2 themes have options flow data, roughly 5% coverage.
+
+Do not implement new features. Do not continue active priority. First identify the exact breaking change and restore page functionality.
+
+Triage goals:
+
+* Determine whether Themes failure is caused by Phase 4A quote-demand registration.
+* Determine whether Sectors sparse options data is caused by Phase 3 budget enforcement, stale/LKG not loading, lane starvation, or broken cache bridging.
+* Preserve endpoint response shapes.
+* Do not make Sectors live-scan watchlist-overlap symbols.
+* Do not bypass TradierProvider.
+* Do not raise global Tradier RPM.
+
+Step 1 — Capture exact failing endpoints and errors
+Immediately call and log:
+
+* Themes page data endpoint(s), especially:
+
+  * `/api/themes/relative-strength`
+  * any endpoint used by the Market Performance tab
+  * any endpoint used by Themes/Sectors/All toggles
+
+* Options Flow Sectors endpoint:
+
+  * `/api/options-flow/sectors`
+
+* Rate status:
+
+  * `/api/rate-status`
+
+For each:
+
+* HTTP status
+* response body
+* backend stack trace if 500
+* frontend console/network error if available
+* exact route handler/function
+
+Step 2 — Themes failure isolation
+Phase 4A added quote-demand registration as side effects to some endpoints. Check whether any Themes endpoint now calls `quote_demand_registry.register(...)`.
+
+If yes:
+
+* Wrap/disable only that registration temporarily.
+* Re-test the Themes endpoint.
+* If Themes loads after disabling registration, fix the registration bug.
+* Registration must never be allowed to break the primary page response. It should be best-effort only.
+
+Required behavior:
+
+* quote-demand registration failure should log warning and continue.
+* bad/missing symbol list should not throw.
+* unknown scope should normalize to `page` or be ignored safely.
+* endpoint should return its original data even if demand registration fails.
+
+Step 3 — Options Flow Sectors sparse data diagnosis
+Do not guess. Pull the Sectors diagnostics and compare to prior expected diagnostics.
+
+Report:
+
+* `symbols_total`
+* `symbols_from_cache`
+* `symbols_from_master`
+* `symbols_from_lkg`
+* `symbols_from_watchlist_cache`
+* `symbols_from_unavailable_cache`
+* `watchlist_overlap_live_calls`
+* `duplicate_scan_attempts_blocked`
+* `theme_only_live_calls_enqueued`
+* `live_scan_policy`
+* any count of rows with `options_data_available=true`
+* any count of rows with stale/LKG options rows
+
+Expected:
+
+* `watchlist_overlap_live_calls` must remain 0.
+* Sectors should still read cached/LKG/shared rows.
+* It should not fall to only two symbols unless shared options rows are missing, not being loaded, or being filtered out.
+
+Step 4 — Check budget/lane starvation
+From `/api/rate-status`, report:
+
+* `budget_enforcement_active`
+* `calls_last_60s_by_lane`
+* `deferred_by_lane`
+* `lane_saturation`
+* `budget_rejections_or_deferrals`
+* `options_flow_budget_used`
+* `saved_options_budget_used`
+* `maintenance_budget_used`
+* `last_429_at`
+* `options_loop_calls_last_60s`
+
+Check whether:
+
+* `saved_options` is being deferred heavily
+* `maintenance` is being deferred heavily
+* `options_flow` is saturated
+* watchlist/portfolio options refresh is unable to refill `portfolio_opts:{sym}`
+* supplement/master data is not reaching the Sectors aggregation cache
+
+If active-session budget enforcement is causing Sectors to starve, do not remove the whole architecture. Add/adjust a safe fix:
+
+* temporarily raise `SAVED_OPTIONS_RPM_BUDGET`
+* temporarily raise `MAINTENANCE_RPM_BUDGET`
+* or allow LKG hydration to run without live Tradier calls
+* but do not let live scans burst beyond global limiter
+
+Step 5 — LKG/cache hydration check
+After restart, verify whether options LKG files are being loaded into memory/shared rows:
+
+* master options LKG
+* supplement LKG
+* portfolio/watchlist options LKG
+* `portfolio_opts:{sym}` rows
+
+Check exact files/keys:
+
+* `options_master_lkg_v1`
+* supplement LKG
+* portfolio options LKG
+* `portfolio_opts:{sym}`
+
+If Sectors is sparse because memory cache is cold but disk LKG exists, fix hydration/read path so Sectors can serve LKG immediately without requiring live scans.
+
+Step 6 — Safe rollback switches
+If page functionality cannot be fixed quickly, apply the smallest reversible disable:
+
+A. For Themes failure:
+
+* disable quote-demand registration on Themes endpoint only.
+* keep the rest of Phase 4A intact.
+
+B. For Sectors sparse options:
+
+* temporarily disable active budget enforcement for saved_options/maintenance only, or raise those budgets.
+* do not disable global Tradier limiter.
+* do not disable Sectors aggregation-only rule.
+
+Step 7 — Final report before code changes beyond hotfix
+Report:
+
+* exact root cause of Themes failed load
+* exact root cause of Sectors sparse data
+* whether each was Phase 3 or Phase 4A related
+* files/functions involved
+* minimal hotfix applied
+* validation that:
+
+  * Themes page loads
+  * Options Flow Sectors coverage is back to expected
+  * Sectors still has `watchlist_overlap_live_calls=0`
+  * no 429s
+  * endpoint shapes unchanged
+  * no unmanaged Tradier calls reintroduced
+
+Do not proceed to new work until both regressions are fixed.
