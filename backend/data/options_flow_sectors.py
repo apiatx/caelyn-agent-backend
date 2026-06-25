@@ -154,21 +154,27 @@ def _build_ticker_node(
     row = cache_by_ticker.get(sym)
     if row:
         source = row.get("_source", "live")
+        scan_result = row.get("scan_result")  # "neutral_no_unusual_flow" or None
         call_p, put_p = _ticker_call_put(row)
         net_p   = call_p - put_p
         has_prem = (call_p + put_p) > 0
+        # Neutral rows have premium=0 but options confirmed — show "neutral" not None
+        bias_val = _bias(call_p, put_p) if has_prem else (
+            "neutral" if scan_result == "neutral_no_unusual_flow" else None
+        )
         return {
             "symbol":           sym,
             "call_premium":     round(call_p, 2) if has_prem else None,
             "put_premium":      round(put_p, 2)  if has_prem else None,
             "net_premium":      round(net_p, 2)  if has_prem else None,
             "put_call_ratio":   _pcr(call_p, put_p),
-            "bias":             _bias(call_p, put_p) if has_prem else None,
+            "bias":             bias_val,
             "total_volume":     row.get("total_volume"),
             "heat_score":       row.get("heat_score"),
             "side_bias":        row.get("side_bias"),
             "options_available": True,
             "scan_status":      source,
+            "scan_result":      scan_result,
             "updated_at":       row.get("updated_at") or row.get("cached_at"),
         }
 

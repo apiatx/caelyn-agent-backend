@@ -843,7 +843,15 @@ class OptionsFlowEngine:
                     _expiry_api = getattr(self, "_scan_proxy", None) or self.data.public_com
                     all_exps = await _expiry_api.get_option_expirations(symbol)
                     await asyncio.sleep(sleep_s)
-                    valid = [e for e in (all_exps or [])
+                    # all_exps is None → API call was budget-deferred or failed.
+                    # Do NOT write to expiry_cache: the symbol stays absent (pending).
+                    # Only a confirmed empty list (Tradier returned no expirations at
+                    # all) should be written as ([], ts) so _upd_no_opts can mark the
+                    # symbol as confirmed-no-options. This prevents budget deferrals
+                    # from falsely marking optionable stocks as no_options.
+                    if all_exps is None:
+                        return symbol, None
+                    valid = [e for e in all_exps
                              if (dte := _days_to_expiration(e)) is not None and min_dte <= dte <= max_dte]
                     valid = valid[:max_exp]
                     if not valid and all_exps:

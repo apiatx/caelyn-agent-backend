@@ -12006,6 +12006,56 @@ async def _master_screener_loop():
         except Exception:
             pass
 
+        # ── Write neutral rows for theme symbols confirmed in expiry cache ──
+        # The master screener already fetched expirations for 60+ symbols per
+        # cycle.  Symbols that passed Stage-1 (non-empty expirations) but were
+        # not selected for unusual flow are optionable but neutral.  Writing
+        # them here gives sectors near-instant coverage without extra Tradier
+        # calls, replacing the supplement loop's slow 6-symbol-per-batch path.
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _ms_theme_univ
+            from data.options_theme_supplement import update_supplement_cache as _ms_supp_upd
+            _ms_result_syms = {
+                (t.get("ticker") or "").upper()
+                for t in screener_data.get("tickers", [])
+            }
+            _ms_all_theme: set = set()
+            for _ms_meta in _ms_theme_univ.values():
+                for _ms_s in (_ms_meta.get("proxy_symbols") or []):
+                    _ms_all_theme.add(_ms_s.upper())
+            _ms_now = _time.time()
+            _ms_neutral: list = []
+            for _ms_sym, _ms_entry in _master_expiry_cache.items():
+                if _ms_sym in _ms_result_syms:
+                    continue  # already has an unusual-flow row from master screener
+                if _ms_sym not in _ms_all_theme:
+                    continue  # not a theme symbol; skip
+                if not isinstance(_ms_entry, (list, tuple)) or not _ms_entry[0]:
+                    continue  # no expirations confirmed (empty or wrong type)
+                if _ms_now - _ms_entry[1] > 3600:
+                    continue  # stale cache entry
+                _ms_neutral.append({
+                    "ticker":        _ms_sym,
+                    "_source":       "supplement",
+                    "premium":       0.0,
+                    "call_flow_pct": 50.0,
+                    "put_flow_pct":  50.0,
+                    "total_volume":  0,
+                    "heat_score":    0.0,
+                    "side_bias":     "neutral",
+                    "scan_result":   "neutral_no_unusual_flow",
+                    "cached_at":     _ms_now,
+                    "updated_at":    _ms_now,
+                })
+            if _ms_neutral:
+                _ms_supp_upd(_ms_neutral)
+                print(
+                    f"[MASTER_SCREENER] Neutral coverage: {len(_ms_neutral)} theme symbols "
+                    f"with options, no unusual flow"
+                )
+        except Exception as _ms_ne:
+            print(f"[MASTER_SCREENER] Neutral coverage error (non-fatal): {_ms_ne}")
+
         _ms_done = _time.time()
         _ld_ms.update_master_loop(
             "active",
@@ -12275,9 +12325,48 @@ async def _theme_options_supplement_loop():
             if results:
                 enrich_ticker_rows(results)
                 _update_supp(results)
-                print(f"[THEME_SUPP] Batch done: {len(results)}/{len(batch)} tickers with options data")
+                print(f"[THEME_SUPP] Batch done: {len(results)}/{len(batch)} tickers with unusual flow")
             else:
-                print(f"[THEME_SUPP] Batch done: 0/{len(batch)} produced data (low activity or no options)")
+                print(f"[THEME_SUPP] Batch done: 0/{len(batch)} unusual flow (checking for neutral coverage)")
+
+            # Write neutral rows for candidates confirmed to have options but no unusual flow.
+            # _local_expiry is populated by Stage-1: (exps, ts) with non-empty exps means
+            # options exist; empty exps means no options (handled by _upd_no_opts below);
+            # absent means fetch failed or never reached → leave pending.
+            # This ensures sectors shows options_available=True for every optionable symbol,
+            # not just symbols with unusual bullish/bearish flow.
+            try:
+                _now_neutral = _ts.time()
+                _result_syms = {(r.get("ticker") or "").upper() for r in results}
+                _neutral_rows = []
+                for _c in candidates:
+                    _csym = (_c.get("ticker") or "").upper()
+                    if not _csym or _csym in _result_syms:
+                        continue
+                    _expiry_entry = _local_expiry.get(_csym)
+                    if not _expiry_entry:
+                        continue   # fetch failed or never reached → leave pending
+                    _exps = _expiry_entry[0] if isinstance(_expiry_entry, (list, tuple)) else []
+                    if not _exps:
+                        continue   # no expirations → will be marked no_options below
+                    _neutral_rows.append({
+                        "ticker":         _csym,
+                        "_source":        "supplement",
+                        "premium":        0.0,
+                        "call_flow_pct":  50.0,
+                        "put_flow_pct":   50.0,
+                        "total_volume":   0,
+                        "heat_score":     0.0,
+                        "side_bias":      "neutral",
+                        "scan_result":    "neutral_no_unusual_flow",
+                        "cached_at":      _now_neutral,
+                        "updated_at":     _now_neutral,
+                    })
+                if _neutral_rows:
+                    _update_supp(_neutral_rows)
+                    print(f"[THEME_SUPP] Neutral coverage: {len(_neutral_rows)} symbols confirmed options, no unusual flow")
+            except Exception as _ne:
+                print(f"[THEME_SUPP] Neutral row generation error (non-fatal): {_ne}")
 
             # Persist no-options info discovered in this batch's Stage-1 sweep
             _upd_no_opts(_local_expiry)

@@ -1,0 +1,169 @@
+Stop. Sectors is still not working as intended.
+
+Themes page is fixed, but Options Flow → Sectors is still unacceptable. Only ~2 sectors have any visible options data and ~90% of stocks/themes/sectors are missing. That is not a “wait longer” issue unless proven with diagnostics. The target is 99%+ optionable stock coverage across all sectors/themes, with every sector highlighted using bullish/bearish/neutral/no-flow state.
+
+Critical clarification:
+Do not equate “no unusual options flow” with “no options data.”
+
+Expected behavior:
+
+* Every optionable US ticker in the Sectors/Theme universe should have an options state row.
+* If options chains were fetched successfully but there is no unusual activity, the row should still exist.
+* It should show something like:
+
+  * `options_data_available=true`
+  * `options_signal="Neutral"` or `"No unusual flow"`
+  * `options_flow_direction="neutral"`
+  * call/put volume, OI, IV, put/call ratio if available
+  * stale/LKG/retry fields if needed
+* Only truly unsupported symbols should be excluded or marked unsupported.
+* Pending should mean “not scanned yet,” not “scanned but no bullish/bearish flow.”
+
+Right now the Sectors UI/API appears to be showing only tickers with detected bullish/bearish/unusual flow. That is wrong for coverage.
+
+Do not continue feature work. Diagnose and fix Sectors coverage now.
+
+Step 1 — Prove whether this is a filtering/model bug or a scanning-speed bug
+For `/api/options-flow/sectors`, report:
+
+1. Universe counts:
+
+* total sectors
+* total themes
+* total ticker symbols considered
+* optionable US symbols expected
+* foreign/OTC/unsupported symbols
+* pending symbols
+* scanned symbols
+* symbols with successful chain/expiration fetch
+* symbols with options row but neutral/no unusual flow
+* symbols with bullish/bearish/unusual signal
+* symbols hidden/filtered from UI/API
+
+2. Per-sector counts:
+   For each sector:
+
+* total symbols
+* optionable expected
+* data_available_count
+* neutral_or_no_flow_count
+* bullish_count
+* bearish_count
+* stale_lkg_count
+* pending_count
+* unsupported_count
+* displayed_count
+
+3. Source counts:
+
+* symbols_from_cache
+* symbols_from_master
+* symbols_from_lkg
+* symbols_from_watchlist_cache
+* symbols_from_supplement_lkg
+* symbols_from_unavailable_cache
+* symbols_from_pending_queue
+
+4. Scan outcome counts:
+
+* chain_success_count
+* expirations_success_count
+* no_expirations_count
+* no_chain_returned_count
+* zero_volume_but_valid_chain_count
+* neutral_no_unusual_flow_count
+* bullish_signal_count
+* bearish_signal_count
+* unsupported_count
+
+Step 2 — Audit filtering logic
+Find where Sectors decides whether a ticker/sector/theme is “included” or “has options data.”
+
+Look for filters like:
+
+* `if options_score`
+* `if options_signal`
+* `if bullish or bearish`
+* `if call_volume > 0`
+* `if options_volume > 0`
+* `if unusual`
+* `if flow_score`
+* `if data_available`
+* `if not pending`
+
+Confirm whether neutral/no-flow rows are being dropped.
+
+Fix requirement:
+
+* Sectors should include every ticker with a valid options state row, even if neutral/no unusual flow.
+* Sector/theme aggregation should aggregate neutral rows too.
+* Every sector should show a state:
+
+  * Bullish
+  * Bearish
+  * Mixed
+  * Neutral / No unusual flow
+  * Pending
+  * Unsupported-heavy
+* It should not be blank just because there is no unusual options activity.
+
+Step 3 — Ensure scans write rows for neutral/no-flow symbols
+Audit the options scoring/write path:
+
+* master screener
+* supplement loop
+* portfolio/watchlist options service
+* Sectors aggregation
+
+If a ticker is scanned successfully but no unusual flow is found, it must still write a canonical row to `portfolio_opts:{sym}` or the appropriate shared options row.
+
+Required row behavior:
+
+* successful chain fetch + no unusual signal = data_available true, neutral/no-flow state
+* zero volume chain = valid options data, neutral/no-flow, not pending
+* no expiration = confirmed no options only after actual expiration endpoint confirms none
+* no_chain_returned = retry/stale, not unsupported
+* failed refresh does not hide last-good
+
+Step 4 — Sectors must read all canonical rows, not only signal rows
+Sectors should be aggregation-first:
+
+* read canonical shared options rows
+* read master LKG
+* read supplement LKG
+* read portfolio/watchlist LKG
+* include neutral/no-flow rows
+* include stale rows
+* only mark pending if there is truly no row yet
+* do not live-scan watchlist-overlap symbols
+
+`watchlist_overlap_live_calls` must stay 0.
+
+Step 5 — If this is genuinely scanning speed, prove it
+If the claim is still “it just needs time,” show:
+
+* current queue depth
+* scan rate per minute
+* expected time to 99% optionable coverage
+* exact remaining pending symbols
+* why they are pending
+* why LKG did not already cover them
+* whether LKG will persist after restart
+
+But do not hide behind “slow options data.” The UI should not stay at 10% coverage if scans are returning neutral/no-flow states correctly.
+
+Step 6 — Acceptance criteria
+This is fixed only when:
+
+* `/api/options-flow/sectors` shows 99%+ coverage of optionable US tickers, not just unusual-flow tickers
+* every sector has an options state
+* every sector has highlighted/aggregated bullish/bearish/mixed/neutral data
+* neutral/no-flow stocks are included, not filtered out
+* pending count is only truly unscanned symbols
+* unsupported count is only true foreign/OTC/no-options symbols
+* `watchlist_overlap_live_calls=0`
+* no Tradier 429s
+* endpoint shapes remain compatible
+* rows survive restart via LKG/hydration
+
+Do not build new features until this is fixed.
