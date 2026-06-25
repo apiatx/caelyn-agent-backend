@@ -261,6 +261,13 @@ def _build_ticker_node(
         )
         _neutral_confirmed = (state == "neutral_no_unusual_flow") or _stale_was_neutral
 
+        # scan_status: "fresh" for chain-summarized rows (explicit real data),
+        # otherwise the source tag (live / supplement / supplement_lkg / etc.)
+        scan_status_val = (
+            "fresh" if scan_result == "sectors_chain_summarized"
+            else source
+        )
+
         return {
             "symbol":            sym,
             "ticker_state":      state,
@@ -269,11 +276,13 @@ def _build_ticker_node(
             "net_premium":       round(net_p, 2)  if has_prem else (0.0 if _neutral_confirmed else None),
             "put_call_ratio":    _pcr(call_p, put_p) if has_prem else None,
             "bias":              bias_val,
+            "call_volume":       row.get("call_volume") if row.get("call_volume") is not None else (0 if _neutral_confirmed else None),
+            "put_volume":        row.get("put_volume")  if row.get("put_volume")  is not None else (0 if _neutral_confirmed else None),
             "total_volume":      row.get("total_volume") if row.get("total_volume") is not None else (0 if _neutral_confirmed else None),
             "heat_score":        row.get("heat_score") if row.get("heat_score") is not None else (0.0 if _neutral_confirmed else None),
             "side_bias":         row.get("side_bias"),
             "options_available": state in _OPTIONS_CONFIRMED_STATES,
-            "scan_status":       source,
+            "scan_status":       scan_status_val,
             "scan_result":       scan_result,
             "updated_at":        row.get("updated_at") or row.get("cached_at") or row.get("_cached_at"),
         }
@@ -287,6 +296,8 @@ def _build_ticker_node(
             "net_premium":       None,
             "put_call_ratio":    None,
             "bias":              None,
+            "call_volume":       None,
+            "put_volume":        None,
             "total_volume":      None,
             "heat_score":        None,
             "side_bias":         None,
@@ -305,6 +316,8 @@ def _build_ticker_node(
         "net_premium":       None,
         "put_call_ratio":    None,
         "bias":              None,
+        "call_volume":       None,
+        "put_volume":        None,
         "total_volume":      None,
         "heat_score":        None,
         "side_bias":         None,
@@ -335,8 +348,12 @@ def _build_theme_node(
     total_net  = total_call - total_put
     has_data   = (total_call + total_put) > 0
     # Volume: sum non-None values from tickers that have real volume data
-    total_vol_vals = [t["total_volume"] for t in ticker_nodes if t.get("total_volume") is not None]
-    total_vol      = sum(total_vol_vals) if total_vol_vals else None
+    total_vol_vals  = [t["total_volume"] for t in ticker_nodes if t.get("total_volume") is not None]
+    total_vol       = sum(total_vol_vals) if total_vol_vals else None
+    total_call_vols = [t["call_volume"] for t in ticker_nodes if t.get("call_volume") is not None]
+    total_put_vols  = [t["put_volume"]  for t in ticker_nodes if t.get("put_volume")  is not None]
+    total_call_vol  = sum(total_call_vols) if total_call_vols else None
+    total_put_vol   = sum(total_put_vols)  if total_put_vols  else None
 
     # State counts across all proxy tickers
     state_counts: dict[str, int] = {}
@@ -360,6 +377,8 @@ def _build_theme_node(
         "total_net_flow":                round(total_net, 2)  if has_data else None,
         "average_net_flow":              avg_net,
         "total_volume":                  total_vol,
+        "call_volume":                   total_call_vol,
+        "put_volume":                    total_put_vol,
         "put_call_ratio":                _pcr(total_call, total_put),
         "bias":                          _bias(total_call, total_put) if has_data else None,
         "ticker_count":                  len(proxy_syms),
@@ -394,10 +413,12 @@ def _build_sector_node(
         for sym in (meta.get("proxy_symbols") or []):
             sector_unique_syms.add(sym.upper())
 
-    sector_call  = 0.0
-    sector_put   = 0.0
-    sector_vol   = 0
-    flow_count   = 0
+    sector_call     = 0.0
+    sector_put      = 0.0
+    sector_vol      = 0
+    sector_call_vol = 0
+    sector_put_vol  = 0
+    flow_count      = 0
     state_counts: dict[str, int] = {}
 
     for sym in sector_unique_syms:
@@ -413,6 +434,12 @@ def _build_sector_node(
                 v = row.get("total_volume")
                 if v is not None:
                     sector_vol += int(v)
+            cv = row.get("call_volume")
+            pv = row.get("put_volume")
+            if cv is not None:
+                sector_call_vol += int(cv)
+            if pv is not None:
+                sector_put_vol  += int(pv)
 
     sector_net   = sector_call - sector_put
     has_data     = flow_count > 0
@@ -438,6 +465,8 @@ def _build_sector_node(
         "net_premium":                   round(sector_net, 2)  if has_data else None,
         "total_net_flow":                round(sector_net, 2)  if has_data else None,
         "total_volume":                  sector_vol if has_data else None,
+        "call_volume":                   sector_call_vol if sector_call_vol else None,
+        "put_volume":                    sector_put_vol  if sector_put_vol  else None,
         "average_net_flow":              avg_net,
         "put_call_ratio":                _pcr(sector_call, sector_put),
         "bias":                          _bias(sector_call, sector_put) if has_data else None,
@@ -568,13 +597,33 @@ def build_sector_tree(
     except Exception:
         pass
 
-    # Estimated time to full coverage from the fast backfill loop
-    _sbf_batch   = 8
-    _sbf_sleep_s = 60
+    # Estimated time to full coverage from the fast backfill loop.
+    # Use dynamic batch/sleep based on Sectors active status.
+    try:
+        from data.options_theme_supplement import is_sectors_active as _sbf_is_active_now
+        _sbf_active_now = _sbf_is_active_now()
+    except Exception:
+        _sbf_active_now = False
+
+    if _sbf_active_now:
+        _sbf_batch   = 25
+        _sbf_sleep_s = 25
+    else:
+        _sbf_batch   = 8
+        _sbf_sleep_s = 60
+
     _generic_pend_n = _global_state_counts.get("generic_pending", 0)
     _stale_lkg_n    = _global_state_counts.get("stale_lkg", 0)
     _still_pending  = _generic_pend_n + _stale_lkg_n   # symbols needing a scan pass
     est_minutes  = round(_still_pending / _sbf_batch * _sbf_sleep_s / 60, 1) if _still_pending else 0
+
+    # Sectors active refresh diagnostics
+    _sectors_active_diag: dict = {}
+    try:
+        from data.options_theme_supplement import get_sectors_active_diag as _sad
+        _sectors_active_diag = _sad()
+    except Exception:
+        pass
 
     return {
         "as_of":                         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -582,6 +631,15 @@ def build_sector_tree(
         "net_flow_method":               "call_minus_put_premium",
         "put_call_ratio_method":         "premium_dollars",
         "sector_total_method":           "unique_ticker_sum",
+        "sectors_active_refresh": {
+            **_sectors_active_diag,
+            "sectors_active":            _sbf_active_now,
+            "priority_mode":             _sbf_active_now,
+            "active_batch_size":         _sbf_batch,
+            "active_sleep_seconds":      _sbf_sleep_s,
+            "active_lane":               "sectors" if _sbf_active_now else "maintenance",
+            "estimated_full_pass_minutes": est_minutes,
+        },
         "scan_coverage": {
             # ── Universe dimensions ────────────────────────────────────────────
             "total_sectors":                  _total_sectors,

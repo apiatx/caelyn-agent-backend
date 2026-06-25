@@ -1,0 +1,235 @@
+Stop the broad architecture work. Fix only Options Flow → Sectors.
+
+Do not change Options Flow → Screener. Screener is market-wide unusual-flow discovery and should remain separate.
+
+The Sectors tab requirement is simple:
+
+When the user opens Options Flow → Sectors, the page should show the last known options premium data immediately, then prioritize refreshing the saved sector/theme/ticker universe through Tradier.
+
+Current unacceptable behavior:
+
+* Tickers show `Pending scan`
+* Last scan/LKG values are not visible for many rows
+* Stock rows are blank/dash even though the system should have prior data or should be able to fetch it quickly
+* Coverage is taking too long
+
+Core product requirement:
+For every ticker in the saved backend theme universe:
+
+* get call premium
+* get put premium
+* get net premium
+* get put/call ratio
+* get call volume
+* get put volume
+* get total volume
+* store those values on the stock row
+* roll stock rows up into theme totals
+* roll theme/stock rows up into sector totals
+
+Do not depend on `run_live_scan()` unusual-flow output for Sectors stock rows. The Sectors tab needs a direct per-ticker options chain premium summarizer.
+
+Important:
+A stock does not need “unusual flow” to have options premium data.
+Even boring/neutral tickers should have call/put premium values after chain scan.
+
+Immediate fix requirements:
+
+1. Last-known data must be visible immediately
+   Before doing any live scan, `/api/options-flow/sectors` must hydrate stock rows from:
+
+* Sectors LKG
+* supplement LKG
+* master LKG
+* portfolio/watchlist options LKG
+* shared cache rows
+
+If any prior successful row exists for a ticker, show it as `stale_lkg` or equivalent with its last call_premium / put_premium / net_premium / volume values.
+
+`Pending scan` should only mean:
+
+* no prior row exists anywhere
+* no chain has ever been successfully summarized for that ticker
+
+Do not show `Pending scan` when an LKG row exists.
+
+2. Sectors page visit should trigger active options priority
+   When the user visits `/api/options-flow/sectors`, register the Sectors universe as active options demand.
+
+While Sectors is active:
+
+* pause or deprioritize nonessential options work such as generic OI enrichment, supplement trickle scans, and non-visible maintenance
+* keep the global Tradier limiter intact
+* do not raise global RPM
+* do not bypass TradierProvider
+* do not call Tradier directly from the route in a giant blocking burst
+* enqueue missing/stale Sectors tickers into a high-priority Sectors refresh queue/backfill
+
+Target behavior:
+
+* visible theme/sector symbols first
+* then remaining Sectors universe
+* first-pass premium refresh should complete in minutes, not 30+ minutes
+
+Expected timing:
+
+* If expirations are cached, one chain call per ticker should populate the universe in roughly 2–3 minutes under the existing Tradier limit.
+* If expirations are not cached, expirations + one chain per ticker should still be closer to 4–6 minutes, not 30+.
+* If the current implementation estimates 27–30+ minutes, explain exactly why and fix the bottleneck.
+
+3. Direct Sectors chain summarizer
+   Build or adapt a Sectors-specific summarizer:
+
+For each ticker:
+
+* get expirations using existing TradierProvider cache/coalescing
+* select the primary expiration according to existing options-flow policy
+* fetch chain using existing TradierProvider cache/coalescing
+* summarize all contracts in that chain, not only unusual contracts
+* compute:
+
+  * call_premium
+  * put_premium
+  * net_premium = call_premium - put_premium
+  * put_call_ratio = put_premium / call_premium when call_premium > 0
+  * call_volume
+  * put_volume
+  * total_volume
+  * updated_at
+  * source
+
+Premium formula:
+Use the existing options premium-dollar formula if one exists.
+Otherwise:
+premium dollars = contract volume × best available option price × 100
+
+Best price order:
+
+1. mark
+2. midpoint of bid/ask
+3. last
+4. bid/ask fallback only if needed
+
+Do not filter contracts by unusual-flow score for Sectors.
+Do not require a bullish/bearish signal to write a stock row.
+
+4. Stock rows drive theme and sector totals
+   Theme totals must be derived from stock rows:
+
+* theme_call_premium = sum(stock.call_premium)
+* theme_put_premium = sum(stock.put_premium)
+* theme_net_premium = sum(stock.net_premium)
+* theme_avg_net_premium = average(stock.net_premium across represented stocks)
+* theme_call_volume = sum(stock.call_volume)
+* theme_put_volume = sum(stock.put_volume)
+* theme_total_volume = sum(stock.total_volume)
+* theme_put_call_ratio = theme_put_premium / theme_call_premium when call > 0
+
+Sector totals must be derived from stock/theme rows:
+
+* sector_call_premium
+* sector_put_premium
+* sector_net_premium
+* sector_avg_net_premium
+* sector_call_volume
+* sector_put_volume
+* sector_total_volume
+* sector_put_call_ratio
+
+Do not show aggregate sector/theme numbers that cannot be traced to populated stock rows.
+
+5. Status rules
+   Allowed statuses:
+
+* `fresh`
+* `stale_lkg`
+* `pending_chain`
+* `deferred_retry`
+* `confirmed_no_options`
+* `unsupported_foreign_otc`
+
+Do not mark known optionable tickers as `confirmed_no_options` from premarket/postmarket/off-hours empty responses.
+Only write `confirmed_no_options` from a real regular-session empty-expirations confirmation.
+
+Do not let pending/neutral/no-options rows overwrite prior rows with real premium data.
+
+Do not let LKG shrink on restart.
+
+6. Active refresh priority
+   Add diagnostics showing:
+
+* sectors_active_refresh_enabled
+* sectors_active_since
+* sectors_refresh_queue_depth
+* sectors_refresh_inflight
+* sectors_refresh_completed_this_session
+* sectors_refresh_calls_last_60s
+* sectors_refresh_deferred_count
+* sectors_refresh_eta_seconds
+* sectors_lkg_rows_loaded
+* sectors_rows_with_premium
+* sectors_pending_no_lkg
+
+If Sectors is active, it should get priority over:
+
+* generic supplement scans
+* Screener Hub OI enrichment
+* non-visible maintenance
+* background history warmups
+
+Do not starve Options Flow Screener entirely, but Sectors page visit should clearly raise Sectors priority.
+
+7. Validation using actual visible examples
+   Validate the exact UI paths.
+
+Financials → Fintech:
+
+* ARKF
+* CRCL
+* FINX
+* INV
+* IPAY
+
+Technology → Data Center Infrastructure:
+
+* ADEA
+* AKAM
+* BTDR
+* BZAI
+* CEG
+* CIFR
+* CLSK
+* DELL
+* DTCR
+* EQIX
+* ETN
+
+For each ticker, report:
+
+* status
+* source
+* call_premium
+* put_premium
+* net_premium
+* put_call_ratio
+* call_volume
+* put_volume
+* total_volume
+* updated_at
+* whether value came from fresh scan or LKG
+
+Acceptance criteria:
+
+* On page load, prior LKG values are visible immediately.
+* No ticker with prior successful data shows generic `Pending scan`.
+* Active Sectors refresh starts immediately when the page is visited.
+* First-pass refresh of optionable Sectors universe is measured in minutes, not 30+ minutes.
+* Stock rows populate first.
+* Theme totals equal the sum of stock rows.
+* Sector totals equal the sum of theme/stock rows.
+* Known optionable tickers like AKAM, BTDR, DELL, AMAT, INTC, WDC, TER are not false no-options.
+* No Options Flow Screener behavior changes.
+* No unmanaged Tradier calls.
+* No 429s.
+* No global RPM increase.
+* LKG persists after restart.

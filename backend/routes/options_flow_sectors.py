@@ -56,6 +56,15 @@ async def options_flow_sectors(
     Coverage improves automatically as the background supplement loop runs (batch=20, every 5 min).
     """
     try:
+        # Signal to the backfill loop that Sectors is actively being viewed.
+        # This switches the loop to priority mode: larger batches, shorter
+        # sleep, and the "sectors" budget lane (60 RPM vs 20 RPM maintenance).
+        try:
+            from data.options_theme_supplement import register_sectors_active
+            register_sectors_active()
+        except Exception:
+            pass
+
         from data.options_flow_sectors import get_sector_flow
         payload = get_sector_flow(force_refresh=refresh)
         return JSONResponse(content=payload)

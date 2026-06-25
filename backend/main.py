@@ -12111,25 +12111,24 @@ async def _master_screener_loop():
 
 async def _sectors_fast_backfill_loop():
     """
-    Dedicated fast Sectors coverage backfill.
+    Dedicated Sectors coverage backfill — uses a direct chain summarizer
+    instead of run_live_scan(), so ALL tickers get real call/put premium
+    data regardless of unusual flow threshold.
 
-    Targets ALL theme universe symbols in generic_pending or stale_lkg state
-    (not yet scanned or loaded from disk LKG this session).
+    Two modes:
 
-    Cadence : 8 symbols every 60 s during active hours.
-    Budget  : maintenance lane (20 RPM).  8 symbols = 1 quote + 8 expiry +
-              8 chain = 17 calls — fits cleanly under the 20 RPM cap with
-              headroom for retries.
+    Priority (Sectors page visited within 5 min):
+      batch=25, sleep=25 s, sectors lane (60 RPM)
+      First-pass ETA: ~4 min (expiry cached) / ~8 min (cold start)
 
-    Full-universe pass (~232 symbols): ~30 min on first session.
-    On restart: Sectors LKG pre-loads all symbols as stale_lkg → passes are
-    refresh cycles only; same ~30 min to move them to current-session state.
+    Background (Sectors not actively being viewed):
+      batch=8, sleep=60 s, maintenance lane (20 RPM)
+      First-pass ETA: ~30 min (same as before)
 
-    After each complete pass, saves a comprehensive Sectors universe LKG so
-    the NEXT restart starts with 100% stale_lkg coverage immediately.
+    After each complete pass, saves the Sectors LKG so restarts begin with
+    100% stale_lkg coverage immediately.
 
     Does NOT change Options Flow Screener behaviour.
-    Uses the same _TRADIER_GLOBAL_SEM as the master screener — no second client.
     """
     global _TRADIER_GLOBAL_SEM
 
@@ -12157,44 +12156,49 @@ async def _sectors_fast_backfill_loop():
         update_no_options_from_expiry_cache  as _sbf_upd_no_opts,
         save_sectors_universe_lkg_to_disk    as _sbf_save_lkg,
         update_sectors_backfill_tracking     as _sbf_tracking,
+        is_sectors_active                    as _sbf_is_page_active,
+        update_sectors_refresh_diag          as _sbf_upd_diag,
     )
-    from data.options_enricher import enrich_ticker_rows
-    from data.tradier_flow_engine import TradierFlowEngine
-    from data.options_flow_engine import ETF_SET as _SBF_ETF_SET
-    from data.tradier_budget import lane as _sbf_lane
+    from data.sectors_chain_summarizer import scan_batch_for_sectors as _sbf_scan_batch
+    from data.tradier_budget import lane as _sbf_lane, diagnostics as _sbf_budget_diag
     from data.tradier_market_session import get_session as _sbf_get_session
 
-    _SBF_BATCH_SIZE     = 8    # 1 quote + 8 expiry + 8 chain = 17 calls (< 20 RPM)
-    _SBF_ACTIVE_SLEEP   = 60   # seconds between batches during active hours
-    _SBF_OFFHOURS_SLEEP = 600  # 10 min between batches off-hours (still build LKG)
-    _sbf_cursor     = 0
-    _sbf_pass_count = 0
-    _sbf_local_expiry: dict = {}
+    # Batch / sleep / lane settings
+    _SBF_PRIORITY_BATCH   = 25   # tickers per batch when Sectors page is active
+    _SBF_PRIORITY_SLEEP   = 25   # seconds between batches (priority mode)
+    _SBF_BACKGROUND_BATCH = 8    # tickers per batch when Sectors not active
+    _SBF_BACKGROUND_SLEEP = 60   # seconds between batches (background mode)
+    _SBF_OFFHOURS_SLEEP   = 600  # 10 min between batches off-hours
 
-    def _sbf_sf(v):
-        try: return float(v) if v is not None else None
-        except: return None
-    def _sbf_si(v):
-        try: return int(v) if v is not None else 0
-        except: return 0
+    _sbf_cursor            = 0
+    _sbf_pass_count        = 0
+    _sbf_session_completed = 0
+    _sbf_local_expiry: dict = {}  # {sym: ([expirations], checked_at_float)}
+    _sbf_sleep_s           = _SBF_BACKGROUND_SLEEP  # safe default for except block
 
-    # Brief startup delay — let master screener warm up first; supplement loop
-    # waits 60 s, so we start at 30 s to begin building coverage sooner.
+    # Brief startup delay — let master screener warm up first
     await asyncio.sleep(30)
-    print("[SECTORS_BF] Sectors fast backfill loop started")
+    print("[SECTORS_BF] Sectors fast backfill loop started (chain summarizer mode)")
 
     while True:
-        _sbf_is_active = True   # safe default for except block
-        _sbf_sleep_s   = _SBF_ACTIVE_SLEEP
+        _sbf_sleep_s = _SBF_BACKGROUND_SLEEP   # reset each cycle
         try:
-            _sbf_sess      = _sbf_get_session()
-            _sbf_is_active = _sbf_sess not in ("off_hours", "weekend")
-            _sbf_sleep_s   = _SBF_ACTIVE_SLEEP if _sbf_is_active else _SBF_OFFHOURS_SLEEP
+            _sbf_sess    = _sbf_get_session()
+            _sbf_off     = _sbf_sess in ("off_hours", "weekend")
+
+            if _sbf_off:
+                _sbf_upd_diag({
+                    "sectors_active": _sbf_is_page_active(),
+                    "sectors_refresh_queue_depth": 0,
+                    "sectors_refresh_eta_seconds": None,
+                })
+                await asyncio.sleep(_SBF_OFFHOURS_SLEEP)
+                continue
 
             pending = _sbf_get_pending()
 
             if not pending:
-                # ── Full pass complete ────────────────────────────────────────
+                # ── Full pass complete ─────────────────────────────────────────
                 _sbf_pass_count += 1
                 _n_saved = _sbf_save_lkg()
                 _sbf_tracking(
@@ -12204,149 +12208,151 @@ async def _sectors_fast_backfill_loop():
                 )
                 print(
                     f"[SECTORS_BF] Pass {_sbf_pass_count} complete — "
-                    f"0 pending, {_n_saved} symbols in Sectors LKG. "
-                    f"Re-checking in 5 min."
+                    f"0 pending, {_n_saved} in Sectors LKG. Re-checking in 5 min."
                 )
-                await asyncio.sleep(300)  # re-check for deferred_retry symbols
+                await asyncio.sleep(300)
                 continue
+
+            # ── Choose batch size / sleep / lane based on page-active status ──
+            _priority = _sbf_is_page_active()
+            if _priority:
+                _batch_size = _SBF_PRIORITY_BATCH
+                _sbf_sleep_s = _SBF_PRIORITY_SLEEP
+                _lane_name   = "sectors"
+            else:
+                _batch_size = _SBF_BACKGROUND_BATCH
+                _sbf_sleep_s = _SBF_BACKGROUND_SLEEP
+                _lane_name   = "maintenance"
 
             # Advance cursor (wraps on next pass)
             _sbf_cursor = _sbf_cursor % len(pending)
-            batch = pending[_sbf_cursor: _sbf_cursor + _SBF_BATCH_SIZE]
-            _sbf_cursor += _SBF_BATCH_SIZE
+            batch = pending[_sbf_cursor: _sbf_cursor + _batch_size]
+            _sbf_cursor += _batch_size
 
             if not batch:
                 await asyncio.sleep(_sbf_sleep_s)
                 continue
 
+            # ETA
+            remaining   = max(0, len(pending) - _sbf_cursor)
+            eta_batches = (remaining + _batch_size - 1) // _batch_size if _batch_size else 0
+            eta_s       = eta_batches * _sbf_sleep_s
+
             _sbf_tracking(
                 batch_syms = batch,
                 next_at    = _ts_sbf.time() + _sbf_sleep_s,
             )
+            _sbf_upd_diag({
+                "sectors_active":              _priority,
+                "sectors_refresh_queue_depth": len(pending),
+                "sectors_refresh_eta_seconds": eta_s,
+                "sectors_pending_no_lkg":      len([s for s in pending if s not in _sbf_local_expiry]),
+            })
+
             print(
-                f"[SECTORS_BF] Batch [{_sbf_cursor}/{len(pending)}]: {batch} "
-                f"(session={_sbf_sess}, sleep={_sbf_sleep_s}s)"
+                f"[SECTORS_BF] {'[PRIORITY] ' if _priority else ''}"
+                f"Batch [{_sbf_cursor}/{len(pending)}]: {batch} "
+                f"(lane={_lane_name}, sleep={_sbf_sleep_s}s)"
             )
 
-            # ── Pre-fetch Tradier quotes (maintenance lane) ───────────────────
-            candidates = []
+            # ── Run chain summarizer for this batch ────────────────────────────
+            _now_sbf = _ts_sbf.time()
+            results: list[dict] = []
             try:
-                with _sbf_lane("maintenance"):
-                    _sbf_raw_q = await data_service.tradier.get_quotes(batch)
-                _sbf_qmap = {
-                    (q.get("symbol") or "").upper(): q
-                    for q in (_sbf_raw_q or []) if isinstance(q, dict)
+                with _sbf_lane(_lane_name):
+                    results = await _sbf_scan_batch(
+                        batch,
+                        data_service.tradier,
+                        _sbf_local_expiry,
+                        concurrency=6,
+                    )
+            except Exception as _be:
+                print(f"[SECTORS_BF] Batch scan error: {_be}")
+                _tb_sbf.print_exc()
+
+            # ── Process results ────────────────────────────────────────────────
+            supplement_rows: list[dict] = []
+            no_options_expiry: dict = {}
+
+            for r in results:
+                if not isinstance(r, dict):
+                    continue
+                sym = (r.get("ticker") or "").upper()
+                if not sym:
+                    continue
+                scan_result = r.get("scan_result", "")
+
+                if scan_result == "confirmed_no_options":
+                    # Populate local expiry so the no-options update picks it up.
+                    # The session gate inside update_no_options_from_expiry_cache
+                    # prevents false no-options conclusions off-hours.
+                    _sbf_local_expiry[sym] = ([], _now_sbf)
+                    continue
+
+                if scan_result == "deferred_retry":
+                    # Write a coverage row so the symbol isn't counted as
+                    # generic_pending — it'll be retried next cycle.
+                    supplement_rows.append({
+                        "ticker":      sym,
+                        "_source":     "supplement",
+                        "scan_result": "deferred_retry",
+                        "premium":     0.0,
+                        "updated_at":  _now_sbf,
+                    })
+                    continue
+
+                # Real chain data (sectors_chain_summarized or any result
+                # with call/put premium fields populated)
+                row = {
+                    "ticker":          sym,
+                    "_source":         "supplement",
+                    "call_premium":    r.get("call_premium", 0.0),
+                    "put_premium":     r.get("put_premium",  0.0),
+                    "net_premium":     r.get("net_premium",  0.0),
+                    "call_volume":     r.get("call_volume",  0),
+                    "put_volume":      r.get("put_volume",   0),
+                    "total_volume":    r.get("total_volume", 0),
+                    "put_call_ratio":  r.get("put_call_ratio"),
+                    # premium = total dollar flow (backward-compat field)
+                    "premium":         (r.get("call_premium") or 0.0) + (r.get("put_premium") or 0.0),
+                    "scan_result":     scan_result,
+                    "expiration_used": r.get("expiration_used"),
+                    "updated_at":      r.get("updated_at", _now_sbf),
                 }
-                for sym in batch:
-                    sym_u = sym.upper()
-                    q     = _sbf_qmap.get(sym_u) or {}
-                    price = _sbf_sf(q.get("last"))
-                    if price:
-                        candidates.append({
-                            "ticker":               sym_u,
-                            "price":                price,
-                            "change_pct":           _sbf_sf(q.get("change_percentage")),
-                            "volume":               _sbf_si(q.get("volume")),
-                            "category":             "etf" if sym_u in _SBF_ETF_SET else "stock",
-                            "source_score":         5.0,
-                            "source_hits":          ["sectors_backfill"],
-                            "reasons":              ["sectors_universe"],
-                            "prefilter_score":      5.0,
-                            "profile":              {},
-                            "technicals":           {},
-                            "stock_relative_volume": None,
-                            "liquidity_dollars":    None,
-                            "liquidity_supported":  False,
-                        })
-            except Exception as _qe:
-                print(f"[SECTORS_BF] Quote prefetch error: {_qe}")
+                supplement_rows.append(row)
+                _sbf_session_completed += 1
 
-            if not candidates:
-                await asyncio.sleep(_sbf_sleep_s)
-                continue
+            if supplement_rows:
+                _sbf_update_supp(supplement_rows)
 
-            # ── Run Stage-1 (expiry) + Stage-2 (chain) ───────────────────────
-            _sbf_engine = TradierFlowEngine(data_service)
-            _sbf_engine._shared_sem   = _TRADIER_GLOBAL_SEM
-            _sbf_engine._expiry_cache = _sbf_local_expiry
-
-            with _sbf_lane("maintenance"):
-                _sbf_scan = await _sbf_engine.run_live_scan(
-                    None,
-                    prefilter_snapshot={
-                        "candidates":       candidates,
-                        "macro":            {},
-                        "degraded_sources": [],
-                    },
-                    tab="master",
-                )
-
-            results = _sbf_scan.get("tickers", [])
-            if results:
-                enrich_ticker_rows(results)
-                _sbf_update_supp(results)
-
-            # ── Write 9-state coverage rows ───────────────────────────────────
-            _now_sbf     = _ts_sbf.time()
-            _result_syms = {(r.get("ticker") or "").upper() for r in results}
-            _s2_neutral  = {s.upper() for s in (_sbf_scan.get("stage2_neutral_tickers") or [])}
-            _s2_pending  = {s.upper() for s in (_sbf_scan.get("stage2_pending_chain_tickers") or [])}
-
-            # Stage-1 alive: expirations confirmed
-            _s1_alive: set[str] = set()
-            for _c in candidates:
-                _csym = (_c.get("ticker") or "").upper()
-                _exp  = _sbf_local_expiry.get(_csym)
-                if _exp and isinstance(_exp, (list, tuple)) and _exp[0]:
-                    _s1_alive.add(_csym)
-
-            # True neutral (Stage-2 chain scanned, had contracts, none unusual)
-            _neutral_rows = [
-                {
-                    "ticker":        _sym,
-                    "_source":       "supplement",
-                    "premium":       0.0,
-                    "call_flow_pct": 50.0,
-                    "put_flow_pct":  50.0,
-                    "total_volume":  0,
-                    "heat_score":    0.0,
-                    "side_bias":     "neutral",
-                    "scan_result":   "neutral_no_unusual_flow",
-                    "cached_at":     _now_sbf,
-                    "updated_at":    _now_sbf,
-                }
-                for _sym in _s2_neutral if _sym and _sym not in _result_syms
-            ]
-
-            # Pending chain (Stage-1 confirmed expirations, Stage-2 deferred/empty)
-            _pending_pool = (_s2_pending | (_s1_alive - _s2_neutral - _result_syms)) - _result_syms
-            _pending_rows = [
-                {
-                    "ticker":        _sym,
-                    "_source":       "supplement",
-                    "premium":       0.0,
-                    "call_flow_pct": 50.0,
-                    "put_flow_pct":  50.0,
-                    "total_volume":  0,
-                    "heat_score":    0.0,
-                    "side_bias":     "neutral",
-                    "scan_result":   "optionable_pending_chain",
-                    "cached_at":     _now_sbf,
-                    "updated_at":    _now_sbf,
-                }
-                for _sym in _pending_pool if _sym
-            ]
-
-            _all_cov = _neutral_rows + _pending_rows
-            if _all_cov:
-                _sbf_update_supp(_all_cov)
-
+            # Update no-options set from expiry cache (gated to regular session)
             _sbf_upd_no_opts(_sbf_local_expiry)
 
+            # Update diagnostics
+            _rows_with_prem = sum(
+                1 for r in supplement_rows
+                if (r.get("call_premium") or 0) + (r.get("put_premium") or 0) > 0
+            )
+            try:
+                _bdiag = _sbf_budget_diag()
+                _sbf_upd_diag({
+                    "sectors_refresh_completed_this_session": _sbf_session_completed,
+                    "sectors_rows_with_premium":             _rows_with_prem,
+                    "sectors_refresh_calls_last_60s": (
+                        _bdiag.get("calls_last_60s_by_lane", {}).get(_lane_name, 0)
+                    ),
+                    "sectors_refresh_deferred_count": (
+                        _bdiag.get("deferred_by_lane", {}).get(_lane_name, 0)
+                    ),
+                })
+            except Exception:
+                pass
+
+            _no_opts_n = len([s for s in batch if _sbf_local_expiry.get(s, (["x"],))[0] == []])
             print(
-                f"[SECTORS_BF] Done: {len(results)} unusual_flow + "
-                f"{len(_neutral_rows)} neutral + {len(_pending_rows)} optionable_pending "
-                f"| cursor={_sbf_cursor}/{len(pending)}"
+                f"[SECTORS_BF] Done: {len(supplement_rows)} rows updated "
+                f"({_rows_with_prem} with premium, {_no_opts_n} no-options) | "
+                f"session_total={_sbf_session_completed}, cursor={_sbf_cursor}/{len(pending)}"
             )
 
         except Exception as _sbf_exc:

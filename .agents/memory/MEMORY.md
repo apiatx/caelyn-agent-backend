@@ -1,4 +1,4 @@
-- [Sectors fast backfill loop](sectors-fast-backfill.md) — batch=8/sleep=60s on maintenance lane → ~29 min first pass; Sectors LKG makes restarts start at 100% represented immediately
+- [Sectors chain summarizer backfill](sectors-chain-summarizer.md) — NEW: sectors_chain_summarizer.py replaces run_live_scan for Sectors tab; real call/put premium for ALL tickers; priority mode (25/25s/sectors lane) when page active; budget pre-check prevents deferred→confirmed_no_options bug
 - [Chart Radar user_id pattern](chart-radar-user-id.md) — JWT middleware is disabled; parse Bearer token directly, not request.state.user_id
 - [Screener Hub thematic FMP refresh](screener-hub-thematic-refresh.md) — with_fmp_screener=True required in _background_refresh_theme; weak_cache trigger fires even for "fresh" low-coverage snapshots
 - [Screener Hub proxy_type=custom bug](screener-hub-proxy-etf-bug.md) — _build_all_proxy_etfs must only include proxy_type="etf" themes; stock-ticker proxies must NOT be in the ETF exclusion set

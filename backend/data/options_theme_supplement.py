@@ -640,6 +640,55 @@ _sectors_backfill_next_at:         float = 0.0
 _sectors_backfill_last_pass_at:    float = 0.0
 _sectors_backfill_last_batch_syms: list  = []
 
+# ── Sectors page active tracking ─────────────────────────────────────────────
+# When the Sectors page is visited, register_sectors_active() is called.
+# The backfill loop reads is_sectors_active() each cycle and uses a larger
+# batch + shorter sleep + the "sectors" budget lane for priority refresh.
+_SECTORS_ACTIVE_TS:  float = 0.0
+_SECTORS_ACTIVE_TTL: int   = 300   # 5 minutes since last page visit
+
+# Diagnostics updated by the backfill loop each cycle.
+_SECTORS_REFRESH_DIAG: dict = {
+    "sectors_active":                        False,
+    "sectors_active_since":                  None,
+    "sectors_refresh_queue_depth":           0,
+    "sectors_refresh_inflight":              0,
+    "sectors_refresh_completed_this_session": 0,
+    "sectors_refresh_calls_last_60s":        0,
+    "sectors_refresh_deferred_count":        0,
+    "sectors_refresh_eta_seconds":           None,
+    "sectors_lkg_rows_loaded":               0,
+    "sectors_rows_with_premium":             0,
+    "sectors_pending_no_lkg":               0,
+}
+
+
+def register_sectors_active() -> None:
+    """
+    Record that the Sectors page was just visited.
+
+    The backfill loop calls is_sectors_active() each cycle; when True it
+    switches to priority mode: larger batches, shorter sleep, sectors lane.
+    """
+    global _SECTORS_ACTIVE_TS
+    _SECTORS_ACTIVE_TS = time.time()
+
+
+def is_sectors_active() -> bool:
+    """Return True if the Sectors page was visited within the last 5 minutes."""
+    return time.time() - _SECTORS_ACTIVE_TS < _SECTORS_ACTIVE_TTL
+
+
+def update_sectors_refresh_diag(updates: dict) -> None:
+    """Merge *updates* into the sectors refresh diagnostics dict."""
+    global _SECTORS_REFRESH_DIAG
+    _SECTORS_REFRESH_DIAG.update(updates)
+
+
+def get_sectors_active_diag() -> dict:
+    """Return a copy of the sectors refresh diagnostics dict."""
+    return dict(_SECTORS_REFRESH_DIAG)
+
 
 def update_sectors_backfill_tracking(
     *,

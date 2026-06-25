@@ -37,6 +37,7 @@ LANE_NAMES: tuple[str, ...] = (
     "options_flow",
     "saved_options",
     "maintenance",
+    "sectors",
     "reserved",
 )
 WINDOW_S: float = 60.0  # sliding window duration (seconds)
@@ -90,6 +91,7 @@ BUDGETS: dict[str, int] = {
     "options_flow":  _env_int("TRADIER_OPTIONS_FLOW_RPM_BUDGET",  40),
     "saved_options": _env_int("TRADIER_SAVED_OPTIONS_RPM_BUDGET", 25),
     "maintenance":   _env_int("TRADIER_MAINTENANCE_RPM_BUDGET",   20),
+    "sectors":       _env_int("TRADIER_SECTORS_RPM_BUDGET",       60),
     "reserved":      _env_int("TRADIER_RESERVED_RPM_BUDGET",       5),
 }
 
@@ -173,6 +175,7 @@ def diagnostics() -> dict:
         "quote_budget_used":               calls_60s["quotes"],
         "saved_options_budget_used":       calls_60s["saved_options"],
         "maintenance_budget_used":         calls_60s["maintenance"],
+        "sectors_budget_used":             calls_60s["sectors"],
         "reserved_budget_used":            calls_60s["reserved"],
         "budget_rejections_or_deferrals":  sum(_deferred.values()),
         "oldest_deferred_by_lane":         dict(_oldest_deferred),
