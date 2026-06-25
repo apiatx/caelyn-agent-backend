@@ -690,7 +690,9 @@ async def _get_price_context_batch(tickers: list[str]) -> dict[str, dict]:
         import main as _main  # type: ignore
         _ds = getattr(_main, "data_service", None)
         if _ds and getattr(_ds, "tradier", None):
-            quotes_raw = await _ds.tradier.get_quotes(remaining[:50])
+            from data.tradier_budget import lane as _ins_lane
+            with _ins_lane("quotes"):
+                quotes_raw = await _ds.tradier.get_quotes(remaining[:50])
             for q in (quotes_raw or []):
                 sym = (q.get("symbol") or "").upper()
                 price = q.get("last") or q.get("close") or q.get("prevclose")

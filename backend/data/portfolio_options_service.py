@@ -576,9 +576,11 @@ async def _scan_one_symbol(
     """
     async with sem:
         try:
-            expirations = await asyncio.wait_for(
-                tradier.get_option_expirations(sym), timeout=_SCAN_TIMEOUT_EXP
-            )
+            from data.tradier_budget import lane as _pos_lane
+            with _pos_lane("saved_options"):
+                expirations = await asyncio.wait_for(
+                    tradier.get_option_expirations(sym), timeout=_SCAN_TIMEOUT_EXP
+                )
             if not expirations:
                 # Tradier returned no expirations → confirmed no options chain
                 return {"_sym": sym, "_reason": "no_expirations"}
@@ -594,13 +596,15 @@ async def _scan_one_symbol(
 
             for _batch_start in range(0, min(4, len(expirations)), 2):
                 _batch_exps = expirations[_batch_start:_batch_start + 2]
-                _chain_tasks = [
-                    asyncio.wait_for(
-                        tradier.get_option_chain(sym, exp), timeout=_SCAN_TIMEOUT_CHAIN
-                    )
-                    for exp in _batch_exps
-                ]
-                _chains = await asyncio.gather(*_chain_tasks, return_exceptions=True)
+                from data.tradier_budget import lane as _pos2_lane
+                with _pos2_lane("saved_options"):
+                    _chain_tasks = [
+                        asyncio.wait_for(
+                            tradier.get_option_chain(sym, exp), timeout=_SCAN_TIMEOUT_CHAIN
+                        )
+                        for exp in _batch_exps
+                    ]
+                    _chains = await asyncio.gather(*_chain_tasks, return_exceptions=True)
 
                 for ch in _chains:
                     if isinstance(ch, Exception) or not isinstance(ch, dict):

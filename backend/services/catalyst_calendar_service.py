@@ -791,7 +791,9 @@ async def _enrich_tradier_quotes(
         import main as _main  # type: ignore
         _ds = getattr(_main, "data_service", None)
         if _ds is not None and getattr(_ds, "tradier", None):
-            raw_quotes = await _ds.tradier.get_quotes(us_syms)
+            from data.tradier_budget import lane as _cat_lane
+            with _cat_lane("quotes"):
+                raw_quotes = await _ds.tradier.get_quotes(us_syms)
             for q in (raw_quotes or []):
                 sym = (q.get("symbol") or "").upper()
                 if not sym:

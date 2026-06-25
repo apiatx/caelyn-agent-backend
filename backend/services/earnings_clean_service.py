@@ -1002,7 +1002,9 @@ async def _hydrate_user_scope_events(
             if _tradier_key:
                 from data.tradier_provider import TradierProvider as _TradierProvider  # type: ignore
                 _tradier = _TradierProvider(_tradier_key)
-                _raw_q = await asyncio.wait_for(_tradier.get_quotes(syms), timeout=8.0)
+                from data.tradier_budget import lane as _earn_lane
+                with _earn_lane("quotes"):
+                    _raw_q = await asyncio.wait_for(_tradier.get_quotes(syms), timeout=8.0)
                 for q in (_raw_q or []):
                     s = (q.get("symbol") or "").upper()
                     if s:

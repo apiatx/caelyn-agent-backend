@@ -5403,7 +5403,9 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
             from data.tradier_provider import TradierProvider as _TPOV
             _tpov = _TPOV(api_key=os.getenv("TRADIER_API_KEY", ""))
             _tradier_syms = list(_opt_sym_map.values())
-            _opt_quotes_raw = await _tpov.get_quotes(_tradier_syms)
+            from data.tradier_budget import lane as _pf_opt_lane
+            with _pf_opt_lane("saved_options"):
+                _opt_quotes_raw = await _tpov.get_quotes(_tradier_syms)
             for _q in _opt_quotes_raw:
                 _qsym = (_q.get("symbol") or "").upper()
                 if _qsym:
@@ -8067,9 +8069,11 @@ async def get_portfolio_quotes(request: Request, api_key: str = Header(None, ali
             tradier_covered: set = set()
             if data_service and getattr(data_service, "tradier", None):
                 try:
-                    _tr_results = await asyncio.wait_for(
-                        data_service.tradier.get_quotes(stock_tickers), timeout=8.0
-                    )
+                    from data.tradier_budget import lane as _pf_q_lane
+                    with _pf_q_lane("quotes"):
+                        _tr_results = await asyncio.wait_for(
+                            data_service.tradier.get_quotes(stock_tickers), timeout=8.0
+                        )
                     for q in (_tr_results or []):
                         sym = (q.get("symbol") or "").upper()
                         last = q.get("last")
@@ -8716,9 +8720,11 @@ async def portfolio_relative_volume(
     # ── Live Tradier call ─────────────────────────────────────────────────
     try:
         import asyncio as _aio
-        raw = await _aio.wait_for(
-            data_service.tradier.get_quotes(syms), timeout=5.0
-        )
+        from data.tradier_budget import lane as _rv_lane
+        with _rv_lane("quotes"):
+            raw = await _aio.wait_for(
+                data_service.tradier.get_quotes(syms), timeout=5.0
+            )
     except Exception as _e:
         _ms = round((_time_mod.time() - _t0) * 1000)
         print(f"[PORTFOLIO_RELVOL] status=tradier_error elapsed_ms={_ms} exc={type(_e).__name__}")
@@ -10246,7 +10252,9 @@ async def get_closed_trades(request: Request, api_key: str = Header(None, alias=
         try:
             from data.tradier_provider import TradierProvider as _TP
             _tradier = _TP(api_key=os.getenv("TRADIER_API_KEY", ""))
-            quotes = await _tradier.get_quotes(unique_tickers)
+            from data.tradier_budget import lane as _ct_lane
+            with _ct_lane("quotes"):
+                quotes = await _tradier.get_quotes(unique_tickers)
             for q in quotes:
                 sym = (q.get("symbol") or "").upper()
                 price = q.get("last") or q.get("price") or q.get("close")
@@ -11568,7 +11576,9 @@ async def _home_options_fast_loop():
                 )
 
                 # Batch-quote all seeds to rank by current activity
-                raw_quotes = await data_service.tradier.get_quotes(_HOME_OPTIONS_FAST_SEEDS)
+                from data.tradier_budget import lane as _hof_lane
+                with _hof_lane("saved_options"):
+                    raw_quotes = await data_service.tradier.get_quotes(_HOME_OPTIONS_FAST_SEEDS)
                 quote_map: dict = {
                     (q.get("symbol") or "").upper(): q
                     for q in (raw_quotes or [])
@@ -15357,7 +15367,9 @@ async def trading_dashboard(
         _SECTOR_ETFS = ["XLK", "XLV", "XLF", "XLE", "XLI", "XLP", "XLY", "XLB", "XLU", "XLRE", "XLC"]
         if mp.tradier:
             try:
-                quotes = await mp.tradier.get_quotes(_SECTOR_ETFS)
+                from data.tradier_budget import lane as _sec_lane
+                with _sec_lane("quotes"):
+                    quotes = await mp.tradier.get_quotes(_SECTOR_ETFS)
                 result = []
                 ETF_TO_SECTOR = {
                     "XLK": "Technology", "XLV": "Healthcare", "XLF": "Financial Services",

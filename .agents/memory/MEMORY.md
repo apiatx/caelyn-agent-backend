@@ -20,3 +20,4 @@
 - [Options cache bridge watchlist→Sectors](options-cache-bridge.md) — get_combined_ticker_data() must read portfolio_opts:{sym} as 4th layer; supplement loop covers overlap symbols in steady-state; bridge fires in cold window
 - [Supplement loop anti-duplication](supplement-anti-duplication.md) — supplement loop has cache-first filter for watchlist-overlap symbols; _SUPP_DIAG tracks lifetime counters; exposed via rate-status supplement_loop field
 - [Watchlist options freshness SLA](watchlist-options-freshness.md) — SLA thresholds _SLA_FRESH_AGE_S=900/_SLA_WARN_AGE_S=3600; _is_market_hours_et() gates stale_over_sla_symbols; memory-LKG hits must be queued for refresh same as disk-LKG hits
+- [Tradier budget lane tagging](tradier-budget-lane-tagging.md) — /markets/history calls (get_history) are per-ticker HTTP calls; caelyn_terminal._fetch_tradier_histories and whale_watch history gather both need quotes lane

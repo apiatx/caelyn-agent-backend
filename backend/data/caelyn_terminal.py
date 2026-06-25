@@ -1192,7 +1192,9 @@ class CaelynTerminalProvider:
         if not _saturated:
             _t0 = _tm.time()
             try:
-                raw = await asyncio.wait_for(self.tradier.get_quotes(syms), timeout=8.0)
+                from data.tradier_budget import lane as _term_lane
+                with _term_lane("quotes"):
+                    raw = await asyncio.wait_for(self.tradier.get_quotes(syms), timeout=8.0)
                 # Write per-ticker LKG for future saturated rebuilds
                 _now = _tm.time()
                 for q in (raw or []):
@@ -1253,8 +1255,10 @@ class CaelynTerminalProvider:
     ) -> dict[str, list[dict]]:
         if not syms or not self.tradier:
             return {}
-        tasks = [self.tradier.get_history(sym, "daily", start) for sym in syms]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        from data.tradier_budget import lane as _hist_lane
+        with _hist_lane("quotes"):
+            tasks = [self.tradier.get_history(sym, "daily", start) for sym in syms]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
         return {
             sym: (res if not isinstance(res, Exception) else [])
             for sym, res in zip(syms, results)
@@ -1431,9 +1435,11 @@ class CaelynTerminalProvider:
 
         if eq_extras and self.tradier:
             try:
-                extra_quotes = await asyncio.wait_for(
-                    self.tradier.get_quotes(eq_extras), timeout=8.0
-                )
+                from data.tradier_budget import lane as _term2_lane
+                with _term2_lane("quotes"):
+                    extra_quotes = await asyncio.wait_for(
+                        self.tradier.get_quotes(eq_extras), timeout=8.0
+                    )
                 for q in extra_quotes:
                     sym = q.get("symbol", "")
                     price = _sf(q.get("last"))

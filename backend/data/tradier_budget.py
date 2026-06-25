@@ -41,6 +41,13 @@ LANE_NAMES: tuple[str, ...] = (
 )
 WINDOW_S: float = 60.0  # sliding window duration (seconds)
 
+# Test/ops override: set TRADIER_BUDGET_FORCE_ENFORCE=1 to enforce budget
+# regardless of market session (useful for active-session validation off-hours).
+# Read once at import — requires server restart to take effect.
+FORCE_ENFORCE: bool = os.environ.get("TRADIER_BUDGET_FORCE_ENFORCE", "").lower() in (
+    "1", "true", "yes"
+)
+
 # ── ContextVar: active lane for the current asyncio task ─────────────────────
 _CURRENT_LANE: ContextVar[str] = ContextVar("tradier_lane", default="reserved")
 
@@ -152,7 +159,7 @@ def diagnostics() -> dict:
     }
     try:
         from data.tradier_market_session import is_active_session as _ia
-        _enforcing = _ia()
+        _enforcing = FORCE_ENFORCE or _ia()
     except Exception:
         _enforcing = True
     return {

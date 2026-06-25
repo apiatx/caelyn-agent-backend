@@ -1086,7 +1086,9 @@ async def _tradier_batch_live(
         _ds = getattr(_main, "data_service", None)
         if _ds is None or not getattr(_ds, "tradier", None):
             return {}
-        raw_quotes = await _ds.tradier.get_quotes(tickers[:200])
+        from data.tradier_budget import lane as _soc_lane
+        with _soc_lane("quotes"):
+            raw_quotes = await _ds.tradier.get_quotes(tickers[:200])
         out: dict[str, dict] = {}
         for q in (raw_quotes or []):
             sym = (q.get("symbol") or "").upper()

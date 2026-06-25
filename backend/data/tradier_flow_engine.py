@@ -187,7 +187,9 @@ class TradierFlowEngine(OptionsFlowEngine):
         seed_quotes: dict[str, dict] = {}
         if seeds:
             try:
-                raw_quotes = await self._tradier.get_quotes(seeds)
+                from data.tradier_budget import lane as _fe_lane
+                with _fe_lane("options_flow"):
+                    raw_quotes = await self._tradier.get_quotes(seeds)
                 for q in raw_quotes or []:
                     sym = (q.get("symbol") or "").upper()
                     if sym and _safe_float(q.get("last")):

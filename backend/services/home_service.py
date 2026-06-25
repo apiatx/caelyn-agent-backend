@@ -761,7 +761,9 @@ async def _batch_quotes(tickers: list[str], data_service) -> dict[str, dict]:
 
     if data_service and getattr(data_service, "tradier", None) and not _tradier_saturated:
         try:
-            quotes = await data_service.tradier.get_quotes(us_tickers)
+            from data.tradier_budget import lane as _home_lane
+            with _home_lane("quotes"):
+                quotes = await data_service.tradier.get_quotes(us_tickers)
             for q in (quotes or []):
                 sym = (q.get("symbol") or "").upper()
                 last = q.get("last")

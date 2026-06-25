@@ -176,7 +176,7 @@ class TradierProvider:
         _lane = _bgt.get_current_lane()
         try:
             from data.tradier_market_session import is_active_session as _is_active
-            _enforce_budget = _is_active()
+            _enforce_budget = _bgt.FORCE_ENFORCE or _is_active()
         except Exception:
             _enforce_budget = True  # safe default: enforce if unsure
         if _enforce_budget and not _bgt.check_budget(_lane):

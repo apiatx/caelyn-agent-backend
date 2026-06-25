@@ -1457,7 +1457,9 @@ async def _get_current_prices(tickers: list[str]) -> dict[str, float]:
         _ds = getattr(_main, "data_service", None)
         if _ds and getattr(_ds, "tradier", None):
             batch = remaining[:50]
-            quotes_raw = await _ds.tradier.get_quotes(batch)
+            from data.tradier_budget import lane as _ww_lane
+            with _ww_lane("quotes"):
+                quotes_raw = await _ds.tradier.get_quotes(batch)
             for q in (quotes_raw or []):
                 sym = (q.get("symbol") or "").upper()
                 price = q.get("last") or q.get("close") or q.get("prevclose")
@@ -1570,11 +1572,13 @@ async def _get_historical_returns_async(tickers: list[str]) -> dict[str, dict]:
         import main as _main  # type: ignore
         _ds = getattr(_main, "data_service", None)
         if _ds and getattr(_ds, "tradier", None):
-            histories = await asyncio.gather(
-                *[_ds.tradier.get_history(t, "daily", start_str, today_str)
-                  for t in all_tickers],
-                return_exceptions=True,
-            )
+            from data.tradier_budget import lane as _ww_lane
+            with _ww_lane("quotes"):
+                histories = await asyncio.gather(
+                    *[_ds.tradier.get_history(t, "daily", start_str, today_str)
+                      for t in all_tickers],
+                    return_exceptions=True,
+                )
             tickers_needing_fallback = []
             for ticker, bars in zip(all_tickers, histories):
                 if isinstance(bars, list) and bars:

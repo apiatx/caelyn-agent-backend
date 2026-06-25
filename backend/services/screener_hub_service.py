@@ -840,10 +840,12 @@ async def _fetch_tradier_oi_for_symbol(
     expiration does not stall the whole request.
     """
     try:
-        expirations: list[str] = await asyncio.wait_for(
-            provider.get_option_expirations(symbol),
-            timeout=timeout_per_call,
-        )
+        from data.tradier_budget import lane as _oi_lane
+        with _oi_lane("quotes"):
+            expirations: list[str] = await asyncio.wait_for(
+                provider.get_option_expirations(symbol),
+                timeout=timeout_per_call,
+            )
     except Exception:
         return None
 
@@ -856,10 +858,12 @@ async def _fetch_tradier_oi_for_symbol(
 
     for exp in near_exps:
         try:
-            chain: dict = await asyncio.wait_for(
-                provider.get_option_chain(symbol, exp),
-                timeout=timeout_per_call,
-            )
+            from data.tradier_budget import lane as _oi2_lane
+            with _oi2_lane("quotes"):
+                chain: dict = await asyncio.wait_for(
+                    provider.get_option_chain(symbol, exp),
+                    timeout=timeout_per_call,
+                )
         except Exception:
             continue
         for side in ("calls", "puts"):
@@ -3131,7 +3135,9 @@ async def refresh_quotes_for_page(symbols: Iterable[str]) -> dict:
     for i in range(0, len(stale), batch_size):
         chunk = stale[i:i + batch_size]
         try:
-            quotes = await provider.get_quotes(chunk)
+            from data.tradier_budget import lane as _shub_lane
+            with _shub_lane("quotes"):
+                quotes = await provider.get_quotes(chunk)
         except Exception as e:
             print(f"[SCREENER_HUB] Tradier batch error ({i}): {e}")
             continue
@@ -3505,7 +3511,9 @@ async def _overlay_canonical_quotes_inplace(
         chunk = missing_syms[i : i + batch_size]
         try:
             # provider.get_quotes() auto-writes to tradier:quote:sym:{SYM}
-            quotes = await provider.get_quotes(chunk)
+            from data.tradier_budget import lane as _shub2_lane
+            with _shub2_lane("quotes"):
+                quotes = await provider.get_quotes(chunk)
         except Exception as e:
             print(f"[SCREENER_HUB] canonical_quote_overlay: Tradier batch error: {e}")
             continue

@@ -161,7 +161,9 @@ async def tradier_quote(ticker: str, api_key: str, sandbox: bool = False) -> Dic
         _ds = getattr(_main, "data_service", None)
         if _ds is None or not getattr(_ds, "tradier", None):
             return {}
-        raw_quotes = await _ds.tradier.get_quotes([ticker])
+        from data.tradier_budget import lane as _de1_lane
+        with _de1_lane("quotes"):
+            raw_quotes = await _ds.tradier.get_quotes([ticker])
         quote = next(
             (q for q in (raw_quotes or []) if (q.get("symbol") or "").upper() == ticker.upper()),
             {},
@@ -202,7 +204,9 @@ async def enrich_us_quotes_tradier(
         import main as _main  # type: ignore
         _ds = getattr(_main, "data_service", None)
         if _ds is not None and getattr(_ds, "tradier", None):
-            raw_quotes = await _ds.tradier.get_quotes(us_tickers)
+            from data.tradier_budget import lane as _de2_lane
+            with _de2_lane("quotes"):
+                raw_quotes = await _ds.tradier.get_quotes(us_tickers)
             results: Dict[str, Dict[str, Any]] = {}
             for q in (raw_quotes or []):
                 sym = (q.get("symbol") or "").upper()
