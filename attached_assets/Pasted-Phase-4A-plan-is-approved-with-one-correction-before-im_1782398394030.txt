@@ -1,0 +1,102 @@
+Phase 4A plan is approved with one correction before implementation.
+
+The active quote-demand registry concept is aligned:
+
+* quote-only priority
+* no options priority
+* no new scheduler
+* no endpoint response shape changes
+* no new quote cache namespace
+* no raised Tradier RPM
+* demand registration as a side effect of existing page endpoints
+* active demand merges by symbol/scope
+* all pages still read the canonical quote cache/LKG
+
+Correction required:
+Sorting `remaining` by demand priority is necessary but may not be sufficient if `_tradier_batch()` launches all chunks concurrently with `asyncio.gather`.
+
+If chunks are launched concurrently, chunk 0 is not guaranteed to consume quote budget before chunk 1/2/3. Under quote-lane budget pressure, lower-priority chunks could still race ahead and consume budget.
+
+Implementation requirement:
+Make quote batch fetching priority-aware.
+
+Minimum acceptable behavior:
+
+1. `get_realtime_quotes()` sorts cache-miss symbols by demand priority desc.
+2. `_tradier_batch()` must process the highest-priority chunk first.
+3. If multiple chunks are needed, lower-priority chunks should not be allowed to race ahead of higher-priority chunks under budget pressure.
+4. Keep concurrency only where it does not break priority ordering.
+5. No new scheduler is needed.
+
+Possible simple implementation:
+
+* split sorted symbols into chunks
+* await the first/highest-priority chunk first
+* then process remaining chunks sequentially or with limited concurrency
+* preserve existing cache writes and response shape
+* if quote lane is saturated, high-priority symbols should be the ones most likely to have been fetched before deferral
+
+Proceed with Phase 4A implementation only after applying that correction.
+
+Implementation scope:
+
+1. New `backend/data/quote_demand_registry.py`
+
+   * `register()`
+   * `get_priority()`
+   * `active_symbols()`
+   * `diagnostics()`
+   * lazy expiry
+   * scope merge
+   * priority boost per additional scope, capped at 1.0
+
+2. Modify `realtime_quotes_service.py`
+
+   * sort `remaining` by active demand priority
+   * make `_tradier_batch()` priority-aware so high-priority chunks execute first
+   * collect diagnostics:
+
+     * active_quote_queue_depth
+     * quote_refresh_order_sample
+     * active_quote_hits_from_cache
+     * active_quote_live_fetches
+
+3. Register quote demand in existing page endpoints/scopes:
+
+   * Watchlist
+   * Portfolio
+   * Themes
+   * Options Flow
+   * Options Flow Sectors
+   * Social
+   * Screener
+   * Strategy
+   * ticker popup/search
+
+4. Extend `/api/rate-status` with quote-demand diagnostics:
+
+   * active_quote_demand_count
+   * active_quote_symbols_by_scope
+   * top_active_quote_symbols
+   * active_quote_queue_depth
+   * active_quote_expired_count
+   * duplicate_quote_demands_merged
+   * quote_refresh_order_sample
+   * active_quote_hits_from_cache
+   * active_quote_live_fetches
+
+Validation:
+
+1. Unit test registry:
+
+   * single scope priority
+   * multi-scope merge
+   * TTL expiry
+   * capped priority
+2. Hit a page endpoint and confirm demand appears in `/api/rate-status`.
+3. Confirm endpoint response shapes are unchanged.
+4. Confirm registration alone does not directly call Tradier.
+5. Force quote budget pressure and confirm high-priority active symbols appear in the first fetched chunk.
+6. Confirm lower-priority/background symbols defer before active symbols.
+7. Confirm no options-chain calls are prioritized by this phase.
+8. Confirm no 429s.

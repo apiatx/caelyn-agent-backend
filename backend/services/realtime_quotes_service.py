@@ -293,6 +293,16 @@ class RealtimeQuotesService:
                 remaining.append(sym)
         served_from_cache = len(normalized) - len(remaining)
 
+        # ── Phase 4A: sort cache-miss symbols by active demand priority ───────
+        # Highest-priority symbols enter the first Tradier batch chunk, which is
+        # processed before lower-priority chunks (see _tradier_batch).
+        if remaining:
+            try:
+                import data.quote_demand_registry as _qdr
+                remaining.sort(key=lambda s: -_qdr.get_priority(s, default=0.0))
+            except Exception:
+                pass
+
         print(
             f"[REALTIME] requested={len(normalized)} cache_hits={served_from_cache} "
             f"to_fetch={len(remaining)} session={session}"
@@ -313,6 +323,18 @@ class RealtimeQuotesService:
                     result[sym] = q
                 else:
                     tradier_failures.append(sym)
+            # ── Phase 4A: record refresh diagnostics ─────────────────────────
+            try:
+                import data.quote_demand_registry as _qdr
+                _live = sum(1 for s in remaining if s in result)
+                _qdr.record_refresh_stats(
+                    queue_depth=len(remaining),
+                    order_sample=remaining[:10],
+                    cache_hits=served_from_cache,
+                    live_fetches=_live,
+                )
+            except Exception:
+                pass
         else:
             tradier_failures = list(remaining)
             print("[REALTIME] Tradier provider not configured")
@@ -408,7 +430,20 @@ class RealtimeQuotesService:
                         print(f"[REALTIME] Tradier error: {e}")
                         return []
 
-        results = await asyncio.gather(*[_fetch(c) for c in chunks])
+        # ── Phase 4A: priority-first batching ────────────────────────────────
+        # symbols are pre-sorted by demand priority (highest first), so chunks[0]
+        # contains the highest-priority symbols.  Await it alone so it consumes
+        # the quote-lane budget before lower-priority chunks can race ahead.
+        # Chunks 1+ are gathered concurrently (same lower-priority tier — racing
+        # within that tier is fine).
+        if not chunks:
+            results: list[list[dict]] = []
+        elif len(chunks) == 1:
+            results = [await _fetch(chunks[0])]
+        else:
+            _first = await _fetch(chunks[0])
+            _rest  = await asyncio.gather(*[_fetch(c) for c in chunks[1:]])
+            results = [_first, *_rest]
         now_ts = int(time.time())
         for chunk_quotes in results:
             for q in chunk_quotes or []:

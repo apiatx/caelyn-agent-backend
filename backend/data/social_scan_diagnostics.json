@@ -1,25 +1,5 @@
 [
   {
-    "scan_ts": "2026-05-27T15:00:55.379524+00:00",
-    "accounts_count": 16,
-    "batch_count": 2,
-    "batches_returned": 2,
-    "sections_ok": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "sections_missing": [],
-    "lkg_sections_used": [],
-    "ticker_count": 50,
-    "mention_records": 14,
-    "consensus_picks": 10,
-    "top_tickers": 10,
-    "cache_write_status": "written_clean",
-    "error": null
-  },
-  {
     "scan_ts": "2026-05-29T13:30:49.471634+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -596,6 +576,26 @@
     "mention_records": 14,
     "consensus_picks": 10,
     "top_tickers": 10,
+    "cache_write_status": "written_clean",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-06-25T14:54:15.715235+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 50,
+    "mention_records": 15,
+    "consensus_picks": 8,
+    "top_tickers": 8,
     "cache_write_status": "written_clean",
     "error": null
   }

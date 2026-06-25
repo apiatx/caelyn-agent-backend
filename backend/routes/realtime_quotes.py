@@ -111,6 +111,13 @@ def _build_response(
 @router.get("/realtime-quotes")
 async def realtime_quotes_get(
     symbols: str = Query(..., description="Comma-separated tickers"),
+    scope: str = Query(
+        "page",
+        description=(
+            "Requesting scope for demand-priority tracking: "
+            "watchlist|portfolio|options_flow|screener|social|themes|sectors|strategy|popup|page"
+        ),
+    ),
 ):
     raw_symbols = [s for s in symbols.split(",") if s.strip()]
     if not raw_symbols:
@@ -119,6 +126,16 @@ async def realtime_quotes_get(
         raise HTTPException(status_code=400, detail="too many symbols (max 200)")
 
     valid, errors = _validate_symbols(raw_symbols)
+
+    # ── Phase 4A: register active demand before fetching ─────────────────────
+    if valid:
+        try:
+            import data.quote_demand_registry as _qdr
+            _ttl = 30 if scope == "popup" else 90
+            _qdr.register(valid, scope, ttl=_ttl)
+        except Exception:
+            pass
+
     quotes: dict[str, RealtimeQuote] = {}
     if valid:
         try:
@@ -135,6 +152,7 @@ async def realtime_quotes_get(
 class QuotesPostBody(BaseModel):
     symbols: List[str]
     allow_fallback: Optional[bool] = True
+    scope: Optional[str] = "page"
 
 
 @router.post("/realtime-quotes")
@@ -146,6 +164,17 @@ async def realtime_quotes_post(body: QuotesPostBody):
         raise HTTPException(status_code=400, detail="too many symbols (max 200)")
 
     valid, errors = _validate_symbols(raw)
+
+    # ── Phase 4A: register active demand before fetching ─────────────────────
+    if valid:
+        try:
+            import data.quote_demand_registry as _qdr
+            _scope = body.scope or "page"
+            _ttl   = 30 if _scope == "popup" else 90
+            _qdr.register(valid, _scope, ttl=_ttl)
+        except Exception:
+            pass
+
     quotes: dict[str, RealtimeQuote] = {}
     if valid:
         try:

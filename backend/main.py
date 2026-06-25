@@ -5059,6 +5059,13 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
     except Exception:
         budget_diag = {"tradier_budget_enabled": False, "error": "budget module unavailable"}
 
+    # ── Phase 4A: active quote demand diagnostics ─────────────────────────────
+    try:
+        import data.quote_demand_registry as _qdr_mod
+        quote_demand_diag = _qdr_mod.diagnostics()
+    except Exception:
+        quote_demand_diag = {"error": "quote_demand_registry unavailable"}
+
     return {
         # ── Session & loop health (Phase 2) ──────────────────────────────────
         **session_info,
@@ -5080,6 +5087,8 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
         "options_inflight": inflight_data,
         "coalescing": coalescing_data,
         "supplement_loop": supplement_loop_diag,
+        # ── Phase 4A: active quote demand ─────────────────────────────────────
+        "quote_demand": quote_demand_diag,
         "unmanaged_tradier_paths": {
             "count": len(unmanaged_tradier_paths),
             "paths": unmanaged_tradier_paths,
@@ -5170,6 +5179,14 @@ async def get_holdings(request: Request, api_key: str = Header(None, alias="X-AP
     user_id  = getattr(request.state, "user_id", "default")
     holdings = _load()
     syms     = [h.get("ticker", "?") for h in holdings]
+    # ── Phase 4A: register portfolio demand for quote priority ────────────────
+    _pf_syms = [s for s in syms if s and s != "?"]
+    if _pf_syms:
+        try:
+            import data.quote_demand_registry as _qdr
+            _qdr.register(_pf_syms, "portfolio", ttl=90)
+        except Exception:
+            pass
     print(
         f"[portfolio-source-audit] endpoint=dashboard-get  user_id={user_id}  "
         f"source_file=data/portfolio/active_holdings.json  "
@@ -12575,6 +12592,15 @@ async def options_flow_master_latest(
             -(t.get("total_volume") or 0),
         ),
     )[:limit]
+
+    # ── Phase 4A: register options-flow demand for quote priority ─────────────
+    try:
+        import data.quote_demand_registry as _qdr
+        _flow_syms = [t.get("ticker") for t in rows if isinstance(t, dict) and t.get("ticker")]
+        if _flow_syms:
+            _qdr.register(_flow_syms, "options_flow", ttl=90)
+    except Exception:
+        pass
 
     # Return a slimmed-down verification payload for each row
     _ENRICHED_KEYS = [

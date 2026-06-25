@@ -703,6 +703,14 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
     analysis: dict       = store.get("analysis") or {}
     sections: list[dict] = analysis.get("sections", [])
 
+    # ── Phase 4A: register watchlist demand for quote priority ────────────────
+    if tickers:
+        try:
+            import data.quote_demand_registry as _qdr
+            _qdr.register(tickers, "watchlist", ttl=90)
+        except Exception:
+            pass
+
     if not tickers:
         return store
 

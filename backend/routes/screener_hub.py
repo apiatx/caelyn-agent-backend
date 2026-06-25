@@ -120,6 +120,20 @@ async def screener_hub(
             min_volume=_min_vol,
             exchange=exchange,
         )
+        # ── Phase 4A: register screener demand for quote priority ─────────────
+        try:
+            import data.quote_demand_registry as _qdr
+            _rows = data.get("rows") or []
+            _syms = [
+                r.get("ticker") or r.get("symbol")
+                for r in _rows
+                if isinstance(r, dict)
+            ]
+            _syms = [s for s in _syms if isinstance(s, str) and s]
+            if _syms:
+                _qdr.register(_syms, "screener", ttl=90)
+        except Exception:
+            pass
         return JSONResponse(content=data)
     except Exception as e:
         print(f"[SCREENER_HUB] /api/screener-hub error: {e}")
