@@ -165,8 +165,26 @@ class TradierProvider:
         }
 
     async def _get(self, path: str, params: dict | None = None) -> dict | list | None:
-        """Generic GET with rate limiting and 429 auto-retry."""
+        """Generic GET with lane-budget pre-check, rate limiting, and 429 auto-retry.
+
+        Lane budget is enforced only during active trading sessions (pre/regular/post-market).
+        During off-hours and weekends the global TRADIER_LIMITER remains the sole ceiling —
+        budget checks are skipped so warmup and background refresh calls are not needlessly
+        deferred when no starvation risk exists.
+        """
+        import data.tradier_budget as _bgt
+        _lane = _bgt.get_current_lane()
+        try:
+            from data.tradier_market_session import is_active_session as _is_active
+            _enforce_budget = _is_active()
+        except Exception:
+            _enforce_budget = True  # safe default: enforce if unsure
+        if _enforce_budget and not _bgt.check_budget(_lane):
+            _bgt.record_defer(_lane)
+            print(f"[TRADIER_BUDGET] {_lane!r} lane over budget — deferring {path}")
+            return None
         await TRADIER_LIMITER.acquire()
+        _bgt.record_call(_lane)
         url = f"{self.base_url}{path}"
         for attempt in range(3):
             try:

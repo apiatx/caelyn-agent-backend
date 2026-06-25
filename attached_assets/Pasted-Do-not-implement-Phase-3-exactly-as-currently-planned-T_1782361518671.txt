@@ -1,0 +1,91 @@
+Do not implement Phase 3 exactly as currently planned. The lane budget concept is approved, but the implementation needs two corrections before coding.
+
+Corrections:
+
+1. Budget accounting should live inside `TradierProvider._get()`, not only as manual checks around a few loops.
+
+Reason:
+Every physical Tradier HTTP call should be counted by lane in one central place. Manual `record_call()` calls in `main.py` can undercount/overcount because cache hits, coalesced futures, early returns, and failures may not map 1:1 to API calls.
+
+Desired:
+
+* Add `lane: str = "reserved"` to `TradierProvider._get()`.
+* Add `lane` through:
+
+  * `get_quotes`
+  * `get_option_expirations`
+  * `get_option_chain`
+  * `get_history`
+  * `get_timesales`
+  * any other TradierProvider method that makes a real HTTP request.
+* Cache hits should not consume lane budget.
+* Coalesced waiters should not consume lane budget multiple times.
+* Only the coroutine that makes the physical HTTP call should consume/record budget.
+* If over lane budget, return `None` or a structured deferred result only if the caller already handles that safely via LKG/fallback.
+
+2. Fix lane mapping:
+
+* Quote calls → `quotes`
+* Master Options Flow screener → `options_flow`
+* Watchlist/Portfolio options refresh → `saved_options`
+* Theme supplement, stale LKG retries, retry/maintenance loops → `maintenance`
+* Popup/manual/user-triggered direct calls → `reserved`
+
+Do not put theme supplement in `saved_options`. It is maintenance/gap-fill work and should not compete equally with Watchlist/Portfolio saved-symbol refresh.
+
+Clarify budget semantics before implementation:
+
+* Are lane budgets hard caps, or can unused lane capacity be borrowed?
+* For Phase 3, hard caps are acceptable if simpler.
+* If borrowing is implemented, it must not allow one lane to starve protected lanes.
+
+Approved defaults for first pass:
+
+* `TRADIER_QUOTE_RPM_BUDGET=30`
+* `TRADIER_OPTIONS_FLOW_RPM_BUDGET=40`
+* `TRADIER_SAVED_OPTIONS_RPM_BUDGET=25`
+* `TRADIER_MAINTENANCE_RPM_BUDGET=10`
+* `TRADIER_RESERVED_RPM_BUDGET=5`
+
+Hard constraints:
+
+* Do not raise global Tradier RPM.
+* Do not build active page priority yet.
+* Do not build a new scheduler.
+* Do not change endpoint shapes.
+* Do not create new cache namespaces.
+* Do not make Sectors live-scan watchlist-overlap symbols.
+* Failed refresh must continue serving last-good/LKG data.
+
+Implementation target:
+
+* One new `tradier_budget.py` module is fine.
+* Budget check/record should be integrated centrally at the physical HTTP-call boundary in `TradierProvider._get()`.
+* Call sites should pass the correct `lane`.
+* Untagged calls default to `reserved`.
+* `/api/rate-status` should expose the budget diagnostics.
+
+Required validation:
+
+1. Confirm cache hits do not count against lane budget.
+2. Confirm coalesced option-chain waiters do not count multiple times.
+3. Confirm over-budget lane defers safely and serves LKG/last-good data.
+4. Confirm Options Flow, Watchlist options, realtime quotes, popup/manual routes still work.
+5. Confirm `/api/rate-status` shows:
+
+   * budget_by_lane
+   * calls_last_60s_by_lane
+   * deferred_by_lane
+   * lane_saturation
+   * options_flow_budget_used
+   * quote_budget_used
+   * saved_options_budget_used
+   * maintenance_budget_used
+   * reserved_budget_used
+   * budget_rejections_or_deferrals
+   * oldest_deferred_by_lane
+   * last_429_at
+6. Confirm no Tradier 429s.
+7. Confirm no unmanaged raw Tradier paths were reintroduced.
+
+After these corrections, proceed with Phase 3 implementation only.

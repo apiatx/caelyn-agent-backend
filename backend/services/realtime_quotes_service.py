@@ -394,17 +394,19 @@ class RealtimeQuotesService:
         )
 
         async def _fetch(chunk: list[str]) -> list[dict]:
-            async with self._tradier_sem:
-                try:
-                    return await asyncio.wait_for(
-                        self.tradier.get_quotes(chunk), timeout=_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    print(f"[REALTIME] Tradier timeout for {len(chunk)} symbols")
-                    return []
-                except Exception as e:
-                    print(f"[REALTIME] Tradier error: {e}")
-                    return []
+            from data.tradier_budget import lane as _rqs_lane
+            with _rqs_lane("quotes"):
+                async with self._tradier_sem:
+                    try:
+                        return await asyncio.wait_for(
+                            self.tradier.get_quotes(chunk), timeout=_TIMEOUT
+                        )
+                    except asyncio.TimeoutError:
+                        print(f"[REALTIME] Tradier timeout for {len(chunk)} symbols")
+                        return []
+                    except Exception as e:
+                        print(f"[REALTIME] Tradier error: {e}")
+                        return []
 
         results = await asyncio.gather(*[_fetch(c) for c in chunks])
         now_ts = int(time.time())

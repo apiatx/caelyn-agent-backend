@@ -5052,12 +5052,21 @@ async def rate_status(request: Request, api_key: str = Header(None, alias="X-API
     except Exception:
         _last_429_at_ts = None
 
+    # ── Phase 3 lane budget diagnostics ──────────────────────────────────────
+    try:
+        import data.tradier_budget as _bgt_mod
+        budget_diag = _bgt_mod.diagnostics()
+    except Exception:
+        budget_diag = {"tradier_budget_enabled": False, "error": "budget module unavailable"}
+
     return {
         # ── Session & loop health (Phase 2) ──────────────────────────────────
         **session_info,
         **loop_diag,
         "calls_used_last_60s": tradier_status.get("calls_last_60s"),
         "last_429_at": _last_429_at_ts,
+        # ── Phase 3 lane budget (Phase 3) ─────────────────────────────────────
+        **budget_diag,
         # ── Tradier rate-limiter ──────────────────────────────────────────────
         "tradier": {
             **tradier_status,
@@ -11833,9 +11842,11 @@ async def _master_screener_loop():
                 except Exception as _thseed_err:
                     print(f"[MASTER_SCREENER] Curated theme seed injection skipped: {_thseed_err}")
 
-                prefilter_data = await engine.build_prefilter_snapshot(
-                    _cycle_seeds, tab="master",
-                )
+                from data.tradier_budget import lane as _ms_lane
+                with _ms_lane("options_flow"):
+                    prefilter_data = await engine.build_prefilter_snapshot(
+                        _cycle_seeds, tab="master",
+                    )
                 cache.set(_OPTIONS_MASTER_PREFILTER_KEY, prefilter_data, _OPTIONS_PREFILTER_CACHE_TTL)
                 _save_master_prefilter_to_disk(prefilter_data)
                 n_pf = len(prefilter_data.get("candidates", []))
@@ -11846,9 +11857,11 @@ async def _master_screener_loop():
             # TradierFlowEngine.build_prefilter_snapshot.  Passing them again
             # causes the base engine to re-inflate the inspectable list to
             # all 94 seeds, ballooning Stage-1 calls from ~60 to 147.
-            screener_data = await engine.run_live_scan(
-                None, prefilter_snapshot=prefilter_data, tab="master",
-            )
+            from data.tradier_budget import lane as _ms_lane2
+            with _ms_lane2("options_flow"):
+                screener_data = await engine.run_live_scan(
+                    None, prefilter_snapshot=prefilter_data, tab="master",
+                )
             # ── Enrich rows with premium analytics, OTM metrics, heat_score ──
             try:
                 from data.options_enricher import enrich_ticker_rows
@@ -12179,8 +12192,10 @@ async def _theme_options_supplement_loop():
 
             # Pre-fetch Tradier quotes — Stage 1 needs a price to proceed
             candidates = []
+            from data.tradier_budget import lane as _supp_lane
             try:
-                raw_q = await data_service.tradier.get_quotes(batch)
+                with _supp_lane("maintenance"):
+                    raw_q = await data_service.tradier.get_quotes(batch)
                 qmap = {(q.get("symbol") or "").upper(): q for q in (raw_q or []) if isinstance(q, dict)}
                 for sym in batch:
                     sym_u = sym.upper()
@@ -12217,15 +12232,17 @@ async def _theme_options_supplement_loop():
             engine._shared_sem  = _TRADIER_GLOBAL_SEM
             engine._expiry_cache = _local_expiry
 
-            screener_data = await engine.run_live_scan(
-                None,
-                prefilter_snapshot={
-                    "candidates":       candidates,
-                    "macro":            {},
-                    "degraded_sources": [],
-                },
-                tab="master",
-            )
+            from data.tradier_budget import lane as _supp_lane2
+            with _supp_lane2("maintenance"):
+                screener_data = await engine.run_live_scan(
+                    None,
+                    prefilter_snapshot={
+                        "candidates":       candidates,
+                        "macro":            {},
+                        "degraded_sources": [],
+                    },
+                    tab="master",
+                )
 
             results = screener_data.get("tickers", [])
             if results:

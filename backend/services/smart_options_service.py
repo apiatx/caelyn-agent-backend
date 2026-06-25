@@ -249,9 +249,11 @@ async def build_smart_options_data(
     tradier_quotes: list[dict] = []
     if tradier:
         try:
-            tradier_quotes = await asyncio.wait_for(
-                tradier.get_quotes(tickers), timeout=35.0
-            )
+            from data.tradier_budget import lane as _so_lane
+            with _so_lane("saved_options"):
+                tradier_quotes = await asyncio.wait_for(
+                    tradier.get_quotes(tickers), timeout=35.0
+                )
         except asyncio.TimeoutError:
             print("[SmartOptions] Tradier batch-quote timed out — serving HL-only data")
         except Exception as exc:
