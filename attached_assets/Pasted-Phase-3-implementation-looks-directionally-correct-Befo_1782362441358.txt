@@ -1,0 +1,66 @@
+Phase 3 implementation looks directionally correct. Before checkpointing it as complete, run active-session validation and confirm lane mapping for quote-like pages.
+
+Do not build active page priority yet. Do not build a new scheduler. Do not change endpoint shapes.
+
+Validation/correction items:
+
+1. Active-session budget validation
+   The current validation happened off-hours with `budget_enforcement_active: false`, so the budget layer was not really exercised.
+
+Please simulate or temporarily force an active session in a safe test mode and validate:
+
+* `budget_enforcement_active: true`
+* quote lane respects `TRADIER_QUOTE_RPM_BUDGET`
+* options_flow lane respects `TRADIER_OPTIONS_FLOW_RPM_BUDGET`
+* saved_options lane respects `TRADIER_SAVED_OPTIONS_RPM_BUDGET`
+* maintenance lane respects `TRADIER_MAINTENANCE_RPM_BUDGET`
+* reserved lane respects `TRADIER_RESERVED_RPM_BUDGET`
+* over-budget calls defer safely
+* LKG/last-good rows remain visible
+* no Tradier 429s
+
+2. Confirm budget accounting is at the physical HTTP boundary
+   Confirm:
+
+* cache hits do not count
+* coalesced option-chain waiters do not count multiple times
+* only the coroutine making the real `_get()` HTTP call consumes/records lane budget
+
+3. Fix or report quote-like call sites currently falling into `reserved`
+   The report says only realtime_quotes_service is tagged as `quotes`, while everything else defaults to `reserved`.
+
+Please check these Phase 1-converted services:
+
+* social_screener_service.py
+* catalyst_calendar_service.py
+* playbook/discovery_enrichment.py
+* sector_rotation/providers.py
+
+If they call `TradierProvider.get_quotes()`, they should likely pass `lane="quotes"` rather than defaulting to reserved.
+
+Do not change response shapes. Just tag quote-like provider calls with the quote lane if safe.
+
+4. Keep these lane mappings:
+
+* master screener / Options Flow engine → `options_flow`
+* watchlist/portfolio options refresh → `saved_options`
+* theme supplement / stale LKG / retry maintenance → `maintenance`
+* ordinary quote enrichment → `quotes`
+* popup/manual/user-triggered direct one-offs → `reserved`
+
+5. Validate `/api/rate-status`
+   Confirm it shows during active-session simulation:
+
+* calls_last_60s_by_lane changing correctly
+* deferred_by_lane increments when a lane is saturated
+* lane_saturation reflects real usage
+* budget_rejections_or_deferrals increments only when expected
+* last_429_at remains null
+
+Final acceptance:
+
+* active-session budgets are actually exercised
+* quote-like pages are not accidentally stuck in the 5 RPM reserved lane
+* no page independently bypasses TradierProvider
+* no endpoint shape changes
+* no 429s
