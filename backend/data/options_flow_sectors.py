@@ -499,11 +499,30 @@ def build_sector_tree(
         )
     )
 
-    # Coverage percentage based on represented tickers (any known state)
-    _batch_size  = 20
-    _cadence_min = 5
+    # ── Coverage metrics ─────────────────────────────────────────────────────
+    _bullish_n  = _global_state_counts.get("bullish_flow", 0)
+    _bearish_n  = _global_state_counts.get("bearish_flow", 0)
+    _mixed_n    = _global_state_counts.get("mixed_flow", 0)
+    _neutral_n  = _global_state_counts.get("neutral_no_unusual_flow", 0)
+    _no_opts_n  = _global_state_counts.get("confirmed_no_options", 0)
+    _unsupp_n   = _global_state_counts.get("unsupported_foreign_otc", 0)
+    _chain_scanned_n = _bullish_n + _bearish_n + _mixed_n + _neutral_n
+    # optionable_expected = universe minus known no-options and unsupported
+    _optionable_expected = max(0, len(all_theme_syms) - _no_opts_n - _unsupp_n)
+
     coverage_pct = round(_represented_syms / max(len(all_theme_syms), 1) * 100, 1)
-    est_minutes  = round(len(pending_syms) / _batch_size * _cadence_min, 1) if pending_syms else 0
+
+    # Sectors/themes totals
+    _total_sectors = len(sectors)
+    _total_themes  = sum(len(v) for v in sectors.values())
+
+    # Backfill timing from module tracking
+    _sbf_diag: dict = {}
+    try:
+        from data.options_theme_supplement import get_sectors_backfill_diag as _sbf_d
+        _sbf_diag = _sbf_d()
+    except Exception:
+        pass
 
     # Supplement timing from module tracking
     last_scan_at = None
@@ -517,6 +536,14 @@ def build_sector_tree(
     except Exception:
         pass
 
+    # Estimated time to full coverage from the fast backfill loop
+    _sbf_batch   = 8
+    _sbf_sleep_s = 60
+    _generic_pend_n = _global_state_counts.get("generic_pending", 0)
+    _stale_lkg_n    = _global_state_counts.get("stale_lkg", 0)
+    _still_pending  = _generic_pend_n + _stale_lkg_n   # symbols needing a scan pass
+    est_minutes  = round(_still_pending / _sbf_batch * _sbf_sleep_s / 60, 1) if _still_pending else 0
+
     return {
         "as_of":                         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source":                        "master_and_supplement_cache",
@@ -524,31 +551,45 @@ def build_sector_tree(
         "put_call_ratio_method":         "premium_dollars",
         "sector_total_method":           "unique_ticker_sum",
         "scan_coverage": {
-            "theme_universe_total":          len(all_theme_syms),
-            "represented_count":             _represented_syms,
-            "coverage_pct":                  coverage_pct,
-            # 9-state breakdown (global, theme universe only)
-            "bullish_count":                 _global_state_counts.get("bullish_flow", 0),
-            "bearish_count":                 _global_state_counts.get("bearish_flow", 0),
-            "mixed_count":                   _global_state_counts.get("mixed_flow", 0),
-            "true_neutral_count":            _global_state_counts.get("neutral_no_unusual_flow", 0),
+            # ── Universe dimensions ────────────────────────────────────────────
+            "total_sectors":                  _total_sectors,
+            "total_themes":                   _total_themes,
+            "total_tickers":                  len(all_theme_syms),
+            "theme_universe_total":           len(all_theme_syms),   # compat alias
+            "optionable_expected":            _optionable_expected,
+            # ── Coverage summary ──────────────────────────────────────────────
+            "represented_count":              _represented_syms,
+            "represented_percent":            coverage_pct,
+            "coverage_pct":                   coverage_pct,          # compat alias
+            "chain_scanned_count":            _chain_scanned_n,
+            # ── 9-state breakdown (theme universe, global) ─────────────────────
+            "bullish_count":                  _bullish_n,
+            "bearish_count":                  _bearish_n,
+            "mixed_count":                    _mixed_n,
+            "true_neutral_no_unusual_flow_count": _neutral_n,
+            "true_neutral_count":             _neutral_n,            # compat alias
             "optionable_pending_chain_count": _global_state_counts.get("optionable_pending_chain", 0),
-            "confirmed_no_options_count":    _global_state_counts.get("confirmed_no_options", 0),
-            "stale_lkg_count":               _global_state_counts.get("stale_lkg", 0),
-            "deferred_retry_count":          _global_state_counts.get("deferred_retry", 0),
-            "unsupported_count":             _global_state_counts.get("unsupported_foreign_otc", 0),
-            "generic_pending_count":         _global_state_counts.get("generic_pending", 0),
-            # Legacy / cache-source compat fields
-            "master_count":                  len(live_syms & all_theme_syms),
-            "supplement_fresh_count":        len(fresh_supp_syms & all_theme_syms),
-            "supplement_lkg_count":          len(lkg_supp_syms & all_theme_syms),
-            "supplement_count":              len(supplement_syms & all_theme_syms),
-            "no_options_count":              len(no_options_syms & all_theme_syms),
-            "pending_count":                 len(pending_syms),
-            "tickers_with_data":             len(theme_in_scan),
+            "confirmed_no_options_count":     _no_opts_n,
+            "stale_lkg_count":                _stale_lkg_n,
+            "deferred_retry_count":           _global_state_counts.get("deferred_retry", 0),
+            "unsupported_count":              _unsupp_n,
+            "generic_pending_count":          _generic_pend_n,
+            # ── Cache-source counts (for diagnostics) ──────────────────────────
+            "master_count":                   len(live_syms & all_theme_syms),
+            "supplement_fresh_count":         len(fresh_supp_syms & all_theme_syms),
+            "supplement_lkg_count":           len(lkg_supp_syms & all_theme_syms),
+            "supplement_count":               len(supplement_syms & all_theme_syms),
+            "no_options_count":               len(no_options_syms & all_theme_syms),
+            "pending_count":                  len(pending_syms),
+            "tickers_with_data":              len(theme_in_scan),
+            # ── Backfill timing ────────────────────────────────────────────────
             "estimated_full_coverage_minutes": est_minutes,
-            "last_supplement_scan_at":       last_scan_at,
-            "next_supplement_scan_at":       next_scan_at,
+            "backfill_pass_count":            _sbf_diag.get("pass_count", 0),
+            "backfill_last_pass_at":          _sbf_diag.get("last_pass_at"),
+            "backfill_next_at":               _sbf_diag.get("next_at"),
+            "backfill_last_batch_syms":       _sbf_diag.get("last_batch_syms", []),
+            "last_supplement_scan_at":        last_scan_at,
+            "next_supplement_scan_at":        next_scan_at,
         },
         "sectors": sector_nodes,
     }

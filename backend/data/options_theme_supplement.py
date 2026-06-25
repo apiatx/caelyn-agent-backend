@@ -543,3 +543,202 @@ def get_supplement_debug_info() -> dict:
         }
     except Exception as exc:
         return {"error": str(exc)}
+
+
+# ── Sectors universe LKG ──────────────────────────────────────────────────────
+# A separate LKG that captures ALL theme universe symbol states (including
+# symbols covered by the master screener that would otherwise be lost on
+# restart). This ensures high coverage immediately after restart.
+
+_SECTORS_LKG_DISK_PATH    = _pathlib.Path(__file__).resolve().parent / "options_sectors_universe_lkg_v1.json"
+_SECTORS_LKG_DISK_MAX_AGE = 86400   # 24 h
+
+# Loop tracking (updated by _sectors_fast_backfill_loop via update_sectors_backfill_tracking)
+_sectors_backfill_pass_count:      int   = 0
+_sectors_backfill_next_at:         float = 0.0
+_sectors_backfill_last_pass_at:    float = 0.0
+_sectors_backfill_last_batch_syms: list  = []
+
+
+def update_sectors_backfill_tracking(
+    *,
+    pass_count:   int   | None = None,
+    next_at:      float | None = None,
+    last_pass_at: float | None = None,
+    batch_syms:   list  | None = None,
+) -> None:
+    global _sectors_backfill_pass_count, _sectors_backfill_next_at
+    global _sectors_backfill_last_pass_at, _sectors_backfill_last_batch_syms
+    if pass_count   is not None: _sectors_backfill_pass_count      = pass_count
+    if next_at      is not None: _sectors_backfill_next_at         = next_at
+    if last_pass_at is not None: _sectors_backfill_last_pass_at    = last_pass_at
+    if batch_syms   is not None: _sectors_backfill_last_batch_syms = list(batch_syms)
+
+
+def get_sectors_backfill_diag() -> dict:
+    return {
+        "pass_count":      _sectors_backfill_pass_count,
+        "next_at":         _sectors_backfill_next_at or None,
+        "last_pass_at":    _sectors_backfill_last_pass_at or None,
+        "last_batch_syms": list(_sectors_backfill_last_batch_syms),
+    }
+
+
+def save_sectors_universe_lkg_to_disk() -> int:
+    """
+    Snapshot ALL theme universe symbols from the combined cache into the
+    Sectors-specific LKG file.  Called after each complete backfill pass.
+
+    Includes: live, supplement, supplement_lkg, and watchlist_cache rows.
+    Confirmed no-options symbols are also included.
+
+    Returns the number of symbols persisted.
+    """
+    try:
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+    except ImportError:
+        return 0
+
+    all_theme_syms: set[str] = {
+        sym.upper()
+        for meta in ENRICHED_THEME_RS_UNIVERSE.values()
+        for sym in (meta.get("proxy_symbols") or [])
+    }
+
+    combined = get_combined_ticker_data()
+    no_opts  = get_no_options_symbols()
+    now      = time.time()
+    snapshot: dict[str, dict] = {}
+
+    for sym in all_theme_syms:
+        row = combined.get(sym)
+        if row:
+            # Re-tag as supplement so the row loads as supplement_lkg (stale) on restart
+            snapshot[sym] = {**row, "_source": "supplement", "_sectors_lkg_at": now}
+        elif sym in no_opts:
+            snapshot[sym] = {
+                "ticker":          sym,
+                "scan_result":     "confirmed_no_options",
+                "_source":         "supplement",
+                "_sectors_lkg_at": now,
+            }
+        # Symbols with no data and not confirmed no-options are intentionally
+        # NOT persisted — they re-enter the pending queue on next restart.
+
+    if not snapshot:
+        return 0
+
+    try:
+        payload = {
+            "schema_version": 2,
+            "ticker_data":    snapshot,
+            "saved_at":       now,
+            "ticker_count":   len(snapshot),
+        }
+        tmp = _SECTORS_LKG_DISK_PATH.with_suffix(".json.tmp")
+        _SECTORS_LKG_DISK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(_json.dumps(payload, default=str), encoding="utf-8")
+        tmp.replace(_SECTORS_LKG_DISK_PATH)
+        print(
+            f"[SECTORS_LKG] Saved {len(snapshot)}/{len(all_theme_syms)} "
+            f"theme universe symbols to disk"
+        )
+        return len(snapshot)
+    except Exception as exc:
+        print(f"[SECTORS_LKG] Disk write failed (non-fatal): {exc}")
+        return 0
+
+
+def load_sectors_universe_lkg_from_disk() -> None:
+    """
+    Load Sectors universe LKG at startup.  Merged into the supplement LKG
+    cache (supplement LKG symbols win for any overlap so per-symbol data
+    from the supplement loop is not overwritten).
+
+    All rows are tagged _source='supplement_lkg' → _ticker_state() classifies
+    them as stale_lkg until the fast backfill loop refreshes them this session.
+    """
+    if not _SECTORS_LKG_DISK_PATH.exists():
+        print("[SECTORS_LKG] No disk LKG — Sectors backfill will build from scratch")
+        return
+    try:
+        now     = time.time()
+        payload = _json.loads(_SECTORS_LKG_DISK_PATH.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            print("[SECTORS_LKG] Disk LKG bad format — skipping")
+            return
+
+        saved_at = payload.get("saved_at", 0)
+        age_s    = int(now - saved_at)
+        if age_s > _SECTORS_LKG_DISK_MAX_AGE:
+            print(f"[SECTORS_LKG] Disk LKG too old ({age_s}s) — skipping")
+            return
+
+        ticker_data: dict = payload.get("ticker_data", {})
+        if not ticker_data:
+            print("[SECTORS_LKG] Disk LKG empty — skipping")
+            return
+
+        # Tag all rows as supplement_lkg → shown as stale_lkg until refreshed
+        tagged = {
+            sym: {**row, "_source": "supplement_lkg"}
+            for sym, row in ticker_data.items()
+        }
+
+        from data.cache import cache
+        existing_lkg = cache.get(_SUPPLEMENT_LKG_CACHE_KEY) or {}
+        existing_td  = dict(existing_lkg.get("ticker_data", {}))
+        # Supplement LKG wins for any overlap; Sectors LKG fills in the rest
+        merged = {**tagged, **existing_td}
+        cache.set(
+            _SUPPLEMENT_LKG_CACHE_KEY,
+            {"ticker_data": merged, "loaded_at": now, "saved_at": saved_at},
+            _SUPPLEMENT_LKG_CACHE_TTL,
+        )
+        print(
+            f"[SECTORS_LKG] Loaded {len(tagged)} theme universe symbols from disk "
+            f"(age={age_s}s) → {len(merged)} total in supplement_lkg cache"
+        )
+    except Exception as exc:
+        print(f"[SECTORS_LKG] Disk load failed (non-fatal): {exc}")
+
+
+def get_sectors_pending_symbols() -> list[str]:
+    """
+    Return theme universe symbols that need scanning this session.
+
+    Includes:
+    - generic_pending  — not in any cache at all
+    - stale_lkg        — loaded from LKG (supplement_lkg source), needs refresh
+
+    Excludes:
+    - live / supplement / watchlist_cache  (current-session data, already good)
+    - confirmed no-options symbols
+
+    Sorted alphabetically for a deterministic rolling cursor.
+    """
+    try:
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+    except ImportError:
+        return []
+
+    all_theme_syms: set[str] = {
+        sym.upper()
+        for meta in ENRICHED_THEME_RS_UNIVERSE.values()
+        for sym in (meta.get("proxy_symbols") or [])
+    }
+
+    combined = get_combined_ticker_data()
+    no_opts  = get_no_options_symbols()
+
+    pending = []
+    for sym in sorted(all_theme_syms):
+        if sym in no_opts:
+            continue
+        row = combined.get(sym)
+        if row is None:
+            pending.append(sym)                       # generic_pending
+        elif row.get("_source") == "supplement_lkg":
+            pending.append(sym)                       # stale_lkg — needs refresh
+        # live / supplement / watchlist_cache = current-session data → skip
+    return pending
