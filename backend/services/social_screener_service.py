@@ -1068,69 +1068,60 @@ async def _tradier_batch_live(
     api_key: str,
     sandbox: bool = False,
 ) -> dict[str, dict]:
-    """Batch-fetch Tradier quotes, return {SYMBOL: normalised-quote-dict}.
+    """Batch-fetch Tradier quotes via the shared TradierProvider.
 
-    Returns empty dict on any failure so the caller can fall back to FMP.
-    Result is also written to per-symbol LKG cache (TTL 72 h).
+    api_key / sandbox are retained for call-site compatibility but are ignored —
+    the shared provider's configured credentials and rate limiter are used instead.
+    Result is written to per-symbol social LKG cache (TTL 72 h) for backward
+    compatibility with _tradier_lkg_for_symbol fallback.
+    Returns empty dict on any failure so the caller falls back to FMP.
     """
-    if not api_key or not tickers:
+    if not tickers:
         return {}
-    _base = "https://sandbox.tradier.com/v1" if sandbox else "https://api.tradier.com/v1"
-    _LKG_TTL = 72 * 3600
     import time as _time_mod
     _now_ts = _time_mod.time()
+    _LKG_TTL = 72 * 3600
     try:
-        syms_str = ",".join(s.upper() for s in tickers[:200])
-        async with httpx.AsyncClient(timeout=8.0) as _c:
-            resp = await _c.get(
-                f"{_base}/markets/quotes",
-                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-                params={"symbols": syms_str, "greeks": "false"},
-            )
-        if resp.status_code != 200:
-            print(f"[SOCIAL_TRADIER] batch quotes HTTP {resp.status_code}")
+        import main as _main  # type: ignore
+        _ds = getattr(_main, "data_service", None)
+        if _ds is None or not getattr(_ds, "tradier", None):
             return {}
-        raw = resp.json()
-        quotes_block = raw.get("quotes", {})
-        quote_list = quotes_block.get("quote", []) if isinstance(quotes_block, dict) else []
-        if isinstance(quote_list, dict):
-            quote_list = [quote_list]
+        raw_quotes = await _ds.tradier.get_quotes(tickers[:200])
         out: dict[str, dict] = {}
-        for q in quote_list:
+        for q in (raw_quotes or []):
             sym = (q.get("symbol") or "").upper()
-            last = q.get("last")
             if not sym:
                 continue
             try:
-                last = float(last) if last not in (None, "", "-") else None
+                last = float(q["last"]) if q.get("last") not in (None, "", "-") else None
             except (TypeError, ValueError):
                 last = None
             try:
-                chg_pct = float(q.get("change_percentage")) if q.get("change_percentage") not in (None, "", "-") else None
+                chg_pct = float(q["change_percentage"]) if q.get("change_percentage") not in (None, "", "-") else None
             except (TypeError, ValueError):
                 chg_pct = None
             try:
-                vol = int(float(q.get("volume"))) if q.get("volume") not in (None, "", "-") else None
+                vol = int(float(q["volume"])) if q.get("volume") not in (None, "", "-") else None
             except (TypeError, ValueError):
                 vol = None
             row = {
-                "price":       last,
-                "volume":      vol,
-                "change_1d":   chg_pct,
-                "market_cap":  None,
-                "bid":         q.get("bid"),
-                "ask":         q.get("ask"),
-                "quote_source":         "tradier",
-                "quote_cached_at":      _now_ts,
-                "quote_is_stale":       False,
+                "price":                 last,
+                "volume":                vol,
+                "change_1d":             chg_pct,
+                "market_cap":            None,
+                "bid":                   q.get("bid"),
+                "ask":                   q.get("ask"),
+                "quote_source":          "tradier",
+                "quote_cached_at":       _now_ts,
+                "quote_is_stale":        False,
                 "quote_fallback_reason": None,
             }
             out[sym] = row
             cache.set(f"social:tradier_lkg:{sym}", row, _LKG_TTL)
-        print(f"[SOCIAL_TRADIER] batch returned {len(out)} quotes for {len(tickers)} tickers")
+        print(f"[SOCIAL_TRADIER] batch returned {len(out)} quotes for {len(tickers)} tickers via shared provider")
         return out
     except Exception as exc:
-        print(f"[SOCIAL_TRADIER] batch live error: {exc}")
+        print(f"[SOCIAL_TRADIER] provider error: {exc}")
         return {}
 
 

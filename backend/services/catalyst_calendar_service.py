@@ -760,61 +760,48 @@ async def _enrich_tradier_quotes(
     symbols: list[str],
     max_syms: int = 30,
 ) -> dict[str, dict]:
-    """Batch-fetch Tradier live quotes for the top `max_syms` visible symbols.
+    """Batch-fetch Tradier live quotes via the shared TradierProvider.
 
     Returns {SYMBOL: {price, changesPercentage, volume, bid, ask,
                       quote_source, quote_is_stale}}.
     Only US equity symbols (no ":") are submitted. Result is also stored in
     per-symbol LKG cache (72 h) so the calendar degrades gracefully when
-    Tradier is down.
+    Tradier is unavailable.  Falls back to shared provider LKG when live data
+    is absent.
 
     Never raises — returns empty dict on any failure.
     """
-    import os as _os, time as _time_mod, httpx as _httpx
-    api_key  = _os.getenv("TRADIER_API_KEY", "")
-    sandbox  = _os.getenv("TRADIER_SANDBOX", "false").lower() == "true"
-    base_url = "https://sandbox.tradier.com/v1" if sandbox else "https://api.tradier.com/v1"
+    import time as _time_mod
+    _now_ts  = _time_mod.time()
     _LKG_TTL = 72 * 3600
     _LKG_PFX = "cal:tradier_lkg:"
-    _now_ts  = _time_mod.time()
 
     us_syms = [s for s in symbols if s and ":" not in s][:max_syms]
-    if not api_key or not us_syms:
+    if not us_syms:
         return {}
+
+    def _sf(v):
+        try:
+            return float(v) if v not in (None, "", "-") else None
+        except (TypeError, ValueError):
+            return None
 
     out: dict[str, dict] = {}
     try:
-        syms_str = ",".join(s.upper() for s in us_syms)
-        async with _httpx.AsyncClient(timeout=8.0) as _c:
-            resp = await _c.get(
-                f"{base_url}/markets/quotes",
-                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-                params={"symbols": syms_str, "greeks": "false"},
-            )
-        if resp.status_code != 200:
-            print(f"[CALENDAR_TRADIER] batch quotes HTTP {resp.status_code}")
-        else:
-            raw = resp.json()
-            ql = raw.get("quotes", {})
-            quote_list = ql.get("quote", []) if isinstance(ql, dict) else []
-            if isinstance(quote_list, dict):
-                quote_list = [quote_list]
-            for q in quote_list:
+        import main as _main  # type: ignore
+        _ds = getattr(_main, "data_service", None)
+        if _ds is not None and getattr(_ds, "tradier", None):
+            raw_quotes = await _ds.tradier.get_quotes(us_syms)
+            for q in (raw_quotes or []):
                 sym = (q.get("symbol") or "").upper()
                 if not sym:
                     continue
-                def _sf(v):
-                    try:
-                        return float(v) if v not in (None, "", "-") else None
-                    except (TypeError, ValueError):
-                        return None
-                last    = _sf(q.get("last"))
-                chg_pct = _sf(q.get("change_percentage"))
+                last = _sf(q.get("last"))
                 if last is None:
                     continue
                 row = {
                     "price":             last,
-                    "changesPercentage": chg_pct,
+                    "changesPercentage": _sf(q.get("change_percentage")),
                     "volume":            q.get("volume"),
                     "bid":               _sf(q.get("bid")),
                     "ask":               _sf(q.get("ask")),
@@ -824,15 +811,18 @@ async def _enrich_tradier_quotes(
                 }
                 out[sym] = row
                 cache.set(f"{_LKG_PFX}{sym}", row, _LKG_TTL)
-            print(f"[CALENDAR_TRADIER] {len(out)} live quotes for {len(us_syms)} symbols")
+            print(f"[CALENDAR_TRADIER] {len(out)} live quotes for {len(us_syms)} symbols via shared provider")
     except Exception as exc:
-        print(f"[CALENDAR_TRADIER] batch error: {exc}")
+        print(f"[CALENDAR_TRADIER] provider error: {exc}")
 
     # Fall back to LKG for tickers we couldn't get live
     for sym in us_syms:
         sym_u = sym.upper()
         if sym_u not in out:
             lkg = cache.get(f"{_LKG_PFX}{sym_u}")
+            if not (lkg and lkg.get("price")):
+                # Also check the shared provider LKG
+                lkg = cache.get(f"tradier:lkg:sym:{sym_u}")
             if lkg and lkg.get("price"):
                 out[sym_u] = {**lkg, "quote_is_stale": True}
 

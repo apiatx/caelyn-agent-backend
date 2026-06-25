@@ -25,15 +25,6 @@ _QUOTE_TTL = 120
 _executor  = ThreadPoolExecutor(max_workers=40)  # large pool for theme RS dynamic stock universe
 
 
-def _tradier_key() -> str:
-    return os.getenv("TRADIER_API_KEY", "")
-
-
-def _tradier_base() -> str:
-    sandbox = os.getenv("TRADIER_SANDBOX", "false").lower() in ("true", "1", "yes")
-    return "https://sandbox.tradier.com/v1" if sandbox else "https://api.tradier.com/v1"
-
-
 def _finnhub_key() -> str:
     return os.getenv("FINNHUB_API_KEY", "")
 
@@ -63,46 +54,22 @@ def _normalize_tradier_quote(sym: str, q: dict) -> dict:
 
 async def _tradier_quotes_batch(tickers: list[str]) -> dict[str, dict]:
     """
-    Fetch real-time quotes for all tickers in one Tradier batch call.
+    Fetch real-time quotes for all tickers via the shared TradierProvider.
     Returns {ticker: normalized_quote_dict}.
+    Formerly used raw httpx; now routes through the shared rate limiter and
+    per-ticker cache (tradier:quote:sym:{SYM}, 60 s TTL).
     """
-    key = _tradier_key()
-    if not key:
-        return {}
-
-    cache_key = f"sr_td_batch:{'_'.join(sorted(tickers))}"
-    hit = cache.get(cache_key)
-    if hit is not None:
-        return hit
-
-    symbols_str = ",".join(t.upper() for t in tickers)
-    base = _tradier_base()
     try:
-        async with httpx.AsyncClient(timeout=10) as session:
-            resp = await session.get(
-                f"{base}/markets/quotes",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Accept": "application/json",
-                },
-                params={"symbols": symbols_str, "greeks": "false"},
-            )
-        if resp.status_code != 200:
-            print(f"[SR][Tradier] batch quote HTTP {resp.status_code}")
+        import main as _main  # type: ignore
+        _ds = getattr(_main, "data_service", None)
+        if _ds is None or not getattr(_ds, "tradier", None):
             return {}
-        data = resp.json()
-        quotes_raw = data.get("quotes", {})
-        quote_list = quotes_raw.get("quote", []) if isinstance(quotes_raw, dict) else []
-        if isinstance(quote_list, dict):
-            quote_list = [quote_list]
-
+        raw_quotes = await _ds.tradier.get_quotes(tickers)
         result: dict[str, dict] = {}
-        for q in quote_list:
+        for q in (raw_quotes or []):
             sym = (q.get("symbol") or "").upper()
             if sym:
                 result[sym] = _normalize_tradier_quote(sym, q)
-
-        cache.set(cache_key, result, _QUOTE_TTL)
         return result
     except Exception as e:
         print(f"[SR][Tradier] batch quote error: {e}")

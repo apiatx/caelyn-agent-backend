@@ -1,0 +1,188 @@
+Use the audit results already produced. Do not re-audit the entire app unless needed for exact line numbers.
+
+We need to align the existing Tradier system to the intended app-wide model, but do this in phases. Do not build a separate parallel scheduler unless absolutely necessary. Use the existing TradierProvider, limiter, caches, in-flight guard, coalescing, and shared `portfolio_opts:{sym}` rows.
+
+North-star model:
+There should eventually be two central Tradier work types:
+
+1. Quote work:
+
+* price
+* bid/ask
+* volume
+* quote timestamp
+* quote-derived fields like VolX / volume context where applicable
+
+2. Options work:
+
+* expirations
+* option chains
+* IV
+* call/put volume
+* open interest
+* put/call ratio
+* expected move
+* options score/signal
+
+Pages are not separate Tradier scanners.
+
+Watchlist, Portfolio, Themes, Options Flow, Sectors, Social, Screener, Strategy, ticker popup/search, and any other page needing Tradier data should eventually register symbol demand with:
+
+* symbol
+* needed data type: quote/options/both
+* scope: watchlist/portfolio/themes/options_flow/sectors/social/screener/strategy/popup
+* priority
+* visible_now true/false
+
+Then all pages should read the same canonical cached quote/options rows.
+
+If AMD appears in Watchlist, Themes, Portfolio, Strategy, Social, and Options Flow Sectors, AMD should not be scanned six times. It should have one canonical quote row and one canonical options row. Multiple page scopes should raise AMD’s priority, not create duplicate Tradier calls.
+
+Important:
+Do not interpret this as “scan every ticker’s full options chain every minute.”
+Instead:
+
+* quotes refresh fastest
+* options refresh on a reasonable cycle
+* active visible page symbols eventually get priority
+* Options Flow screener eventually gets reserved near-real-time budget
+* stale/LKG rows are refreshed in the background
+* last-good values stay visible until replaced by a successful refresh
+
+But do not implement the entire north-star system in one pass.
+
+Implement Phase 1 only now.
+
+Phase 1 goal:
+Stop unmanaged Tradier calls from bypassing the existing TradierProvider. The audit found raw httpx/requests paths that bypass the shared limiter/cache and create duplicate calls, isolated stale data, and hidden 429 pressure.
+
+Unmanaged paths to fix in Phase 1:
+
+1. `services/watchlist_quote_cache.py`
+
+   * `_fetch_direct()`
+   * currently raw `/markets/quotes`
+   * route through `TradierProvider.get_quotes()`
+   * do not top-up by bypassing limiter when saturated
+
+2. `services/social_screener_service.py`
+
+   * `_tradier_batch_live()`
+   * currently raw `/markets/quotes`
+   * route through `TradierProvider.get_quotes()`
+   * preserve Social page response shape
+   * stop relying on isolated `social:tradier_lkg:{sym}` if shared `tradier:lkg:sym:{SYM}` safely replaces it
+
+3. `services/catalyst_calendar_service.py`
+
+   * `_enrich_tradier_quotes()`
+   * currently raw `/markets/quotes`
+   * route through `TradierProvider.get_quotes()`
+   * preserve Calendar/Catalyst response shape
+
+4. `services/playbook/discovery_enrichment.py`
+
+   * `tradier_quote()` / `enrich_us_quotes_tradier()`
+   * currently raw `/markets/quotes`
+   * route through `TradierProvider.get_quotes()`
+   * preserve Strategy / Playbook response shape
+
+5. `services/sector_rotation/providers.py`
+
+   * `_tradier_quotes_batch()`
+   * currently raw `/markets/quotes`
+   * route through `TradierProvider.get_quotes()`
+   * results should benefit from and populate shared quote cache
+
+6. `services/whale_watch_service.py`
+
+   * inline `requests.get()` to Tradier history
+   * replace with async/shared `TradierProvider.get_history()` or existing managed history path
+   * avoid blocking sync request in async route
+
+Hard constraints:
+
+* Do not change frontend contracts.
+* Do not change endpoint response shapes.
+* Do not raise Tradier rate limit.
+* Do not bypass the global Tradier limiter.
+* Do not build active page priority yet.
+* Do not build a new scheduler yet.
+* Do not create new cache namespaces.
+* Do not touch Options Flow screener behavior except where it already uses shared provider.
+* Do not make Sectors live-scan watchlist-overlap symbols.
+
+Implementation approach:
+
+* Replace raw Tradier quote/history calls with existing `data_service.tradier` / `TradierProvider` calls.
+* Preserve each service’s expected output shape.
+* If a service expects a dict by symbol, adapt the provider result locally.
+* Keep service-specific computed fields.
+* Remove or demote isolated Tradier quote LKGs only where shared provider/LKG safely replaces them.
+* If any raw Tradier path must remain temporarily, document exactly why.
+
+Validation:
+
+1. Search repo for remaining unmanaged Tradier paths:
+
+   * `api.tradier.com`
+   * `sandbox.tradier.com`
+   * `/markets/quotes`
+   * `/markets/history`
+   * `/markets/timesales`
+   * `requests.get(` with Tradier
+   * raw `httpx` with Tradier
+
+2. Confirm all quote/history paths now either:
+
+   * use `TradierProvider`, or
+   * are explicitly documented as intentionally unmanaged with a reason.
+
+3. Hit these pages/endpoints and confirm response shape still works:
+
+   * Watchlist
+   * Social
+   * Catalyst Calendar
+   * Strategy / Playbook
+   * Sector Rotation
+   * Whale Watch
+
+4. Confirm status diagnostics show:
+
+   * managed calls count increasing
+   * unmanaged Tradier quote/history paths reduced to zero or documented exceptions
+   * no Tradier 429s
+
+5. Confirm shared quote cache is populated:
+
+   * `tradier:quote:sym:{SYM}`
+   * `tradier:lkg:sym:{SYM}`
+
+6. Confirm no page now creates isolated duplicate quote calls for the same ticker while the shared cache is fresh.
+
+After Phase 1 report:
+
+* files changed
+* unmanaged paths removed
+* any unmanaged paths intentionally left and why
+* validation results
+* remaining Phase 2 recommendation
+
+Do not proceed to Phase 2 without approval.
+
+Future Phase 2:
+Market-hours gating for options loops.
+
+Future Phase 3:
+Budget/reserved capacity:
+
+* Options Flow reserved budget
+* quote budget
+* maintenance/stale refresh budget
+
+Future Phase 4:
+Active page priority, likely dev/admin-gated first:
+
+* include Watchlist, Portfolio, Themes, Options Flow, Sectors, Social, Screener, Strategy, and ticker popup/search
+* quotes can be broadly prioritized
+* options priority should be capped by visible rows and likely dev/admin-only until higher-rate options API is available

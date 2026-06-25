@@ -1493,150 +1493,118 @@ async def _get_current_prices(tickers: list[str]) -> dict[str, float]:
     return results
 
 
-def _get_historical_returns_sync(tickers: list[str]) -> dict[str, dict]:
+# ── Portfolio return calculator ───────────────────────────────────────────────
+
+def _whale_hist_yf_fallback_sync(ticker: str) -> dict | None:
+    """yfinance fallback for whale return calculation — designed to run in executor."""
+    try:
+        import yfinance as yf
+        import pandas as pd
+        from datetime import timedelta as _td
+        data = yf.download([ticker], period="2y", interval="1d", progress=False, auto_adjust=True)
+        if data.empty:
+            return None
+        if isinstance(data.columns, pd.MultiIndex):
+            series = data["Close"][ticker].dropna()
+        else:
+            series = data["Close"].dropna() if "Close" in data.columns else data.iloc[:, 0].dropna()
+        if series.empty:
+            return None
+        ts_today = pd.Timestamp.now(tz="UTC").normalize()
+        if series.index.tz is None:
+            series.index = series.index.tz_localize("UTC")
+
+        def _pr(days: int) -> float | None:
+            target = ts_today - pd.Timedelta(days=days)
+            past = series[series.index <= target]
+            if past.empty or pd.isna(past.iloc[-1]):
+                return None
+            curr_price = float(series.dropna().iloc[-1])
+            past_price = float(past.iloc[-1])
+            if past_price == 0:
+                return None
+            return round((curr_price / past_price - 1) * 100, 2)
+
+        return {"ret_1m": _pr(30), "ret_3m": _pr(90), "ret_6m": _pr(180), "ret_1y": _pr(365)}
+    except Exception as e:
+        logger.debug("[WHALE_HIST] yf fallback error for %s: %s", ticker, e)
+        return None
+
+
+async def _get_historical_returns_async(tickers: list[str]) -> dict[str, dict]:
+    """Async replacement for _get_historical_returns_sync.
+
+    Routes Tradier history calls through the shared TradierProvider (rate-limited,
+    3600 s cached) instead of the legacy sync requests.get() path.  yfinance is
+    used as a fallback for any ticker the provider cannot serve, run in the shared
+    executor to avoid blocking the event loop.
     """
-    For each ticker return a dict with keys: ret_1m, ret_3m, ret_6m, ret_1y
-    Values are percentage returns (float).
-    Primary source: Tradier history API.
-    Fallback: yfinance (per-ticker, only when Tradier fails or returns empty data).
-    """
-    import time
-    import requests
-    import yfinance as yf
-    import pandas as pd
-    from datetime import date, timedelta
+    from datetime import date as _date, timedelta as _td
 
     result: dict[str, dict] = {}
     if not tickers:
         return result
 
-    all_tickers = list(set(tickers + ["SPY"]))
-    tradier_key = os.environ.get("TRADIER_API_KEY", "")
+    all_tickers = list(dict.fromkeys(tickers + ["SPY"]))
+    today      = _date.today()
+    start      = today - _td(days=730)
+    today_str  = today.strftime("%Y-%m-%d")
+    start_str  = start.strftime("%Y-%m-%d")
 
-    today = date.today()
-    start = today - timedelta(days=730)
-    today_str = today.strftime("%Y-%m-%d")
-    start_str = start.strftime("%Y-%m-%d")
-
-    def _period_return_from_days(day_list: list[dict], days: int) -> float | None:
-        """
-        day_list: list of {"date": "YYYY-MM-DD", "close": float} sorted ascending.
-        Returns (latest_close / close_N_days_ago - 1) * 100 or None.
-        """
+    def _period_return(day_list: list[dict], days: int) -> float | None:
         if not day_list:
             return None
-        target = today - timedelta(days=days)
-        target_str = target.strftime("%Y-%m-%d")
-        past_candidates = [d for d in day_list if d["date"] <= target_str]
-        if not past_candidates:
+        target_str = (today - _td(days=days)).strftime("%Y-%m-%d")
+        past = [d for d in day_list if (d.get("date") or "") <= target_str]
+        if not past:
             return None
-        past_price = float(past_candidates[-1]["close"])
-        current_price = float(day_list[-1]["close"])
-        if past_price == 0:
+        past_price    = past[-1].get("close") or 0
+        current_price = day_list[-1].get("close") or 0
+        if not past_price:
             return None
         return round((current_price / past_price - 1) * 100, 2)
 
-    def _yf_fallback(ticker: str) -> dict | None:
-        """yfinance fallback for a single ticker."""
-        try:
-            data = yf.download(
-                [ticker],
-                period="2y",
-                interval="1d",
-                progress=False,
-                auto_adjust=True,
+    tickers_needing_fallback: list[str] = list(all_tickers)
+
+    try:
+        import main as _main  # type: ignore
+        _ds = getattr(_main, "data_service", None)
+        if _ds and getattr(_ds, "tradier", None):
+            histories = await asyncio.gather(
+                *[_ds.tradier.get_history(t, "daily", start_str, today_str)
+                  for t in all_tickers],
+                return_exceptions=True,
             )
-            if data.empty:
-                return None
-            if isinstance(data.columns, pd.MultiIndex):
-                series = data["Close"][ticker].dropna()
-            else:
-                series = data["Close"].dropna() if "Close" in data.columns else data.iloc[:, 0].dropna()
-            if series.empty:
-                return None
-            ts_today = pd.Timestamp.now(tz="UTC").normalize()
-            if series.index.tz is None:
-                series.index = series.index.tz_localize("UTC")
-
-            def _pr(days: int) -> float | None:
-                target = ts_today - pd.Timedelta(days=days)
-                past = series[series.index <= target]
-                if past.empty or pd.isna(past.iloc[-1]):
-                    return None
-                curr_price = float(series.dropna().iloc[-1])
-                past_price = float(past.iloc[-1])
-                if past_price == 0:
-                    return None
-                return round((curr_price / past_price - 1) * 100, 2)
-
-            return {
-                "ret_1m": _pr(30),
-                "ret_3m": _pr(90),
-                "ret_6m": _pr(180),
-                "ret_1y": _pr(365),
-            }
-        except Exception as e:
-            logger.debug("[WHALE_PRICE] yf fallback error for %s: %s", ticker, e)
-            return None
-
-    tickers_needing_fallback: list[str] = []
-
-    for i, ticker in enumerate(all_tickers):
-        if i > 0:
-            time.sleep(0.2)
-
-        fetched = False
-        if tradier_key:
-            try:
-                resp = requests.get(
-                    "https://api.tradier.com/v1/markets/history",
-                    headers={
-                        "Authorization": f"Bearer {tradier_key}",
-                        "Accept": "application/json",
-                    },
-                    params={
-                        "symbol":   ticker,
-                        "interval": "daily",
-                        "start":    start_str,
-                        "end":      today_str,
-                    },
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    payload = resp.json()
-                    history = (payload.get("history") or {})
-                    day_list = history.get("day") if history else None
-                    if day_list:
-                        if isinstance(day_list, dict):
-                            day_list = [day_list]
-                        day_list = sorted(day_list, key=lambda d: d["date"])
-                        result[ticker] = {
-                            "ret_1m": _period_return_from_days(day_list, 30),
-                            "ret_3m": _period_return_from_days(day_list, 90),
-                            "ret_6m": _period_return_from_days(day_list, 180),
-                            "ret_1y": _period_return_from_days(day_list, 365),
-                        }
-                        fetched = True
-                    else:
-                        logger.debug("[WHALE_PRICE] Tradier empty data for %s", ticker)
+            tickers_needing_fallback = []
+            for ticker, bars in zip(all_tickers, histories):
+                if isinstance(bars, list) and bars:
+                    sorted_bars = sorted(bars, key=lambda d: d.get("date", ""))
+                    result[ticker] = {
+                        "ret_1m": _period_return(sorted_bars, 30),
+                        "ret_3m": _period_return(sorted_bars, 90),
+                        "ret_6m": _period_return(sorted_bars, 180),
+                        "ret_1y": _period_return(sorted_bars, 365),
+                    }
                 else:
-                    logger.debug("[WHALE_PRICE] Tradier %s status %s", ticker, resp.status_code)
-            except Exception as e:
-                logger.debug("[WHALE_PRICE] Tradier error for %s: %s", ticker, e)
+                    tickers_needing_fallback.append(ticker)
+    except Exception as exc:
+        logger.warning("[WHALE_HIST] TradierProvider error: %s", exc)
+        tickers_needing_fallback = [t for t in all_tickers if t not in result]
 
-        if not fetched:
-            tickers_needing_fallback.append(ticker)
-
-    for ticker in tickers_needing_fallback:
-        logger.debug("[WHALE_PRICE] yfinance fallback for %s", ticker)
-        ret = _yf_fallback(ticker)
-        if ret:
-            result[ticker] = ret
+    # yfinance fallback — run each in executor (sync I/O, avoids blocking event loop)
+    if tickers_needing_fallback:
+        loop = asyncio.get_event_loop()
+        yf_results = await asyncio.gather(
+            *[loop.run_in_executor(_executor, _whale_hist_yf_fallback_sync, t)
+              for t in tickers_needing_fallback],
+            return_exceptions=True,
+        )
+        for ticker, ret in zip(tickers_needing_fallback, yf_results):
+            if isinstance(ret, dict) and ret:
+                result[ticker] = ret
 
     return result
 
-
-# ── Portfolio return calculator ───────────────────────────────────────────────
 
 async def calculate_whale_returns(whale_name: str) -> dict:
     """
@@ -1652,8 +1620,7 @@ async def calculate_whale_returns(whale_name: str) -> dict:
     total_val = sum(h.get("value_usd", 0) or 0 for h in holdings)
     tickers  = [h["ticker"] for h in holdings if h.get("ticker")]
 
-    loop = asyncio.get_event_loop()
-    price_history = await loop.run_in_executor(_executor, _get_historical_returns_sync, tickers)
+    price_history = await _get_historical_returns_async(tickers)
 
     spy_returns = price_history.get("SPY", {})
 

@@ -144,33 +144,28 @@ async def enrich_batch_finnhub(
 
 async def tradier_quote(ticker: str, api_key: str, sandbox: bool = False) -> Dict[str, Any]:
     """
-    Fetch a Tradier quote for a US-listed ticker.
+    Fetch a Tradier quote for a US-listed ticker via the shared TradierProvider.
     Returns {price, change_pct, volume, week52_high, week52_low, bid, ask, description}.
-    Only call for US-listed or ADR tickers — Tradier does not support foreign natives.
+    api_key / sandbox retained for call-site compatibility but ignored — the shared
+    provider's configured credentials and rate limiter are used instead.
     """
-    if not api_key:
+    if not ticker:
         return {}
     cache_key = f"discovery:tradier:quote:{ticker.upper()}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
-    base_url = "https://sandbox.tradier.com/v1" if sandbox else "https://api.tradier.com/v1"
     try:
-        import httpx
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Accept":        "application/json",
-        }
-        params = {"symbols": ticker.upper(), "greeks": "false"}
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{base_url}/markets/quotes", headers=headers, params=params)
-        if resp.status_code != 200:
+        import main as _main  # type: ignore
+        _ds = getattr(_main, "data_service", None)
+        if _ds is None or not getattr(_ds, "tradier", None):
             return {}
-        data = resp.json()
-        quote = data.get("quotes", {}).get("quote", {})
-        if isinstance(quote, list):
-            quote = quote[0] if quote else {}
+        raw_quotes = await _ds.tradier.get_quotes([ticker])
+        quote = next(
+            (q for q in (raw_quotes or []) if (q.get("symbol") or "").upper() == ticker.upper()),
+            {},
+        )
         if not quote:
             return {}
         result = {
@@ -196,16 +191,48 @@ async def enrich_us_quotes_tradier(
     sandbox: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Batch Tradier quote enrichment for US-listed and ADR tickers.
-    Only pass US-tradable tickers; foreign natives will be skipped/empty.
+    Batch Tradier quote enrichment for US-listed and ADR tickers via shared TradierProvider.
+    tradier_key / sandbox retained for call-site compatibility but ignored.
+    All tickers are fetched in a single batch call; results are also cached per-ticker
+    under discovery:tradier:quote:{SYM} for individual lookup reuse.
     """
-    results: Dict[str, Dict[str, Any]] = {}
-    tasks = [tradier_quote(t, tradier_key, sandbox) for t in us_tickers]
-    quotes = await asyncio.gather(*tasks, return_exceptions=True)
+    if not us_tickers:
+        return {}
+    try:
+        import main as _main  # type: ignore
+        _ds = getattr(_main, "data_service", None)
+        if _ds is not None and getattr(_ds, "tradier", None):
+            raw_quotes = await _ds.tradier.get_quotes(us_tickers)
+            results: Dict[str, Dict[str, Any]] = {}
+            for q in (raw_quotes or []):
+                sym = (q.get("symbol") or "").upper()
+                if not sym:
+                    continue
+                result = {
+                    "price":       q.get("last"),
+                    "change_pct":  q.get("change_percentage"),
+                    "volume":      q.get("volume"),
+                    "week52_high": q.get("week_52_high"),
+                    "week52_low":  q.get("week_52_low"),
+                    "bid":         q.get("bid"),
+                    "ask":         q.get("ask"),
+                    "description": q.get("description", ""),
+                }
+                results[sym] = result
+                cache.set(f"discovery:tradier:quote:{sym}", result, _QUOTE_TTL)
+            return results
+    except Exception as e:
+        print(f"[DISCOVERY_ENRICH] Tradier batch error: {e}")
+    # Fall back to per-ticker calls (uses cached results if available)
+    results_fb: Dict[str, Dict[str, Any]] = {}
+    quotes = await asyncio.gather(
+        *[tradier_quote(t, tradier_key, sandbox) for t in us_tickers],
+        return_exceptions=True,
+    )
     for ticker, q in zip(us_tickers, quotes):
         if isinstance(q, dict) and q:
-            results[ticker] = q
-    return results
+            results_fb[ticker] = q
+    return results_fb
 
 
 # ── FMP enrichment (sparing — 250/day cap) ────────────────────────────────────
