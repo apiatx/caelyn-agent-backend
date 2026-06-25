@@ -1,0 +1,222 @@
+Do not close this yet. The root cause is finally identified, but the Options Flow → Sectors tab is still not meeting the required behavior.
+
+Important distinction:
+Do not change the Options Flow → Screener tab/toggle.
+
+The Options Flow Screener tab works differently:
+
+* It is a market-wide unusual flow discovery tool.
+* It should continue identifying unusual flow across the broader market.
+* It should not be limited to the saved backend sector/theme/ticker universe.
+* Do not change its response shape, scan universe, scoring logic, or UI behavior unless absolutely required for shared-cache compatibility.
+
+This task is only about the Options Flow → Sectors tab/toggle.
+
+Expected Sectors behavior:
+The Sectors tab should operate on the saved backend sector/theme/ticker universe.
+
+Flow should roll up like this:
+
+1. Individual theme stock options flow/state
+2. Theme-level total and average net flow
+3. Sector-level total and average net flow
+
+For every sector:
+
+* show the sector’s aggregate options flow state
+* show total net flow across its included theme stocks
+* show average net flow across its included theme stocks
+* show bullish/bearish/mixed/neutral/pending/unsupported composition
+* include all relevant stocks from the saved backend theme universe, not only tickers with unusual flow
+
+For every theme:
+
+* show total net flow across theme stocks
+* show average net flow across theme stocks
+* show number of bullish/bearish/mixed/neutral/pending/unsupported tickers
+* include all theme member stocks that are optionable or explicitly classified as unsupported/no-options/pending
+
+For every stock:
+
+* show its individual options flow state if available
+* if chain was scanned successfully but no unusual flow exists, mark it as neutral/no unusual flow
+* if expirations confirmed but chain not scanned yet, mark it as optionable_pending_chain
+* if unsupported/foreign/OTC/no-options, mark it explicitly
+* do not leave it invisible just because it lacks unusual flow
+
+Required status model:
+Every ticker in Sectors must have one of these explicit states:
+
+1. `bullish_flow`
+
+   * chain scanned successfully
+   * bullish/unusual signal found
+
+2. `bearish_flow`
+
+   * chain scanned successfully
+   * bearish/unusual signal found
+
+3. `mixed_flow`
+
+   * chain scanned successfully
+   * mixed signals found
+
+4. `neutral_no_unusual_flow`
+
+   * chain scanned successfully
+   * no unusual bullish/bearish flow found
+   * this is the only valid true neutral flow state
+
+5. `optionable_pending_chain`
+
+   * expirations confirmed non-empty
+   * chain not scanned yet, deferred, or not completed
+   * counts as represented/optionable coverage, but not as true neutral flow
+
+6. `confirmed_no_options`
+
+   * expirations endpoint returned a real empty result
+   * not a budget deferral
+   * not a failed request
+
+7. `unsupported_foreign_otc`
+
+   * skipped by eligibility rules
+
+8. `deferred_retry`
+
+   * budget deferral / transient provider failure
+   * must not poison no-options cache
+
+9. `stale_lkg`
+
+   * prior successful row exists but refresh pending
+
+Critical correction:
+Do not mark a ticker as true `neutral_no_unusual_flow` just because Stage-1 confirmed non-empty expirations.
+
+Non-empty expirations only means:
+
+* the ticker is optionable
+
+It does not necessarily mean:
+
+* the option chain was fetched successfully
+* flow was analyzed
+* no unusual flow was found
+
+If only expirations are confirmed, write/return `optionable_pending_chain`, not true neutral.
+
+Sectors-specific fix requirements:
+
+1. Sectors must include all backend saved sector/theme/ticker universe stocks.
+2. Sectors must not only include tickers with unusual flow.
+3. Sectors must aggregate from individual stock rows into theme rows, then sector rows.
+4. Aggregation must include:
+
+   * total net flow
+   * average net flow
+   * bullish count
+   * bearish count
+   * mixed count
+   * neutral/no-flow count
+   * optionable pending-chain count
+   * stale count
+   * unsupported/no-options count
+5. Every sector should have a visible state, even if most tickers are neutral or pending-chain.
+6. Generic pending should only mean truly unattempted/no-state-yet symbols.
+7. `watchlist_overlap_live_calls` must remain 0.
+8. Failed/deferred requests must never write `confirmed_no_options`.
+9. Rows must survive restart via LKG/hydration.
+
+Do not change:
+
+* Options Flow Screener tab/toggle behavior
+* master market-wide unusual-flow screener universe
+* frontend endpoint response shapes unless strictly additive/backward-compatible
+* global Tradier RPM
+* TradierProvider/limiter/coalescing architecture
+* Sectors aggregation-only rule for watchlist-overlap symbols
+
+Audit/fix only the Sectors pipeline:
+
+* `/api/options-flow/sectors`
+* sector/theme/ticker universe mapping
+* supplement/master/shared options rows consumed by Sectors
+* neutral/no-flow/pending-chain state writing
+* Sectors aggregation logic
+* LKG hydration for Sectors rows
+
+Validation required before closing:
+
+1. Run until at least one full Sectors coverage cycle completes.
+
+2. Report global Sectors counts:
+
+* total sectors
+* total themes
+* total tickers in saved backend sector/theme universe
+* optionable_expected
+* represented_count
+* represented_percent
+* true_neutral_no_unusual_flow_count
+* optionable_pending_chain_count
+* bullish_count
+* bearish_count
+* mixed_count
+* confirmed_no_options_count
+* unsupported_count
+* deferred_retry_count
+* stale_lkg_count
+* generic_pending_count
+
+3. Per-sector report:
+   For every sector:
+
+* total tickers
+* represented count
+* optionable coverage %
+* total net flow
+* average net flow
+* true neutral count
+* pending-chain count
+* bullish count
+* bearish count
+* mixed count
+* no-options count
+* unsupported count
+* stale count
+* displayed/represented count
+
+4. Per-theme report:
+   For every theme:
+
+* total tickers
+* represented count
+* total net flow
+* average net flow
+* bullish/bearish/mixed/neutral/pending/unsupported counts
+
+5. Acceptance criteria:
+
+* 99%+ of optionable US tickers in the saved backend Sectors universe are represented by either chain-scanned flow state, stale LKG, or optionable_pending_chain
+* every sector has a visible options state
+* every sector has total and average net flow
+* every theme has total and average net flow
+* neutral/no-flow stocks are included, not filtered out
+* generic pending near zero except truly unattempted symbols
+* no false no-options for known optionable names like AMAT, DELL, INTC, WDC, TER
+* true neutral only after successful chain scan
+* no 429s
+* LKG rows persist after restart
+
+6. Persistence test:
+   After full Sectors coverage builds:
+
+* confirm LKG files contain the new Sectors state rows
+* restart server
+* immediately hit `/api/options-flow/sectors`
+* confirm Sectors coverage remains high immediately after restart
+
+Do not proceed to new features until the Sectors tab reaches the acceptance criteria.

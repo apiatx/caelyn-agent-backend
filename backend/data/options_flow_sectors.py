@@ -134,6 +134,66 @@ def _pcr(call_p: float, put_p: float) -> Optional[float]:
     return None
 
 
+# ── 9-state model ────────────────────────────────────────────────────────────
+
+# States written explicitly into scan_result by the coverage-row writers.
+# All other rows derive their state from _source and premium data.
+_EXPLICIT_STATES = frozenset({
+    "neutral_no_unusual_flow",
+    "optionable_pending_chain",
+    "confirmed_no_options",
+    "unsupported_foreign_otc",
+    "deferred_retry",
+})
+
+# States where options information is confirmed (ticker has options)
+_OPTIONS_CONFIRMED_STATES = frozenset({
+    "bullish_flow", "bearish_flow", "mixed_flow",
+    "neutral_no_unusual_flow", "optionable_pending_chain",
+    "stale_lkg",
+})
+
+
+def _ticker_state(row: dict | None, sym: str, no_options_syms: set) -> str:
+    """
+    Map a ticker's cached data to one of the 9 Sectors status states.
+
+    Priority:
+      1. Explicit scan_result tag written by coverage-row writers
+      2. supplement_lkg source → stale_lkg (previous-session data, refresh pending)
+      3. Premium data present → infer bullish_flow / bearish_flow / mixed_flow
+      4. Fresh row, no premium, no tag → neutral_no_unusual_flow (backward compat)
+      5. No row + in no_options_syms → confirmed_no_options
+      6. No row → generic_pending (unattempted)
+    """
+    if row is None:
+        return "confirmed_no_options" if sym in no_options_syms else "generic_pending"
+
+    source = row.get("_source", "live")
+    if source == "supplement_lkg":
+        # All previous-session rows are stale_lkg regardless of their old scan_result tag.
+        # The supplement loop will re-classify them correctly when it refreshes this cycle.
+        return "stale_lkg"
+
+    scan_result = row.get("scan_result") or ""
+    if scan_result in _EXPLICIT_STATES:
+        return scan_result
+
+    call_p, put_p = _ticker_call_put(row)
+    has_prem = (call_p + put_p) > 0
+    if has_prem:
+        b = _bias(call_p, put_p)
+        if b == "bullish":
+            return "bullish_flow"
+        if b == "bearish":
+            return "bearish_flow"
+        return "mixed_flow"
+
+    # Fresh row (live or supplement), no premium, no explicit scan_result tag.
+    # Backward-compat: old supplement rows before scan_result tagging was added.
+    return "neutral_no_unusual_flow"
+
+
 # ── per-ticker row ────────────────────────────────────────────────────────────
 
 def _build_ticker_node(
@@ -142,73 +202,96 @@ def _build_ticker_node(
     no_options_syms: set[str],
 ) -> dict:
     """
-    Build a per-ticker options-flow node.
+    Build a per-ticker options-flow node with full 9-state classification.
 
-    scan_status values:
-      "live"           — master screener cache (unusual-flow threshold met)
-      "supplement"     — supplement loop, current session (fresh)
-      "supplement_lkg" — supplement loop, previous session (disk LKG loaded at startup)
-      "no_options"     — Stage-1 confirmed: no tradeable options expirations
-      "pending"        — not yet reached by any scan pass
+    ticker_state values (9 states):
+      bullish_flow           — chain scanned, bullish unusual flow detected
+      bearish_flow           — chain scanned, bearish unusual flow detected
+      mixed_flow             — chain scanned, mixed call/put flow
+      neutral_no_unusual_flow — chain scanned (Stage-2 complete), no unusual flow
+      optionable_pending_chain — Stage-1 expirations confirmed, chain not yet scanned
+      confirmed_no_options   — Stage-1 confirmed no tradeable expirations (not budget deferral)
+      unsupported_foreign_otc — skipped by eligibility rules (foreign/OTC)
+      deferred_retry         — budget-deferred or transient failure; retry next cycle
+      stale_lkg              — prior successful row from previous session, refresh pending
+      generic_pending        — not yet attempted by any scanner
     """
     row = cache_by_ticker.get(sym)
-    if row:
-        source = row.get("_source", "live")
-        scan_result = row.get("scan_result")  # "neutral_no_unusual_flow" or None
+    state = _ticker_state(row, sym, no_options_syms)
+
+    if row is not None:
+        source      = row.get("_source", "live")
+        scan_result = row.get("scan_result")
         call_p, put_p = _ticker_call_put(row)
-        net_p   = call_p - put_p
+        net_p    = call_p - put_p
         has_prem = (call_p + put_p) > 0
-        # Neutral rows have premium=0 but options confirmed — show "neutral" not None
-        bias_val = _bias(call_p, put_p) if has_prem else (
-            "neutral" if scan_result == "neutral_no_unusual_flow" else None
-        )
+
+        # Bias for display — stale_lkg rows show their historical bias
+        if state == "bullish_flow":
+            bias_val = "bullish"
+        elif state == "bearish_flow":
+            bias_val = "bearish"
+        elif state == "mixed_flow":
+            bias_val = "mixed" if has_prem else "neutral"
+        elif state == "stale_lkg" and has_prem:
+            bias_val = _bias(call_p, put_p)  # show stale direction
+        elif state == "neutral_no_unusual_flow":
+            bias_val = "neutral"
+        else:
+            bias_val = None
+
         return {
-            "symbol":           sym,
-            "call_premium":     round(call_p, 2) if has_prem else None,
-            "put_premium":      round(put_p, 2)  if has_prem else None,
-            "net_premium":      round(net_p, 2)  if has_prem else None,
-            "put_call_ratio":   _pcr(call_p, put_p),
-            "bias":             bias_val,
-            "total_volume":     row.get("total_volume"),
-            "heat_score":       row.get("heat_score"),
-            "side_bias":        row.get("side_bias"),
-            "options_available": True,
-            "scan_status":      source,
-            "scan_result":      scan_result,
-            "updated_at":       row.get("updated_at") or row.get("cached_at"),
+            "symbol":            sym,
+            "ticker_state":      state,
+            "call_premium":      round(call_p, 2) if has_prem else None,
+            "put_premium":       round(put_p, 2)  if has_prem else None,
+            "net_premium":       round(net_p, 2)  if has_prem else None,
+            "put_call_ratio":    _pcr(call_p, put_p),
+            "bias":              bias_val,
+            "total_volume":      row.get("total_volume"),
+            "heat_score":        row.get("heat_score"),
+            "side_bias":         row.get("side_bias"),
+            "options_available": state in _OPTIONS_CONFIRMED_STATES,
+            "scan_status":       source,
+            "scan_result":       scan_result,
+            "updated_at":        row.get("updated_at") or row.get("cached_at"),
         }
 
     if sym in no_options_syms:
         return {
-            "symbol":           sym,
-            "call_premium":     None,
-            "put_premium":      None,
-            "net_premium":      None,
-            "put_call_ratio":   None,
-            "bias":             None,
-            "total_volume":     None,
-            "heat_score":       None,
-            "side_bias":        None,
+            "symbol":            sym,
+            "ticker_state":      "confirmed_no_options",
+            "call_premium":      None,
+            "put_premium":       None,
+            "net_premium":       None,
+            "put_call_ratio":    None,
+            "bias":              None,
+            "total_volume":      None,
+            "heat_score":        None,
+            "side_bias":         None,
             "options_available": False,
-            "scan_status":      "no_options",
-            "reason":           "confirmed_no_tradeable_options",
-            "updated_at":       None,
+            "scan_status":       "no_options",
+            "scan_result":       "confirmed_no_options",
+            "reason":            "confirmed_no_tradeable_options",
+            "updated_at":        None,
         }
 
     return {
-        "symbol":           sym,
-        "call_premium":     None,
-        "put_premium":      None,
-        "net_premium":      None,
-        "put_call_ratio":   None,
-        "bias":             None,
-        "total_volume":     None,
-        "heat_score":       None,
-        "side_bias":        None,
+        "symbol":            sym,
+        "ticker_state":      "generic_pending",
+        "call_premium":      None,
+        "put_premium":       None,
+        "net_premium":       None,
+        "put_call_ratio":    None,
+        "bias":              None,
+        "total_volume":      None,
+        "heat_score":        None,
+        "side_bias":         None,
         "options_available": False,
-        "scan_status":      "pending",
-        "reason":           "pending_scan",
-        "updated_at":       None,
+        "scan_status":       "pending",
+        "scan_result":       None,
+        "reason":            "pending_scan",
+        "updated_at":        None,
     }
 
 
@@ -223,24 +306,50 @@ def _build_theme_node(
     proxy_syms   = [s.upper() for s in (meta.get("proxy_symbols") or [])]
     ticker_nodes = [_build_ticker_node(sym, cache_by_ticker, no_options_syms) for sym in proxy_syms]
 
-    contributing = [t for t in ticker_nodes if t["options_available"]]
-    total_call   = sum(t["call_premium"] or 0 for t in contributing)
-    total_put    = sum(t["put_premium"]  or 0 for t in contributing)
-    total_net    = total_call - total_put
+    # Flow totals from all rows with actual premium data (unusual flow + stale LKG)
+    total_call = sum(t["call_premium"] or 0 for t in ticker_nodes if t.get("call_premium"))
+    total_put  = sum(t["put_premium"]  or 0 for t in ticker_nodes if t.get("put_premium"))
+    total_net  = total_call - total_put
+    has_data   = (total_call + total_put) > 0
 
-    has_data = len(contributing) > 0
+    # State counts across all proxy tickers
+    state_counts: dict[str, int] = {}
+    for t in ticker_nodes:
+        s = t.get("ticker_state", "generic_pending")
+        state_counts[s] = state_counts.get(s, 0) + 1
+
+    # Represented = any state that isn't generic_pending (some info is known)
+    represented = [t for t in ticker_nodes if t.get("ticker_state") != "generic_pending"]
+    # Tickers contributing premium (for average net flow calculation)
+    flow_nodes  = [t for t in ticker_nodes if t.get("call_premium") or t.get("put_premium")]
+    avg_net     = round(total_net / len(flow_nodes), 2) if flow_nodes else None
+
     return {
-        "theme_id":                  theme_id,
-        "theme_name":                meta.get("display_name", theme_id),
-        "classification":            meta.get("classification"),
-        "call_premium":              round(total_call, 2) if has_data else None,
-        "put_premium":               round(total_put, 2)  if has_data else None,
-        "net_premium":               round(total_net, 2)  if has_data else None,
-        "put_call_ratio":            _pcr(total_call, total_put),
-        "bias":                      _bias(total_call, total_put) if has_data else None,
-        "ticker_count":              len(proxy_syms),
-        "contributing_ticker_count": len(contributing),
-        "tickers":                   ticker_nodes,
+        "theme_id":                      theme_id,
+        "theme_name":                    meta.get("display_name", theme_id),
+        "classification":                meta.get("classification"),
+        "call_premium":                  round(total_call, 2) if has_data else None,
+        "put_premium":                   round(total_put, 2)  if has_data else None,
+        "net_premium":                   round(total_net, 2)  if has_data else None,
+        "total_net_flow":                round(total_net, 2)  if has_data else None,
+        "average_net_flow":              avg_net,
+        "put_call_ratio":                _pcr(total_call, total_put),
+        "bias":                          _bias(total_call, total_put) if has_data else None,
+        "ticker_count":                  len(proxy_syms),
+        "represented_count":             len(represented),
+        "contributing_ticker_count":     len(flow_nodes),
+        # 9-state breakdown
+        "bullish_count":                 state_counts.get("bullish_flow", 0),
+        "bearish_count":                 state_counts.get("bearish_flow", 0),
+        "mixed_count":                   state_counts.get("mixed_flow", 0),
+        "neutral_count":                 state_counts.get("neutral_no_unusual_flow", 0),
+        "optionable_pending_count":      state_counts.get("optionable_pending_chain", 0),
+        "confirmed_no_options_count":    state_counts.get("confirmed_no_options", 0),
+        "stale_lkg_count":               state_counts.get("stale_lkg", 0),
+        "deferred_retry_count":          state_counts.get("deferred_retry", 0),
+        "unsupported_count":             state_counts.get("unsupported_foreign_otc", 0),
+        "generic_pending_count":         state_counts.get("generic_pending", 0),
+        "tickers":                       ticker_nodes,
     }
 
 
@@ -258,19 +367,26 @@ def _build_sector_node(
         for sym in (meta.get("proxy_symbols") or []):
             sector_unique_syms.add(sym.upper())
 
-    sector_call = 0.0
-    sector_put  = 0.0
-    sector_contributing = 0
+    sector_call  = 0.0
+    sector_put   = 0.0
+    flow_count   = 0
+    state_counts: dict[str, int] = {}
+
     for sym in sector_unique_syms:
-        row = cache_by_ticker.get(sym)
+        row   = cache_by_ticker.get(sym)
+        state = _ticker_state(row, sym, no_options_syms)
+        state_counts[state] = state_counts.get(state, 0) + 1
         if row:
             c, p = _ticker_call_put(row)
-            sector_call += c
-            sector_put  += p
-            sector_contributing += 1
+            if (c + p) > 0:
+                sector_call += c
+                sector_put  += p
+                flow_count  += 1
 
-    sector_net = sector_call - sector_put
-    has_data   = sector_contributing > 0
+    sector_net   = sector_call - sector_put
+    has_data     = flow_count > 0
+    avg_net      = round(sector_net / flow_count, 2) if flow_count else None
+    represented  = sum(v for k, v in state_counts.items() if k != "generic_pending")
 
     themes_built = [
         _build_theme_node(tid, meta, cache_by_ticker, no_options_syms)
@@ -278,23 +394,37 @@ def _build_sector_node(
     ]
     themes_built.sort(
         key=lambda t: (
-            -(t.get("contributing_ticker_count") or 0),
+            -(t.get("represented_count") or 0),
             -(t.get("call_premium") or 0) - (t.get("put_premium") or 0),
         )
     )
 
     return {
-        "sector_id":                 sector_id,
-        "sector_name":               sector_names.get(sector_id, sector_id.replace("_", " ").title()),
-        "call_premium":              round(sector_call, 2) if has_data else None,
-        "put_premium":               round(sector_put, 2)  if has_data else None,
-        "net_premium":               round(sector_net, 2)  if has_data else None,
-        "put_call_ratio":            _pcr(sector_call, sector_put),
-        "bias":                      _bias(sector_call, sector_put) if has_data else None,
-        "ticker_count":              len(sector_unique_syms),
-        "contributing_ticker_count": sector_contributing,
-        "sector_total_method":       "unique_ticker_sum",
-        "themes":                    themes_built,
+        "sector_id":                     sector_id,
+        "sector_name":                   sector_names.get(sector_id, sector_id.replace("_", " ").title()),
+        "call_premium":                  round(sector_call, 2) if has_data else None,
+        "put_premium":                   round(sector_put, 2)  if has_data else None,
+        "net_premium":                   round(sector_net, 2)  if has_data else None,
+        "total_net_flow":                round(sector_net, 2)  if has_data else None,
+        "average_net_flow":              avg_net,
+        "put_call_ratio":                _pcr(sector_call, sector_put),
+        "bias":                          _bias(sector_call, sector_put) if has_data else None,
+        "ticker_count":                  len(sector_unique_syms),
+        "represented_count":             represented,
+        "contributing_ticker_count":     flow_count,
+        "sector_total_method":           "unique_ticker_sum",
+        # 9-state breakdown
+        "bullish_count":                 state_counts.get("bullish_flow", 0),
+        "bearish_count":                 state_counts.get("bearish_flow", 0),
+        "mixed_count":                   state_counts.get("mixed_flow", 0),
+        "neutral_count":                 state_counts.get("neutral_no_unusual_flow", 0),
+        "optionable_pending_count":      state_counts.get("optionable_pending_chain", 0),
+        "confirmed_no_options_count":    state_counts.get("confirmed_no_options", 0),
+        "stale_lkg_count":               state_counts.get("stale_lkg", 0),
+        "deferred_retry_count":          state_counts.get("deferred_retry", 0),
+        "unsupported_count":             state_counts.get("unsupported_foreign_otc", 0),
+        "generic_pending_count":         state_counts.get("generic_pending", 0),
+        "themes":                        themes_built,
     }
 
 
@@ -314,7 +444,7 @@ def build_sector_tree(
     no_options_syms      : set of tickers confirmed to have no tradeable options
     theme_universe       : ENRICHED_THEME_RS_UNIVERSE (live, updated in-place)
     """
-    # Collect coverage stats
+    # Collect coverage stats — compute per-symbol state across the full theme universe
     all_theme_syms: set[str] = set()
     for meta in theme_universe.values():
         for sym in (meta.get("proxy_symbols") or []):
@@ -325,7 +455,23 @@ def build_sector_tree(
     lkg_supp_syms    = {s for s, r in combined_ticker_data.items() if r.get("_source") == "supplement_lkg"}
     supplement_syms  = fresh_supp_syms | lkg_supp_syms
     theme_in_scan    = (live_syms | supplement_syms) & all_theme_syms
-    pending_syms     = all_theme_syms - theme_in_scan - no_options_syms
+
+    # 9-state counts across the entire theme universe
+    _global_state_counts: dict[str, int] = {}
+    for _sym in all_theme_syms:
+        _row   = combined_ticker_data.get(_sym)
+        _state = _ticker_state(_row, _sym, no_options_syms)
+        _global_state_counts[_state] = _global_state_counts.get(_state, 0) + 1
+
+    # Represented = any state with known options information (not generic_pending)
+    _represented_syms = sum(
+        v for k, v in _global_state_counts.items() if k != "generic_pending"
+    )
+    # generic_pending = unattempted tickers (no state yet)
+    pending_syms = {
+        _sym for _sym in all_theme_syms
+        if _ticker_state(combined_ticker_data.get(_sym), _sym, no_options_syms) == "generic_pending"
+    }
 
     # Build sector display-name map
     sector_names = dict(_SECTOR_DISPLAY_NAMES)
@@ -353,10 +499,10 @@ def build_sector_tree(
         )
     )
 
-    # Extended coverage metadata
+    # Coverage percentage based on represented tickers (any known state)
     _batch_size  = 20
     _cadence_min = 5
-    coverage_pct = round(len(theme_in_scan) / max(len(all_theme_syms), 1) * 100, 1)
+    coverage_pct = round(_represented_syms / max(len(all_theme_syms), 1) * 100, 1)
     est_minutes  = round(len(pending_syms) / _batch_size * _cadence_min, 1) if pending_syms else 0
 
     # Supplement timing from module tracking
@@ -378,18 +524,31 @@ def build_sector_tree(
         "put_call_ratio_method":         "premium_dollars",
         "sector_total_method":           "unique_ticker_sum",
         "scan_coverage": {
-            "theme_universe_total":      len(all_theme_syms),
-            "master_count":              len(live_syms & all_theme_syms),
-            "supplement_fresh_count":    len(fresh_supp_syms & all_theme_syms),
-            "supplement_lkg_count":      len(lkg_supp_syms & all_theme_syms),
-            "supplement_count":          len(supplement_syms & all_theme_syms),
-            "no_options_count":          len(no_options_syms & all_theme_syms),
-            "pending_count":             len(pending_syms),
-            "tickers_with_data":         len(theme_in_scan),
-            "coverage_pct":              coverage_pct,
+            "theme_universe_total":          len(all_theme_syms),
+            "represented_count":             _represented_syms,
+            "coverage_pct":                  coverage_pct,
+            # 9-state breakdown (global, theme universe only)
+            "bullish_count":                 _global_state_counts.get("bullish_flow", 0),
+            "bearish_count":                 _global_state_counts.get("bearish_flow", 0),
+            "mixed_count":                   _global_state_counts.get("mixed_flow", 0),
+            "true_neutral_count":            _global_state_counts.get("neutral_no_unusual_flow", 0),
+            "optionable_pending_chain_count": _global_state_counts.get("optionable_pending_chain", 0),
+            "confirmed_no_options_count":    _global_state_counts.get("confirmed_no_options", 0),
+            "stale_lkg_count":               _global_state_counts.get("stale_lkg", 0),
+            "deferred_retry_count":          _global_state_counts.get("deferred_retry", 0),
+            "unsupported_count":             _global_state_counts.get("unsupported_foreign_otc", 0),
+            "generic_pending_count":         _global_state_counts.get("generic_pending", 0),
+            # Legacy / cache-source compat fields
+            "master_count":                  len(live_syms & all_theme_syms),
+            "supplement_fresh_count":        len(fresh_supp_syms & all_theme_syms),
+            "supplement_lkg_count":          len(lkg_supp_syms & all_theme_syms),
+            "supplement_count":              len(supplement_syms & all_theme_syms),
+            "no_options_count":              len(no_options_syms & all_theme_syms),
+            "pending_count":                 len(pending_syms),
+            "tickers_with_data":             len(theme_in_scan),
             "estimated_full_coverage_minutes": est_minutes,
-            "last_supplement_scan_at":   last_scan_at,
-            "next_supplement_scan_at":   next_scan_at,
+            "last_supplement_scan_at":       last_scan_at,
+            "next_supplement_scan_at":       next_scan_at,
         },
         "sectors": sector_nodes,
     }

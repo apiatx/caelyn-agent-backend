@@ -12024,17 +12024,13 @@ async def _master_screener_loop():
                 for _ms_s in (_ms_meta.get("proxy_symbols") or []):
                     _ms_all_theme.add(_ms_s.upper())
             _ms_now = _time.time()
-            _ms_neutral: list = []
-            for _ms_sym, _ms_entry in _master_expiry_cache.items():
-                if _ms_sym in _ms_result_syms:
-                    continue  # already has an unusual-flow row from master screener
-                if _ms_sym not in _ms_all_theme:
-                    continue  # not a theme symbol; skip
-                if not isinstance(_ms_entry, (list, tuple)) or not _ms_entry[0]:
-                    continue  # no expirations confirmed (empty or wrong type)
-                if _ms_now - _ms_entry[1] > 3600:
-                    continue  # stale cache entry
-                _ms_neutral.append({
+            # Stage-2 neutral/pending sets from the engine (correctly classified)
+            _ms_s2_neutral  = {s.upper() for s in (screener_data.get("stage2_neutral_tickers") or [])}
+            _ms_s2_pending  = {s.upper() for s in (screener_data.get("stage2_pending_chain_tickers") or [])}
+
+            # true neutral_no_unusual_flow rows (Stage-2 chain scanned, no unusual flow)
+            _ms_neutral: list = [
+                {
                     "ticker":        _ms_sym,
                     "_source":       "supplement",
                     "premium":       0.0,
@@ -12046,12 +12042,51 @@ async def _master_screener_loop():
                     "scan_result":   "neutral_no_unusual_flow",
                     "cached_at":     _ms_now,
                     "updated_at":    _ms_now,
-                })
-            if _ms_neutral:
-                _ms_supp_upd(_ms_neutral)
+                }
+                for _ms_sym in _ms_s2_neutral
+                if _ms_sym not in _ms_result_syms and _ms_sym in _ms_all_theme
+            ]
+
+            # optionable_pending_chain rows: Stage-1.5 trimmed by engine + any
+            # Stage-1 confirmed symbols not reached by Stage-2 this master cycle.
+            # Do NOT use _master_expiry_cache directly — Stage-1 confirmation
+            # alone is insufficient to declare neutral_no_unusual_flow.
+            _ms_pending_extra: set[str] = set()
+            for _ms_sym, _ms_entry in _master_expiry_cache.items():
+                if _ms_sym in _ms_result_syms or _ms_sym not in _ms_all_theme:
+                    continue
+                if not isinstance(_ms_entry, (list, tuple)) or not _ms_entry[0]:
+                    continue
+                if _ms_now - _ms_entry[1] > 3600:
+                    continue
+                if _ms_sym in _ms_s2_neutral:
+                    continue  # already classified as neutral_no_unusual_flow above
+                _ms_pending_extra.add(_ms_sym)
+            _ms_pending_syms = (_ms_s2_pending | _ms_pending_extra) - _ms_result_syms
+            _ms_pending: list = [
+                {
+                    "ticker":        _ms_sym,
+                    "_source":       "supplement",
+                    "premium":       0.0,
+                    "call_flow_pct": 50.0,
+                    "put_flow_pct":  50.0,
+                    "total_volume":  0,
+                    "heat_score":    0.0,
+                    "side_bias":     "neutral",
+                    "scan_result":   "optionable_pending_chain",
+                    "cached_at":     _ms_now,
+                    "updated_at":    _ms_now,
+                }
+                for _ms_sym in _ms_pending_syms
+                if _ms_sym not in _ms_s2_neutral  # double-guard
+            ]
+
+            _ms_all_coverage = _ms_neutral + _ms_pending
+            if _ms_all_coverage:
+                _ms_supp_upd(_ms_all_coverage)
                 print(
-                    f"[MASTER_SCREENER] Neutral coverage: {len(_ms_neutral)} theme symbols "
-                    f"with options, no unusual flow"
+                    f"[MASTER_SCREENER] Coverage: {len(_ms_neutral)} neutral_no_unusual_flow "
+                    f"(Stage-2 chain scanned), {len(_ms_pending)} optionable_pending_chain"
                 )
         except Exception as _ms_ne:
             print(f"[MASTER_SCREENER] Neutral coverage error (non-fatal): {_ms_ne}")
@@ -12329,44 +12364,77 @@ async def _theme_options_supplement_loop():
             else:
                 print(f"[THEME_SUPP] Batch done: 0/{len(batch)} unusual flow (checking for neutral coverage)")
 
-            # Write neutral rows for candidates confirmed to have options but no unusual flow.
-            # _local_expiry is populated by Stage-1: (exps, ts) with non-empty exps means
-            # options exist; empty exps means no options (handled by _upd_no_opts below);
-            # absent means fetch failed or never reached → leave pending.
-            # This ensures sectors shows options_available=True for every optionable symbol,
-            # not just symbols with unusual bullish/bearish flow.
+            # Write coverage rows with the correct 9-state model:
+            #   neutral_no_unusual_flow  — Stage-2 chain scanned AND no unusual flow
+            #                             (total_normalized > 0, no contracts passing filter)
+            #   optionable_pending_chain — Stage-1 confirmed (expirations exist) but Stage-2
+            #                             was budget-deferred, trimmed by Stage-1.5, or the
+            #                             chain returned 0 normalised contracts (ambiguous).
+            # Do NOT write neutral_no_unusual_flow for Stage-1-only confirmation.
             try:
-                _now_neutral = _ts.time()
+                _now_s2     = _ts.time()
                 _result_syms = {(r.get("ticker") or "").upper() for r in results}
-                _neutral_rows = []
+                _s2_neutral  = {s.upper() for s in (screener_data.get("stage2_neutral_tickers") or [])}
+                _s2_pending  = {s.upper() for s in (screener_data.get("stage2_pending_chain_tickers") or [])}
+
+                # True neutral rows (Stage-2 chain scanned, had contracts, none passed filter)
+                _neutral_rows = [
+                    {
+                        "ticker":        _sym,
+                        "_source":       "supplement",
+                        "premium":       0.0,
+                        "call_flow_pct": 50.0,
+                        "put_flow_pct":  50.0,
+                        "total_volume":  0,
+                        "heat_score":    0.0,
+                        "side_bias":     "neutral",
+                        "scan_result":   "neutral_no_unusual_flow",
+                        "cached_at":     _now_s2,
+                        "updated_at":    _now_s2,
+                    }
+                    for _sym in _s2_neutral if _sym and _sym not in _result_syms
+                ]
+
+                # Optionable-pending rows: Stage-1.5 trimmed by engine + Stage-1 alive
+                # that reached Stage-2 but chain was deferred/empty (total_normalized == 0).
+                # Also capture any Stage-1 alive symbols not accounted for by either set
+                # (defensive fallback — should be empty for normal 6-symbol supplement batches).
+                _s1_alive: set[str] = set()
                 for _c in candidates:
                     _csym = (_c.get("ticker") or "").upper()
-                    if not _csym or _csym in _result_syms:
+                    if not _csym:
                         continue
                     _expiry_entry = _local_expiry.get(_csym)
-                    if not _expiry_entry:
-                        continue   # fetch failed or never reached → leave pending
-                    _exps = _expiry_entry[0] if isinstance(_expiry_entry, (list, tuple)) else []
-                    if not _exps:
-                        continue   # no expirations → will be marked no_options below
-                    _neutral_rows.append({
-                        "ticker":         _csym,
-                        "_source":        "supplement",
-                        "premium":        0.0,
-                        "call_flow_pct":  50.0,
-                        "put_flow_pct":   50.0,
-                        "total_volume":   0,
-                        "heat_score":     0.0,
-                        "side_bias":      "neutral",
-                        "scan_result":    "neutral_no_unusual_flow",
-                        "cached_at":      _now_neutral,
-                        "updated_at":     _now_neutral,
-                    })
-                if _neutral_rows:
-                    _update_supp(_neutral_rows)
-                    print(f"[THEME_SUPP] Neutral coverage: {len(_neutral_rows)} symbols confirmed options, no unusual flow")
+                    if _expiry_entry and isinstance(_expiry_entry, (list, tuple)) and _expiry_entry[0]:
+                        _s1_alive.add(_csym)
+                # pending = engine Stage-1.5 trimmed + Stage-1 alive not accounted for
+                _pending_syms = (_s2_pending | (_s1_alive - _s2_neutral - _result_syms)) - _result_syms
+                _pending_rows = [
+                    {
+                        "ticker":        _sym,
+                        "_source":       "supplement",
+                        "premium":       0.0,
+                        "call_flow_pct": 50.0,
+                        "put_flow_pct":  50.0,
+                        "total_volume":  0,
+                        "heat_score":    0.0,
+                        "side_bias":     "neutral",
+                        "scan_result":   "optionable_pending_chain",
+                        "cached_at":     _now_s2,
+                        "updated_at":    _now_s2,
+                    }
+                    for _sym in _pending_syms if _sym
+                ]
+
+                _all_coverage = _neutral_rows + _pending_rows
+                if _all_coverage:
+                    _update_supp(_all_coverage)
+                    print(
+                        f"[THEME_SUPP] Coverage: {len(_neutral_rows)} neutral_no_unusual_flow "
+                        f"(Stage-2 chain scanned), {len(_pending_rows)} optionable_pending_chain"
+                    )
             except Exception as _ne:
-                print(f"[THEME_SUPP] Neutral row generation error (non-fatal): {_ne}")
+                print(f"[THEME_SUPP] Coverage row error (non-fatal): {_ne}")
 
             # Persist no-options info discovered in this batch's Stage-1 sweep
             _upd_no_opts(_local_expiry)

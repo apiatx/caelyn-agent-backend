@@ -298,6 +298,9 @@ class OptionsFlowEngine:
                     inspectable.append(c)
         print(f"[OPTIONS_FLOW] [{tab}] Pipeline: {len(candidates)} prefilter → {len(inspectable)} inspectable")
         results = await self._inspect_shortlist(inspectable, macro, tab=tab)
+        # Capture Stage-2 coverage metadata produced by _inspect_shortlist
+        _stage2_neutral_list      = sorted(getattr(self, "_s2_neutral_syms",       set()))
+        _stage2_pending_chain_list = sorted(getattr(self, "_s2_pending_chain_syms", set()))
         dropped_tickers = [inspectable[i].get("ticker") for i, r in enumerate(results) if r is None]
         results = [r for r in results if r]
         results.sort(key=lambda row: row.get("composite_score", 0), reverse=True)
@@ -362,6 +365,9 @@ class OptionsFlowEngine:
             "tickers": results,
             "all_contracts": all_contracts[:500],
             "market_summary": market_summary,
+            # Stage-2 coverage metadata for the Sectors neutral-row writers
+            "stage2_neutral_tickers":       _stage2_neutral_list,
+            "stage2_pending_chain_tickers": _stage2_pending_chain_list,
         }
     async def run_scan(
         self,
@@ -866,6 +872,7 @@ class OptionsFlowEngine:
         stage1_raw = await asyncio.gather(*[_stage1_expiry(c) for c in candidates])
         expiration_map: dict[str, list[str]] = {sym: exps for sym, exps in stage1_raw if exps}
         alive = [c for c in candidates if c["ticker"] in expiration_map]
+        _s1_alive_syms = {c["ticker"] for c in alive}   # Stage-1 survivor set (before Stage-1.5 trim)
         n_dropped_s1 = len(candidates) - len(alive)
         t_s1_elapsed = _ts.time() - t_stage1
         print(
@@ -887,6 +894,9 @@ class OptionsFlowEngine:
             alive.sort(key=lambda c: c.get("prefilter_score", 0), reverse=True)
             alive = alive[:stage2_limit]
             print(f"[OPTIONS_FLOW] [{tab}] Stage1.5 trim: {alive_before_trim} → {stage2_limit} (by prefilter_score)")
+        # Stage-1.5 trimmed = Stage-1 alive that didn't make the Stage-2 cut.
+        # These go to optionable_pending_chain (expirations confirmed, chain not yet scanned).
+        _s15_pending_syms: set[str] = _s1_alive_syms - {c["ticker"] for c in alive}
 
         # ── Stage 2: deep chain inspect (finalists only) ──────────────────
         # If the engine exposes _enrich_polygon_async (TradierFlowEngine), we
@@ -935,8 +945,28 @@ class OptionsFlowEngine:
                 f"Polygon DB (parallel, {sum(1 for r in stage2_results if r)} tickers): {t_db_elapsed:.1f}s"
             )
 
-        # Return in original candidate order (None for tickers dropped at Stage 1)
-        result_map = {alive[i]["ticker"]: stage2_results[i] for i in range(len(alive))}
+        # ── Classify Stage-2 results into scored / neutral / pending-chain ───
+        # neutral_no_unusual_flow : chain fetched, had contracts, none passed filter
+        # optionable_pending_chain: chain budget-deferred or returned 0 contracts
+        #                           (indistinguishable externally → conservative pending)
+        # Scored results          : unusual flow dicts (full ticker scoring data)
+        _s2_neutral_syms: set[str]       = set()
+        _s2_pending_chain_syms: set[str] = set(_s15_pending_syms)  # copy Stage-1.5 trimmed set
+        for _i, _r in enumerate(stage2_results):
+            _sym = alive[_i]["ticker"]
+            if _r is None:
+                # Chain deferred/empty/failed → conservative pending_chain
+                _s2_pending_chain_syms.add(_sym)
+            elif isinstance(_r, dict) and _r.get("_neutral_chain_scanned"):
+                # Sentinel: chain fetched, contracts existed, none unusual → true neutral
+                _s2_neutral_syms.add(_sym)
+                stage2_results[_i] = None   # strip sentinel so downstream sees it as dropped
+        # Expose via self; run_live_scan() reads these after the await returns.
+        self._s2_neutral_syms       = _s2_neutral_syms
+        self._s2_pending_chain_syms = _s2_pending_chain_syms
+
+        # Return in original candidate order (None for tickers dropped at Stage 1 or Stage 2)
+        result_map = {alive[_i]["ticker"]: stage2_results[_i] for _i in range(len(alive))}
         return [result_map.get(c["ticker"]) for c in candidates]
 
     async def _inspect_one_ticker(
@@ -1016,6 +1046,15 @@ class OptionsFlowEngine:
 
         if not contracts:
             print(f"[OPTIONS_FLOW] {symbol}: 0/{total_normalized} contracts passed filter")
+            if total_normalized > 0:
+                # Chain was fetched and had normalised contracts, but none passed the
+                # unusual-flow filter → true neutral (chain scanned, no signal).
+                # Return a sentinel dict; _inspect_shortlist will record this as
+                # neutral_no_unusual_flow and strip it from scored results.
+                return {"_neutral_chain_scanned": True, "ticker": symbol}
+            # total_normalized == 0 → chain was budget-deferred or the API returned
+            # an empty/non-dict response.  Leave as optionable_pending_chain so the
+            # next cycle retries instead of falsely marking this as neutral.
             return None
 
         call_volume = sum(c["volume"] for c in contracts if c["type"] == "call")
