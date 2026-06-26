@@ -16,9 +16,33 @@ Architecture
       Called once at startup.  Reads the disk file into the in-memory dict so
       values are immediately available after a server restart.
 
+  force_warmup_stage2_nulls()
+      Admin/recovery path.  Bypasses the freshness gate for all entries where
+      label is None and score is None (including fetch_failed and legacy nulls).
+      Also re-processes entries with status="fetch_failed" even if computed recently.
+      Leaves valid-label entries untouched.  Called via POST /api/admin/stage2/force-warmup.
+
 Disk LKG : backend/data/watchlist_stage2_lkg.json
-Format    : {updated_at: ISO, results: {SYM: {score, label, reason, computed_at}}}
-Freshness : Skip symbols whose computed_at is < _FRESH_HOURS hours old in warmup.
+Format    : {updated_at: ISO, results: {SYM: {score, label, reason, status, computed_at}}}
+
+Status field (added for freshness discrimination):
+  "ok"           — stage computed successfully from valid bars
+  "no_bars"      — provider returned no usable historical bars for this symbol
+  "fetch_failed" — provider call failed, timed out, or returned unexpectedly empty
+  (legacy null)  — entries written before status field existed; treated as fetch_failed
+
+Freshness TTLs:
+  ok           → 20h  (normal recompute cadence)
+  no_bars      → 20h  (symbol has no Tradier-tradeable history; retry same cadence)
+  fetch_failed → 2h   (transient failure; retry quickly)
+  legacy       → 2h   (unknown outcome; assume transient failure)
+
+LKG Overwrite Guard:
+  If a bulk warmup run computes > 50 symbols but produces < 20% valid labels
+  while the existing LKG had ≥ 20% valid, the run is treated as degraded.
+  In degraded mode: only entries with new valid labels are written; existing
+  valid labels are NOT overwritten with nulls from this failed run.
+  fetch_failed status is still recorded so those symbols retry sooner.
 """
 from __future__ import annotations
 
@@ -33,8 +57,11 @@ from typing import Optional
 # ── Disk LKG path ────────────────────────────────────────────────────────────
 _LKG_PATH = Path(__file__).parent.parent / "data" / "watchlist_stage2_lkg.json"
 
-# How old a per-symbol result must be before it is recomputed
-_FRESH_HOURS = 20          # hours
+# Normal freshness TTL for successfully computed or no_bars entries
+_FRESH_HOURS = 20
+
+# Short retry TTL for fetch_failed and legacy-null entries
+_FRESH_HOURS_FAILED = 2
 
 # Max Tradier calls in flight simultaneously (conserv. — market data budget)
 _CONCURRENCY = 4
@@ -45,8 +72,12 @@ _HIST_DAYS = 400
 # Cache TTL for bar entries (1h, same as tdier_hist)
 _BAR_TTL = 3600
 
+# Bulk degraded-run guard thresholds
+_GUARD_MIN_SYMBOLS   = 50    # only apply guard when batch is large enough
+_GUARD_MIN_COVERAGE  = 0.20  # < 20% valid labels in new run → degraded
+
 # ── In-memory LKG ────────────────────────────────────────────────────────────
-# Keyed by uppercase symbol → {score, label, reason, computed_at}
+# Keyed by uppercase symbol → {score, label, reason, status, computed_at}
 _STAGE2_LKG: dict[str, dict] = {}
 _lkg_loaded_at: float = 0.0
 
@@ -70,9 +101,15 @@ def load_lkg() -> None:
         _lkg_loaded_at = time.time()
         updated_at = data.get("updated_at", "unknown")
         non_null = sum(1 for v in _STAGE2_LKG.values() if v.get("score") is not None)
+        null_count = len(_STAGE2_LKG) - non_null
+        status_counts: dict[str, int] = {}
+        for v in _STAGE2_LKG.values():
+            st = v.get("status") or "legacy"
+            status_counts[st] = status_counts.get(st, 0) + 1
         print(
             f"[STAGE2_WL] disk LKG loaded: {len(_STAGE2_LKG)} symbols "
-            f"({non_null} with stage data) updated_at={updated_at}"
+            f"({non_null} valid, {null_count} null) "
+            f"status_counts={status_counts} updated_at={updated_at}"
         )
     except Exception as exc:
         print(f"[STAGE2_WL] disk LKG load error (non-fatal): {exc}")
@@ -98,8 +135,31 @@ def get_stage2(sym: str) -> dict:
 
 # ── Warmup helpers ────────────────────────────────────────────────────────────
 
+def _ttl_hours_for_entry(entry: dict) -> float:
+    """
+    Return the freshness TTL (hours) for a given LKG entry based on its status.
+
+    Status rules:
+      "ok"           → 20h  (normal cadence)
+      "no_bars"      → 20h  (no tradeable history; same cadence is fine)
+      "fetch_failed" → 2h   (transient failure; retry soon)
+      missing/legacy → 2h   (unknown; treat as potentially failed)
+    """
+    status = entry.get("status") or ""
+    if status in ("ok", "no_bars"):
+        return float(_FRESH_HOURS)
+    return float(_FRESH_HOURS_FAILED)
+
+
 def _is_fresh(sym: str) -> bool:
-    """Return True if the in-memory entry was computed within _FRESH_HOURS."""
+    """
+    Return True if the in-memory entry is within its status-appropriate TTL.
+
+    TTLs:
+      ok / no_bars   → _FRESH_HOURS     (20h)
+      fetch_failed   → _FRESH_HOURS_FAILED (2h)
+      legacy (none)  → _FRESH_HOURS_FAILED (2h)
+    """
     entry = _STAGE2_LKG.get(sym.upper())
     if not entry:
         return False
@@ -109,14 +169,28 @@ def _is_fresh(sym: str) -> bool:
     try:
         computed_at = datetime.fromisoformat(computed_at_str.replace("Z", "+00:00"))
         age_h = (datetime.now(timezone.utc) - computed_at).total_seconds() / 3600
-        return age_h < _FRESH_HOURS
+        ttl = _ttl_hours_for_entry(entry)
+        return age_h < ttl
     except Exception:
         return False
 
 
-async def _fetch_bars(sym: str) -> list[dict]:
+def _is_null_entry(sym: str) -> bool:
+    """Return True if the LKG entry has no valid stage label (null or fetch_failed)."""
+    entry = _STAGE2_LKG.get(sym.upper())
+    if not entry:
+        return True
+    return entry.get("label") is None or entry.get("score") is None
+
+
+async def _fetch_bars(sym: str) -> tuple[list[dict], str]:
     """
-    Return daily price bars for *sym* (oldest → newest, each with date+close).
+    Return (daily_bars, fetch_status) for *sym*.
+
+    fetch_status is one of:
+      "ok"           — bars returned successfully
+      "no_bars"      — provider returned an empty list (normal for some symbols)
+      "fetch_failed" — exception or unexpected failure during the call
 
     Probe order:
       1. In-memory cache: fmp_hist:{sym}  (FMP bars, ~4h TTL, set by theme_rs)
@@ -128,20 +202,17 @@ async def _fetch_bars(sym: str) -> list[dict]:
 
     Reuses theme_rs_service providers so rate-limiting and caching are shared
     across the whole application — no independent httpx calls.
-    Never raises — returns [] on any failure.
+    Returns ([], "fetch_failed") on any unexpected exception.
     """
     s = sym.upper()
     try:
         from data.cache import cache as _cache
         cached = _cache.get(f"fmp_hist:{s}") or _cache.get(f"tdier_hist:{s}:{_HIST_DAYS}")
         if cached:
-            return cached
+            return cached, "ok"
     except Exception:
         pass
 
-    # Reuse theme_rs_service fetch functions (FMP semaphore + Tradier fallback).
-    # They cache results back to fmp_hist:{sym} / tdier_hist:{sym}:400, so the
-    # _get_stage2_breakout() bar probe also benefits after the first warmup.
     try:
         from services.theme_rs_service import (
             _fetch_fmp_daily_history,
@@ -150,10 +221,15 @@ async def _fetch_bars(sym: str) -> list[dict]:
         bars = await _fetch_fmp_daily_history(s)
         if not bars:
             bars = await _fetch_tradier_daily_history(s, days=_HIST_DAYS)
-        return bars
+        if bars:
+            return bars, "ok"
+        # Both providers returned empty — could be a genuinely unsupported symbol
+        # OR a transient failure.  We classify this as "no_bars" at the _fetch level;
+        # the caller distinguishes further based on context (bulk run vs single call).
+        return [], "no_bars"
     except Exception as exc:
-        print(f"[STAGE2_WL] bar fetch error {sym}: {exc}")
-        return []
+        print(f"[STAGE2_WL] bar fetch exception {sym}: {exc}")
+        return [], "fetch_failed"
 
 
 def _persist_lkg() -> None:
@@ -173,37 +249,75 @@ def _persist_lkg() -> None:
 
 # ── Public warmup ─────────────────────────────────────────────────────────────
 
-async def warmup_stage2(tickers: list[str]) -> dict:
+async def warmup_stage2(
+    tickers: list[str],
+    *,
+    force_nulls: bool = False,
+) -> dict:
     """
     Fetch daily bars + compute Weinstein stage for every ticker in *tickers*.
 
-    Skips symbols whose cached result is < _FRESH_HOURS old.
+    force_nulls=True  — bypasses the freshness gate for all entries where
+                        label is None or score is None (recovery mode).
+                        Entries with valid labels are still skipped if fresh.
+
+    Skips symbols whose cached result is within its status-appropriate TTL
+    (ok/no_bars → 20h; fetch_failed/legacy → 2h) unless force_nulls overrides.
+
     Runs _CONCURRENCY concurrent Tradier calls with a small sleep between batches.
 
-    Returns a summary dict.
+    LKG Overwrite Guard:
+      If ≥ _GUARD_MIN_SYMBOLS processed and new valid coverage < _GUARD_MIN_COVERAGE
+      while existing LKG has ≥ _GUARD_MIN_COVERAGE valid labels → degraded mode.
+      In degraded mode, existing valid labels are preserved; only new valid labels
+      and fetch_failed status updates are written.
+
+    Returns a detailed summary dict.
     """
+    started_at = datetime.now(timezone.utc).isoformat()
+
     if not tickers:
-        return {"status": "skipped", "reason": "no_tickers"}
+        return {"status": "skipped", "reason": "no_tickers", "started_at": started_at}
 
     deduped = list(dict.fromkeys(s.strip().upper() for s in tickers if s.strip()))
-    skip_count = sum(1 for s in deduped if _is_fresh(s))
-    to_process = [s for s in deduped if not _is_fresh(s)]
+
+    def _should_skip(sym: str) -> bool:
+        if force_nulls and _is_null_entry(sym):
+            return False
+        return _is_fresh(sym)
+
+    skip_count = sum(1 for s in deduped if _should_skip(s))
+    to_process = [s for s in deduped if not _should_skip(s)]
 
     print(
-        f"[STAGE2_WL] warmup starting: {len(deduped)} unique tickers, "
-        f"{skip_count} fresh (skip), {len(to_process)} to compute"
+        f"[STAGE2_WL] warmup starting{'[FORCE-NULL]' if force_nulls else ''}: "
+        f"{len(deduped)} unique tickers, {skip_count} fresh (skip), "
+        f"{len(to_process)} to compute"
     )
 
     if not to_process:
-        return {"status": "all_fresh", "skipped": skip_count, "computed": 0}
+        return {
+            "status": "all_fresh",
+            "skipped": skip_count,
+            "computed": 0,
+            "started_at": started_at,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    # Snapshot existing LKG coverage for the overwrite guard
+    prev_valid_count = sum(
+        1 for v in _STAGE2_LKG.values() if v.get("label") is not None and v.get("score") is not None
+    )
+    prev_total = len(_STAGE2_LKG)
+    prev_coverage = (prev_valid_count / prev_total) if prev_total > 0 else 0.0
 
     # SPY bars for RS calculation (optional)
     spy_weekly = None
     try:
         from services.stage_analysis import weekly_bars_from_daily
-        spy_bars = await _fetch_bars("SPY")
-        if spy_bars:
-            spy_weekly = weekly_bars_from_daily(spy_bars)
+        spy_bars_raw, _ = await _fetch_bars("SPY")
+        if spy_bars_raw:
+            spy_weekly = weekly_bars_from_daily(spy_bars_raw)
     except Exception as _spy_err:
         print(f"[STAGE2_WL] SPY bar fetch failed (non-fatal): {_spy_err}")
 
@@ -212,22 +326,32 @@ async def warmup_stage2(tickers: list[str]) -> dict:
     sem = asyncio.Semaphore(_CONCURRENCY)
     now_ts = datetime.now(timezone.utc).isoformat()
 
-    computed  = 0
-    no_bars   = 0
-    too_short = 0
-    errors    = 0
+    computed              = 0
+    no_bars_count         = 0
+    fetch_failed_count    = 0
+    too_short             = 0
+    errors                = 0
+    preserved_valid_count = 0
+    overwritten_valid_count = 0
+
+    # Per-symbol new results — collected before bulk overwrite guard applies
+    new_results: dict[str, dict] = {}
 
     async def _process_one(sym: str) -> None:
-        nonlocal computed, no_bars, too_short, errors
+        nonlocal computed, no_bars_count, fetch_failed_count, too_short, errors
         async with sem:
             try:
-                await asyncio.sleep(0.3)   # gentle pacing — 4 concurrent × 0.3s ≈ 25 req/s max
-                bars = await _fetch_bars(sym)
-                if not bars:
-                    no_bars += 1
-                    # Store explicit null so we don't retry until next warmup
-                    _STAGE2_LKG[sym] = {
+                await asyncio.sleep(0.3)
+                bars, fetch_status = await _fetch_bars(sym)
+
+                if fetch_status == "fetch_failed" or (not bars and fetch_status == "no_bars"):
+                    if fetch_status == "fetch_failed":
+                        fetch_failed_count += 1
+                    else:
+                        no_bars_count += 1
+                    new_results[sym] = {
                         "score": None, "label": None, "reason": None,
+                        "status": fetch_status,
                         "computed_at": now_ts,
                     }
                     return
@@ -235,8 +359,9 @@ async def warmup_stage2(tickers: list[str]) -> dict:
                 weekly = weekly_bars_from_daily(bars)
                 if len(weekly) < 35:
                     too_short += 1
-                    _STAGE2_LKG[sym] = {
+                    new_results[sym] = {
                         "score": None, "label": None, "reason": None,
+                        "status": "no_bars",
                         "computed_at": now_ts,
                     }
                     return
@@ -246,36 +371,127 @@ async def warmup_stage2(tickers: list[str]) -> dict:
                     spy_weekly_bars=spy_weekly,
                     source="watchlist_stage2_warmup",
                 )
-                _STAGE2_LKG[sym] = {
+                computed += 1
+                new_results[sym] = {
                     "score":       result.get("stage_score"),
                     "label":       result.get("stage_label"),
                     "reason":      result.get("stage_reason"),
+                    "status":      "ok",
                     "computed_at": now_ts,
                 }
-                computed += 1
             except Exception as exc:
                 errors += 1
+                fetch_failed_count += 1
+                new_results[sym] = {
+                    "score": None, "label": None, "reason": None,
+                    "status": "fetch_failed",
+                    "computed_at": now_ts,
+                }
                 print(f"[STAGE2_WL] error processing {sym}: {exc}")
 
-    # Fire all tasks and let the semaphore gate concurrency
     tasks = [_process_one(sym) for sym in to_process]
     await asyncio.gather(*tasks, return_exceptions=True)
 
+    # ── Overwrite guard ───────────────────────────────────────────────────────
+    new_valid_count = sum(
+        1 for v in new_results.values() if v.get("label") is not None and v.get("score") is not None
+    )
+    new_total = len(new_results)
+    new_coverage = (new_valid_count / new_total) if new_total > 0 else 0.0
+
+    degraded = (
+        new_total >= _GUARD_MIN_SYMBOLS
+        and new_coverage < _GUARD_MIN_COVERAGE
+        and prev_coverage >= _GUARD_MIN_COVERAGE
+    )
+
+    if degraded:
+        print(
+            f"[STAGE2_WL] DEGRADED RUN DETECTED: "
+            f"new_coverage={new_coverage:.1%} ({new_valid_count}/{new_total}) "
+            f"prev_coverage={prev_coverage:.1%} ({prev_valid_count}/{prev_total}) "
+            f"— applying per-symbol guard (valid labels preserved)"
+        )
+
+    for sym, new_entry in new_results.items():
+        new_has_valid = new_entry.get("label") is not None and new_entry.get("score") is not None
+        existing = _STAGE2_LKG.get(sym)
+        existing_has_valid = (
+            existing is not None
+            and existing.get("label") is not None
+            and existing.get("score") is not None
+        )
+
+        if degraded and not new_has_valid and existing_has_valid:
+            # Preserve the previous valid label; only update status so retry fires sooner
+            preserved = dict(existing)
+            preserved["status"] = "fetch_failed"
+            _STAGE2_LKG[sym] = preserved
+            preserved_valid_count += 1
+        else:
+            if new_has_valid and existing_has_valid:
+                overwritten_valid_count += 1
+            _STAGE2_LKG[sym] = new_entry
+
     _persist_lkg()
 
-    non_null = sum(1 for v in _STAGE2_LKG.values() if v.get("score") is not None)
+    non_null_total = sum(1 for v in _STAGE2_LKG.values() if v.get("score") is not None)
+    finished_at = datetime.now(timezone.utc).isoformat()
+
     summary = {
-        "status":     "done",
-        "total":      len(deduped),
-        "skipped":    skip_count,
-        "computed":   computed,
-        "no_bars":    no_bars,
-        "too_short":  too_short,
-        "errors":     errors,
-        "non_null_in_lkg": non_null,
+        "status":                   "degraded" if degraded else "done",
+        "force_nulls":              force_nulls,
+        "total_required":           len(deduped),
+        "skipped_fresh":            skip_count,
+        "to_process":               len(to_process),
+        "valid_stage_count":        computed,
+        "null_stage_count":         no_bars_count + fetch_failed_count + too_short + errors,
+        "fetch_failed_count":       fetch_failed_count,
+        "no_bars_count":            no_bars_count + too_short,
+        "error_count":              errors,
+        "preserved_previous_valid": preserved_valid_count,
+        "overwritten_valid_count":  overwritten_valid_count,
+        "degraded_run":             degraded,
+        "lkg_total_non_null":       non_null_total,
+        "lkg_path":                 str(_LKG_PATH),
+        "started_at":               started_at,
+        "finished_at":              finished_at,
     }
     print(f"[STAGE2_WL] warmup done: {summary}")
     return summary
+
+
+async def force_warmup_stage2_nulls() -> dict:
+    """
+    Recovery entrypoint — bypasses freshness gate for all null/failed entries.
+
+    Loads all watchlist tickers from Neon, then calls warmup_stage2 with
+    force_nulls=True so entries with label=None or score=None are recomputed
+    regardless of when they were last attempted.
+
+    Entries that already have valid labels and are within their TTL are skipped.
+    """
+    tickers: list[str] = []
+    try:
+        from data.pg_storage import watchlist_list, watchlist_read
+        wl_metas = watchlist_list()
+        for meta in wl_metas:
+            wl_id = meta.get("id")
+            if not wl_id:
+                continue
+            try:
+                store = watchlist_read(wl_id)
+                if store:
+                    tickers.extend(store.get("tickers") or [])
+            except Exception as _re:
+                print(f"[STAGE2_WL] read error wl={wl_id}: {_re}")
+    except Exception as exc:
+        print(f"[STAGE2_WL] watchlist_list error: {exc}")
+
+    if not tickers:
+        return {"status": "skipped", "reason": "no_tickers_in_any_watchlist"}
+
+    return await warmup_stage2(tickers, force_nulls=True)
 
 
 async def warmup_stage2_all_watchlists(startup_delay_s: float = 0.0) -> dict:

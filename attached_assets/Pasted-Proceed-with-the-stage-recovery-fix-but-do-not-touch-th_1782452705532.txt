@@ -1,0 +1,132 @@
+Proceed with the stage recovery fix, but do not touch the new Tradier realtime/options dynamic pacer.
+
+Important:
+Do not modify the new Tradier price/options pacer.
+Do not change options-chain allocation.
+Do not add stage work into the realtime quote rotation.
+Do not add stage work into the options-chain rotation.
+
+Stage must remain a separate slow historical/LKG system.
+
+Approved fixes:
+
+Fix A — immediate recovery:
+Run a force warmup for Watchlist stages that bypasses the freshness gate only for entries where the current LKG has:
+
+* label is None
+* score is None
+
+This should recompute stage using the existing stage service / historical bar path and persist valid results to disk/memory.
+
+Requirements:
+
+* Use the existing stage warmup service.
+* Keep concurrency low.
+* Do not use the realtime/options pacer.
+* Do not steal budget from options-chain calls.
+* Do not fetch historical bars on page render.
+* This can be a manual/admin/debug action or one-time backend call.
+
+Fix B — structural freshness fix:
+Update stage freshness logic so null stage entries do not stay “fresh” for the full 20 hours.
+
+Current bad behavior:
+`{ label: None, score: None, computed_at: recent }` is treated as fresh for 20h even if it came from a failed historical fetch.
+
+Change:
+
+* valid stage label entries keep the normal TTL, e.g. 20h
+* null label/null score entries get a much shorter retry TTL, e.g. 2h
+* if possible, distinguish true `no_bars` from `fetch_failed`
+
+Preferred:
+Add a status field to stage LKG entries going forward:
+
+* `status: "ok"` when stage computed successfully
+* `status: "no_bars"` when provider returned no usable historical bars
+* `status: "fetch_failed"` when provider call failed, timed out, was blocked, or returned unexpectedly empty during a bulk run
+
+Then freshness rules:
+
+* ok: normal 20h TTL
+* no_bars: longer TTL is okay, maybe 20h or 24h
+* fetch_failed: short retry TTL, maybe 30–120 minutes
+* legacy null entries without status: treat as stale after 2h
+
+Fix C — critical LKG overwrite guard:
+Prevent a failed warmup from overwriting the entire stage LKG with nulls again.
+
+Before saving a bulk stage warmup result:
+
+* count total symbols
+* count valid labels
+* count null labels
+* calculate valid coverage %
+
+If existing LKG has valid stage labels and the new run produces an abnormally low valid coverage rate, do not overwrite good values with nulls.
+
+Suggested guard:
+
+* If total symbols > 50
+* and new valid stage coverage < 20%
+* and previous LKG valid coverage was materially higher
+* treat the run as failed / degraded
+* preserve previous valid LKG values
+* only update entries that produced valid labels
+* do not replace valid previous labels with null from this failed run
+
+Per-symbol save rule:
+
+* If new result has a valid label, overwrite old value.
+* If new result is null because of fetch_failed, do not overwrite an existing valid label.
+* If new result is null because of true no_bars and there was no prior valid label, save no_bars.
+* If new result is null because of true no_bars but there was a prior valid label, preserve prior label unless there is strong reason to invalidate it.
+
+This prevents one transient provider/pacing issue from nuking all stage data.
+
+Diagnostics:
+Add or print summary after force warmup:
+
+* total_required
+* valid_stage_count
+* null_stage_count
+* fetch_failed_count
+* no_bars_count
+* preserved_previous_valid_count
+* overwritten_valid_count
+* lkg_path
+* started_at
+* finished_at
+
+Validation:
+
+1. Run the force warmup for current 302 watchlist tickers.
+2. Confirm LKG is no longer 302/302 null.
+3. Confirm sample tickers compute:
+
+   * AAOI
+   * ACLS
+   * NVDA
+4. Confirm Watchlist API rows include canonical stage labels:
+
+   * S1 Base
+   * S1-2 Watch
+   * S2 Breakout
+   * S2-S3 Advance
+   * S3 Momentum
+   * S3-S4 Top
+   * S4 Decline
+5. Confirm frontend Stage column shows again.
+6. Confirm Golden Zone, Growth Momentum, HC Investment Zone, and HC Trade Zone repopulate where qualifying rows exist.
+7. Confirm new Tradier realtime/options pacer is untouched.
+8. Confirm no options-chain allocation changes.
+9. Confirm no provider storm.
+10. Confirm no backend errors.
+
+After completing, report:
+
+* final LKG valid/null counts
+* which stage TTL logic changed
+* whether status field was added
+* whether bulk null-overwrite guard was added
+* proof that the realtime/options pacer was not modified
