@@ -12290,19 +12290,17 @@ async def _sectors_fast_backfill_loop():
                     continue
 
                 if scan_result == "deferred_retry":
-                    # Write a coverage row so the symbol isn't counted as
-                    # generic_pending — it'll be retried next cycle.
-                    supplement_rows.append({
-                        "ticker":      sym,
-                        "_source":     "supplement",
-                        "scan_result": "deferred_retry",
-                        "premium":     0.0,
-                        "updated_at":  _now_sbf,
-                    })
+                    # Do NOT write a coverage row for budget-deferred tickers.
+                    # Writing a supplement row tags them _source="supplement",
+                    # which causes get_sectors_pending_symbols() to exclude them
+                    # from the next batch's queue — they would NEVER be retried.
+                    # Leaving them absent means they stay generic_pending (or
+                    # stale_lkg) and are included in the next cycle automatically.
                     continue
 
                 # Real chain data (sectors_chain_summarized or any result
                 # with call/put premium fields populated)
+                _scan_ts = r.get("updated_at", _now_sbf)
                 row = {
                     "ticker":          sym,
                     "_source":         "supplement",
@@ -12317,7 +12315,8 @@ async def _sectors_fast_backfill_loop():
                     "premium":         (r.get("call_premium") or 0.0) + (r.get("put_premium") or 0.0),
                     "scan_result":     scan_result,
                     "expiration_used": r.get("expiration_used"),
-                    "updated_at":      r.get("updated_at", _now_sbf),
+                    "scanned_at":      _scan_ts,   # explicit audit timestamp
+                    "updated_at":      _scan_ts,
                 }
                 supplement_rows.append(row)
                 _sbf_session_completed += 1

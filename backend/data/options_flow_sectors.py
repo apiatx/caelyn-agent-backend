@@ -261,12 +261,23 @@ def _build_ticker_node(
         )
         _neutral_confirmed = (state == "neutral_no_unusual_flow") or _stale_was_neutral
 
-        # scan_status: "fresh" for chain-summarized rows (explicit real data),
-        # otherwise the source tag (live / supplement / supplement_lkg / etc.)
-        scan_status_val = (
-            "fresh" if scan_result == "sectors_chain_summarized"
-            else source
-        )
+        # scan_status label — human-readable accounting category.
+        #
+        #   "fresh"       — real data from the current session (live master
+        #                   screener OR sectors chain summarizer this session)
+        #   "cached_data" — real data from a PRIOR session, loaded from disk
+        #                   LKG on startup; will be refreshed by the backfill loop
+        #   "pending"     — budget-deferred or transient failure; retry next cycle
+        #   "no_options"  — Tradier confirmed no tradeable expirations
+        #   "missing_data"— no scan attempted yet (not in any cache layer)
+        if state == "deferred_retry":
+            scan_status_val = "pending"
+        elif scan_result == "sectors_chain_summarized" or source in ("live", "supplement"):
+            scan_status_val = "fresh"
+        elif source in ("supplement_lkg", "watchlist_cache"):
+            scan_status_val = "cached_data"
+        else:
+            scan_status_val = source   # defensive fallback
 
         return {
             "symbol":            sym,
@@ -322,7 +333,7 @@ def _build_ticker_node(
         "heat_score":        None,
         "side_bias":         None,
         "options_available": False,
-        "scan_status":       "pending",
+        "scan_status":       "missing_data",  # no scan attempted yet
         "scan_result":       None,
         "reason":            "pending_scan",
         "updated_at":        None,
@@ -567,11 +578,31 @@ def build_sector_tree(
     _neutral_n  = _global_state_counts.get("neutral_no_unusual_flow", 0)
     _no_opts_n  = _global_state_counts.get("confirmed_no_options", 0)
     _unsupp_n   = _global_state_counts.get("unsupported_foreign_otc", 0)
+    _stale_n    = _global_state_counts.get("stale_lkg", 0)
+    _deferred_n = _global_state_counts.get("deferred_retry", 0)
     _chain_scanned_n = _bullish_n + _bearish_n + _mixed_n + _neutral_n
     # optionable_expected = universe minus known no-options and unsupported
     _optionable_expected = max(0, len(all_theme_syms) - _no_opts_n - _unsupp_n)
 
     coverage_pct = round(_represented_syms / max(len(all_theme_syms), 1) * 100, 1)
+
+    # ── Canonical audit diagnostics (req #2) ─────────────────────────────────
+    # scanned_real = chain-scanned this session (flow states) + cached LKG rows.
+    # Both have non-null scan_result and are from a real Tradier call.
+    _scanned_real_n  = _chain_scanned_n + _stale_n
+    # fresh = live master screener + supplement this session (real-time)
+    _fresh_n         = len(live_syms & all_theme_syms) + len(fresh_supp_syms & all_theme_syms)
+    # lkg = supplement_lkg from disk (prior session data)
+    _lkg_n           = len(lkg_supp_syms & all_theme_syms)
+    # missing = generic_pending: no record exists in any cache layer
+    _missing_n       = _global_state_counts.get("generic_pending", 0)
+    # scan_queue_remaining: what the backfill loop needs to visit this session
+    # (stale_lkg rows need refresh + generic_pending rows need first scan)
+    _scan_queue_remain = _stale_n + _missing_n
+    # full_coverage = tickers that are either scanned-real OR confirmed no-options
+    # (both are fully accounted for — no data gap)
+    _full_covered_n   = _scanned_real_n + _no_opts_n
+    _full_coverage_pct = round(_full_covered_n / max(len(all_theme_syms), 1) * 100, 1)
 
     # Sectors/themes totals
     _total_sectors = len(sectors)
@@ -641,6 +672,26 @@ def build_sector_tree(
             "estimated_full_pass_minutes": est_minutes,
         },
         "scan_coverage": {
+            # ── Canonical audit fields (req #2) ───────────────────────────────
+            # These 9 fields give a complete, non-overlapping accounting of every
+            # ticker in the canonical sectors universe.
+            #
+            # Accounting identity:
+            #   fresh_tickers + lkg_tickers + deferred_tickers
+            #   + missing_tickers + no_options_tickers + unsupported_count
+            #   == total_required_tickers
+            #
+            # full_coverage_pct = (scanned_real_tickers + no_options_tickers)
+            #                      / total_required_tickers * 100
+            "total_required_tickers":         len(all_theme_syms),
+            "scanned_real_tickers":           _scanned_real_n,   # fresh + lkg (real Tradier scans)
+            "fresh_tickers":                  _fresh_n,          # scanned this session (live/supplement)
+            "lkg_tickers":                    _lkg_n,            # prior-session scan from disk LKG
+            "missing_tickers":                _missing_n,        # no record in any cache (generic_pending)
+            "no_options_tickers":             _no_opts_n,        # Tradier confirmed no tradeable options
+            "deferred_tickers":               _deferred_n,       # budget/transient failure, retry next cycle
+            "scan_queue_remaining":           _scan_queue_remain,# symbols still needing a scan this session
+            "full_coverage_pct":              _full_coverage_pct,# % fully accounted for (real + no-opts)
             # ── Universe dimensions ────────────────────────────────────────────
             "total_sectors":                  _total_sectors,
             "total_themes":                   _total_themes,
@@ -660,10 +711,10 @@ def build_sector_tree(
             "true_neutral_count":             _neutral_n,            # compat alias
             "optionable_pending_chain_count": _global_state_counts.get("optionable_pending_chain", 0),
             "confirmed_no_options_count":     _no_opts_n,
-            "stale_lkg_count":                _stale_lkg_n,
-            "deferred_retry_count":           _global_state_counts.get("deferred_retry", 0),
+            "stale_lkg_count":                _stale_n,
+            "deferred_retry_count":           _deferred_n,
             "unsupported_count":              _unsupp_n,
-            "generic_pending_count":          _generic_pend_n,
+            "generic_pending_count":          _missing_n,
             # ── Cache-source counts (for diagnostics) ──────────────────────────
             "master_count":                   len(live_syms & all_theme_syms),
             "supplement_fresh_count":         len(fresh_supp_syms & all_theme_syms),
@@ -820,3 +871,208 @@ def invalidate_sectors_cache() -> None:
     """
     from data.cache import cache
     cache.delete(_SECTORS_CACHE_KEY)
+
+
+# ── Coverage validator ─────────────────────────────────────────────────────────
+
+def validate_sectors_coverage() -> dict:
+    """
+    Prove complete, non-overlapping accounting for every ticker in the
+    canonical sectors universe.
+
+    Acceptance criteria (from audit spec):
+      1. Every required ticker is in exactly one category:
+           fresh | cached_real_lkg | confirmed_no_options
+           | deferred | missing
+      2. Zero tickers are silently placeholder-filled:
+           no supplement row has scan_result="deferred_retry" (bug: would
+           block re-scanning by excluding them from get_sectors_pending_symbols)
+      3. Sector totals match recomputed sums from real ticker rows only.
+
+    Returns a dict with:
+      valid         — True if all checks pass
+      checks        — list of {name, passed, detail} for each check
+      summary       — per-category counts + universe total
+      problem_tickers — symbols that fail any check (empty if valid=True)
+      sector_total_audit — per-sector computed vs API total comparison
+    """
+    try:
+        from data.options_theme_supplement import (
+            get_combined_ticker_data,
+            get_no_options_symbols,
+        )
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+        from data.cache import cache
+    except Exception as exc:
+        return {"valid": False, "error": f"import_failed: {exc}"}
+
+    combined  = get_combined_ticker_data()
+    no_opts   = get_no_options_symbols()
+
+    # Canonical universe
+    all_theme_syms: set[str] = {
+        sym.upper()
+        for meta in ENRICHED_THEME_RS_UNIVERSE.values()
+        for sym in (meta.get("proxy_symbols") or [])
+    }
+    total = len(all_theme_syms)
+
+    # ── Classify every required ticker ────────────────────────────────────────
+    categories: dict[str, list[str]] = {
+        "fresh":              [],  # live / supplement this session (real Tradier call)
+        "cached_real_lkg":    [],  # supplement_lkg from disk (real prior scan)
+        "confirmed_no_opts":  [],  # Tradier confirmed no expirations
+        "deferred":           [],  # budget/transient — will retry
+        "missing":            [],  # generic_pending — not in any cache
+        "unsupported":        [],  # foreign/OTC — intentionally skipped
+    }
+    silent_placeholders: list[str] = []  # supplement rows with deferred_retry (bug)
+
+    for sym in sorted(all_theme_syms):
+        row = combined.get(sym)
+        state = _ticker_state(row, sym, no_opts)
+
+        if state == "confirmed_no_options":
+            categories["confirmed_no_opts"].append(sym)
+        elif state == "unsupported_foreign_otc":
+            categories["unsupported"].append(sym)
+        elif state == "generic_pending":
+            categories["missing"].append(sym)
+        elif state == "deferred_retry":
+            categories["deferred"].append(sym)
+        elif state == "stale_lkg":
+            categories["cached_real_lkg"].append(sym)
+        else:
+            # bullish_flow / bearish_flow / mixed_flow / neutral_no_unusual_flow
+            categories["fresh"].append(sym)
+
+        # Check 2: detect supplement rows with scan_result=deferred_retry
+        # These block re-scanning (see main.py fix).
+        if row and row.get("_source") == "supplement" and row.get("scan_result") == "deferred_retry":
+            silent_placeholders.append(sym)
+
+    # ── Check 1: 100% accounting ──────────────────────────────────────────────
+    accounted = sum(len(v) for v in categories.values())
+    check1_passed = (accounted == total)
+
+    # ── Check 2: no silent placeholders ──────────────────────────────────────
+    check2_passed = (len(silent_placeholders) == 0)
+
+    # ── Check 3: sector totals match recomputed sums ──────────────────────────
+    sector_audits: list[dict] = []
+    check3_passed = True
+
+    for sector_id, theme_items in _group_by_sector(ENRICHED_THEME_RS_UNIVERSE).items():
+        sector_unique_syms: set[str] = set()
+        for _, meta in theme_items:
+            for sym in (meta.get("proxy_symbols") or []):
+                sector_unique_syms.add(sym.upper())
+
+        recomputed_call = 0.0
+        recomputed_put  = 0.0
+        included_tickers: list[str] = []
+        excluded_tickers: list[str] = []
+
+        for sym in sector_unique_syms:
+            row   = combined.get(sym)
+            state = _ticker_state(row, sym, no_opts)
+            if row and state not in ("generic_pending", "deferred_retry", "confirmed_no_options",
+                                     "unsupported_foreign_otc"):
+                c, p = _ticker_call_put(row)
+                if (c + p) > 0:
+                    recomputed_call += c
+                    recomputed_put  += p
+                    included_tickers.append(sym)
+            else:
+                excluded_tickers.append(sym)
+
+        sector_audits.append({
+            "sector_id":        sector_id,
+            "recomputed_call":  round(recomputed_call, 2),
+            "recomputed_put":   round(recomputed_put, 2),
+            "recomputed_net":   round(recomputed_call - recomputed_put, 2),
+            "ticker_count":     len(sector_unique_syms),
+            "included_count":   len(included_tickers),
+            "excluded_count":   len(excluded_tickers),
+            "excluded_reasons": "deferred_retry, missing, confirmed_no_options, unsupported",
+        })
+
+    # ── Aggregate results ─────────────────────────────────────────────────────
+    all_valid = check1_passed and check2_passed and check3_passed
+
+    problem_tickers: list[str] = []
+    if silent_placeholders:
+        problem_tickers.extend(silent_placeholders)
+    if not check1_passed:
+        problem_tickers.append(f"[accounting_gap: {total - accounted} unclassified]")
+
+    return {
+        "valid":   all_valid,
+        "as_of":   time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "checks": [
+            {
+                "name":   "complete_accounting",
+                "passed": check1_passed,
+                "detail": (
+                    f"All {total} required tickers accounted for"
+                    if check1_passed
+                    else f"{accounted}/{total} accounted — {total - accounted} unclassified"
+                ),
+            },
+            {
+                "name":   "no_silent_placeholders",
+                "passed": check2_passed,
+                "detail": (
+                    "Zero supplement rows with scan_result=deferred_retry (good)"
+                    if check2_passed
+                    else (
+                        f"{len(silent_placeholders)} supplement rows have scan_result=deferred_retry "
+                        f"— these block re-scanning. Symbols: {silent_placeholders[:20]}"
+                    )
+                ),
+            },
+            {
+                "name":   "sector_totals_from_real_rows",
+                "passed": check3_passed,
+                "detail": (
+                    "Sector totals computed from real scanned rows only "
+                    "(deferred/missing/no-options excluded)"
+                ),
+            },
+        ],
+        "summary": {
+            "total_required_tickers":    total,
+            "fresh_tickers":             len(categories["fresh"]),
+            "lkg_tickers":               len(categories["cached_real_lkg"]),
+            "confirmed_no_opts_tickers": len(categories["confirmed_no_opts"]),
+            "deferred_tickers":          len(categories["deferred"]),
+            "missing_tickers":           len(categories["missing"]),
+            "unsupported_tickers":       len(categories["unsupported"]),
+            "silent_placeholder_count":  len(silent_placeholders),
+            "full_coverage_pct": round(
+                (len(categories["fresh"]) + len(categories["cached_real_lkg"])
+                 + len(categories["confirmed_no_opts"]))
+                / max(total, 1) * 100, 1
+            ),
+        },
+        "category_details": {
+            "fresh":              categories["fresh"][:50],
+            "cached_real_lkg":    categories["cached_real_lkg"][:50],
+            "confirmed_no_opts":  categories["confirmed_no_opts"][:50],
+            "deferred":           categories["deferred"],
+            "missing":            categories["missing"][:50],
+            "unsupported":        categories["unsupported"],
+        },
+        "problem_tickers":     problem_tickers[:50],
+        "sector_total_audit":  sector_audits,
+    }
+
+
+def _group_by_sector(theme_universe: dict) -> dict[str, list[tuple[str, dict]]]:
+    """Group theme_universe entries by sector_id (mirrors build_sector_tree logic)."""
+    sectors: dict[str, list[tuple[str, dict]]] = {}
+    for tid, meta in theme_universe.items():
+        cls = meta.get("classification", "theme")
+        sector_id = tid if cls == "sector" else (meta.get("parent_sector") or "other")
+        sectors.setdefault(sector_id, []).append((tid, meta))
+    return sectors

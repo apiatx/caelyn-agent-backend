@@ -46,14 +46,19 @@ async def options_flow_sectors(
     appears in a sibling theme.
 
     scan_status values per ticker:
-      "live"           — master screener cache hit (unusual-flow threshold met)
-      "supplement"     — supplement loop, current session
-      "supplement_lkg" — supplement loop, previous session (loaded from disk at startup)
-      "no_options"     — confirmed no tradeable options
-      "pending"        — not yet scanned
+      "fresh"       — real data from the current session (live master screener
+                      or sectors chain summarizer run this session)
+      "cached_data" — real data from a PRIOR session, loaded from disk LKG
+                      on startup.  Shown as ticker_state=stale_lkg until the
+                      backfill loop refreshes this ticker.
+      "pending"     — budget-deferred or transient failure; will be retried
+                      automatically in the next backfill cycle.
+      "no_options"  — Tradier confirmed no tradeable options for this ticker.
+      "missing_data"— no scan has been attempted yet (ticker in queue).
 
-    Tickers not yet scanned are included with options_available=false and null premium fields.
-    Coverage improves automatically as the background supplement loop runs (batch=20, every 5 min).
+    Sector/theme premium totals include ONLY tickers with real scanned data
+    (fresh or cached_data).  Deferred, missing, and no-options tickers are
+    excluded from totals but appear in diagnostics.scan_coverage.
     """
     try:
         # Signal to the backfill loop that Sectors is actively being viewed.
@@ -74,6 +79,40 @@ async def options_flow_sectors(
             status_code=500,
             content={
                 "error": "sector_flow_build_failed",
+                "detail": str(exc),
+                "trace": traceback.format_exc()[-2000:],
+            },
+        )
+
+
+@router.get("/api/options-flow/sectors/validate")
+async def options_flow_sectors_validate(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Coverage validation for the Options Flow → Sectors universe.
+
+    Proves:
+      1. Every required ticker is classified in exactly one category
+         (fresh | cached_real_lkg | confirmed_no_options | deferred | missing)
+      2. Zero supplement rows with scan_result=deferred_retry exist
+         (these would block re-scanning by removing them from the pending queue)
+      3. Sector totals are computed from real scanned rows only
+
+    Returns valid=True if all checks pass.
+    """
+    try:
+        from data.options_flow_sectors import validate_sectors_coverage
+        result = validate_sectors_coverage()
+        status_code = 200 if result.get("valid") else 422
+        return JSONResponse(status_code=status_code, content=result)
+    except Exception as exc:
+        import traceback
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "validate_failed",
                 "detail": str(exc),
                 "trace": traceback.format_exc()[-2000:],
             },

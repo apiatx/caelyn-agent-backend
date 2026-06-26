@@ -1,0 +1,38 @@
+Audit and fix Options Flow → Sectors so every ticker in the sector/theme universe is actually scanned and persisted before being used in sector/theme rollups.
+
+Current problem:
+The page no longer shows "pending/loading", but rows now show "Live/Fresh Options Flow Data" mixed with "LKG Supplement". That label is confusing and possibly masking missing scans. This page requires complete per-ticker options premium coverage across all sectors because sector/theme flow totals are calculated from all ticker rows.
+
+Requirements:
+1. Define one canonical sector options universe: every ticker used by Options Flow → Sectors sector/theme rollups.
+2. Add diagnostics showing:
+   - total_required_tickers
+   - scanned_real_tickers
+   - fresh_tickers
+   - lkg_tickers
+   - missing_tickers
+   - no_options_tickers
+   - deferred_tickers
+   - scan_queue_remaining
+   - full_coverage_pct
+3. Verify the backfill loop eventually scans every ticker in the canonical universe, not just visible/active/theme-priority subsets.
+4. Persist every successful ticker summary to durable LKG cache.
+5. On API response, use LKG only if it is a real previous successful scan with scanned_at and non-null scan_result.
+6. Do not use fake zero values for missing/deferred tickers.
+7. Sector/theme totals must include only real scanned ticker records. Missing/deferred tickers should be excluded from totals and surfaced in diagnostics/coverage, not counted as zero.
+8. Rename "LKG Supplement" in the response/UI to something clearer:
+   - "Cached Options Data" if it is real persisted data.
+   - "Missing Options Data" if no real scan exists.
+   - "No Listed Options" only if confirmed by successful provider response.
+9. Add a validation script that proves:
+   - every required ticker is either fresh, cached real LKG, confirmed no-options, or explicitly missing/deferred
+   - zero tickers are silently placeholder-filled
+   - sector totals match the sum of included real ticker rows
+10. Do not declare success from one ticker like MARA. Validate full universe coverage.
+
+Acceptance criteria:
+- No ticker displays "pending scan" or fake 0 premium unless confirmed no-options.
+- LKG/cache records have scanned_at timestamps and real scan_result metadata.
+- API diagnostics show 100% accounted-for coverage across the required sector universe.
+- Sector/theme premium totals are calculated from real fresh or cached data only.
+- UI label "LKG Supplement" is removed or renamed so users understand it is real cached data, not a placeholder.
