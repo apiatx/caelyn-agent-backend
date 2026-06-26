@@ -529,21 +529,22 @@ def build_sector_tree(
     theme_in_scan    = (live_syms | supplement_syms) & all_theme_syms
 
     # 9-state counts across the entire theme universe
+    # Also collect _missing_syms (generic_pending) for diagnostics.
     _global_state_counts: dict[str, int] = {}
-    for _sym in all_theme_syms:
+    _missing_syms: list[str] = []
+    for _sym in sorted(all_theme_syms):   # sorted so missing_symbols list is deterministic
         _row   = combined_ticker_data.get(_sym)
         _state = _ticker_state(_row, _sym, no_options_syms)
         _global_state_counts[_state] = _global_state_counts.get(_state, 0) + 1
+        if _state == "generic_pending":
+            _missing_syms.append(_sym)
 
     # Represented = any state with known options information (not generic_pending)
     _represented_syms = sum(
         v for k, v in _global_state_counts.items() if k != "generic_pending"
     )
     # generic_pending = unattempted tickers (no state yet)
-    pending_syms = {
-        _sym for _sym in all_theme_syms
-        if _ticker_state(combined_ticker_data.get(_sym), _sym, no_options_syms) == "generic_pending"
-    }
+    pending_syms = set(_missing_syms)
 
     # Build sector display-name map
     sector_names = dict(_SECTOR_DISPLAY_NAMES)
@@ -692,6 +693,7 @@ def build_sector_tree(
             "deferred_tickers":               _deferred_n,       # budget/transient failure, retry next cycle
             "scan_queue_remaining":           _scan_queue_remain,# symbols still needing a scan this session
             "full_coverage_pct":              _full_coverage_pct,# % fully accounted for (real + no-opts)
+            "missing_symbols":                _missing_syms,     # exact symbols with no scan data yet
             # ── Universe dimensions ────────────────────────────────────────────
             "total_sectors":                  _total_sectors,
             "total_themes":                   _total_themes,
@@ -958,7 +960,15 @@ def validate_sectors_coverage() -> dict:
     # ── Check 2: no silent placeholders ──────────────────────────────────────
     check2_passed = (len(silent_placeholders) == 0)
 
-    # ── Check 3: sector totals match recomputed sums ──────────────────────────
+    # ── Check 3: no missing_data tickers ─────────────────────────────────────
+    # After one active full-pass the backfill loop drains all generic_pending
+    # symbols (missing_data), so this count must reach 0.
+    # Fails if missing_data > 0 regardless of pass state — signals that either
+    # the backfill loop has not yet reached these symbols, or they are stuck in
+    # a budget-defer loop.
+    check3_missing_passed = (len(categories["missing"]) == 0)
+
+    # ── Check 4: sector totals match recomputed sums ──────────────────────────
     sector_audits: list[dict] = []
     check3_passed = True
 
@@ -998,13 +1008,14 @@ def validate_sectors_coverage() -> dict:
         })
 
     # ── Aggregate results ─────────────────────────────────────────────────────
-    all_valid = check1_passed and check2_passed and check3_passed
+    all_valid = check1_passed and check2_passed and check3_missing_passed and check3_passed
 
     problem_tickers: list[str] = []
     if silent_placeholders:
         problem_tickers.extend(silent_placeholders)
     if not check1_passed:
         problem_tickers.append(f"[accounting_gap: {total - accounted} unclassified]")
+    problem_tickers.extend(categories["missing"])
 
     return {
         "valid":   all_valid,
@@ -1028,6 +1039,19 @@ def validate_sectors_coverage() -> dict:
                     else (
                         f"{len(silent_placeholders)} supplement rows have scan_result=deferred_retry "
                         f"— these block re-scanning. Symbols: {silent_placeholders[:20]}"
+                    )
+                ),
+            },
+            {
+                "name":   "no_missing_data",
+                "passed": check3_missing_passed,
+                "detail": (
+                    "missing_data=0 — all tickers are fresh, cached_real_lkg, or confirmed_no_options"
+                    if check3_missing_passed
+                    else (
+                        f"{len(categories['missing'])} tickers still in missing_data "
+                        f"(backfill loop has not yet reached them or they are budget-deferred). "
+                        f"Symbols: {categories['missing']}"
                     )
                 ),
             },

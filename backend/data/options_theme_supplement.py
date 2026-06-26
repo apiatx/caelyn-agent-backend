@@ -835,17 +835,22 @@ def load_sectors_universe_lkg_from_disk() -> None:
 
 def get_sectors_pending_symbols() -> list[str]:
     """
-    Return theme universe symbols that need scanning this session.
+    Return theme universe symbols that need scanning this session, in priority
+    order so the backfill loop drains the most important gaps first.
 
-    Includes:
-    - generic_pending  — not in any cache at all
-    - stale_lkg        — loaded from LKG (supplement_lkg source), needs refresh
+    Priority order (highest → lowest):
+      1. generic_pending  — not in any cache at all (missing_data).
+                            These MUST be scanned before stale rows are refreshed;
+                            they are the primary coverage gap.
+      2. stale_lkg        — loaded from LKG (supplement_lkg source), needs refresh.
+                            Real prior-session data exists, but it should be freshed.
 
     Excludes:
     - live / supplement / watchlist_cache  (current-session data, already good)
     - confirmed no-options symbols
 
-    Sorted alphabetically for a deterministic rolling cursor.
+    Within each priority tier, symbols are sorted alphabetically for a deterministic
+    rolling cursor so every symbol in that tier is visited in a predictable order.
     """
     try:
         from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
@@ -861,14 +866,17 @@ def get_sectors_pending_symbols() -> list[str]:
     combined = get_combined_ticker_data()
     no_opts  = get_no_options_symbols()
 
-    pending = []
+    missing_syms:  list[str] = []   # generic_pending — highest priority
+    stale_lkg_syms: list[str] = []  # supplement_lkg  — lower priority
+
     for sym in sorted(all_theme_syms):
         if sym in no_opts:
             continue
         row = combined.get(sym)
         if row is None:
-            pending.append(sym)                       # generic_pending
+            missing_syms.append(sym)               # generic_pending — FIRST
         elif row.get("_source") == "supplement_lkg":
-            pending.append(sym)                       # stale_lkg — needs refresh
+            stale_lkg_syms.append(sym)             # stale_lkg — SECOND
         # live / supplement / watchlist_cache = current-session data → skip
-    return pending
+
+    return missing_syms + stale_lkg_syms
