@@ -16492,3 +16492,90 @@ async def alert_dismiss(
     user_id = "default"
     ok = await _da(alert_id, user_id)
     return {"ok": ok, "alert_id": alert_id}
+
+
+# ── Admin: Watchlist Stage2 force recovery ───────────────────────────────────
+
+@app.post("/api/admin/stage2/force-warmup")
+async def admin_stage2_force_warmup(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Force-recompute Weinstein stage for all watchlist tickers that currently
+    have null/failed stage results, bypassing the normal freshness gate.
+
+    Entries with valid stage labels that are still within their TTL are skipped.
+    Entries with label=None or score=None are recomputed unconditionally.
+
+    Fires as a background task and returns immediately.
+    Poll GET /api/admin/stage2/status to watch progress.
+
+    Uses the slow historical bar path (Tradier /markets/history, 4 concurrent).
+    Does NOT touch the realtime/options pacer or options-chain allocation.
+    """
+    import asyncio as _asyncio
+    from services.watchlist_stage2_service import force_warmup_stage2_nulls as _force
+
+    null_count = sum(
+        1 for v in __import__("services.watchlist_stage2_service", fromlist=["_STAGE2_LKG"])._STAGE2_LKG.values()
+        if v.get("label") is None
+    )
+    print(f"[ADMIN] stage2 force-warmup triggered: {null_count} null entries will be recomputed")
+    _asyncio.create_task(_force())
+    return {
+        "status": "started",
+        "message": f"Force warmup running in background for {null_count} null entries.",
+        "poll": "GET /api/admin/stage2/status",
+    }
+
+
+@app.get("/api/admin/stage2/status")
+async def admin_stage2_status(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Return current stage LKG summary: total symbols, valid/null counts,
+    status breakdown, and freshness info.
+    """
+    from services import watchlist_stage2_service as _s2
+    from datetime import datetime, timezone as _tz
+
+    lkg = _s2._STAGE2_LKG
+    total = len(lkg)
+    valid = sum(1 for v in lkg.values() if v.get("label") is not None and v.get("score") is not None)
+    null  = total - valid
+
+    status_counts: dict[str, int] = {}
+    fresh_counts:  dict[str, int] = {"fresh": 0, "stale": 0}
+    for sym, entry in lkg.items():
+        st = entry.get("status") or "legacy"
+        status_counts[st] = status_counts.get(st, 0) + 1
+        if _s2._is_fresh(sym):
+            fresh_counts["fresh"] += 1
+        else:
+            fresh_counts["stale"] += 1
+
+    samples: list[dict] = []
+    for sym, entry in list(lkg.items())[:6]:
+        samples.append({
+            "symbol":      sym,
+            "label":       entry.get("label"),
+            "score":       entry.get("score"),
+            "status":      entry.get("status") or "legacy",
+            "computed_at": entry.get("computed_at"),
+            "is_fresh":    _s2._is_fresh(sym),
+        })
+
+    return {
+        "total_symbols":   total,
+        "valid_labels":    valid,
+        "null_labels":     null,
+        "coverage_pct":    round(valid / total * 100, 1) if total else 0,
+        "status_counts":   status_counts,
+        "freshness":       fresh_counts,
+        "lkg_loaded_at":   _s2._lkg_loaded_at,
+        "lkg_path":        str(_s2._LKG_PATH),
+        "sample_entries":  samples,
+    }

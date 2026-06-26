@@ -1,1818 +1,2120 @@
 {
-  "updated_at": "2026-06-25T13:38:04.334281+00:00",
+  "updated_at": "2026-06-26T05:57:03.601958+00:00",
   "symbol_count": 302,
   "results": {
     "AAOI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +38.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ACLS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +58.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ADEA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +31.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ADUR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +14.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AEHR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +76.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AEVA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 98.1,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +20.5% above rising 30-week MA \u2014 late-stage advance (7/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AIM:FTC": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "AIM:ENSI": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "AIM:IQE": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "AIM:TRT": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "AIR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +27.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ALAB": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +101.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AKAM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 70.8,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +3.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ALGM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +55.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ALMU": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +11.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ALOY": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "AMBA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 21.2,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -3.2% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AMD": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +78.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AME": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 97.5,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +8.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AMKR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +50.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AMPG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 98.1,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +100.7% above rising 30-week MA \u2014 late-stage advance (7/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AMPX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 45.0,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -12.9% vs MA. Prior 26w gain: +44%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AMRC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 12.9,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -6.7% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ANET": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +15.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AMSC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 76.6,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +7.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AOSL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +56.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "APH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 94.4,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +17.0% above a rising 30-week MA (5/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "APLD": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +21.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ARM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +87.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ARRY": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 23.4,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -11.6% vs flat 30-week MA. Prior 26w: -21%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ASPI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 61.1,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price +7.7% above 30-week MA (falling slope). Prior 26w: +13%. RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ASTS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 37.5,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -25.1% vs flat 30-week MA. Prior 26w: -21%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AIM:VLX": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "AMS:BESI": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "ASYS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +33.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ATOM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +35.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ASX:AXE": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "ASX:EOS": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "AUR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +22.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AVAV": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -39.3% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "AVEX": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "AXTI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +24.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "BB": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +104.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "BE": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +67.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "BKSY": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 44.4,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -13.5% vs MA. Prior 26w gain: +17%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "BTDR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +34.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "BWA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +23.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "BZAI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -16.8% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CAMT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 76.1,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +7.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CBRS": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "CEG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 3.4,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -11.2% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CEVA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +60.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CGNX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +30.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CIEN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +27.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CIFR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +42.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CLFD": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +14.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "COHR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +48.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CLSK": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +28.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CODA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 39.4,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -17.7% vs flat 30-week MA. Prior 26w: -1%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CORZ": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +38.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "COHU": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +80.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CPSH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.4,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +4.7% above a rising 30-week MA (7/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CRDO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +68.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CRCL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 7.5,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -22.4% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CRML": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 39.1,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -13.2% vs MA. Prior 26w gain: +14%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CRUS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 74.4,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +6.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CSIQ": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 2.4,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -14.4% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "DGXX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +50.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "DNN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 37.2,
+      "label": "S3-S4 Top",
+      "reason": "Distribution risk \u2014 broke below 30-week MA (-11.0%). MA slope: +2.63%/4w. RS vs SPY: falling. Risk of S4 decline.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ASX:EQR": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "DRS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 94.3,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +5.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "DVLT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -53.8% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ELVA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 79.1,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +9.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ENLT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +25.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ENPH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +12.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ENTG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +41.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ENVX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 10.5,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -9.4% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "EOSE": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -35.9% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "CSE:FTEL": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "CSE:MAXX": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "EPA:ALRIB": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "EPA:MRN": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "EQIX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +14.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "EQT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 4.6,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -9.7% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ETN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +12.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ESLT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 55.0,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price -3.2% above 30-week MA (rising slope). Prior 26w: +24%. RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "EPA:SOI": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "EPA:XFAB": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "ETR:AIXA": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "ETR:JEN": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "ETR:LPK": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "ETR:P4O": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "FCEL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +74.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "FJET": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "FLNC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 56.2,
+      "label": "S1-2 Watch",
+      "reason": "Base tightening. Price -1.5% vs 30-week MA (rising slope). Prior 26w: -16%. RS vs SPY: falling. Watch for confirmed breakout.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "FLY": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 43.1,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -16.8% vs flat 30-week MA. Prior 26w: +4%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "FN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 65.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +1.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "FORM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +45.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ETR:SMHN": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "ETR:TPE": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "FRMI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 58.8,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price +10.9% above 30-week MA (falling slope). Prior 26w: -0%. RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "FSLR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 81.1,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +6.7% above a flat 30-week MA (7/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "FTAI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 89.2,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +9.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "GFS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +58.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "GILT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 35.6,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -24.7% vs flat 30-week MA. Prior 26w: -12%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "GLW": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +61.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "GLXY": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +10.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ETR:WAF": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "GNRC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +39.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "GSIT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 47.9,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -6.4% vs flat 30-week MA. Prior 26w: +2%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "HIMX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +32.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "HLIT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +33.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "HNRG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 20.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -0.7% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "HUT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +67.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "HYLN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +61.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ICHR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +90.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "IMSR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 5.9,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -12.5% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "INDI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 49.9,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -3.4% vs flat 30-week MA. Prior 26w: -0%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "INFQ": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "FRA:APR": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "INTC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +93.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "INTT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +36.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "IONQ": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +12.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "INV": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 74.1,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +5.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "IPGP": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 88.3,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +2.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "IPI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 50.6,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -4.7% vs MA. Prior 26w gain: +20%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "IPWR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +20.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "FRA:KLA": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "IPX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 11.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -29.6% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "JOBY": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 1.9,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -19.4% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "IREN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 64.8,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +1.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KEYS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +27.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KLAC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +56.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KEEL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +83.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KLIC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +73.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KRMN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -40.6% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KTOS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -40.1% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KOPN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +16.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LAES": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 23.6,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -10.8% below a falling 30-week MA. RS vs SPY: rising. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KULR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 98.1,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +15.0% above a rising 30-week MA (7/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LAC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 3.8,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -19.8% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LITE": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +29.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LASR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 77.1,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +7.9% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LIDR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -31.6% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LOGI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 35.3,
+      "label": "S3-S4 Top",
+      "reason": "Distribution risk \u2014 broke below 30-week MA (+1.0%). MA slope: -0.95%/4w. RS vs SPY: falling. Risk of S4 decline.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "KRX:000660": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "LON:0RPO": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "LON:0ABT": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "LON:CWR": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "LON:QQ": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "LPTH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +13.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LSCC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +38.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LUNR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 43.4,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -14.7% vs flat 30-week MA. Prior 26w: +5%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "LWLG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 77.8,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +8.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MARA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +29.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MEI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +109.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MDA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +21.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MCHP": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +20.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MPWR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +15.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MP": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 30.8,
+      "label": "S3-S4 Top",
+      "reason": "Distribution risk \u2014 broke below 30-week MA (-6.1%). MA slope: -0.07%/4w. RS vs SPY: falling. Risk of S4 decline.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MNTS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 37.1,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -4.5% below a falling 30-week MA. RS vs SPY: rising. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MRAM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +40.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MRVL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +109.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MTSI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +48.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +30.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MU": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +131.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "MXL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +128.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NNE": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 3.8,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -23.0% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NBIS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +83.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NNBR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +42.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NOK": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +46.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NTAP": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +32.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NUAI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 98.1,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +23.8% above rising 30-week MA \u2014 late-stage advance (7/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NRGV": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 56.9,
+      "label": "S1-2 Watch",
+      "reason": "Base tightening. Price -1.1% vs 30-week MA (rising slope). Prior 26w: -13%. RS vs SPY: falling. Watch for confirmed breakout.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NVEC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +21.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NVTS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +32.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NVT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +32.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NXT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 61.7,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price -0.5% above 30-week MA (rising slope). Prior 26w: +22%. RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "NXXT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 20.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -47.9% below a falling 30-week MA. RS vs SPY: rising. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ON": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +50.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "OKLO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -26.6% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "OCC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +95.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ONDS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 35.6,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -23.5% vs flat 30-week MA. Prior 26w: -30%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "OPTX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +39.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ONTO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +48.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ORA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 74.8,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +1.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "OSS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +48.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "OSL:NAPA": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "OSL:SMOP": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "OTC:ATEYY": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "OTC:CGEH": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "OUST": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +56.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "P": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 37.0,
+      "label": "S3-S4 Top",
+      "reason": "Distribution risk \u2014 broke below 30-week MA (+2.1%). MA slope: -2.37%/4w. RS vs SPY: falling. Risk of S4 decline.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PATH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -20.1% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PDFS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +73.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 85.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +7.3% above a rising 30-week MA (2/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PENG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +117.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PKE": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +14.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 21.6,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -0.9% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PLAB": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 36.7,
+      "label": "S3-S4 Top",
+      "reason": "Distribution risk \u2014 broke below 30-week MA (-13.8%). MA slope: +3.68%/4w. RS vs SPY: falling. Risk of S4 decline.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 48.1,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -9.3% vs MA. Prior 26w gain: +30%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "POET": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +20.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "PLUG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 63.6,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +0.5% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "POWI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +51.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "POWL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +52.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "Q": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "PPSI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 52.5,
+      "label": "S1-2 Watch",
+      "reason": "Base tightening. Price -4.7% vs 30-week MA (rising slope). Prior 26w: -19%. RS vs SPY: falling. Watch for confirmed breakout.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "QS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.1,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -14.9% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "QRVO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 99.7,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +9.8% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "OTC:HGRAF": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "OTC:KRKNF": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "RDW": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 67.6,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price -1.7% above 30-week MA (rising slope). Prior 26w: +20%. RS vs SPY: flat.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "QUIK": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +55.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "RGTI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 14.1,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -7.5% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "RKLB": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 54.2,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -3.7% vs flat 30-week MA. Prior 26w: +6%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "ROK": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +16.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "RMBS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 79.1,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +9.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "RUN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 3.8,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -12.8% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SANM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +41.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SATL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 48.2,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -9.2% vs MA. Prior 26w gain: +134%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SATS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 45.3,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -10.3% vs flat 30-week MA. Prior 26w: -7%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SDRL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 47.1,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -8.4% vs flat 30-week MA. Prior 26w: +10%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SEI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +31.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SHAZ": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "SES": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -40.5% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SHLS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +12.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SHMD": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 36.1,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -14.5% vs flat 30-week MA. Prior 26w: -24%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SILC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +53.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SIDU": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 43.1,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -18.0% vs flat 30-week MA. Prior 26w: -42%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SIMO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +97.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SITM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +40.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SKYT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +17.3% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SLAB": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +14.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SLNH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 48.1,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price +11.0% vs flat 30-week MA. Prior 26w: +2%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SMCI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 32.9,
+      "label": "S3-S4 Top",
+      "reason": "Distribution risk \u2014 broke below 30-week MA (+1.8%). MA slope: -0.83%/4w. RS vs SPY: falling. Risk of S4 decline.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SMR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -27.1% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SMTC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +59.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SNDK": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +160.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SPIR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +15.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SSYS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 26.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -9.8% below a falling 30-week MA. RS vs SPY: flat. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "STEM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -40.5% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "STM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +74.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "STO:ACCON": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "STO:GAPW.B": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "STO:HTRO": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "STO:SILEX": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "STX": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +92.7% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SVCO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +71.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SYNA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +33.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SYM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -25.2% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TE": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 98.1,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +22.4% above a rising 30-week MA (7/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SYPR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 37.5,
+      "label": "S3-S4 Top",
+      "reason": "Distribution risk \u2014 broke below 30-week MA (-23.5%). MA slope: +1.96%/4w. RS vs SPY: falling. Risk of S4 decline.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TEL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 5.5,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -8.7% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TER": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +53.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TOYO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 43.1,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -21.6% vs MA. Prior 26w gain: +24%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "SWX:HUBN": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "STO:SIVE": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TPE:3661": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TPE:8271": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TRMB": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 0.0,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -24.5% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TPL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 61.6,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price -1.9% above 30-week MA (rising slope). Prior 26w: +31%. RS vs SPY: flat.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TRT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +41.9% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TSAT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 78.2,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +8.7% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TSEM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +52.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TSM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +20.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TPEX:6643": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TSX:MAL": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TSX:HPS.A": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TSX:FLT": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TSXV:AAG": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TSX:VNP": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TSXV:XBOT": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TSX:MOLY": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "TXN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +34.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TYGO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 39.4,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -27.8% vs MA. Prior 26w gain: +54%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TTI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 91.3,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +5.1% above a rising 30-week MA (7/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "UFO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 53.0,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -4.4% vs MA. Prior 26w gain: +13%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "UAMY": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 34.0,
+      "label": "S3-S4 Top",
+      "reason": "Distribution risk \u2014 broke below 30-week MA (-16.7%). MA slope: +0.73%/4w. RS vs SPY: falling. Risk of S4 decline.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "UCTT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +91.2% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "UMAC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +18.0% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "USAR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 70.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +3.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "UUUU": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 25.2,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -22.3% vs flat 30-week MA. Prior 26w: -14%. RS vs SPY: falling. No breakout signal yet.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VECO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +77.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VELO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +15.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VIAV": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 90.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +47.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: flat. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VICR": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +67.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VLN": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 77.4,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +8.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VIVO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +81.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VRT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +28.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: falling. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VOYG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 61.8,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price -5.1% above 30-week MA (rising slope). Prior 26w: +6%. RS vs SPY: flat.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VPG": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +107.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VSAT": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 80.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +14.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "VSH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +116.4% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "WDC": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +96.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "WOLF": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +62.8% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "WULF": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +46.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "WYFI": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +85.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "XNDU": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "XTIA": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "score": 41.6,
+      "label": "S3-S4 Top",
+      "reason": "Topping / distribution. 30-week MA rising, price -12.5% vs MA. Prior 26w gain: +13%. RS vs SPY: falling. Watch for breakdown.",
+      "status": "ok",
+      "computed_at": "2026-06-26T05:49:25.406624+00:00"
     },
     "TYO:6315": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "WSE:VGO": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     },
     "XSAT:SMOL": {
       "score": null,
       "label": null,
       "reason": null,
-      "computed_at": "2026-06-25T13:37:12.068644+00:00"
+      "status": "no_bars",
+      "computed_at": "2026-06-26T05:54:34.595844+00:00"
     }
   }
 }
