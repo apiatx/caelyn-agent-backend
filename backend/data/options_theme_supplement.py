@@ -867,7 +867,7 @@ def get_sectors_pending_symbols() -> list[str]:
     no_opts  = get_no_options_symbols()
 
     missing_syms:  list[str] = []   # generic_pending — highest priority
-    stale_lkg_syms: list[str] = []  # supplement_lkg  — lower priority
+    stale_lkg_syms: list[str] = []  # supplement_lkg with real data — lower priority
 
     for sym in sorted(all_theme_syms):
         if sym in no_opts:
@@ -876,7 +876,45 @@ def get_sectors_pending_symbols() -> list[str]:
         if row is None:
             missing_syms.append(sym)               # generic_pending — FIRST
         elif row.get("_source") == "supplement_lkg":
-            stale_lkg_syms.append(sym)             # stale_lkg — SECOND
+            # Split LKG rows by data quality.
+            # Rows with real scanned data (sectors_chain_summarized,
+            # neutral_no_unusual_flow, or positive premium) go to stale_lkg_syms
+            # so they show as cached_data until refreshed.
+            # Rows that are coverage-only placeholders (deferred_retry,
+            # optionable_pending_chain with zero premium) go to missing_syms —
+            # they have no real data and must be filled by the backfill loop first.
+            if _lkg_has_real_data(row):
+                stale_lkg_syms.append(sym)         # stale_lkg — SECOND
+            else:
+                missing_syms.append(sym)           # placeholder, no real data — FIRST
         # live / supplement / watchlist_cache = current-session data → skip
 
     return missing_syms + stale_lkg_syms
+
+
+def _lkg_has_real_data(row: dict) -> bool:
+    """
+    Return True if this supplement_lkg row contains real scanned options data
+    (not a coverage-only placeholder written by the old supplement loop).
+
+    Real data: either a known complete-scan result or positive premium.
+    Placeholders: deferred_retry, optionable_pending_chain with zero premium.
+    """
+    scan_result = row.get("scan_result") or ""
+    # Explicitly deferred → no real data
+    if scan_result == "deferred_retry":
+        return False
+    # Known real-scan results — even if premium=0, the scan completed
+    if scan_result in ("sectors_chain_summarized", "neutral_no_unusual_flow"):
+        return True
+    # For other/unknown scan_result values, check for actual premium data
+    call_p = row.get("call_premium")
+    put_p  = row.get("put_premium")
+    if call_p is not None and put_p is not None and (call_p + put_p) > 0:
+        return True
+    prem = row.get("premium") or 0.0
+    cpct = row.get("call_flow_pct")
+    ppct = row.get("put_flow_pct")
+    if prem > 0 and cpct is not None and ppct is not None:
+        return True
+    return False

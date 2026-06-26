@@ -167,7 +167,12 @@ def _ticker_state(row: dict | None, sym: str, no_options_syms: set) -> str:
 
     Priority:
       1. Explicit scan_result tag written by coverage-row writers
-      2. supplement_lkg source → stale_lkg (previous-session data, refresh pending)
+      2. supplement_lkg source → classify by actual data quality:
+           - deferred_retry scan_result          → deferred_retry (re-queue)
+           - confirmed_no_options scan_result     → confirmed_no_options
+           - has real premium data               → stale_lkg (show as cached_data)
+           - real scan with zero flow            → stale_lkg (valid zero-flow reading)
+           - coverage placeholder (no real data) → generic_pending (re-queue)
       3. Premium data present → infer bullish_flow / bearish_flow / mixed_flow
       4. Fresh row, no premium, no tag → neutral_no_unusual_flow (backward compat)
       5. No row + in no_options_syms → confirmed_no_options
@@ -178,9 +183,34 @@ def _ticker_state(row: dict | None, sym: str, no_options_syms: set) -> str:
 
     source = row.get("_source", "live")
     if source == "supplement_lkg":
-        # All previous-session rows are stale_lkg regardless of their old scan_result tag.
-        # The supplement loop will re-classify them correctly when it refreshes this cycle.
-        return "stale_lkg"
+        # supplement_lkg rows must be classified by actual data quality.
+        # Old placeholder rows (deferred_retry, optionable_pending_chain with
+        # zero premium) must NOT be promoted to stale_lkg / cached_data — that
+        # would display blank premiums and is misleading.
+        scan_result_lkg = row.get("scan_result") or ""
+
+        # Explicitly budget-deferred → re-queue as deferred_retry, not cached_data
+        if scan_result_lkg == "deferred_retry":
+            return "deferred_retry"
+
+        # Confirmed no options → preserve that classification
+        if scan_result_lkg == "confirmed_no_options":
+            return "confirmed_no_options"
+
+        # Real complete-scan results mean data exists even if premium=0
+        # (sectors_chain_summarized = backfill scan; neutral_no_unusual_flow = master screener)
+        _LKG_REAL_SCAN_RESULTS = frozenset({"sectors_chain_summarized", "neutral_no_unusual_flow"})
+        if scan_result_lkg in _LKG_REAL_SCAN_RESULTS:
+            return "stale_lkg"
+
+        # For other scan_result values, require positive premium to confirm real data
+        lkg_call, lkg_put = _ticker_call_put(row)
+        if (lkg_call + lkg_put) > 0:
+            return "stale_lkg"
+
+        # No real data (optionable_pending_chain, unknown, zero premium) →
+        # re-queue as generic_pending so the backfill loop fills it in
+        return "generic_pending"
 
     scan_result = row.get("scan_result") or ""
     if scan_result in _EXPLICIT_STATES:
@@ -257,7 +287,17 @@ def _build_ticker_node(
         #      scan — we know options exist and flow was zero, even though data is stale.
         _stale_was_neutral = (
             state == "stale_lkg"
-            and scan_result == "neutral_no_unusual_flow"
+            and (
+                scan_result == "neutral_no_unusual_flow"
+                # sectors_chain_summarized rows with zero premiums are a real
+                # neutral scan result (chain was scanned, no unusual flow found).
+                # They must return 0.0 not None so the UI shows "no flow" not blank.
+                or (
+                    scan_result == "sectors_chain_summarized"
+                    and call_p == 0.0
+                    and put_p == 0.0
+                )
+            )
         )
         _neutral_confirmed = (state == "neutral_no_unusual_flow") or _stale_was_neutral
 
@@ -270,15 +310,29 @@ def _build_ticker_node(
         #   "pending"     — budget-deferred or transient failure; retry next cycle
         #   "no_options"  — Tradier confirmed no tradeable expirations
         #   "missing_data"— no scan attempted yet (not in any cache layer)
-        if state == "deferred_retry":
+        # scan_status is derived from state (primary), then source (secondary),
+        # then scan_result (tertiary).  Source must be checked BEFORE scan_result
+        # because supplement_lkg rows store their original scan_result tag
+        # (e.g. "sectors_chain_summarized") even when they represent prior-session
+        # data.  Checking scan_result first would incorrectly label LKG rows "fresh".
+        if state == "generic_pending":
+            scan_status_val = "missing_data"   # LKG placeholder re-queued as missing
+        elif state == "confirmed_no_options":
+            scan_status_val = "no_options"     # LKG row with confirmed no-options
+        elif state == "deferred_retry":
             scan_status_val = "pending"
-        elif scan_result == "sectors_chain_summarized" or source in ("live", "supplement"):
-            scan_status_val = "fresh"
         elif source in ("supplement_lkg", "watchlist_cache"):
-            scan_status_val = "cached_data"
+            scan_status_val = "cached_data"    # prior-session real data — must come
+                                               # BEFORE the scan_result check below
+        elif scan_result == "sectors_chain_summarized" or source in ("live", "supplement"):
+            scan_status_val = "fresh"          # current-session scan
         else:
             scan_status_val = source   # defensive fallback
 
+        _scanned_at = (
+            row.get("updated_at") or row.get("cached_at") or row.get("_cached_at")
+            or row.get("_sectors_lkg_at")
+        )
         return {
             "symbol":            sym,
             "ticker_state":      state,
@@ -295,7 +349,8 @@ def _build_ticker_node(
             "options_available": state in _OPTIONS_CONFIRMED_STATES,
             "scan_status":       scan_status_val,
             "scan_result":       scan_result,
-            "updated_at":        row.get("updated_at") or row.get("cached_at") or row.get("_cached_at"),
+            "scanned_at":        _scanned_at,   # when the chain was last scanned
+            "updated_at":        _scanned_at,   # alias kept for backward compat
         }
 
     if sym in no_options_syms:
@@ -968,7 +1023,30 @@ def validate_sectors_coverage() -> dict:
     # a budget-defer loop.
     check3_missing_passed = (len(categories["missing"]) == 0)
 
-    # ── Check 4: sector totals match recomputed sums ──────────────────────────
+    # ── Check 4b: cached_data rows must not have null premiums ────────────────
+    # Every ticker in cached_real_lkg (scan_status=cached_data) must carry real
+    # premium data.  Null premiums on a cached_data row means the LKG contained
+    # a coverage-only placeholder that was incorrectly shown as real data.
+    # Exception: neutral scans (sectors_chain_summarized / neutral_no_unusual_flow)
+    # with zero flow are real data and may show 0.0 premiums.
+    blank_cached_data: list[str] = []
+    _REAL_SCAN_TAGS = frozenset({"sectors_chain_summarized", "neutral_no_unusual_flow"})
+    for _sym in categories["cached_real_lkg"]:
+        _row = combined.get(_sym)
+        if _row is None:
+            blank_cached_data.append(_sym)
+            continue
+        _sr = _row.get("scan_result") or ""
+        # Known-real scan tags: premium=0.0 is a valid zero-flow reading
+        if _sr in _REAL_SCAN_TAGS:
+            continue
+        # Otherwise require positive premium to confirm real data
+        _c, _p = _ticker_call_put(_row)
+        if (_c + _p) == 0:
+            blank_cached_data.append(_sym)
+    check4b_passed = (len(blank_cached_data) == 0)
+
+    # ── Check 5: sector totals match recomputed sums ──────────────────────────
     sector_audits: list[dict] = []
     check3_passed = True
 
@@ -1008,7 +1086,13 @@ def validate_sectors_coverage() -> dict:
         })
 
     # ── Aggregate results ─────────────────────────────────────────────────────
-    all_valid = check1_passed and check2_passed and check3_missing_passed and check3_passed
+    all_valid = (
+        check1_passed
+        and check2_passed
+        and check3_missing_passed
+        and check4b_passed
+        and check3_passed
+    )
 
     problem_tickers: list[str] = []
     if silent_placeholders:
@@ -1016,6 +1100,7 @@ def validate_sectors_coverage() -> dict:
     if not check1_passed:
         problem_tickers.append(f"[accounting_gap: {total - accounted} unclassified]")
     problem_tickers.extend(categories["missing"])
+    problem_tickers.extend(blank_cached_data)
 
     return {
         "valid":   all_valid,
@@ -1052,6 +1137,20 @@ def validate_sectors_coverage() -> dict:
                         f"{len(categories['missing'])} tickers still in missing_data "
                         f"(backfill loop has not yet reached them or they are budget-deferred). "
                         f"Symbols: {categories['missing']}"
+                    )
+                ),
+            },
+            {
+                "name":   "no_blank_cached_data_premiums",
+                "passed": check4b_passed,
+                "detail": (
+                    f"All {len(categories['cached_real_lkg'])} cached_data rows have real "
+                    f"premium fields (no null premiums on cached_data)"
+                    if check4b_passed
+                    else (
+                        f"{len(blank_cached_data)} cached_data tickers have null premiums "
+                        f"(LKG contained coverage-only placeholders, not real scan data). "
+                        f"Symbols: {blank_cached_data[:20]}"
                     )
                 ),
             },
