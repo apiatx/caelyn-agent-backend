@@ -143,6 +143,54 @@ def _pcr(call_p: float, put_p: float) -> Optional[float]:
     return None
 
 
+def _dte_from_exp(exp_str: str) -> Optional[int]:
+    """Compute days-to-expiry from a YYYY-MM-DD string. Returns None on parse error."""
+    try:
+        from datetime import date, datetime
+        return (datetime.strptime(exp_str, "%Y-%m-%d").date() - date.today()).days
+    except Exception:
+        return None
+
+
+def _expiry_scope(row: dict) -> tuple[str, Optional[str], Optional[int], str]:
+    """
+    Derive (expiration_scope, expiration_used, dte_used, premium_calc_method)
+    from a raw cache row.
+
+    The discriminator is scan_result:
+      "sectors_chain_summarized" → Chain Summarizer path.
+          Scope: one primary expiry (nearest 7–60 DTE preferred, then nearest
+          non-expired).  ALL contracts with volume > 0 on that one expiry are
+          included.  The expiry date is stored in row["expiration_used"].
+
+      anything else → Master Screener / unusual-flow path.
+          Scope: the screener's top unusual-flow contracts, which may span
+          multiple expirations.  row["expiry"] holds the best (highest-premium)
+          contract's expiry; row["days_to_expiry"] holds its DTE.
+
+    Returns (scope_label, expiration_used, dte_used, calc_method).
+    """
+    scan_result = (row.get("scan_result") or "") if row else ""
+
+    if scan_result == "sectors_chain_summarized":
+        exp_used = row.get("expiration_used")
+        return (
+            "single_expiry_7_60dte_preferred",
+            exp_used,
+            _dte_from_exp(exp_used) if exp_used else None,
+            "volume × mid_price × 100  (all contracts on primary expiry)",
+        )
+
+    exp_used = (row.get("expiry") if row else None)
+    dte_used = int(row["days_to_expiry"]) if row and row.get("days_to_expiry") is not None else None
+    return (
+        "top_unusual_contracts",
+        exp_used,
+        dte_used,
+        "volume × mid_price × 100  (screener top unusual-flow contracts)",
+    )
+
+
 # ── shared aggregation helper ─────────────────────────────────────────────────
 
 def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
@@ -213,11 +261,28 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         "total_volume":               total_vol,
         "call_volume":                total_call_vol,
         "put_volume":                 total_put_vol,
+        # Explicit contract-count alias so the frontend can label column correctly.
+        # Dollar premiums (call_premium / put_premium / net_premium) are NOT
+        # contract counts; this field is.
+        "total_contract_volume":      total_vol,
         "put_call_ratio":             _pcr(total_call, total_put),
         "bias":                       _bias(total_call, total_put) if has_data else None,
         "ticker_count":               len(ticker_nodes),
         "represented_count":          represented,
         "contributing_ticker_count":  flow_count,
+        # ── Premium scope metadata ─────────────────────────────────────────────
+        # Clarifies that dollar values are ESTIMATED PREMIUM, not contract volume.
+        # See per-ticker expiration_scope for the chain-level detail.
+        "premium_metric_label":  "Estimated Premium (USD)",
+        "premium_scope_summary": (
+            "Dollar values are estimated option premium (mid_price × volume × 100 "
+            "per contract), not the number of contracts traded. "
+            "Tickers scanned by the chain summarizer use one primary expiry "
+            "(nearest 7–60 DTE preferred). "
+            "Tickers from the master screener use unusual-flow top contracts "
+            "which may span multiple expirations. "
+            "Use total_contract_volume for the combined contract count."
+        ),
         # 9-state breakdown
         "bullish_count":              state_counts.get("bullish_flow",            0),
         "bearish_count":              state_counts.get("bearish_flow",            0),
@@ -424,6 +489,13 @@ def _build_ticker_node(
             row.get("updated_at") or row.get("cached_at") or row.get("_cached_at")
             or row.get("_sectors_lkg_at")
         )
+
+        # ── Premium scope metadata (labeling only, no calculation change) ─────
+        # Tells the frontend exactly what the dollar values represent so columns
+        # can be labeled "Call Premium (est.)" not "Call Volume".
+        _scope, _exp_used, _dte_used, _prem_method = _expiry_scope(row)
+        _tv = row.get("total_volume") if row.get("total_volume") is not None else (0 if _neutral_confirmed else None)
+
         return {
             "symbol":            sym,
             "ticker_state":      state,
@@ -434,55 +506,85 @@ def _build_ticker_node(
             "bias":              bias_val,
             "call_volume":       row.get("call_volume") if row.get("call_volume") is not None else (0 if _neutral_confirmed else None),
             "put_volume":        row.get("put_volume")  if row.get("put_volume")  is not None else (0 if _neutral_confirmed else None),
-            "total_volume":      row.get("total_volume") if row.get("total_volume") is not None else (0 if _neutral_confirmed else None),
+            "total_volume":      _tv,
+            # Explicit contract-count alias — distinguishes dollar premium fields
+            # from contract count. Use this for the "Contracts" column.
+            "total_contract_volume": _tv,
             "heat_score":        row.get("heat_score") if row.get("heat_score") is not None else (0.0 if _neutral_confirmed else None),
             "side_bias":         row.get("side_bias"),
             "options_available": state in _OPTIONS_CONFIRMED_STATES,
             "scan_status":       scan_status_val,
             "scan_result":       scan_result,
-            "scanned_at":        _scanned_at,   # when the chain was last scanned
-            "updated_at":        _scanned_at,   # alias kept for backward compat
+            "scanned_at":        _scanned_at,
+            "updated_at":        _scanned_at,
+            # ── Premium labeling metadata ──────────────────────────────────────
+            # premium_metric_label  : human-readable name for the dollar values.
+            # premium_calc_method   : the formula used (mid_price × vol × 100).
+            # expiration_scope      : "single_expiry_7_60dte_preferred" means the
+            #   chain summarizer used ONE expiry (nearest 7–60 DTE).
+            #   "top_unusual_contracts" means the master screener's unusual-flow
+            #   subset, which may span multiple expirations.
+            # expiration_used       : the primary expiry date (YYYY-MM-DD) if a
+            #   single expiry was used; the best-contract expiry otherwise.
+            # dte_used              : days-to-expiry for expiration_used.
+            "premium_metric_label": "Estimated Premium (USD)",
+            "premium_calc_method":  _prem_method,
+            "expiration_scope":     _scope,
+            "expiration_used":      _exp_used,
+            "dte_used":             _dte_used,
         }
 
     if sym in no_options_syms:
         return {
-            "symbol":            sym,
-            "ticker_state":      "confirmed_no_options",
-            "call_premium":      None,
-            "put_premium":       None,
-            "net_premium":       None,
-            "put_call_ratio":    None,
-            "bias":              None,
-            "call_volume":       None,
-            "put_volume":        None,
-            "total_volume":      None,
-            "heat_score":        None,
-            "side_bias":         None,
-            "options_available": False,
-            "scan_status":       "no_options",
-            "scan_result":       "confirmed_no_options",
-            "reason":            "confirmed_no_tradeable_options",
-            "updated_at":        None,
+            "symbol":                sym,
+            "ticker_state":          "confirmed_no_options",
+            "call_premium":          None,
+            "put_premium":           None,
+            "net_premium":           None,
+            "put_call_ratio":        None,
+            "bias":                  None,
+            "call_volume":           None,
+            "put_volume":            None,
+            "total_volume":          None,
+            "total_contract_volume": None,
+            "heat_score":            None,
+            "side_bias":             None,
+            "options_available":     False,
+            "scan_status":           "no_options",
+            "scan_result":           "confirmed_no_options",
+            "reason":                "confirmed_no_tradeable_options",
+            "updated_at":            None,
+            "premium_metric_label":  "Estimated Premium (USD)",
+            "premium_calc_method":   "n/a (no tradeable options)",
+            "expiration_scope":      "none",
+            "expiration_used":       None,
+            "dte_used":              None,
         }
 
     return {
-        "symbol":            sym,
-        "ticker_state":      "generic_pending",
-        "call_premium":      None,
-        "put_premium":       None,
-        "net_premium":       None,
-        "put_call_ratio":    None,
-        "bias":              None,
-        "call_volume":       None,
-        "put_volume":        None,
-        "total_volume":      None,
-        "heat_score":        None,
-        "side_bias":         None,
-        "options_available": False,
-        "scan_status":       "missing_data",  # no scan attempted yet
-        "scan_result":       None,
-        "reason":            "pending_scan",
-        "updated_at":        None,
+        "symbol":                sym,
+        "ticker_state":          "generic_pending",
+        "call_premium":          None,
+        "put_premium":           None,
+        "net_premium":           None,
+        "put_call_ratio":        None,
+        "bias":                  None,
+        "call_volume":           None,
+        "put_volume":            None,
+        "total_volume":          None,
+        "total_contract_volume": None,
+        "heat_score":            None,
+        "side_bias":             None,
+        "options_available":     False,
+        "scan_status":           "missing_data",
+        "scan_result":           None,
+        "reason":                "pending_scan",
+        "updated_at":            None,
+        "premium_metric_label":  "Estimated Premium (USD)",
+        "premium_calc_method":   "n/a (pending scan)",
+        "expiration_scope":      "none",
+        "expiration_used":       None,
+        "dte_used":              None,
     }
 
 
@@ -805,6 +907,32 @@ def build_sector_tree(
             "next_supplement_scan_at":        next_scan_at,
         },
         "sectors": sector_nodes,
+        # ── Premium labeling metadata ──────────────────────────────────────────
+        # Allows the frontend to label dollar values as "Estimated Premium"
+        # rather than guessing whether they are contract counts.
+        "premium_metadata": {
+            "premium_metric_label":    "Estimated Premium (USD)",
+            "premium_calc_method":     "mid_price × volume × 100 per contract",
+            "net_premium_formula":     "call_premium − put_premium",
+            "put_call_ratio_basis":    "put_premium / call_premium  (dollar basis, not contract count)",
+            "chain_summarizer_scope":  (
+                "single_expiry_7_60dte_preferred — ONE expiry selected per ticker "
+                "(nearest in 7–60 DTE window; fallback to nearest non-expired). "
+                "ALL contracts with volume > 0 on that expiry are included."
+            ),
+            "master_screener_scope":   (
+                "top_unusual_contracts — screener's unusual-flow subset, which may "
+                "span multiple expirations. expiration_used on each ticker row "
+                "reflects the highest-premium single contract's expiry."
+            ),
+            "call_volume_definition":  "contracts with volume > 0 on scanned expiry/contracts (call side)",
+            "put_volume_definition":   "contracts with volume > 0 on scanned expiry/contracts (put side)",
+            "total_contract_volume":   "call_volume + put_volume — use this for a 'Contracts' column",
+            "note": (
+                "Dollar values are estimated option premium flow, NOT the number of "
+                "contracts traded. Use total_contract_volume for contract counts."
+            ),
+        },
     }
 
 
@@ -1323,6 +1451,30 @@ def build_theme_tree(
             "generic_pending_count":      _missing_n,
         },
         "themes": theme_nodes,
+        # ── Premium labeling metadata ──────────────────────────────────────────
+        "premium_metadata": {
+            "premium_metric_label":    "Estimated Premium (USD)",
+            "premium_calc_method":     "mid_price × volume × 100 per contract",
+            "net_premium_formula":     "call_premium − put_premium",
+            "put_call_ratio_basis":    "put_premium / call_premium  (dollar basis, not contract count)",
+            "chain_summarizer_scope":  (
+                "single_expiry_7_60dte_preferred — ONE expiry selected per ticker "
+                "(nearest in 7–60 DTE window; fallback to nearest non-expired). "
+                "ALL contracts with volume > 0 on that expiry are included."
+            ),
+            "master_screener_scope":   (
+                "top_unusual_contracts — screener's unusual-flow subset, which may "
+                "span multiple expirations. expiration_used on each ticker row "
+                "reflects the highest-premium single contract's expiry."
+            ),
+            "call_volume_definition":  "contracts with volume > 0 on scanned expiry/contracts (call side)",
+            "put_volume_definition":   "contracts with volume > 0 on scanned expiry/contracts (put side)",
+            "total_contract_volume":   "call_volume + put_volume — use this for a 'Contracts' column",
+            "note": (
+                "Dollar values are estimated option premium flow, NOT the number of "
+                "contracts traded. Use total_contract_volume for contract counts."
+            ),
+        },
     }
 
 
