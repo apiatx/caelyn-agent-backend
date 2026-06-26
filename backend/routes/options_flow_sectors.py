@@ -119,6 +119,140 @@ async def options_flow_sectors_validate(
         )
 
 
+@router.post("/api/options-flow/sectors/page-active")
+async def options_flow_sectors_page_active(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Signal that the Sectors page is actively being viewed.
+
+    Calling this switches the backfill loop to priority mode:
+      - Larger batches (25 tickers vs 8)
+      - Shorter sleep (25 s vs 60 s)
+      - "sectors" budget lane (60 RPM vs 20 RPM maintenance)
+
+    The priority window lasts 5 minutes from the last call.
+    The main /api/options-flow/sectors endpoint also calls this automatically.
+    """
+    try:
+        from data.options_theme_supplement import (
+            register_sectors_active,
+            is_sectors_active,
+            get_sectors_pending_symbols,
+        )
+        register_sectors_active()
+        pending = get_sectors_pending_symbols()
+        return JSONResponse(content={
+            "ok": True,
+            "priority_active": is_sectors_active(),
+            "queue_remaining": len(pending),
+            "next_pending": pending[:10],
+        })
+    except Exception as exc:
+        import traceback
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(exc), "trace": traceback.format_exc()[-1000:]},
+        )
+
+
+@router.get("/api/options-flow/sectors/rate-status")
+async def options_flow_sectors_rate_status(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Real-time status of the sectors backfill loop and coverage.
+
+    Returns:
+      - priority_mode: whether the loop is in page-active priority mode
+      - queue_remaining: how many tickers still need scanning this session
+      - missing_symbols: tickers with no scan data at all (generic_pending)
+      - pass_count / last_pass_at / next_at: loop timing
+      - scan_coverage snapshot (fresh / cached_data / missing / no_options counts)
+    """
+    try:
+        import time as _time
+        from data.options_theme_supplement import (
+            is_sectors_active,
+            get_sectors_pending_symbols,
+            get_sectors_backfill_diag,
+            get_combined_ticker_data,
+            get_no_options_symbols,
+        )
+        from data.options_flow_sectors import _ticker_state
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+
+        pending  = get_sectors_pending_symbols()
+        bf_diag  = get_sectors_backfill_diag()
+        combined = get_combined_ticker_data()
+        no_opts  = get_no_options_symbols()
+
+        # Compute coverage directly from raw data (not from the sector tree cache,
+        # which may be stale/absent on fresh restart).
+        all_theme_syms: set[str] = {
+            s.upper()
+            for m in ENRICHED_THEME_RS_UNIVERSE.values()
+            for s in (m.get("proxy_symbols") or [])
+        }
+        _state_counts: dict[str, int] = {}
+        _missing_syms: list[str] = []
+        _fresh_syms: list[str] = []
+        _lkg_syms: list[str] = []
+        _deferred_syms: list[str] = []
+        _no_opts_syms: list[str] = []
+        for _s in sorted(all_theme_syms):
+            _row   = combined.get(_s)
+            _state = _ticker_state(_row, _s, no_opts)
+            _state_counts[_state] = _state_counts.get(_state, 0) + 1
+            if _state == "generic_pending":
+                _missing_syms.append(_s)
+            elif _state == "stale_lkg":
+                _lkg_syms.append(_s)
+            elif _state == "deferred_retry":
+                _deferred_syms.append(_s)
+            elif _state == "confirmed_no_options":
+                _no_opts_syms.append(_s)
+            else:
+                _fresh_syms.append(_s)
+
+        _total    = len(all_theme_syms)
+        _covered  = _total - len(_missing_syms) - len(_deferred_syms)
+        _full_pct = round(_covered / max(_total, 1) * 100, 1)
+
+        return JSONResponse(content={
+            "as_of":           _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+            "priority_mode":   is_sectors_active(),
+            "queue_remaining": len(pending),
+            "next_pending_10": pending[:10],
+            "sectors_backfill": {
+                "pass_count":       bf_diag.get("pass_count"),
+                "last_pass_at":     bf_diag.get("last_pass_at"),
+                "next_at":          bf_diag.get("next_at"),
+                "last_batch_syms":  bf_diag.get("last_batch_syms", []),
+                **{k: v for k, v in bf_diag.items()
+                   if k.startswith("last_full_pass")},
+            },
+            "coverage": {
+                "total":           _total,
+                "fresh":           len(_fresh_syms),
+                "cached_data":     len(_lkg_syms),
+                "missing":         len(_missing_syms),
+                "no_options":      len(_no_opts_syms),
+                "deferred":        len(_deferred_syms),
+                "full_pct":        _full_pct,
+                "missing_symbols": _missing_syms,
+            },
+        })
+    except Exception as exc:
+        import traceback
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(exc), "trace": traceback.format_exc()[-1500:]},
+        )
+
+
 @router.get("/api/options-flow/sectors/debug")
 async def options_flow_sectors_debug(
     request: Request,

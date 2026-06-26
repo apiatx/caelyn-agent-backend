@@ -12201,6 +12201,48 @@ async def _sectors_fast_backfill_loop():
                 # ── Full pass complete ─────────────────────────────────────────
                 _sbf_pass_count += 1
                 _n_saved = _sbf_save_lkg()
+
+                # Assertion: missing_data must be 0 after a full pass.
+                # pending=[] means get_sectors_pending_symbols() returned empty,
+                # which guarantees no generic_pending (missing_data) or stale_lkg
+                # symbols remain.  Run a quick count as a sanity check.
+                try:
+                    from data.options_theme_supplement import (
+                        get_combined_ticker_data as _sbf_gtd,
+                        get_no_options_symbols   as _sbf_gno,
+                    )
+                    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _sbf_tu
+                    _sbf_all = {
+                        s.upper()
+                        for m in _sbf_tu.values()
+                        for s in (m.get("proxy_symbols") or [])
+                    }
+                    _sbf_comb = _sbf_gtd()
+                    _sbf_noop = _sbf_gno()
+                    _sbf_missing = [
+                        s for s in _sbf_all
+                        if s not in _sbf_noop and _sbf_comb.get(s) is None
+                    ]
+                    if _sbf_missing:
+                        print(
+                            f"[SECTORS_BF] WARNING: Pass {_sbf_pass_count} complete but "
+                            f"{len(_sbf_missing)} missing_data tickers still present "
+                            f"(budget-deferred?): {_sbf_missing}"
+                        )
+                    else:
+                        print(
+                            f"[SECTORS_BF] ASSERTION PASS: missing_data=0 after pass {_sbf_pass_count}"
+                        )
+                    _sbf_upd_diag({
+                        "last_full_pass_missing_count": len(_sbf_missing),
+                        "last_full_pass_missing_symbols": _sbf_missing,
+                        "last_full_pass_coverage_pct":  round(
+                            (len(_sbf_all) - len(_sbf_missing)) / max(len(_sbf_all), 1) * 100, 1
+                        ),
+                    })
+                except Exception as _sbf_ae:
+                    print(f"[SECTORS_BF] Full-pass assertion error (non-fatal): {_sbf_ae}")
+
                 _sbf_tracking(
                     pass_count   = _sbf_pass_count,
                     last_pass_at = _ts_sbf.time(),
