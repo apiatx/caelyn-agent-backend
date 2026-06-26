@@ -1,0 +1,153 @@
+Audit first. Do not modify the new Tradier realtime/options dynamic pacer unless the audit proves a direct integration bug. Do not increase options-chain allocations. Do not add stage computation into the realtime quote/options rotation loop.
+
+Problem:
+After recent backend Tradier pacing/dynamic refresh changes, the Watchlist page Stage column is no longer working. As a result, these Watchlist tabs are blank because they depend on Stage:
+
+* Golden Zone
+* Growth Momentum
+* HC Investment Zone
+* HC Trade Zone
+
+Important:
+The new Tradier pacer is working well and must not be broken.
+
+Do not:
+
+* add historical/stage work into the realtime price rotation
+* add historical/stage work into the options-chain rotation
+* steal budget from options data
+* call historical candles on every page load
+* call historical candles for every ticker every rotation cycle
+* rewrite the pacing system
+* loosen frontend tab rules just to hide missing stages
+
+Correct architecture:
+Stage is slow-changing historical technical data. It should be served from LKG/cache and refreshed in a separate low-priority historical stage lane, not from the live price/options pacer.
+
+Audit:
+Find the current stage data flow for Watchlist rows:
+
+* where `stage_analysis` is computed
+* where `stage2_breakout` is computed
+* where stage LKG is saved/loaded
+* where Watchlist API rows attach stage data
+* whether recent Tradier pacing changes removed, blocked, renamed, or starved the stage warmup
+* whether new tickers are now missing from the stage LKG
+* whether the Watchlist response contains `stage_analysis` / `stage2_breakout`
+* whether those fields are being returned as null/empty
+
+Canonical stage fields:
+Every Watchlist row should include, when available:
+
+* `stage_analysis`
+* `stage2_breakout`
+
+Both should contain the canonical label shape used before.
+
+Canonical labels:
+
+* S1 Base
+* S1-2 Watch
+* S2 Breakout
+* S2-S3 Advance
+* S3 Momentum
+* S3-S4 Top
+* S4 Decline
+
+Do not reintroduce old labels.
+
+Required behavior:
+
+1. Watchlist API should serve stage values from LKG immediately.
+2. Missing/stale stage values should not blank existing valid stages.
+3. New tickers should be queued for background stage warmup.
+4. Stage warmup should use a separate low-priority historical-data budget/lane.
+5. Stage should not consume realtime quote/options pacer budget.
+6. Stage should not block page load.
+7. Stage should not trigger provider storms.
+
+If an existing stage service exists:
+Preserve it. Restore its LKG path and warmup integration.
+
+Likely existing service names to audit:
+
+* watchlist_stage2_service
+* stage_analysis
+* analyze_symbol_stage
+* watchlist_stage2_lkg.json
+* stage2_breakout
+* stage_analysis.label
+
+If these exist, use them instead of creating a replacement.
+
+Stage refresh policy:
+
+* Use existing historical cache first.
+* Use persisted stage LKG second.
+* Fetch historical candles only when missing/stale.
+* Refresh cadence should be daily/off-hours, not live.
+* For newly added tickers, enqueue only those missing ticker stages.
+* Concurrency must be small.
+* Add backoff/rate limit.
+* Do not compete with options-chain calls.
+
+Suggested lane:
+If the new Tradier pacer has separate budgets/classes, create or preserve a low-priority lane such as:
+
+`historical_stage`
+
+Rules for this lane:
+
+* lowest priority
+* daily TTL
+* only missing/stale/new symbols
+* capped concurrency
+* does not take from options-chain budget
+* does not take from realtime quote batch priority
+* safe to pause when rate limits are tight
+
+If historical data is already cached via FMP/Tradier:
+Use existing cache first.
+Do not fetch new candles if cached daily bars are already sufficient.
+
+Frontend/API diagnostics:
+Add or expose lightweight diagnostics somewhere in the Watchlist response or debug endpoint:
+
+* stage_total_required
+* stage_lkg_available
+* stage_missing
+* stage_stale
+* stage_queued
+* stage_provider_fetches_last_run
+* stage_last_warm_at
+
+This is for validation only; do not add noisy UI.
+
+Critical:
+Do not solve this by loosening Golden Zone / HC Trade / Growth Momentum filters.
+Those tabs should remain stage-dependent.
+The fix is to restore stable stage data.
+
+Validation:
+
+1. Hit Watchlist API directly.
+2. Confirm rows include `stage_analysis.label` or `stage2_breakout.label`.
+3. Confirm existing tickers receive LKG stage values immediately after restart.
+4. Confirm newly added tickers are queued for background stage warmup.
+5. Confirm page load does not trigger historical candle calls for all tickers.
+6. Confirm realtime quote/options pacer allocations remain unchanged.
+7. Confirm options-chain data still receives its higher allocation.
+8. Confirm Stage column displays canonical labels.
+9. Confirm Golden Zone has rows again when qualifying staged tickers exist.
+10. Confirm Growth Momentum has rows again when qualifying staged tickers exist.
+11. Confirm HC Investment Zone has rows again when qualifying staged tickers exist.
+12. Confirm HC Trade Zone has rows again when qualifying staged tickers exist.
+13. Confirm no provider-call storm occurs.
+14. Confirm no backend errors.
+15. Report exactly what broke:
+
+* stage LKG missing?
+* stage fields renamed?
+* stage warmup starved?
+* stage fields overwritten by null?
+* historical lane blocked?
