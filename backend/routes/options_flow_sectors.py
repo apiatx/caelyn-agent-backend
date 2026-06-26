@@ -1,84 +1,89 @@
 """
-GET /api/options-flow/sectors
+GET /api/options-flow/sectors          — Sector → Theme → Ticker tree
+GET /api/options-flow/sectors?view=themes — flat Theme → Ticker tree (same cache)
+GET /api/options-flow/sectors/validate
+GET /api/options-flow/sectors/validate?view=themes
 GET /api/options-flow/sectors/debug
 
-Net Options Flow aggregated by Sector → Theme → Ticker.
-
-Zero new Tradier calls — reads exclusively from the existing master
-screener cache and supplement caches populated by background scanners.
+Net Options Flow aggregated views.  Both views read from the same canonical
+per-ticker options cache populated by the master screener and supplement loop.
+Zero new Tradier calls from either view.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import JSONResponse
 
 router = APIRouter(tags=["options_flow"])
-
-
-def _require_subscription(request: Request):
-    """Minimal subscription gate — mirrors the pattern used in main.py."""
-    from main import require_subscription  # type: ignore[import]
-    return None
 
 
 @router.get("/api/options-flow/sectors")
 async def options_flow_sectors(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
-    refresh: bool = Query(False, description="Force-expire the sectors cache and rebuild from master screener data"),
+    refresh: bool = Query(
+        False,
+        description="Force-expire the cache and rebuild from the current master screener data",
+    ),
+    view: str = Query(
+        "sectors",
+        description=(
+            "sectors (default) — Sector → Theme → Ticker hierarchy with unique-ticker dedup at sector level. "
+            "themes — flat Theme → Ticker list; every theme is a top-level item with no sector grouping. "
+            "Both views read the same canonical per-ticker options cache."
+        ),
+    ),
 ):
     """
-    Net Options Flow aggregated by Sector → Theme → Ticker.
+    Net Options Flow aggregated by view.
 
-    Hierarchy:
-      sectors[]
-        └─ themes[]
-             └─ tickers[]
+    view=sectors (default)
+      Hierarchy: sectors[] → themes[] → tickers[]
+      Sector totals use UNIQUE ticker dedup across themes in the same sector.
+      Theme totals include every ticker in the basket.
 
-    Premium derivation (no new Tradier calls):
-      call_premium = master_row.premium × (call_flow_pct / 100)
-      put_premium  = master_row.premium × (put_flow_pct / 100)
-      net_premium  = call_premium − put_premium
-      put_call_ratio = put_premium / call_premium  (premium-dollars, not contract count)
+    view=themes
+      Hierarchy: themes[] → tickers[]
+      Every theme in the canonical universe is a top-level item.
+      Theme totals = proxy_symbols_sum (no cross-theme dedup at the theme level).
+      Themes sorted by contributing_ticker_count desc, then total flow desc.
 
-    Sector totals use UNIQUE ticker dedup across themes.
-    Theme totals include every ticker in the basket, even if it also
-    appears in a sibling theme.
+    Both views share:
+      - Same canonical ticker cache (master screener + supplement LKG)
+      - Same _build_ticker_node and _rollup_ticker_nodes aggregation engine
+      - cached_data (stale_lkg) rows contribute identically to fresh rows
+      - Zero new Tradier calls
 
-    scan_status values per ticker:
-      "fresh"       — real data from the current session (live master screener
-                      or sectors chain summarizer run this session)
-      "cached_data" — real data from a PRIOR session, loaded from disk LKG
-                      on startup.  Shown as ticker_state=stale_lkg until the
-                      backfill loop refreshes this ticker.
-      "pending"     — budget-deferred or transient failure; will be retried
-                      automatically in the next backfill cycle.
-      "no_options"  — Tradier confirmed no tradeable options for this ticker.
-      "missing_data"— no scan has been attempted yet (ticker in queue).
-
-    Sector/theme premium totals include ONLY tickers with real scanned data
-    (fresh or cached_data).  Deferred, missing, and no-options tickers are
-    excluded from totals but appear in diagnostics.scan_coverage.
+    scan_status per ticker:
+      fresh        — current session (live master screener or backfill run)
+      cached_data  — prior session LKG loaded from disk; valid premium data
+      pending      — budget-deferred or transient; retried next backfill cycle
+      no_options   — Tradier confirmed no tradeable options
+      missing_data — not yet reached by any scan pass
     """
+    # Signal the backfill loop to stay in priority mode (sectors lane, 60 RPM).
+    # Both views benefit from the same priority scan — the supplement loop
+    # populates tickers consumed by both Sectors and Themes.
     try:
-        # Signal to the backfill loop that Sectors is actively being viewed.
-        # This switches the loop to priority mode: larger batches, shorter
-        # sleep, and the "sectors" budget lane (60 RPM vs 20 RPM maintenance).
-        try:
-            from data.options_theme_supplement import register_sectors_active
-            register_sectors_active()
-        except Exception:
-            pass
+        from data.options_theme_supplement import register_sectors_active
+        register_sectors_active()
+    except Exception:
+        pass
 
-        from data.options_flow_sectors import get_sector_flow
-        payload = get_sector_flow(force_refresh=refresh)
+    try:
+        if view == "themes":
+            from data.options_flow_sectors import get_theme_flow
+            payload = get_theme_flow(force_refresh=refresh)
+        else:
+            from data.options_flow_sectors import get_sector_flow
+            payload = get_sector_flow(force_refresh=refresh)
         return JSONResponse(content=payload)
     except Exception as exc:
         import traceback
         return JSONResponse(
             status_code=500,
             content={
-                "error": "sector_flow_build_failed",
+                "error": f"{view}_flow_build_failed",
                 "detail": str(exc),
                 "trace": traceback.format_exc()[-2000:],
             },
@@ -89,22 +94,36 @@ async def options_flow_sectors(
 async def options_flow_sectors_validate(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
+    view: str = Query(
+        "sectors",
+        description="sectors (default) — sector coverage checks. themes — adds theme_totals_match_ticker_sums check.",
+    ),
 ):
     """
-    Coverage validation for the Options Flow → Sectors universe.
+    Coverage validation for the Net Options Flow universe.
 
-    Proves:
-      1. Every required ticker is classified in exactly one category
-         (fresh | cached_real_lkg | confirmed_no_options | deferred | missing)
-      2. Zero supplement rows with scan_result=deferred_retry exist
-         (these would block re-scanning by removing them from the pending queue)
-      3. Sector totals are computed from real scanned rows only
+    view=sectors (default)
+      1. complete_accounting
+      2. no_silent_placeholders
+      3. no_missing_data
+      4. no_blank_cached_data_premiums
+      5. sector_totals_from_real_rows
+
+    view=themes
+      1–4 same as above
+      5. theme_totals_match_ticker_sums — recomputes each theme's call/put from
+         raw cache independently and compares to the theme node total, proving
+         that cached_data rows contribute correctly to theme aggregates.
 
     Returns valid=True if all checks pass.
     """
     try:
-        from data.options_flow_sectors import validate_sectors_coverage
-        result = validate_sectors_coverage()
+        if view == "themes":
+            from data.options_flow_sectors import validate_themes_coverage
+            result = validate_themes_coverage()
+        else:
+            from data.options_flow_sectors import validate_sectors_coverage
+            result = validate_sectors_coverage()
         status_code = 200 if result.get("valid") else 422
         return JSONResponse(status_code=status_code, content=result)
     except Exception as exc:

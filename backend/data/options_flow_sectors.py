@@ -48,6 +48,8 @@ from typing import Optional
 
 _SECTORS_CACHE_KEY = "options_flow_sectors:v1"
 _SECTORS_CACHE_TTL = 60   # 1 min — short so supplement updates are visible quickly
+_THEMES_CACHE_KEY  = "options_flow_themes:v1"
+_THEMES_CACHE_TTL  = 60   # same cadence as sectors
 
 
 def _load_all_watchlist_symbols() -> set[str]:
@@ -139,6 +141,95 @@ def _pcr(call_p: float, put_p: float) -> Optional[float]:
     if call_p > 0:
         return round(put_p / call_p, 3)
     return None
+
+
+# ── shared aggregation helper ─────────────────────────────────────────────────
+
+def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
+    """
+    Aggregate a list of ticker nodes (output of _build_ticker_node) into a
+    single dict of premium, volume, bias, and state-count fields.
+
+    Used by both _build_theme_node (theme-level rollup, all proxy_symbols) and
+    _build_sector_node (sector-level rollup, unique-ticker-dedup set), so both
+    Sectors and Themes views share exactly one aggregation implementation.
+
+    Contribution rules:
+      - call_premium / put_premium: sum all is-not-None values.
+        A value of 0.0 (neutral / confirmed zero-flow row) contributes 0.0, not
+        nothing — the is-not-None guard is intentional so neutral rows are counted
+        as represented without inflating the premium total.
+      - Volumes: sum all non-None values across every ticker node, regardless
+        of whether that node has non-zero flow premium.
+      - State counts: every ticker node is counted once regardless of its state.
+      - cached_data (stale_lkg) rows contribute identically to fresh rows — the
+        _build_ticker_node output is the same shape for both; there is no
+        scan_source branch here.
+    """
+    total_call:     float     = 0.0
+    total_put:      float     = 0.0
+    total_call_vol: int | None = None
+    total_put_vol:  int | None = None
+    total_vol:      int | None = None
+    state_counts:   dict[str, int] = {}
+    flow_count:     int = 0
+    represented:    int = 0
+
+    for t in ticker_nodes:
+        cp = t.get("call_premium")
+        pp = t.get("put_premium")
+        if cp is not None:
+            total_call += cp
+        if pp is not None:
+            total_put += pp
+        if cp is not None and pp is not None and (cp + pp) > 0:
+            flow_count += 1
+
+        cv = t.get("call_volume")
+        pv = t.get("put_volume")
+        tv = t.get("total_volume")
+        if cv is not None:
+            total_call_vol = (total_call_vol or 0) + int(cv)
+        if pv is not None:
+            total_put_vol = (total_put_vol or 0) + int(pv)
+        if tv is not None:
+            total_vol = (total_vol or 0) + int(tv)
+
+        state = t.get("ticker_state", "generic_pending")
+        state_counts[state] = state_counts.get(state, 0) + 1
+        if state != "generic_pending":
+            represented += 1
+
+    total_net = total_call - total_put
+    has_data  = (total_call + total_put) > 0
+    avg_net   = round(total_net / flow_count, 2) if flow_count else None
+
+    return {
+        "call_premium":               round(total_call, 2) if has_data else None,
+        "put_premium":                round(total_put,  2) if has_data else None,
+        "net_premium":                round(total_net,  2) if has_data else None,
+        "total_net_flow":             round(total_net,  2) if has_data else None,
+        "average_net_flow":           avg_net,
+        "total_volume":               total_vol,
+        "call_volume":                total_call_vol,
+        "put_volume":                 total_put_vol,
+        "put_call_ratio":             _pcr(total_call, total_put),
+        "bias":                       _bias(total_call, total_put) if has_data else None,
+        "ticker_count":               len(ticker_nodes),
+        "represented_count":          represented,
+        "contributing_ticker_count":  flow_count,
+        # 9-state breakdown
+        "bullish_count":              state_counts.get("bullish_flow",            0),
+        "bearish_count":              state_counts.get("bearish_flow",            0),
+        "mixed_count":                state_counts.get("mixed_flow",              0),
+        "neutral_count":              state_counts.get("neutral_no_unusual_flow", 0),
+        "optionable_pending_count":   state_counts.get("optionable_pending_chain", 0),
+        "confirmed_no_options_count": state_counts.get("confirmed_no_options",    0),
+        "stale_lkg_count":            state_counts.get("stale_lkg",               0),
+        "deferred_retry_count":       state_counts.get("deferred_retry",          0),
+        "unsupported_count":          state_counts.get("unsupported_foreign_otc", 0),
+        "generic_pending_count":      state_counts.get("generic_pending",         0),
+    }
 
 
 # ── 9-state model ────────────────────────────────────────────────────────────
@@ -403,65 +494,23 @@ def _build_theme_node(
     cache_by_ticker: dict[str, dict],
     no_options_syms: set[str],
 ) -> dict:
+    """
+    Build a theme-level aggregation node.
+
+    Builds one ticker node per proxy symbol via _build_ticker_node, then
+    delegates all premium/volume/state aggregation to _rollup_ticker_nodes.
+    cached_data (stale_lkg) ticker nodes contribute identically to fresh nodes
+    because _build_ticker_node emits the same shape for both.
+    """
     proxy_syms   = [s.upper() for s in (meta.get("proxy_symbols") or [])]
     ticker_nodes = [_build_ticker_node(sym, cache_by_ticker, no_options_syms) for sym in proxy_syms]
-
-    # Flow totals — use is-not-None guard so neutral rows (0.0) are counted,
-    # not falsy-filtered. Neutral/zero rows don't change the total but are
-    # still "represented" in the universe.
-    total_call = sum(t["call_premium"] for t in ticker_nodes if t.get("call_premium") is not None)
-    total_put  = sum(t["put_premium"]  for t in ticker_nodes if t.get("put_premium")  is not None)
-    total_net  = total_call - total_put
-    has_data   = (total_call + total_put) > 0
-    # Volume: sum non-None values from tickers that have real volume data
-    total_vol_vals  = [t["total_volume"] for t in ticker_nodes if t.get("total_volume") is not None]
-    total_vol       = sum(total_vol_vals) if total_vol_vals else None
-    total_call_vols = [t["call_volume"] for t in ticker_nodes if t.get("call_volume") is not None]
-    total_put_vols  = [t["put_volume"]  for t in ticker_nodes if t.get("put_volume")  is not None]
-    total_call_vol  = sum(total_call_vols) if total_call_vols else None
-    total_put_vol   = sum(total_put_vols)  if total_put_vols  else None
-
-    # State counts across all proxy tickers
-    state_counts: dict[str, int] = {}
-    for t in ticker_nodes:
-        s = t.get("ticker_state", "generic_pending")
-        state_counts[s] = state_counts.get(s, 0) + 1
-
-    # Represented = any state that isn't generic_pending (some info is known)
-    represented = [t for t in ticker_nodes if t.get("ticker_state") != "generic_pending"]
-    # Tickers contributing non-zero premium (for average net flow calculation)
-    flow_nodes  = [t for t in ticker_nodes if (t.get("call_premium") or 0) + (t.get("put_premium") or 0) > 0]
-    avg_net     = round(total_net / len(flow_nodes), 2) if flow_nodes else None
-
+    totals       = _rollup_ticker_nodes(ticker_nodes)
     return {
-        "theme_id":                      theme_id,
-        "theme_name":                    meta.get("display_name", theme_id),
-        "classification":                meta.get("classification"),
-        "call_premium":                  round(total_call, 2) if has_data else None,
-        "put_premium":                   round(total_put, 2)  if has_data else None,
-        "net_premium":                   round(total_net, 2)  if has_data else None,
-        "total_net_flow":                round(total_net, 2)  if has_data else None,
-        "average_net_flow":              avg_net,
-        "total_volume":                  total_vol,
-        "call_volume":                   total_call_vol,
-        "put_volume":                    total_put_vol,
-        "put_call_ratio":                _pcr(total_call, total_put),
-        "bias":                          _bias(total_call, total_put) if has_data else None,
-        "ticker_count":                  len(proxy_syms),
-        "represented_count":             len(represented),
-        "contributing_ticker_count":     len(flow_nodes),
-        # 9-state breakdown
-        "bullish_count":                 state_counts.get("bullish_flow", 0),
-        "bearish_count":                 state_counts.get("bearish_flow", 0),
-        "mixed_count":                   state_counts.get("mixed_flow", 0),
-        "neutral_count":                 state_counts.get("neutral_no_unusual_flow", 0),
-        "optionable_pending_count":      state_counts.get("optionable_pending_chain", 0),
-        "confirmed_no_options_count":    state_counts.get("confirmed_no_options", 0),
-        "stale_lkg_count":               state_counts.get("stale_lkg", 0),
-        "deferred_retry_count":          state_counts.get("deferred_retry", 0),
-        "unsupported_count":             state_counts.get("unsupported_foreign_otc", 0),
-        "generic_pending_count":         state_counts.get("generic_pending", 0),
-        "tickers":                       ticker_nodes,
+        "theme_id":       theme_id,
+        "theme_name":     meta.get("display_name", theme_id),
+        "classification": meta.get("classification"),
+        **totals,
+        "tickers":        ticker_nodes,
     }
 
 
@@ -474,43 +523,32 @@ def _build_sector_node(
     no_options_syms: set[str],
     sector_names: dict[str, str],
 ) -> dict:
+    """
+    Build a sector-level aggregation node using unique-ticker dedup.
+
+    Sector totals are computed over the UNION of all proxy symbols across every
+    theme in this sector, deduplicating tickers that appear in multiple themes.
+    The rollup is delegated to _rollup_ticker_nodes (same helper used by
+    _build_theme_node) so both Sectors and Themes views share one implementation.
+
+    sector_total_method = "unique_ticker_sum" is preserved: a ticker that
+    appears in N themes within a sector contributes its premium exactly once
+    to the sector total, even though it contributes once per theme in each
+    theme node.
+    """
     sector_unique_syms: set[str] = set()
     for _, meta in theme_items:
         for sym in (meta.get("proxy_symbols") or []):
             sector_unique_syms.add(sym.upper())
 
-    sector_call     = 0.0
-    sector_put      = 0.0
-    sector_vol      = 0
-    sector_call_vol = 0
-    sector_put_vol  = 0
-    flow_count      = 0
-    state_counts: dict[str, int] = {}
-
-    for sym in sector_unique_syms:
-        row   = cache_by_ticker.get(sym)
-        state = _ticker_state(row, sym, no_options_syms)
-        state_counts[state] = state_counts.get(state, 0) + 1
-        if row:
-            c, p = _ticker_call_put(row)
-            if (c + p) > 0:
-                sector_call += c
-                sector_put  += p
-                flow_count  += 1
-                v = row.get("total_volume")
-                if v is not None:
-                    sector_vol += int(v)
-            cv = row.get("call_volume")
-            pv = row.get("put_volume")
-            if cv is not None:
-                sector_call_vol += int(cv)
-            if pv is not None:
-                sector_put_vol  += int(pv)
-
-    sector_net   = sector_call - sector_put
-    has_data     = flow_count > 0
-    avg_net      = round(sector_net / flow_count, 2) if flow_count else None
-    represented  = sum(v for k, v in state_counts.items() if k != "generic_pending")
+    # Build one ticker node per unique symbol, then roll up via shared helper.
+    # This preserves unique-ticker dedup semantics while using the same
+    # aggregation code path as the Themes view.
+    sector_ticker_nodes = [
+        _build_ticker_node(sym, cache_by_ticker, no_options_syms)
+        for sym in sector_unique_syms
+    ]
+    totals = _rollup_ticker_nodes(sector_ticker_nodes)
 
     themes_built = [
         _build_theme_node(tid, meta, cache_by_ticker, no_options_syms)
@@ -524,34 +562,11 @@ def _build_sector_node(
     )
 
     return {
-        "sector_id":                     sector_id,
-        "sector_name":                   sector_names.get(sector_id, sector_id.replace("_", " ").title()),
-        "call_premium":                  round(sector_call, 2) if has_data else None,
-        "put_premium":                   round(sector_put, 2)  if has_data else None,
-        "net_premium":                   round(sector_net, 2)  if has_data else None,
-        "total_net_flow":                round(sector_net, 2)  if has_data else None,
-        "total_volume":                  sector_vol if has_data else None,
-        "call_volume":                   sector_call_vol if sector_call_vol else None,
-        "put_volume":                    sector_put_vol  if sector_put_vol  else None,
-        "average_net_flow":              avg_net,
-        "put_call_ratio":                _pcr(sector_call, sector_put),
-        "bias":                          _bias(sector_call, sector_put) if has_data else None,
-        "ticker_count":                  len(sector_unique_syms),
-        "represented_count":             represented,
-        "contributing_ticker_count":     flow_count,
-        "sector_total_method":           "unique_ticker_sum",
-        # 9-state breakdown
-        "bullish_count":                 state_counts.get("bullish_flow", 0),
-        "bearish_count":                 state_counts.get("bearish_flow", 0),
-        "mixed_count":                   state_counts.get("mixed_flow", 0),
-        "neutral_count":                 state_counts.get("neutral_no_unusual_flow", 0),
-        "optionable_pending_count":      state_counts.get("optionable_pending_chain", 0),
-        "confirmed_no_options_count":    state_counts.get("confirmed_no_options", 0),
-        "stale_lkg_count":               state_counts.get("stale_lkg", 0),
-        "deferred_retry_count":          state_counts.get("deferred_retry", 0),
-        "unsupported_count":             state_counts.get("unsupported_foreign_otc", 0),
-        "generic_pending_count":         state_counts.get("generic_pending", 0),
-        "themes":                        themes_built,
+        "sector_id":           sector_id,
+        "sector_name":         sector_names.get(sector_id, sector_id.replace("_", " ").title()),
+        **totals,
+        "sector_total_method": "unique_ticker_sum",
+        "themes":              themes_built,
     }
 
 
@@ -1199,3 +1214,401 @@ def _group_by_sector(theme_universe: dict) -> dict[str, list[tuple[str, dict]]]:
         sector_id = tid if cls == "sector" else (meta.get("parent_sector") or "other")
         sectors.setdefault(sector_id, []).append((tid, meta))
     return sectors
+
+
+# ── Themes view builder ────────────────────────────────────────────────────────
+
+def build_theme_tree(
+    combined_ticker_data: dict[str, dict],
+    no_options_syms: set[str],
+    theme_universe: dict,
+) -> dict:
+    """
+    Build the flat Theme → Ticker tree (Themes view).
+
+    Every entry in the canonical theme universe that has at least one
+    proxy_symbol is included as a top-level theme node.  There is no sector
+    grouping — themes are presented flat, sorted by coverage then by total flow.
+
+    Uses the same _build_ticker_node and _rollup_ticker_nodes as
+    build_sector_tree so cached_data (stale_lkg) rows contribute identically
+    to fresh rows in both views.
+
+    The theme_total_method = "proxy_symbols_sum" (i.e. every proxy symbol in a
+    theme basket contributes once, including symbols that also appear in other
+    themes).  This is intentionally different from the sector total method
+    ("unique_ticker_sum") because here each theme stands alone as a top-level
+    item without a parent dedup layer.
+    """
+    all_theme_syms: set[str] = set()
+    for meta in theme_universe.values():
+        for sym in (meta.get("proxy_symbols") or []):
+            all_theme_syms.add(sym.upper())
+
+    theme_nodes: list[dict] = []
+    for theme_id, meta in theme_universe.items():
+        if not meta.get("proxy_symbols"):
+            continue
+        node = _build_theme_node(theme_id, meta, combined_ticker_data, no_options_syms)
+        node["parent_sector"] = meta.get("parent_sector")
+        theme_nodes.append(node)
+
+    theme_nodes.sort(key=lambda t: (
+        -(t.get("contributing_ticker_count") or 0),
+        -(t.get("call_premium") or 0) - (t.get("put_premium") or 0),
+        t.get("theme_name", ""),
+    ))
+
+    # ── coverage stats (same shape as build_sector_tree.scan_coverage) ────────
+    _state_counts: dict[str, int] = {}
+    _missing_syms: list[str] = []
+    for _sym in sorted(all_theme_syms):
+        _row   = combined_ticker_data.get(_sym)
+        _state = _ticker_state(_row, _sym, no_options_syms)
+        _state_counts[_state] = _state_counts.get(_state, 0) + 1
+        if _state == "generic_pending":
+            _missing_syms.append(_sym)
+
+    _represented_n  = sum(v for k, v in _state_counts.items() if k != "generic_pending")
+    _bullish_n      = _state_counts.get("bullish_flow",            0)
+    _bearish_n      = _state_counts.get("bearish_flow",            0)
+    _mixed_n        = _state_counts.get("mixed_flow",              0)
+    _neutral_n      = _state_counts.get("neutral_no_unusual_flow", 0)
+    _no_opts_n      = _state_counts.get("confirmed_no_options",    0)
+    _unsupp_n       = _state_counts.get("unsupported_foreign_otc", 0)
+    _stale_n        = _state_counts.get("stale_lkg",               0)
+    _deferred_n     = _state_counts.get("deferred_retry",          0)
+    _missing_n      = _state_counts.get("generic_pending",         0)
+    _scanned_real_n = _bullish_n + _bearish_n + _mixed_n + _neutral_n + _stale_n
+    _full_covered_n = _scanned_real_n + _no_opts_n
+    _total_n        = len(all_theme_syms)
+    _full_pct       = round(_full_covered_n / max(_total_n, 1) * 100, 1)
+    _repr_pct       = round(_represented_n  / max(_total_n, 1) * 100, 1)
+
+    return {
+        "as_of":                 time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "view":                  "themes",
+        "source":                "shared_options_symbol_cache",
+        "net_flow_method":       "call_minus_put_premium",
+        "put_call_ratio_method": "premium_dollars",
+        "theme_total_method":    "proxy_symbols_sum",
+        "scan_coverage": {
+            "total_required_tickers":     _total_n,
+            "scanned_real_tickers":       _scanned_real_n,
+            "fresh_tickers":              len({
+                s for s, r in combined_ticker_data.items()
+                if r.get("_source") in ("live", "supplement") and s in all_theme_syms
+            }),
+            "lkg_tickers":                len({
+                s for s, r in combined_ticker_data.items()
+                if r.get("_source") == "supplement_lkg" and s in all_theme_syms
+            }),
+            "missing_tickers":            _missing_n,
+            "no_options_tickers":         _no_opts_n,
+            "deferred_tickers":           _deferred_n,
+            "unsupported_tickers":        _unsupp_n,
+            "full_coverage_pct":          _full_pct,
+            "represented_pct":            _repr_pct,
+            "missing_symbols":            _missing_syms,
+            "total_themes":               len(theme_nodes),
+            # 9-state global breakdown
+            "bullish_count":              _bullish_n,
+            "bearish_count":              _bearish_n,
+            "mixed_count":                _mixed_n,
+            "true_neutral_count":         _neutral_n,
+            "stale_lkg_count":            _stale_n,
+            "deferred_retry_count":       _deferred_n,
+            "confirmed_no_options_count": _no_opts_n,
+            "unsupported_count":          _unsupp_n,
+            "generic_pending_count":      _missing_n,
+        },
+        "themes": theme_nodes,
+    }
+
+
+def get_theme_flow(*, force_refresh: bool = False) -> dict:
+    """
+    Return the flat theme tree, backed by a 1-minute in-memory cache.
+
+    Reads from the same master + supplement caches as get_sector_flow.
+    Zero new Tradier calls — pure aggregation.
+    """
+    from data.cache import cache
+
+    if not force_refresh:
+        cached = cache.get(_THEMES_CACHE_KEY)
+        if cached:
+            return {**cached, "_from_themes_cache": True}
+
+    try:
+        from data.options_theme_supplement import (
+            get_combined_ticker_data,
+            get_no_options_symbols,
+        )
+        combined_ticker_data = get_combined_ticker_data()
+        no_options_syms      = get_no_options_symbols()
+    except Exception:
+        master_snap = (
+            cache.get("options_master_screener_v1")
+            or cache.get("options_master_lkg_v1")
+        )
+        master_rows = (master_snap or {}).get("tickers", [])
+        combined_ticker_data = {
+            (r.get("ticker") or "").upper(): {**r, "_source": "live"}
+            for r in master_rows if r.get("ticker")
+        }
+        no_options_syms = set()
+
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+
+    result = build_theme_tree(combined_ticker_data, no_options_syms, ENRICHED_THEME_RS_UNIVERSE)
+    result["_from_themes_cache"] = False
+    cache.set(_THEMES_CACHE_KEY, result, _THEMES_CACHE_TTL)
+    return result
+
+
+def invalidate_themes_cache() -> None:
+    """Expire the themes cache after any admin theme basket edit."""
+    from data.cache import cache
+    cache.delete(_THEMES_CACHE_KEY)
+
+
+# ── Themes coverage validator ──────────────────────────────────────────────────
+
+_REAL_SCAN_TAGS = frozenset({"sectors_chain_summarized", "neutral_no_unusual_flow"})
+
+
+def validate_themes_coverage() -> dict:
+    """
+    Coverage validation for the Options Flow → Themes view.
+
+    Checks:
+      1. complete_accounting   — every ticker in exactly one of:
+                                 fresh | cached_real_lkg | confirmed_no_opts |
+                                 deferred | missing | unsupported
+      2. no_silent_placeholders — zero supplement rows with scan_result=deferred_retry
+      3. no_missing_data       — missing_data=0 (all tickers have some scan result)
+      4. no_blank_cached_data_premiums — cached_data rows have non-null premiums
+      5. theme_totals_match_ticker_sums — for each theme, recompute call/put from
+                                 raw cache independently and compare to the theme
+                                 node total; proves cached_data contributes correctly.
+
+    Returns valid=True when all five checks pass.
+    """
+    try:
+        from data.options_theme_supplement import (
+            get_combined_ticker_data,
+            get_no_options_symbols,
+        )
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+    except Exception as exc:
+        return {"valid": False, "error": f"import_failed: {exc}"}
+
+    combined = get_combined_ticker_data()
+    no_opts  = get_no_options_symbols()
+
+    all_theme_syms: set[str] = {
+        sym.upper()
+        for meta in ENRICHED_THEME_RS_UNIVERSE.values()
+        for sym in (meta.get("proxy_symbols") or [])
+    }
+    total = len(all_theme_syms)
+
+    # ── Classify every ticker ─────────────────────────────────────────────────
+    categories: dict[str, list[str]] = {
+        "fresh":             [],
+        "cached_real_lkg":   [],
+        "confirmed_no_opts": [],
+        "deferred":          [],
+        "missing":           [],
+        "unsupported":       [],
+    }
+    silent_placeholders: list[str] = []
+
+    for sym in sorted(all_theme_syms):
+        row   = combined.get(sym)
+        state = _ticker_state(row, sym, no_opts)
+
+        if state == "confirmed_no_options":       categories["confirmed_no_opts"].append(sym)
+        elif state == "unsupported_foreign_otc":  categories["unsupported"].append(sym)
+        elif state == "generic_pending":          categories["missing"].append(sym)
+        elif state == "deferred_retry":           categories["deferred"].append(sym)
+        elif state == "stale_lkg":                categories["cached_real_lkg"].append(sym)
+        else:                                     categories["fresh"].append(sym)
+
+        if (
+            row is not None
+            and row.get("_source") == "supplement"
+            and row.get("scan_result") == "deferred_retry"
+        ):
+            silent_placeholders.append(sym)
+
+    accounted         = sum(len(v) for v in categories.values())
+    check1_passed     = (accounted == total)
+    check2_passed     = (len(silent_placeholders) == 0)
+    check3_passed     = (len(categories["missing"]) == 0)
+
+    # ── Check 4b: cached_data rows must have real premium data ────────────────
+    blank_cached: list[str] = []
+    for _sym in categories["cached_real_lkg"]:
+        _row = combined.get(_sym)
+        if _row is None:
+            blank_cached.append(_sym)
+            continue
+        _sr = _row.get("scan_result") or ""
+        if _sr in _REAL_SCAN_TAGS:
+            continue  # real scan confirmed — zero premium is valid
+        _c, _p = _ticker_call_put(_row)
+        if (_c + _p) == 0:
+            blank_cached.append(_sym)
+    check4b_passed = (len(blank_cached) == 0)
+
+    # ── Check 5 (Themes-specific): theme totals must equal ticker-row sums ────
+    # Build the actual theme tree so we use the identical code path as the API.
+    # Then independently recompute call/put for each theme from raw cache rows
+    # (bypassing _build_ticker_node) and compare.  The tolerance is $1 to allow
+    # for floating-point rounding across many tickers.
+    theme_tree = build_theme_tree(combined, no_opts, ENRICHED_THEME_RS_UNIVERSE)
+    theme_audits: list[dict] = []
+    mismatches:   list[str]  = []
+
+    for theme_node in theme_tree.get("themes", []):
+        theme_id   = theme_node["theme_id"]
+        meta       = ENRICHED_THEME_RS_UNIVERSE.get(theme_id, {})
+        proxy_syms = [s.upper() for s in (meta.get("proxy_symbols") or [])]
+
+        # Independent recomputation: sum premiums for tickers with real data
+        recomputed_call = 0.0
+        recomputed_put  = 0.0
+        for sym in proxy_syms:
+            row   = combined.get(sym)
+            state = _ticker_state(row, sym, no_opts)
+            if row and state not in (
+                "generic_pending", "deferred_retry",
+                "confirmed_no_options", "unsupported_foreign_otc",
+            ):
+                c, p = _ticker_call_put(row)
+                if (c + p) > 0:
+                    recomputed_call += c
+                    recomputed_put  += p
+
+        node_call = theme_node.get("call_premium") or 0.0
+        node_put  = theme_node.get("put_premium")  or 0.0
+        call_ok   = abs(node_call - recomputed_call) < 1.0
+        put_ok    = abs(node_put  - recomputed_put)  < 1.0
+        ok        = call_ok and put_ok
+        if not ok:
+            mismatches.append(theme_id)
+
+        theme_audits.append({
+            "theme_id":        theme_id,
+            "node_call":       round(node_call, 2),
+            "node_put":        round(node_put, 2),
+            "recomputed_call": round(recomputed_call, 2),
+            "recomputed_put":  round(recomputed_put, 2),
+            "ok":              ok,
+        })
+
+    check5_passed = (len(mismatches) == 0)
+
+    all_valid = check1_passed and check2_passed and check3_passed and check4b_passed and check5_passed
+
+    problem_tickers: list[str] = []
+    if silent_placeholders:
+        problem_tickers.extend(silent_placeholders)
+    if not check1_passed:
+        problem_tickers.append(f"[accounting_gap: {total - accounted} unclassified]")
+    problem_tickers.extend(categories["missing"])
+    problem_tickers.extend(blank_cached)
+
+    failing_audits = [a for a in theme_audits if not a["ok"]]
+
+    return {
+        "valid":   all_valid,
+        "as_of":   time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "checks": [
+            {
+                "name":   "complete_accounting",
+                "passed": check1_passed,
+                "detail": (
+                    f"All {total} required tickers accounted for"
+                    if check1_passed
+                    else f"{accounted}/{total} accounted — {total - accounted} unclassified"
+                ),
+            },
+            {
+                "name":   "no_silent_placeholders",
+                "passed": check2_passed,
+                "detail": (
+                    "Zero supplement rows with scan_result=deferred_retry"
+                    if check2_passed
+                    else (
+                        f"{len(silent_placeholders)} supplement rows have "
+                        f"scan_result=deferred_retry — blocks re-scanning: "
+                        f"{silent_placeholders[:20]}"
+                    )
+                ),
+            },
+            {
+                "name":   "no_missing_data",
+                "passed": check3_passed,
+                "detail": (
+                    "missing_data=0 — all tickers are fresh, cached_real_lkg, or confirmed_no_options"
+                    if check3_passed
+                    else (
+                        f"{len(categories['missing'])} tickers still in missing_data: "
+                        f"{categories['missing']}"
+                    )
+                ),
+            },
+            {
+                "name":   "no_blank_cached_data_premiums",
+                "passed": check4b_passed,
+                "detail": (
+                    f"All {len(categories['cached_real_lkg'])} cached_data rows "
+                    f"have real premium fields"
+                    if check4b_passed
+                    else (
+                        f"{len(blank_cached)} cached_data tickers have null premiums "
+                        f"(LKG contained coverage-only placeholders): {blank_cached[:20]}"
+                    )
+                ),
+            },
+            {
+                "name":   "theme_totals_match_ticker_sums",
+                "passed": check5_passed,
+                "detail": (
+                    f"All {len(theme_audits)} theme totals equal recomputed ticker sums "
+                    f"(cached_data rows included)"
+                    if check5_passed
+                    else f"Mismatch in themes: {mismatches}"
+                ),
+            },
+        ],
+        "summary": {
+            "total_required_tickers":    total,
+            "total_themes":              len(theme_audits),
+            "fresh_tickers":             len(categories["fresh"]),
+            "lkg_tickers":               len(categories["cached_real_lkg"]),
+            "confirmed_no_opts_tickers": len(categories["confirmed_no_opts"]),
+            "deferred_tickers":          len(categories["deferred"]),
+            "missing_tickers":           len(categories["missing"]),
+            "unsupported_tickers":       len(categories["unsupported"]),
+            "silent_placeholder_count":  len(silent_placeholders),
+            "full_coverage_pct": round(
+                (len(categories["fresh"]) + len(categories["cached_real_lkg"])
+                 + len(categories["confirmed_no_opts"]))
+                / max(total, 1) * 100, 1
+            ),
+        },
+        "category_details": {
+            "fresh":             categories["fresh"][:50],
+            "cached_real_lkg":   categories["cached_real_lkg"][:50],
+            "confirmed_no_opts": categories["confirmed_no_opts"][:50],
+            "deferred":          categories["deferred"],
+            "missing":           categories["missing"][:50],
+            "unsupported":       categories["unsupported"],
+        },
+        "problem_tickers":   problem_tickers[:50],
+        "theme_total_audit": failing_audits if failing_audits else theme_audits[:5],
+    }
