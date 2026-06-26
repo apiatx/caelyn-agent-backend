@@ -222,6 +222,12 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
     state_counts:   dict[str, int] = {}
     flow_count:     int = 0
     represented:    int = 0
+    # Track premium-contributing tickers by their expiration scope so rollup
+    # nodes can expose whether aggregated premiums come from one methodology
+    # or a mix of two.  Only tickers with at least one non-None premium field
+    # are counted — pending / no_options tickers with scope="none" add nothing
+    # to the dollar total and are excluded from the scope breakdown.
+    _scope_counts:  dict[str, int] = {}
 
     for t in ticker_nodes:
         cp = t.get("call_premium")
@@ -248,9 +254,37 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         if state != "generic_pending":
             represented += 1
 
+        # Scope accounting — only for tickers that actually contribute premium.
+        # Map internal expiration_scope labels to the two public categories:
+        #   "single_expiry_7_60dte_preferred" → "primary_expiry"
+        #   "top_unusual_contracts"           → "top_unusual_contracts"
+        #   "none" (pending / no_options)     → excluded
+        if cp is not None or pp is not None:
+            raw_scope = t.get("expiration_scope", "none")
+            if raw_scope == "single_expiry_7_60dte_preferred":
+                pub_scope = "primary_expiry"
+            elif raw_scope == "top_unusual_contracts":
+                pub_scope = "top_unusual_contracts"
+            else:
+                pub_scope = None
+            if pub_scope:
+                _scope_counts[pub_scope] = _scope_counts.get(pub_scope, 0) + 1
+
     total_net = total_call - total_put
     has_data  = (total_call + total_put) > 0
     avg_net   = round(total_net / flow_count, 2) if flow_count else None
+
+    # Derive aggregation_scope from which scope categories are present.
+    _has_primary  = "primary_expiry"        in _scope_counts
+    _has_unusual  = "top_unusual_contracts" in _scope_counts
+    if _has_primary and _has_unusual:
+        _agg_scope = "mixed"
+    elif _has_primary:
+        _agg_scope = "primary_expiry"
+    elif _has_unusual:
+        _agg_scope = "top_unusual_contracts"
+    else:
+        _agg_scope = "none"   # all tickers are pending / no_options
 
     return {
         "call_premium":               round(total_call, 2) if has_data else None,
@@ -270,6 +304,27 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         "ticker_count":               len(ticker_nodes),
         "represented_count":          represented,
         "contributing_ticker_count":  flow_count,
+        # ── Aggregation scope ──────────────────────────────────────────────────
+        # Tells the frontend whether the dollar totals above were built from one
+        # methodology or a blend of two.
+        #
+        # aggregation_scope values:
+        #   "primary_expiry"        — all contributing tickers came from the chain
+        #                             summarizer (one selected expiry per ticker)
+        #   "top_unusual_contracts" — all came from the master screener (unusual-
+        #                             flow contracts, possibly multi-expiry)
+        #   "mixed"                 — BOTH sources contributed (most common in
+        #                             practice: backfill loop uses chain summarizer,
+        #                             master screener adds unusual-flow tickers)
+        #   "none"                  — no tickers with premium data yet
+        #
+        # aggregation_scope_counts breaks down the contributing ticker count by
+        # methodology so the frontend can show "148 primary / 100 unusual".
+        "aggregation_scope":        _agg_scope,
+        "aggregation_scope_counts": {
+            "primary_expiry":        _scope_counts.get("primary_expiry",        0),
+            "top_unusual_contracts": _scope_counts.get("top_unusual_contracts", 0),
+        },
         # ── Premium scope metadata ─────────────────────────────────────────────
         # Clarifies that dollar values are ESTIMATED PREMIUM, not contract volume.
         # See per-ticker expiration_scope for the chain-level detail.
