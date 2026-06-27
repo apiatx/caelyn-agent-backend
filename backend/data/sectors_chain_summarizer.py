@@ -45,6 +45,13 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
+# How long to reuse a cached expiration list before refetching from Tradier.
+# Exchange-listed expirations change slowly (new monthly series added ~quarterly,
+# new weekly series added weekly on Thursday evening), so 12 h gives a good
+# balance: stale lists are refreshed at least twice a day without creating extra
+# Tradier load on every scan.
+_EXPIRY_CACHE_TTL = 12 * 3600   # 12 hours
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -167,14 +174,31 @@ async def summarize_ticker_chain(
     sym = sym.upper()
     now = time.time()
 
-    # ── 1. Get expirations (cache-first) ──────────────────────────────────────
+    # ── 1. Get expirations (cache-first, _EXPIRY_CACHE_TTL) ───────────────────
+    #
+    # Cache format: {sym: ([exp_date_strings, ...], checked_at_float)}
+    #
+    # TTL logic:
+    #   FRESH  (age < TTL)  → use cached list, skip fetch entirely.
+    #   STALE  (age >= TTL) → refetch; on failure fall back to stale list.
+    #   MISS   (no entry)   → fetch unconditionally.
+    #
+    # Stale-fallback rules:
+    #   - Exception during fetch AND cached list is non-empty → use old list,
+    #     log warning, leave checked_at unchanged so next scan retries sooner.
+    #   - Budget-deferral post-check (empty result + no budget) AND cached list
+    #     is non-empty → same stale fallback.
+    #   - If cached list is empty (confirmed_no_options at prior scan) OR missing
+    #     → return deferred_retry as before; do not fabricate a no-options result.
     expirations: Optional[list[str]] = None
     cached = expiry_cache.get(sym)
-    if cached and isinstance(cached, (list, tuple)) and len(cached) >= 1:
-        expirations = cached[0]
+    if cached and isinstance(cached, (list, tuple)) and len(cached) >= 2:
+        _cached_exps, _cached_at = cached[0], cached[1]
+        if now - _cached_at < _EXPIRY_CACHE_TTL:
+            expirations = _cached_exps  # within TTL — skip Tradier call
 
     if expirations is None:
-        # Pre-check budget to avoid budget deferrals masquerading as no-options
+        # Pre-check budget before any Tradier call.
         if not _budget_ok():
             return {
                 "ticker":      sym,
@@ -185,24 +209,46 @@ async def summarize_ticker_chain(
         try:
             raw = await tradier.get_option_expirations(sym)
         except Exception as exc:
-            return {
-                "ticker":      sym,
-                "scan_result": "deferred_retry",
-                "error":       str(exc)[:200],
-                "updated_at":  now,
-            }
+            # Fetch failed — fall back to stale list if one exists and is non-empty.
+            if cached and isinstance(cached, (list, tuple)) and cached[0]:
+                expirations = cached[0]
+                print(
+                    f"[SECTORS_BF] {sym}: expiry refresh failed "
+                    f"({str(exc)[:120]}), using stale list "
+                    f"({len(expirations)} expirations, "
+                    f"age={(now - cached[1]) / 3600:.1f}h)"
+                )
+            else:
+                return {
+                    "ticker":      sym,
+                    "scan_result": "deferred_retry",
+                    "error":       str(exc)[:200],
+                    "updated_at":  now,
+                }
 
-        if not raw and not _budget_ok():
-            # Empty result while budget is exhausted = budget deferral, not no-options
-            return {
-                "ticker":      sym,
-                "scan_result": "deferred_retry",
-                "reason":      "budget_post_check_expiry",
-                "updated_at":  now,
-            }
-
-        expiry_cache[sym] = (raw or [], now)
-        expirations = raw or []
+        if expirations is None:
+            # `raw` was successfully fetched.  Apply budget post-check.
+            if not raw and not _budget_ok():
+                # Empty result while budget exhausted → budget deferral.
+                # Fall back to stale list rather than marking confirmed_no_options.
+                if cached and isinstance(cached, (list, tuple)) and cached[0]:
+                    expirations = cached[0]
+                    print(
+                        f"[SECTORS_BF] {sym}: budget-gated expiry refresh, "
+                        f"using stale list ({len(expirations)} expirations, "
+                        f"age={(now - cached[1]) / 3600:.1f}h)"
+                    )
+                else:
+                    return {
+                        "ticker":      sym,
+                        "scan_result": "deferred_retry",
+                        "reason":      "budget_post_check_expiry",
+                        "updated_at":  now,
+                    }
+            else:
+                # Successful fetch (possibly empty = confirmed_no_options later).
+                expiry_cache[sym] = (raw or [], now)
+                expirations = raw or []
 
     if not expirations:
         return {
