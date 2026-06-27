@@ -25,8 +25,26 @@ description: Event-family grouping, tracked odds, Hormuz misclassification fix, 
 
 **Why:** Existing endpoints (/overview, /themes, /regime, /watchlists) are all on-demand with 90-150s TTL. The new intelligence endpoint is heavier (parallel fetches) so needs a background pre-warm loop.
 
+## Canonical ticker resolution (no SECTOR_STOCKS)
+`_build_equity_signals` and `_resolve_ticker_impacts` in `investor_intel.py` now use
+`ENRICHED_THEME_RS_UNIVERSE` exclusively for ticker resolution. Key components:
+- `_SECTOR_LABEL_TO_THEME_IDS` — static adapter mapping 22 impact_engine sector label
+  strings (e.g. "Defense/Aerospace") → canonical theme IDs (e.g. ["defense","drones"]).
+  This is the ONLY bridge; no second taxonomy was introduced.
+- `_build_canonical_ticker_map()` — called once per intelligence build, returns
+  ticker→[theme_ids] reverse map from proxy+candidate symbols; 430 tickers vs 80 in SECTOR_STOCKS.
+- `_resolve_ticker_impacts()` — now takes `canonical_ticker_map` param; returns
+  4-tuple (dict, wl_hits, fb_hits, unmapped_count). All 21 sector labels map cleanly (unmapped=0).
+- `_build_equity_signals()` — returns (signals, diag_dict) tuple; caller unpacks.
+- `impact_engine.SECTOR_STOCKS` still used by old /overview, /themes, /regime endpoints — correct.
+
+Diagnostics added: `ticker_impact_source`, `hardcoded_sector_stocks_used`, `watchlist_symbols_count`,
+`watchlist_ticker_hits`, `canonical_theme_fallback_hits`, `unmapped_theme_impacts`, `theme_universe_theme_count`.
+
 ## Backward-compat
 All existing investor endpoints unchanged. The new endpoint is purely additive.
 
 ## How to apply
 When adding new Polymarket event families: add to `_FAMILY_RULES` in `event_grouping.py` (for grouping) AND `_TRACKED_FAMILIES` in `tracked_odds.py` (for permanent monitoring). Both files use OR-logic keyword matching — first match wins.
+
+When adding new impact_engine sector labels to ThemeImpact: also add them to `_SECTOR_LABEL_TO_THEME_IDS` in `investor_intel.py` or unmapped_theme_impacts will increment.

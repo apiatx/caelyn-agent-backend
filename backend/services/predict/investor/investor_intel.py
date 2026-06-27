@@ -29,7 +29,6 @@ from services.predict.investor.classifier import classify_markets, filter_equity
 from services.predict.investor.clustering import build_theme_clusters
 from services.predict.investor.impact_engine import (
     get_theme_impact, SECTOR_STOCKS, THEME_BASKETS, ThemeImpact, THEME_IMPACTS,
-    _stocks_for,
 )
 from services.predict.investor.regime import compute_regime_scoreboard
 from services.predict.investor.themes import THEME_BY_ID
@@ -271,7 +270,14 @@ class InvestorIntel:
         # ── Equity signals — event-family-centric ──────────────────────────────
         classified = classify_markets(scored)
         equity_relevant = filter_equity_relevant(classified)
-        equity_signals = _build_equity_signals(equity_relevant, watchlist_syms)
+
+        # Build canonical ticker map once here — passed into _build_equity_signals
+        # so it is constructed once per intelligence build, not per signal.
+        canonical_ticker_map = _build_canonical_ticker_map()
+
+        equity_signals, build_diag = _build_equity_signals(
+            equity_relevant, watchlist_syms, canonical_ticker_map
+        )
 
         # ── Diagnostics ────────────────────────────────────────────────────────
         from services.predict.investor.event_grouping import make_event_family_key
@@ -280,39 +286,34 @@ class InvestorIntel:
             for m in equity_relevant
         }
 
-        wl_ticker_hits = sum(
-            len(s["ticker_impacts"]["bullish_watchlist"])
-            + len(s["ticker_impacts"]["bearish_watchlist"])
-            for s in equity_signals
-        )
-        fallback_ticker_hits = sum(
-            len(s["ticker_impacts"]["bullish_fallback"])
-            + len(s["ticker_impacts"]["bearish_fallback"])
-            for s in equity_signals
-        )
-
+        theme_universe_theme_count = 0
         theme_universe_info = "unavailable"
         try:
             from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
-            theme_universe_info = f"ENRICHED_THEME_RS_UNIVERSE ({len(_uni)} themes)"
+            theme_universe_theme_count = len(_uni)
+            theme_universe_info = f"ENRICHED_THEME_RS_UNIVERSE ({theme_universe_theme_count} themes)"
         except Exception:
             pass
 
         diagnostics = {
-            "raw_markets_seen":            len(all_markets),
-            "equity_relevant_markets":     len(equity_relevant),
-            "grouped_event_families":      len(family_keys_seen),
-            "equity_signals_returned":     len(equity_signals),
-            "duplicate_markets_collapsed": max(0, len(equity_relevant) - len(family_keys_seen)),
-            "watchlist_symbols_loaded":    len(watchlist_syms),
-            "watchlist_ticker_hits":       wl_ticker_hits,
-            "fallback_ticker_hits":        fallback_ticker_hits,
-            "tracked_odds_families":       len(tracked_odds),
-            "tracked_odds_with_data":      sum(
+            "ticker_impact_source":          "watchlist+canonical_theme_universe",
+            "hardcoded_sector_stocks_used":  False,
+            "raw_markets_seen":              len(all_markets),
+            "equity_relevant_markets":       len(equity_relevant),
+            "grouped_event_families":        len(family_keys_seen),
+            "equity_signals_returned":       len(equity_signals),
+            "duplicate_markets_collapsed":   max(0, len(equity_relevant) - len(family_keys_seen)),
+            "watchlist_symbols_count":       len(watchlist_syms),
+            "watchlist_ticker_hits":         build_diag["watchlist_ticker_hits"],
+            "canonical_theme_fallback_hits": build_diag["canonical_theme_fallback_hits"],
+            "unmapped_theme_impacts":        build_diag["unmapped_theme_impacts"],
+            "theme_universe_theme_count":    theme_universe_theme_count,
+            "tracked_odds_families":         len(tracked_odds),
+            "tracked_odds_with_data":        sum(
                 1 for t in tracked_odds if t.get("yes_probability") is not None
             ),
-            "theme_universe_source":       theme_universe_info,
-            "build_time_ms":               round((_time.time() - t0) * 1000, 1),
+            "theme_universe_source":         theme_universe_info,
+            "build_time_ms":                 round((_time.time() - t0) * 1000, 1),
         }
 
         now_ts = _time.time()
@@ -829,21 +830,41 @@ def _narrative_with_qualifier(narrative: str, confidence: str, direction: str) -
     return f"{qualifier} {narrative}"
 
 
-# ── Watchlist-first ticker resolution ────────────────────────────────────────
-
-# Reverse map: ticker → [sector, ...] — built once at import from SECTOR_STOCKS.
-_TICKER_TO_SECTORS: dict[str, list[str]] = {}
-for _s, _ts in SECTOR_STOCKS.items():
-    for _t in _ts:
-        if _t not in _TICKER_TO_SECTORS:
-            _TICKER_TO_SECTORS[_t] = []
-        _TICKER_TO_SECTORS[_t].append(_s)
+# ── Canonical ticker resolution for /intelligence endpoint ────────────────────
+#
+# impact_engine.ThemeImpact uses human-readable sector labels (e.g. "Defense/Aerospace")
+# that have no 1:1 match with canonical theme IDs (e.g. "defense").
+# This static adapter is the ONLY bridge — no second taxonomy is introduced.
+_SECTOR_LABEL_TO_THEME_IDS: dict[str, list[str]] = {
+    "Energy":                       ["energy", "oil_gas", "oil_services", "lng_gas"],
+    "Defense/Aerospace":            ["defense", "drones"],
+    "Airlines/Transport":           ["travel_transportation"],
+    "Industrials":                  ["industrials"],
+    "Financials":                   ["financials", "banks", "fintech"],
+    "Regional Banks":               ["regional_banks"],
+    "Small Caps":                   [],
+    "Semiconductors":               ["semiconductors", "semicap_equipment", "memory_storage"],
+    "Semiconductors (US domestic)": ["semiconductors"],
+    "Software/Growth Tech":         ["software", "cloud_software"],
+    "Long-Duration Growth Tech":    ["technology", "software", "cloud_software"],
+    "Legacy Tech":                  ["technology"],
+    "Cybersecurity":                ["cybersecurity"],
+    "AI Infra/Data Centers":        ["datacenter_infra", "ai_networking", "power_cooling"],
+    "REITs/Housing":                ["real_estate", "homebuilders"],
+    "Consumer Discretionary":       ["consumer_discretionary", "consumer_retail"],
+    "Consumer Electronics":         ["consumer_discretionary"],
+    "Consumer Hardware":            ["consumer_discretionary"],
+    "Utilities/Nuclear Power":      ["utilities", "uranium_nuclear"],
+    "Gold/Metals/Commodities":      ["gold", "silver", "metals_mining", "copper_miners", "rare_earth"],
+    "Crypto Proxies":               ["crypto_equities"],
+    "Clean Energy":                 ["clean_energy", "solar"],
+}
 
 
 def _get_watchlist_symbols() -> set[str]:
     """
     Read the user's watchlist ticker symbols from the JSON store (sync, disk).
-    Returns empty set on any error so callers degrade to fallback lists gracefully.
+    Returns empty set on any error so callers degrade to canonical fallback gracefully.
     """
     try:
         from services.watchlist_service import _read_store, extract_tickers
@@ -857,54 +878,114 @@ def _get_watchlist_symbols() -> set[str]:
         return set()
 
 
+def _build_canonical_ticker_map() -> dict[str, list[str]]:
+    """
+    Build reverse map: ticker → [theme_ids it appears in].
+
+    Reads ENRICHED_THEME_RS_UNIVERSE at call time (not at import) so it always
+    reflects the current canonical universe, including any post-startup enrichments.
+    Both proxy_symbols and candidate_symbols are included.
+    No SECTOR_STOCKS used at any stage.
+    """
+    try:
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+        result: dict[str, list[str]] = {}
+        for tid, meta in ENRICHED_THEME_RS_UNIVERSE.items():
+            for sym in list(meta.get("proxy_symbols", [])) + list(meta.get("candidate_symbols", [])):
+                if sym:
+                    result.setdefault(sym, []).append(tid)
+        return result
+    except Exception as exc:
+        logger.warning(f"[InvestorIntel] Canonical ticker map build failed: {exc}")
+        return {}
+
+
+def _get_canonical_tickers_for_themes(theme_ids: list[str]) -> list[str]:
+    """
+    Return deduped tickers (proxy_symbols then candidate_symbols) for the given
+    theme IDs from ENRICHED_THEME_RS_UNIVERSE.  No SECTOR_STOCKS fallback.
+    """
+    try:
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
+        seen: set[str] = set()
+        out: list[str] = []
+        for tid in theme_ids:
+            meta = ENRICHED_THEME_RS_UNIVERSE.get(tid, {})
+            for sym in list(meta.get("proxy_symbols", [])) + list(meta.get("candidate_symbols", [])):
+                if sym and sym not in seen:
+                    seen.add(sym)
+                    out.append(sym)
+        return out
+    except Exception:
+        return []
+
+
 def _resolve_ticker_impacts(
     bullish_sectors: list[str],
     bearish_sectors: list[str],
     watchlist_syms: set[str],
-) -> dict:
+    canonical_ticker_map: dict[str, list[str]],
+) -> tuple[dict, int, int, int]:
     """
-    Resolve ticker lists for a signal using watchlist-first priority:
+    Resolve ticker lists for a signal — canonical universe only, no SECTOR_STOCKS.
 
-    1. Watchlist symbols that appear in SECTOR_STOCKS for the affected sectors
-    2. Static SECTOR_STOCKS fallback (excluding watchlist hits already listed)
+    Resolution order:
+    1. Watchlist symbols whose canonical theme memberships intersect impacted themes
+    2. Canonical ENRICHED_THEME_RS_UNIVERSE proxy/candidate tickers as fallback
+    3. If no match at either stage, empty lists — no hardcoded catalogs used
 
     Returns:
-        bullish_watchlist   watchlist tickers exposed to bullish sector tailwinds
-        bearish_watchlist   watchlist tickers exposed to bearish sector headwinds
-        conditional_watchlist tickers that appear in both lists (direction ambiguous)
-        bullish_fallback    static SECTOR_STOCKS tickers not in watchlist
-        bearish_fallback    static SECTOR_STOCKS tickers not in watchlist
+        (ticker_impacts_dict, watchlist_hits, canonical_fallback_hits, unmapped_label_count)
     """
-    bull_set = set(bullish_sectors)
-    bear_set = set(bearish_sectors)
+    bull_theme_ids: list[str] = []
+    bear_theme_ids: list[str] = []
+    unmapped = 0
+    for sec in bullish_sectors:
+        tids = _SECTOR_LABEL_TO_THEME_IDS.get(sec, None)
+        if tids is None:
+            if sec:
+                unmapped += 1
+        else:
+            bull_theme_ids.extend(tids)
+    for sec in bearish_sectors:
+        tids = _SECTOR_LABEL_TO_THEME_IDS.get(sec, None)
+        if tids is None:
+            if sec:
+                unmapped += 1
+        else:
+            bear_theme_ids.extend(tids)
+
+    bull_theme_set = set(bull_theme_ids)
+    bear_theme_set = set(bear_theme_ids)
 
     wl_bull = sorted(
         t for t in watchlist_syms
-        if any(sec in bull_set for sec in _TICKER_TO_SECTORS.get(t, []))
+        if any(tid in bull_theme_set for tid in canonical_ticker_map.get(t, []))
     )
     wl_bear = sorted(
         t for t in watchlist_syms
-        if any(sec in bear_set for sec in _TICKER_TO_SECTORS.get(t, []))
+        if any(tid in bear_theme_set for tid in canonical_ticker_map.get(t, []))
     )
 
-    # Symbols in both lists are conditional — direction depends on which theme wins
     wl_cond = sorted(set(wl_bull) & set(wl_bear))
     cond_set = set(wl_cond)
     wl_bull = [t for t in wl_bull if t not in cond_set]
     wl_bear = [t for t in wl_bear if t not in cond_set]
 
     seen_wl = set(wl_bull) | set(wl_bear) | cond_set
+    watchlist_hits = len(seen_wl)
 
-    fb_bull = [t for t in _stocks_for(bullish_sectors) if t not in seen_wl][:6]
-    fb_bear = [t for t in _stocks_for(bearish_sectors) if t not in seen_wl][:6]
+    fb_bull = [t for t in _get_canonical_tickers_for_themes(bull_theme_ids) if t not in seen_wl][:8]
+    fb_bear = [t for t in _get_canonical_tickers_for_themes(bear_theme_ids) if t not in seen_wl][:8]
+    canonical_hits = len(fb_bull) + len(fb_bear)
 
     return {
-        "bullish_watchlist":    wl_bull[:6],
-        "bearish_watchlist":    wl_bear[:6],
+        "bullish_watchlist":     wl_bull[:6],
+        "bearish_watchlist":     wl_bear[:6],
         "conditional_watchlist": wl_cond[:4],
-        "bullish_fallback":     fb_bull,
-        "bearish_fallback":     fb_bear,
-    }
+        "bullish_fallback":      fb_bull,
+        "bearish_fallback":      fb_bear,
+    }, watchlist_hits, canonical_hits, unmapped
 
 
 # ── Event-family-centric equity signal builder ────────────────────────────────
@@ -912,8 +993,9 @@ def _resolve_ticker_impacts(
 def _build_equity_signals(
     equity_relevant: list[dict],
     watchlist_syms: set[str],
+    canonical_ticker_map: dict[str, list[str]],
     max_signals: int = 14,
-) -> list[dict]:
+) -> tuple[list[dict], dict]:
     """
     Build equity_signals in the new event-family-centric shape.
 
@@ -922,8 +1004,11 @@ def _build_equity_signals(
     Multiple "Hormuz by Jul 15" / "Hormuz by Jul 31" markets collapse into
     ONE grouped signal instead of contributing to a conflated theme cluster.
 
+    Ticker resolution uses ENRICHED_THEME_RS_UNIVERSE exclusively via
+    canonical_ticker_map (pre-built by caller).  No SECTOR_STOCKS used.
+
     Returns:
-        list of signal dicts, sorted by total_volume_24h desc, up to max_signals.
+        (signals list sorted by total_volume_24h desc, diag dict with hit counts)
     """
     from services.predict.investor.event_grouping import (
         make_event_family_key,
@@ -938,6 +1023,9 @@ def _build_equity_signals(
         family_groups.setdefault(fk, []).append(m)
 
     signals: list[dict] = []
+    _diag_wl_hits  = 0
+    _diag_fb_hits  = 0
+    _diag_unmapped = 0
 
     for family_key, markets in family_groups.items():
         if not markets:
@@ -998,8 +1086,13 @@ def _build_equity_signals(
             bearish_sectors = td.bearish_bias_sectors if td else []
             narrative = ""
 
-        # ── Watchlist-first ticker resolution ──────────────────────────────
-        ticker_impacts = _resolve_ticker_impacts(bullish_sectors, bearish_sectors, watchlist_syms)
+        # ── Canonical ticker resolution — no SECTOR_STOCKS ─────────────────
+        ticker_impacts, wl_hits, fb_hits, umap = _resolve_ticker_impacts(
+            bullish_sectors, bearish_sectors, watchlist_syms, canonical_ticker_map
+        )
+        _diag_wl_hits    += wl_hits
+        _diag_fb_hits    += fb_hits
+        _diag_unmapped   += umap
 
         # ── Theme impacts list ──────────────────────────────────────────────
         theme_impacts_list: list[dict] = []
@@ -1092,7 +1185,12 @@ def _build_equity_signals(
 
     # Sort by total volume (most liquid events first)
     signals.sort(key=lambda s: s["total_volume_24h"], reverse=True)
-    return signals[:max_signals]
+    diag = {
+        "watchlist_ticker_hits":       _diag_wl_hits,
+        "canonical_theme_fallback_hits": _diag_fb_hits,
+        "unmapped_theme_impacts":      _diag_unmapped,
+    }
+    return signals[:max_signals], diag
 
 
 # Module-level singleton
