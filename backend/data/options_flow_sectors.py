@@ -143,6 +143,19 @@ def _pcr(call_p: float, put_p: float) -> Optional[float]:
     return None
 
 
+def _vpcr(call_vol, put_vol) -> Optional[float]:
+    """Volume put/call ratio: put_volume / call_volume.
+    Returns None when call_vol is 0, null, or both sides are absent."""
+    try:
+        cv = int(call_vol) if call_vol is not None else 0
+        pv = int(put_vol)  if put_vol  is not None else 0
+    except (TypeError, ValueError):
+        return None
+    if cv > 0:
+        return round(pv / cv, 3)
+    return None
+
+
 def _dte_from_exp(exp_str: str) -> Optional[int]:
     """Compute days-to-expiry from a YYYY-MM-DD string. Returns None on parse error."""
     try:
@@ -300,6 +313,8 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         # contract counts; this field is.
         "total_contract_volume":      total_vol,
         "put_call_ratio":             _pcr(total_call, total_put),
+        "volume_put_call_ratio":      _vpcr(total_call_vol, total_put_vol),
+        "volume_pcr":                 _vpcr(total_call_vol, total_put_vol),
         "bias":                       _bias(total_call, total_put) if has_data else None,
         "ticker_count":               len(ticker_nodes),
         "represented_count":          represented,
@@ -557,10 +572,18 @@ def _build_ticker_node(
             "call_premium":      round(call_p, 2) if has_prem else (0.0 if _neutral_confirmed else None),
             "put_premium":       round(put_p, 2)  if has_prem else (0.0 if _neutral_confirmed else None),
             "net_premium":       round(net_p, 2)  if has_prem else (0.0 if _neutral_confirmed else None),
-            "put_call_ratio":    _pcr(call_p, put_p) if has_prem else None,
-            "bias":              bias_val,
-            "call_volume":       row.get("call_volume") if row.get("call_volume") is not None else (0 if _neutral_confirmed else None),
-            "put_volume":        row.get("put_volume")  if row.get("put_volume")  is not None else (0 if _neutral_confirmed else None),
+            "put_call_ratio":         _pcr(call_p, put_p) if has_prem else None,
+            "bias":                   bias_val,
+            "call_volume":            row.get("call_volume") if row.get("call_volume") is not None else (0 if _neutral_confirmed else None),
+            "put_volume":             row.get("put_volume")  if row.get("put_volume")  is not None else (0 if _neutral_confirmed else None),
+            "volume_put_call_ratio":  _vpcr(
+                row.get("call_volume") if row.get("call_volume") is not None else (0 if _neutral_confirmed else None),
+                row.get("put_volume")  if row.get("put_volume")  is not None else (0 if _neutral_confirmed else None),
+            ),
+            "volume_pcr":             _vpcr(
+                row.get("call_volume") if row.get("call_volume") is not None else (0 if _neutral_confirmed else None),
+                row.get("put_volume")  if row.get("put_volume")  is not None else (0 if _neutral_confirmed else None),
+            ),
             "total_volume":      _tv,
             # Explicit contract-count alias — distinguishes dollar premium fields
             # from contract count. Use this for the "Contracts" column.
@@ -600,6 +623,8 @@ def _build_ticker_node(
             "bias":                  None,
             "call_volume":           None,
             "put_volume":            None,
+            "volume_put_call_ratio": None,
+            "volume_pcr":            None,
             "total_volume":          None,
             "total_contract_volume": None,
             "heat_score":            None,
@@ -626,6 +651,8 @@ def _build_ticker_node(
         "bias":                  None,
         "call_volume":           None,
         "put_volume":            None,
+        "volume_put_call_ratio": None,
+        "volume_pcr":            None,
         "total_volume":          None,
         "total_contract_volume": None,
         "heat_score":            None,
