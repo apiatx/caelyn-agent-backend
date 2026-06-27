@@ -184,7 +184,7 @@ THEMES: list[ThemeDef] = [
         emoji="🇨🇳",
         question_keywords=[
             "china", "chinese", "prc", "xi jinping", "taiwan", "taiwanese",
-            "strait", "pla", "invasion of taiwan", "taiwan independence",
+            "taiwan strait", "pla", "invasion of taiwan", "taiwan independence",
             "tsmc", "supply chain", "decoupling", "friend-shoring", "nearshoring",
             "hong kong", "huawei", "tiktok", "bytedance",
             "sino-us", "trade deficit", "renminbi", "yuan",

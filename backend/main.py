@@ -355,6 +355,27 @@ async def _home_planning_warmup_loop():
         await asyncio.sleep(3600)     # re-check every hour
 
 
+async def _investor_intelligence_loop():
+    """
+    Pre-warm the Predict page investor intelligence cache every 30 minutes.
+
+    Builds: tracked macro odds families, event-family-centric equity signals,
+    watchlist-first ticker resolution, and diagnostics.
+
+    Uses a 2-min startup delay so the Polymarket scored-markets cache is already
+    warm before the first intelligence build fires.
+    """
+    await asyncio.sleep(120)   # let Polymarket scored-markets cache warm first
+    while True:
+        try:
+            from services.predict.investor.investor_intel import investor_intel as _ii
+            await _ii.get_intelligence()
+            print("[INVESTOR_INTEL] Intelligence cache refreshed (tracked_odds + equity_signals)")
+        except Exception as _iil_err:
+            print(f"[INVESTOR_INTEL] refresh error (non-fatal): {_iil_err}")
+        await asyncio.sleep(1800)   # 30 minutes
+
+
 @asynccontextmanager
 async def lifespan(app):
     _init_postgres_chat_storage_on_startup("lifespan")
@@ -545,6 +566,9 @@ async def lifespan(app):
     # /api/home/top-catalysts request is served from the in-process cache
     # rather than triggering an on-demand FMP fetch inline.
     asyncio.create_task(_home_planning_warmup_loop())
+    # Predict page investor intelligence: pre-warm event-family payload every 30 min.
+    # Covers tracked macro odds, equity signals, watchlist-first ticker resolution.
+    asyncio.create_task(_investor_intelligence_loop())
 
     # Pre-warm the Caelyn Terminal cache in the background so the portfolio
     # dashboard is ready before the first user request arrives.

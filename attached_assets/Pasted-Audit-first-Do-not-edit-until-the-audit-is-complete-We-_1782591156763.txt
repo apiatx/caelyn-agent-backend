@@ -1,0 +1,127 @@
+Audit first. Do not edit until the audit is complete.
+
+We need to clean up the Prediction Markets / Polymarket / Prophetik backend logic without removing existing signal.
+
+Goals:
+1. Preserve the existing Polymarket/Kalshi fetching logic that is already finding useful market events.
+2. Stop duplicate/conflicting Top Equity Signal cards for the same underlying event.
+3. Remove or bypass any local hardcoded prediction-market industry/ticker catalog.
+4. Use the app’s canonical backend sector/theme/sub-theme/ticker universe for all sector/theme/ticker mapping.
+5. Resolve tickers user-first:
+   - first: authenticated user’s watchlist symbols that belong to affected sectors/themes
+   - second: canonical theme universe symbols
+   - third: sector/theme only if no tickers are available
+6. Add permanent tracked macro/market odds families:
+   - Fed decision by date
+   - recession by date
+   - number of Fed cuts in 2026
+   - Fed hikes in 2026
+   - SPX / major index daily up/down markets
+   - target price milestones for major watchlist/mega-cap names like NVDA, TSLA, AAPL, MSFT, GOOGL, AMD
+   - tech earnings markets for companies on the user’s watchlist
+   - AI/chips/data center/regulation/China export-control markets
+   - geopolitics/oil/inflation/rates markets
+7. Cache scan results and expose the latest normalized payload to the frontend. The scan target should be about every 30 minutes if the existing scheduler supports it. If not, implement the safest existing scheduler pattern already used in this codebase.
+
+Audit requirements:
+- Find all backend files/routes/services used by the Prophetik / Polymarket / Prediction Markets page.
+- Find where Top Equity Signals are generated.
+- Find where sector/theme/ticker mappings are generated.
+- Identify any hardcoded ticker/industry/theme catalogs inside prediction-market code.
+- Identify existing canonical theme universe source and existing watchlist source.
+- Identify existing cache/LKG/scheduler pattern for this page.
+- Report exact file paths and current data shapes before editing.
+
+Implementation requirements:
+- Add a canonical event grouping layer.
+- Each raw Polymarket market should map into an event_family_key.
+- Similar markets such as “Strait of Hormuz traffic returns to normal by July 15?” and “...by July 31?” must become driver markets under one grouped event, not separate contradictory equity signals.
+- Equity interpretation should be computed once per grouped event.
+- Include driver_markets inside the grouped event payload.
+- If driver markets conflict, expose conflict metadata and classify the group as Conditional/Mixed instead of producing separate opposing cards.
+- Fix misclassification where Hormuz/Iran/shipping events show as China/Taiwan/Supply Chain unless the market title/description truly references China/Taiwan/Taiwan Strait/TSMC.
+- Add diagnostics:
+  - raw_markets_seen
+  - equity_relevant_markets
+  - grouped_events_count
+  - duplicate_groups_collapsed
+  - hardcoded_catalog_hits_removed_or_bypassed
+  - theme_universe_source
+  - watchlist_symbols_count
+  - fallback_theme_symbols_count
+  - unmapped_events_count
+  - cache_age_seconds
+  - last_scan_at
+
+Preferred normalized response shape:
+{
+  "updated_at": "...",
+  "cache_age_seconds": 0,
+  "diagnostics": {},
+  "tracked_odds": [
+    {
+      "family_key": "fed_cuts_2026",
+      "label": "Fed cuts in 2026",
+      "category": "Fed/Rates",
+      "yes_probability": 0.43,
+      "delta_1h_pp": null,
+      "delta_24h_pp": null,
+      "delta_7d_pp": null,
+      "volume_24h": null,
+      "liquidity": null,
+      "dashboard_priority": 1,
+      "driver_markets": []
+    }
+  ],
+  "equity_signals": [
+    {
+      "event_family_key": "hormuz_traffic_normalization",
+      "title": "Strait of Hormuz traffic normalizes",
+      "primary_category": "Geopolitics / Energy / Shipping",
+      "region": "Middle East",
+      "yes_probability": 0.43,
+      "delta_24h_pp": -11.5,
+      "delta_7d_pp": -1.5,
+      "direction": "mixed",
+      "signal_quality": "moderate",
+      "why_it_matters": "...",
+      "driver_markets": [],
+      "theme_impacts": [
+        {
+          "sector": "Energy",
+          "theme": "Oil & Gas",
+          "sub_theme": null,
+          "direction": "bearish_if_normalization_rises",
+          "confidence": "moderate",
+          "rationale": "..."
+        }
+      ],
+      "ticker_impacts": {
+        "bullish_watchlist": [],
+        "bearish_watchlist": [],
+        "conditional_watchlist": [],
+        "bullish_fallback": [],
+        "bearish_fallback": []
+      },
+      "conflicts": [],
+      "source_links": []
+    }
+  ],
+  "raw_markets": []
+}
+
+Do not:
+- Do not create a new standalone theme universe.
+- Do not invent random tickers.
+- Do not remove existing market-fetching logic unless it is dead code.
+- Do not break existing frontend endpoints without either preserving compatibility or adding a new v2 endpoint.
+- Do not use an LLM on page load.
+- Do not add expensive FMP calls for this. Use existing watchlist/theme/cache data.
+
+Validation:
+- The same Hormuz event no longer appears as multiple contradictory top equity cards.
+- Hormuz/Iran events no longer classify as China/Taiwan unless actually relevant.
+- Tickers shown in equity impacts come from user watchlist first.
+- Fallback tickers come from canonical theme universe only.
+- Tracked odds include Fed, recession, cuts/hikes, index up/down, target milestones where available.
+- Endpoint exposes diagnostics proving dedupe, mapping source, watchlist count, and cache age.

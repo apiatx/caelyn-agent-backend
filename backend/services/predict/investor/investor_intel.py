@@ -29,6 +29,7 @@ from services.predict.investor.classifier import classify_markets, filter_equity
 from services.predict.investor.clustering import build_theme_clusters
 from services.predict.investor.impact_engine import (
     get_theme_impact, SECTOR_STOCKS, THEME_BASKETS, ThemeImpact, THEME_IMPACTS,
+    _stocks_for,
 )
 from services.predict.investor.regime import compute_regime_scoreboard
 from services.predict.investor.themes import THEME_BY_ID
@@ -36,6 +37,7 @@ from services.predict.investor.themes import THEME_BY_ID
 logger = logging.getLogger("investor_intel")
 
 _INVESTOR_CACHE_TTL = 150   # 2.5 min — aligned with scored cache TTL
+_INTELLIGENCE_CACHE_TTL = 2100  # 35 min — pre-warmed by 30-min background loop
 
 
 class InvestorIntel:
@@ -214,13 +216,116 @@ class InvestorIntel:
         cluster_impacts = _compute_cluster_impacts(clusters)
         watchlists = _build_watchlists(cluster_impacts)
 
-        # Also add the static full sector→stock reference
         result = {
             "generated_at": _now(),
             "watchlists": watchlists,
             "sector_reference": SECTOR_STOCKS,
         }
         cache.set(key, result, _INVESTOR_CACHE_TTL)
+        return result
+
+    async def get_intelligence(self) -> dict:
+        """
+        New normalized intelligence payload for the Predict page.
+
+        Shape:
+            updated_at          ISO timestamp
+            cache_age_seconds   float — 0 on fresh build
+            diagnostics         dict — coverage/build stats
+            tracked_odds        list — 19 permanent macro/market families with live odds
+            equity_signals      list — event-family-centric signals (Hormuz, Russia, Fed, etc.)
+            raw_markets         list — reserved; empty in this version
+
+        Backed by _INTELLIGENCE_CACHE_TTL (35 min) and pre-warmed every 30 min by
+        _investor_intelligence_loop() in main.py.
+
+        Existing /overview, /themes, /regime, /watchlists are UNCHANGED.
+        """
+        import time as _time
+
+        key = "pm:investor:intelligence"
+        cached = cache.get(key)
+        if cached is not None:
+            age = _time.time() - cached.get("_cached_at", _time.time())
+            return {**cached, "cache_age_seconds": round(age, 1)}
+
+        t0 = _time.time()
+
+        # ── Parallel fetch ─────────────────────────────────────────────────────
+        # all_markets (unfiltered, 300 markets) → tracked_odds
+        # scored (sports-filtered, 200 markets) → equity_signals
+        all_markets_coro = polymarket_intel.get_top_markets(limit=300)
+        scored_coro = self._get_scored()
+        results = await asyncio.gather(all_markets_coro, scored_coro, return_exceptions=True)
+
+        all_markets: list[dict] = results[0] if not isinstance(results[0], Exception) else []
+        scored: list[dict] = results[1] if not isinstance(results[1], Exception) else []
+
+        # ── Watchlist symbols (sync disk read) ─────────────────────────────────
+        watchlist_syms = _get_watchlist_symbols()
+
+        # ── Tracked odds ───────────────────────────────────────────────────────
+        from services.predict.investor.tracked_odds import build_tracked_odds
+        tracked_odds = build_tracked_odds(all_markets)
+
+        # ── Equity signals — event-family-centric ──────────────────────────────
+        classified = classify_markets(scored)
+        equity_relevant = filter_equity_relevant(classified)
+        equity_signals = _build_equity_signals(equity_relevant, watchlist_syms)
+
+        # ── Diagnostics ────────────────────────────────────────────────────────
+        from services.predict.investor.event_grouping import make_event_family_key
+        family_keys_seen = {
+            make_event_family_key(m.get("question", ""))
+            for m in equity_relevant
+        }
+
+        wl_ticker_hits = sum(
+            len(s["ticker_impacts"]["bullish_watchlist"])
+            + len(s["ticker_impacts"]["bearish_watchlist"])
+            for s in equity_signals
+        )
+        fallback_ticker_hits = sum(
+            len(s["ticker_impacts"]["bullish_fallback"])
+            + len(s["ticker_impacts"]["bearish_fallback"])
+            for s in equity_signals
+        )
+
+        theme_universe_info = "unavailable"
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+            theme_universe_info = f"ENRICHED_THEME_RS_UNIVERSE ({len(_uni)} themes)"
+        except Exception:
+            pass
+
+        diagnostics = {
+            "raw_markets_seen":            len(all_markets),
+            "equity_relevant_markets":     len(equity_relevant),
+            "grouped_event_families":      len(family_keys_seen),
+            "equity_signals_returned":     len(equity_signals),
+            "duplicate_markets_collapsed": max(0, len(equity_relevant) - len(family_keys_seen)),
+            "watchlist_symbols_loaded":    len(watchlist_syms),
+            "watchlist_ticker_hits":       wl_ticker_hits,
+            "fallback_ticker_hits":        fallback_ticker_hits,
+            "tracked_odds_families":       len(tracked_odds),
+            "tracked_odds_with_data":      sum(
+                1 for t in tracked_odds if t.get("yes_probability") is not None
+            ),
+            "theme_universe_source":       theme_universe_info,
+            "build_time_ms":               round((_time.time() - t0) * 1000, 1),
+        }
+
+        now_ts = _time.time()
+        result = {
+            "updated_at":       _now(),
+            "_cached_at":       now_ts,
+            "cache_age_seconds": 0,
+            "diagnostics":      diagnostics,
+            "tracked_odds":     tracked_odds,
+            "equity_signals":   equity_signals,
+            "raw_markets":      [],
+        }
+        cache.set(key, result, _INTELLIGENCE_CACHE_TTL)
         return result
 
 
@@ -722,6 +827,272 @@ def _narrative_with_qualifier(narrative: str, confidence: str, direction: str) -
     key = (confidence, direction)
     qualifier = qualifiers.get(key, "Conditional implication:")
     return f"{qualifier} {narrative}"
+
+
+# ── Watchlist-first ticker resolution ────────────────────────────────────────
+
+# Reverse map: ticker → [sector, ...] — built once at import from SECTOR_STOCKS.
+_TICKER_TO_SECTORS: dict[str, list[str]] = {}
+for _s, _ts in SECTOR_STOCKS.items():
+    for _t in _ts:
+        if _t not in _TICKER_TO_SECTORS:
+            _TICKER_TO_SECTORS[_t] = []
+        _TICKER_TO_SECTORS[_t].append(_s)
+
+
+def _get_watchlist_symbols() -> set[str]:
+    """
+    Read the user's watchlist ticker symbols from the JSON store (sync, disk).
+    Returns empty set on any error so callers degrade to fallback lists gracefully.
+    """
+    try:
+        from services.watchlist_service import _read_store, extract_tickers
+        store = _read_store()
+        csv_data = store.get("csv_data", []) or []
+        analysis = store.get("analysis")
+        tickers = extract_tickers(csv_data, analysis)
+        return set(tickers)
+    except Exception as exc:
+        logger.debug(f"[InvestorIntel] Watchlist load skipped: {exc}")
+        return set()
+
+
+def _resolve_ticker_impacts(
+    bullish_sectors: list[str],
+    bearish_sectors: list[str],
+    watchlist_syms: set[str],
+) -> dict:
+    """
+    Resolve ticker lists for a signal using watchlist-first priority:
+
+    1. Watchlist symbols that appear in SECTOR_STOCKS for the affected sectors
+    2. Static SECTOR_STOCKS fallback (excluding watchlist hits already listed)
+
+    Returns:
+        bullish_watchlist   watchlist tickers exposed to bullish sector tailwinds
+        bearish_watchlist   watchlist tickers exposed to bearish sector headwinds
+        conditional_watchlist tickers that appear in both lists (direction ambiguous)
+        bullish_fallback    static SECTOR_STOCKS tickers not in watchlist
+        bearish_fallback    static SECTOR_STOCKS tickers not in watchlist
+    """
+    bull_set = set(bullish_sectors)
+    bear_set = set(bearish_sectors)
+
+    wl_bull = sorted(
+        t for t in watchlist_syms
+        if any(sec in bull_set for sec in _TICKER_TO_SECTORS.get(t, []))
+    )
+    wl_bear = sorted(
+        t for t in watchlist_syms
+        if any(sec in bear_set for sec in _TICKER_TO_SECTORS.get(t, []))
+    )
+
+    # Symbols in both lists are conditional — direction depends on which theme wins
+    wl_cond = sorted(set(wl_bull) & set(wl_bear))
+    cond_set = set(wl_cond)
+    wl_bull = [t for t in wl_bull if t not in cond_set]
+    wl_bear = [t for t in wl_bear if t not in cond_set]
+
+    seen_wl = set(wl_bull) | set(wl_bear) | cond_set
+
+    fb_bull = [t for t in _stocks_for(bullish_sectors) if t not in seen_wl][:6]
+    fb_bear = [t for t in _stocks_for(bearish_sectors) if t not in seen_wl][:6]
+
+    return {
+        "bullish_watchlist":    wl_bull[:6],
+        "bearish_watchlist":    wl_bear[:6],
+        "conditional_watchlist": wl_cond[:4],
+        "bullish_fallback":     fb_bull,
+        "bearish_fallback":     fb_bear,
+    }
+
+
+# ── Event-family-centric equity signal builder ────────────────────────────────
+
+def _build_equity_signals(
+    equity_relevant: list[dict],
+    watchlist_syms: set[str],
+    max_signals: int = 14,
+) -> list[dict]:
+    """
+    Build equity_signals in the new event-family-centric shape.
+
+    Unlike _build_top_equity_signals (theme-cluster-centric), this function
+    groups raw markets by event_family_key first, then derives theme impacts.
+    Multiple "Hormuz by Jul 15" / "Hormuz by Jul 31" markets collapse into
+    ONE grouped signal instead of contributing to a conflated theme cluster.
+
+    Returns:
+        list of signal dicts, sorted by total_volume_24h desc, up to max_signals.
+    """
+    from services.predict.investor.event_grouping import (
+        make_event_family_key,
+        get_family_label,
+        get_family_primary_category,
+    )
+
+    # ── Group by event family ──────────────────────────────────────────────────
+    family_groups: dict[str, list[dict]] = {}
+    for m in equity_relevant:
+        fk = make_event_family_key(m.get("question", ""))
+        family_groups.setdefault(fk, []).append(m)
+
+    signals: list[dict] = []
+
+    for family_key, markets in family_groups.items():
+        if not markets:
+            continue
+
+        # Sort by volume within family
+        markets.sort(key=lambda m: m.get("volume_24h", 0) or 0, reverse=True)
+
+        # ── Primary theme: most-voted theme_id across markets ───────────────
+        theme_votes: dict[str, float] = {}
+        for m in markets:
+            for te in m.get("themes", []):
+                tid = te.get("theme_id", "")
+                theme_votes[tid] = theme_votes.get(tid, 0) + float(te.get("match_score", 1))
+        primary_theme_id = (
+            max(theme_votes, key=theme_votes.get)
+            if theme_votes else "geopolitics_war_trade"
+        )
+
+        # ── Volume-weighted aggregated stats ────────────────────────────────
+        vols = [max(0.0, m.get("volume_24h", 0) or 0) for m in markets]
+        total_vol = sum(vols) or 1.0
+        weights = [v / total_vol for v in vols]
+
+        def _wavg(field: str) -> float:
+            return sum((m.get(field) or 0) * w for m, w in zip(markets, weights))
+
+        agg_yes_pct    = _wavg("yes_pct")
+        agg_delta_24h  = _wavg("price_change_1d")
+        agg_delta_7d   = _wavg("price_change_1wk")
+
+        # ── Direction ───────────────────────────────────────────────────────
+        # Check for intra-family polarity conflict (escalation vs de-escalation)
+        strong_up   = sum(1 for m in markets if (m.get("price_change_1d") or 0) >  3)
+        strong_down = sum(1 for m in markets if (m.get("price_change_1d") or 0) < -3)
+        has_conflict = strong_up > 0 and strong_down > 0 and len(markets) >= 2
+
+        if has_conflict:
+            direction = "mixed"
+        elif agg_delta_24h > 0.5:
+            direction = "rising"
+        elif agg_delta_24h < -0.5:
+            direction = "falling"
+        else:
+            direction = "mixed"
+
+        # ── Theme impact ────────────────────────────────────────────────────
+        effective_dir = "mixed" if has_conflict else direction
+        impact = get_theme_impact(primary_theme_id, effective_dir)
+
+        if impact:
+            bullish_sectors = impact.bullish_sectors
+            bearish_sectors = impact.bearish_sectors
+            narrative = impact.narrative
+        else:
+            td = THEME_BY_ID.get(primary_theme_id)
+            bullish_sectors = td.bullish_bias_sectors if td else []
+            bearish_sectors = td.bearish_bias_sectors if td else []
+            narrative = ""
+
+        # ── Watchlist-first ticker resolution ──────────────────────────────
+        ticker_impacts = _resolve_ticker_impacts(bullish_sectors, bearish_sectors, watchlist_syms)
+
+        # ── Theme impacts list ──────────────────────────────────────────────
+        theme_impacts_list: list[dict] = []
+        for sec in bullish_sectors[:4]:
+            theme_impacts_list.append({
+                "sector":    sec,
+                "theme":     primary_theme_id.replace("_", " ").title(),
+                "sub_theme": None,
+                "direction": "bullish",
+                "confidence": "moderate",
+                "rationale": narrative,
+            })
+        for sec in bearish_sectors[:4]:
+            theme_impacts_list.append({
+                "sector":    sec,
+                "theme":     primary_theme_id.replace("_", " ").title(),
+                "sub_theme": None,
+                "direction": "bearish",
+                "confidence": "moderate",
+                "rationale": narrative,
+            })
+
+        # ── Conflicts ───────────────────────────────────────────────────────
+        conflicts: list[dict] = []
+        if has_conflict:
+            up_qs   = [m.get("question", "") for m in markets if (m.get("price_change_1d") or 0) >  3][:2]
+            down_qs = [m.get("question", "") for m in markets if (m.get("price_change_1d") or 0) < -3][:2]
+            conflicts.append({
+                "type":        "opposing_24h_moves",
+                "description": (
+                    "Markets in this group show opposing 24h moves — "
+                    "some rising while others are falling. Direction is ambiguous."
+                ),
+                "rising_markets":  up_qs,
+                "falling_markets": down_qs,
+            })
+
+        # ── Signal quality ──────────────────────────────────────────────────
+        max_relevance = max(
+            (m.get("equity_relevance_score") or 0 for m in markets), default=0
+        )
+        if has_conflict:
+            signal_quality = "low"
+        elif max_relevance >= 60:
+            signal_quality = "high"
+        elif max_relevance >= 35:
+            signal_quality = "moderate"
+        else:
+            signal_quality = "low"
+
+        # ── Why it matters ──────────────────────────────────────────────────
+        why = _why_it_matters(primary_theme_id, effective_dir, {
+            "market_count":   len(markets),
+            "confidence_score": max_relevance,
+        })
+
+        # ── Driver markets ──────────────────────────────────────────────────
+        driver_markets = [
+            {
+                "question":    m.get("question", ""),
+                "yes_pct":     m.get("yes_pct"),
+                "delta_24h_pp": m.get("price_change_1d"),
+                "delta_7d_pp": m.get("price_change_1wk"),
+                "volume_24h":  m.get("volume_24h", 0),
+                "condition_id": m.get("condition_id", ""),
+                "slug":         m.get("slug", ""),
+            }
+            for m in markets[:6]
+        ]
+
+        signals.append({
+            "event_family_key":  family_key,
+            "title":             get_family_label(family_key),
+            "primary_category":  get_family_primary_category(family_key, primary_theme_id),
+            "primary_theme_id":  primary_theme_id,
+            "yes_probability":   round(agg_yes_pct / 100.0, 4),
+            "delta_24h_pp":      round(agg_delta_24h, 2),
+            "delta_7d_pp":       round(agg_delta_7d, 2),
+            "direction":         direction,
+            "signal_quality":    signal_quality,
+            "why_it_matters":    why,
+            "driver_markets":    driver_markets,
+            "theme_impacts":     theme_impacts_list,
+            "ticker_impacts":    ticker_impacts,
+            "conflicts":         conflicts,
+            "market_count":      len(markets),
+            "total_volume_24h":  round(total_vol, 0),
+            "source_links":      [],
+        })
+
+    # Sort by total volume (most liquid events first)
+    signals.sort(key=lambda s: s["total_volume_24h"], reverse=True)
+    return signals[:max_signals]
 
 
 # Module-level singleton

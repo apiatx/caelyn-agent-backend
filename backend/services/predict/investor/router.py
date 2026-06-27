@@ -136,6 +136,60 @@ async def investor_regime():
         return JSONResponse(status_code=502, content={"error": str(e)})
 
 
+@router.get("/api/predict/investor/intelligence")
+async def investor_intelligence():
+    """
+    New normalized Predict intelligence payload.
+
+    Returns a unified, event-family-centric view of current Polymarket odds,
+    with permanent tracked macro/market families and grouped equity signals.
+
+    Shape:
+        updated_at          ISO timestamp
+        cache_age_seconds   seconds since last build (0 on fresh)
+        diagnostics         dict — coverage stats, build time, ticker resolution info
+        tracked_odds        list[dict] — 19 permanent macro/market families:
+            family_key, label, category, description
+            yes_probability     float (0-1) or null if not live on Polymarket
+            delta_1h_pp, delta_24h_pp, delta_7d_pp   pp shifts or null
+            volume_24h, liquidity, condition_id, market_question
+            driver_markets      up to 5 matching markets sorted by volume
+        equity_signals      list[dict] — event-family-grouped equity implications:
+            event_family_key    canonical family key (e.g. "hormuz_iran")
+            title               human-readable event title
+            primary_category    e.g. "Geopolitics / Energy / Shipping"
+            primary_theme_id    macro theme (e.g. "geopolitics_war_trade")
+            yes_probability     volume-weighted aggregated YES probability
+            delta_24h_pp, delta_7d_pp   aggregated shifts
+            direction           rising | falling | mixed
+            signal_quality      high | moderate | low
+            why_it_matters      one-sentence equity implication
+            driver_markets      top 6 raw markets grouped under this event
+            theme_impacts       list of {sector, direction, rationale}
+            ticker_impacts      {bullish_watchlist, bearish_watchlist,
+                                 conditional_watchlist, bullish_fallback, bearish_fallback}
+            conflicts           list of intra-family conflict notes
+            market_count        int — number of markets in this family group
+            total_volume_24h    float — sum of 24h volume for the family
+        raw_markets         list — reserved (empty in this version)
+
+    Cache:
+        Pre-warmed every 30 min by _investor_intelligence_loop() in main.py.
+        TTL = 35 min.  Stale-reads return cached data with cache_age_seconds > 0.
+
+    Backward-compat:
+        This endpoint is ADDITIVE.  All existing /overview, /themes, /regime,
+        /watchlists endpoints are unchanged.
+    """
+    try:
+        result = await investor_intel.get_intelligence()
+        return JSONResponse(content=result)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
 @router.get("/api/predict/investor/watchlists")
 async def investor_watchlists():
     """

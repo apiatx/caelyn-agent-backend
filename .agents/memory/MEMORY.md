@@ -1,3 +1,4 @@
+- [Predict investor intelligence layer](predict-investor-intelligence.md) — event_grouping.py+tracked_odds.py collapse duplicate Polymarket cards; "strait" keyword in china_taiwan theme caused Hormuz misclassification (fix: "taiwan strait"); new GET /api/predict/investor/intelligence; 30-min loop in main.py
 - [Sectors chain summarizer backfill](sectors-chain-summarizer.md) — NEW: sectors_chain_summarizer.py replaces run_live_scan for Sectors tab; real call/put premium for ALL tickers; priority mode (25/25s/sectors lane) when page active; budget pre-check prevents deferred→confirmed_no_options bug
 - [Chart Radar user_id pattern](chart-radar-user-id.md) — JWT middleware is disabled; parse Bearer token directly, not request.state.user_id
 - [Screener Hub thematic FMP refresh](screener-hub-thematic-refresh.md) — with_fmp_screener=True required in _background_refresh_theme; weak_cache trigger fires even for "fresh" low-coverage snapshots
