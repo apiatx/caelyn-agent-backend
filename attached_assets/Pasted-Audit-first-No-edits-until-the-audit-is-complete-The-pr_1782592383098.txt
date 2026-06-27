@@ -1,0 +1,55 @@
+Audit first. No edits until the audit is complete.
+
+The previous implementation added /api/predict/investor/intelligence and fixed event grouping, but I need one cleanup pass before frontend work.
+
+Goal:
+Remove remaining architectural drift where prediction-market ticker impacts still depend on impact_engine.SECTION_STOCKS / THEME_BASKETS / THEME_IMPACTS instead of the app’s canonical theme/ticker universe.
+
+Audit:
+1. Inspect services/predict/investor/impact_engine.py.
+2. Inspect services/predict/investor/investor_intel.py.
+3. Find every reference to:
+   - SECTOR_STOCKS
+   - THEME_BASKETS
+   - THEME_IMPACTS
+   - _TICKER_TO_SECTORS
+4. Confirm whether /api/predict/investor/intelligence ticker_impacts are still using these local hardcoded catalogs.
+5. Inspect backend/services/theme_merge_layer.py and confirm the current shape of ENRICHED_THEME_RS_UNIVERSE.
+6. Inspect watchlist_service.py and confirm the user watchlist loading shape.
+
+Implementation requirement:
+Ticker impacts for prediction-market intelligence must resolve from canonical sources only.
+
+Resolution order:
+1. User watchlist symbols first.
+2. Canonical theme universe fallback from ENRICHED_THEME_RS_UNIVERSE.
+3. If no matching tickers exist, return sector/theme impact without tickers.
+
+Do not create a new prediction-market-local ticker catalog.
+
+Expected behavior:
+- For each equity signal, theme_impacts should identify sector/theme/sub_theme/direction.
+- ticker_impacts should be derived by matching impacted sectors/themes against:
+  a) user watchlist tickers
+  b) canonical theme universe tickers
+- Fallback tickers must come from ENRICHED_THEME_RS_UNIVERSE proxy_symbols/candidate_symbols, not SECTOR_STOCKS.
+- If the theme universe lacks sector labels directly, build the lightest adapter around existing theme ids/names already used by the Themes/Screener system. Do not invent a second taxonomy.
+
+Diagnostics to add or update:
+{
+  "ticker_impact_source": "watchlist+canonical_theme_universe",
+  "hardcoded_sector_stocks_used": false,
+  "watchlist_symbols_count": 0,
+  "watchlist_ticker_hits": 0,
+  "canonical_theme_fallback_hits": 0,
+  "unmapped_theme_impacts": 0,
+  "theme_universe_theme_count": 0
+}
+
+Validation:
+1. Temporarily test with watchlist symbols that should match Energy/Airlines/Defense impacts if possible.
+2. Confirm watchlist tickers appear in bullish_watchlist/bearish_watchlist rather than fallback.
+3. Confirm fallback tickers are sourced from ENRICHED_THEME_RS_UNIVERSE.
+4. Confirm no /api/predict/investor/intelligence response path uses SECTOR_STOCKS.
+5. Confirm old endpoints still work.
+6. Confirm Hormuz still does not classify as China/Taiwan.
