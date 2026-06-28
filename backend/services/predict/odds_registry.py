@@ -22,6 +22,8 @@ keyword_patterns    list    substring match against question.lower() (OR logic)
 exclude_patterns    list    disqualify market if ANY pattern matches question.lower()
 preferred_outcome   str     "yes" | "no" — which leg is equity-relevant
                             "higher" / "lower" for price milestone families
+allow_near_expiry   bool    if True, bypass the 72-hour near-expiry exclusion gate
+                            (required for daily direction markets that expire same day)
 """
 
 from __future__ import annotations
@@ -152,6 +154,10 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
     },
 
     # ─── Index / Market Direction ─────────────────────────────────────────────
+    #
+    # allow_near_expiry=True: daily direction markets expire same day — the
+    # 72-hour near-expiry gate is bypassed; markets are only excluded if
+    # closed=True, acceptingOrders=False, or end_date is already in the past.
 
     {
         "family_key":       "spx_daily_direction",
@@ -160,11 +166,30 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "priority":         7,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
+        "allow_near_expiry":  True,
         "search_queries":   ["S&P 500 close today", "SPX close"],
         "keyword_patterns": [
-            "s&p 500 close", "s&p500 close", "spx close", "spy close",
-            "s&p 500 up", "spx up", "s&p 500 green", "stock market up today",
-            "market close up", "s&p 500 end",
+            # Close direction
+            "s&p 500 close higher", "s&p 500 close lower", "s&p 500 close positive",
+            "s&p 500 close negative", "s&p 500 close above", "s&p 500 finish higher",
+            "s&p 500 finish lower", "s&p 500 end higher", "s&p 500 end lower",
+            "s&p 500 end positive", "s&p 500 end negative",
+            "spx close higher", "spx close lower", "spx finish higher", "spx finish lower",
+            "spy close higher", "spy close lower", "spy finish higher", "spy finish lower",
+            # Up/Down/Green/Red
+            "will the s&p 500 be up", "will the s&p 500 be down",
+            "will s&p 500 be up", "will s&p 500 be down",
+            "s&p 500 up today", "s&p 500 down today",
+            "s&p 500 green today", "s&p 500 red today",
+            "s&p 500 up or down", "spx up or down",
+            "will the s&p 500 close", "will s&p 500 close",
+            "will spx close", "will spy close",
+            "stock market up today", "market close higher today", "market close lower today",
+            "market close up today", "market close down today",
+            "will the stock market be up", "will the stock market be down",
+            # Weekly
+            "s&p 500 up this week", "s&p 500 down this week",
+            "s&p 500 green this week", "s&p 500 red this week",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
@@ -176,10 +201,27 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "priority":         8,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
+        "allow_near_expiry":  True,
         "search_queries":   ["Nasdaq close today", "QQQ close"],
         "keyword_patterns": [
-            "nasdaq close", "nasdaq up", "qqq close", "nasdaq green",
-            "nasdaq end", "nasdaq 100 close", "ndx close",
+            # Close direction
+            "nasdaq close higher", "nasdaq close lower", "nasdaq close positive",
+            "nasdaq close negative", "nasdaq finish higher", "nasdaq finish lower",
+            "nasdaq end higher", "nasdaq end lower", "nasdaq end positive",
+            "qqq close higher", "qqq close lower", "qqq finish higher", "qqq finish lower",
+            "nasdaq 100 close higher", "nasdaq 100 close lower",
+            "ndx close higher", "ndx close lower", "ndx finish higher",
+            # Up/Down/Green/Red
+            "will the nasdaq be up", "will the nasdaq be down",
+            "will nasdaq be up", "will nasdaq be down",
+            "nasdaq up today", "nasdaq down today",
+            "nasdaq green today", "nasdaq red today",
+            "nasdaq up or down", "qqq up or down",
+            "will the nasdaq close", "will nasdaq close",
+            "will qqq close", "will ndx close",
+            # Weekly
+            "nasdaq up this week", "nasdaq down this week",
+            "nasdaq green this week", "nasdaq red this week",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
@@ -191,16 +233,36 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "priority":         9,
         "dashboard_enabled": False,
         "prophetik_enabled": True,
+        "allow_near_expiry":  True,
         "search_queries":   ["Dow close today", "DJIA close"],
         "keyword_patterns": [
-            "dow close", "djia close", "dow jones close", "dow up today",
-            "dow jones end", "dow jones green",
+            # Close direction
+            "dow close higher", "dow close lower", "dow close positive",
+            "dow close negative", "dow finish higher", "dow finish lower",
+            "dow end higher", "dow end lower", "dow end positive",
+            "djia close higher", "djia close lower", "djia finish higher",
+            "dow jones close higher", "dow jones close lower",
+            "dia close higher", "dia close lower", "dia finish higher",
+            # Up/Down/Green/Red
+            "will the dow be up", "will the dow be down",
+            "will dow be up", "will dow be down",
+            "dow up today", "dow down today",
+            "dow green today", "dow red today",
+            "dow up or down", "djia up or down",
+            "will the dow close", "will dow close", "will djia close",
+            # Weekly
+            "dow up this week", "dow down this week",
+            "dow green this week", "dow red this week",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
     },
 
     # ─── Mega-cap / Watchlist Price Milestones ────────────────────────────────
+    #
+    # Keyword patterns must require actual price / market cap / stock price wording.
+    # "X be the" patterns tightened to "X be the largest" to avoid matching
+    # AI benchmark questions like "Will Google be the first company to have an AI model..."
 
     {
         "family_key":       "nvda_price_milestone",
@@ -214,10 +276,10 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             "nvidia above", "nvda above", "nvda hit", "nvda reach",
             "nvidia reach", "nvidia price", "nvda price",
             # "Will NVIDIA be the largest company in the world by market cap on June 30?"
-            "nvidia largest", "nvidia market cap", "nvidia be the",
+            "nvidia be the largest", "nvidia market cap", "nvidia largest company",
             "nvidia stock", "nvda stock",
         ],
-        "exclude_patterns": [],
+        "exclude_patterns": ["ai model", "chatbot", "arena", "benchmark"],
         "preferred_outcome": "higher",
     },
     {
@@ -232,10 +294,10 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             "tesla above", "tsla above", "tesla hit", "tsla reach",
             "tesla price", "tsla price",
             # "Will Tesla be the largest company in the world by market cap on June 30?"
-            "tesla largest", "tesla market cap", "tesla be the",
+            "tesla be the largest", "tesla market cap", "tesla largest company",
             "tesla stock", "tsla stock",
         ],
-        "exclude_patterns": [],
+        "exclude_patterns": ["ai model", "chatbot", "arena", "benchmark"],
         "preferred_outcome": "higher",
     },
     {
@@ -250,10 +312,10 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             "apple above", "aapl above", "apple hit", "aapl reach",
             "apple price", "aapl price",
             # "Will Apple be the largest company in the world by market cap on June 30?"
-            "apple largest", "apple market cap", "apple be the",
+            "apple be the largest", "apple market cap", "apple largest company",
             "apple stock", "aapl stock",
         ],
-        "exclude_patterns": [],
+        "exclude_patterns": ["ai model", "chatbot", "arena", "benchmark"],
         "preferred_outcome": "higher",
     },
     {
@@ -266,10 +328,10 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "search_queries":   ["MSFT price", "Microsoft stock price"],
         "keyword_patterns": [
             "microsoft above", "msft above", "microsoft hit", "msft reach",
-            "microsoft largest", "microsoft market cap", "microsoft be the",
+            "microsoft be the largest", "microsoft market cap", "microsoft largest company",
             "msft price", "microsoft stock", "msft stock",
         ],
-        "exclude_patterns": [],
+        "exclude_patterns": ["ai model", "chatbot", "arena", "benchmark"],
         "preferred_outcome": "higher",
     },
     {
@@ -282,24 +344,60 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "search_queries":   ["Google stock price", "Alphabet price"],
         "keyword_patterns": [
             "google above", "googl above", "alphabet above", "google hit", "googl hit",
-            "google largest", "google market cap", "google be the",
+            # Tightened: was "google be the" (too broad — matched Chatbot Arena question)
+            "google be the largest", "google market cap", "google largest company",
             "alphabet market cap", "googl stock", "google stock",
         ],
-        "exclude_patterns": [],
+        # Explicitly block AI benchmark / Chatbot Arena markets from this family
+        "exclude_patterns": [
+            "chatbot arena", "arena score", "arena", "ai model",
+            "chatbot", "coding ai", "first company", "benchmark",
+        ],
         "preferred_outcome": "higher",
     },
+
+    # ─── AI / Tech Benchmarks ─────────────────────────────────────────────────
+    #
+    # Separate from stock price milestones.
+    # Covers AI model performance, Chatbot Arena rankings, frontier AI leadership.
+
+    {
+        "family_key":       "google_ai_benchmark",
+        "label":            "Google AI Model Benchmark",
+        "category":         "AI / Tech",
+        "priority":         15,
+        "dashboard_enabled": False,
+        "prophetik_enabled": True,
+        "search_queries":   ["Google AI model", "Chatbot Arena", "AI model benchmark"],
+        "keyword_patterns": [
+            # Chatbot Arena / Arena Score — these are highly specific phrases
+            "chatbot arena", "arena score", "1550 overall", "1550 on chatbot",
+            "1550 overall arena", "ai model reach 1550", "ai model hit 1550",
+            # Google AI leadership specifically (not generic company AI rankings)
+            "google have the best", "google best coding",
+            "google first company", "first company to have an ai",
+            "will google be the first", "google be the first",
+        ],
+        "exclude_patterns": [
+            # Do not match stock price, market cap, or earnings questions
+            "stock", "price", "market cap", "earnings", "revenue",
+            "above $", "below $", "reach $",
+        ],
+        "preferred_outcome": "yes",
+    },
+
     {
         "family_key":       "amd_price_milestone",
         "label":            "AMD Price Milestone",
         "category":         "Equities / Tech",
-        "priority":         15,
+        "priority":         16,
         "dashboard_enabled": False,
         "prophetik_enabled": True,
         "search_queries":   ["AMD price"],
         "keyword_patterns": [
             "amd above", "amd hit", "amd reach", "amd price",
         ],
-        "exclude_patterns": [],
+        "exclude_patterns": ["ai model", "chatbot", "arena", "benchmark"],
         "preferred_outcome": "higher",
     },
 
@@ -309,7 +407,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "earnings_nvda",
         "label":            "NVDA Earnings",
         "category":         "Earnings / Tech",
-        "priority":         16,
+        "priority":         17,
         "dashboard_enabled": False,
         "prophetik_enabled": True,
         "search_queries":   ["Nvidia earnings", "NVDA earnings"],
@@ -324,7 +422,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "earnings_tsla",
         "label":            "TSLA Earnings / Deliveries",
         "category":         "Earnings / Tech",
-        "priority":         17,
+        "priority":         18,
         "dashboard_enabled": False,
         "prophetik_enabled": True,
         "search_queries":   ["Tesla earnings", "TSLA deliveries"],
@@ -339,7 +437,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "ai_export_controls",
         "label":            "AI / Chip Export Controls",
         "category":         "AI / Tech / Regulation",
-        "priority":         18,
+        "priority":         19,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
         "search_queries":   ["chip export control", "AI export restriction"],
@@ -358,7 +456,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "hormuz_iran",
         "label":            "Strait of Hormuz / Iran",
         "category":         "Geopolitics / Energy",
-        "priority":         19,
+        "priority":         20,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
         "search_queries":   ["Strait of Hormuz", "Iran sanctions"],
@@ -373,7 +471,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "russia_ukraine",
         "label":            "Russia / Ukraine Ceasefire",
         "category":         "Geopolitics / War",
-        "priority":         20,
+        "priority":         21,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
         "search_queries":   ["Ukraine ceasefire", "Russia Ukraine peace"],
@@ -389,7 +487,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "china_taiwan",
         "label":            "China / Taiwan Strait Tension",
         "category":         "Geopolitics / Tech / Supply Chain",
-        "priority":         21,
+        "priority":         22,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
         "search_queries":   ["Taiwan invasion", "China Taiwan"],
@@ -405,7 +503,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "israel_gaza",
         "label":            "Israel / Gaza / Hamas",
         "category":         "Geopolitics / Middle East",
-        "priority":         22,
+        "priority":         23,
         "dashboard_enabled": False,
         "prophetik_enabled": True,
         "search_queries":   ["Israel Gaza ceasefire"],
@@ -420,7 +518,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "us_tariffs",
         "label":            "US Tariff Escalation",
         "category":         "Trade / Geopolitics",
-        "priority":         23,
+        "priority":         24,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
         "search_queries":   ["US tariffs", "reciprocal tariffs trade war"],
@@ -442,7 +540,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "oil_price_milestone",
         "label":            "Oil / Crude Price Milestone",
         "category":         "Commodities / Energy",
-        "priority":         24,
+        "priority":         25,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
         "search_queries":   ["crude oil price", "WTI oil"],
@@ -460,7 +558,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "gold_price_milestone",
         "label":            "Gold Price Milestone",
         "category":         "Commodities / Safe Haven",
-        "priority":         25,
+        "priority":         26,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
         "search_queries":   ["gold price milestone", "gold above"],
@@ -476,7 +574,7 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "family_key":       "bitcoin_price",
         "label":            "Bitcoin Price Milestone",
         "category":         "Crypto / Risk Proxy",
-        "priority":         26,
+        "priority":         27,
         "dashboard_enabled": True,
         "prophetik_enabled": True,
         "search_queries":   ["Bitcoin price", "BTC above"],
@@ -486,9 +584,75 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             # "Will the price of Bitcoin be above $64,000 on June 27?"
             "bitcoin price", "price of bitcoin", "btc price",
             "bitcoin be above", "btc be above",
+            # Range / between
+            "price of bitcoin be between", "bitcoin be between",
         ],
-        "exclude_patterns": [],
+        # Do not let price milestone steal daily direction markets
+        "exclude_patterns": [
+            "up or down", "close higher", "close lower",
+            "end positive", "end negative", "finish higher", "finish lower",
+            "bitcoin green", "bitcoin red", "btc green", "btc red",
+            "up today", "down today",
+        ],
         "preferred_outcome": "higher",
+    },
+
+    # ─── BTC Daily Direction ──────────────────────────────────────────────────
+    #
+    # Separate from bitcoin_price (milestone / target-price markets).
+    # Tracks daily or weekly close direction: up/green vs down/red.
+    # allow_near_expiry=True: these markets expire same day or same week.
+    # exclude_patterns block 5-minute intraday micromarkets and price milestones.
+
+    {
+        "family_key":       "btc_daily_direction",
+        "label":            "Bitcoin Daily Direction",
+        "category":         "Crypto / Risk Proxy",
+        "priority":         28,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "allow_near_expiry":  True,
+        "search_queries":   ["Bitcoin close today", "Bitcoin up today"],
+        "keyword_patterns": [
+            # Close direction
+            "will bitcoin close higher", "will bitcoin close lower",
+            "will btc close higher", "will btc close lower",
+            "bitcoin close higher", "bitcoin close lower",
+            "btc close higher", "btc close lower",
+            "bitcoin finish higher", "bitcoin finish lower",
+            "bitcoin end higher", "bitcoin end lower",
+            "bitcoin end positive", "bitcoin end negative",
+            "bitcoin close positive", "bitcoin close negative",
+            # Up/Down today
+            "bitcoin up today", "bitcoin down today",
+            "btc up today", "btc down today",
+            # Green/Red
+            "will bitcoin be green", "will bitcoin be red",
+            "will btc be green", "will btc be red",
+            "bitcoin green today", "bitcoin red today",
+            "btc green today", "btc red today",
+            # Up or Down (daily/weekly, not 5-minute micromarkets)
+            "bitcoin up or down today", "bitcoin up or down this week",
+            "btc up or down today", "btc up or down this week",
+            # Weekly close
+            "bitcoin weekly close", "bitcoin close this week",
+            "btc weekly close", "btc close this week",
+            "bitcoin up this week", "bitcoin down this week",
+            "bitcoin green this week", "bitcoin red this week",
+        ],
+        # Block price milestone markets AND 5-minute intraday micromarkets
+        "exclude_patterns": [
+            # Price milestone phrasing
+            "above $", "below $", "price of bitcoin", "bitcoin reach",
+            "btc reach", "bitcoin hit $", "btc hit $", "bitcoin dip",
+            "be above", "be between", "bitcoin be",
+            # 5-minute intraday micromarket time-range patterns
+            "pm et", "am et", "pm-", "am-",
+            ":00pm", ":05pm", ":10pm", ":15pm", ":20pm", ":25pm",
+            ":30pm", ":35pm", ":40pm", ":45pm", ":50pm", ":55pm",
+            ":00am", ":05am", ":10am", ":15am", ":20am", ":25am",
+        ],
+        "preferred_outcome": "yes",
     },
 ]
 

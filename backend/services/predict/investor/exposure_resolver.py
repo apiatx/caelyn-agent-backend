@@ -271,6 +271,26 @@ _FAMILY_EXPOSURE_MAP: dict[str, dict] = {
         "bearish_sectors": ["Consumer Discretionary", "Semiconductors"],
     },
 
+    # ── BTC Daily Direction ───────────────────────────────────────────────────
+
+    "btc_daily_direction": {
+        # preferred_outcome=yes → Bitcoin closes UP / green
+        "market_read":     "risk-on",
+        "bullish_sectors": ["Crypto Proxies", "Software/Growth Tech", "Financials"],
+        "bearish_sectors": [],
+        "invert_on_below": False,   # "below" not meaningful for direction markets
+    },
+
+    # ── AI / Tech Benchmarks ─────────────────────────────────────────────────
+
+    "google_ai_benchmark": {
+        "market_read":              "tech bullish",
+        "direct_tickers_bullish":   ["GOOGL"],
+        "bullish_sectors":          ["Software/Growth Tech", "AI Infra/Data Centers",
+                                     "Semiconductors"],
+        "bearish_sectors":          [],
+    },
+
     # ── Commodities / Crypto ─────────────────────────────────────────────────
 
     "oil_price_milestone": {

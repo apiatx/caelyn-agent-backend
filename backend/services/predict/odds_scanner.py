@@ -179,6 +179,34 @@ def _is_active_raw(m: dict) -> bool:
     return True
 
 
+def _is_active_direction(m: dict) -> bool:
+    """
+    Relaxed active-check for daily direction families (allow_near_expiry=True).
+
+    Same closed / acceptingOrders rules as _is_active_raw(), but the end_date
+    threshold is lowered to -1 h (only exclude markets already 1 h past expiry).
+    This allows same-day markets (S&P up today?, BTC close higher today?) that
+    would otherwise be killed by the standard 72-hour resolving gate.
+    """
+    if m.get("closed") is True:
+        return False
+
+    accepting = m.get("acceptingOrders")
+    if accepting is not None and accepting is not True and not bool(accepting):
+        return False
+
+    end_raw = m.get("endDate") or m.get("endDateIso") or m.get("end_date")
+    if end_raw:
+        try:
+            exp = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+            delta_h = (exp - datetime.now(timezone.utc)).total_seconds() / 3600
+            if delta_h < -1.0:   # only exclude if already 1 h past expiry
+                return False
+        except Exception:
+            pass
+    return True
+
+
 # ── Delta computation ─────────────────────────────────────────────────────────
 
 def _compute_deltas(
@@ -796,16 +824,27 @@ class OddsScanner:
         catalog_events_total         = crawl_stats.get("catalog_events_total", 0)
 
         # ── 3. Active filter + dedup by condition_id ──────────────────────────
+        #
+        # Two pools are built in one pass:
+        #   active_pool        — standard 72-h near-expiry gate (all families)
+        #   direction_raw_pool — relaxed -1h gate (only for allow_near_expiry families)
+        #
         seen_cids: set[str] = set()
-        active_pool: list[dict] = []
+        active_pool:        list[dict] = []
+        direction_raw_pool: list[dict] = []
         for m in raw_markets:
             cid = m.get("conditionId") or m.get("condition_id") or ""
             if cid and cid in seen_cids:
                 continue
             if cid:
                 seen_cids.add(cid)
-            if _is_active_raw(m):
+            std_active = _is_active_raw(m)
+            if std_active:
                 active_pool.append(m)
+                direction_raw_pool.append(m)
+            elif _is_active_direction(m):
+                # Near-expiry market: only allow for direction families
+                direction_raw_pool.append(m)
 
         active_open_count = len(active_pool)   # after is_active_raw, before investor exclusion
 
@@ -813,7 +852,8 @@ class OddsScanner:
         sports_excluded_count      = 0
         pop_culture_excluded_count = 0
         excluded_categories_seen: set[str] = set()
-        clean_pool: list[dict] = []
+        clean_pool:           list[dict] = []
+        direction_clean_pool: list[dict] = []
         for m in active_pool:
             if _is_sports_market(m):
                 sports_excluded_count += 1
@@ -826,12 +866,64 @@ class OddsScanner:
             else:
                 clean_pool.append(m)
 
+        # direction_clean_pool: include near-expiry markets that passed _is_active_direction
+        _direction_seen_cids: set[str] = {
+            m.get("conditionId") or m.get("condition_id") or "" for m in clean_pool
+        }
+        direction_clean_pool = list(clean_pool)   # start with all standard eligible markets
+        for m in direction_raw_pool:
+            cid = m.get("conditionId") or m.get("condition_id") or ""
+            if cid and cid in _direction_seen_cids:
+                continue   # already in clean_pool
+            if _is_sports_market(m) or _is_pop_culture_market(m):
+                continue
+            direction_clean_pool.append(m)
+            if cid:
+                _direction_seen_cids.add(cid)
+
         investor_excluded_count = sports_excluded_count + pop_culture_excluded_count
         candidate_pool_size     = len(clean_pool)
+
+        # ── Daily direction diagnostic counters ───────────────────────────────
+        _dir_fkeys = {
+            fdef["family_key"] for fdef in ODDS_REGISTRY if fdef.get("allow_near_expiry")
+        }
+        _direction_terms: set[str] = {
+            "s&p 500", "s&p500", "spx", "spy",
+            "nasdaq", "qqq", "ndx",
+            "dow", "djia", "dia",
+            "bitcoin", "btc",
+            "up today", "down today", "close higher", "close lower",
+            "up or down", "green today", "red today",
+        }
+
+        def _is_direction_candidate(m: dict) -> bool:
+            q = (m.get("question") or "").lower()
+            return any(t in q for t in _direction_terms)
+
+        spx_candidates_seen      = sum(1 for m in direction_raw_pool if any(
+            t in (m.get("question") or "").lower() for t in ("s&p 500","s&p500","spx","spy ")))
+        nasdaq_candidates_seen   = sum(1 for m in direction_raw_pool if any(
+            t in (m.get("question") or "").lower() for t in ("nasdaq","qqq","ndx")))
+        dow_candidates_seen      = sum(1 for m in direction_raw_pool if any(
+            t in (m.get("question") or "").lower() for t in ("dow jones","djia","dow close","dow up","dow down")))
+        btc_dir_candidates_seen  = sum(1 for m in direction_raw_pool if any(
+            t in (m.get("question") or "").lower() for t in ("bitcoin","btc")))
+        daily_dir_candidates_seen = sum(1 for m in direction_raw_pool if _is_direction_candidate(m))
+        # excluded-by-std-gate count: in direction_raw_pool but NOT in active_pool
+        _active_cids = {m.get("conditionId") or m.get("condition_id") or "" for m in active_pool}
+        daily_dir_excl_near_expiry = sum(
+            1 for m in direction_raw_pool
+            if (m.get("conditionId") or m.get("condition_id") or "") not in _active_cids
+            and _is_direction_candidate(m)
+        )
+
         log.info(
-            "[odds_scanner] pool: %d raw → %d active/open → %d investor-eligible "
-            "(%d sports + %d pop-culture excluded)",
-            len(raw_markets), active_open_count, candidate_pool_size,
+            "[odds_scanner] pool: %d raw → %d active/open (+%d direction near-expiry) "
+            "→ %d investor-eligible (%d sports + %d pop-culture excluded)",
+            len(raw_markets), active_open_count,
+            len(direction_clean_pool) - len(clean_pool),
+            candidate_pool_size,
             sports_excluded_count, pop_culture_excluded_count,
         )
 
@@ -844,10 +936,13 @@ class OddsScanner:
         snap_rows:             list[dict] = []
         families_from_catalog: list[str]  = []
         families_still_missing: list[str] = []
+        daily_dir_matched: list[str]      = []
 
         for fdef in ODDS_REGISTRY:
             fk = fdef["family_key"]
-            candidates = _match_family(fdef, clean_pool)
+            # Direction families use the relaxed near-expiry pool
+            pool = direction_clean_pool if fdef.get("allow_near_expiry") else clean_pool
+            candidates = _match_family(fdef, pool)
 
             if not candidates:
                 families_still_missing.append(fk)
@@ -892,6 +987,8 @@ class OddsScanner:
                 }
 
             families_from_catalog.append(fk)
+            if fdef.get("allow_near_expiry"):
+                daily_dir_matched.append(fk)
             best_cid = best.get("condition_id") or ""
             yes_pct  = best.get("yes_pct")
             yes_prob = round(yes_pct / 100.0, 6) if yes_pct is not None else None
@@ -1148,6 +1245,16 @@ class OddsScanner:
             "clob_price_fail_count":         clob_fail_count,
             "gamma_price_fallback_count":    gamma_price_fallback_count,
             "hardcoded_sector_stocks_used":  False,
+            # ── Daily direction diagnostics ────────────────────────────────
+            "daily_direction_candidates_seen":       daily_dir_candidates_seen,
+            "daily_direction_excluded_near_expiry_count": daily_dir_excl_near_expiry,
+            "daily_direction_matched_count":         len(daily_dir_matched),
+            "daily_direction_matched_families":      daily_dir_matched,
+            "spx_candidates_seen":                   spx_candidates_seen,
+            "nasdaq_candidates_seen":                nasdaq_candidates_seen,
+            "dow_candidates_seen":                   dow_candidates_seen,
+            "btc_direction_candidates_seen":         btc_dir_candidates_seen,
+            "btc_direction_matched_count":           sum(1 for fk in daily_dir_matched if "btc" in fk or "bitcoin" in fk),
             # ── Scan timing ────────────────────────────────────────────────
             "scan_ms":                       scan_ms,
         }

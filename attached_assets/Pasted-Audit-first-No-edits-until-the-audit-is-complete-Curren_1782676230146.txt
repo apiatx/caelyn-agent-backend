@@ -1,0 +1,260 @@
+Audit first. No edits until the audit is complete.
+
+Current Prophetik output is now showing rich contract context correctly, but some important tracked market families are still missing or mislabeled.
+
+Current confirmed output includes:
+
+* BTC price milestone:
+  “Will Bitcoin reach $100,000 by December 31, 2026?”
+* Oil and gold milestones
+* Fed decision / cuts / hikes
+* Recession / unemployment
+* Geopolitics
+* Mega-cap company markets
+
+Current missing / wrong items:
+
+1. Missing daily direction markets:
+
+   * S&P 500 / SPX / SPY up or down today
+   * Nasdaq / NDX / QQQ up or down today
+   * Dow / DJIA / DIA up or down today
+   * Bitcoin / BTC up or down today or this week
+
+2. Bad label/mapping:
+   Current row:
+   “Will Google be the first company to have an AI model hit 1550 on Chatbot Arena in 2026?”
+   is labeled:
+   “GOOGL / Alphabet Price Milestone”
+   This is wrong. It is not a price milestone. It should be classified as Google / AI model benchmark / AI leadership, not price milestone.
+
+Goal:
+Improve the odds registry and matcher so daily index / BTC direction markets appear when active on Polymarket, and mislabeled company markets are correctly classified.
+
+Do not edit frontend.
+Do not break the current loading fix.
+Do not break enriched contract fields.
+Do not remove current working families.
+Do not reintroduce sports/pop-culture.
+Do not run crawls inline in request handlers.
+
+Audit:
+
+1. Inspect odds_registry.py.
+2. Inspect odds_scanner.py matching/scoring.
+3. Inspect exposure_resolver.py.
+4. Inspect current full active catalog candidates for:
+
+   * “S&P 500”
+   * “SPX”
+   * “SPY”
+   * “Nasdaq”
+   * “Nasdaq-100”
+   * “NDX”
+   * “QQQ”
+   * “Dow”
+   * “Dow Jones”
+   * “DJIA”
+   * “DIA”
+   * “Bitcoin”
+   * “BTC”
+   * “up today”
+   * “down today”
+   * “close higher”
+   * “close lower”
+   * “green”
+   * “red”
+5. For each candidate, report:
+
+   * question
+   * event_slug
+   * active/closed status
+   * accepting_orders
+   * end_date
+   * volume/liquidity
+   * why it did or did not match a registry family
+6. Audit why the Google Chatbot Arena market is classified as GOOGL price milestone.
+
+Implementation requirements:
+
+1. Add / repair daily index direction families
+
+Add or repair these tracked families:
+
+* spx_daily_direction
+* nasdaq_daily_direction
+* dow_daily_direction
+
+These should match active markets asking whether the index / ETF / proxy closes higher/lower, goes up/down, green/red, or finishes positive/negative on a date.
+
+Patterns:
+
+S&P 500:
+
+* “S&P 500”
+* “S&P”
+* “SPX”
+* “SPY”
+* “close higher”
+* “close lower”
+* “up today”
+* “down today”
+* “green”
+* “red”
+
+Nasdaq:
+
+* “Nasdaq”
+* “Nasdaq-100”
+* “NDX”
+* “QQQ”
+* “close higher”
+* “close lower”
+* “up today”
+* “down today”
+* “green”
+* “red”
+
+Dow:
+
+* “Dow”
+* “Dow Jones”
+* “DJIA”
+* “DIA”
+* “close higher”
+* “close lower”
+* “up today”
+* “down today”
+* “green”
+* “red”
+
+2. Add / repair BTC direction family
+
+Keep existing BTC price milestone family, but add separate direction family:
+
+* btc_daily_direction
+
+Patterns:
+
+* “Bitcoin”
+* “BTC”
+* “up today”
+* “down today”
+* “close higher”
+* “close lower”
+* “green”
+* “red”
+* “positive”
+* “negative”
+* “today”
+* “this week”
+
+Do not confuse BTC daily direction with BTC price milestone.
+
+3. Fix near-expiry handling
+
+Daily direction markets naturally expire soon. Do not exclude them just because end_date is today or within 72 hours.
+
+Rules:
+
+* Exclude if closed/resolved/inactive.
+* Include if active/open/accepting orders, even if end_date is today.
+* For daily direction families, near-expiry should not disqualify.
+* For other milestone families, near-expiry may lower score but should not auto-exclude if active/open.
+
+Add diagnostics:
+
+* daily_direction_candidates_seen
+* daily_direction_excluded_near_expiry_count
+* daily_direction_matched_count
+* spx_candidates_seen
+* nasdaq_candidates_seen
+* dow_candidates_seen
+* btc_direction_candidates_seen
+* btc_direction_matched_count
+
+4. Fix misclassified company/AI markets
+
+The current market:
+“Will Google be the first company to have an AI model hit 1550 on Chatbot Arena in 2026?”
+must not be labeled as:
+“GOOGL / Alphabet Price Milestone”
+
+Fix classification logic:
+
+* Price milestone families should require price / market cap / stock price / above / below / largest company by market cap / target price wording.
+* AI benchmark / model performance markets should map to a separate family, for example:
+
+  * google_ai_benchmark
+  * ai_model_benchmark
+  * chatbot_arena_ai_leadership
+
+Acceptable display:
+
+* “Google AI Model Benchmark”
+* category: “AI / Tech”
+* question preserved as the main contract
+
+Do not remove the market. Just classify it correctly.
+
+5. Display fields
+
+All new or repaired matched rows must preserve the same rich fields already working:
+
+* question
+* display_title
+* display_subtitle
+* priced_outcome_label
+* priced_probability
+* outcomes[]
+* outcome_summary
+* contract_context
+* end_date
+* url
+* market_read
+* exposure
+
+6. Exposure mapping
+
+Daily index direction:
+
+* SPX up / broad market up:
+  bullish: broad market, mega-cap tech, cyclicals, financials
+  bearish: defensives/safe-haven relative
+* SPX down:
+  bullish: defensives, gold/safe-haven, volatility proxy if available
+  bearish: broad market/cyclicals/high-beta
+
+Nasdaq / QQQ up:
+bullish: mega-cap tech, semis, AI/software
+bearish: defensives relative
+
+Dow up:
+bullish: industrials, financials, cyclicals
+bearish: defensives relative
+
+BTC up:
+bullish: crypto equities, miners, exchanges, high-beta liquidity proxies
+bearish: none unless existing taxonomy supports it
+
+BTC down:
+bearish: crypto equities/high-beta liquidity proxies
+bullish: safe-haven/defensives if represented
+
+Use ENRICHED_THEME_RS_UNIVERSE and watchlist-first resolution. Do not use SECTOR_STOCKS.
+
+Validation:
+
+1. Force scan.
+2. If active Polymarket SPX/S&P daily direction market exists, tracked_odds includes spx_daily_direction.
+3. If active Nasdaq/QQQ daily direction market exists, tracked_odds includes nasdaq_daily_direction.
+4. If active Dow/DJIA daily direction market exists, tracked_odds includes dow_daily_direction.
+5. If active BTC up/down market exists, tracked_odds includes btc_daily_direction.
+6. Existing btc_price milestone still works separately.
+7. Google Chatbot Arena market is no longer labeled as a GOOGL price milestone.
+8. Price milestone families only match actual price / market cap / target-type markets.
+9. New rows include rich question/outcome/date/url fields.
+10. No sports/pop-culture rows appear.
+11. Existing Fed, recession, geopolitical, oil, gold, BTC price milestone rows still work.
+12. LKG/stale_db still works after restart.
+13. Provide sample matched questions for SPX/BTC direction or exact missing reasons if no active market exists.
