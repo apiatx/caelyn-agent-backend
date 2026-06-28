@@ -55,6 +55,13 @@ except Exception as _e:
     def is_sports_excluded(*a, **kw) -> bool:  # type: ignore
         return False
 
+# Families that bypass the 72-h near-expiry gate during live scan.
+# Expired entries from these families MUST be stripped from LKG / stale_db payloads
+# so yesterday's direction market never re-surfaces as a current signal.
+_DAILY_DIRECTION_FAMILY_KEYS: frozenset = frozenset(
+    fdef["family_key"] for fdef in ODDS_REGISTRY if fdef.get("allow_near_expiry")
+)
+
 try:
     from data.predict_odds_store import (
         ensure_table,
@@ -454,6 +461,80 @@ def _match_family(fdef: dict, all_markets: list[dict]) -> list[dict]:
             continue
         matches.append(m)
     return matches
+
+
+# ── Daily direction expiry guard ──────────────────────────────────────────────
+
+def _strip_expired_daily_directions(payload: dict, now_dt: datetime) -> tuple:
+    """
+    Remove daily-direction entries whose end_date has already passed.
+
+    Daily direction families (allow_near_expiry=True) have same-day markets that
+    expire within hours.  LKG / stale_db payloads written while the market was
+    active must not re-surface those entries once end_date has passed.
+
+    Expired entries are moved from odds[] to missing_families[] with
+    reason="no_active_daily_market".  Non-direction families are untouched.
+
+    Returns (modified_payload_copy, excluded_count).
+    Modifies nothing if _DAILY_DIRECTION_FAMILY_KEYS is empty or no entry expired.
+    """
+    if not _DAILY_DIRECTION_FAMILY_KEYS:
+        return payload, 0
+
+    odds_in    = payload.get("odds") or []
+    missing_in = list(payload.get("missing_families") or [])
+    odds_out: list = []
+    excluded   = 0
+    missing_fkeys = {m.get("family_key") for m in missing_in}
+
+    for entry in odds_in:
+        fk = entry.get("family_key", "")
+        if fk not in _DAILY_DIRECTION_FAMILY_KEYS:
+            odds_out.append(entry)
+            continue
+
+        expired = False
+        end_raw = entry.get("end_date")
+        if end_raw:
+            try:
+                exp_dt = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if exp_dt <= now_dt:
+                    expired = True
+            except Exception:
+                pass
+
+        if expired:
+            excluded += 1
+            log.info(
+                "[odds_scanner] daily-direction expiry strip: family=%s end_date=%s",
+                fk, end_raw,
+            )
+            if fk not in missing_fkeys:
+                missing_fkeys.add(fk)
+                fdef = REGISTRY_BY_KEY.get(fk) or {}
+                missing_in.append({
+                    "family_key": fk,
+                    "label":      fdef.get("label", fk),
+                    "category":   fdef.get("category", ""),
+                    "priority":   fdef.get("priority", 99),
+                    "reason":     "no_active_daily_market",
+                })
+        else:
+            odds_out.append(entry)
+
+    if excluded == 0:
+        return payload, 0
+
+    payload = dict(payload)
+    payload["odds"]                   = odds_out
+    payload["missing_families"]       = sorted(missing_in, key=lambda m: m.get("priority", 99))
+    payload["live_count"]             = len(odds_out)
+    payload["matched_families"]       = len(odds_out)
+    payload["missing_families_count"] = len(missing_in)
+    return payload, excluded
 
 
 # ── Core scanner ──────────────────────────────────────────────────────────────
@@ -946,7 +1027,7 @@ class OddsScanner:
 
             if not candidates:
                 families_still_missing.append(fk)
-                missing_list.append({
+                _missing_entry: dict = {
                     "family_key":        fk,
                     "label":             fdef["label"],
                     "category":          fdef["category"],
@@ -955,7 +1036,12 @@ class OddsScanner:
                     "prophetik_enabled": fdef["prophetik_enabled"],
                     "preferred_outcome": fdef["preferred_outcome"],
                     "description":       fdef.get("description", ""),
-                })
+                }
+                # Daily direction families have no multi-day markets — absence means
+                # no active same-day market exists right now, not a data problem.
+                if fdef.get("allow_near_expiry"):
+                    _missing_entry["reason"] = "no_active_daily_market"
+                missing_list.append(_missing_entry)
                 continue
 
             # Best candidate = highest 24h volume
@@ -1358,6 +1444,12 @@ class OddsScanner:
                 pass
             cached.setdefault("status", "ok")
             cached.setdefault("stale", False)
+            _now = datetime.now(timezone.utc)
+            cached, _excl = _strip_expired_daily_directions(cached, _now)
+            _d = dict(cached.get("diagnostics") or {})
+            _d["expired_daily_direction_lkg_excluded_count"] = _excl
+            cached = dict(cached)
+            cached["diagnostics"] = _d
             return cached
 
         # ── Tier 2: LKG file (survives process restart) ────────────────────────
@@ -1378,6 +1470,8 @@ class OddsScanner:
                 "last_scan_error":           self._last_scan_error,
                 "scanner_running":           self._scanner_running,
             })
+            lkg, _excl = _strip_expired_daily_directions(lkg, datetime.now(timezone.utc))
+            diag["expired_daily_direction_lkg_excluded_count"] = _excl
             lkg["diagnostics"] = diag
             return lkg
 
@@ -1394,6 +1488,8 @@ class OddsScanner:
                 "last_scan_error":           self._last_scan_error,
                 "scanner_running":           self._scanner_running,
             })
+            db_payload, _excl = _strip_expired_daily_directions(db_payload, datetime.now(timezone.utc))
+            diag["expired_daily_direction_lkg_excluded_count"] = _excl
             db_payload["diagnostics"] = diag
             return db_payload
 

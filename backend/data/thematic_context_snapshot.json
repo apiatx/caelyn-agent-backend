@@ -166,26 +166,6 @@
       ]
     },
     {
-      "name": "Data Center Infrastructure",
-      "score": 65.2,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
-        "X consensus: 1 ticker mentioned"
-      ],
-      "related_etfs": [
-        "ADEA",
-        "AKAM",
-        "CIFR",
-        "CLSK"
-      ],
-      "related_tickers": [
-        "IRM",
-        "DLR",
-        "AMT"
-      ]
-    },
-    {
       "name": "Banks",
       "score": 64.4,
       "source": "theme_rs_service",
@@ -200,6 +180,26 @@
         "GS",
         "MS",
         "JPM"
+      ]
+    },
+    {
+      "name": "Data Center Infrastructure",
+      "score": 64.2,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
+        "X consensus: 1 ticker mentioned"
+      ],
+      "related_etfs": [
+        "ADEA",
+        "AKAM",
+        "CIFR",
+        "CLSK"
+      ],
+      "related_tickers": [
+        "IRM",
+        "DLR",
+        "AMT"
       ]
     }
   ],
@@ -326,7 +326,7 @@
   ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-06-28T20:00:56.769865+00:00",
+  "last_updated": "2026-06-28T20:33:49.599406+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -337,5 +337,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1782676856.769914
+  "_saved_at": 1782678829.5995207
 }
