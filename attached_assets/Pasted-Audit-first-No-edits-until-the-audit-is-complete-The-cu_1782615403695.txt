@@ -1,0 +1,181 @@
+Audit first. No edits until the audit is complete.
+
+The current two-lane Polymarket scanner is still not the right implementation. It improved from 2/26 to 15/26, but it is still sampling top markets and selected tags. That is not comprehensive discovery.
+
+Goal:
+Replace top-N/tag-limited discovery with a full active Polymarket market catalog crawl, then match tracked odds families against that local catalog.
+
+Do not edit frontend.
+Do not remove existing endpoints.
+Do not break:
+
+* GET /api/predict/odds/live
+* GET /api/predict/odds/history
+* GET /api/predict/odds/diagnostics
+* existing Prophetik endpoints
+
+Core principle:
+Tags and top-volume scans can be used for scoring, but they must not define the search universe.
+
+Correct architecture:
+
+1. Full active catalog crawl
+   Use Gamma API pagination to fetch all active/open events or markets.
+
+Preferred:
+GET https://gamma-api.polymarket.com/events?active=true&closed=false&limit=500&offset=0
+GET https://gamma-api.polymarket.com/events?active=true&closed=false&limit=500&offset=500
+Continue until has_more=false or returned results are exhausted.
+
+If the existing provider only supports top markets, add a dedicated provider method for full active event pagination.
+
+Events are preferred because they contain nested markets and reduce calls.
+
+2. Persist active catalog in Neon/Postgres
+   Create or reuse a table:
+
+public.prediction_market_catalog
+
+Suggested columns:
+
+* condition_id primary key or unique
+* market_slug
+* event_slug
+* question
+* title
+* description
+* category
+* tags jsonb
+* active boolean
+* closed boolean
+* accepting_orders boolean
+* end_date timestamptz
+* volume numeric
+* volume_24h numeric
+* liquidity numeric
+* outcomes jsonb
+* outcome_prices jsonb
+* clob_token_ids jsonb
+* raw_json jsonb
+* discovered_at timestamptz
+* updated_at timestamptz
+
+Use the project’s existing pg_storage connection pattern.
+Use INSERT ... ON CONFLICT ... DO UPDATE.
+Do not create a separate DB system.
+
+3. Mark stale catalog rows
+   If a market is no longer returned by the active crawl, mark it inactive/stale instead of deleting immediately.
+
+Suggested:
+
+* last_seen_at
+* is_currently_discovered
+
+4. Match tracked odds families against the full catalog
+   In odds_scanner.py, stop treating broad top-N + tag fetches as the full candidate pool.
+
+New candidate pool:
+
+* all current active/open catalog rows
+
+For every odds_registry family:
+
+* match against question/title/description/tags
+* use keyword_patterns, exclude_patterns, category hints, ticker aliases, and family-specific rules
+* exclude sports/gambling markets from Investor/Dashboard unless explicitly allowed
+* score each candidate
+
+Candidate score should consider:
+
+* exact phrase match
+* ticker/company alias match
+* category/tag relevance
+* volume_24h
+* liquidity
+* active/open status
+* end_date relevance
+* freshness
+* whether market is resolving/closed
+
+Pick the best live candidate per family.
+
+5. Keep targeted tags only as optional enrichment
+   You may keep tag-based fetches only as a supplemental fast path or validation source, but they cannot be the only source of candidates.
+
+6. Use CLOB read endpoints for better live price where possible
+   For matched markets with clob_token_ids:
+
+* identify YES token ID
+* fetch midpoint or price from CLOB if an existing helper exists or add a small public read helper
+* fall back to Gamma outcomePrices if CLOB read fails
+
+Do not require trading authentication. Public read endpoints only.
+
+7. 7-day snapshots
+   Keep the existing prediction_market_odds_snapshots table and retention logic.
+   Every scan:
+
+* save snapshots for all matched live families
+* compute delta_1h_pp
+* compute delta_24h_pp
+* compute delta_7d_pp
+
+8. Live endpoint behavior
+   GET /api/predict/odds/live should return:
+
+{
+updated_at,
+cache_age_seconds,
+live_count,
+tracked_count,
+odds: [live matched families only],
+missing_families: [tracked but unmatched],
+diagnostics: {}
+}
+
+Important:
+
+* odds[] must contain only live matched families
+* missing families must not appear as giant empty rows
+* do not call missing families absent unless the full active catalog was crawled successfully
+
+9. Diagnostics
+   Expand diagnostics with:
+
+* catalog_rows_total
+* catalog_rows_current_active
+* catalog_events_pages_fetched
+* catalog_markets_flattened
+* catalog_last_full_crawl_at
+* catalog_full_crawl_success
+* registry_family_count
+* live_family_count
+* missing_family_count
+* family_matches_from_full_catalog
+* family_matches_from_tag_fast_path
+* candidate_pool_size
+* sports_excluded_count
+* snapshots_written
+* snapshots_retained_days
+* clob_price_success_count
+* clob_price_fail_count
+* gamma_price_fallback_count
+* hardcoded_sector_stocks_used: false
+
+10. Validation
+    After implementation:
+
+* Force a cold scan.
+* Confirm the scanner crawls the full active catalog with pagination.
+* Confirm catalog rows are persisted.
+* Confirm /api/predict/odds/live works.
+* Confirm /api/predict/odds/history works.
+* Confirm missing_families are only declared missing after a successful full catalog crawl.
+* Confirm Fed/Recession/SPX/NVDA/BTC/Oil families are matched if active markets exist anywhere in the active catalog.
+* Confirm sports are excluded.
+* Confirm snapshots write to Neon.
+* Confirm existing Prophetik endpoints still work.
+
+Do not claim “no active market exists” based only on top-volume or tag fetches.
+Only claim missing after full active catalog crawl + registry matching.

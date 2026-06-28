@@ -428,6 +428,13 @@ async def lifespan(app):
     except Exception as _mab_err:
         print(f"[MANUAL_ANCHOR] startup ensure error: {_mab_err}")
 
+    # Prediction market catalog table (full active universe for Tracked Odds Registry)
+    try:
+        from data.predict_market_catalog_store import ensure_catalog_table as _ensure_catalog
+        _ensure_catalog()
+    except Exception as _pmc_err:
+        print(f"[PM_CATALOG] startup ensure error: {_pmc_err}")
+
     import threading
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())

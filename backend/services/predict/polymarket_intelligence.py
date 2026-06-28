@@ -767,6 +767,118 @@ class PolymarketIntelligence:
             "bid_ask_signal": "buy_pressure" if imbalance > 0.15 else "sell_pressure" if imbalance < -0.15 else "neutral",
         }
 
+    # ── Full Catalog Crawl (for Tracked Odds Registry) ────────────────────────
+
+    async def fetch_full_active_catalog(self) -> tuple[list[dict], dict]:
+        """
+        Paginate ALL active/open events from the Gamma API and flatten their
+        nested markets.  No tag filter — this crawls the entire active universe.
+
+        Preferred over /markets because /events carries tags AND has nested
+        market arrays, reducing total API calls while capturing all categories.
+
+        Returns:
+            (flat_market_list, stats_dict)
+
+        stats_dict keys:
+            catalog_events_pages_fetched, catalog_events_total,
+            catalog_markets_flattened
+        """
+        # Gamma /events endpoint returns at most 100 events per page regardless
+        # of the limit parameter.  Use 100 to get accurate pagination detection
+        # (if page < PAGE_SIZE we know we're done).
+        PAGE_SIZE   = 100
+        MAX_PAGES   = 150       # safety cap: 150 × 100 = 15 000 events maximum
+        TIMEOUT_S   = 30.0
+
+        base_params = {
+            "active":     "true",
+            "closed":     "false",
+            "limit":      str(PAGE_SIZE),
+            "order":      "volume24hr",
+            "ascending":  "false",
+        }
+
+        all_markets: list[dict] = []
+        pages_fetched  = 0
+        events_total   = 0
+        offset         = 0
+
+        async with httpx.AsyncClient(timeout=TIMEOUT_S, follow_redirects=True) as client:
+            while pages_fetched < MAX_PAGES:
+                params = {**base_params, "offset": str(offset)}
+                try:
+                    resp = await client.get(
+                        f"{GAMMA_BASE}/events", params=params, headers=_HEADERS
+                    )
+                    resp.raise_for_status()
+                    events_page = resp.json()
+                    if not isinstance(events_page, list) or not events_page:
+                        break
+
+                    pages_fetched += 1
+                    events_total  += len(events_page)
+
+                    for ev in events_page:
+                        ev_tags = [
+                            t.get("label", t) if isinstance(t, dict) else t
+                            for t in (ev.get("tags") or [])
+                        ]
+                        ev_slug = ev.get("slug", "")
+                        for market in (ev.get("markets") or []):
+                            market["tags"]       = ev_tags
+                            market["event_slug"] = ev_slug
+                            all_markets.append(market)
+
+                    if len(events_page) < PAGE_SIZE:
+                        break   # last page — no more data
+                    offset += PAGE_SIZE
+
+                except Exception as exc:
+                    print(
+                        f"[PM_INTEL] fetch_full_active_catalog error "
+                        f"(page={pages_fetched}, offset={offset}): {exc}"
+                    )
+                    break
+
+        stats = {
+            "catalog_events_pages_fetched": pages_fetched,
+            "catalog_events_total":         events_total,
+            "catalog_markets_flattened":    len(all_markets),
+        }
+        return all_markets, stats
+
+    async def get_clob_midpoint(self, token_id: str) -> Optional[float]:
+        """
+        Fetch the YES-token midpoint price from the public CLOB read API.
+        No authentication required.
+
+        Endpoint: GET https://clob.polymarket.com/midpoint?token_id=<token_id>
+        Response:  {"mid": "0.42"}
+
+        Returns the mid as a float in [0, 1], or None on failure.
+        Falls back gracefully — callers should use Gamma outcomePrices if None.
+        """
+        if not token_id:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{CLOB_BASE}/midpoint",
+                    params={"token_id": token_id},
+                    headers=_HEADERS,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    mid = data.get("mid")
+                    if mid is not None:
+                        val = float(mid)
+                        if 0.0 < val < 1.0:
+                            return val
+        except Exception:
+            pass
+        return None
+
     # ── HTTP Helpers ──────────────────────────────────────────────────────────
 
     async def _fetch_markets(self, limit: int = 200) -> list[dict]:

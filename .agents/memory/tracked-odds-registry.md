@@ -1,72 +1,117 @@
 ---
 name: Tracked Odds Registry architecture
-description: Two-lane Polymarket discovery, Neon persistence, delta history, and integration with investor intelligence.
+description: Full-catalog Polymarket discovery, Neon persistence (catalog + snapshots), CLOB price enrichment, and Prophetik integration.
 ---
 
 ## The rule
-Three-layer pipeline: `odds_registry.py` (26 families) → `odds_scanner.py` (two-lane fetch/match/persist) → `predict_odds_store.py` (Neon table). `get_intelligence()` consumes the scanner payload and falls back to `build_tracked_odds()` only on cold start.
+Four-layer pipeline:
+1. `odds_registry.py` — 26 family definitions (keyword patterns, categories, priorities)
+2. `odds_scanner.py` — full catalog crawl → match → CLOB enrich → snapshot persist
+3. `predict_odds_store.py` — Neon table `prediction_market_odds_snapshots` (7-day retention)
+4. `predict_market_catalog_store.py` — Neon table `prediction_market_catalog` (full crawl persistence)
 
-**Why:** Single broad scan only matched 2/26 families — FIFA World Cup 2026 dominated the top-400-by-volume pool, burying macro/finance markets below the cut.
+**Why:** Top-N and tag-limited scans cannot define the search universe — they miss lower-volume macro/finance markets dominated by sports when sorted by volume.
 
-## Critical: Gamma API q= param is non-functional
-`GET /markets?q=<query>` completely ignores the query text and returns the same top-by-volume results regardless. Do NOT attempt text-search via Gamma. The only working targeted approach is tag-based: `GET /events?tag_slug=<slug>` via `get_top_markets(limit=N, tag=X)`.
+## Critical: Gamma /events page cap = 100 (not 500)
+The Gamma `/events` endpoint silently caps responses at **100 events per page** regardless of the `limit` parameter you send. Always use `PAGE_SIZE=100` for correct pagination detection:
+```python
+if len(events_page) < PAGE_SIZE:
+    break   # last page — no more data
+```
+With `limit=500`, the page always contains ≤100 events, so `len < 500` is always True and you stop after page 1 — getting only the top 100 events (all FIFA during World Cup season).
 
-## Two-lane discovery (current implementation)
-- **Lane A**: `get_top_markets(limit=400)` — untagged, sorted by 24h volume
-- **Lane B**: 6 parallel `get_top_markets(limit=N, tag=X)` calls:
-  - `economy(300)` → Fed decisions, recession, CPI, Hormuz
-  - `finance(300)` → stocks, oil, gold, earnings, Fed cuts
-  - `crypto(200)` → Bitcoin milestones
-  - `geopolitics(200)` → Russia/Ukraine, China/Taiwan, Israel
-  - `tech(150)` → AI/chip export controls
-  - `politics(150)` → macro policy, tariffs
-- Merge by `condition_id` dedup (Lane A wins), then sports-filter, then keyword match
-- Result: 2/26 → 15/26 families matched; 3 via broad, 12 via targeted
+**Why this matters:** FIFA World Cup 2026 fills the top 100+ events by volume. Finance/macro markets (NVDA, gold, recession, bitcoin) only appear on pages 2-21.
 
-## Payload structure (after two-lane upgrade)
-- `odds[]` — **live matched families only** (no null stubs); sorted by priority
-- `missing_families[]` — unmatched family metadata (family_key, label, category, etc.)
-- `_scan_diag{}` — full diagnostics: broad/targeted/merged counts, per-lane match lists, sports_excluded_count, snapshots_written
+## Critical: Gamma /events q= query param is non-functional
+`GET /markets?q=<query>` completely ignores query text and returns top-by-volume regardless. DO NOT attempt text-search via Gamma. Tag-based search (`/events?tag_slug=X`) works but coverage varies by tag.
 
-## Keyword pattern gotchas
-Real Polymarket question phrasing often doesn't match naive keyword assumptions:
-- "no change in Fed interest rates after the July meeting" → need "fed interest rate", "interest rates after", "no change in fed"
-- "Will no Fed rate cuts happen in 2026?" → "fed rate cut" (IS substring of "fed rate cuts") works; "cuts in 2026" does NOT match "cuts happen in 2026"
-- "Gold (GC) hit (HIGH) $8,000" → need "gold (gc)" or "(gc) hit" — "gold hit" fails because "(GC)" sits between "gold" and "hit"
-- "WTI Crude Oil (WTI) hit (LOW) $20" → need "wti hit", "crude (wti)", "crude oil (wti)"
-- "annual inflation be 3.6% or less" → need "annual inflation"; "inflation above/below" don't match
-- "NVIDIA be the largest company by market cap" → need "nvidia largest", "nvidia market cap", "nvidia be the"
-- "Tariff increase on Canada in effect by June 30" → need "tariff increase", "tariff on", "tariff in effect"
+## Full catalog crawl (current implementation)
+```
+fetch_full_active_catalog()  in polymarket_intelligence.py
+  GET /events?active=true&closed=false&limit=100&offset=0
+  GET /events?active=true&closed=false&limit=100&offset=100
+  ...until len(page) < 100 (last page)
+  Safety cap: MAX_PAGES=150 (15 000 events maximum)
+```
+- Flattens nested `markets[]` from each event
+- Injects `event_slug` and `tags` (from parent event) onto each market dict
+- Returns (flat_market_list, stats_dict)
+- Current results: ~21 pages / ~2100 events / ~28,984 markets flattened / ~10,011 non-sports
 
-## Why families still go missing
-Low match counts after two-lane discovery are correct behavior in these cases:
-1. **June-end expiry**: Markets for "June" events are `is_resolving` (within 72h of end date) by late June and get correctly filtered
-2. **No live market**: Earnings, SPX/Nasdaq daily direction, AMD/GOOGL milestones only exist near their events
-3. **Volume below tag limits**: A market may exist but not appear in the top N for its tag
+## Active market filter (_is_active_raw)
+Run on raw Gamma event-nested market dicts BEFORE keyword matching:
+- **Exclude if `closed=True`** (hard stop)
+- **Exclude if `acceptingOrders` is EXPLICITLY False** — do NOT exclude if null/missing; Gamma often omits this field from event-nested dicts (missing = treating as accepting)
+- **Exclude if `endDate` is within 72h** (resolving) or in the past (expired)
 
-## Loop timing
-`_odds_scanner_loop` starts at 90s; `_investor_intelligence_loop` at 120s. Keep gap ≥30s.
+## CLOB price enrichment
+```
+GET https://clob.polymarket.com/midpoint?token_id=<YES_token_id>
+Response: {"mid": "0.42"}
+```
+- YES token = `clob_token_ids[0]` from the market dict
+- Public read, no authentication required
+- Runs in parallel (asyncio.gather) for all matched families simultaneously
+- Overrides Gamma outcomePrices when successful
+- Track: `clob_price_success_count` / `clob_price_fail_count` / `gamma_price_fallback_count`
 
-## Delta fallback chain
-1. DB history (`get_snapshots_before` with window tolerance)
-2. Polymarket's own `price_change_1h/1d/1wk` API fields
-3. None (returned as null)
+## Neon catalog table
+`public.prediction_market_catalog` — condition_id PK, question, description, tags, active, closed, accepting_orders, end_date, volume_24h, liquidity, clob_token_ids, outcome_prices, raw_json, discovered_at, updated_at, last_seen_at, is_currently_discovered.
 
-## Neon table
-`public.prediction_market_odds_snapshots` — BIGSERIAL PK, indexed on (family_key, captured_at DESC). 7-day retention on every scan cycle.
+Upsert: chunked executemany (500/batch), INSERT ON CONFLICT DO UPDATE, `last_seen_at=NOW()`.
+Stale detection: `UPDATE SET is_currently_discovered=false WHERE last_seen_at < crawl_started_at - 60s`.
+Fallback: `get_active_catalog_rows()` reads last-good crawl if live crawl fails.
+
+## Diagnostics spec (all 16 required fields)
+```
+catalog_rows_total, catalog_rows_current_active,
+catalog_events_pages_fetched, catalog_markets_flattened,
+catalog_last_full_crawl_at, catalog_full_crawl_success,
+registry_family_count, live_family_count, missing_family_count,
+family_matches_from_full_catalog, family_matches_from_tag_fast_path,
+candidate_pool_size, sports_excluded_count,
+snapshots_written, snapshots_retained_days,
+clob_price_success_count, clob_price_fail_count,
+gamma_price_fallback_count, hardcoded_sector_stocks_used
+```
+
+## Live endpoint response shape (spec)
+```json
+{
+  "updated_at": "ISO",
+  "cache_age_seconds": N,
+  "live_count": N,
+  "tracked_count": 26,
+  "odds": [...live matched families only...],
+  "missing_families": [...tracked but unmatched...],
+  "diagnostics": {...all 16+ fields...}
+}
+```
+Backward-compat aliases also present: `scanned_at`, `total_families`, `matched_families`.
+
+## Why families go missing (correct behavior)
+1. **End-of-month expiry**: Markets with `endDate` ≤72h from now are filtered as resolving (e.g., June 30 markets filtered on June 28)
+2. **No active market**: SPX/Nasdaq/Dow daily direction, AMD milestones, earnings (NVDA/TSLA), AI export controls — only created near their specific events
+3. **True absence**: Some families have no corresponding Polymarket market in any event
+
+## Match count history
+- Original (2 lane): 2/26
+- Two-lane (Lane A top-400 + Lane B 6 tags): 15/26
+- Full catalog crawl (correct pagination): **17/26**
 
 ## File locations
 - Registry: `backend/services/predict/odds_registry.py`
-- Store: `backend/data/predict_odds_store.py`
+- Snapshot store: `backend/data/predict_odds_store.py`
+- Catalog store: `backend/data/predict_market_catalog_store.py`
 - Scanner: `backend/services/predict/odds_scanner.py`
+- Intelligence methods: `backend/services/predict/polymarket_intelligence.py` (fetch_full_active_catalog, get_clob_midpoint)
 - Endpoints: `backend/services/predict/router.py`
-- Loop: `_odds_scanner_loop()` in `backend/main.py`
+- Loop: `_odds_scanner_loop()` in `backend/main.py` (90s startup, 30min cadence)
 - Intelligence integration: `backend/services/predict/investor/investor_intel.py` (~line 266)
-- Old pure-function stub preserved: `backend/services/predict/investor/tracked_odds.py`
 
 ## How to apply
-- **Add new families**: Edit `ODDS_REGISTRY` list in `odds_registry.py` only. Scanner picks it up automatically.
-- **Fix missing patterns**: Probe real Gamma API questions for the family's tag, then add exact substring patterns. Test with: `curl "https://gamma-api.polymarket.com/events?active=true&tag_slug=<tag>&limit=50"`.
-- **Add new Lane B tag**: Append to `_LANE_B_TAGS` in `odds_scanner.py` — format `(tag_label, max_markets)`.
-- **Debugging missing families**: Check `/api/predict/odds/diagnostics` for `families_still_missing`, `merged_candidates_seen`, `sports_excluded_count`.
-- **Delta windows**: Edit `_DELTA_*` constants in `odds_scanner.py`.
+- **Add new family**: Edit `ODDS_REGISTRY` in `odds_registry.py` only.
+- **Fix missing keywords**: Probe real markets with `curl "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100" | python3 -c "import json,sys; [print(m['question']) for ev in json.load(sys.stdin) for m in ev.get('markets',[])]"`. Use exact substring patterns.
+- **Add new tags to scanner**: Not needed — full catalog crawl covers all tags.
+- **Debugging missing families**: Check `/api/predict/odds/diagnostics` for `families_still_missing`, `catalog_events_pages_fetched`, `candidate_pool_size`.
+- **Extend catalog schema**: Add columns to DDL in `predict_market_catalog_store.py`, bump `_DDL_APPLIED=False` temporarily to re-apply.
