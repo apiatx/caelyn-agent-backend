@@ -1,0 +1,133 @@
+Audit first. No frontend edits. No new feature work until this verification is complete.
+
+The full catalog crawl is the right direction, but the final validation has a major inconsistency:
+
+- Crawl says 21 pages / 2,100 events / 28,984 markets flattened
+- Candidate pool says 10,011 non-sports markets
+- Catalog says only 3,103 rows persisted
+
+That does not make sense. 3,103 was the earlier page-1 crawl count. Before moving on, verify and fix catalog persistence/diagnostics.
+
+Tasks:
+
+1. Audit catalog persistence
+Inspect:
+- backend/data/predict_market_catalog_store.py
+- backend/services/predict/polymarket_intelligence.py
+- backend/services/predict/odds_scanner.py
+
+Report:
+- how many raw markets are flattened from full crawl
+- how many markets pass active/open filter
+- how many markets pass investor hard exclusion filter
+- how many rows are upserted into prediction_market_catalog
+- how many rows are current after stale marking
+- how many rows are read back for matching
+
+2. Fix the row-count mismatch
+Expected:
+- If prediction_market_catalog stores all active markets, current rows should be close to active/open flattened count.
+- If it stores only investor-eligible markets, current rows should be close to investor candidate pool count.
+- It should not stay stuck at 3,103 if the full crawl discovered 28,984 markets.
+
+Do not claim full catalog persistence until read-back counts prove it.
+
+3. Confirm stale marking is correct
+Verify:
+- rows seen in the current crawl are marked current
+- rows not seen are marked stale/current=false
+- stale marking is not accidentally marking pages 2–21 stale after page 1
+- upsert conflict key is appropriate
+
+4. Confirm condition_id uniqueness is safe
+If multiple markets/outcomes share condition_id or nested Gamma data lacks condition_id, confirm the unique key is not collapsing unrelated markets.
+
+If needed, use a composite unique key:
+- condition_id if present
+- otherwise market_slug
+- otherwise event_slug + question hash
+
+5. Hard exclusion must include sports AND pop culture
+Investor/Dashboard candidate pool must exclude:
+- sports
+- esports
+- celebrity
+- entertainment
+- awards
+- movies
+- music
+- influencer
+- streamer
+- YouTube / Twitch / TikTok
+- reality TV
+- dating
+- pure gambling / non-market-relevant culture markets
+
+This exclusion must happen before:
+- family matching
+- odds snapshot writes
+- /api/predict/odds/live payload construction
+- Prophetik Investor consumption
+- Market Dashboard consumption
+
+6. Add diagnostics
+/api/predict/odds/diagnostics and /api/predict/odds/live diagnostics must include:
+
+{
+  "catalog_events_pages_fetched": 0,
+  "catalog_events_seen": 0,
+  "catalog_markets_flattened": 0,
+  "catalog_markets_active_open": 0,
+  "catalog_rows_upserted": 0,
+  "catalog_rows_current_total": 0,
+  "catalog_rows_current_investor_eligible": 0,
+  "candidate_pool_size": 0,
+  "sports_excluded_count": 0,
+  "pop_culture_excluded_count": 0,
+  "investor_excluded_count": 0,
+  "catalog_persistence_consistent": true,
+  "catalog_count_mismatch_reason": null
+}
+
+7. Validate exact families
+After fixing persistence, list which of the 26 registry families matched and show the selected market question for each.
+
+Specifically confirm whether these are matched or missing:
+- Fed decision
+- Fed cuts 2026
+- Fed hikes 2026
+- Recession
+- CPI / inflation
+- SPX / S&P 500 direction or milestone
+- Nasdaq direction or milestone
+- Dow direction or milestone
+- NVDA milestone
+- TSLA milestone
+- AAPL milestone
+- MSFT milestone
+- GOOGL milestone
+- AMD milestone
+- BTC milestone
+- Oil milestone
+- Gold milestone
+- Hormuz / Iran
+- Russia / Ukraine
+- China / Taiwan
+- Tariffs / trade
+
+For missing families, only call them missing after full catalog read-back is confirmed.
+
+8. Validation output required
+Return:
+- final flattened market count
+- final active/open count
+- final investor-eligible count
+- final catalog current row count
+- final matched family count
+- final missing family list
+- 5 sample excluded sports markets
+- 5 sample excluded pop-culture markets if present
+- 5 sample matched macro/market markets
+- confirmation that /api/predict/odds/live contains no sports or pop-culture
+- confirmation that /api/predict/odds/history still works
+- confirmation existing Prophetik endpoints still work

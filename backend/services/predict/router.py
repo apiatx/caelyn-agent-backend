@@ -343,17 +343,16 @@ async def predict_odds_live():
 
     Returns the most recent scanner payload including:
       - yes_probability, yes_pct
-      - delta_1h_pp / delta_24h_pp / delta_7d_pp  (from 7-day DB history when available,
-        falls back to Polymarket's own price_change fields on cold start)
+      - delta_1h_pp / delta_24h_pp / delta_7d_pp  (from 7-day DB history)
       - volume_24h, liquidity, candidate_count, driver_markets
       - dashboard_enabled / prophetik_enabled / preferred_outcome / priority flags
 
-    The payload is pre-warmed every 30 minutes by the _odds_scanner_loop background
-    task. On the first request after a cold start, the scan runs inline (~2–5 s).
+    Pre-warmed every 30 minutes by the background scanner loop. Returns a
+    {"status": "warming"} stub immediately on cold start — never hangs.
     """
     try:
         from services.predict.odds_scanner import odds_scanner as _os
-        payload = await _os.get_live()
+        payload = _os.get_live()   # sync, cache-only — never triggers inline crawl
         return JSONResponse(content=payload)
     except Exception as e:
         print(f"[PREDICT/odds/live] Error: {e}")
@@ -375,10 +374,15 @@ async def predict_odds_history(
     (e.g. "fed_rate_decision", "bitcoin_price", "russia_ukraine").
 
     Suitable for charting a family's probability over time.
+    DB read is offloaded to a thread executor so it never blocks the event loop.
     """
     try:
+        import asyncio as _asyncio
         from services.predict.odds_scanner import odds_scanner as _os
-        result = _os.get_history(family_key=family_key, days=days)
+        loop = _asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, lambda: _os.get_history(family_key=family_key, days=days)
+        )
         return JSONResponse(content=result)
     except Exception as e:
         print(f"[PREDICT/odds/history] Error: {e}")
@@ -387,7 +391,10 @@ async def predict_odds_history(
 
 @router.get("/api/predict/odds/diagnostics")
 async def predict_odds_diagnostics():
-    """Diagnostics for the Tracked Odds Registry scanner and Neon snapshot table."""
+    """
+    Scanner diagnostics — reads from in-memory cache only, always fast.
+    No DB calls. Updated by background scanner after each 30-min cycle.
+    """
     try:
         from services.predict.odds_scanner import odds_scanner as _os
         return JSONResponse(content=_os.get_diagnostics())

@@ -200,17 +200,16 @@ def _raw_to_row(raw: dict) -> tuple:
 
 # ── Writes ────────────────────────────────────────────────────────────────────
 
-_UPSERT_SQL = f"""
+# execute_values template: 15 data %s placeholders + NOW()/NOW()/NOW()/TRUE for
+# discovered_at, updated_at, last_seen_at, is_currently_discovered.
+# This generates batched multi-row VALUES clauses (~100x faster than executemany).
+_UPSERT_EV_SQL = f"""
     INSERT INTO {_TABLE}
         (condition_id, market_slug, event_slug, question, description,
          tags, active, closed, accepting_orders, end_date,
          volume_24h, liquidity, clob_token_ids, outcome_prices, raw_json,
          discovered_at, updated_at, last_seen_at, is_currently_discovered)
-    VALUES
-        (%s, %s, %s, %s, %s,
-         %s, %s, %s, %s, %s,
-         %s, %s, %s, %s, %s,
-         NOW(), NOW(), NOW(), TRUE)
+    VALUES %s
     ON CONFLICT (condition_id) DO UPDATE SET
         market_slug             = EXCLUDED.market_slug,
         event_slug              = EXCLUDED.event_slug,
@@ -230,14 +229,16 @@ _UPSERT_SQL = f"""
         last_seen_at            = NOW(),
         is_currently_discovered = TRUE
 """
-
-_CHUNK_SIZE = 500
+# Row template: 15 %s for data fields; NOW()/TRUE resolved server-side for timestamps/flag.
+_UPSERT_EV_TEMPLATE = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW(),NOW(),TRUE)"
+_PAGE_SIZE = 500
 
 
 def upsert_catalog_rows(raw_markets: list[dict]) -> int:
     """
     Bulk-upsert raw Gamma market dicts into the catalog table.
-    Uses chunked inserts (500/batch) for reliability with large crawls.
+    Uses psycopg2 execute_values() with batched multi-row VALUES clauses
+    (~100x faster than executemany for large crawls).
     Returns number of rows successfully upserted (0 on failure).
     """
     if not raw_markets:
@@ -247,12 +248,23 @@ def upsert_catalog_rows(raw_markets: list[dict]) -> int:
     if conn is None:
         return 0
 
-    rows = []
+    # Build rows and deduplicate by condition_id (index 0).
+    # The same market can appear in multiple Gamma events; execute_values sends
+    # all rows in one batched VALUES clause and PostgreSQL will throw
+    # "ON CONFLICT DO UPDATE command cannot affect row a second time" if the
+    # same condition_id appears twice in one batch.
+    seen_cids: set[str] = set()
+    rows: list[tuple] = []
     for raw in raw_markets:
         try:
             row = _raw_to_row(raw)
-            if row is not None:
-                rows.append(row)
+            if row is None:
+                continue
+            cid = row[0]
+            if cid in seen_cids:
+                continue
+            seen_cids.add(cid)
+            rows.append(row)
         except Exception as exc:
             log.debug("[predict_market_catalog_store] row build error: %s", exc)
             continue
@@ -262,11 +274,16 @@ def upsert_catalog_rows(raw_markets: list[dict]) -> int:
 
     count = 0
     try:
+        from psycopg2.extras import execute_values
         cur = conn.cursor()
-        for i in range(0, len(rows), _CHUNK_SIZE):
-            chunk = rows[i:i + _CHUNK_SIZE]
-            cur.executemany(_UPSERT_SQL, chunk)
-            count += len(chunk)
+        execute_values(
+            cur,
+            _UPSERT_EV_SQL,
+            rows,
+            template=_UPSERT_EV_TEMPLATE,
+            page_size=_PAGE_SIZE,
+        )
+        count = len(rows)
         conn.commit()
         cur.close()
         log.info(

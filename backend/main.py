@@ -366,7 +366,14 @@ async def _odds_scanner_loop():
     Runs 90 s after startup so the Polymarket cache is warm but before the
     investor intelligence loop (120 s) fires — ensuring get_intelligence()
     sees a populated odds_scanner on its first call.
+
+    Kill switch: set ODDS_SCANNER_ENABLED=false to disable entirely.
     """
+    import os as _os_env
+    if _os_env.getenv("ODDS_SCANNER_ENABLED", "true").strip().lower() == "false":
+        print("[ODDS_SCANNER] disabled via ODDS_SCANNER_ENABLED=false — loop not started")
+        return
+
     await asyncio.sleep(90)    # let Polymarket cache warm; beat intelligence loop
     while True:
         try:
@@ -427,13 +434,6 @@ async def lifespan(app):
         ensure_manual_anchor_table()
     except Exception as _mab_err:
         print(f"[MANUAL_ANCHOR] startup ensure error: {_mab_err}")
-
-    # Prediction market catalog table (full active universe for Tracked Odds Registry)
-    try:
-        from data.predict_market_catalog_store import ensure_catalog_table as _ensure_catalog
-        _ensure_catalog()
-    except Exception as _pmc_err:
-        print(f"[PM_CATALOG] startup ensure error: {_pmc_err}")
 
     import threading
     threading.Thread(target=_do_init, daemon=True).start()

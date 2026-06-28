@@ -12,8 +12,12 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 
 def _sanitize_database_url(url: str | None) -> str | None:
-    """Strip channel_binding from Neon pooler URLs — psycopg2-binary doesn't
-    always handle SCRAM channel binding correctly with connection poolers."""
+    """Strip channel_binding from Neon pooler URLs and inject connect_timeout.
+
+    psycopg2-binary doesn't always handle SCRAM channel binding correctly with
+    connection poolers. connect_timeout=10 ensures connections never hang
+    indefinitely when the Neon pooler is slow or the pool is being rebuilt.
+    """
     if not url:
         return url
     try:
@@ -21,8 +25,10 @@ def _sanitize_database_url(url: str | None) -> str | None:
         qs = parse_qs(parsed.query, keep_blank_values=True)
         if "channel_binding" in qs:
             del qs["channel_binding"]
-            new_query = urlencode(qs, doseq=True)
-            url = urlunparse(parsed._replace(query=new_query))
+        if "connect_timeout" not in qs:
+            qs["connect_timeout"] = ["10"]
+        new_query = urlencode(qs, doseq=True)
+        url = urlunparse(parsed._replace(query=new_query))
     except Exception:
         pass
     return url
@@ -74,7 +80,9 @@ def _get_conn():
             try:
                 import psycopg2
                 from psycopg2 import pool as _pg_pool
-                _pool = _pg_pool.SimpleConnectionPool(1, 5, _DATABASE_URL)
+                _pool = _pg_pool.SimpleConnectionPool(
+                    1, 5, _DATABASE_URL, connect_timeout=10
+                )
                 _available = True
                 _last_conn_error = None
             except Exception as e:

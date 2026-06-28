@@ -67,6 +67,30 @@ _SPORTS_KEYWORDS = [
     "rockies", "rays", "blue jays", "red sox", "white sox",
 ]
 
+_POP_CULTURE_KEYWORDS = [
+    "oscar", "emmy", "grammy", "golden globe", "bafta", "academy award",
+    "best picture", "best actor", "best actress", "best director",
+    "best album", "best song", "best artist", "best rapper",
+    "taylor swift", "beyonce", "drake", "kanye", "rihanna", "billie eilish",
+    "kendrick lamar", "bad bunny", "ariana grande", "ed sheeran",
+    "travis scott", "nicki minaj", "cardi b", "post malone", "the weeknd",
+    "sabrina carpenter", "olivia rodrigo", "lady gaga",
+    "bachelor", "bachelorette", "love island", "survivor", "big brother",
+    "american idol", "the voice", "dancing with the stars", "the masked singer",
+    "real housewives", "keeping up with", "jersey shore",
+    "kim kardashian", "kylie jenner",
+    "youtube", "tiktok", "twitch", "streamer", "youtuber", "influencer",
+    "mr. beast", "mrbeast", "pewdiepie", "ninja streamer",
+    "marvel", "avengers", "box office", "rotten tomatoes",
+    "game of thrones", "stranger things", "the crown", "squid game",
+    "house of the dragon", "succession",
+    "esport", "e-sport", "valorant", "fortnite", "league of legends",
+    "counter-strike", "dota 2", "overwatch", "rocket league",
+    "call of duty", "apex legends", "pubg",
+    "miss universe", "miss world", "pageant",
+    "lip sync", "rap battle",
+]
+
 
 def _is_sports_market(m: dict) -> bool:
     """Return True if this market appears to be a live sports game/match result."""
@@ -74,6 +98,18 @@ def _is_sports_market(m: dict) -> bool:
     tags = " ".join(str(t).lower() for t in (m.get("tags") or []))
     combined = f"{question} {tags}"
     return any(kw in combined for kw in _SPORTS_KEYWORDS)
+
+
+def _is_pop_culture_market(m: dict) -> bool:
+    """
+    Return True if this market is a pop-culture / entertainment / celebrity market
+    excluded from the investor-eligible candidate pool.
+    Checked only after _is_sports_market() returns False.
+    """
+    question = m.get("question", "").lower()
+    tags = " ".join(str(t).lower() for t in (m.get("tags") or []))
+    combined = f"{question} {tags}"
+    return any(kw in combined for kw in _POP_CULTURE_KEYWORDS)
 
 
 class PolymarketIntelligence:
@@ -834,6 +870,17 @@ class PolymarketIntelligence:
                         break   # last page — no more data
                     offset += PAGE_SIZE
 
+                except httpx.HTTPStatusError as exc:
+                    # 422 Unprocessable Entity = Gamma rejects offset >= catalog size
+                    # (their API has a hard limit, usually 2100 events).
+                    # Treat this as end-of-results, not a crawl failure.
+                    if exc.response.status_code == 422:
+                        break
+                    print(
+                        f"[PM_INTEL] fetch_full_active_catalog error "
+                        f"(page={pages_fetched}, offset={offset}): {exc}"
+                    )
+                    break
                 except Exception as exc:
                     print(
                         f"[PM_INTEL] fetch_full_active_catalog error "

@@ -1,0 +1,137 @@
+Stop feature work. Stabilization pass only.
+
+Current problem:
+The Polymarket full catalog scanner architecture is directionally correct, but the app is becoming unstable because heavy DB/network work is blocking startup, request handlers, diagnostics, or the event loop.
+
+Goal:
+Make the odds scanner non-blocking and safe. Do not add new features. Do not edit frontend.
+
+Hard rules:
+
+1. App startup must never block on Polymarket crawl or Neon catalog table creation.
+2. Request handlers must never crawl Polymarket.
+3. Request handlers must never run heavy sync psycopg2 queries on the event loop.
+4. Diagnostics must be cheap and must return cached scanner state by default.
+5. The scanner can fail without taking down the app.
+6. If scanner/cache is cold, endpoints should return stale/empty-but-valid payloads, not hang.
+
+Implementation plan:
+
+A. Add a kill switch
+Add env/config flag:
+ODDS_SCANNER_ENABLED=true/false
+
+If false:
+
+* do not start scanner loop
+* /api/predict/odds/live returns last cached payload or empty valid payload
+* /api/predict/odds/history can still read history safely if available
+
+B. Remove blocking startup work
+Do not call ensure_catalog_table synchronously inside FastAPI lifespan/startup.
+
+Instead:
+
+* run DDL/table ensure inside scanner background task
+* wrap it in timeout
+* catch/log errors
+* never block app boot
+
+C. Make scanner background-only
+The scanner loop should:
+
+* sleep initial delay
+* run full catalog crawl
+* persist catalog/snapshots
+* compute payload
+* update in-memory cache
+* set diagnostics state
+
+No endpoint should trigger a full crawl inline.
+
+D. Make /api/predict/odds/live cache-only
+/live should:
+
+* return odds_scanner.get_cached_live_payload()
+* never crawl Polymarket inline
+* never persist DB inline
+* never run catalog diagnostics inline
+
+If cache is cold:
+return:
+{
+updated_at: null,
+cache_age_seconds: null,
+live_count: 0,
+tracked_count: registry count,
+odds: [],
+missing_families: [],
+status: "warming",
+diagnostics: { cache_warm: false }
+}
+
+E. Make /api/predict/odds/diagnostics cache-only by default
+/diagnostics should return scanner.last_diagnostics from memory.
+
+Do not call get_catalog_diagnostics() directly from the route.
+
+Optional:
+Add a separate explicit endpoint later like /api/predict/odds/db-diagnostics if live DB inspection is needed, but do not add it now unless necessary.
+
+F. Fix DB calls
+All psycopg2 DB calls must be either:
+
+* inside scanner background thread/executor, or
+* wrapped with asyncio.to_thread / run_in_executor with timeouts
+
+No sync DB call directly inside async route handlers.
+
+G. Fix DB pool safety
+Use connect_timeout on Neon/psycopg2 connections.
+Avoid exhausting SimpleConnectionPool.
+Always close/put connection back in finally.
+If DB unavailable, scanner should log error and continue next cycle.
+
+H. Batch persistence safely
+Use execute_values or true batch upsert.
+Dedupe rows before ON CONFLICT to avoid:
+“ON CONFLICT DO UPDATE command cannot affect row a second time”
+
+Use stable unique key:
+
+* condition_id if present
+* else market_slug
+* else hash(event_slug + question)
+
+I. Keep hard exclusions
+Investor/Dashboard scanner must hard-exclude:
+
+* sports
+* esports
+* celebrity
+* entertainment
+* awards
+* movies
+* music
+* influencer/streamer/social media
+* reality TV
+* dating
+* pure pop culture/gambling markets
+
+This exclusion happens before matching and before snapshot writes.
+
+J. Validation
+After changes:
+
+1. App boots normally even if Neon is slow.
+2. /api/health returns quickly.
+3. /api/predict/odds/live returns quickly.
+4. /api/predict/odds/diagnostics returns quickly.
+5. No endpoint triggers full crawl inline.
+6. Scanner loop runs in background only.
+7. Scanner failure does not block app.
+8. DB calls are not executed directly on event loop.
+9. Full crawl still works in background.
+10. Snapshots still write when DB is healthy.
+11. Existing Prophetik endpoints still work.
+12. No frontend changes.
