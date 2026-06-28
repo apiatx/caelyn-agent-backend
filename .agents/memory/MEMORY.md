@@ -31,3 +31,4 @@
 - [Watchlist Stage2 LKG freshness/overwrite guards](watchlist-stage2-lkg-guards.md) — LKG entries now have status field (ok/no_bars/fetch_failed); failed entries use 2h TTL not 20h; bulk null-overwrite guard; force_warmup_stage2_nulls() for recovery; POST /api/admin/stage2/force-warmup
 - [Odds scanner _persist_catalog_bg hang](odds-scanner-persist-hang.md) — connect_timeout kwarg silently ignored by libpq when DSN is a URL; must embed in URL query string; run_in_executor needs wait_for guard
 - [Odds scanner catalog Option C](odds-scanner-option-c.md) — 29k-row catalog upsert removed; in-memory _last_raw_markets fallback; only 26 snapshot rows persisted per cycle
+- [Odds scanner LKG cold-start](odds-scanner-lkg.md) — 3-tier fallback (memory→file LKG→DB snapshot→warming); LKG file at backend/data/predict_odds_live_lkg.json; get_latest_per_family() is the DB fallback source

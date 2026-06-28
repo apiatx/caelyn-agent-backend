@@ -28,7 +28,11 @@ odds_scanner.get_diagnostics()    → sync; returns full diagnostics dict (no DB
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import pathlib
+import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -58,6 +62,7 @@ try:
         get_snapshots_before,
         get_history as _db_get_history,
         get_diagnostics as _db_get_diagnostics,
+        get_latest_per_family as _db_get_latest_per_family,
     )
     _SNAP_STORE_OK = True
 except Exception as _e:
@@ -69,6 +74,7 @@ except Exception as _e:
     def get_snapshots_before(*a, **kw): return []    # type: ignore
     def _db_get_history(*a, **kw): return []         # type: ignore
     def _db_get_diagnostics(*a, **kw): return {}     # type: ignore
+    def _db_get_latest_per_family(*a, **kw): return {}  # type: ignore
 
 try:
     from data.predict_market_catalog_store import (
@@ -116,6 +122,10 @@ _LIVE_CACHE_KEY  = "pm:odds:live"
 _LIVE_CACHE_TTL  = 2100       # 35 min — slightly longer than scan cadence
 _SCAN_LOCK       = asyncio.Lock()
 _SNAPSHOTS_RETAIN_DAYS = 7
+
+# LKG (Last Known Good) file path — written after every successful scan
+_LKG_PATH = pathlib.Path(__file__).parent.parent.parent / "data" / "predict_odds_live_lkg.json"
+_LKG_MAX_AGE_HOURS = 72    # serve file LKG up to 72 h old
 
 # Delta computation window tolerances (seconds)
 _DELTA_1H_TARGET   = 3600
@@ -264,13 +274,173 @@ class OddsScanner:
         self._catalog_crawl_success: bool = False
         # In-memory catalog fallback (Option C: no DB upsert of 29k rows)
         self._last_raw_markets: list[dict] = []
+        # Scan lifecycle tracking
+        self._last_successful_scan_at: Optional[str] = None
+        self._last_scan_error: Optional[str] = None
+        self._scanner_running: bool = False
         # Last-good diagnostics — written after each scan, read by /diagnostics (no DB calls)
         self._last_diagnostics: dict = {
             "cache_warm":            False,
             "registry_family_count": len(ODDS_REGISTRY),
             "live_family_count":     0,
             "missing_family_count":  len(ODDS_REGISTRY),
+            "odds_live_source":      "warming",
+            "lkg_file_exists":       _LKG_PATH.exists(),
+            "lkg_loaded":            False,
+            "lkg_updated_at":        None,
+            "lkg_age_seconds":       None,
+            "db_snapshot_fallback_loaded": False,
+            "last_successful_scan_at": None,
+            "last_scan_error":       None,
+            "scanner_running":       False,
         }
+
+    # ── LKG (Last Known Good) helpers ─────────────────────────────────────────
+
+    def _save_lkg(self, payload: dict) -> bool:
+        """
+        Atomically write the full /odds/live payload to the LKG file.
+        Uses temp-file + rename so readers never see a partial write.
+        Returns True on success.
+        """
+        try:
+            _LKG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _LKG_PATH.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, default=str)
+            os.replace(tmp, _LKG_PATH)
+            log.info("[odds_scanner] LKG written → %s", _LKG_PATH)
+            return True
+        except Exception as exc:
+            log.warning("[odds_scanner] LKG write failed: %s", exc)
+            return False
+
+    def _load_lkg(self, max_age_hours: float = _LKG_MAX_AGE_HOURS) -> Optional[dict]:
+        """
+        Load the LKG file if it exists and is not older than max_age_hours.
+        Returns the payload dict (with status/stale fields injected) or None.
+        """
+        try:
+            if not _LKG_PATH.exists():
+                return None
+            raw = _LKG_PATH.read_text(encoding="utf-8")
+            payload = json.loads(raw)
+            # Check age
+            updated_raw = payload.get("scanned_at") or payload.get("updated_at")
+            if updated_raw:
+                try:
+                    updated_dt = datetime.fromisoformat(str(updated_raw))
+                    if updated_dt.tzinfo is None:
+                        updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+                    age_s = (datetime.now(timezone.utc) - updated_dt).total_seconds()
+                    if age_s > max_age_hours * 3600:
+                        log.info("[odds_scanner] LKG too old (%.0fh), skipping", age_s / 3600)
+                        return None
+                    payload = dict(payload)
+                    payload["cache_age_seconds"] = round(age_s)
+                except Exception:
+                    pass
+            payload["status"]   = "lkg"
+            payload["stale"]    = True
+            payload["cache_warm"] = True
+            payload["last_successful_scan_at"] = payload.get("scanned_at") or payload.get("updated_at")
+            return payload
+        except Exception as exc:
+            log.warning("[odds_scanner] LKG load failed: %s", exc)
+            return None
+
+    def _hydrate_from_db_snapshots(self) -> Optional[dict]:
+        """
+        Reconstruct a /odds/live payload from the latest DB snapshot per family.
+        Used as a second fallback when no LKG file is available.
+        Returns a payload dict with status="stale_db" or None.
+        """
+        if not _SNAP_STORE_OK:
+            return None
+        try:
+            latest: dict[str, dict] = _db_get_latest_per_family()
+            if not latest:
+                return None
+
+            now_dt  = datetime.now(timezone.utc)
+            entries: list[dict] = []
+            missing: list[dict] = []
+
+            for fdef in ODDS_REGISTRY:
+                fk   = fdef["family_key"]
+                snap = latest.get(fk)
+                if snap is None:
+                    missing.append({
+                        "family_key": fk,
+                        "label":      fdef.get("label", fk),
+                        "category":   fdef.get("category", ""),
+                        "priority":   fdef.get("priority", 99),
+                    })
+                    continue
+                yes_prob = snap.get("yes_probability")
+                yes_pct  = round(float(yes_prob) * 100, 2) if yes_prob is not None else None
+                cap_at   = snap.get("captured_at")
+                entry = {
+                    "family_key":       fk,
+                    "label":            fdef.get("label", fk),
+                    "category":         fdef.get("category", ""),
+                    "priority":         fdef.get("priority", 99),
+                    "dashboard_enabled":  fdef.get("dashboard_enabled", True),
+                    "prophetik_enabled":  fdef.get("prophetik_enabled", False),
+                    "preferred_outcome":  fdef.get("preferred_outcome"),
+                    "description":        fdef.get("description", ""),
+                    "yes_probability":  yes_prob,
+                    "yes_pct":          yes_pct,
+                    "market_question":  snap.get("question"),
+                    "condition_id":     None,
+                    "slug":             snap.get("market_slug"),
+                    "volume_24h":       snap.get("volume_24h"),
+                    "liquidity":        snap.get("liquidity"),
+                    "candidate_count":  1,
+                    "driver_markets":   [],
+                    "delta_1h_pp":      None,
+                    "delta_24h_pp":     None,
+                    "delta_7d_pp":      None,
+                    "market_read":      None,
+                    "exposure":         None,
+                    "_db_snap_at":      cap_at,
+                }
+                entries.append(entry)
+
+            entries_sorted = sorted(entries, key=lambda e: e.get("priority", 99))
+            missing_sorted = sorted(missing, key=lambda e: e.get("priority", 99))
+
+            payload = {
+                "updated_at":             now_dt.isoformat(),
+                "scanned_at":             now_dt.isoformat(),
+                "cache_age_seconds":      0,
+                "scan_ms":                None,
+                "live_count":             len(entries),
+                "tracked_count":          len(ODDS_REGISTRY),
+                "total_families":         len(ODDS_REGISTRY),
+                "matched_families":       len(entries),
+                "missing_families_count": len(missing),
+                "odds":                   entries_sorted,
+                "missing_families":       missing_sorted,
+                "status":                 "stale_db",
+                "stale":                  True,
+                "cache_warm":             True,
+                "last_successful_scan_at": None,
+                "diagnostics": {
+                    "cache_warm":          True,
+                    "db_snapshot_fallback": True,
+                    "db_families_loaded":  len(entries),
+                    "odds_live_source":    "db_snapshot",
+                },
+            }
+            log.info(
+                "[odds_scanner] DB snapshot fallback: %d/%d families hydrated",
+                len(entries), len(ODDS_REGISTRY),
+            )
+            return payload
+        except Exception as exc:
+            log.warning("[odds_scanner] DB snapshot hydration failed: %s", exc)
+            return None
 
     # ── Catalog crawl ─────────────────────────────────────────────────────────
 
@@ -360,8 +530,16 @@ class OddsScanner:
 
     async def scan_and_persist(self) -> dict:
         """Full scan cycle. Thread-safe via _SCAN_LOCK."""
-        async with _SCAN_LOCK:
-            return await self._do_scan()
+        self._scanner_running = True
+        try:
+            async with _SCAN_LOCK:
+                return await self._do_scan()
+        except Exception as exc:
+            self._last_scan_error = str(exc)
+            log.warning("[odds_scanner] scan_and_persist error: %s", exc)
+            raise
+        finally:
+            self._scanner_running = False
 
     async def _do_scan(self) -> dict:
         t0 = time.time()
@@ -742,7 +920,19 @@ class OddsScanner:
             "_scan_diag":        diagnostics,
         }
 
+        # ── 11a. Mark status and inject LKG diagnostics fields ───────────────
+        now_iso = now_dt.isoformat()
+        self._last_successful_scan_at = now_iso
+        self._last_scan_error         = None
+        payload["status"]      = "ok"
+        payload["stale"]       = False
+        payload["cache_warm"]  = True
+        payload["last_successful_scan_at"] = now_iso
+
         _mem_cache.set(_LIVE_CACHE_KEY, payload, _LIVE_CACHE_TTL)
+
+        # ── 11b. Write LKG file (sync — fast local disk write) ────────────────
+        self._save_lkg(payload)
 
         # ── 12. Retention (fire-and-forget) ───────────────────────────────────
         try:
@@ -760,7 +950,20 @@ class OddsScanner:
         )
 
         # Store diagnostics for /diagnostics endpoint (pure in-memory, no DB calls)
-        self._last_diagnostics = {**diagnostics, "cache_warm": True}
+        lkg_exists = _LKG_PATH.exists()
+        self._last_diagnostics = {
+            **diagnostics,
+            "cache_warm":                True,
+            "odds_live_source":          "memory",
+            "lkg_file_exists":           lkg_exists,
+            "lkg_loaded":                False,
+            "lkg_updated_at":            now_iso,
+            "lkg_age_seconds":           0,
+            "db_snapshot_fallback_loaded": False,
+            "last_successful_scan_at":   now_iso,
+            "last_scan_error":           None,
+            "scanner_running":           False,
+        }
 
         return payload
 
@@ -772,10 +975,15 @@ class OddsScanner:
 
     def get_live(self) -> dict:
         """
-        Return cached live payload — never triggers an inline scan.
-        If the scanner has not yet run, returns a 'warming' stub so callers
-        always get a valid, fast response.
+        Return the best available /odds/live payload — never triggers an inline scan.
+
+        Priority:
+          1. In-memory cache  → status: "ok"  (set after successful scan)
+          2. Local LKG file   → status: "lkg"  (persisted after last scan, survives restart)
+          3. DB snapshot fallback → status: "stale_db"  (reconstructed from latest DB rows)
+          4. Warming stub     → status: "warming"  (truly nothing available)
         """
+        # ── Tier 1: in-memory cache ────────────────────────────────────────────
         cached = self.get_live_payload()
         if cached is not None:
             try:
@@ -789,8 +997,48 @@ class OddsScanner:
                     cached["cache_age_seconds"] = round(age)
             except Exception:
                 pass
+            cached.setdefault("status", "ok")
+            cached.setdefault("stale", False)
             return cached
-        # Cache cold — return warming stub (spec §D)
+
+        # ── Tier 2: LKG file (survives process restart) ────────────────────────
+        lkg = self._load_lkg()
+        if lkg is not None:
+            log.info("[odds_scanner] /live served from LKG file (%d families)", len(lkg.get("odds", [])))
+            # Patch diagnostics block so the source is visible
+            diag = dict(lkg.get("diagnostics") or {})
+            diag.update({
+                "cache_warm":                True,
+                "odds_live_source":          "file_lkg",
+                "lkg_file_exists":           True,
+                "lkg_loaded":                True,
+                "lkg_updated_at":            lkg.get("last_successful_scan_at") or lkg.get("scanned_at"),
+                "lkg_age_seconds":           lkg.get("cache_age_seconds"),
+                "db_snapshot_fallback_loaded": False,
+                "last_successful_scan_at":   lkg.get("last_successful_scan_at"),
+                "last_scan_error":           self._last_scan_error,
+                "scanner_running":           self._scanner_running,
+            })
+            lkg["diagnostics"] = diag
+            return lkg
+
+        # ── Tier 3: DB snapshot fallback ───────────────────────────────────────
+        log.info("[odds_scanner] /live: no memory/LKG — attempting DB snapshot fallback")
+        db_payload = self._hydrate_from_db_snapshots()
+        if db_payload is not None:
+            diag = dict(db_payload.get("diagnostics") or {})
+            diag.update({
+                "lkg_file_exists":           False,
+                "lkg_loaded":                False,
+                "db_snapshot_fallback_loaded": True,
+                "last_successful_scan_at":   None,
+                "last_scan_error":           self._last_scan_error,
+                "scanner_running":           self._scanner_running,
+            })
+            db_payload["diagnostics"] = diag
+            return db_payload
+
+        # ── Tier 4: warming stub ───────────────────────────────────────────────
         return {
             "updated_at":        None,
             "scanned_at":        None,
@@ -802,7 +1050,18 @@ class OddsScanner:
             "odds":              [],
             "missing_families":  [],
             "status":            "warming",
-            "diagnostics":       {"cache_warm": False},
+            "stale":             True,
+            "cache_warm":        False,
+            "diagnostics": {
+                "cache_warm":                False,
+                "odds_live_source":          "warming",
+                "lkg_file_exists":           _LKG_PATH.exists(),
+                "lkg_loaded":                False,
+                "db_snapshot_fallback_loaded": False,
+                "last_successful_scan_at":   None,
+                "last_scan_error":           self._last_scan_error,
+                "scanner_running":           self._scanner_running,
+            },
         }
 
     # ── History endpoint ──────────────────────────────────────────────────────

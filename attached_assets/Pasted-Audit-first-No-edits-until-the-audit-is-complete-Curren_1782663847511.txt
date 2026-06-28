@@ -1,0 +1,98 @@
+Audit first. No edits until the audit is complete.
+
+Current problem:
+After restart, Prophetik → Market Impact Command Center shows:
+
+“Prediction odds warming… 26 families tracked · cache initializing”
+
+for 10+ minutes, even though historical snapshots exist and Event Impact Ledger has some data. This is unacceptable.
+
+Goal:
+GET /api/predict/odds/live must return the last known good live odds immediately after restart, then refresh in the background. It should not show a long warming spinner unless there is truly no persisted or local cached odds data.
+
+Do not edit frontend yet unless backend behavior proves impossible.
+Do not trigger a full Polymarket crawl inside request handlers.
+Do not block startup.
+Do not break existing scanner/background behavior.
+
+Required behavior:
+
+1. On successful odds scan, save the full `/api/predict/odds/live` payload as a Last Known Good cache.
+2. On app startup or cold memory cache, hydrate `/api/predict/odds/live` from LKG immediately.
+3. If LKG exists, return it with:
+
+   * status: "stale" or "lkg"
+   * cache_warm: true
+   * stale: true
+   * last_successful_scan_at
+   * cache_age_seconds
+   * odds[] populated
+4. Background scanner still refreshes and replaces it with:
+
+   * status: "ok"
+   * stale: false
+5. Only return status: "warming" if no in-memory cache, no local LKG file, and no DB snapshot fallback exist.
+
+Preferred LKG sources:
+A. Fast local JSON file first:
+
+* backend/data/cache/predict_odds_live_lkg.json or existing cache directory pattern
+* write atomically using temp file + rename
+* include updated_at, odds[], missing_families[], diagnostics
+
+B. DB fallback second:
+
+* if local file missing, reconstruct latest odds from prediction_market_odds_snapshots
+* use latest snapshot per family
+* include deltas if available
+* mark status as "stale_db"
+
+Implementation requirements:
+
+1. Add helper functions:
+
+   * save_odds_live_lkg(payload)
+   * load_odds_live_lkg(max_age_hours maybe 48 or 72)
+   * hydrate_latest_odds_from_snapshots() if no file LKG
+2. In odds_scanner:
+
+   * after successful scan and snapshot persistence, write LKG file
+   * update in-memory cache
+3. In `/api/predict/odds/live`:
+
+   * return in-memory cache if available
+   * else return file LKG if available
+   * else return DB latest snapshot fallback if available
+   * else return warming stub
+4. Do not run scanner inline inside the `/live` request.
+5. Do not query heavy catalog data in `/live`.
+6. Keep `/diagnostics` cheap/cache-only.
+
+Diagnostics:
+Add fields:
+
+* lkg_file_exists
+* lkg_loaded
+* lkg_updated_at
+* lkg_age_seconds
+* db_snapshot_fallback_loaded
+* last_successful_scan_at
+* odds_live_source: "memory" | "file_lkg" | "db_snapshot" | "warming"
+* scanner_running
+* last_scan_error
+
+Validation:
+
+1. Warm scanner once.
+2. Confirm LKG file is written.
+3. Restart app.
+4. Immediately call `/api/predict/odds/live`.
+5. It should return odds[] within <500ms and should NOT say warming if LKG exists.
+6. It should mark status as "stale" or "lkg" until fresh scan completes.
+7. After background scan completes, status changes to "ok" or stale=false.
+8. Prophetik `/api/predict/investor/intelligence` should also benefit from the same hydrated tracked odds if applicable.
+9. No endpoint triggers full Polymarket crawl inline.
+10. Existing Prophetik endpoints still work.
+
+Important:
+Do not claim this is fixed unless the restart test proves `/api/predict/odds/live` returns populated odds immediately after restart.
