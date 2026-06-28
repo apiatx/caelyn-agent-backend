@@ -263,9 +263,22 @@ class InvestorIntel:
         # ── Watchlist symbols (sync disk read) ─────────────────────────────────
         watchlist_syms = _get_watchlist_symbols()
 
-        # ── Tracked odds ───────────────────────────────────────────────────────
-        from services.predict.investor.tracked_odds import build_tracked_odds
-        tracked_odds = build_tracked_odds(all_markets)
+        # ── Tracked odds (scanner-backed, falls back to pure-function stub) ──
+        # odds_scanner.scan_and_persist() is pre-warmed every 30 min by
+        # _odds_scanner_loop() in main.py and carries full 7-day DB history.
+        # Fall back to build_tracked_odds() on cold start (scanner not yet run).
+        try:
+            from services.predict.odds_scanner import odds_scanner as _odds_scanner
+            _scanner_payload = _odds_scanner.get_live_payload()
+            if _scanner_payload is not None:
+                tracked_odds = _scanner_payload.get("odds", [])
+            else:
+                from services.predict.investor.tracked_odds import build_tracked_odds
+                tracked_odds = build_tracked_odds(all_markets)
+        except Exception as _oe:
+            logger.warning("odds_scanner unavailable, falling back: %s", _oe)
+            from services.predict.investor.tracked_odds import build_tracked_odds
+            tracked_odds = build_tracked_odds(all_markets)
 
         # ── Equity signals — event-family-centric ──────────────────────────────
         classified = classify_markets(scored)

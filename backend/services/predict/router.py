@@ -336,6 +336,65 @@ async def predict_diagnostics():
     })
 
 
+@router.get("/api/predict/odds/live")
+async def predict_odds_live():
+    """
+    Live tracked odds for all registry families — Market Dashboard widget source.
+
+    Returns the most recent scanner payload including:
+      - yes_probability, yes_pct
+      - delta_1h_pp / delta_24h_pp / delta_7d_pp  (from 7-day DB history when available,
+        falls back to Polymarket's own price_change fields on cold start)
+      - volume_24h, liquidity, candidate_count, driver_markets
+      - dashboard_enabled / prophetik_enabled / preferred_outcome / priority flags
+
+    The payload is pre-warmed every 30 minutes by the _odds_scanner_loop background
+    task. On the first request after a cold start, the scan runs inline (~2–5 s).
+    """
+    try:
+        from services.predict.odds_scanner import odds_scanner as _os
+        payload = await _os.get_live()
+        return JSONResponse(content=payload)
+    except Exception as e:
+        print(f"[PREDICT/odds/live] Error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@router.get("/api/predict/odds/history")
+async def predict_odds_history(
+    family_key: str = Query(..., min_length=2, max_length=80),
+    days: int = Query(7, ge=1, le=7),
+):
+    """
+    7-day probability history for a single tracked-odds family.
+
+    Returns time-series snapshots (one per 30-min scan) as an array of:
+      { captured_at, yes_probability, yes_pct, volume_24h, liquidity }
+
+    Use the family_key values from /api/predict/odds/live
+    (e.g. "fed_rate_decision", "bitcoin_price", "russia_ukraine").
+
+    Suitable for charting a family's probability over time.
+    """
+    try:
+        from services.predict.odds_scanner import odds_scanner as _os
+        result = _os.get_history(family_key=family_key, days=days)
+        return JSONResponse(content=result)
+    except Exception as e:
+        print(f"[PREDICT/odds/history] Error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+@router.get("/api/predict/odds/diagnostics")
+async def predict_odds_diagnostics():
+    """Diagnostics for the Tracked Odds Registry scanner and Neon snapshot table."""
+    try:
+        from services.predict.odds_scanner import odds_scanner as _os
+        return JSONResponse(content=_os.get_diagnostics())
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
 @router.post("/api/predict/analyze")
 async def predict_analyze(request: Request, body: dict, _sub: None = Depends(require_subscription)):
     """

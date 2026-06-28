@@ -355,6 +355,29 @@ async def _home_planning_warmup_loop():
         await asyncio.sleep(3600)     # re-check every hour
 
 
+async def _odds_scanner_loop():
+    """
+    Tracked Odds Registry — scan and persist loop.
+
+    Fetches live Polymarket markets every 30 minutes, matches them to all
+    registry families, writes snapshots to Neon/Postgres (7-day retention),
+    computes 1h/24h/7d deltas from stored history, and caches the live payload.
+
+    Runs 90 s after startup so the Polymarket cache is warm but before the
+    investor intelligence loop (120 s) fires — ensuring get_intelligence()
+    sees a populated odds_scanner on its first call.
+    """
+    await asyncio.sleep(90)    # let Polymarket cache warm; beat intelligence loop
+    while True:
+        try:
+            from services.predict.odds_scanner import odds_scanner as _os
+            await _os.scan_and_persist()
+            print("[ODDS_SCANNER] Tracked odds scan complete — snapshot persisted")
+        except Exception as _osl_err:
+            print(f"[ODDS_SCANNER] scan error (non-fatal): {_osl_err}")
+        await asyncio.sleep(1800)   # 30 minutes
+
+
 async def _investor_intelligence_loop():
     """
     Pre-warm the Predict page investor intelligence cache every 30 minutes.
@@ -566,6 +589,9 @@ async def lifespan(app):
     # /api/home/top-catalysts request is served from the in-process cache
     # rather than triggering an on-demand FMP fetch inline.
     asyncio.create_task(_home_planning_warmup_loop())
+    # Tracked Odds Registry: fetch → match → persist → delta → cache, every 30 min.
+    # Runs at 90 s so it beats the intelligence loop (120 s) on first cycle.
+    asyncio.create_task(_odds_scanner_loop())
     # Predict page investor intelligence: pre-warm event-family payload every 30 min.
     # Covers tracked macro odds, equity signals, watchlist-first ticker resolution.
     asyncio.create_task(_investor_intelligence_loop())

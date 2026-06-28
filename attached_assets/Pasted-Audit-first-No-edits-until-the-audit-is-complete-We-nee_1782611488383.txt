@@ -1,0 +1,236 @@
+Audit first. No edits until the audit is complete.
+
+We need a durable Tracked Odds Registry for Prophetik / Prediction Markets that continuously tracks the most important Polymarket odds for stock-market relevance and stores 7 days of history.
+
+This is higher priority than frontend cleanup.
+
+Goal:
+Create a backend system that scans Polymarket every ~30 minutes for important macro / political / economic / market-moving odds, saves snapshots for 7 days, computes 1h / 24h / 7d deltas, and exposes compact payloads for both:
+
+1. Prophetik Investor page
+2. Market Dashboard live odds widget
+
+Do not remove existing Prophetik endpoints.
+Do not edit frontend yet.
+Do not break /api/predict/investor/overview or /api/predict/investor/intelligence.
+
+Must-track odds families:
+Fed / Rates:
+
+* Next Fed decision by date
+* Number of Fed cuts in 2026
+* Fed hikes in 2026
+
+Macro:
+
+* Recession by date
+* CPI / inflation reading/surprise
+* Jobs / unemployment / GDP if live liquid markets exist
+
+Index / Daily Market Direction:
+
+* S&P 500 / SPX up or down today
+* Nasdaq up or down today
+* Dow up or down today
+* Major index target milestone markets
+
+Mega-cap / Watchlist Price Milestones:
+
+* NVDA target price milestone markets
+* TSLA target price milestone markets
+* AAPL price milestone markets
+* MSFT price milestone markets
+* GOOGL / Alphabet price milestone markets
+* AMD price milestone markets
+* Any similar markets for tickers in the user’s watchlist
+
+Tech / Earnings / AI:
+
+* Tech earnings markets
+* Watchlist company earnings odds where available
+* AI / chips / semiconductors / data center / export controls / regulation markets
+
+Geopolitics / Commodities:
+
+* Iran / Israel / Strait of Hormuz
+* Russia / Ukraine
+* China / Taiwan
+* tariffs / sanctions / trade war
+* oil / crude price milestones
+* gold price milestones
+* Bitcoin price milestones as liquidity/risk proxy
+
+Audit requirements:
+
+1. Find current Polymarket fetcher/provider files.
+2. Find current tracked_odds.py implementation.
+3. Find current event_grouping.py implementation.
+4. Find current scheduler loop added for investor intelligence.
+5. Find existing Neon/Postgres helpers and patterns for creating tables / upserts / retention.
+6. Find existing Market Dashboard backend endpoint(s) where a compact live odds widget could be added later.
+7. Report exact file paths and current shapes before editing.
+
+Implementation requirements:
+
+1. Add a tracked odds registry module.
+   It should define family records:
+   {
+   family_key,
+   label,
+   category,
+   priority,
+   dashboard_enabled,
+   prophetik_enabled,
+   search_queries,
+   keyword_patterns,
+   exclude_patterns,
+   preferred_outcome
+   }
+
+2. Add persistent snapshot storage in Neon/Postgres.
+   Suggested table:
+   prediction_market_odds_snapshots
+
+Columns:
+
+* id
+* family_key
+* market_id
+* market_slug
+* question
+* source
+* yes_probability
+* no_probability
+* best_bid
+* best_ask
+* volume_24h
+* liquidity
+* end_date
+* captured_at
+* raw_json
+
+Use existing DB helper patterns. Do not invent a separate database system.
+
+3. Add retention.
+   Keep at least 7 days of snapshots.
+   Delete/compact older data safely.
+
+4. Add scanner.
+   Every ~30 minutes:
+
+* search/fetch Polymarket markets for every registry family
+* match markets to families using keyword_patterns/search_queries
+* exclude sports/gambling markets for Investor/Dashboard unless family explicitly allows it
+* choose the best live market per family using liquidity, volume, recency, and relevance score
+* save snapshot
+* compute latest odds and deltas
+
+5. Deltas:
+   Compute:
+
+* delta_1h_pp
+* delta_24h_pp
+* delta_7d_pp
+  based on nearest previous snapshot at or before the target time.
+  If no old snapshot exists, return null.
+
+6. Add endpoint:
+   GET /api/predict/odds/live
+
+Return compact payload:
+{
+updated_at,
+cache_age_seconds,
+live_count,
+tracked_count,
+odds: [
+{
+family_key,
+label,
+category,
+priority,
+dashboard_enabled,
+prophetik_enabled,
+source,
+market_id,
+question,
+yes_probability,
+no_probability,
+delta_1h_pp,
+delta_24h_pp,
+delta_7d_pp,
+volume_24h,
+liquidity,
+end_date,
+url,
+status: "live"
+}
+],
+missing_families: [
+{
+family_key,
+label,
+category,
+status: "not_found"
+}
+],
+diagnostics: {}
+}
+
+Important display rule:
+The primary frontend payload should put live odds first and should not force render missing families as giant empty rows.
+
+7. Add endpoint:
+   GET /api/predict/odds/history?family_key=...&days=7
+
+Return time series snapshots for charting:
+{
+family_key,
+label,
+days,
+points: [
+{
+captured_at,
+yes_probability,
+volume_24h,
+liquidity
+}
+]
+}
+
+8. Integrate with existing Prophetik engine/intelligence.
+   The Prophetik Investor engine should consume / use the same tracked odds registry results, not its own separate tracked odds stubs.
+
+9. Prepare Market Dashboard integration.
+   Do not edit frontend yet, but expose the /api/predict/odds/live endpoint so Market Dashboard can render:
+
+* top 5–8 dashboard_enabled live odds
+* ordered by priority, volume/liquidity, and recent movement
+
+Diagnostics:
+Include:
+
+* registry_family_count
+* searched_family_count
+* live_family_count
+* missing_family_count
+* snapshots_written
+* snapshots_retained_days
+* snapshot_table_name
+* hardcoded_sector_stocks_used: false
+* sports_excluded_count
+* build_time_ms
+* last_scan_at
+
+Validation:
+
+1. /api/predict/odds/live returns tracked_count >= number of registry families.
+2. It shows live odds only in odds[] and missing families separately.
+3. It includes Fed, recession, cuts/hikes, SPX/index, NVDA/mega-cap milestones, tech/earnings, geopolitics, commodities families in registry.
+4. It writes snapshots to Neon/Postgres.
+5. It computes 1h/24h/7d deltas when enough history exists.
+6. It retains 7 days and does not grow forever.
+7. Investor mode excludes sports.
+8. Existing Prophetik endpoints still work.
+9. Scheduler runs every ~30 minutes.
+10. No frontend changes in this pass.
