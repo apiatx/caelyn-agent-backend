@@ -632,8 +632,11 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             "bitcoin green today", "bitcoin red today",
             "btc green today", "btc red today",
             # Up or Down (daily/weekly, not 5-minute micromarkets)
+            # also matches date-specific phrasing: "Bitcoin Up or Down on Jun 29?"
             "bitcoin up or down today", "bitcoin up or down this week",
+            "bitcoin up or down on",
             "btc up or down today", "btc up or down this week",
+            "btc up or down on",
             # Weekly close
             "bitcoin weekly close", "bitcoin close this week",
             "btc weekly close", "btc close this week",
@@ -653,6 +656,153 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             ":00am", ":05am", ":10am", ":15am", ":20am", ":25am",
         ],
         "preferred_outcome": "yes",
+    },
+
+    # ─── WTI Daily Direction ──────────────────────────────────────────────────
+    #
+    # Tracks daily close direction for WTI crude oil: up vs down.
+    # Polymarket phrasing: "WTI Crude Oil (WTI) Up or Down on [date]"
+    # allow_near_expiry=True: these expire same day.
+
+    {
+        "family_key":       "wti_daily_direction",
+        "label":            "WTI Oil Daily Direction",
+        "category":         "Commodities / Energy",
+        "priority":         30,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "allow_near_expiry": True,
+        "search_queries":   ["WTI oil up today", "WTI crude oil up or down"],
+        "keyword_patterns": [
+            # Polymarket exact phrasing
+            "wti crude oil (wti) up or down",
+            "wti up or down", "crude oil up or down",
+            # Close direction
+            "wti close higher", "wti close lower",
+            "wti end higher", "wti end lower",
+            "crude oil close higher", "crude oil close lower",
+            # Up/down phrasing
+            "wti up today", "wti down today",
+            "oil up today", "oil down today",
+            "wti up or down on", "wti crude up or down on",
+            "crude oil up or down on",
+            # Weekly/date-specific
+            "wti up or down this week",
+        ],
+        "exclude_patterns": [
+            "above $", "below $", "hit $", "reach $",
+            "wti hit", "wti reach", "price of wti",
+            "oil above", "oil below", "crude above", "crude below",
+            "wti above", "wti below",
+        ],
+        "preferred_outcome": "yes",
+    },
+
+    # ─── Gold Daily Direction ─────────────────────────────────────────────────
+    #
+    # Tracks daily close direction for gold (XAUUSD): up vs down.
+    # Polymarket phrasing: "Gold (XAUUSD) Up or Down on [date]"
+
+    {
+        "family_key":       "gold_daily_direction",
+        "label":            "Gold Daily Direction",
+        "category":         "Commodities / Safe Haven",
+        "priority":         31,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "allow_near_expiry": True,
+        "search_queries":   ["gold close higher today", "Gold XAUUSD up or down"],
+        "keyword_patterns": [
+            # Polymarket exact phrasing
+            "gold (xauusd) up or down",
+            "xauusd up or down",
+            # General up/down
+            "gold up or down", "gold up or down on", "gold up or down this week",
+            # Close direction
+            "gold close higher", "gold close lower",
+            "gold end higher", "gold end lower",
+            # Daily phrasing
+            "gold up today", "gold down today",
+            "will gold close higher", "will gold close lower",
+        ],
+        "exclude_patterns": [
+            "above $", "below $", "gold hit", "gold reach",
+            "gold above", "gold below", "gold price",
+            "xau above", "xau below",
+        ],
+        "preferred_outcome": "yes",
+    },
+
+    # ─── NVDA Daily Direction ─────────────────────────────────────────────────
+    #
+    # Tracks daily close direction for NVIDIA stock: up vs down.
+    # Polymarket phrasing: "NVIDIA (NVDA) Up or Down on [date]"
+    # Note: may have low volume — quality field will reflect.
+
+    {
+        "family_key":       "nvda_daily_direction",
+        "label":            "NVIDIA Daily Direction",
+        "category":         "Equities / Tech",
+        "priority":         32,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "allow_near_expiry": True,
+        "search_queries":   ["NVDA up or down today", "Nvidia close higher"],
+        "keyword_patterns": [
+            # Polymarket exact phrasing
+            "nvidia (nvda) up or down",
+            "nvda up or down", "nvidia up or down",
+            "nvda up or down on", "nvidia up or down on",
+            # Close direction
+            "nvda close higher", "nvda close lower",
+            "nvidia close higher", "nvidia close lower",
+            # Daily phrasing
+            "nvda up today", "nvda down today",
+            "nvidia up today", "nvidia down today",
+            "will nvidia close higher", "will nvda close higher",
+        ],
+        "exclude_patterns": [
+            "above $", "below $",
+            "nvda hit", "nvda reach", "nvidia hit", "nvidia reach",
+            "nvda earnings", "nvidia earnings", "nvda revenue", "nvidia revenue",
+            "nvda above", "nvda below", "nvidia above", "nvidia below",
+        ],
+        "preferred_outcome": "yes",
+    },
+
+    # ─── S&P 500 Year-End Milestone ───────────────────────────────────────────
+    #
+    # Tracks market consensus on where the S&P 500 will close on Dec 31.
+    # Kalshi PRIMARY via KXINXDIRY (multi-strike ladder).
+    # Polymarket fallback: above-level milestone markets for Dec 31.
+    # preferred_outcome="higher": equity-positive read is S&P finishing higher.
+
+    {
+        "family_key":       "spx_dec31_milestone",
+        "label":            "S&P 500 Year-End Level",
+        "category":         "Indices / Macro",
+        "priority":         29,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "search_queries":   ["S&P 500 year end 2026", "SPX December 31 2026"],
+        "keyword_patterns": [
+            # Kalshi phrasing
+            "s&p price at year-end", "s&p price on dec 31",
+            "s&p 500 on dec 31", "s&p 500 be above",
+            # General year-end phrasing
+            "spx year end", "spx year-end", "s&p year end", "s&p 500 year-end",
+            "s&p 500 close above", "spx close above",
+            # Specific Dec 31 Polymarket style
+            "s&p above", "spy close above",
+        ],
+        "exclude_patterns": [
+            # Exclude today/this-week direction markets
+            "up or down", "close higher", "close lower",
+            "up today", "down today", "this week",
+            # Exclude daily direction phrasing
+            "end higher", "end lower",
+        ],
+        "preferred_outcome": "higher",
     },
 ]
 

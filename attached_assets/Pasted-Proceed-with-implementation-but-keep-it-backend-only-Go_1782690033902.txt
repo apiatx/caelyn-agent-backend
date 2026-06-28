@@ -1,0 +1,290 @@
+Proceed with implementation, but keep it backend-only.
+
+Goal:
+Add Kalshi as a second prediction-market provider for specific high-quality finance contracts, while preserving the existing Polymarket scanner and Prophetik frontend contract display.
+
+Do not edit frontend yet.
+Do not remove or replace the Polymarket scanner.
+Do not break current enriched fields.
+Do not break LKG/stale_db loading.
+Do not touch Gambler mode.
+Do not require authenticated Kalshi endpoints for display.
+Do not print Kalshi env values.
+
+Architecture:
+Create a new Kalshi public-market scanner/service, parallel to the existing Polymarket odds scanner.
+
+Use Kalshi PRIMARY for:
+
+* spx_daily_direction via KXINXDUD
+* nasdaq_daily_direction via KXNASDAQDUD
+* spx_dec31_milestone via KXINXDIRY-26DEC31H1600 or latest matching Dec 31 event
+
+Use Polymarket PRIMARY/FALLBACK for:
+
+* btc_daily_direction
+* wti_daily_direction
+* gold_daily_direction
+* nvda_daily_direction
+* existing Fed/recession/geopolitical/AI/mega-cap/BTC price milestone families
+
+Do not fake missing Kalshi markets:
+
+* dow_daily_direction: missing unless either provider has a valid daily binary
+* btc_daily_direction: only include if a non-garbage active market exists
+* wti_daily_direction: use Polymarket if active; Kalshi only if a real binary daily up/down exists
+* gold_daily_direction: use Polymarket if active; Kalshi only if a real binary daily up/down exists
+* nvda_daily_direction: use Polymarket if active; Kalshi only if a real binary daily up/down exists
+
+Implementation requirements:
+
+1. New service
+   Add a backend service such as:
+   backend/services/predict/kalshi_scanner.py
+
+It should use public Kalshi market data only:
+Base URL:
+https://external-api.kalshi.com/trade-api/v2
+
+No auth required for this pass.
+
+2. Kalshi fetch logic
+
+For daily contracts:
+
+* Fetch latest/open event for series:
+
+  * KXINXDUD for S&P 500 Daily Up/Down
+  * KXNASDAQDUD for NASDAQ-100 Daily Up/Down
+* Select the active/open event with the nearest close_time.
+* Select its binary market.
+* Extract:
+
+  * market_ticker
+  * event_ticker
+  * series_ticker
+  * title
+  * subtitle
+  * question
+  * yes_bid
+  * yes_ask
+  * last_price
+  * probability
+  * volume
+  * volume_24h if available
+  * open_interest
+  * liquidity if available
+  * close_time
+  * expiration_time
+  * status
+
+Probability rule:
+
+* Prefer midpoint of yes_bid/yes_ask if both exist.
+* Else use last_price.
+* Else use yes_bid/yes_ask fallback.
+* Normalize to 0–1.
+
+3. SPX Dec 31 / year-end
+
+Use Kalshi for:
+
+* spx_dec31_milestone
+
+Series:
+
+* KXINXDIRY
+
+Find the Dec 31, 2026 event or current year-end event.
+Represent the strike ladder as outcomes[].
+
+For each strike market:
+
+* label like “Above 6,900”
+* probability from midpoint/last
+* market_ticker
+* volume/open_interest
+
+Pick a priced/default outcome:
+
+* choose the closest high-volume strike near current relevant ladder center, or highest-liquidity strike if no better logic exists.
+* Preserve full outcomes[] so frontend can show the ladder.
+
+4. Normalize Kalshi rows into the existing tracked odds row shape
+
+Every Kalshi row must match the same schema already used by Polymarket rows:
+
+* family_key
+* provider: "kalshi"
+* question
+* display_title
+* display_subtitle
+* event_title
+* contract_context
+* priced_outcome_label
+* priced_probability
+* outcomes[]
+* outcome_summary
+* end_date
+* url if constructable
+* volume_24h
+* liquidity
+* open_interest
+* market_read
+* exposure
+* quality
+
+For daily direction rows:
+Example question:
+“Will the S&P 500 be above 7354.02 on Jun 29 at 4pm EDT?”
+
+priced_outcome_label:
+“Up” or “Above 7354.02”
+
+outcomes[]:
+
+* Up / Above strike
+* Down / At or below strike
+
+5. Provider routing / merge
+
+In the main odds scanner, merge provider results by family_key.
+
+Routing priority:
+
+* For spx_daily_direction: Kalshi first, Polymarket fallback
+* For nasdaq_daily_direction: Kalshi first, Polymarket fallback
+* For spx_dec31_milestone: Kalshi first, Polymarket fallback
+* For other families: existing Polymarket first
+
+If both providers have a valid row for the same family:
+
+* choose higher quality score based on liquidity/volume/open_interest
+* preserve provider in diagnostics
+* optionally include alternative_provider_candidates in diagnostics, not the main UI payload
+
+Do not duplicate the same family twice in odds[].
+
+6. Add/repair families
+
+Make sure these family keys exist:
+
+* spx_daily_direction
+* nasdaq_daily_direction
+* dow_daily_direction
+* btc_daily_direction
+* wti_daily_direction
+* gold_daily_direction
+* nvda_daily_direction
+* spx_dec31_milestone
+
+Kalshi will immediately satisfy:
+
+* spx_daily_direction
+* nasdaq_daily_direction
+* spx_dec31_milestone
+
+Polymarket should be used for:
+
+* btc_daily_direction if a valid non-micro active market exists
+* wti_daily_direction if active
+* gold_daily_direction if active
+* nvda_daily_direction if active
+
+7. Polymarket daily direction matching
+
+For the exact user-requested Polymarket-style markets, improve matching for:
+
+* “Bitcoin Up or Down on [date]”
+* “BTC Up or Down on [date]”
+* “WTI Crude Oil (WTI) Up or Down on [date]”
+* “Gold (XAUUSD) Up or Down on [date]”
+* “NVIDIA (NVDA) Up or Down on [date]”
+
+Allow current/next-day date-specific wording.
+Do not require “today.”
+Use active/open status and near-term end_date.
+
+Quality rules:
+
+* NVDA example may have very low volume. It can be included, but mark quality: "low" if volume/liquidity is low.
+* BTC 5-minute micro markets should be excluded unless they pass a meaningful volume/liquidity threshold.
+* Prefer daily over 5-minute micro markets.
+
+8. Staleness
+
+Daily direction rows from any provider must obey the existing stale guard:
+
+* allowed while active/open, even near expiry
+* stripped from memory/LKG/stale_db after end_date passes
+* moved to missing_families with reason: "no_active_daily_market"
+
+This must apply to Kalshi rows too.
+
+9. Diagnostics
+
+Add diagnostics:
+
+* kalshi_public_api_ok
+* kalshi_auth_ok
+* kalshi_auth_error_type, without secrets
+* kalshi_spx_daily_matched
+* kalshi_nasdaq_daily_matched
+* kalshi_spx_dec31_matched
+* kalshi_rows_returned
+* provider_selected_by_family
+* provider_fallback_used_by_family
+* polymarket_daily_candidates_seen
+* wti_daily_direction_candidates_seen
+* gold_daily_direction_candidates_seen
+* nvda_daily_direction_candidates_seen
+* btc_daily_direction_candidates_seen
+* micro_markets_excluded_count
+
+Auth diagnostic:
+
+* If public API works but auth fails, do not fail the scanner.
+* Report auth as unavailable/misconfigured.
+* Public display should continue.
+
+10. Validation
+
+Force scan and verify:
+
+A. Kalshi:
+
+* spx_daily_direction appears from Kalshi if KXINXDUD has an active event.
+* nasdaq_daily_direction appears from Kalshi if KXNASDAQDUD has an active event.
+* spx_dec31_milestone appears from Kalshi if KXINXDIRY Dec 31 event is active.
+
+B. Polymarket:
+
+* wti_daily_direction appears if active Polymarket market exists.
+* gold_daily_direction appears if active Polymarket market exists.
+* nvda_daily_direction appears if active Polymarket market exists.
+* btc_daily_direction appears only if a valid non-micro active market exists.
+
+C. Schema:
+Every new row includes:
+
+* provider
+* question
+* priced_probability
+* priced_outcome_label
+* outcomes[]
+* outcome_summary
+* end_date
+* market_read
+* exposure
+
+D. Safety:
+
+* Existing Fed/recession/geopolitical/NVDA milestone/BTC price milestone rows still work.
+* No sports/pop-culture rows appear.
+* LKG/stale_db still loads instantly.
+* Expired daily rows are stripped from all serving tiers.
+
+E. Output:
+Return a validation table:
+
+family_key | provider | matched | question | probability | volume | liquidity/OI | end_date | quality | fallback_reason

@@ -313,6 +313,44 @@ _FAMILY_EXPOSURE_MAP: dict[str, dict] = {
         "bearish_sectors": [],
         "invert_on_below": True,
     },
+
+    # ── Daily Commodities / Equities Direction ────────────────────────────────
+
+    "wti_daily_direction": {
+        # preferred_outcome=yes → WTI closes UP
+        "market_read":     "commodity pressure",
+        "bullish_sectors": ["Energy"],
+        "bearish_sectors": ["Airlines/Transport", "Consumer Discretionary"],
+        "invert_on_below": False,
+    },
+
+    "gold_daily_direction": {
+        # preferred_outcome=yes → Gold closes UP (risk-off / safe-haven)
+        "market_read":     "risk-off",
+        "bullish_sectors": ["Gold/Metals/Commodities"],
+        "bearish_sectors": [],
+        "invert_on_below": False,
+    },
+
+    "nvda_daily_direction": {
+        # preferred_outcome=yes → NVDA closes UP
+        "market_read":              "tech bullish",
+        "direct_tickers_bullish":   ["NVDA"],
+        "bullish_sectors":          ["Semiconductors", "AI Infra/Data Centers"],
+        "bearish_sectors":          [],
+        "invert_on_below":          False,
+    },
+
+    # ── SPX Year-End Milestone ────────────────────────────────────────────────
+
+    "spx_dec31_milestone": {
+        # preferred_outcome=higher → S&P finishes above the strike level
+        "market_read":     "risk-on",
+        "bullish_sectors": ["Software/Growth Tech", "Semiconductors",
+                            "Consumer Discretionary", "Financials"],
+        "bearish_sectors": [],
+        "invert_on_below": True,
+    },
 }
 
 

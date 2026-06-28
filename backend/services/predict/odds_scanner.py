@@ -123,6 +123,19 @@ except Exception as _exp_e:
     def _resolve_family_exposure(*a, **kw): return "mixed", {}  # type: ignore
     def _build_canonical_ticker_map() -> dict: return {}  # type: ignore
 
+try:
+    from services.predict.kalshi_scanner import (
+        scan_kalshi as _scan_kalshi,
+        KALSHI_PRIMARY_FAMILIES as _KALSHI_PRIMARY_FAMILIES,
+    )
+    _KALSHI_SCANNER_OK = True
+except Exception as _ks_e:
+    log.warning("[odds_scanner] kalshi_scanner import error: %s", _ks_e)
+    _KALSHI_SCANNER_OK = False
+    async def _scan_kalshi() -> dict:  # type: ignore
+        return {}
+    _KALSHI_PRIMARY_FAMILIES: frozenset = frozenset()  # type: ignore
+
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -537,6 +550,135 @@ def _strip_expired_daily_directions(payload: dict, now_dt: datetime) -> tuple:
     return payload, excluded
 
 
+# ── Kalshi live-entry builder ─────────────────────────────────────────────────
+
+def _make_kalshi_live_entry(
+    family_key: str,
+    fdef: dict,
+    krow: dict,
+    now_ts: float,
+    now_dt: datetime,
+) -> dict:
+    """
+    Convert a normalized Kalshi row (from kalshi_scanner.scan_kalshi) into a
+    live_pre entry with the same shape produced by the Polymarket matching loop.
+
+    The _best_enriched stub has empty clob_token_ids so the CLOB gather step
+    exits early (no Kalshi CLOB data exists).
+    The _snap_row is included so Kalshi rows appear in the 7-day history DB.
+    """
+    yes_prob = krow.get("yes_probability")
+    yes_pct  = krow.get("yes_pct")
+
+    _best_enriched: dict = {
+        "yes_pct":          yes_pct,
+        "yes_price":        yes_prob,
+        "volume_24h":       krow.get("volume_24h"),
+        "liquidity":        krow.get("liquidity"),
+        "clob_token_ids":   [],
+        "_clob_price_used": False,
+    }
+
+    return {
+        # ── Registry metadata ────────────────────────────────────────────────
+        "family_key":        family_key,
+        "label":             fdef.get("label", family_key),
+        "category":          fdef.get("category", ""),
+        "priority":          fdef.get("priority", 99),
+        "dashboard_enabled": fdef.get("dashboard_enabled", True),
+        "prophetik_enabled": fdef.get("prophetik_enabled", False),
+        "preferred_outcome": fdef.get("preferred_outcome", "yes"),
+        "description":       fdef.get("description", ""),
+        # ── Pricing ──────────────────────────────────────────────────────────
+        "yes_probability":   yes_prob,
+        "yes_pct":           yes_pct,
+        # ── Market identity ───────────────────────────────────────────────────
+        "market_question":   krow.get("question", ""),
+        "question":          krow.get("question", ""),
+        "condition_id":      None,
+        "slug":              krow.get("slug", ""),
+        "market_slug":       krow.get("market_slug", ""),
+        "event_slug":        krow.get("event_slug", ""),
+        "event_title":       krow.get("event_title", ""),
+        "url":               krow.get("url", ""),
+        "end_date":          krow.get("end_date"),
+        # ── Display / outcome context ─────────────────────────────────────────
+        "display_title":        krow.get("display_title", ""),
+        "display_subtitle":     krow.get("display_subtitle", ""),
+        "contract_context":     krow.get("contract_context", ""),
+        "priced_outcome":       krow.get("priced_outcome", "Yes"),
+        "priced_outcome_label": krow.get("priced_outcome_label", ""),
+        "priced_probability":   krow.get("priced_probability"),
+        "outcomes":             krow.get("outcomes") or [],
+        "outcome_summary":      krow.get("outcome_summary", ""),
+        "clob_token_ids":       [],
+        "neg_risk":             False,
+        # ── Volume / liquidity ────────────────────────────────────────────────
+        "volume_24h":        krow.get("volume_24h"),
+        "liquidity":         krow.get("liquidity"),
+        "candidate_count":   krow.get("candidate_count", 1),
+        "driver_markets":    [],
+        # ── Provider tag ──────────────────────────────────────────────────────
+        "provider":                 "kalshi",
+        "_kalshi_market_ticker":    krow.get("_kalshi_market_ticker", ""),
+        "_kalshi_event_ticker":     krow.get("_kalshi_event_ticker", ""),
+        "_kalshi_series_ticker":    krow.get("_kalshi_series_ticker", ""),
+        # ── CLOB staging (Kalshi has no CLOB; empty tokens → skipped) ─────────
+        "_best_enriched":    _best_enriched,
+        # ── Delta staging fields (popped in step 8) ───────────────────────────
+        "_api_1h":      None,
+        "_api_24h":     None,
+        "_api_7d":      None,
+        "_yes_pct_raw": yes_pct,
+        # ── Snapshot row (persisted to DB in step 7) ─────────────────────────
+        "_snap_row": {
+            "family_key":      family_key,
+            "market_id":       (
+                krow.get("_kalshi_market_ticker")
+                or krow.get("slug", "")
+                or family_key
+            ),
+            "market_slug":     krow.get("market_slug"),
+            "question":        krow.get("question"),
+            "source":          "kalshi",
+            "yes_probability": yes_prob,
+            "no_probability":  (
+                round(1.0 - yes_prob, 6) if yes_prob is not None else None
+            ),
+            "best_bid":        None,
+            "best_ask":        None,
+            "volume_24h":      krow.get("volume_24h"),
+            "liquidity":       krow.get("liquidity"),
+            "end_date":        krow.get("end_date"),
+            "captured_at":     now_dt,
+            "raw_json": {
+                "question":             krow.get("question"),
+                "yes_pct":              yes_pct,
+                "price_change_1h":      None,
+                "price_change_1d":      None,
+                "price_change_1wk":     None,
+                "volume_24h":           krow.get("volume_24h"),
+                "catalog_source":       "kalshi",
+                "event_title":          krow.get("event_title", ""),
+                "event_slug":           krow.get("event_slug", ""),
+                "url":                  krow.get("url", ""),
+                "outcomes":             krow.get("outcomes") or [],
+                "outcome_summary":      krow.get("outcome_summary", ""),
+                "priced_outcome_label": krow.get("priced_outcome_label", ""),
+                "priced_probability":   krow.get("priced_probability"),
+                "display_title":        krow.get("display_title", ""),
+                "display_subtitle":     krow.get("display_subtitle", ""),
+                "contract_context":     krow.get("contract_context", ""),
+                "end_date":             krow.get("end_date"),
+                "provider":             "kalshi",
+                "kalshi_market_ticker": krow.get("_kalshi_market_ticker", ""),
+                "kalshi_event_ticker":  krow.get("_kalshi_event_ticker", ""),
+                "quality":              krow.get("quality", ""),
+            },
+        },
+    }
+
+
 # ── Core scanner ──────────────────────────────────────────────────────────────
 
 class OddsScanner:
@@ -888,6 +1030,11 @@ class OddsScanner:
 
         crawl_started_at = datetime.now(timezone.utc)
 
+        # ── 1b. Launch Kalshi scan concurrently with Polymarket crawl ──────────
+        _kalshi_task = asyncio.create_task(
+            asyncio.wait_for(_scan_kalshi(), timeout=30.0)
+        ) if _KALSHI_SCANNER_OK else None
+
         # ── 2. Full catalog crawl (memory-only, Option C) ─────────────────────
         if polymarket_intel is not None:
             raw_markets, crawl_stats, crawl_success = await self._crawl_catalog(
@@ -899,6 +1046,15 @@ class OddsScanner:
                 "catalog_events_total":         0,
                 "catalog_markets_flattened":    0,
             }, False
+
+        # ── 2b. Collect Kalshi result (already running in background) ──────────
+        kalshi_scan_result: dict = {}
+        if _kalshi_task is not None:
+            try:
+                kalshi_scan_result = await _kalshi_task
+            except Exception as _ks_exc:
+                log.warning("[odds_scanner] kalshi scan task error: %s", _ks_exc)
+                kalshi_scan_result = {}
 
         catalog_markets_flattened    = crawl_stats.get("catalog_markets_flattened", 0)
         catalog_events_pages_fetched = crawl_stats.get("catalog_events_pages_fetched", 0)
@@ -1175,6 +1331,51 @@ class OddsScanner:
                 },
             })
 
+        # ── 5b. Inject Kalshi rows for Kalshi-primary families ────────────────
+        #
+        # For spx_daily_direction / nasdaq_daily_direction / spx_dec31_milestone:
+        #   - Kalshi is the preferred provider.
+        #   - Only inject if Polymarket did NOT already match the family.
+        #   - Remove from missing_list if it was added there during step 5.
+        # All other families remain Polymarket-primary.
+
+        _ks_diag: dict = (kalshi_scan_result or {}).pop("_diagnostics", {})
+        kalshi_injected_families: list[str] = []
+        provider_selected_by_family: dict[str, str] = {}
+
+        pm_matched_keys: set[str] = {e["family_key"] for e in live_pre}
+
+        for fk, krow in list((kalshi_scan_result or {}).items()):
+            if fk not in _KALSHI_PRIMARY_FAMILIES:
+                continue
+            fdef_k = REGISTRY_BY_KEY.get(fk)
+            if not fdef_k:
+                continue
+            if fk in pm_matched_keys:
+                provider_selected_by_family[fk] = "polymarket"
+                log.info("[odds_scanner] %s: Kalshi available but Polymarket match kept", fk)
+                continue
+            entry = _make_kalshi_live_entry(fk, fdef_k, krow, now_ts, now_dt)
+            live_pre.append(entry)
+            kalshi_injected_families.append(fk)
+            provider_selected_by_family[fk] = "kalshi"
+            pm_matched_keys.add(fk)
+            if fdef_k.get("allow_near_expiry"):
+                daily_dir_matched.append(fk)
+            families_from_catalog.append(fk)
+            missing_list[:] = [m for m in missing_list if m["family_key"] != fk]
+            if fk in families_still_missing:
+                families_still_missing.remove(fk)
+            log.info(
+                "[odds_scanner] Kalshi injected: %s (prob=%.1f%% vol=%.0f)",
+                fk, (krow.get("yes_pct") or 0), (krow.get("volume_total") or 0),
+            )
+
+        for e in live_pre:
+            fk = e["family_key"]
+            if fk not in provider_selected_by_family:
+                provider_selected_by_family[fk] = e.get("provider", "polymarket")
+
         # ── 6. Parallel CLOB price enrichment ────────────────────────────────
         clob_success_count = 0
         clob_fail_count    = 0
@@ -1341,6 +1542,45 @@ class OddsScanner:
             "dow_candidates_seen":                   dow_candidates_seen,
             "btc_direction_candidates_seen":         btc_dir_candidates_seen,
             "btc_direction_matched_count":           sum(1 for fk in daily_dir_matched if "btc" in fk or "bitcoin" in fk),
+            # ── Kalshi provider diagnostics ────────────────────────────────
+            "kalshi_scanner_ok":             _KALSHI_SCANNER_OK,
+            "kalshi_public_api_ok":          _ks_diag.get("kalshi_public_api_ok", False),
+            "kalshi_auth_ok":                _ks_diag.get("kalshi_auth_ok", False),
+            "kalshi_auth_error_type":        _ks_diag.get("kalshi_auth_error_type", "not_attempted"),
+            "kalshi_spx_daily_matched":      _ks_diag.get("kalshi_spx_daily_matched", False),
+            "kalshi_nasdaq_daily_matched":   _ks_diag.get("kalshi_nasdaq_daily_matched", False),
+            "kalshi_spx_dec31_matched":      _ks_diag.get("kalshi_spx_dec31_matched", False),
+            "kalshi_rows_returned":          _ks_diag.get("kalshi_rows_returned", 0),
+            "kalshi_injected_families":      kalshi_injected_families,
+            "kalshi_scan_ms":               _ks_diag.get("kalshi_scan_ms"),
+            "kalshi_error":                 _ks_diag.get("kalshi_error"),
+            "provider_selected_by_family":  provider_selected_by_family,
+            # ── Polymarket daily direction candidate counts ─────────────────
+            "wti_daily_direction_candidates_seen":  sum(
+                1 for m in direction_raw_pool
+                if any(t in (m.get("question") or "").lower()
+                       for t in ("wti", "crude oil", "crude"))
+            ),
+            "gold_daily_direction_candidates_seen": sum(
+                1 for m in direction_raw_pool
+                if any(t in (m.get("question") or "").lower()
+                       for t in ("gold", "xauusd", "xau"))
+            ),
+            "nvda_daily_direction_candidates_seen": sum(
+                1 for m in direction_raw_pool
+                if any(t in (m.get("question") or "").lower()
+                       for t in ("nvidia", "nvda"))
+            ),
+            "btc_daily_direction_candidates_seen":  btc_dir_candidates_seen,
+            "micro_markets_excluded_count": sum(
+                1 for m in direction_raw_pool
+                if any(t in (m.get("question") or "").lower()
+                       for t in ("bitcoin", "btc"))
+                and any(tp in (m.get("question") or "").lower()
+                        for tp in (":00pm", ":05pm", ":10pm", ":15pm", ":20pm",
+                                   ":25pm", ":30pm", ":35pm", ":40pm", ":45pm",
+                                   ":50pm", ":55pm", "pm et", "am et", "pm-", "am-"))
+            ),
             # ── Scan timing ────────────────────────────────────────────────
             "scan_ms":                       scan_ms,
         }
