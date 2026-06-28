@@ -1,0 +1,160 @@
+Audit first. No edits until the audit is complete.
+
+The Prophetik Investor page now loads correctly. Do not break that. Do not change frontend loading behavior. Do not touch Gambler mode.
+
+Current product issue:
+Odds are too vague because the backend exposes family labels like “Next Fed Rate Decision” with one probability, but not enough Polymarket contract context.
+
+Example problem:
+“Next Fed Rate Decision — 81.5%” is not meaningful unless the user can see:
+
+* the actual Polymarket question
+* the meeting/date
+* which outcome the 81.5% refers to
+* the other available outcomes and their odds
+
+Goal:
+Every tracked odds row returned by:
+
+* GET /api/predict/odds/live
+* GET /api/predict/investor/intelligence tracked_odds[]
+
+must include enough contract/outcome detail for the frontend to render something closer to Polymarket/Kalshi.
+
+Audit:
+
+1. Inspect Polymarket raw market objects from Gamma full catalog crawl.
+2. Confirm available fields:
+
+   * question
+   * title
+   * event title
+   * slug / market_slug / event_slug
+   * end_date
+   * outcomes
+   * outcomePrices / outcome_prices
+   * clobTokenIds
+   * selected outcome / YES side if available
+   * volume / liquidity
+3. Inspect current odds_scanner payload builder.
+4. Inspect LKG file save/load and DB snapshot fallback.
+5. Report which fields are already available but dropped before editing.
+
+Required backend fields per odds row:
+
+{
+"family_key": "...",
+"label": "Next Fed Rate Decision",
+"category": "Fed / Rates",
+
+"question": "Will there be no change in Fed interest rates after the July 2026 meeting?",
+"event_title": "Fed Interest Rates: July 2026",
+"market_slug": "...",
+"event_slug": "...",
+"url": "https://polymarket.com/event/...",
+
+"end_date": "...",
+"display_title": "Next Fed Rate Decision — July 2026 Meeting",
+"display_subtitle": "No change after the July 2026 meeting",
+"priced_outcome": "Yes",
+"priced_outcome_label": "No change",
+"priced_probability": 0.815,
+
+"outcomes": [
+{
+"label": "Yes",
+"display_label": "No change",
+"probability": 0.815,
+"clob_token_id": "...",
+"side": "yes"
+},
+{
+"label": "No",
+"display_label": "Change",
+"probability": 0.185,
+"clob_token_id": "...",
+"side": "no"
+}
+],
+
+"outcome_summary": "No change 81.5% · Change 18.5%",
+"contract_context": "July 2026 Fed meeting",
+"yes_probability": 0.815,
+"delta_24h_pp": 1.0,
+"delta_7d_pp": 3.0,
+"volume_24h": 12345,
+"liquidity": 12345,
+
+"market_read": "...",
+"exposure": {}
+}
+
+Important:
+For binary markets:
+
+* include both Yes and No outcomes
+* make clear what Yes means
+* if the question is “Will there be no change…?” then priced_outcome_label should be “No change,” not just “Yes”
+
+For multi-outcome markets:
+
+* include all available outcomes and probabilities
+* for “Number of Fed Cuts in 2026,” show the actual buckets:
+
+  * 0 cuts
+  * 1 cut
+  * 2 cuts
+  * 3+ cuts
+    or whatever Polymarket returns
+* do not reduce it to one unexplained probability
+
+For price milestone markets:
+
+* include the target and date in display_subtitle if parseable:
+
+  * “NVDA above $X by DATE”
+  * “Bitcoin above $X by DATE”
+* if parsing is uncertain, use raw question as display_subtitle
+
+For date-sensitive markets:
+
+* preserve end_date
+* parse obvious dates from question into contract_context when possible
+* do not invent dates if unavailable
+
+LKG/cache requirement:
+The new display fields must be preserved in:
+
+* in-memory odds cache
+* file LKG
+* DB snapshot fallback if possible
+
+If DB snapshot fallback cannot reconstruct all outcome options, return at least:
+
+* question
+* priced_outcome_label
+* priced_probability
+* end_date
+* family label
+* status: "stale_db"
+
+Do not:
+
+* Do not run Polymarket crawl inline in request handlers.
+* Do not break LKG/stale_db instant load.
+* Do not remove exposure or market_read.
+* Do not hardcode frontend-specific labels if raw Polymarket data can provide them.
+* Do not use an LLM.
+
+Validation:
+
+1. /api/predict/investor/intelligence tracked_odds[] includes question, display_title, display_subtitle, outcome_summary, outcomes[], end_date, url.
+2. Fed decision row shows actual meeting/date context.
+3. Fed cuts row shows actual cut bucket/outcome context.
+4. Fed hikes row shows actual hike contract context.
+5. NVDA/TSLA/AAPL/MSFT/GOOGL rows show target/date context when available.
+6. Binary markets include both Yes and No outcomes.
+7. Multi-outcome markets include all outcome buckets.
+8. LKG/stale_db still loads immediately after restart.
+9. market_read and exposure remain present.
+10. Existing Prophetik endpoints still work.
