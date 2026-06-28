@@ -245,7 +245,7 @@ def get_latest_per_family() -> dict[str, dict]:
             SELECT DISTINCT ON (family_key)
                 id, family_key, market_id, market_slug, question, source,
                 yes_probability, no_probability, best_bid, best_ask,
-                volume_24h, liquidity, end_date, captured_at
+                volume_24h, liquidity, end_date, captured_at, raw_json
             FROM {_TABLE}
             ORDER BY family_key, captured_at DESC
             """,

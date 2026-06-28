@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -228,6 +229,179 @@ def _compute_deltas(
     }
 
 
+# ── Display field helpers ─────────────────────────────────────────────────────
+
+_MONTHS_PAT = (
+    "january|february|march|april|may|june|july|august"
+    "|september|october|november|december"
+)
+_CONTRACT_CTX_RE = re.compile(
+    r"(?:after the\s+)?(" + _MONTHS_PAT + r")\s+(\d{4})\b",
+    re.IGNORECASE,
+)
+_QUARTER_RE = re.compile(r"\b(Q[1-4])\s*(\d{4})\b", re.IGNORECASE)
+
+
+def _parse_contract_context(question: str, event_title: str) -> str:
+    """
+    Extract a short meeting/date context from question or event_title.
+    Returns empty string when no recognisable date pattern is found.
+    No dates are invented — raw question is used as display_subtitle in that case.
+    """
+    for text in (question, event_title):
+        if not text:
+            continue
+        m = _CONTRACT_CTX_RE.search(text)
+        if m:
+            return f"{m.group(1).title()} {m.group(2)}"
+        m = _QUARTER_RE.search(text)
+        if m:
+            return f"{m.group(1).upper()} {m.group(2)}"
+    return ""
+
+
+def _build_display_fields(
+    fdef: dict,
+    best: dict,
+    best_raw: dict,
+    candidates_sorted: list[dict],
+) -> dict:
+    """
+    Build the full display-context block for one tracked-odds row.
+
+    Binary markets  → outcomes = [Yes, No] with groupItemTitle as display_label.
+    negRisk markets → outcomes = all sibling buckets sharing the same event_slug,
+                      each identified by their groupItemTitle.
+
+    Returns a flat dict of fields to merge into live_pre.
+    """
+    label        = fdef.get("label", "")
+    question     = best.get("question", "")
+    event_title  = best.get("event_title", "") or best_raw.get("event_title", "")
+    event_slug   = best.get("event_slug", "") or best_raw.get("event_slug", "")
+    market_slug  = best.get("slug", "") or best_raw.get("slug", "")
+    end_date     = best.get("end_date")
+    git          = best.get("group_item_title", "") or best_raw.get("groupItemTitle", "") or ""
+    neg_risk     = best.get("neg_risk", False) or bool(best_raw.get("negRisk"))
+    clob_ids     = best.get("clob_token_ids") or []
+    yes_pct      = best.get("yes_pct")
+    yes_prob     = round(yes_pct / 100.0, 6) if yes_pct is not None else None
+    no_pct       = round(100.0 - yes_pct, 1) if yes_pct is not None else None
+    no_prob      = round(1.0 - yes_prob, 6) if yes_prob is not None else None
+
+    # URL — prefer event page (richer context)
+    if event_slug:
+        url = f"https://polymarket.com/event/{event_slug}"
+    elif market_slug:
+        url = f"https://polymarket.com/market/{market_slug}"
+    else:
+        url = None
+
+    # Contract context — parsed from text, never invented
+    contract_context = _parse_contract_context(question, event_title)
+
+    # ── outcomes[] ────────────────────────────────────────────────────────────
+    if neg_risk:
+        # Collect all sibling candidates that share the same event_slug.
+        # Each sibling represents one outcome bucket labelled by groupItemTitle.
+        ev_key  = event_slug or best_raw.get("event_slug", "")
+        buckets: list[dict] = []
+        seen_gits: set      = set()
+        for cand in candidates_sorted:
+            c_git     = cand.get("groupItemTitle", "")
+            if not c_git:
+                continue
+            if c_git in seen_gits:
+                continue
+            # Only include siblings from the same event when we have an event_slug
+            if ev_key:
+                c_ev = cand.get("event_slug", "")
+                if c_ev and c_ev != ev_key:
+                    continue
+            seen_gits.add(c_git)
+            # Extract this bucket's probability from its outcomePrices[0]
+            try:
+                c_op = cand.get("outcomePrices")
+                if isinstance(c_op, str):
+                    c_op = json.loads(c_op)
+                c_prob = float(c_op[0]) if c_op else 0.0
+            except Exception:
+                c_prob = 0.0
+            c_cids = cand.get("clobTokenIds") or []
+            if isinstance(c_cids, str):
+                try:
+                    c_cids = json.loads(c_cids)
+                except Exception:
+                    c_cids = []
+            buckets.append({
+                "label":          c_git,
+                "display_label":  c_git,
+                "probability":    round(c_prob, 6),
+                "clob_token_id":  str(c_cids[0]) if c_cids else None,
+                "side":           "yes",
+            })
+        buckets.sort(key=lambda b: b["probability"], reverse=True)
+        outcomes = buckets
+        priced_outcome_label = git if git else (buckets[0]["label"] if buckets else None)
+        outcome_summary = " · ".join(
+            f"{b['display_label']} {round(b['probability'] * 100, 1)}%"
+            for b in buckets[:6]
+        )
+    else:
+        # Binary Yes/No — groupItemTitle describes what "Yes" means
+        yes_label = git if git else "Yes"
+        yes_clob  = str(clob_ids[0]) if clob_ids else None
+        no_clob   = str(clob_ids[1]) if len(clob_ids) > 1 else None
+        outcomes  = [
+            {
+                "label":         "Yes",
+                "display_label": yes_label,
+                "probability":   yes_prob,
+                "clob_token_id": yes_clob,
+                "side":          "yes",
+            },
+            {
+                "label":         "No",
+                "display_label": "No",
+                "probability":   no_prob,
+                "clob_token_id": no_clob,
+                "side":          "no",
+            },
+        ]
+        priced_outcome_label = yes_label
+        outcome_summary = (
+            f"{yes_label} {yes_pct}% · No {no_pct}%"
+            if yes_pct is not None
+            else ""
+        )
+
+    # display_title: label + meeting context when parseable
+    display_title = f"{label} — {contract_context}" if contract_context else label
+
+    # display_subtitle: groupItemTitle (most informative) > raw question > ""
+    # Never invent text — use what Polymarket provides verbatim
+    display_subtitle = git if git else (question or "")
+
+    return {
+        "question":             question,
+        "event_title":          event_title,
+        "market_slug":          market_slug,
+        "event_slug":           event_slug,
+        "url":                  url,
+        "end_date":             end_date,
+        "display_title":        display_title,
+        "display_subtitle":     display_subtitle,
+        "contract_context":     contract_context,
+        "priced_outcome":       "Yes",
+        "priced_outcome_label": priced_outcome_label,
+        "priced_probability":   yes_prob,
+        "outcomes":             outcomes,
+        "outcome_summary":      outcome_summary,
+        "clob_token_ids":       clob_ids,
+        "neg_risk":             neg_risk,
+    }
+
+
 # ── Family matching ───────────────────────────────────────────────────────────
 
 def _match_family(fdef: dict, all_markets: list[dict]) -> list[dict]:
@@ -380,9 +554,39 @@ class OddsScanner:
                 yes_prob = snap.get("yes_probability")
                 yes_pct  = round(float(yes_prob) * 100, 2) if yes_prob is not None else None
                 cap_at   = snap.get("captured_at")
+                rj       = snap.get("raw_json") or {}
+
+                # Reconstruct display fields from raw_json (persisted during scan)
+                label_str = fdef.get("label", fk)
+                _q        = rj.get("question") or snap.get("question") or ""
+                _evt      = rj.get("event_title", "")
+                _ev_slug  = rj.get("event_slug", "")
+                _url      = rj.get("url")
+                _git      = rj.get("group_item_title", "")
+                _end      = rj.get("end_date") or snap.get("end_date")
+                _ctx      = rj.get("contract_context", "")
+                _d_title  = rj.get("display_title") or (f"{label_str} — {_ctx}" if _ctx else label_str)
+                _d_sub    = rj.get("display_subtitle") or _git or _q or ""
+                _pol      = rj.get("priced_outcome_label", _git or None)
+                _outcomes = rj.get("outcomes")
+                _o_sum    = rj.get("outcome_summary", "")
+                _m_slug   = snap.get("market_slug") or ""
+
+                # If raw_json had no outcomes, synthesise a minimal binary pair
+                if not _outcomes and yes_prob is not None:
+                    _no_prob = round(1.0 - float(yes_prob), 6)
+                    _outcomes = [
+                        {"label": "Yes", "display_label": _pol or "Yes",
+                         "probability": float(yes_prob), "clob_token_id": None, "side": "yes"},
+                        {"label": "No",  "display_label": "No",
+                         "probability": _no_prob, "clob_token_id": None, "side": "no"},
+                    ]
+                    if not _o_sum:
+                        _o_sum = f"{_pol or 'Yes'} {yes_pct}% · No {round((1.0-float(yes_prob))*100, 1)}%"
+
                 entry = {
                     "family_key":       fk,
-                    "label":            fdef.get("label", fk),
+                    "label":            label_str,
                     "category":         fdef.get("category", ""),
                     "priority":         fdef.get("priority", 99),
                     "dashboard_enabled":  fdef.get("dashboard_enabled", True),
@@ -391,9 +595,23 @@ class OddsScanner:
                     "description":        fdef.get("description", ""),
                     "yes_probability":  yes_prob,
                     "yes_pct":          yes_pct,
-                    "market_question":  snap.get("question"),
+                    "market_question":  _q,
+                    "question":         _q,
                     "condition_id":     None,
-                    "slug":             snap.get("market_slug"),
+                    "slug":             _m_slug,
+                    "market_slug":      _m_slug,
+                    "event_slug":       _ev_slug,
+                    "event_title":      _evt,
+                    "url":              _url,
+                    "end_date":         _end,
+                    "display_title":    _d_title,
+                    "display_subtitle": _d_sub,
+                    "contract_context": _ctx,
+                    "priced_outcome":         "Yes",
+                    "priced_outcome_label":   _pol,
+                    "priced_probability":     float(yes_prob) if yes_prob is not None else None,
+                    "outcomes":               _outcomes or [],
+                    "outcome_summary":        _o_sum,
                     "volume_24h":       snap.get("volume_24h"),
                     "liquidity":        snap.get("liquidity"),
                     "candidate_count":  1,
@@ -690,6 +908,9 @@ class OddsScanner:
                 for m in candidates_sorted[:5]
             ]
 
+            # Build display fields: question context, outcomes[], URL, etc.
+            _display = _build_display_fields(fdef, best, best_raw, candidates_sorted)
+
             live_pre.append({
                 "family_key":        fk,
                 "label":             fdef["label"],
@@ -708,7 +929,24 @@ class OddsScanner:
                 "liquidity":         best.get("liquidity"),
                 "candidate_count":   len(candidates),
                 "driver_markets":    driver_markets,
-                # staging fields for CLOB + delta computation — popped below
+                # ── Display / outcome context ─────────────────────────────────
+                "question":             _display["question"],
+                "event_title":          _display["event_title"],
+                "market_slug":          _display["market_slug"],
+                "event_slug":           _display["event_slug"],
+                "url":                  _display["url"],
+                "end_date":             _display["end_date"],
+                "display_title":        _display["display_title"],
+                "display_subtitle":     _display["display_subtitle"],
+                "contract_context":     _display["contract_context"],
+                "priced_outcome":       _display["priced_outcome"],
+                "priced_outcome_label": _display["priced_outcome_label"],
+                "priced_probability":   _display["priced_probability"],
+                "outcomes":             _display["outcomes"],
+                "outcome_summary":      _display["outcome_summary"],
+                "clob_token_ids":       _display["clob_token_ids"],
+                "neg_risk":             _display["neg_risk"],
+                # ── Staging fields (popped during CLOB + delta steps) ─────────
                 "_best_enriched":    best,
                 "_api_1h":           best.get("price_change_1h"),
                 "_api_24h":          best.get("price_change_1d"),
@@ -729,6 +967,7 @@ class OddsScanner:
                     "end_date":        best.get("end_date"),
                     "captured_at":     now_dt,
                     "raw_json": {
+                        # Core price data
                         "question":        best.get("question"),
                         "yes_pct":         yes_pct,
                         "price_change_1h": best.get("price_change_1h"),
@@ -736,6 +975,19 @@ class OddsScanner:
                         "price_change_1wk": best.get("price_change_1wk"),
                         "volume_24h":      best.get("volume_24h"),
                         "catalog_source":  "full_crawl" if crawl_success else "neon_fallback",
+                        # Display context — persisted so DB fallback can reconstruct
+                        "event_title":          _display["event_title"],
+                        "event_slug":           _display["event_slug"],
+                        "url":                  _display["url"],
+                        "group_item_title":     best_raw.get("groupItemTitle", ""),
+                        "outcomes":             _display["outcomes"],
+                        "outcome_summary":      _display["outcome_summary"],
+                        "priced_outcome_label": _display["priced_outcome_label"],
+                        "priced_probability":   _display["priced_probability"],
+                        "display_title":        _display["display_title"],
+                        "display_subtitle":     _display["display_subtitle"],
+                        "contract_context":     _display["contract_context"],
+                        "end_date":             _display["end_date"],
                     },
                 },
             })

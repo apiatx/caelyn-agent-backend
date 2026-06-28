@@ -280,8 +280,11 @@ class InvestorIntel:
         # Fall back to build_tracked_odds() on cold start (scanner not yet run).
         try:
             from services.predict.odds_scanner import odds_scanner as _odds_scanner
-            _scanner_payload = _odds_scanner.get_live_payload()
-            if _scanner_payload is not None:
+            # Use get_live() (memory → file LKG → DB snapshot → warming) so
+            # intelligence benefits from instant-load even after cold restart.
+            _scanner_payload = _odds_scanner.get_live()
+            _src = (_scanner_payload or {}).get("status", "warming")
+            if _src != "warming":
                 tracked_odds = _scanner_payload.get("odds", [])
             else:
                 from services.predict.investor.tracked_odds import build_tracked_odds

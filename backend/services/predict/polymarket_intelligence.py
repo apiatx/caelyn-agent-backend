@@ -692,6 +692,24 @@ class PolymarketIntelligence:
             except Exception:
                 tokens = []
 
+        # Parse outcomePrices into a float array for callers
+        try:
+            _raw_op = raw.get("outcomePrices")
+            if isinstance(_raw_op, str):
+                _raw_op = json.loads(_raw_op)
+            outcome_prices_arr = [float(p) for p in (_raw_op or [])]
+        except Exception:
+            outcome_prices_arr = []
+
+        # outcomes[] — list of string labels from the raw market
+        _raw_outcomes = raw.get("outcomes")
+        if isinstance(_raw_outcomes, str):
+            try:
+                _raw_outcomes = json.loads(_raw_outcomes)
+            except Exception:
+                _raw_outcomes = []
+        outcomes_arr = list(_raw_outcomes) if isinstance(_raw_outcomes, list) else []
+
         return {
             "condition_id": raw.get("conditionId", raw.get("condition_id", "")),
             "question": raw.get("question", ""),
@@ -734,6 +752,12 @@ class PolymarketIntelligence:
             "image": raw.get("image") or raw.get("icon"),
             "accepting_orders": bool(raw.get("acceptingOrders") or raw.get("accepting_orders")),
             "slug": raw.get("slug") or raw.get("market_slug") or "",
+            # ── Context fields forwarded from raw Gamma / catalog-injected ──────
+            "group_item_title": raw.get("groupItemTitle") or "",
+            "outcomes":         outcomes_arr,
+            "outcome_prices":   outcome_prices_arr,
+            "event_slug":       raw.get("event_slug") or "",
+            "event_title":      raw.get("event_title") or "",
         }
 
     def _score_efficiency(
@@ -860,10 +884,12 @@ class PolymarketIntelligence:
                             t.get("label", t) if isinstance(t, dict) else t
                             for t in (ev.get("tags") or [])
                         ]
-                        ev_slug = ev.get("slug", "")
+                        ev_slug  = ev.get("slug", "")
+                        ev_title = ev.get("title", "")
                         for market in (ev.get("markets") or []):
-                            market["tags"]       = ev_tags
-                            market["event_slug"] = ev_slug
+                            market["tags"]        = ev_tags
+                            market["event_slug"]  = ev_slug
+                            market["event_title"] = ev_title
                             all_markets.append(market)
 
                     if len(events_page) < PAGE_SIZE:

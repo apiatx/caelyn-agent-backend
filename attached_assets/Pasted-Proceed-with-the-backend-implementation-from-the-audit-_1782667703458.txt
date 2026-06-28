@@ -1,0 +1,178 @@
+Proceed with the backend implementation from the audit.
+
+No frontend edits yet.
+Do not change frontend loading behavior.
+Do not touch Gambler mode.
+Do not break the LKG/stale_db instant-load behavior.
+Do not run Polymarket crawls inline inside request handlers.
+
+Goal:
+Enrich every tracked odds row with actual Polymarket contract/outcome context so the frontend can show what the probability actually means.
+
+Current issue:
+Rows like “Next Fed Rate Decision — 81.5%” are too vague. The backend must provide:
+
+* actual question
+* event title
+* meeting/date/end date
+* priced outcome label
+* all available outcomes and probabilities
+* outcome summary
+* URL
+* display title/subtitle
+
+Implement the exact audit change points:
+
+1. polymarket_intelligence.py — fetch_full_active_catalog()
+   Inject parent event title into every nested market, alongside event_slug and tags.
+
+Add:
+
+* event_title from ev.get("title")
+
+2. polymarket_intelligence.py — _enrich_market()
+   Forward these fields into the enriched dict:
+
+* groupItemTitle
+* outcomes
+* parsed outcome_prices array from outcomePrices
+* event_slug
+* event_title
+* end_date
+* clob_token_ids
+* neg_risk
+* days_to_expiry if already available
+
+Do not drop these fields before odds_scanner sees them.
+
+3. odds_scanner.py — live_pre builder
+   For each matched family row, add:
+
+* question
+* event_title
+* market_slug
+* event_slug
+* url
+* end_date
+* display_title
+* display_subtitle
+* contract_context
+* priced_outcome
+* priced_outcome_label
+* priced_probability
+* outcomes[]
+* outcome_summary
+
+Rules:
+
+Binary markets:
+
+* include both Yes and No outcomes
+* Yes probability = priced_probability
+* No probability = 1 - Yes
+* priced_outcome_label should use groupItemTitle when present
+* if groupItemTitle says “No change,” show “No change,” not just “Yes”
+
+Multi-outcome / negRisk markets:
+
+* collect sibling candidates from candidates_sorted with the same event_slug
+* for each sibling, use groupItemTitle as the outcome bucket label
+* use that sibling’s yes_pct / price as the probability for that bucket
+* build outcomes[] from all buckets
+* priced_outcome_label = selected/best market’s groupItemTitle
+* outcome_summary should join the top buckets, e.g. “0 cuts 81.5% · 1 cut 12.0% · 2 cuts 4.0%”
+
+Examples:
+
+* Fed decision should show the actual meeting context, like July 2026 Fed meeting, if parseable from the question or event title.
+* Fed cuts should show which number-of-cuts bucket is being priced.
+* Fed hikes should show the actual hike contract context.
+* NVDA/TSLA/AAPL/MSFT/GOOGL/BTC/oil/gold milestones should preserve target/date from the raw question as display_subtitle if parsing is uncertain.
+
+Do not invent dates. If parsing is uncertain, use raw question as display_subtitle.
+
+4. odds_scanner.py — snapshot raw_json
+   When writing prediction_market_odds_snapshots, include enough raw_json to reconstruct display context:
+
+* question
+* event_title
+* event_slug
+* market_slug
+* url
+* groupItemTitle
+* outcomes
+* outcome_summary
+* priced_outcome_label
+* priced_probability
+* display_title
+* display_subtitle
+* contract_context
+* end_date
+
+5. odds_scanner.py — DB fallback hydration
+   In _hydrate_from_db_snapshots(), read these display fields back from raw_json.
+
+If DB fallback cannot reconstruct full outcomes[], still return:
+
+* question
+* priced_outcome_label
+* priced_probability
+* display_title
+* display_subtitle
+* end_date
+* family label
+* status: stale_db
+
+6. investor/investor_intel.py
+   Change intelligence tracked odds source from:
+
+get_live_payload()
+
+to:
+
+get_live()
+
+Reason:
+get_live_payload() is memory-only and skips LKG/DB fallback. get_live() uses memory → file LKG → DB snapshots → warming.
+
+Prophetik intelligence must benefit from the same LKG/stale_db instant-load behavior.
+
+7. Preserve existing fields
+   Do not remove:
+
+* market_read
+* exposure
+* deltas
+* volume/liquidity
+* family_key
+* label/category
+* diagnostics
+* LKG file behavior
+
+Validation:
+
+1. /api/predict/investor/intelligence tracked_odds[] includes:
+
+   * question
+   * event_title
+   * display_title
+   * display_subtitle
+   * contract_context
+   * priced_outcome_label
+   * priced_probability
+   * outcomes[]
+   * outcome_summary
+   * end_date
+   * url
+   * market_read
+   * exposure
+2. Fed decision row shows actual meeting/date or raw question context.
+3. Fed cuts row shows actual cuts bucket/outcome context.
+4. Fed hikes row shows actual hike contract context.
+5. NVDA/TSLA/AAPL/MSFT/GOOGL rows show target/date context from raw question.
+6. Binary markets include both Yes and No outcomes.
+7. Multi-outcome markets include all sibling outcome buckets from same event_slug where available.
+8. LKG/stale_db still loads immediately after restart.
+9. market_read and exposure remain present.
+10. Existing Prophetik endpoints still work.
+11. No frontend edits in this pass.

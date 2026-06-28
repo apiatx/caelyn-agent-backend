@@ -402,6 +402,18 @@ async def predict_odds_diagnostics():
         return JSONResponse(status_code=502, content={"error": str(e)})
 
 
+@router.post("/api/admin/predict/force-scan")
+async def predict_force_scan(request: Request):
+    """Admin: immediately trigger a tracked-odds scan + persist cycle (no auth required for internal use)."""
+    try:
+        from services.predict.odds_scanner import odds_scanner as _os
+        result = await _os.scan_and_persist()
+        return JSONResponse(content={"ok": True, "status": result.get("status"), "live_count": result.get("live_count")})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
 @router.post("/api/predict/analyze")
 async def predict_analyze(request: Request, body: dict, _sub: None = Depends(require_subscription)):
     """
