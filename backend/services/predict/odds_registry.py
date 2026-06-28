@@ -47,6 +47,11 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             "cut rates at", "hike rates at", "25bp", "50bp", "75bp",
             "rate decision", "fomc meeting", "basis point cut", "basis point hike",
             "rate cut at", "rate hike at",
+            # matches actual Polymarket phrasing: "no change in Fed interest rates after the July meeting"
+            "fed interest rate", "interest rates after", "no change in fed",
+            "change in fed interest", "rate hold", "rate unchanged", "no rate change",
+            "after the fomc", "after the july", "after the september", "after the november",
+            "after the december", "after the march", "after the may",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
@@ -62,6 +67,9 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "keyword_patterns": [
             "cuts in 2026", "rate cuts in 2026", "how many cuts 2026",
             "fed cuts 2026", "number of cuts in 2026", "cuts by end of 2026",
+            # matches "Will no Fed rate cuts happen in 2026?" / "Will 1 Fed rate cut happen in 2026?"
+            "fed rate cut", "rate cuts happen", "no rate cuts happen",
+            "rate cut happen", "fed rate cuts",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
@@ -77,6 +85,9 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "keyword_patterns": [
             "hikes in 2026", "rate hikes in 2026", "fed hikes 2026",
             "number of hikes 2026",
+            # actual Polymarket phrasing: "Fed Rate Hike by July 2026 Meeting?"
+            "fed rate hike", "rate hike in 2026", "rate hike by", "rate hike 2026",
+            "hike by", "fed hike", "fed rate hike", "hike in 2026",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
@@ -96,6 +107,9 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             "recession in 2025", "recession in 2026", "us recession",
             "gdp contraction", "gdp negative", "nber recession",
             "technical recession",
+            # broader phrasing: "Will the US enter a recession by Q4 2026?"
+            "enter a recession", "recession by", "recession probability",
+            "recession 2025", "recession 2026",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
@@ -112,6 +126,10 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
             "cpi above", "cpi below", "core cpi", "cpi exceed",
             "inflation above", "inflation below", "pce above",
             "pce below", "inflation report", "cpi surprise",
+            # actual Polymarket phrasing: "Will annual inflation be 3.6% or less in June?"
+            "annual inflation", "cpi be", "cpi reading", "cpi print",
+            "inflation reading", "inflation in june", "inflation in july",
+            "inflation data", "consumer price",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
@@ -195,6 +213,9 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "keyword_patterns": [
             "nvidia above", "nvda above", "nvda hit", "nvda reach",
             "nvidia reach", "nvidia price", "nvda price",
+            # "Will NVIDIA be the largest company in the world by market cap on June 30?"
+            "nvidia largest", "nvidia market cap", "nvidia be the",
+            "nvidia stock", "nvda stock",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "higher",
@@ -210,6 +231,9 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "keyword_patterns": [
             "tesla above", "tsla above", "tesla hit", "tsla reach",
             "tesla price", "tsla price",
+            # "Will Tesla be the largest company in the world by market cap on June 30?"
+            "tesla largest", "tesla market cap", "tesla be the",
+            "tesla stock", "tsla stock",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "higher",
@@ -225,6 +249,9 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "keyword_patterns": [
             "apple above", "aapl above", "apple hit", "aapl reach",
             "apple price", "aapl price",
+            # "Will Apple be the largest company in the world by market cap on June 30?"
+            "apple largest", "apple market cap", "apple be the",
+            "apple stock", "aapl stock",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "higher",
@@ -239,6 +266,8 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "search_queries":   ["MSFT price", "Microsoft stock price"],
         "keyword_patterns": [
             "microsoft above", "msft above", "microsoft hit", "msft reach",
+            "microsoft largest", "microsoft market cap", "microsoft be the",
+            "msft price", "microsoft stock", "msft stock",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "higher",
@@ -253,6 +282,8 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "search_queries":   ["Google stock price", "Alphabet price"],
         "keyword_patterns": [
             "google above", "googl above", "alphabet above", "google hit", "googl hit",
+            "google largest", "google market cap", "google be the",
+            "alphabet market cap", "googl stock", "google stock",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "higher",
@@ -396,6 +427,10 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "keyword_patterns": [
             "tariff rate exceed", "tariff above", "new tariff",
             "reciprocal tariff", "tariff 2025", "tariff 2026", "trade war",
+            # actual Polymarket phrasing: "Tariff increase on Canada in effect by June 30?"
+            "tariff increase", "tariff on canada", "tariff on china",
+            "tariff on", "tariff in effect", "tariff escalat",
+            "tariff pause", "tariff suspended", "tariff lifted",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "yes",
@@ -414,6 +449,9 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "keyword_patterns": [
             "crude above", "oil above", "wti above", "brent above",
             "crude below", "oil below", "wti below", "brent below",
+            # "Will WTI Crude Oil (WTI) hit (LOW) $20 in June?" / "hit (HIGH) $150"
+            "wti hit", "oil hit", "crude hit", "crude (wti)", "crude oil (wti)",
+            "wti crude", "crude oil price",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "higher",
@@ -428,6 +466,8 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "search_queries":   ["gold price milestone", "gold above"],
         "keyword_patterns": [
             "gold above", "gold hit", "gold reach", "gold price", "xau above",
+            # "Will Gold (GC) hit (HIGH) $8,000 by end of June?" — ticker is "GC"
+            "gold (gc)", "(gc) hit", "gc) hit",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "higher",
@@ -443,6 +483,9 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "keyword_patterns": [
             "bitcoin above", "btc above", "bitcoin hit",
             "bitcoin reach", "btc hit", "btc reach",
+            # "Will the price of Bitcoin be above $64,000 on June 27?"
+            "bitcoin price", "price of bitcoin", "btc price",
+            "bitcoin be above", "btc be above",
         ],
         "exclude_patterns": [],
         "preferred_outcome": "higher",

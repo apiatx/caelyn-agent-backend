@@ -1,9 +1,12 @@
 """
-Prediction Market Odds Scanner.
+Prediction Market Odds Scanner — Two-Lane Discovery.
 
-Matches registry families against live Polymarket markets, persists snapshots
-to Neon/Postgres, computes 1h / 24h / 7d deltas from stored history, and
-maintains an in-memory payload cache.
+Lane A: broad top-market scan (get_top_markets limit=400, unfiltered by tag)
+Lane B: 6 parallel tag-specific fetches (economy/finance/crypto/geopolitics/tech/politics)
+        that surface lower-volume but macro-relevant markets not in the top 400.
+
+After deduplication by condition_id and sports exclusion, keyword-match all 26 registry
+families against the merged pool, persist snapshots to Neon, and cache the live payload.
 
 Entry points
 ------------
@@ -11,6 +14,7 @@ odds_scanner.scan_and_persist()   → async; called by _odds_scanner_loop() in m
 odds_scanner.get_live()           → async; returns cached payload, builds on miss
 odds_scanner.get_live_payload()   → sync; returns cached dict or None if not warmed
 odds_scanner.get_history(fk,days) → sync; returns time-series list from DB
+odds_scanner.get_diagnostics()    → sync; returns scan + DB diagnostics
 """
 
 from __future__ import annotations
@@ -84,8 +88,26 @@ _DELTA_1H_WINDOW  = 900    # ±15 min
 _DELTA_24H_WINDOW = 1800   # ±30 min
 _DELTA_7D_WINDOW  = 7200   # ±2 h
 
-# How many markets to fetch from Polymarket for scanning
+# Lane A: broad top-market fetch limit (sorted by 24h volume, unfiltered by tag)
 _FETCH_LIMIT = 400
+
+# Lane B: tag-specific fetches run in parallel alongside Lane A.
+# Each tuple is (gamma_tag_label, max_markets_to_fetch).
+# These tags cover all 26 registry families across their categories.
+# economy     → Fed decisions, recession, CPI, tariffs, Hormuz
+# finance     → stocks, oil, gold, earnings, Fed cuts
+# crypto      → Bitcoin and other crypto milestones
+# geopolitics → Russia/Ukraine, China/Taiwan, Israel/Gaza, Iran
+# tech        → AI/chip export controls, semiconductor regulation
+# politics    → macro policy, tariff legislation context
+_LANE_B_TAGS: list[tuple[str, int]] = [
+    ("economy",     300),
+    ("finance",     300),
+    ("crypto",      200),
+    ("geopolitics", 200),
+    ("tech",        150),
+    ("politics",    150),
+]
 
 
 # ── Delta computation ─────────────────────────────────────────────────────────
@@ -149,7 +171,7 @@ def _match_family(fdef: dict, all_markets: list[dict]) -> list[dict]:
     A market matches if:
       - question.lower() contains at least one keyword_pattern (OR logic)
       - question.lower() contains NONE of the exclude_patterns
-      - NOT a sports market (excluded via sports keywords elsewhere)
+    Sports markets have already been filtered from all_markets before this call.
     """
     patterns = [p.lower() for p in fdef.get("keyword_patterns", [])]
     exclude  = [p.lower() for p in fdef.get("exclude_patterns", [])]
@@ -167,95 +189,205 @@ def _match_family(fdef: dict, all_markets: list[dict]) -> list[dict]:
     return matches
 
 
-def _best_candidate(candidates: list[dict]) -> dict:
-    """Pick the highest-volume candidate as primary market."""
-    return max(candidates, key=lambda m: m.get("volume_24h") or 0)
-
-
 # ── Core scanner ──────────────────────────────────────────────────────────────
 
 class OddsScanner:
     """
-    Fetches live Polymarket markets, matches them to registry families,
-    persists snapshots, computes deltas, and caches the payload.
+    Two-lane Polymarket discovery:
+      Lane A — broad top-market scan (sorted by 24h volume, limit=400)
+      Lane B — 6 parallel tag-specific fetches covering all registry categories
+
+    After merging and deduplicating by condition_id, keyword-matches all 26
+    registry families, persists snapshots to Neon, computes deltas, and caches
+    the live payload.
     """
 
     async def scan_and_persist(self) -> dict:
         """
-        Full scan cycle:
-          1. Fetch top markets from Polymarket (unfiltered, 400 limit)
-          2. Match each registry family to the best available market
-          3. Persist snapshot rows to Neon
-          4. Compute 1h/24h/7d deltas from DB history
-          5. Build + cache live payload
-          6. Run retention (delete rows >7 days old)
-
-        Returns the live payload dict.
-        Thread-safe: acquires _SCAN_LOCK so concurrent callers don't double-scan.
+        Full scan cycle.  Thread-safe: acquires _SCAN_LOCK so concurrent
+        callers don't double-scan.
         """
         async with _SCAN_LOCK:
             return await self._do_scan()
 
+    # ── Lane B helper ──────────────────────────────────────────────────────
+
+    async def _fetch_lane_b(self, polymarket_intel: Any) -> tuple[list[dict], dict]:
+        """
+        Run all Lane B tag fetches in parallel.
+        Returns (enriched_markets, stats_dict).
+        Each tag result is already enriched + active-filtered by get_top_markets().
+        """
+        tasks = [
+            polymarket_intel.get_top_markets(limit=lim, tag=tag)
+            for tag, lim in _LANE_B_TAGS
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_markets: list[dict] = []
+        queries_run = 0
+        for i, res in enumerate(results):
+            queries_run += 1
+            if isinstance(res, Exception):
+                log.warning(
+                    "[odds_scanner] Lane B tag=%r error: %s",
+                    _LANE_B_TAGS[i][0], res,
+                )
+            elif isinstance(res, list):
+                all_markets.extend(res)
+
+        return all_markets, {"targeted_queries_run": queries_run}
+
+    # ── Core scan ──────────────────────────────────────────────────────────
+
     async def _do_scan(self) -> dict:
         t0 = time.time()
 
-        # ── 1. Fetch markets ──────────────────────────────────────────────────
+        # ── 1. Import once inside scan ────────────────────────────────────
         try:
-            from services.predict.polymarket_intelligence import polymarket_intel
-            all_markets = await polymarket_intel.get_top_markets(limit=_FETCH_LIMIT)
+            from services.predict.polymarket_intelligence import (
+                polymarket_intel,
+                _is_sports_market,
+            )
         except Exception as exc:
-            log.warning("[odds_scanner] Polymarket fetch error: %s", exc)
-            all_markets = []
+            log.warning("[odds_scanner] polymarket_intelligence import error: %s", exc)
+            polymarket_intel = None
+            def _is_sports_market(m: dict) -> bool:  # type: ignore
+                return False
 
-        now_ts  = time.time()
-        now_dt  = datetime.fromtimestamp(now_ts, tz=timezone.utc)
-        entries: list[dict] = []
-        snap_rows: list[dict] = []
+        # ── 2. Parallel Lane A + Lane B fetch ─────────────────────────────
+        if polymarket_intel is not None:
+            lane_a_task = polymarket_intel.get_top_markets(limit=_FETCH_LIMIT)
+            lane_b_task = self._fetch_lane_b(polymarket_intel)
+            ab = await asyncio.gather(lane_a_task, lane_b_task, return_exceptions=True)
 
-        # ── 2 & 3. Match families + build snapshot rows ───────────────────────
+            lane_a: list[dict] = ab[0] if not isinstance(ab[0], Exception) else []
+            if isinstance(ab[0], Exception):
+                log.warning("[odds_scanner] Lane A error: %s", ab[0])
+
+            if isinstance(ab[1], Exception):
+                log.warning("[odds_scanner] Lane B error: %s", ab[1])
+                lane_b_markets: list[dict] = []
+                lane_b_stats: dict = {"targeted_queries_run": 0}
+            else:
+                lane_b_markets, lane_b_stats = ab[1]
+        else:
+            lane_a = []
+            lane_b_markets = []
+            lane_b_stats = {"targeted_queries_run": 0}
+
+        broad_candidates_seen  = len(lane_a)
+        targeted_candidates_seen = len(lane_b_markets)
+
+        # ── 3. Merge + dedupe by condition_id ─────────────────────────────
+        # Lane A markets take precedence (already enriched + sorted by volume).
+        # Lane B markets that share a condition_id with Lane A are skipped.
+        broad_cids: set[str] = set()
+        merged: list[dict] = []
+
+        for m in lane_a:
+            cid = m.get("condition_id") or ""
+            broad_cids.add(cid)
+            merged.append(m)
+
+        dedupe_count = 0
+        seen_cids: set[str] = set(broad_cids)
+        for m in lane_b_markets:
+            cid = m.get("condition_id") or ""
+            if cid and cid in seen_cids:
+                dedupe_count += 1
+                continue
+            if cid:
+                seen_cids.add(cid)
+            merged.append(m)
+
+        merged_candidates_seen  = len(merged)
+        candidate_dedupe_count  = dedupe_count
+
+        # ── 4. Sports exclusion ───────────────────────────────────────────
+        sports_excluded_count = 0
+        clean_pool: list[dict] = []
+        for m in merged:
+            if _is_sports_market(m):
+                sports_excluded_count += 1
+            else:
+                clean_pool.append(m)
+
+        now_ts = time.time()
+        now_dt = datetime.fromtimestamp(now_ts, tz=timezone.utc)
+
+        # ── 5. Match families against merged pool ─────────────────────────
+        live_entries:  list[dict] = []   # families with a live market
+        missing_list:  list[dict] = []   # families with no match
+        snap_rows:     list[dict] = []
+
+        families_by_broad:    list[str] = []
+        families_by_targeted: list[str] = []
+        families_still_missing: list[str] = []
+
         for fdef in ODDS_REGISTRY:
             fk = fdef["family_key"]
-            candidates = _match_family(fdef, all_markets)
+            candidates = _match_family(fdef, clean_pool)
 
             if not candidates:
-                entries.append(self._null_entry(fdef))
+                families_still_missing.append(fk)
+                missing_list.append({
+                    "family_key":        fk,
+                    "label":             fdef["label"],
+                    "category":          fdef["category"],
+                    "priority":          fdef["priority"],
+                    "dashboard_enabled": fdef["dashboard_enabled"],
+                    "prophetik_enabled": fdef["prophetik_enabled"],
+                    "preferred_outcome": fdef["preferred_outcome"],
+                    "description":       fdef.get("description", ""),
+                })
                 continue
 
-            candidates_sorted = sorted(candidates, key=lambda m: m.get("volume_24h") or 0, reverse=True)
-            best = _best_candidate(candidates_sorted)
+            candidates_sorted = sorted(
+                candidates, key=lambda m: m.get("volume_24h") or 0, reverse=True
+            )
+            best = candidates_sorted[0]
+            best_cid = best.get("condition_id") or ""
 
-            yes_pct = best.get("yes_pct")     # 0-100 or None
+            discovery_lane = "broad" if best_cid in broad_cids else "targeted"
+            if discovery_lane == "broad":
+                families_by_broad.append(fk)
+            else:
+                families_by_targeted.append(fk)
+
+            yes_pct  = best.get("yes_pct")
             yes_prob = round(yes_pct / 100.0, 6) if yes_pct is not None else None
 
             snap_rows.append({
-                "family_key":    fk,
-                "market_id":     best.get("condition_id", "") or best.get("slug", "") or fk,
-                "market_slug":   best.get("slug"),
-                "question":      best.get("question"),
-                "source":        "polymarket",
+                "family_key":      fk,
+                "market_id":       best_cid or best.get("slug", "") or fk,
+                "market_slug":     best.get("slug"),
+                "question":        best.get("question"),
+                "source":          "polymarket",
                 "yes_probability": yes_prob,
-                "no_probability": round(1.0 - yes_prob, 6) if yes_prob is not None else None,
-                "best_bid":      best.get("best_bid"),
-                "best_ask":      best.get("best_ask"),
-                "volume_24h":    best.get("volume_24h"),
-                "liquidity":     best.get("liquidity"),
-                "end_date":      best.get("end_date_iso") or best.get("end_date"),
-                "captured_at":   now_dt,
-                "raw_json":      {
-                    "question":        best.get("question"),
-                    "yes_pct":         yes_pct,
-                    "price_change_1h": best.get("price_change_1h"),
-                    "price_change_1d": best.get("price_change_1d"),
-                    "price_change_1wk": best.get("price_change_1wk"),
-                    "volume_24h":      best.get("volume_24h"),
+                "no_probability":  round(1.0 - yes_prob, 6) if yes_prob is not None else None,
+                "best_bid":        best.get("best_bid"),
+                "best_ask":        best.get("best_ask"),
+                "volume_24h":      best.get("volume_24h"),
+                "liquidity":       best.get("liquidity"),
+                "end_date":        best.get("end_date_iso") or best.get("end_date"),
+                "captured_at":     now_dt,
+                "raw_json": {
+                    "question":          best.get("question"),
+                    "yes_pct":           yes_pct,
+                    "price_change_1h":   best.get("price_change_1h"),
+                    "price_change_1d":   best.get("price_change_1d"),
+                    "price_change_1wk":  best.get("price_change_1wk"),
+                    "volume_24h":        best.get("volume_24h"),
+                    "discovery_lane":    discovery_lane,
                 },
             })
 
             driver_markets = [
                 {
-                    "question":    m.get("question", ""),
-                    "yes_pct":     m.get("yes_pct"),
-                    "volume_24h":  m.get("volume_24h", 0),
+                    "question":     m.get("question", ""),
+                    "yes_pct":      m.get("yes_pct"),
+                    "volume_24h":   m.get("volume_24h", 0),
                     "delta_24h_pp": m.get("price_change_1d"),
                     "condition_id": m.get("condition_id", ""),
                     "slug":         m.get("slug", ""),
@@ -263,7 +395,7 @@ class OddsScanner:
                 for m in candidates_sorted[:5]
             ]
 
-            entries.append({
+            live_entries.append({
                 "family_key":        fk,
                 "label":             fdef["label"],
                 "category":          fdef["category"],
@@ -275,36 +407,34 @@ class OddsScanner:
                 "yes_probability":   yes_prob,
                 "yes_pct":           yes_pct,
                 "market_question":   best.get("question", ""),
-                "condition_id":      best.get("condition_id", ""),
+                "condition_id":      best_cid,
                 "slug":              best.get("slug", ""),
                 "volume_24h":        best.get("volume_24h"),
                 "liquidity":         best.get("liquidity"),
                 "candidate_count":   len(candidates),
                 "driver_markets":    driver_markets,
-                "_api_1h":           best.get("price_change_1h"),
-                "_api_24h":          best.get("price_change_1d"),
-                "_api_7d":           best.get("price_change_1wk"),
-                "_yes_pct_raw":      yes_pct,
+                "discovery_lane":    discovery_lane,
+                # staging fields for delta computation — popped below
+                "_api_1h":       best.get("price_change_1h"),
+                "_api_24h":      best.get("price_change_1d"),
+                "_api_7d":       best.get("price_change_1wk"),
+                "_yes_pct_raw":  yes_pct,
             })
 
-        # ── 4. Persist to Neon (non-blocking if DB unavailable) ───────────────
+        # ── 6. Persist snapshots ──────────────────────────────────────────
+        snapshots_written = 0
         if snap_rows:
             try:
-                inserted = insert_snapshots(snap_rows)
-                log.debug("[odds_scanner] Persisted %d snapshot rows", inserted)
+                snapshots_written = insert_snapshots(snap_rows)
+                log.debug("[odds_scanner] Persisted %d snapshot rows", snapshots_written)
             except Exception as exc:
                 log.warning("[odds_scanner] insert_snapshots error: %s", exc)
 
-        # ── 5. Compute deltas from DB history ─────────────────────────────────
-        for entry in entries:
-            if entry.get("yes_probability") is None:
-                entry["delta_1h_pp"]  = None
-                entry["delta_24h_pp"] = None
-                entry["delta_7d_pp"]  = None
-                continue
+        # ── 7. Compute deltas from DB history ─────────────────────────────
+        for entry in live_entries:
             deltas = _compute_deltas(
                 family_key=entry["family_key"],
-                current_yes_pct=entry.get("_yes_pct_raw"),
+                current_yes_pct=entry.pop("_yes_pct_raw", None),
                 now_ts=now_ts,
                 api_fallbacks={
                     "delta_1h_api":  entry.pop("_api_1h", None),
@@ -313,27 +443,45 @@ class OddsScanner:
                 },
             )
             entry.update(deltas)
-            # Remove private staging fields
-            entry.pop("_yes_pct_raw", None)
-            entry.pop("_api_1h", None)
-            entry.pop("_api_24h", None)
-            entry.pop("_api_7d", None)
 
-        entries_sorted = sorted(entries, key=lambda e: e.get("priority", 99))
+        entries_sorted = sorted(live_entries, key=lambda e: e.get("priority", 99))
+        missing_sorted = sorted(missing_list, key=lambda e: e.get("priority", 99))
 
         scan_ms = round((time.time() - t0) * 1000)
+
+        # ── 8. Diagnostics block (stored inside payload) ──────────────────
+        scan_diag: dict = {
+            "broad_candidates_seen":              broad_candidates_seen,
+            "targeted_queries_run":               lane_b_stats.get("targeted_queries_run", 0),
+            "targeted_candidates_seen":           targeted_candidates_seen,
+            "merged_candidates_seen":             merged_candidates_seen,
+            "candidate_dedupe_count":             candidate_dedupe_count,
+            "live_family_count":                  len(live_entries),
+            "missing_family_count":               len(missing_list),
+            "families_matched_by_broad_scan":     families_by_broad,
+            "families_matched_by_targeted_search": families_by_targeted,
+            "families_still_missing":             families_still_missing,
+            "sports_excluded_count":              sports_excluded_count,
+            "snapshots_written":                  snapshots_written,
+        }
+
         payload = {
-            "scanned_at":    now_dt.isoformat(),
-            "scan_ms":       scan_ms,
-            "total_families": len(ODDS_REGISTRY),
-            "matched_families": sum(1 for e in entries if e.get("yes_probability") is not None),
-            "missing_families": sum(1 for e in entries if e.get("yes_probability") is None),
-            "odds": entries_sorted,
+            "scanned_at":          now_dt.isoformat(),
+            "scan_ms":             scan_ms,
+            "total_families":      len(ODDS_REGISTRY),
+            "matched_families":    len(live_entries),
+            "missing_families_count": len(missing_list),
+            # odds[] contains ONLY live matched families (no null stubs)
+            "odds":                entries_sorted,
+            # missing_families[] contains unmatched family metadata
+            "missing_families":    missing_sorted,
+            # internal diagnostics — exposed by get_diagnostics()
+            "_scan_diag":          scan_diag,
         }
 
         _mem_cache.set(_LIVE_CACHE_KEY, payload, _LIVE_CACHE_TTL)
 
-        # ── 6. Retention (fire-and-forget, don't block caller) ────────────────
+        # ── 9. Retention (fire-and-forget) ────────────────────────────────
         try:
             loop = asyncio.get_running_loop()
             loop.run_in_executor(None, delete_old_snapshots, 7)
@@ -341,8 +489,13 @@ class OddsScanner:
             pass
 
         log.info(
-            "[odds_scanner] scan complete — %d/%d families matched, %d ms",
-            payload["matched_families"], payload["total_families"], scan_ms,
+            "[odds_scanner] scan complete — %d/%d matched "
+            "(broad=%d targeted=%d missing=%d) "
+            "pool=%d(A=%d B=%d deduped=%d sports=%d) ms=%d",
+            len(live_entries), len(ODDS_REGISTRY),
+            len(families_by_broad), len(families_by_targeted), len(missing_list),
+            merged_candidates_seen, broad_candidates_seen, targeted_candidates_seen,
+            candidate_dedupe_count, sports_excluded_count, scan_ms,
         )
         return payload
 
@@ -364,18 +517,6 @@ class OddsScanner:
     def get_history(self, family_key: str, days: int = 7) -> dict:
         """
         Return time-series probability history for a single family.
-
-        Response shape:
-        {
-          "family_key": "fed_rate_decision",
-          "label": "...",
-          "days": 7,
-          "points": [
-            {"captured_at": "...", "yes_probability": 0.63, "yes_pct": 63.0,
-             "volume_24h": 45000.0, "liquidity": 12000.0},
-            ...
-          ]
-        }
         """
         fdef = REGISTRY_BY_KEY.get(family_key)
         points_raw = _db_get_history(family_key, days=days)
@@ -383,22 +524,22 @@ class OddsScanner:
         for p in points_raw:
             yes_prob = p.get("yes_probability")
             points.append({
-                "captured_at":   p.get("captured_at"),
-                "yes_probability": yes_prob,
-                "yes_pct":       round(float(yes_prob) * 100.0, 2) if yes_prob is not None else None,
-                "volume_24h":    p.get("volume_24h"),
-                "liquidity":     p.get("liquidity"),
+                "captured_at":     p.get("captured_at"),
+                "yes_probability":  yes_prob,
+                "yes_pct":          round(float(yes_prob) * 100.0, 2) if yes_prob is not None else None,
+                "volume_24h":       p.get("volume_24h"),
+                "liquidity":        p.get("liquidity"),
             })
         return {
-            "family_key": family_key,
-            "label":      fdef["label"] if fdef else family_key,
-            "category":   fdef["category"] if fdef else "",
-            "days":       days,
-            "point_count": len(points),
-            "points":     points,
+            "family_key":   family_key,
+            "label":        fdef["label"] if fdef else family_key,
+            "category":     fdef["category"] if fdef else "",
+            "days":         days,
+            "point_count":  len(points),
+            "points":       points,
         }
 
-    # ── Null stub helpers ─────────────────────────────────────────────────────
+    # ── Null stub helper (kept for backward-compat; not in odds[] anymore) ────
 
     @staticmethod
     def _null_entry(fdef: dict) -> dict:
@@ -428,14 +569,32 @@ class OddsScanner:
     # ── Diagnostics ───────────────────────────────────────────────────────────
 
     def get_diagnostics(self) -> dict:
-        payload = self.get_live_payload()
+        payload  = self.get_live_payload()
+        scan_diag = payload.get("_scan_diag", {}) if payload else {}
         return {
-            "cache_warm":        payload is not None,
-            "scanned_at":        payload.get("scanned_at") if payload else None,
-            "matched_families":  payload.get("matched_families") if payload else None,
-            "total_families":    len(ODDS_REGISTRY),
-            "store_available":   _STORE_AVAILABLE,
-            "db_stats":          _db_get_diagnostics(),
+            "cache_warm":          payload is not None,
+            "scanned_at":          payload.get("scanned_at") if payload else None,
+            "scan_ms":             payload.get("scan_ms") if payload else None,
+            "matched_families":    payload.get("matched_families") if payload else None,
+            "missing_families_count": payload.get("missing_families_count") if payload else None,
+            "total_families":      len(ODDS_REGISTRY),
+            "store_available":     _STORE_AVAILABLE,
+            "db_stats":            _db_get_diagnostics(),
+            # Two-lane discovery stats
+            "broad_candidates_seen":              scan_diag.get("broad_candidates_seen"),
+            "targeted_queries_run":               scan_diag.get("targeted_queries_run"),
+            "targeted_candidates_seen":           scan_diag.get("targeted_candidates_seen"),
+            "merged_candidates_seen":             scan_diag.get("merged_candidates_seen"),
+            "candidate_dedupe_count":             scan_diag.get("candidate_dedupe_count"),
+            "live_family_count":                  scan_diag.get("live_family_count"),
+            "missing_family_count":               scan_diag.get("missing_family_count"),
+            "families_matched_by_broad_scan":     scan_diag.get("families_matched_by_broad_scan"),
+            "families_matched_by_targeted_search": scan_diag.get("families_matched_by_targeted_search"),
+            "families_still_missing":             scan_diag.get("families_still_missing"),
+            "sports_excluded_count":              scan_diag.get("sports_excluded_count"),
+            "snapshots_written":                  scan_diag.get("snapshots_written"),
+            # Lane B tag config (for reference)
+            "lane_b_tags": [{"tag": t, "limit": l} for t, l in _LANE_B_TAGS],
         }
 
 

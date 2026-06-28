@@ -1,0 +1,103 @@
+Audit first. No edits until audit is complete.
+
+The tracked odds registry foundation is good, but the current scanner only matched 2 of 26 families. Do not treat that as acceptable yet.
+
+Problem:
+The scanner currently appears to fetch a broad top-market list, then keyword-match families against those markets. That is too shallow. It can miss important but lower-volume or differently-worded markets like:
+
+* Fed cuts / hikes
+* recession
+* SPX / Nasdaq / Dow daily direction
+* NVDA / TSLA / AAPL / MSFT / GOOGL / AMD price milestone markets
+* CPI / inflation / jobs / GDP
+* tech earnings
+* Bitcoin / oil / gold milestones
+
+Goal:
+Improve discovery before any frontend work.
+
+Do not edit frontend.
+Do not remove existing endpoints.
+Do not break /api/predict/odds/live, /api/predict/odds/history, or existing Prophetik endpoints.
+
+Audit:
+
+1. Inspect backend/services/predict/odds_scanner.py.
+2. Inspect backend/services/predict/odds_registry.py.
+3. Inspect backend/services/predict/polymarket_intelligence.py.
+4. Find whether PolymarketIntelligence or any provider supports query/tag/category-specific search beyond get_top_markets().
+5. Find raw Gamma API wrapper patterns that can search markets/events by query, slug, tag, or category.
+6. Report exactly how current discovery works and why only 2/26 matched.
+
+Implementation:
+Add two-lane discovery.
+
+Lane A — Broad scan:
+Keep the current broad top-market scan.
+
+Lane B — Family-specific search:
+For every family in odds_registry, use its search_queries and keyword_patterns to search Polymarket directly for candidate markets.
+
+For example:
+
+* fed_cuts_2026: ["Fed cuts 2026", "rate cuts 2026", "Federal Reserve cuts"]
+* fed_hikes_2026: ["Fed hikes 2026", "rate hikes 2026", "Federal Reserve hikes"]
+* recession: ["recession 2026", "US recession", "recession by"]
+* spx_daily: ["S&P 500 up today", "SPX up", "S&P 500 close higher"]
+* nvda_milestone: ["NVDA", "Nvidia stock", "Nvidia price"]
+* bitcoin_milestone: ["Bitcoin price", "BTC price", "Bitcoin milestone"]
+* oil_milestone: ["oil price", "crude oil", "WTI"]
+* cpi_inflation: ["CPI", "inflation", "inflation reading"]
+
+Candidate handling:
+
+1. Merge candidates from broad scan and targeted family searches.
+2. Dedupe by condition_id / market_id / slug.
+3. Exclude sports/gambling markets for Investor/Dashboard unless explicitly allowed.
+4. Score relevance per family using:
+
+   * keyword match strength
+   * query source match
+   * volume_24h
+   * liquidity
+   * active/open status
+   * recency/end_date
+5. Pick the best live market per family.
+6. Persist snapshots for every matched live family.
+7. Keep missing_families separate.
+
+Do not:
+
+* Do not mark null stub families as live.
+* Do not render missing families in odds[].
+* Do not use an LLM for this.
+* Do not add FMP/Tradier calls.
+* Do not reintroduce hardcoded sector stock catalogs.
+
+Diagnostics:
+Expand /api/predict/odds/diagnostics and /live diagnostics with:
+
+* broad_candidates_seen
+* targeted_queries_run
+* targeted_candidates_seen
+* merged_candidates_seen
+* candidate_dedupe_count
+* live_family_count
+* missing_family_count
+* families_matched_by_broad_scan
+* families_matched_by_targeted_search
+* families_still_missing
+* sports_excluded_count
+* snapshots_written
+
+Validation:
+
+1. /api/predict/odds/live still returns successfully.
+2. odds[] contains only live matched markets.
+3. missing_families contains unmatched registry families.
+4. Targeted search diagnostics show queries ran.
+5. Live matches improve beyond the broad-only baseline where Polymarket has relevant live markets.
+6. Fed/Recession/SPX/NVDA/BTC/Oil families are either matched or clearly listed as missing after targeted query attempts.
+7. Snapshots continue writing to Neon.
+8. /api/predict/odds/history still works.
+9. Existing Prophetik endpoints still work.
