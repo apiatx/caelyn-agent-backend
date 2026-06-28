@@ -1,0 +1,119 @@
+Audit first. No edits until the audit is complete.
+
+Backend now returns market_read and exposure for every row in:
+
+* GET /api/predict/odds/live odds[]
+* GET /api/predict/investor/intelligence tracked_odds[]
+* GET /api/predict/investor/intelligence equity_signals[]
+
+Goal:
+Update Prophetik Investor → Event Impact Ledger so the Exposure column never says “Macro Only” and never renders blank when backend exposure exists.
+
+Do not edit backend unless the frontend audit proves the fields are missing.
+Do not edit Gambler mode.
+Do not hardcode frontend ticker mappings.
+Do not create frontend-only sector/theme exposure rules.
+
+Audit:
+
+1. Inspect the current Prophetik Investor component.
+2. Inspect how Event Impact Ledger rows are built.
+3. Inspect the live payload from:
+
+   * /api/predict/odds/live
+   * /api/predict/investor/intelligence
+4. Confirm each row has:
+
+   * market_read
+   * exposure.bullish_watchlist
+   * exposure.bearish_watchlist
+   * exposure.conditional_watchlist
+   * exposure.bullish_fallback
+   * exposure.bearish_fallback
+   * exposure.conditional_fallback
+   * exposure.bullish_themes
+   * exposure.bearish_themes
+   * exposure.conditional_themes
+   * exposure.exposure_source
+   * exposure.no_direct_exposure
+
+Implementation:
+
+1. Remove “Macro Only” from the Event Impact Ledger display logic.
+2. Rename/keep the column as “Exposure.”
+3. Render backend exposure in priority order:
+
+First row group:
+
+* Watchlist Bullish
+* Watchlist Bearish
+* Watchlist Conditional
+
+Second row group, if no watchlist hits or if space allows:
+
+* Theme Universe Bullish
+* Theme Universe Bearish
+* Theme Universe Conditional
+
+Third fallback:
+
+* Bullish Themes
+* Bearish Themes
+* Conditional Themes
+
+4. If backend exposure is present but only fallback tickers exist, show a subtle label:
+   “Theme Universe”
+   Then show the fallback ticker chips.
+
+5. If backend exposure has themes but no tickers, show theme chips.
+
+6. Only show “No direct exposure” if backend explicitly returns no_direct_exposure=true.
+
+7. If market_read is available, use it in the Market Read column.
+
+8. If market_read is missing, show “Needs mapping” in muted warning style instead of a blank dash.
+
+Important display examples:
+
+Fed row:
+Exposure should show rate-sensitive tickers/themes.
+Do not say Macro Only.
+
+Recession row:
+Exposure should show defensive/cyclical exposure.
+Do not say Macro Only.
+
+NVDA row:
+Exposure should show NVDA and/or AI/semis/data-center theme exposure.
+Do not say Macro Only.
+
+Oil/gold/bitcoin rows:
+Exposure should show relevant commodity/crypto/risk proxy exposure.
+Do not say Macro Only.
+
+Geopolitical rows:
+Exposure should show bullish and bearish impacted tickers/themes where backend provides them.
+
+Layout:
+
+* Keep the ledger tight.
+* Do not make each row huge.
+* Allow exposure chips to wrap within the cell if needed.
+* Do not cut off important ticker groups.
+* Use small labels like Bullish, Bearish, Theme Universe, Themes.
+* Keep odds prominent.
+
+Validation:
+
+1. No Event Impact Ledger row displays “Macro Only.”
+2. No Event Impact Ledger row has a blank Exposure cell when backend exposure exists.
+3. Fed decision row shows exposure.
+4. Fed cuts/hikes rows show exposure.
+5. Recession row shows exposure.
+6. NVDA/TSLA/AAPL/MSFT/GOOGL rows show exposure.
+7. Hormuz/Iran row shows exposure.
+8. Oil/gold/bitcoin rows show exposure.
+9. Market Read column uses backend market_read.
+10. No frontend hardcoded ticker map added.
+11. Gambler mode unchanged.
+12. Provide changed files and browser validation notes.

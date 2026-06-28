@@ -1,25 +1,5 @@
 [
   {
-    "scan_ts": "2026-05-31T14:08:54.100803+00:00",
-    "accounts_count": 16,
-    "batch_count": 2,
-    "batches_returned": 2,
-    "sections_ok": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "sections_missing": [],
-    "lkg_sections_used": [],
-    "ticker_count": 50,
-    "mention_records": 14,
-    "consensus_picks": 8,
-    "top_tickers": 8,
-    "cache_write_status": "written_clean",
-    "error": null
-  },
-  {
     "scan_ts": "2026-06-01T13:48:17.781969+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -601,6 +581,26 @@
     "consensus_picks": 10,
     "top_tickers": 10,
     "cache_write_status": "written_lkg_partial",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-06-28T14:04:15.543495+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 46,
+    "mention_records": 15,
+    "consensus_picks": 10,
+    "top_tickers": 10,
+    "cache_write_status": "written_clean",
     "error": null
   }
 ]
