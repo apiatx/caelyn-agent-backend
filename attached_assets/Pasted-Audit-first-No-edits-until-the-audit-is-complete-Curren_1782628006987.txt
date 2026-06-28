@@ -1,0 +1,152 @@
+Audit first. No edits until the audit is complete.
+
+Current issue:
+The Prophetik Investor → Event Impact Ledger “Exposure” column sometimes says “Macro Only” or has no tickers. That is not acceptable.
+
+Goal:
+Every odds family/event in the Event Impact Ledger must return equity exposure derived from the app’s canonical theme/ticker universe.
+
+Do not hardcode ticker lists in the frontend.
+Do not create a frontend-only exposure map.
+Do not reintroduce SECTOR_STOCKS into the odds engine path.
+Do not edit Gambler mode.
+
+Backend requirement:
+For every item returned by GET /api/predict/odds/live odds[] and/or GET /api/predict/investor/intelligence equity_signals, provide an exposure object.
+
+Required shape per odds/event row:
+
+{
+"market_read": "rates restrictive | rates easing | risk-on | risk-off | inflationary | disinflationary | growth positive | growth negative | geopolitical stress rising | geopolitical stress easing | tech bullish | commodity pressure | mixed | conditional",
+"exposure": {
+"bullish_watchlist": [],
+"bearish_watchlist": [],
+"conditional_watchlist": [],
+"bullish_fallback": [],
+"bearish_fallback": [],
+"conditional_fallback": [],
+"bullish_themes": [],
+"bearish_themes": [],
+"conditional_themes": [],
+"exposure_source": "watchlist+canonical_theme_universe",
+"no_direct_exposure": false
+}
+}
+
+Hard rule:
+No odds family should return no exposure unless the family is malformed. If no user watchlist tickers match, use canonical theme-universe fallback tickers.
+
+Resolution order:
+
+1. User watchlist symbols that belong to impacted themes/sectors.
+2. ENRICHED_THEME_RS_UNIVERSE proxy_symbols/candidate_symbols.
+3. Theme labels only if no tickers exist, but still return bullish_themes/bearish_themes.
+
+Every major odds family needs semantic exposure mapping:
+
+Fed / Rates:
+
+* Fed hikes / higher-for-longer / no cuts:
+  bullish: financials, banks, insurers, cash-rich/value, energy if inflation-linked
+  bearish: REITs/housing, long-duration growth tech, utilities, rate-sensitive small caps
+* Fed cuts / easing:
+  bullish: long-duration growth, software/AI, REITs/housing, small caps, biotech
+  bearish: banks/net interest margin beneficiaries if cuts imply margin compression
+* Fed decision:
+  derive exposure based on the selected priced outcome/question: hike, cut, no change, higher-for-longer, easing.
+
+Recession / Growth:
+
+* recession odds rising:
+  bullish: defensives, staples, utilities, gold/safe haven
+  bearish: banks, cyclicals, discretionary, industrials, travel
+* recession odds falling / growth positive:
+  bullish: cyclicals, industrials, discretionary, semis/tech, banks
+  bearish: defensives/safe-haven relative
+
+Inflation / CPI / Jobs:
+
+* inflation hot / jobs too strong:
+  bullish: energy, commodities, financials
+  bearish: REITs, long-duration growth, utilities, housing
+* inflation cooling / labor cooling without recession:
+  bullish: growth tech, REITs, housing, small caps
+  bearish: energy/commodities relative
+
+Index Direction:
+
+* SPX/Nasdaq/Dow up:
+  bullish: broad market proxy themes, mega-cap tech, semis if Nasdaq, industrials/financials if Dow
+  bearish: volatility/defensive relative
+* index down:
+  bullish: defensive/safe-haven themes
+  bearish: broad cyclicals / beta
+
+Mega-cap / Tech Milestones:
+
+* NVDA/AMD/AI/chips:
+  bullish: direct ticker if in universe/watchlist, semis, AI infrastructure, data center, power/cooling, networking
+  bearish: none unless backend has conflict; otherwise leave bearish empty but bullish must exist
+* AAPL/MSFT/GOOGL/TSLA:
+  bullish: direct ticker if available plus associated canonical themes
+  bearish: competitors/impacted sectors only if existing backend taxonomy supports it; otherwise do not invent.
+
+Geopolitics / War:
+
+* Iran/Hormuz/oil disruption risk rising:
+  bullish: energy, oil/gas, defense, shipping/tankers, gold
+  bearish: airlines, travel, consumer discretionary, transports
+* Hormuz normalization / risk easing:
+  bullish: airlines, travel, consumer discretionary, semis/supply chain
+  bearish: energy spike trades, defense risk premium, gold safe haven
+* Russia/Ukraine escalation:
+  bullish: defense, energy, commodities
+  bearish: Europe-exposed cyclicals/travel if represented
+* ceasefire/de-escalation:
+  bullish: travel/cyclicals/Europe proxy themes if represented
+  bearish: defense risk premium / energy shock trades
+* China/Taiwan tension:
+  bullish: defense, domestic semis/supply-chain resilience
+  bearish: Taiwan/China-exposed semis, consumer electronics, supply chain-heavy themes
+
+Commodities / Crypto:
+
+* oil price up:
+  bullish: oil/gas/energy services
+  bearish: airlines/transports/consumer discretionary
+* gold price up:
+  bullish: gold miners/metals/safe haven
+  bearish: high-beta risk-on relative if applicable
+* Bitcoin up:
+  bullish: crypto equities, miners, exchanges, high-beta liquidity proxies
+  bearish: none unless risk-off conflict exists
+
+Implementation:
+
+1. Add or extend a backend exposure resolver used by odds_scanner and investor intelligence.
+2. Input: family_key, label, category, question, selected outcome/side, odds/deltas.
+3. Output: market_read + exposure object.
+4. Use the existing canonical theme universe: ENRICHED_THEME_RS_UNIVERSE.
+5. Use user watchlist first when available.
+6. Use canonical fallback tickers when watchlist has no hits.
+7. Add diagnostics:
+
+   * exposure_rows_total
+   * exposure_rows_with_watchlist
+   * exposure_rows_with_fallback
+   * exposure_rows_without_tickers
+   * exposure_theme_universe_count
+   * hardcoded_sector_stocks_used: false
+
+Validation:
+
+1. /api/predict/odds/live returns exposure for every odds[] row.
+2. No odds[] row has exposure completely empty.
+3. No row requires the frontend to display “Macro Only.”
+4. Fed rows return rate-sensitive bullish/bearish exposure.
+5. Recession row returns defensive/cyclical exposure.
+6. NVDA/TSLA/AAPL/MSFT/GOOGL rows include direct ticker/theme exposure where canonical universe supports it.
+7. Hormuz/Iran row returns both bullish and bearish impacted tickers/themes.
+8. Bitcoin/oil/gold rows return relevant canonical exposures.
+9. hardcoded_sector_stocks_used remains false.
+10. Existing Prophetik endpoints still work.

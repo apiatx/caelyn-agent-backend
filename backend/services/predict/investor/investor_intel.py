@@ -33,6 +33,17 @@ from services.predict.investor.impact_engine import (
 from services.predict.investor.regime import compute_regime_scoreboard
 from services.predict.investor.themes import THEME_BY_ID
 
+try:
+    from services.predict.investor.exposure_resolver import (
+        resolve_family_exposure as _resolve_family_exposure_fn,
+        get_market_read_for_theme_direction as _get_market_read_fn,
+    )
+    _EXPOSURE_RESOLVER_AVAILABLE = True
+except Exception as _exp_import_e:
+    _EXPOSURE_RESOLVER_AVAILABLE = False
+    def _resolve_family_exposure_fn(*a, **kw): return "mixed", {}  # type: ignore
+    def _get_market_read_fn(*a, **kw): return "mixed"  # type: ignore
+
 logger = logging.getLogger("investor_intel")
 
 _INVESTOR_CACHE_TTL = 150   # 2.5 min — aligned with scored cache TTL
@@ -292,6 +303,34 @@ class InvestorIntel:
             equity_relevant, watchlist_syms, canonical_ticker_map
         )
 
+        # ── Enrich tracked_odds with exposure (watchlist-aware re-resolution) ──
+        _to_wl_hits = _to_fb_hits = _to_no_ticker = 0
+        enriched_tracked_odds: list[dict] = []
+        for _odd in tracked_odds:
+            _odd = dict(_odd)   # shallow copy — do not mutate scanner cache
+            if _EXPOSURE_RESOLVER_AVAILABLE:
+                try:
+                    _mr, _exp = _resolve_family_exposure_fn(
+                        family_key=_odd.get("family_key", ""),
+                        market_question=_odd.get("market_question"),
+                        yes_pct=_odd.get("yes_pct"),
+                        delta_24h=_odd.get("delta_24h_pp"),
+                        watchlist_syms=watchlist_syms,
+                        canonical_ticker_map=canonical_ticker_map,
+                    )
+                    _odd["market_read"] = _mr
+                    _odd["exposure"]    = _exp
+                    if _exp.get("bullish_watchlist") or _exp.get("bearish_watchlist"):
+                        _to_wl_hits += 1
+                    elif _exp.get("bullish_fallback") or _exp.get("bearish_fallback"):
+                        _to_fb_hits += 1
+                    else:
+                        _to_no_ticker += 1
+                except Exception:
+                    pass
+            enriched_tracked_odds.append(_odd)
+        tracked_odds = enriched_tracked_odds
+
         # ── Diagnostics ────────────────────────────────────────────────────────
         from services.predict.investor.event_grouping import make_event_family_key
         family_keys_seen = {
@@ -327,6 +366,17 @@ class InvestorIntel:
             ),
             "theme_universe_source":         theme_universe_info,
             "build_time_ms":                 round((_time.time() - t0) * 1000, 1),
+            "exposure_rows_total":           len(tracked_odds) + len(equity_signals),
+            "exposure_rows_with_watchlist":  (
+                _to_wl_hits + build_diag.get("equity_exposure_wl_hits", 0)
+            ),
+            "exposure_rows_with_fallback":   (
+                _to_fb_hits + build_diag.get("equity_exposure_fb_hits", 0)
+            ),
+            "exposure_rows_without_tickers": (
+                _to_no_ticker + build_diag.get("equity_exposure_no_ticker", 0)
+            ),
+            "exposure_theme_universe_count": theme_universe_theme_count,
         }
 
         now_ts = _time.time()
@@ -1036,9 +1086,12 @@ def _build_equity_signals(
         family_groups.setdefault(fk, []).append(m)
 
     signals: list[dict] = []
-    _diag_wl_hits  = 0
-    _diag_fb_hits  = 0
-    _diag_unmapped = 0
+    _diag_wl_hits      = 0
+    _diag_fb_hits      = 0
+    _diag_unmapped     = 0
+    _diag_eq_wl_hits   = 0
+    _diag_eq_fb_hits   = 0
+    _diag_eq_no_ticker = 0
 
     for family_key, markets in family_groups.items():
         if not markets:
@@ -1106,6 +1159,30 @@ def _build_equity_signals(
         _diag_wl_hits    += wl_hits
         _diag_fb_hits    += fb_hits
         _diag_unmapped   += umap
+
+        # ── market_read + full exposure shape ────────────────────────────────
+        _signal_market_read = _get_market_read_fn(primary_theme_id, effective_dir)
+        _signal_no_tickers  = not bool(
+            ticker_impacts.get("bullish_watchlist") or
+            ticker_impacts.get("bearish_watchlist") or
+            ticker_impacts.get("bullish_fallback") or
+            ticker_impacts.get("bearish_fallback")
+        )
+        _signal_exposure = {
+            **ticker_impacts,
+            "conditional_fallback": [],
+            "bullish_themes":       bullish_sectors,
+            "bearish_themes":       bearish_sectors,
+            "conditional_themes":   [],
+            "exposure_source":      "watchlist+canonical_theme_universe",
+            "no_direct_exposure":   _signal_no_tickers,
+        }
+        if wl_hits:
+            _diag_eq_wl_hits += 1
+        elif fb_hits:
+            _diag_eq_fb_hits += 1
+        else:
+            _diag_eq_no_ticker += 1
 
         # ── Theme impacts list ──────────────────────────────────────────────
         theme_impacts_list: list[dict] = []
@@ -1190,6 +1267,8 @@ def _build_equity_signals(
             "driver_markets":    driver_markets,
             "theme_impacts":     theme_impacts_list,
             "ticker_impacts":    ticker_impacts,
+            "market_read":       _signal_market_read,
+            "exposure":          _signal_exposure,
             "conflicts":         conflicts,
             "market_count":      len(markets),
             "total_volume_24h":  round(total_vol, 0),
@@ -1199,9 +1278,12 @@ def _build_equity_signals(
     # Sort by total volume (most liquid events first)
     signals.sort(key=lambda s: s["total_volume_24h"], reverse=True)
     diag = {
-        "watchlist_ticker_hits":       _diag_wl_hits,
+        "watchlist_ticker_hits":         _diag_wl_hits,
         "canonical_theme_fallback_hits": _diag_fb_hits,
-        "unmapped_theme_impacts":      _diag_unmapped,
+        "unmapped_theme_impacts":        _diag_unmapped,
+        "equity_exposure_wl_hits":       _diag_eq_wl_hits,
+        "equity_exposure_fb_hits":       _diag_eq_fb_hits,
+        "equity_exposure_no_ticker":     _diag_eq_no_ticker,
     }
     return signals[:max_signals], diag
 

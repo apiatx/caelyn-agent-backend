@@ -97,6 +97,18 @@ except Exception:
         def set(self, k, v, ttl=None): self._d[k] = v
     _mem_cache = _FallbackCache()
 
+try:
+    from services.predict.investor.exposure_resolver import (
+        resolve_family_exposure as _resolve_family_exposure,
+        build_canonical_ticker_map as _build_canonical_ticker_map,
+    )
+    _EXPOSURE_RESOLVER_OK = True
+except Exception as _exp_e:
+    log.warning("[odds_scanner] exposure_resolver import error: %s", _exp_e)
+    _EXPOSURE_RESOLVER_OK = False
+    def _resolve_family_exposure(*a, **kw): return "mixed", {}  # type: ignore
+    def _build_canonical_ticker_map() -> dict: return {}  # type: ignore
+
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -616,7 +628,14 @@ class OddsScanner:
                 snapshot_persist_duration_ms = round((time.time() - _snap_t0) * 1000)
                 log.warning("[odds_scanner] insert_snapshots error: %s", exc)
 
-        # ── 8. Compute deltas + strip staging fields ──────────────────────────
+        # ── 8. Compute deltas + strip staging fields + inject exposure ────────
+        _exp_ctmap: dict = {}
+        if _EXPOSURE_RESOLVER_OK:
+            try:
+                _exp_ctmap = _build_canonical_ticker_map()
+            except Exception:
+                pass
+
         live_entries: list[dict] = []
         for entry in live_pre:
             entry.pop("_best_enriched", None)
@@ -631,6 +650,20 @@ class OddsScanner:
                 },
             )
             entry.update(deltas)
+            if _EXPOSURE_RESOLVER_OK:
+                try:
+                    _mr, _exp = _resolve_family_exposure(
+                        family_key=entry["family_key"],
+                        market_question=entry.get("market_question"),
+                        yes_pct=entry.get("yes_pct"),
+                        delta_24h=entry.get("delta_24h_pp"),
+                        watchlist_syms=set(),  # canonical only — /live is a shared endpoint
+                        canonical_ticker_map=_exp_ctmap,
+                    )
+                    entry["market_read"] = _mr
+                    entry["exposure"]    = _exp
+                except Exception:
+                    pass
             live_entries.append(entry)
 
         entries_sorted = sorted(live_entries, key=lambda e: e.get("priority", 99))
