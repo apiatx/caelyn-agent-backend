@@ -1,0 +1,174 @@
+Audit first. No frontend edits.
+
+We need to test Kalshi before continuing deeper Polymarket-only work.
+
+Current user request:
+They want near-term daily finance markets in Prophetik / Prediction Markets:
+
+* BTC Up or Down on current/next day
+* S&P 500 / SPX Up or Down on current/next day
+* WTI Crude Oil (WTI) Up or Down on current/next day
+* NVIDIA (NVDA) Up or Down on current/next day
+* Gold (XAUUSD) Up or Down on current/next day
+* SPX by December 31st / year-end SPX market
+
+They also noticed Kalshi has better / higher-volume daily finance markets, especially:
+“Indices · S&P 500 Daily Up/Down · Jun 29 @ 8:30AM”
+
+Goal:
+Audit whether Kalshi should become the primary provider for these daily finance / high-volume contracts, with Polymarket as fallback.
+
+Do not change frontend.
+Do not break current Polymarket scanner.
+Do not remove existing Polymarket tracked families.
+Do not touch Gambler mode.
+Do not expose secrets in logs.
+
+Important Kalshi API note:
+First test unauthenticated public market data endpoints. Kalshi public market data should not require API keys.
+Only test authenticated endpoints separately if needed.
+KALSHI_API_KEY_ID alone is not enough for authenticated requests; signed Kalshi auth requires an RSA private key as well.
+
+Audit steps:
+
+1. Search repo for existing Kalshi code/env usage:
+
+* kalshi
+* KALSHI_API_KEY_ID
+* KALSHI_PRIVATE_KEY
+* KALSHI_API_PRIVATE_KEY
+* KALSHI_KEY
+* external-api.kalshi.com
+
+2. Test public Kalshi market data first:
+   Base URL:
+   https://external-api.kalshi.com/trade-api/v2
+
+Try:
+GET /markets?status=open&limit=100
+GET /events?limit=100
+GET /series?limit=100
+
+If query/search filters exist in the repo/docs/client, test market searches for:
+
+* S&P 500 Daily Up/Down
+* SPX
+* S&P 500
+* Nasdaq
+* Dow Jones
+* Bitcoin
+* BTC
+* WTI
+* Crude Oil
+* Gold
+* XAUUSD
+* NVIDIA
+* NVDA
+* December 31
+* year end
+
+3. Specifically find Kalshi candidates for:
+
+A. SPX daily direction
+Target market text:
+“S&P 500 Daily Up/Down”
+“Jun 29 @ 8:30AM”
+or current/next trading day equivalent.
+
+B. BTC daily direction
+Target:
+Bitcoin / BTC Up Down current/next day or high-volume near-term market.
+
+C. WTI daily direction
+Target:
+WTI Crude Oil Up or Down current/next day.
+
+D. Gold daily direction
+Target:
+Gold / XAUUSD Up or Down current/next day.
+
+E. NVDA daily direction
+Target:
+NVIDIA / NVDA Up or Down current/next day.
+
+F. SPX year-end / Dec 31
+Target:
+S&P 500 / SPX by Dec 31 / year-end level / milestone / range.
+
+For each candidate, report:
+
+* provider: kalshi
+* ticker / market_ticker
+* event_ticker
+* title
+* subtitle if any
+* yes_bid / yes_ask / last_price / probability source
+* volume
+* open_interest if available
+* liquidity if available
+* close_time / expiration_time
+* status
+* category
+* raw URL if constructable
+* whether it is better than Polymarket candidate by volume/liquidity
+
+4. Auth test, only if useful:
+   Check whether env contains:
+
+* KALSHI_API_KEY_ID
+* KALSHI_PRIVATE_KEY or equivalent RSA private key env
+
+If only KALSHI_API_KEY_ID exists and no private key exists, report:
+“Authenticated Kalshi test cannot work with key id alone; RSA private key env is missing.”
+
+Do not print key values.
+
+If both key id and private key exist:
+
+* perform a minimal signed authenticated request that does not trade.
+* report status only.
+* do not place orders.
+* do not access portfolio unless necessary.
+
+5. Architecture recommendation:
+   If Kalshi has better daily finance markets, propose provider routing:
+
+Use Kalshi primary for:
+
+* spx_daily_direction
+* nasdaq_daily_direction if present
+* dow_daily_direction if present
+* btc_daily_direction if present and not micro-noise
+* wti_daily_direction
+* gold_daily_direction
+* nvda_daily_direction
+* spx_year_end / spx_dec31 milestone
+
+Use Polymarket fallback for:
+
+* Fed / recession / geopolitical / AI / mega-cap odd contracts
+* any family where Kalshi has no useful market
+
+6. Do not integrate yet unless audit is complete.
+   First report:
+
+* Does public Kalshi API respond?
+* Are the target markets discoverable?
+* Which market tickers/events match?
+* What fields are available?
+* Does authenticated Kalshi work or is private key missing?
+* Recommendation: Kalshi primary vs Polymarket primary for daily finance contracts.
+
+Validation output expected:
+A table like:
+
+family_key | provider | matched? | title | ticker | volume | liquidity/OI | close_time | probability | reason
+
+Include:
+
+* spx_daily_direction
+* btc_daily_direction
+* wti_daily_direction
+* gold_daily_direction
+* nvda_daily_direction
+* spx_dec31_milestone
