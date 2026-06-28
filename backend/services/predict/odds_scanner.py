@@ -2,25 +2,27 @@
 Prediction Market Odds Scanner — Full Catalog Architecture.
 
 Discovery: Full active Polymarket catalog crawl via Gamma API pagination.
-  GET /events?active=true&closed=false&limit=500&offset=N
-  Continues until exhausted (up to 40 pages / 20 000 events).
-  Flattens nested markets, persists to prediction_market_catalog (Neon).
+  GET /events?active=true&closed=false&limit=100&offset=N
+  Continues until exhausted (~21 pages / ~29k markets).
+  Flattens nested markets. Catalog held in memory (Option C — no DB persist).
 
-Matching: All 26 tracked-odds families are matched against the FULL catalog,
-not a top-N or tag-limited subset. Sports exclusion, CLOB price enrichment,
-delta computation, and 7-day snapshots follow.
+Matching: All 26 tracked-odds families are matched against the FULL in-memory
+catalog, not a top-N or tag-limited subset.  Sports + pop-culture exclusion,
+CLOB price enrichment, delta computation, and 7-day snapshot persistence follow.
 
-Catalog fallback: if the live crawl fails, the scanner reads the most recent
-successful crawl from Neon (prediction_market_catalog table) so missing_families
-is never declared on stale tag/top-N data.
+Persistence strategy:
+  - Catalog (29k rows): MEMORY-ONLY (Option C).  Full crawl stored in
+    self._last_raw_markets.  No DB upsert — avoids 90s+ timeout on large batch.
+  - Snapshots (26 rows/cycle): persisted to prediction_market_odds_snapshots
+    via executor thread with 30s timeout.  Powers the 7-day history endpoint.
 
 Entry points
 ------------
 odds_scanner.scan_and_persist()   → async; called by _odds_scanner_loop() in main.py
-odds_scanner.get_live()           → async; returns cached payload, builds on miss
+odds_scanner.get_live()           → sync; returns cached payload (warming stub if cold)
 odds_scanner.get_live_payload()   → sync; returns cached dict or None if not warmed
 odds_scanner.get_history(fk,days) → sync; returns time-series list from DB
-odds_scanner.get_diagnostics()    → sync; returns full diagnostics dict
+odds_scanner.get_diagnostics()    → sync; returns full diagnostics dict (no DB calls)
 """
 
 from __future__ import annotations
@@ -240,43 +242,42 @@ class OddsScanner:
     flattens nested markets, and matches 26 tracked-odds families against the
     full universe — not a top-N or tag-limited subset.
 
-    Persistence: upserts catalog to prediction_market_catalog (Neon) after each
-    crawl; falls back to last successful Neon catalog if the live crawl fails.
+    Persistence: catalog held in memory only (Option C).  Odds snapshots
+    (26 rows/cycle) are persisted to prediction_market_odds_snapshots via executor.
     """
 
     def __init__(self) -> None:
         # Catalog-crawl state (survives across scan cycles in the same process)
         self._catalog_last_crawl_at: Optional[datetime] = None
         self._catalog_crawl_success: bool = False
+        # In-memory catalog fallback (Option C: no DB upsert of 29k rows)
+        self._last_raw_markets: list[dict] = []
         # Last-good diagnostics — written after each scan, read by /diagnostics (no DB calls)
         self._last_diagnostics: dict = {
-            "cache_warm":           False,
+            "cache_warm":            False,
             "registry_family_count": len(ODDS_REGISTRY),
-            "live_family_count":    0,
-            "missing_family_count": len(ODDS_REGISTRY),
+            "live_family_count":     0,
+            "missing_family_count":  len(ODDS_REGISTRY),
         }
 
     # ── Catalog crawl ─────────────────────────────────────────────────────────
 
-    async def _crawl_and_persist_catalog(
+    async def _crawl_catalog(
         self,
         polymarket_intel: Any,
-        crawl_started_at: datetime,
     ) -> tuple[list[dict], dict, bool]:
         """
-        Fetch the full active Polymarket market catalog.
+        Fetch the full active Polymarket market catalog — memory-only (Option C).
 
-        Steps:
-          1. Call polymarket_intel.fetch_full_active_catalog() — paginates /events.
-          2. Upsert raw markets to Neon catalog in a thread executor (non-blocking).
-          3. Mark stale rows (last_seen_at < crawl_started_at) in executor.
-          4. On failure: load last-good catalog from Neon as fallback.
+        No DB persistence of the 29k-row catalog.  The full raw_markets list is
+        stored on self._last_raw_markets for inter-cycle in-process fallback.
+        Only odds snapshots (26 rows/cycle) are persisted to Neon.
 
         Returns:
             (raw_markets, crawl_stats, success)
-            raw_markets — list of raw Gamma market dicts (with tags + event_slug injected)
+            raw_markets — list of raw Gamma market dicts (tags + event_slug injected)
             crawl_stats — dict with catalog_* keys
-            success     — True if live crawl succeeded, False if Neon fallback used
+            success     — True if live crawl succeeded, False if in-memory fallback
         """
         try:
             raw_markets, stats = await polymarket_intel.fetch_full_active_catalog()
@@ -284,85 +285,31 @@ class OddsScanner:
             if not raw_markets:
                 raise ValueError("fetch_full_active_catalog returned empty list")
 
-            # Persist to Neon — run in executor (blocking DB ops off event loop).
-            # execute_values makes this ~5-10s for 28k+ rows. Hard cap at 90s
-            # so a stalled DB connection never freezes the entire scan loop.
-            loop = asyncio.get_running_loop()
-            try:
-                rows_upserted = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None, _persist_catalog_bg, raw_markets, crawl_started_at
-                    ),
-                    timeout=90.0,
-                )
-            except asyncio.TimeoutError:
-                log.warning(
-                    "[odds_scanner] _persist_catalog_bg timed out after 90s — "
-                    "scan continues without persistence this cycle"
-                )
-                rows_upserted = 0
-            stats["catalog_rows_upserted"] = rows_upserted
-
+            self._last_raw_markets = raw_markets
             self._catalog_last_crawl_at = datetime.now(timezone.utc)
             self._catalog_crawl_success = True
             log.info(
-                "[odds_scanner] catalog crawl OK — %d events / %d markets / %d pages / %d upserted",
+                "[odds_scanner] catalog crawl OK — %d events / %d markets / %d pages "
+                "(memory-only, no DB upsert)",
                 stats.get("catalog_events_total", 0),
                 stats.get("catalog_markets_flattened", 0),
                 stats.get("catalog_events_pages_fetched", 0),
-                rows_upserted,
             )
             return raw_markets, stats, True
 
         except Exception as exc:
-            log.warning(
-                "[odds_scanner] catalog crawl failed (%s) — loading Neon fallback", exc
-            )
             self._catalog_crawl_success = False
-
-            # Neon fallback: read last-good catalog rows and reconstruct raw-style dicts
-            try:
-                neon_rows = get_active_catalog_rows()
-                # Reconstruct raw-compatible dicts from stored raw_json
-                raw_markets = []
-                for row in neon_rows:
-                    raw = row.get("raw_json") or {}
-                    if raw and raw.get("conditionId"):
-                        raw_markets.append(raw)
-                    elif row.get("condition_id"):
-                        # Build minimal raw dict from catalog columns
-                        raw_markets.append({
-                            "conditionId":   row["condition_id"],
-                            "question":      row.get("question", ""),
-                            "tags":          row.get("tags") or [],
-                            "volume24hr":    row.get("volume_24h"),
-                            "liquidityNum":  row.get("liquidity"),
-                            "closed":        row.get("closed", False),
-                            "acceptingOrders": row.get("accepting_orders", True),
-                            "endDate":       row.get("end_date"),
-                            "clobTokenIds":  row.get("clob_token_ids") or [],
-                            "outcomePrices": row.get("outcome_prices") or [],
-                            "slug":          row.get("market_slug", ""),
-                            "event_slug":    row.get("event_slug", ""),
-                        })
-
-                fallback_stats = {
-                    "catalog_events_pages_fetched": 0,
-                    "catalog_events_total":         0,
-                    "catalog_markets_flattened":    len(raw_markets),
-                }
-                log.info(
-                    "[odds_scanner] Neon catalog fallback: %d active rows", len(raw_markets)
-                )
-                return raw_markets, fallback_stats, False
-
-            except Exception as exc2:
-                log.warning("[odds_scanner] Neon catalog fallback also failed: %s", exc2)
-                return [], {
-                    "catalog_events_pages_fetched": 0,
-                    "catalog_events_total":         0,
-                    "catalog_markets_flattened":    0,
-                }, False
+            log.warning(
+                "[odds_scanner] catalog crawl failed (%s) — using in-memory fallback "
+                "(%d markets from previous cycle)",
+                exc, len(self._last_raw_markets),
+            )
+            fallback_stats = {
+                "catalog_events_pages_fetched": 0,
+                "catalog_events_total":         0,
+                "catalog_markets_flattened":    len(self._last_raw_markets),
+            }
+            return self._last_raw_markets, fallback_stats, False
 
     # ── CLOB price enrichment ─────────────────────────────────────────────────
 
@@ -424,10 +371,10 @@ class OddsScanner:
 
         crawl_started_at = datetime.now(timezone.utc)
 
-        # ── 2. Full catalog crawl ─────────────────────────────────────────────
+        # ── 2. Full catalog crawl (memory-only, Option C) ─────────────────────
         if polymarket_intel is not None:
-            raw_markets, crawl_stats, crawl_success = await self._crawl_and_persist_catalog(
-                polymarket_intel, crawl_started_at
+            raw_markets, crawl_stats, crawl_success = await self._crawl_catalog(
+                polymarket_intel
             )
         else:
             raw_markets, crawl_stats, crawl_success = [], {
@@ -457,12 +404,17 @@ class OddsScanner:
         # ── 4. Investor eligibility exclusion (sports + pop culture) ──────────
         sports_excluded_count      = 0
         pop_culture_excluded_count = 0
+        excluded_categories_seen: set[str] = set()
         clean_pool: list[dict] = []
         for m in active_pool:
             if _is_sports_market(m):
                 sports_excluded_count += 1
+                for tag in (m.get("tags") or []):
+                    excluded_categories_seen.add(tag if isinstance(tag, str) else str(tag))
             elif _is_pop_culture_market(m):
                 pop_culture_excluded_count += 1
+                for tag in (m.get("tags") or []):
+                    excluded_categories_seen.add(tag if isinstance(tag, str) else str(tag))
             else:
                 clean_pool.append(m)
 
@@ -634,14 +586,34 @@ class OddsScanner:
             gamma_price_fallback_count = len(live_pre)
             clob_fail_count = len(live_pre)
 
-        # ── 7. Persist snapshots ──────────────────────────────────────────────
+        # ── 7. Persist snapshots (executor, 30s cap) ─────────────────────────
         snap_rows = [e.pop("_snap_row") for e in live_pre]
-        snapshots_written = 0
+        snapshots_written          = 0
+        snapshot_persist_success   = False
+        snapshot_persist_error: Optional[str] = None
+        snapshot_persist_duration_ms: Optional[int] = None
+
         if snap_rows:
+            _snap_t0 = time.time()
             try:
-                snapshots_written = insert_snapshots(snap_rows)
-                log.debug("[odds_scanner] persisted %d snapshot rows", snapshots_written)
+                _snap_loop = asyncio.get_running_loop()
+                snapshots_written = await asyncio.wait_for(
+                    _snap_loop.run_in_executor(None, insert_snapshots, snap_rows),
+                    timeout=30.0,
+                )
+                snapshot_persist_success     = snapshots_written > 0
+                snapshot_persist_duration_ms = round((time.time() - _snap_t0) * 1000)
+                log.info(
+                    "[odds_scanner] persisted %d snapshot rows in %dms",
+                    snapshots_written, snapshot_persist_duration_ms,
+                )
+            except asyncio.TimeoutError:
+                snapshot_persist_error       = "timeout_30s"
+                snapshot_persist_duration_ms = 30000
+                log.warning("[odds_scanner] insert_snapshots timed out after 30s")
             except Exception as exc:
+                snapshot_persist_error       = str(exc)
+                snapshot_persist_duration_ms = round((time.time() - _snap_t0) * 1000)
                 log.warning("[odds_scanner] insert_snapshots error: %s", exc)
 
         # ── 8. Compute deltas + strip staging fields ──────────────────────────
@@ -666,68 +638,55 @@ class OddsScanner:
 
         scan_ms = round((time.time() - t0) * 1000)
 
-        # ── 9. Catalog diagnostics — computed from known scan values (no DB call) ──
-        catalog_rows_upserted = crawl_stats.get("catalog_rows_upserted", 0)
-
-        # Consistency check: upserted rows should be within 1% of raw flattened count
-        # (small gap is expected for any markets with missing conditionId).
-        def _catalog_consistent() -> bool:
-            if not catalog_markets_flattened:
-                return catalog_rows_upserted == 0
-            return abs(catalog_rows_upserted - catalog_markets_flattened) / catalog_markets_flattened < 0.01
-
-        def _catalog_mismatch_reason() -> Optional[str]:
-            if _catalog_consistent():
-                return None
-            diff = catalog_markets_flattened - catalog_rows_upserted
-            if diff > 0:
-                return f"{diff} markets skipped (missing conditionId or row-build error)"
-            return f"{abs(diff)} more rows upserted than flattened (unexpected)"
-
-        # ── 10. Build diagnostics block ───────────────────────────────────────
+        # ── 9. Build diagnostics block ────────────────────────────────────────
         diagnostics: dict = {
-            # ── Catalog crawl pipeline (spec-required) ─────────────────────
-            "catalog_events_pages_fetched":           catalog_events_pages_fetched,
-            "catalog_events_seen":                    catalog_events_total,
-            "catalog_markets_flattened":              catalog_markets_flattened,
-            "catalog_markets_active_open":            active_open_count,
-            "catalog_rows_upserted":                  catalog_rows_upserted,
-            "catalog_rows_current_total":             catalog_rows_upserted,
-            "catalog_rows_current_investor_eligible": candidate_pool_size,
+            # ── Catalog crawl pipeline ─────────────────────────────────────
+            "catalog_events_pages_fetched":  catalog_events_pages_fetched,
+            "catalog_events_seen":           catalog_events_total,
+            "catalog_markets_flattened":     catalog_markets_flattened,
+            "catalog_markets_active_open":   active_open_count,
+            # ── Catalog persistence (Option C: memory-only, no DB upsert) ─
+            "catalog_rows_upserted":         0,
+            "catalog_persist_success":       False,
+            "catalog_persist_error":         "option_c_memory_only",
+            "catalog_persist_duration_ms":   None,
+            "catalog_persist_note":          (
+                "Catalog stored in memory only (Option C). "
+                "29k-row DB upsert disabled to prevent connection stalls. "
+                "Snapshot history uses prediction_market_odds_snapshots (26 rows/cycle)."
+            ),
+            # ── Snapshot persistence ───────────────────────────────────────
+            "snapshots_written":             snapshots_written,
+            "snapshots_retained_days":       _SNAPSHOTS_RETAIN_DAYS,
+            "snapshot_persist_success":      snapshot_persist_success,
+            "snapshot_persist_error":        snapshot_persist_error,
+            "snapshot_persist_duration_ms":  snapshot_persist_duration_ms,
             # ── Exclusion breakdown ────────────────────────────────────────
-            "candidate_pool_size":                    candidate_pool_size,
-            "sports_excluded_count":                  sports_excluded_count,
-            "pop_culture_excluded_count":             pop_culture_excluded_count,
-            "investor_excluded_count":                investor_excluded_count,
-            # ── Persistence consistency ────────────────────────────────────
-            "catalog_persistence_consistent":         _catalog_consistent(),
-            "catalog_count_mismatch_reason":          _catalog_mismatch_reason(),
+            "candidate_pool_size":           candidate_pool_size,
+            "sports_excluded_count":         sports_excluded_count,
+            "pop_culture_excluded_count":    pop_culture_excluded_count,
+            "investor_excluded_count":       investor_excluded_count,
+            "excluded_categories_seen":      sorted(excluded_categories_seen),
             # ── Crawl metadata ─────────────────────────────────────────────
-            "catalog_last_full_crawl_at":             (
+            "catalog_last_full_crawl_at":    (
                 self._catalog_last_crawl_at.isoformat()
                 if self._catalog_last_crawl_at else None
             ),
-            "catalog_full_crawl_success":             crawl_success,
-            # ── Legacy / compat fields ─────────────────────────────────────
-            "catalog_rows_total":                     catalog_rows_upserted,
-            "catalog_rows_current_active":            active_open_count,
+            "catalog_full_crawl_success":    crawl_success,
             # ── Registry matching stats ────────────────────────────────────
-            "registry_family_count":                  len(ODDS_REGISTRY),
-            "live_family_count":                      len(live_entries),
-            "missing_family_count":                   len(missing_list),
-            "family_matches_from_full_catalog":       families_from_catalog,
-            "family_matches_from_tag_fast_path":      [],
-            # ── Snapshot persistence ───────────────────────────────────────
-            "snapshots_written":                      snapshots_written,
-            "snapshots_retained_days":                _SNAPSHOTS_RETAIN_DAYS,
+            "registry_family_count":         len(ODDS_REGISTRY),
+            "live_family_count":             len(live_entries),
+            "missing_family_count":          len(missing_list),
+            "family_matches_from_full_catalog": families_from_catalog,
+            "family_matches_from_tag_fast_path": [],
+            "families_still_missing":        families_still_missing,
             # ── CLOB price enrichment ──────────────────────────────────────
-            "clob_price_success_count":               clob_success_count,
-            "clob_price_fail_count":                  clob_fail_count,
-            "gamma_price_fallback_count":             gamma_price_fallback_count,
-            "hardcoded_sector_stocks_used":           False,
-            # ── Debug ──────────────────────────────────────────────────────
-            "families_still_missing":                 families_still_missing,
-            "scan_ms":                                scan_ms,
+            "clob_price_success_count":      clob_success_count,
+            "clob_price_fail_count":         clob_fail_count,
+            "gamma_price_fallback_count":    gamma_price_fallback_count,
+            "hardcoded_sector_stocks_used":  False,
+            # ── Scan timing ────────────────────────────────────────────────
+            "scan_ms":                       scan_ms,
         }
 
         # ── 11. Assemble payload ──────────────────────────────────────────────
@@ -853,39 +812,3 @@ class OddsScanner:
 odds_scanner = OddsScanner()
 
 
-# ── Background executor helper ────────────────────────────────────────────────
-
-# DDL applied flag — ensures table creation runs at most once per process,
-# inside the background executor thread (never on the event loop or at startup).
-_CATALOG_DDL_DONE = False
-
-
-def _ensure_catalog_ddl_bg() -> None:
-    """Ensure prediction_market_catalog table exists. Runs in executor thread."""
-    global _CATALOG_DDL_DONE
-    if _CATALOG_DDL_DONE:
-        return
-    try:
-        from data.predict_market_catalog_store import ensure_catalog_table
-        ensure_catalog_table()
-        _CATALOG_DDL_DONE = True
-    except Exception as exc:
-        log.warning("[odds_scanner] catalog DDL error (non-fatal): %s", exc)
-
-
-def _persist_catalog_bg(raw_markets: list[dict], crawl_started_at: datetime) -> int:
-    """
-    Blocking DB operations run in a thread executor — never on the event loop.
-    upsert_catalog_rows() handles DDL internally (ensure_catalog_table).
-    Returns the number of rows successfully upserted (0 on failure).
-    """
-    upserted = 0
-    try:
-        upserted = upsert_catalog_rows(raw_markets)
-    except Exception as exc:
-        log.warning("[odds_scanner] _persist_catalog_bg upsert error: %s", exc)
-    try:
-        mark_stale_before(crawl_started_at)
-    except Exception as exc:
-        log.warning("[odds_scanner] _persist_catalog_bg mark_stale error: %s", exc)
-    return upserted

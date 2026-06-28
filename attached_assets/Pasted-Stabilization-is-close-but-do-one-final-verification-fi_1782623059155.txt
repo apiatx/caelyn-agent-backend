@@ -1,0 +1,84 @@
+Stabilization is close, but do one final verification/fix pass before any frontend work.
+
+No frontend edits.
+No new features.
+Do not change the Prophetik UI yet.
+
+Current status:
+The scanner now runs in the background and /api/predict/odds/live returns quickly. Good.
+But catalog persistence timed out and diagnostics showed catalog rows_upserted=0. Do not call this complete until persistence is clearly verified or intentionally made optional.
+
+Tasks:
+
+1. Separate diagnostics clearly
+   Distinguish these fields:
+
+* catalog_rows_upserted
+* catalog_persist_success
+* catalog_persist_error
+* catalog_persist_duration_ms
+* snapshots_written
+* snapshot_persist_success
+* snapshot_persist_error
+* snapshot_persist_duration_ms
+
+Do not use vague rows_upserted if it only refers to catalog rows.
+
+2. Verify odds snapshot persistence
+   Force or wait for a scan and confirm:
+
+* snapshots_written > 0
+* /api/predict/odds/history?family_key=fed_rate_decision&days=7 returns real DB-backed points
+* one additional scan creates an additional history point or at least updates latest snapshot diagnostics
+
+This is required for the 7-day trend feature.
+
+3. Decide catalog persistence behavior
+   If full catalog persistence of ~29k markets times out, do not let it block or destabilize the scanner.
+
+Acceptable options:
+A. Persist only investor-eligible catalog rows.
+B. Persist only matched-family candidate rows.
+C. Keep full catalog in memory and persist only odds snapshots.
+D. Chunk catalog upserts safely with timeouts and partial-progress diagnostics.
+
+But do not claim full catalog persistence works while catalog_rows_upserted=0.
+
+4. Keep /live and /diagnostics cache-only
+   No route handler should trigger:
+
+* full Polymarket crawl
+* catalog persistence
+* heavy live DB diagnostics
+
+5. Hard exclusion verification
+   Investor/Dashboard scanner must hard-exclude sports and pop culture.
+
+Diagnostics must include:
+
+* sports_excluded_count
+* pop_culture_excluded_count
+* investor_excluded_count
+* excluded_categories_seen
+
+Validate:
+
+* /api/predict/odds/live contains no sports
+* /api/predict/odds/live contains no celebrity / entertainment / awards / movies / music / influencer / streamer / reality TV / esports / pop-culture markets
+
+6. Final validation output required
+   Return:
+
+* /api/health timing
+* /api/predict/odds/live timing
+* /api/predict/odds/diagnostics timing
+* live_count / tracked_count
+* matched family list
+* missing family list
+* snapshots_written
+* snapshot history sample for fed_rate_decision or another matched family
+* catalog persistence status
+* sports/pop-culture exclusion confirmation
+* confirmation existing Prophetik endpoints still work
+
+Do not proceed to frontend until snapshot persistence and exclusion verification are clean.
