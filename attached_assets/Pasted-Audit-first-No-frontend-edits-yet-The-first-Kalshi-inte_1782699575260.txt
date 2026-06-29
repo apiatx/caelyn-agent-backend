@@ -1,0 +1,283 @@
+Audit first. No frontend edits yet.
+
+The first Kalshi integration is working, but it only covers:
+
+* spx_daily_direction
+* nasdaq_daily_direction
+* spx_dec31_milestone
+
+We need to expand Kalshi coverage and change provider selection logic.
+
+Current issue:
+Backend summary says “Polymarket always wins if it finds a match.” That is no longer the desired behavior for finance/index/equity/commodity markets.
+
+New desired provider policy:
+Use Kalshi primary for liquid finance markets when Kalshi has the cleaner/higher-volume contract.
+Use Polymarket primary/fallback for Fed, recession, geopolitical, AI, crypto milestone, and any family where Kalshi lacks a good market.
+
+User wants these Kalshi markets tracked:
+
+1. S&P 500 Daily Up/Down
+   Example:
+   “Indices · S&P 500 Daily Up/Down · Jun 29 @ 8:30AM”
+   Yes 71%, No 29%
+
+2. S&P price tomorrow at 4pm EDT
+   Example ladder:
+   “7,400 or above” 48%
+   “7,375 or above” 65%
+
+3. S&P close price end of 2026
+   Example range/ladder:
+   “7,800 to 7,999.99” 15%
+   “8,000 to 8,199.99” 11%
+
+4. How high will the S&P get this year?
+   Example ladder:
+   “7,800 or above” 52%
+   “8,000 or above” 39%
+
+5. How high will the S&P get by month-end?
+   Example ladder:
+   “Above 7630” 4%
+   “Above 7640” 4%
+
+6. Annual Return: S&P 500 Total Return Vs. Gold
+   Example matchup:
+   “S&P 500 Total Return Index” 83%
+   “Gold” 35%
+
+7. NASDAQ-100 Daily Up/Down
+   Example:
+   Yes 72%, No 28%
+
+8. Nasdaq-100 close price end of 2026
+   Example range/ladder:
+   “33,000.01 or above” 22%
+   “18,999.99 or below” 9%
+
+Goal:
+Track these Kalshi finance markets in Prophetik using the same enriched odds schema already used by Polymarket/Kalshi rows.
+
+Do not edit frontend yet.
+Do not break existing Polymarket families.
+Do not break existing Kalshi rows.
+Do not break LKG/stale_db.
+Do not touch Gambler mode.
+Do not print secrets.
+Use public Kalshi API only.
+
+Implementation requirements:
+
+1. Audit Kalshi series/events for each requested market
+
+Find exact Kalshi series/event/market tickers for:
+
+* S&P 500 Daily Up/Down
+* S&P price tomorrow at 4pm EDT
+* S&P close price end of 2026
+* How high will the S&P get this year?
+* How high will the S&P get by month-end?
+* Annual Return: S&P 500 Total Return Vs. Gold
+* NASDAQ-100 Daily Up/Down
+* Nasdaq-100 close price end of 2026
+
+For each, report:
+
+* series_ticker
+* event_ticker
+* market_ticker(s)
+* title
+* subtitle
+* close_time
+* volume
+* volume_24h if available
+* open_interest
+* liquidity if available
+* all outcome labels/probabilities
+
+2. Add/repair family keys
+
+Add or repair family keys similar to:
+
+* spx_daily_direction
+* spx_tomorrow_close_ladder
+* spx_year_end_close_ladder
+* spx_year_high_ladder
+* spx_month_end_high_ladder
+* spx_vs_gold_annual_return
+* nasdaq_daily_direction
+* nasdaq_year_end_close_ladder
+
+Use names that fit existing registry style, but keep them explicit.
+
+3. Normalize ladder/range markets correctly
+
+For Kalshi ladder/range markets, do not collapse them into one vague probability.
+
+Each family row should include:
+
+* question
+* display_title
+* display_subtitle
+* priced_outcome_label
+* priced_probability
+* outcomes[]
+* outcome_summary
+* end_date
+* provider: "kalshi"
+* volume / volume_24h
+* open_interest
+* liquidity if available
+
+For ladder markets:
+
+* outcomes[] should include each strike/range bucket.
+* label examples:
+
+  * “7,400 or above”
+  * “7,375 or above”
+  * “7,800 to 7,999.99”
+  * “8,000 to 8,199.99”
+  * “Above 7630”
+* probability from midpoint yes_bid/yes_ask if available, else last_price.
+
+For matchup markets:
+
+* outcomes[] should include both sides:
+
+  * “S&P 500 Total Return Index”
+  * “Gold”
+* If Kalshi structure is not mutually exclusive or probabilities sum above 100, preserve raw probabilities and do not force normalization.
+
+4. Provider selection / duplicate handling
+
+If multiple providers or multiple Kalshi events match the same family:
+
+* choose the highest-quality market based on:
+
+  1. higher volume_24h if available
+  2. higher total volume
+  3. higher open_interest
+  4. better liquidity
+  5. closer/current relevant date for daily/tomorrow contracts
+
+Rule:
+If there is a duplicate market, always take the higher-volume one unless it is closed/stale.
+
+Change prior behavior:
+Do not let Polymarket automatically beat Kalshi for these finance families.
+For finance/index/equity/commodity families, Kalshi should win if it has the cleaner/higher-volume active market.
+
+Keep Polymarket primary for:
+
+* Fed decisions/cuts/hikes
+* recession
+* unemployment/CPI if no better Kalshi equivalent
+* geopolitics
+* AI benchmark/Chatbot Arena
+* BTC price milestones unless Kalshi has a better liquid equivalent
+* weird company-specific milestone markets where Kalshi has no equivalent
+
+5. Add unusual-volume detection payload
+
+Create a backend payload section, maybe:
+
+unusual_prediction_markets: []
+
+or include in diagnostics and intelligence payload.
+
+This should power a future frontend glasscard section.
+
+Scope:
+Only finance/macro/market-impact markets. No sports. No culture.
+
+Unusual volume logic:
+
+* Prefer provider-native volume_24h when available.
+* Compare current volume_24h to recent average/median for that same family/provider/market from stored snapshots.
+* If not enough history exists, do not falsely call it unusual; return baseline_status: "warming".
+* If historical data exists, flag unusual if:
+
+  * volume_24h >= 2x 7-day average, or
+  * volume_24h >= 2x 7-day median, or
+  * z-score >= 2 if implemented.
+* Also allow cross-provider comparison where useful:
+
+  * Kalshi current volume unusually high vs Kalshi baseline
+  * Polymarket current volume unusually high vs Polymarket baseline
+* Include:
+
+  * family_key
+  * provider
+  * question
+  * current_volume_24h
+  * avg_volume_7d
+  * median_volume_7d
+  * volume_multiple
+  * unusual_reason
+  * probability
+  * price_change_24h
+  * market_read
+  * exposure
+
+Do not create frontend card yet. Just expose clean backend data.
+
+6. Persistence
+
+Make sure new Kalshi rows are persisted into the same 7-day history/snapshot mechanism:
+
+* provider/source preserved
+* family_key preserved
+* market_ticker or market_id preserved
+* raw_json includes outcomes[] and Kalshi fields
+* unusual volume baseline can be calculated later from these snapshots
+
+7. Staleness
+
+Daily/tomorrow Kalshi rows must obey existing daily stale guard:
+
+* allowed while active/open
+* stripped from memory/LKG/stale_db after close_time/end_date
+* moved to missing_families with reason no_active_daily_market or no_active_near_term_market
+
+Year-end/month-end/year-high rows should not be stripped by daily guard.
+
+8. Diagnostics
+
+Add diagnostics:
+
+* kalshi_finance_rows_seen
+* kalshi_finance_rows_matched
+* kalshi_provider_selected_by_family
+* duplicate_provider_candidates_by_family
+* selected_higher_volume_provider_by_family
+* unusual_prediction_markets_count
+* unusual_volume_baseline_warming_count
+* kalshi_series_missing_by_family
+
+9. Validation
+
+Force scan and return a table:
+
+family_key | provider | matched | question/title | selected outcome | probability | volume | volume_24h | OI | close_time | reason
+
+Must include:
+
+* spx_daily_direction
+* spx_tomorrow_close_ladder
+* spx_year_end_close_ladder
+* spx_year_high_ladder
+* spx_month_end_high_ladder
+* spx_vs_gold_annual_return
+* nasdaq_daily_direction
+* nasdaq_year_end_close_ladder
+
+Also validate:
+
+* Existing Fed/geopolitical/BTC/NVDA milestone rows still work.
+* No sports/culture rows appear.
+* Home/Predict page existing payload still loads.
+* LKG/stale_db still works.
+* Expired daily rows are stripped.
+* unusual_prediction_markets exists, even if baseline is warming.

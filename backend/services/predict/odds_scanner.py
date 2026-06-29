@@ -1352,9 +1352,11 @@ class OddsScanner:
             if not fdef_k:
                 continue
             if fk in pm_matched_keys:
-                provider_selected_by_family[fk] = "polymarket"
-                log.info("[odds_scanner] %s: Kalshi available but Polymarket match kept", fk)
-                continue
+                # Kalshi wins for ALL its primary families — evict the Polymarket entry
+                live_pre[:] = [e for e in live_pre if e["family_key"] != fk]
+                pm_matched_keys.discard(fk)
+                log.info("[odds_scanner] %s: Kalshi wins — Polymarket entry evicted", fk)
+                # Fall through to inject Kalshi row below
             entry = _make_kalshi_live_entry(fk, fdef_k, krow, now_ts, now_dt)
             live_pre.append(entry)
             kalshi_injected_families.append(fk)
@@ -1585,7 +1587,60 @@ class OddsScanner:
             "scan_ms":                       scan_ms,
         }
 
-        # ── 11. Assemble payload ──────────────────────────────────────────────
+        # ── 11. Unusual volume detection ──────────────────────────────────────
+        unusual_prediction_markets: list[dict] = []
+        try:
+            _7D_WINDOW    = 7 * 86400
+            _SPIKE_RATIO  = 2.0
+            _MIN_HISTORY  = 3
+            for _uv_entry in live_entries:
+                _uv_fk  = _uv_entry.get("family_key") or ""
+                _uv_vol = _uv_entry.get("volume_24h")
+                if _uv_vol is None:
+                    continue
+                try:
+                    _uv_cur = float(_uv_vol)
+                except (TypeError, ValueError):
+                    continue
+                if _uv_cur <= 0:
+                    continue
+                try:
+                    _uv_hist_rows = get_snapshots_before(
+                        _uv_fk,
+                        before_ts=now_ts,
+                        window_seconds=_7D_WINDOW,
+                        limit=100,
+                    )
+                except Exception:
+                    continue
+                _uv_vols: list[float] = []
+                for _r in (_uv_hist_rows or []):
+                    _rv = _r.get("volume_24h")
+                    if _rv is not None:
+                        try:
+                            _uv_vols.append(float(_rv))
+                        except (TypeError, ValueError):
+                            pass
+                if len(_uv_vols) < _MIN_HISTORY:
+                    continue
+                _uv_avg = sum(_uv_vols) / len(_uv_vols)
+                if _uv_avg <= 0:
+                    continue
+                _uv_ratio = _uv_cur / _uv_avg
+                if _uv_ratio >= _SPIKE_RATIO:
+                    unusual_prediction_markets.append({
+                        "family_key":        _uv_fk,
+                        "label":             _uv_entry.get("label") or _uv_fk,
+                        "provider":          _uv_entry.get("provider") or "polymarket",
+                        "volume_24h":        round(_uv_cur, 2),
+                        "volume_24h_avg_7d": round(_uv_avg, 2),
+                        "spike_ratio":       round(_uv_ratio, 2),
+                        "baseline_status":   "established",
+                    })
+        except Exception as _uv_exc:
+            log.debug("[odds_scanner] unusual volume detection error: %s", _uv_exc)
+
+        # ── 11b. Assemble payload ─────────────────────────────────────────────
         payload = {
             "updated_at":             now_dt.isoformat(),
             "scanned_at":             now_dt.isoformat(),   # backward compat alias
@@ -1599,6 +1654,8 @@ class OddsScanner:
             # Primary payload arrays
             "odds":              entries_sorted,
             "missing_families":  missing_sorted,
+            # Unusual volume signals
+            "unusual_prediction_markets": unusual_prediction_markets,
             # Diagnostics — top-level per spec, also accessible via get_diagnostics()
             "diagnostics":       diagnostics,
             # Private alias for get_diagnostics() helper (backward compat)

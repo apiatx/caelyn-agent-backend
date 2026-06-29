@@ -351,6 +351,61 @@ _FAMILY_EXPOSURE_MAP: dict[str, dict] = {
         "bearish_sectors": [],
         "invert_on_below": True,
     },
+
+    # ── New Kalshi Finance Families ────────────────────────────────────────────
+
+    "spx_tomorrow_close_ladder": {
+        # preferred_outcome=yes → S&P closes in the priced range tomorrow
+        "market_read":     "risk-on",
+        "bullish_sectors": ["Software/Growth Tech", "Semiconductors",
+                            "Consumer Discretionary"],
+        "bearish_sectors": [],
+        "invert_on_below": True,
+    },
+
+    "spx_year_end_close_range": {
+        # preferred_outcome=yes → S&P closes in the priced range at year-end
+        "market_read":     "risk-on",
+        "bullish_sectors": ["Software/Growth Tech", "Semiconductors",
+                            "Consumer Discretionary", "Financials"],
+        "bearish_sectors": [],
+        "invert_on_below": True,
+    },
+
+    "spx_year_high_ladder": {
+        # preferred_outcome=yes → S&P reaches the priced level or above this year
+        "market_read":     "risk-on",
+        "bullish_sectors": ["Software/Growth Tech", "Semiconductors",
+                            "Consumer Discretionary", "Financials"],
+        "bearish_sectors": [],
+        "invert_on_below": True,
+    },
+
+    "spx_month_end_high_ladder": {
+        # preferred_outcome=yes → S&P reaches the priced level by month-end
+        "market_read":     "risk-on",
+        "bullish_sectors": ["Software/Growth Tech", "Financials"],
+        "bearish_sectors": [],
+        "invert_on_below": True,
+    },
+
+    "spx_vs_gold_annual_return": {
+        # preferred_outcome=yes → S&P 500 total return beats Gold for the year
+        "market_read":     "risk-on",
+        "bullish_sectors": ["Software/Growth Tech", "Semiconductors",
+                            "Consumer Discretionary", "Financials"],
+        "bearish_sectors": ["Gold/Metals/Commodities"],
+        "invert_on_below": False,
+    },
+
+    "nasdaq_year_end_close_range": {
+        # preferred_outcome=yes → Nasdaq-100 closes in the priced range at year-end
+        "market_read":     "tech bullish",
+        "bullish_sectors": ["Software/Growth Tech", "Semiconductors",
+                            "AI Infra/Data Centers"],
+        "bearish_sectors": [],
+        "invert_on_below": True,
+    },
 }
 
 

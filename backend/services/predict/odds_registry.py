@@ -770,6 +770,156 @@ ODDS_REGISTRY: list[dict[str, Any]] = [
         "preferred_outcome": "yes",
     },
 
+    # ─── S&P 500 Tomorrow Close Ladder ────────────────────────────────────────
+    #
+    # Kalshi KXINX series: range buckets for S&P 500 close price tomorrow at 4pm EDT.
+    # allow_near_expiry=True: these daily markets expire the same day.
+
+    {
+        "family_key":       "spx_tomorrow_close_ladder",
+        "label":            "S&P 500 Tomorrow Close",
+        "category":         "Indices / Macro",
+        "priority":         33,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "allow_near_expiry": True,
+        "search_queries":   ["S&P 500 close range tomorrow", "SPX price bucket tomorrow"],
+        "keyword_patterns": [
+            "s&p 500 close between", "s&p close range",
+            "spx close between", "spx close range",
+            "s&p 500 price range tomorrow", "spx price range tomorrow",
+            "s&p 500 tomorrow close", "will s&p close between",
+        ],
+        "exclude_patterns": [
+            "up or down", "close higher", "close lower",
+            "up today", "down today", "year-end", "dec 31",
+        ],
+        "preferred_outcome": "yes",
+    },
+
+    # ─── S&P 500 Year-End Close Range ─────────────────────────────────────────
+    #
+    # Kalshi KXINXY series: range buckets for S&P 500 closing price on Dec 31.
+
+    {
+        "family_key":       "spx_year_end_close_range",
+        "label":            "S&P 500 Year-End Close Range",
+        "category":         "Indices / Macro",
+        "priority":         34,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "search_queries":   ["S&P 500 year end price range 2026", "SPX close range December 2026"],
+        "keyword_patterns": [
+            "s&p 500 close between", "spx close between",
+            "s&p year-end range", "spx year-end range",
+            "s&p 500 year-end close between",
+        ],
+        "exclude_patterns": [
+            "up or down", "up today", "down today",
+            "daily", "tomorrow", "month",
+        ],
+        "preferred_outcome": "yes",
+    },
+
+    # ─── S&P 500 Year High Ladder ─────────────────────────────────────────────
+    #
+    # Kalshi KXINXMAXY series: one-touch "X or above" ladder for S&P 500 year high.
+
+    {
+        "family_key":       "spx_year_high_ladder",
+        "label":            "S&P 500 Year High",
+        "category":         "Indices / Macro",
+        "priority":         35,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "search_queries":   ["S&P 500 year high 2026", "SPX high 2026 reach"],
+        "keyword_patterns": [
+            "s&p 500 max", "spx maximum", "s&p 500 year high",
+            "spx year high", "s&p 500 high this year",
+            "s&p high in 2026", "s&p 500 peak",
+            "s&p 500 annual high", "spx annual high",
+        ],
+        "exclude_patterns": [
+            "up or down", "close higher", "close lower",
+            "up today", "down today", "year-end close", "close range",
+        ],
+        "preferred_outcome": "yes",
+    },
+
+    # ─── S&P 500 Month-End High Ladder ────────────────────────────────────────
+    #
+    # Kalshi KXINXMAXMM series: one-touch "X or above" ladder for S&P 500 month-end high.
+
+    {
+        "family_key":       "spx_month_end_high_ladder",
+        "label":            "S&P 500 Month-End High",
+        "category":         "Indices / Macro",
+        "priority":         36,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "search_queries":   ["S&P 500 month high", "SPX end of month high"],
+        "keyword_patterns": [
+            "s&p 500 month high", "spx month high",
+            "s&p 500 monthly high", "spx monthly high",
+            "s&p 500 by end of month", "spx by end of month",
+            "s&p 500 end of month high",
+        ],
+        "exclude_patterns": [
+            "up or down", "daily", "tomorrow", "year-end", "year high",
+        ],
+        "preferred_outcome": "yes",
+    },
+
+    # ─── S&P 500 vs Gold Annual Return (Matchup) ──────────────────────────────
+    #
+    # Kalshi KXINXVSGOLD series: which asset posts a higher total return in 2026?
+
+    {
+        "family_key":       "spx_vs_gold_annual_return",
+        "label":            "S&P 500 vs. Gold (Annual Return)",
+        "category":         "Indices / Macro",
+        "priority":         37,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "search_queries":   ["S&P 500 vs gold 2026", "SPX beat gold annual return"],
+        "keyword_patterns": [
+            "s&p 500 vs gold", "spx vs gold",
+            "s&p vs gold", "equity vs gold",
+            "s&p 500 outperform gold",
+            "s&p 500 total return vs gold",
+        ],
+        "exclude_patterns": [
+            "gold price", "gold above", "gold below",
+            "gold hit", "gold reach", "xauusd",
+        ],
+        "preferred_outcome": "yes",
+    },
+
+    # ─── Nasdaq-100 Year-End Close Range ──────────────────────────────────────
+    #
+    # Kalshi KXNASDAQ100Y series: range buckets for Nasdaq-100 close price on Dec 31.
+
+    {
+        "family_key":       "nasdaq_year_end_close_range",
+        "label":            "Nasdaq-100 Year-End Close Range",
+        "category":         "Indices / Macro",
+        "priority":         38,
+        "dashboard_enabled": True,
+        "prophetik_enabled": True,
+        "search_queries":   ["Nasdaq year end price range 2026", "NDX close range December 2026"],
+        "keyword_patterns": [
+            "nasdaq year-end range", "ndx year-end range",
+            "nasdaq 100 close between", "ndx close between",
+            "nasdaq close between", "nasdaq close range",
+            "nasdaq year-end close between",
+        ],
+        "exclude_patterns": [
+            "up or down", "up today", "down today",
+            "daily", "tomorrow", "month",
+        ],
+        "preferred_outcome": "yes",
+    },
+
     # ─── S&P 500 Year-End Milestone ───────────────────────────────────────────
     #
     # Tracks market consensus on where the S&P 500 will close on Dec 31.
