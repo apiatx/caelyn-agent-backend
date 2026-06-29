@@ -1,0 +1,63 @@
+Backend follow-up. Audit first, then fix.
+
+The validation is much improved, but the listed “known Δ24h anomalies” are not acceptable as displayed market moves.
+
+Examples:
+
+* fed_rate_decision +81.1pp because June FOMC rotated to July FOMC
+* jobs_unemployment +45.9pp because monthly question rotated
+* bitcoin_price +86.5pp because question/date rotated
+* israel_gaza -42.7pp because matched question changed
+
+These should not be treated as real 24h / 7d odds moves.
+
+Requirement:
+Apply the same market-identity discipline to Polymarket deltas that was applied to Kalshi daily deltas.
+
+Rules:
+
+1. For delta calculation, compare only the same underlying market identity:
+
+   * Polymarket: condition_id / market_id / slug, whichever is stable and unique for the contract.
+   * Kalshi: market_ticker.
+2. If the family_key is the same but the underlying market changed, do not compute a family-level delta.
+3. Return:
+
+   * price_change_24h: null
+   * price_change_7d: null
+   * delta_missing_reason: "new_contract_or_rotated_market"
+     or equivalent diagnostic.
+4. Do not show June → July Fed rotation as +81.1pp.
+5. Do not show old BTC date → new BTC date as +86.5pp.
+6. Do not show changed geopolitical question as a real Top Mover.
+7. Long-lived identical markets should still compute normal deltas.
+8. Multi-outcome families should compare the same event/condition where possible.
+9. If a market rotates but the family remains active, keep the row; just suppress bogus deltas.
+
+Diagnostics:
+
+* polymarket_delta_rows_found_24h
+* polymarket_delta_rows_found_7d
+* polymarket_delta_missing_reason_by_family
+* rotated_contract_delta_suppressed_count
+
+Validation:
+Return sample rows for:
+
+* fed_rate_decision
+* jobs_unemployment
+* bitcoin_price
+* israel_gaza
+* fed_cuts_2026
+* oil_price_milestone
+* gold_price_milestone
+* spx_daily_direction
+* nasdaq_daily_direction
+
+Expected:
+
+* Rotated markets have null deltas with reason "new_contract_or_rotated_market".
+* Stable same-contract markets keep real deltas.
+* Top Movers should not be driven by rotated market artifacts.
+* LKG/stale_db still works.
+* Existing Market Read / Exposure fixes remain intact.

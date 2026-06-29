@@ -257,20 +257,41 @@ def _compute_deltas(
     now_ts: float,
     api_fallbacks: dict,
     market_id: Optional[str] = None,
+    suppress_api_fallback: bool = False,
 ) -> dict:
     """
     Compute 1h / 24h / 7d probability deltas in percentage-point (pp) units.
     Reads from DB history first; falls back to Polymarket's own price_change fields.
 
-    market_id: when provided (Kalshi daily direction families) the DB query is
-    filtered to that specific contract ticker so yesterday's expired contract
-    never pollutes today's delta.
+    market_id: when provided, the DB query is filtered to that exact contract so
+    yesterday's expired/rotated contract never pollutes today's delta.
+    For Kalshi daily families this is the market_ticker.
+    For Polymarket families this is the condition_id of the currently-matched market.
+
+    suppress_api_fallback: when True (Polymarket entries with a known condition_id),
+    the Polymarket API's oneDayPriceChange / oneWeekPriceChange values are NOT used
+    as fallbacks.  Those fields are per-contract and reflect whatever happened since
+    the current contract was first listed — which is meaningless when a contract just
+    rotated (e.g. June FOMC → July FOMC).  If no DB snapshot exists for the current
+    condition_id, all deltas return null and delta_missing_reason is set to
+    "new_contract_or_rotated_market" so callers can surface the right diagnostic.
 
     Returns:
-        {"delta_1h_pp": float|None, "delta_24h_pp": float|None, "delta_7d_pp": float|None}
+        {
+          "delta_1h_pp":  float|None,
+          "delta_24h_pp": float|None,
+          "delta_7d_pp":  float|None,
+          "delta_missing_reason": str|None,
+        }
     """
+    _null = {
+        "delta_1h_pp":  None,
+        "delta_24h_pp": None,
+        "delta_7d_pp":  None,
+        "delta_missing_reason": None,
+    }
     if current_yes_pct is None:
-        return {"delta_1h_pp": None, "delta_24h_pp": None, "delta_7d_pp": None}
+        return _null
 
     def _delta_from_db(target_secs: int, window_secs: int) -> Optional[float]:
         rows = get_snapshots_before(
@@ -291,17 +312,27 @@ def _compute_deltas(
     delta_24h = _delta_from_db(_DELTA_24H_TARGET, _DELTA_24H_WINDOW)
     delta_7d  = _delta_from_db(_DELTA_7D_TARGET,  _DELTA_7D_WINDOW)
 
-    if delta_1h  is None and api_fallbacks.get("delta_1h_api")  is not None:
-        delta_1h  = round(float(api_fallbacks["delta_1h_api"]),  2)
-    if delta_24h is None and api_fallbacks.get("delta_24h_api") is not None:
-        delta_24h = round(float(api_fallbacks["delta_24h_api"]), 2)
-    if delta_7d  is None and api_fallbacks.get("delta_7d_api")  is not None:
-        delta_7d  = round(float(api_fallbacks["delta_7d_api"]),  2)
+    _has_any_db = any(d is not None for d in (delta_1h, delta_24h, delta_7d))
+    delta_missing_reason: Optional[str] = None
+
+    if suppress_api_fallback:
+        # Never use the API's own price_change fields for anchored markets.
+        # If the DB has no prior row for this contract, mark as rotated/new.
+        if not _has_any_db and market_id:
+            delta_missing_reason = "new_contract_or_rotated_market"
+    else:
+        if delta_1h  is None and api_fallbacks.get("delta_1h_api")  is not None:
+            delta_1h  = round(float(api_fallbacks["delta_1h_api"]),  2)
+        if delta_24h is None and api_fallbacks.get("delta_24h_api") is not None:
+            delta_24h = round(float(api_fallbacks["delta_24h_api"]), 2)
+        if delta_7d  is None and api_fallbacks.get("delta_7d_api")  is not None:
+            delta_7d  = round(float(api_fallbacks["delta_7d_api"]),  2)
 
     return {
         "delta_1h_pp":  delta_1h,
         "delta_24h_pp": delta_24h,
         "delta_7d_pp":  delta_7d,
+        "delta_missing_reason": delta_missing_reason,
     }
 
 
@@ -1513,6 +1544,10 @@ class OddsScanner:
                 pass
 
         live_entries: list[dict] = []
+        _poly_delta_found_24h:      int  = 0
+        _poly_delta_found_7d:       int  = 0
+        _rotated_suppressed_count:  int  = 0
+        _delta_missing_by_family:   dict = {}
         for entry in live_pre:
             entry.pop("_best_enriched", None)
             _is_kalshi_daily = entry["family_key"] in _DAILY_DIRECTION_FAMILY_KEYS
@@ -1520,6 +1555,14 @@ class OddsScanner:
                 entry.get("_kalshi_market_ticker") or None
                 if _is_kalshi_daily else None
             )
+            # For Polymarket entries, anchor delta computation to the currently-
+            # matched condition_id.  This prevents cross-contract deltas when a
+            # market rotates (e.g. June FOMC → July FOMC, old BTC date → new date).
+            _polymarket_cid  = (
+                entry.get("condition_id") or None
+                if entry.get("provider") == "polymarket" else None
+            )
+            _market_id_for_delta = _kalshi_mkt_id or _polymarket_cid
             deltas = _compute_deltas(
                 family_key=entry["family_key"],
                 current_yes_pct=entry.pop("_yes_pct_raw", None),
@@ -1529,9 +1572,21 @@ class OddsScanner:
                     "delta_24h_api": entry.pop("_api_24h", None),
                     "delta_7d_api":  entry.pop("_api_7d", None),
                 },
-                market_id=_kalshi_mkt_id,
+                market_id=_market_id_for_delta,
+                suppress_api_fallback=bool(_polymarket_cid),
             )
             entry.update(deltas)
+            # ── Delta diagnostics tracking ────────────────────────────────────
+            _fk = entry["family_key"]
+            _reason = deltas.get("delta_missing_reason")
+            if _reason:
+                _rotated_suppressed_count += 1
+                _delta_missing_by_family[_fk] = _reason
+            if entry.get("provider") == "polymarket":
+                if deltas.get("delta_24h_pp") is not None:
+                    _poly_delta_found_24h += 1
+                if deltas.get("delta_7d_pp") is not None:
+                    _poly_delta_found_7d  += 1
             if _EXPOSURE_RESOLVER_OK:
                 try:
                     _mr, _exp = _resolve_family_exposure(
@@ -1602,6 +1657,11 @@ class OddsScanner:
             "clob_price_fail_count":         clob_fail_count,
             "gamma_price_fallback_count":    gamma_price_fallback_count,
             "hardcoded_sector_stocks_used":  False,
+            # ── Polymarket delta integrity diagnostics ─────────────────────
+            "polymarket_delta_rows_found_24h":          _poly_delta_found_24h,
+            "polymarket_delta_rows_found_7d":           _poly_delta_found_7d,
+            "polymarket_delta_missing_reason_by_family": _delta_missing_by_family,
+            "rotated_contract_delta_suppressed_count":  _rotated_suppressed_count,
             # ── Daily direction diagnostics ────────────────────────────────
             "daily_direction_candidates_seen":       daily_dir_candidates_seen,
             "daily_direction_excluded_near_expiry_count": daily_dir_excl_near_expiry,
