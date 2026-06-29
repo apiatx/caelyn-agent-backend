@@ -773,7 +773,16 @@ def _make_kalshi_live_entry(
         "market_question":   krow.get("question", ""),
         "question":          krow.get("question", ""),
         "raw_question":      krow.get("question", ""),
-        "primary_question":  krow.get("event_title") or krow.get("question", ""),
+        # Binary Kalshi markets (2-outcome Yes/No) keep the specific raw question
+        # (e.g. "Will the S&P 500 be above 7354.02 on Jun 29 at 4pm EDT?").
+        # Ladder / range markets (>2 outcomes) use the concise event_title
+        # (e.g. "S&P 500 Tomorrow Close") because the raw question names one
+        # specific strike bucket and would be misleading as the headline.
+        "primary_question":  (
+            krow.get("question", "")
+            if len(krow.get("outcomes") or []) <= 2
+            else (krow.get("event_title") or krow.get("question", ""))
+        ),
         "condition_id":      None,
         "slug":              krow.get("slug", ""),
         "market_slug":       krow.get("market_slug", ""),
