@@ -1,0 +1,106 @@
+Backend audit + fix. No frontend edits.
+
+Frontend now has a dedicated Near-Term Market Direction section. It can only show the rows backend sends.
+
+Current issue:
+Frontend audit shows `/api/predict/investor/intelligence` has only 21 tracked_odds rows, while prior backend validation had ~30 live rows from `/api/predict/odds/live`.
+
+Required families for the new section:
+
+* spx_daily_direction
+* nasdaq_daily_direction
+* btc_daily_direction
+* wti_daily_direction
+* gold_daily_direction
+* nvda_daily_direction
+* spx_tomorrow_close_ladder
+* spx_dec31_milestone
+* spx_year_end_close_ladder
+* spx_year_end_close_range
+* spx_year_high_ladder
+* spx_month_end_high_ladder
+* spx_vs_gold_annual_return
+
+Frontend confirmed present:
+
+* btc_daily_direction
+* wti_daily_direction
+* gold_daily_direction
+* nvda_daily_direction
+
+Frontend confirmed missing or inconsistent:
+
+* spx_daily_direction
+* nasdaq_daily_direction
+* spx_tomorrow_close_ladder
+* spx_dec31_milestone
+* spx_year_end_close_ladder
+* spx_year_end_close_range
+
+Audit:
+
+1. Call `/api/predict/odds/live`.
+2. Call `/api/predict/investor/intelligence`.
+3. Print family_key lists for:
+
+   * odds.live odds[]
+   * intelligence.tracked_odds[]
+4. Compare counts and missing keys.
+5. Specifically report whether each required family is present in:
+
+   * odds/live
+   * investor/intelligence
+
+Hard requirement:
+`/api/predict/investor/intelligence.tracked_odds[]` must include the same valid prediction market rows needed by the Prophetik frontend, especially the Kalshi finance rows.
+
+If `/odds/live` has a required family but `/investor/intelligence` drops it, fix the intelligence assembly path.
+
+Likely issue:
+Investor intelligence is filtering or rebuilding tracked_odds from an older subset instead of passing through the full live odds payload.
+
+Fix rules:
+
+1. Do not remove Kalshi rows from intelligence.
+2. Do not filter out SPX/Nasdaq/Kalshi ladder/range rows just because they are finance/index families.
+3. Do not rely only on old Polymarket categories.
+4. Preserve all enriched fields:
+
+   * primary_question
+   * raw_question
+   * provider
+   * priced_probability
+   * priced_outcome_label
+   * outcomes[]
+   * market_read
+   * exposure
+   * quality_label / quality_reason
+   * price_change_24h / price_change_7d
+   * delta_missing_reason
+5. Keep LKG/stale_db behavior.
+6. No sports/culture.
+7. No frontend edits.
+
+Validation:
+Return a table:
+
+family_key | in_odds_live | in_investor_intelligence | provider | question/primary_question | probability | reason_if_missing
+
+Must include:
+
+* spx_daily_direction
+* nasdaq_daily_direction
+* btc_daily_direction
+* wti_daily_direction
+* gold_daily_direction
+* nvda_daily_direction
+* spx_tomorrow_close_ladder
+* spx_dec31_milestone
+* spx_year_end_close_ladder
+* spx_year_end_close_range
+* spx_year_high_ladder
+* spx_month_end_high_ladder
+* spx_vs_gold_annual_return
+
+Acceptance:
+Frontend-used `/api/predict/investor/intelligence.tracked_odds[]` includes all currently valid Kalshi finance rows and Polymarket direction rows that `/api/predict/odds/live` includes.
