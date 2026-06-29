@@ -388,6 +388,38 @@ def get_history(family_key: str, days: int = 7) -> list[dict]:
         _put_conn(conn)
 
 
+def get_known_market_ids() -> set[str]:
+    """
+    Return all distinct market_ids currently present in the snapshot table.
+
+    Used in the delta loop to distinguish a truly new/rotated contract
+    (condition_id not yet seen in DB → 'new_contract_or_rotated_market')
+    from a known contract that simply lacks a 24h-ago snapshot
+    (condition_id exists in DB → 'insufficient_same_contract_history',
+    provider-native fallback is safe).
+
+    Called once per scan (not per-family) to avoid per-row round-trips.
+    """
+    ensure_table()
+    conn = _get_conn()
+    if conn is None:
+        return set()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT DISTINCT market_id FROM {_TABLE}"
+            " WHERE market_id IS NOT NULL AND market_id != ''",
+        )
+        rows = cur.fetchall()
+        cur.close()
+        return {r[0] for r in rows if r[0]}
+    except Exception as exc:
+        log.warning("[predict_odds_store] get_known_market_ids error: %s", exc)
+        return set()
+    finally:
+        _put_conn(conn)
+
+
 def get_diagnostics() -> dict:
     """Snapshot table stats for /diagnostics endpoints."""
     ensure_table()

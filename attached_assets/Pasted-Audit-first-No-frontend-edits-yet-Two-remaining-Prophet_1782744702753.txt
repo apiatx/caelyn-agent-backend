@@ -1,0 +1,185 @@
+Audit first. No frontend edits yet.
+
+Two remaining Prophetik backend issues:
+
+1. Multi-outcome headline mismatch
+
+Example:
+The row headline says:
+“Will 11 Fed rate cuts happen in 2026?”
+
+But the displayed primary odds are:
+0 cuts / 0 bps = ~77.9%
+
+That is wrong. The headline must match the outcome/probability being displayed.
+
+Root issue:
+For multi-outcome / negRisk / ladder markets, backend now correctly selects the highest-probability outcome, but the row still exposes the raw sibling market question from whatever Polymarket market was selected earlier.
+
+Requirement:
+For multi-outcome markets, do not use a low-probability sibling question as the primary displayed question.
+
+Add a display-safe field such as:
+
+* primary_question
+* display_question
+* canonical_question
+
+Rules:
+For binary markets:
+
+* primary_question can be the raw market question.
+
+For multi-outcome / negRisk / ladder / range markets:
+
+* primary_question should be event-level or most-likely-outcome-aware.
+
+Examples:
+Fed cuts:
+If most likely outcome is 0 cuts / 0 bps:
+Primary question should be one of:
+
+* “Will 0 Fed rate cuts happen in 2026?”
+  or better:
+* “How many Fed rate cuts will happen in 2026?”
+  with priced_outcome_label = “0 cuts / 0 bps”
+
+Do NOT show:
+“Will 11 Fed rate cuts happen in 2026?”
+when displaying 0-cut odds.
+
+Fed decision:
+Primary question can stay:
+“Will there be no change in Fed interest rates after the July 2026 meeting?”
+if the priced outcome is No Change.
+
+Unemployment:
+If most likely bucket is 4.3%, primary question should not show a different bucket.
+
+Kalshi ladders:
+Use event/title question like:
+“S&P close price end of 2026”
+or the actual ladder event title, with selected outcome shown separately.
+
+Preserve raw_question separately if needed:
+
+* raw_question
+* source_question
+* selected_market_question
+
+But frontend’s primary headline should have a safe field that always matches the displayed odds.
+
+Validation:
+Return rows for:
+
+* fed_cuts_2026
+* fed_rate_decision
+* jobs_unemployment
+* spx_year_end_close_ladder
+* spx_tomorrow_close_ladder
+
+For each, show:
+
+* raw_question
+* primary_question / display_question
+* priced_outcome_label
+* priced_probability
+* most_likely_outcome_label
+* most_likely_probability
+
+Expected:
+fed_cuts_2026 must not have primary_question = “Will 11 Fed rate cuts happen in 2026?” unless 11 cuts is actually the displayed priced outcome.
+
+2. Delta availability became too sparse
+
+Current issue:
+After the correct contract-identity fix, most 24h / 7d columns are blank.
+
+We do NOT want fake cross-contract deltas back.
+But we do want valid same-contract deltas when available.
+
+Audit:
+
+1. For each row, determine why delta is null:
+
+   * no same-contract DB snapshot near 24h
+   * new contract
+   * provider-native delta suppressed
+   * missing market_id / condition_id
+   * stale/rotated contract
+2. Inspect Polymarket raw fields:
+
+   * oneDayPriceChange
+   * oneWeekPriceChange
+   * any equivalent field already in the raw market object
+3. Determine whether provider-native price change is same-contract and safe to use.
+4. Determine contract age / first_seen timestamp from DB snapshots if possible.
+
+Delta rules:
+A. Always prefer same-contract DB delta:
+
+* Polymarket: same condition_id / market_id
+* Kalshi: same market_ticker
+
+B. If no DB 24h/7d row exists, provider-native fallback is allowed only when safe:
+
+* The provider-native delta belongs to the exact same current contract.
+* The current contract is not newly rotated.
+* The contract has existed long enough for the provider-native 24h/7d field to be meaningful.
+* Do not use provider-native fallback if first_seen is too recent or market identity just changed.
+
+C. If no safe delta exists:
+
+* price_change_24h = null
+* price_change_7d = null
+* delta_missing_reason = one of:
+
+  * insufficient_same_contract_history
+  * new_contract_or_rotated_market
+  * insufficient_contract_age
+  * missing_market_identity
+  * provider_delta_unavailable
+
+D. Do not compare different contracts under the same family_key.
+
+E. Kalshi daily markets:
+
+* It is correct for 24h/7d to be null on newly opened daily contracts.
+* Do not compare today’s SPX daily contract to yesterday’s.
+
+F. Long-lived Kalshi ladders and stable Polymarket contracts:
+
+* These should start showing 24h/7d once same-contract history exists.
+* If provider-native safe delta exists, use it as fallback.
+
+Diagnostics:
+Add/confirm:
+
+* delta_missing_reason_by_family
+* provider_native_delta_used_count
+* provider_native_delta_suppressed_count
+* same_contract_db_delta_used_count
+* insufficient_same_contract_history_count
+* new_contract_or_rotated_market_count
+
+Validation:
+Return a compact table for all live rows with:
+
+* family_key
+* provider
+* market_id / condition_id / market_ticker
+* price_change_24h
+* price_change_7d
+* delta_missing_reason
+* provider_native_delta_available
+* provider_native_delta_used
+* same_contract_db_delta_used
+
+Expected:
+
+* No fake rotated-contract deltas.
+* Stable contracts like oil/gold/geopolitics retain valid deltas if same-contract history exists.
+* New contracts show null with clear reason.
+* Polymarket provider-native deltas may be used only when safe.
+* Kalshi daily rows stay null until same market_ticker history exists.
+* Frontend should receive enough reason fields to show “—” intentionally, not as a bug.

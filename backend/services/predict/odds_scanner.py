@@ -64,6 +64,7 @@ _DAILY_DIRECTION_FAMILY_KEYS: frozenset = frozenset(
 
 try:
     from data.predict_odds_store import (
+        get_known_market_ids,
         ensure_table,
         insert_snapshots,
         delete_old_snapshots,
@@ -258,40 +259,59 @@ def _compute_deltas(
     api_fallbacks: dict,
     market_id: Optional[str] = None,
     suppress_api_fallback: bool = False,
+    contract_is_known: bool = True,
 ) -> dict:
     """
     Compute 1h / 24h / 7d probability deltas in percentage-point (pp) units.
-    Reads from DB history first; falls back to Polymarket's own price_change fields.
 
-    market_id: when provided, the DB query is filtered to that exact contract so
-    yesterday's expired/rotated contract never pollutes today's delta.
-    For Kalshi daily families this is the market_ticker.
-    For Polymarket families this is the condition_id of the currently-matched market.
+    Priority order:
+      1. Same-contract DB snapshot (market_id-anchored WHERE clause)
+      2. Provider-native API fallback — only when safe (contract is known/stable)
+      3. null + delta_missing_reason code
 
-    suppress_api_fallback: when True (Polymarket entries with a known condition_id),
-    the Polymarket API's oneDayPriceChange / oneWeekPriceChange values are NOT used
-    as fallbacks.  Those fields are per-contract and reflect whatever happened since
-    the current contract was first listed — which is meaningless when a contract just
-    rotated (e.g. June FOMC → July FOMC).  If no DB snapshot exists for the current
-    condition_id, all deltas return null and delta_missing_reason is set to
-    "new_contract_or_rotated_market" so callers can surface the right diagnostic.
+    market_id:
+        Polymarket → condition_id of the currently-matched market.
+        Kalshi     → market_ticker (all families, daily and long-lived).
+        When provided, DB query is filtered to that exact contract so a
+        rotated market's old snapshot never pollutes today's delta.
 
-    Returns:
-        {
-          "delta_1h_pp":  float|None,
-          "delta_24h_pp": float|None,
-          "delta_7d_pp":  float|None,
-          "delta_missing_reason": str|None,
-        }
+    suppress_api_fallback (Polymarket only):
+        When True, Polymarket's oneDayPriceChange is only used as a fallback
+        if the contract is already known to the DB (contract_is_known=True).
+        This prevents brand-new/rotated contracts from inheriting their own
+        bootstrapped API price-change (which is meaningless at rotation).
+
+    contract_is_known:
+        Pre-computed by caller from get_known_market_ids() batch lookup.
+        True  → condition_id (or market_ticker) exists in DB from a prior scan.
+                 Provider-native fallback is safe for windows still null.
+        False → brand-new contract (or just rotated); suppress all fallbacks.
+
+    delta_missing_reason codes:
+        "new_contract_or_rotated_market"    — no DB history at all for this contract.
+        "insufficient_same_contract_history"— contract known, but 24h/7d window empty;
+                                              API also had no data.
+        "provider_delta_unavailable"        — contract known, allowed API fallback,
+                                              but provider returned no delta value.
+
+    Returns a dict merged directly into the live entry:
+        delta_1h_pp / delta_24h_pp / delta_7d_pp: float|None
+        delta_missing_reason:                      str|None
+        provider_native_delta_available:           bool
+        provider_native_delta_used:                bool
+        same_contract_db_delta_used:               bool
     """
-    _null = {
+    _base: dict = {
         "delta_1h_pp":  None,
         "delta_24h_pp": None,
         "delta_7d_pp":  None,
-        "delta_missing_reason": None,
+        "delta_missing_reason":           None,
+        "provider_native_delta_available": False,
+        "provider_native_delta_used":      False,
+        "same_contract_db_delta_used":     False,
     }
     if current_yes_pct is None:
-        return _null
+        return _base
 
     def _delta_from_db(target_secs: int, window_secs: int) -> Optional[float]:
         rows = get_snapshots_before(
@@ -313,26 +333,77 @@ def _compute_deltas(
     delta_7d  = _delta_from_db(_DELTA_7D_TARGET,  _DELTA_7D_WINDOW)
 
     _has_any_db = any(d is not None for d in (delta_1h, delta_24h, delta_7d))
+
+    # Check what provider-native data is available (before suppression logic)
+    _api_24h_val = api_fallbacks.get("delta_24h_api")
+    _api_7d_val  = api_fallbacks.get("delta_7d_api")
+    _api_1h_val  = api_fallbacks.get("delta_1h_api")
+    _api_available = (
+        _api_24h_val is not None or _api_7d_val is not None or _api_1h_val is not None
+    )
+
+    # ── Determine whether API fallback is permitted ────────────────────────────
+    _allow_api         = False
     delta_missing_reason: Optional[str] = None
 
     if suppress_api_fallback:
-        # Never use the API's own price_change fields for anchored markets.
-        # If the DB has no prior row for this contract, mark as rotated/new.
-        if not _has_any_db and market_id:
-            delta_missing_reason = "new_contract_or_rotated_market"
+        # Polymarket anchored — provider-native fields are per-contract and safe
+        # only when we can confirm the contract is not brand-new or rotated.
+        if not _has_any_db:
+            if not contract_is_known:
+                # No DB row at all for this condition_id → truly new/rotated.
+                delta_missing_reason = "new_contract_or_rotated_market"
+                _allow_api = False
+            else:
+                # Contract is in DB but specific time windows have no snapshot yet.
+                # Provider-native data belongs to this exact contract → safe fallback.
+                delta_missing_reason = "insufficient_same_contract_history"
+                _allow_api = True
+        else:
+            # DB has some history (e.g. 1h delta found).  Fill any still-null
+            # 24h/7d windows from the API since it's the same contract.
+            _allow_api = True
     else:
-        if delta_1h  is None and api_fallbacks.get("delta_1h_api")  is not None:
-            delta_1h  = round(float(api_fallbacks["delta_1h_api"]),  2)
-        if delta_24h is None and api_fallbacks.get("delta_24h_api") is not None:
-            delta_24h = round(float(api_fallbacks["delta_24h_api"]), 2)
-        if delta_7d  is None and api_fallbacks.get("delta_7d_api")  is not None:
-            delta_7d  = round(float(api_fallbacks["delta_7d_api"]),  2)
+        # Kalshi and any non-anchored entry — use API freely.
+        _allow_api = True
+
+    # ── Apply API fallbacks for windows still null ─────────────────────────────
+    _provider_native_used = False
+    if _allow_api:
+        if delta_1h is None and _api_1h_val is not None:
+            delta_1h = round(float(_api_1h_val), 2)
+        if delta_24h is None and _api_24h_val is not None:
+            delta_24h = round(float(_api_24h_val), 2)
+            _provider_native_used = True
+        if delta_7d is None and _api_7d_val is not None:
+            delta_7d = round(float(_api_7d_val), 2)
+            _provider_native_used = True
+
+    # If API filled data, clear the intermediate "insufficient" reason
+    if _provider_native_used and delta_missing_reason == "insufficient_same_contract_history":
+        delta_missing_reason = None
+
+    # ── Final reason when both 24h + 7d remain null ───────────────────────────
+    if delta_24h is None and delta_7d is None:
+        if delta_missing_reason is None:
+            # _allow_api was True but API had no usable data
+            if _allow_api and _api_available and not _provider_native_used:
+                delta_missing_reason = "provider_delta_unavailable"
+            else:
+                delta_missing_reason = "insufficient_same_contract_history"
+        # else: reason already set (new_contract_or_rotated_market)
+    else:
+        # At least one window has data → not "missing"
+        delta_missing_reason = None
 
     return {
         "delta_1h_pp":  delta_1h,
         "delta_24h_pp": delta_24h,
         "delta_7d_pp":  delta_7d,
-        "delta_missing_reason": delta_missing_reason,
+        "delta_missing_reason":            delta_missing_reason,
+        "provider_native_delta_available": _api_available,
+        "provider_native_delta_used":      _provider_native_used,
+        "same_contract_db_delta_used":     _has_any_db,
     }
 
 
@@ -512,8 +583,30 @@ def _build_display_fields(
     else:
         display_subtitle = git if git else (question or "")
 
+    # primary_question: for negRisk / multi-outcome markets the raw `question`
+    # is the matched market's bucket question.  When the MATCHED market is the
+    # same as the PRICED outcome bucket (e.g. "No change" in "Will there be no
+    # change..."), the raw question is correct.  When it is a different bucket
+    # (e.g. matched by volume = "6 cuts" but priced outcome = "0 cuts / 0 bps"),
+    # the raw question is wrong and we use the event_title instead.
+    #
+    # Detection: check whether the priced_outcome_label appears in the question.
+    #   Yes → matched market IS the priced bucket → keep raw question.
+    #   No  → matched market is a different bucket → use event_title.
+    if neg_risk and event_title:
+        _lbl_low = (priced_outcome_label or "").lower().strip()
+        _q_low   = question.lower()
+        _q_describes_priced = bool(_lbl_low) and (
+            _lbl_low in _q_low
+            or any(w in _q_low for w in _lbl_low.split() if len(w) >= 3)
+        )
+        primary_question = question if _q_describes_priced else event_title
+    else:
+        primary_question = question
     return {
         "question":             question,
+        "raw_question":         question,
+        "primary_question":     primary_question,
         "event_title":          event_title,
         "market_slug":          market_slug,
         "event_slug":           event_slug,
@@ -679,6 +772,8 @@ def _make_kalshi_live_entry(
         # ── Market identity ───────────────────────────────────────────────────
         "market_question":   krow.get("question", ""),
         "question":          krow.get("question", ""),
+        "raw_question":      krow.get("question", ""),
+        "primary_question":  krow.get("event_title") or krow.get("question", ""),
         "condition_id":      None,
         "slug":              krow.get("slug", ""),
         "market_slug":       krow.get("market_slug", ""),
@@ -1310,9 +1405,18 @@ class OddsScanner:
                     "liquidity":    float(best_raw.get("liquidityNum") or 0),
                     "slug":         best_raw.get("slug", ""),
                     "clob_token_ids": best_raw.get("clobTokenIds") or [],
-                    "price_change_1h":  float(best_raw.get("oneHourPriceChange") or 0) * 100,
-                    "price_change_1d":  float(best_raw.get("oneDayPriceChange") or 0) * 100,
-                    "price_change_1wk": float(best_raw.get("oneWeekPriceChange") or 0) * 100,
+                    "price_change_1h":  (
+                        float(best_raw.get("oneHourPriceChange")) * 100
+                        if best_raw.get("oneHourPriceChange") is not None else None
+                    ),
+                    "price_change_1d":  (
+                        float(best_raw.get("oneDayPriceChange")) * 100
+                        if best_raw.get("oneDayPriceChange") is not None else None
+                    ),
+                    "price_change_1wk": (
+                        float(best_raw.get("oneWeekPriceChange")) * 100
+                        if best_raw.get("oneWeekPriceChange") is not None else None
+                    ),
                 }
 
             families_from_catalog.append(fk)
@@ -1358,6 +1462,8 @@ class OddsScanner:
                 "provider":          "polymarket",
                 # ── Display / outcome context ─────────────────────────────────
                 "question":             _display["question"],
+                "raw_question":         _display["raw_question"],
+                "primary_question":     _display["primary_question"],
                 "event_title":          _display["event_title"],
                 "market_slug":          _display["market_slug"],
                 "event_slug":           _display["event_slug"],
@@ -1543,26 +1649,45 @@ class OddsScanner:
             except Exception:
                 pass
 
+        # One batch DB call to get all known market_ids (condition_ids + tickers).
+        # Used to distinguish brand-new/rotated contracts from stable ones that
+        # just lack a 24h-ago snapshot.
+        _known_market_ids: set[str] = set()
+        try:
+            _known_market_ids = get_known_market_ids()
+        except Exception:
+            pass
+
         live_entries: list[dict] = []
-        _poly_delta_found_24h:      int  = 0
-        _poly_delta_found_7d:       int  = 0
-        _rotated_suppressed_count:  int  = 0
-        _delta_missing_by_family:   dict = {}
+        _poly_delta_found_24h:        int  = 0
+        _poly_delta_found_7d:         int  = 0
+        _rotated_suppressed_count:    int  = 0   # any entry with delta_missing_reason set
+        _delta_missing_by_family:     dict = {}
+        _provider_native_used_count:  int  = 0
+        _same_contract_db_count:      int  = 0
+        _insufficient_history_count:  int  = 0
+        _new_contract_count:          int  = 0
         for entry in live_pre:
             entry.pop("_best_enriched", None)
-            _is_kalshi_daily = entry["family_key"] in _DAILY_DIRECTION_FAMILY_KEYS
-            _kalshi_mkt_id   = (
-                entry.get("_kalshi_market_ticker") or None
-                if _is_kalshi_daily else None
-            )
-            # For Polymarket entries, anchor delta computation to the currently-
-            # matched condition_id.  This prevents cross-contract deltas when a
-            # market rotates (e.g. June FOMC → July FOMC, old BTC date → new date).
-            _polymarket_cid  = (
+            # Kalshi: all families (daily and long-lived) are anchored to their
+            # market_ticker so DB queries never cross contract boundaries.
+            _kalshi_mkt_id  = entry.get("_kalshi_market_ticker") or None
+            # Polymarket: anchor to condition_id of the currently-matched market.
+            _polymarket_cid = (
                 entry.get("condition_id") or None
                 if entry.get("provider") == "polymarket" else None
             )
             _market_id_for_delta = _kalshi_mkt_id or _polymarket_cid
+
+            # contract_is_known: True if this exact contract (by market_id) has
+            # ever been seen in our DB.  False → brand-new/rotated; no fallbacks.
+            if _polymarket_cid:
+                _contract_is_known = _polymarket_cid in _known_market_ids
+            elif _kalshi_mkt_id:
+                _contract_is_known = _kalshi_mkt_id in _known_market_ids
+            else:
+                _contract_is_known = True   # no anchoring; allow API
+
             deltas = _compute_deltas(
                 family_key=entry["family_key"],
                 current_yes_pct=entry.pop("_yes_pct_raw", None),
@@ -1574,14 +1699,24 @@ class OddsScanner:
                 },
                 market_id=_market_id_for_delta,
                 suppress_api_fallback=bool(_polymarket_cid),
+                contract_is_known=_contract_is_known,
             )
             entry.update(deltas)
+
             # ── Delta diagnostics tracking ────────────────────────────────────
-            _fk = entry["family_key"]
+            _fk     = entry["family_key"]
             _reason = deltas.get("delta_missing_reason")
             if _reason:
                 _rotated_suppressed_count += 1
                 _delta_missing_by_family[_fk] = _reason
+                if _reason == "new_contract_or_rotated_market":
+                    _new_contract_count += 1
+                elif _reason == "insufficient_same_contract_history":
+                    _insufficient_history_count += 1
+            if deltas.get("provider_native_delta_used"):
+                _provider_native_used_count += 1
+            if deltas.get("same_contract_db_delta_used"):
+                _same_contract_db_count += 1
             if entry.get("provider") == "polymarket":
                 if deltas.get("delta_24h_pp") is not None:
                     _poly_delta_found_24h += 1
@@ -1657,11 +1792,18 @@ class OddsScanner:
             "clob_price_fail_count":         clob_fail_count,
             "gamma_price_fallback_count":    gamma_price_fallback_count,
             "hardcoded_sector_stocks_used":  False,
-            # ── Polymarket delta integrity diagnostics ─────────────────────
-            "polymarket_delta_rows_found_24h":          _poly_delta_found_24h,
-            "polymarket_delta_rows_found_7d":           _poly_delta_found_7d,
+            # ── Delta integrity diagnostics ────────────────────────────────
+            "polymarket_delta_rows_found_24h":           _poly_delta_found_24h,
+            "polymarket_delta_rows_found_7d":            _poly_delta_found_7d,
+            "delta_missing_reason_by_family":            _delta_missing_by_family,
+            "rotated_contract_delta_suppressed_count":   _rotated_suppressed_count,
+            "provider_native_delta_used_count":          _provider_native_used_count,
+            "same_contract_db_delta_used_count":         _same_contract_db_count,
+            "insufficient_same_contract_history_count":  _insufficient_history_count,
+            "new_contract_or_rotated_market_count":      _new_contract_count,
+            "known_market_ids_in_db":                    len(_known_market_ids),
+            # legacy alias
             "polymarket_delta_missing_reason_by_family": _delta_missing_by_family,
-            "rotated_contract_delta_suppressed_count":  _rotated_suppressed_count,
             # ── Daily direction diagnostics ────────────────────────────────
             "daily_direction_candidates_seen":       daily_dir_candidates_seen,
             "daily_direction_excluded_near_expiry_count": daily_dir_excl_near_expiry,
