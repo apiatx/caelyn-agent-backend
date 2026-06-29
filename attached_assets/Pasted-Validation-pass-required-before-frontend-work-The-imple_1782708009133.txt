@@ -1,0 +1,91 @@
+Validation pass required before frontend work.
+
+The implementation sounds directionally correct, but “syntax clean / app running” is not enough because this change affects Market Read and Exposure across the app.
+
+Please force-scan and return actual sample rows from /api/predict/odds/live and /api/predict/investor/intelligence.
+
+Required sample rows:
+
+* fed_cuts_2026
+* fed_rate_decision
+* fed_hikes_2026
+* jobs_unemployment
+* recession_probability
+* spx_daily_direction
+* nasdaq_daily_direction
+* spx_year_end_close_ladder
+* spx_vs_gold_annual_return
+* oil_price_milestone
+* gold_price_milestone
+* bitcoin_price
+* nvda_price_milestone
+* hormuz_iran
+* russia_ukraine
+* israel_gaza
+* google_ai_benchmark if present
+
+For each row, print:
+
+* family_key
+* provider
+* question
+* priced_outcome_label
+* priced_probability
+* most_likely_outcome_label
+* most_likely_probability
+* price_change_24h
+* price_change_7d
+* market_read
+* exposure bullish tickers/themes
+* exposure bearish tickers/themes
+* quality_label
+* quality_reason
+
+Specific validations:
+
+1. Fed cuts:
+   If 0 cuts / 0 bps is highest probability, the row must use:
+
+* most_likely_outcome_label = 0 cuts / 0 bps
+* priced_outcome_label = 0 cuts / 0 bps
+* market_read should be higher-for-longer / rates restrictive, not rates easing.
+
+2. Fed decision:
+   If no change is highest probability and rising, market_read should reflect policy hold / higher-for-longer, not generic mixed unless odds are genuinely ambiguous.
+
+3. Fed hikes:
+   If hike odds are high/rising, market_read should be rates restrictive.
+   If falling, market_read should be policy risk easing.
+
+4. Oil:
+   Higher oil outcome rising should map to energy inflation pressure and bullish energy / bearish transports-airlines-consumer margins.
+
+5. Gold:
+   Higher gold outcome rising should map to safe-haven / real-rate hedge bid and bullish gold/miners/defensives.
+
+6. BTC:
+   Higher BTC outcome rising should map to crypto risk-on.
+   Falling should map to crypto risk appetite fading.
+
+7. Geopolitics:
+   Stress/escalation outcomes high/rising should map to geopolitical stress rising.
+   De-escalation outcomes high/rising should map to geopolitical stress easing.
+   Do not blindly infer easing from a family name.
+
+8. AI / company:
+   Positive AI/NVDA leadership outcome high/rising should map to AI leadership strengthening.
+   Falling should map to AI leadership premium fading.
+
+9. Kalshi:
+   SPX/Nasdaq daily rows should have 24h/7d deltas only when same market_ticker history exists.
+   If unavailable, return null plus clear diagnostic reason, not bogus dashes from mismatched contracts.
+
+10. Quality:
+    quality_label and quality_reason should be present and meaningful.
+    Do not rely on a blank/low-only field.
+
+11. LKG/stale_db:
+    Restart backend and immediately call both endpoints.
+    Expected: non-empty rows from memory/LKG/stale_db, not 0 tracked warming.
+
+Return the validation output as a compact table.

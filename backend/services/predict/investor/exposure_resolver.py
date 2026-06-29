@@ -98,7 +98,7 @@ _FAMILY_EXPOSURE_MAP: dict[str, dict] = {
                                 "Utilities/Nuclear Power"],
         },
         "_hold": {
-            "market_read":     "mixed",
+            "market_read":     "policy hold / higher-for-longer",
             "bullish_sectors": ["Financials"],
             "bearish_sectors": ["REITs/Housing"],
         },
@@ -785,6 +785,58 @@ def _pick_outcome_aware_read(
                 list(spec.get("bullish_sectors", [])),
             )
         return (base_mr, None, None)
+
+    # ── oil_price_milestone ────────────────────────────────────────────────────
+    # yp is YES probability (0-100): YES = oil will hit the high target.
+    # When oil WON'T hit the target (yp low), consumer/transport margins benefit.
+    if family_key == "oil_price_milestone":
+        if yp >= 50:
+            return (
+                "energy inflation pressure",
+                list(spec.get("bullish_sectors", [])),
+                list(spec.get("bearish_sectors", [])),
+            )
+        if yp >= 20:
+            return ("energy upside risk building", list(spec.get("bullish_sectors", [])), [])
+        return (
+            "energy price pressure contained",
+            list(spec.get("bearish_sectors", [])),  # Airlines/Consumer bullish when oil contained
+            list(spec.get("bullish_sectors", [])),
+        )
+
+    # ── gold_price_milestone ───────────────────────────────────────────────────
+    # Gold is structurally bullish for gold/miners regardless of milestone.
+    # market_read changes based on how aggressive the milestone pricing is.
+    if family_key == "gold_price_milestone":
+        if yp >= 50:
+            return (
+                "safe-haven / hard asset speculation at highs",
+                list(spec.get("bullish_sectors", [])),
+                ["Software/Growth Tech", "Consumer Discretionary"],
+            )
+        if yp >= 20:
+            return ("safe-haven / real-rate hedge bid", list(spec.get("bullish_sectors", [])), [])
+        return (
+            "gold elevated / safe-haven steady",
+            list(spec.get("bullish_sectors", [])),
+            [],
+        )
+
+    # ── bitcoin_price ──────────────────────────────────────────────────────────
+    if family_key == "bitcoin_price":
+        if yp >= 70:
+            return (
+                "crypto risk-on / BTC strength",
+                list(spec.get("bullish_sectors", [])),
+                [],
+            )
+        if yp >= 40:
+            return ("crypto risk-on", list(spec.get("bullish_sectors", [])), [])
+        return (
+            "crypto risk appetite fading",
+            [],
+            list(spec.get("bullish_sectors", [])),
+        )
 
     # Default: use static spec value
     return (spec.get("market_read", "mixed"), None, None)

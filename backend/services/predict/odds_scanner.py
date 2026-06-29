@@ -227,6 +227,28 @@ def _is_active_direction(m: dict) -> bool:
     return True
 
 
+# ── Quality scoring (Polymarket) ──────────────────────────────────────────────
+
+def _polymarket_quality(best: dict) -> dict:
+    """Derive a quality struct from a Polymarket enriched-market dict."""
+    vol_24h = float(best.get("volume_24h") or 0)
+    liq     = float(best.get("liquidity")  or 0)
+    if vol_24h >= 100_000 or liq >= 250_000:
+        return {"quality_score": 0.95, "quality_label": "high",
+                "quality_reason": f"high 24h volume (${int(vol_24h):,}) / deep liquidity"}
+    if vol_24h >= 20_000 or liq >= 50_000:
+        return {"quality_score": 0.80, "quality_label": "high",
+                "quality_reason": "solid 24h volume and liquidity"}
+    if vol_24h >= 2_000 or liq >= 5_000:
+        return {"quality_score": 0.50, "quality_label": "medium",
+                "quality_reason": "moderate market activity"}
+    if vol_24h > 0 or liq > 0:
+        return {"quality_score": 0.25, "quality_label": "low",
+                "quality_reason": "low volume; treat signals with caution"}
+    return {"quality_score": 0.10, "quality_label": "low",
+            "quality_reason": "nascent market — no recent volume"}
+
+
 # ── Delta computation ─────────────────────────────────────────────────────────
 
 def _compute_deltas(
@@ -642,6 +664,7 @@ def _make_kalshi_live_entry(
         "priced_probability":   krow.get("priced_probability"),
         "most_likely_outcome_label": krow.get("most_likely_outcome_label"),
         "most_likely_probability":   krow.get("most_likely_probability"),
+        "quality":              krow.get("quality"),
         "outcomes":             krow.get("outcomes") or [],
         "outcome_summary":      krow.get("outcome_summary", ""),
         "clob_token_ids":       [],
@@ -1301,6 +1324,7 @@ class OddsScanner:
                 "liquidity":         best.get("liquidity"),
                 "candidate_count":   len(candidates),
                 "driver_markets":    driver_markets,
+                "provider":          "polymarket",
                 # ── Display / outcome context ─────────────────────────────────
                 "question":             _display["question"],
                 "event_title":          _display["event_title"],
@@ -1316,6 +1340,7 @@ class OddsScanner:
                 "priced_probability":   _display["priced_probability"],
                 "most_likely_outcome_label": _display.get("most_likely_outcome_label"),
                 "most_likely_probability":   _display.get("most_likely_probability"),
+                "quality":              _polymarket_quality(best),
                 "outcomes":             _display["outcomes"],
                 "outcome_summary":      _display["outcome_summary"],
                 "clob_token_ids":       _display["clob_token_ids"],

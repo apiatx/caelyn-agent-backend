@@ -320,6 +320,8 @@ class InvestorIntel:
                         delta_24h=_odd.get("delta_24h_pp"),
                         watchlist_syms=watchlist_syms,
                         canonical_ticker_map=canonical_ticker_map,
+                        most_likely_outcome_label=_odd.get("most_likely_outcome_label"),
+                        most_likely_probability=_odd.get("most_likely_probability"),
                     )
                     _odd["market_read"] = _mr
                     _odd["exposure"]    = _exp
