@@ -355,12 +355,18 @@ def _extract_strike_value(ticker: str) -> float:
         return 0.0
 
 
-def _quality(vol_total: float, vol_24h: float) -> str:
-    if vol_total >= 10000:
-        return "high"
-    if vol_total >= 1000 or vol_24h >= 100:
-        return "moderate"
-    return "low"
+def _quality(vol_total: float, vol_24h: float) -> dict:
+    if vol_total >= 50_000:
+        score, label, reason = 0.95, "high", f"high lifetime volume ({int(vol_total):,} contracts)"
+    elif vol_total >= 10_000 or vol_24h >= 5_000:
+        score, label, reason = 0.75, "high", "solid volume"
+    elif vol_total >= 1_000 or vol_24h >= 100:
+        score, label, reason = 0.50, "medium", "moderate volume"
+    elif vol_total > 0:
+        score, label, reason = 0.25, "low", "low volume, treat signals with caution"
+    else:
+        score, label, reason = 0.10, "low", "nascent market, no volume"
+    return {"quality_score": score, "quality_label": label, "quality_reason": reason}
 
 
 # ── Shared row template ────────────────────────────────────────────────────────
@@ -386,6 +392,8 @@ def _base_row(
     oi: float,
     liq: float,
     candidate_count: int = 1,
+    most_likely_outcome_label: Optional[str] = None,
+    most_likely_probability: Optional[float] = None,
 ) -> dict:
     """Return a normalized row dict with the standard shape for odds_scanner."""
     instrument = _INSTRUMENT_LABELS.get(family_key, "S&P 500")
@@ -417,6 +425,14 @@ def _base_row(
         "liquidity":             liq,
         "open_interest":         oi,
         "quality":               _quality(vol_total, vol_24h),
+        "most_likely_outcome_label": (
+            most_likely_outcome_label if most_likely_outcome_label is not None
+            else priced_outcome_label
+        ),
+        "most_likely_probability": (
+            most_likely_probability if most_likely_probability is not None
+            else prob
+        ),
         # Staging fields for odds_scanner integration
         "condition_id":          None,
         "slug":                  market_ticker or event_ticker,
@@ -548,6 +564,8 @@ def _build_daily_row(
         vol_total=vol_total,
         oi=oi,
         liq=liq,
+        most_likely_outcome_label=(f"Up · {strike_label}" if prob >= 0.50 else "Down"),
+        most_likely_probability=(prob if prob >= 0.50 else round(1.0 - prob, 4)),
     )
 
 
@@ -597,9 +615,10 @@ def _build_dec31_row(
     if not outcomes:
         return None
 
+    # Headline: highest probability bucket (most likely outcome for year-end close).
     best_outcome = max(
         outcomes,
-        key=lambda o: (o.get("volume_24h") or 0, o.get("open_interest") or 0),
+        key=lambda o: (o.get("probability") or 0, o.get("volume_24h") or 0, o.get("open_interest") or 0),
     )
 
     event_ticker = event.get("event_ticker") or ""
@@ -653,6 +672,8 @@ def _build_dec31_row(
         oi=oi,
         liq=0.0,
         candidate_count=len(outcomes),
+        most_likely_outcome_label=strike_label,
+        most_likely_probability=prob,
     )
 
 
@@ -717,10 +738,11 @@ def _build_range_row(
         for p in priced_sorted
     ]
 
-    # Headline: highest volume, then OI, then prob closest to 0.30
-    best = max(priced_sorted, key=lambda x: (x["vol"], x["oi"]))
-    if best["vol"] == 0:
-        best = min(priced_sorted, key=lambda x: abs(x["prob"] - 0.30))
+    # Headline: highest probability bucket (most likely outcome).
+    # Ties broken by volume then OI; ensures the displayed range reflects
+    # where the market actually expects the index to close, not where
+    # the most early speculative volume happened to accumulate.
+    best = max(priced_sorted, key=lambda x: (x["prob"], x["vol"], x["oi"]))
 
     headline_label = best["subtitle"] or f"Range {best['strike']:,.0f}"
     prob  = best["prob"]
@@ -781,6 +803,8 @@ def _build_range_row(
         oi=oi,
         liq=liq,
         candidate_count=len(outcomes),
+        most_likely_outcome_label=headline_label,
+        most_likely_probability=prob,
     )
 
 
@@ -926,6 +950,8 @@ def _build_onetouch_row(
         oi=oi,
         liq=liq,
         candidate_count=len(outcomes),
+        most_likely_outcome_label=hl_label,
+        most_likely_probability=prob,
     )
 
 
@@ -1024,6 +1050,12 @@ def _build_matchup_row(
     )
     url = f"https://kalshi.com/events/{event_ticker}"
 
+    # most_likely: whichever side the market currently favours
+    _mol_label = hl_label if (prob is not None and prob >= 0.50) else vs_label
+    _mol_prob  = prob if (prob is not None and prob >= 0.50) else (
+        round(1.0 - prob, 4) if prob is not None else None
+    )
+
     return _base_row(
         family_key=family_key,
         event_ticker=event_ticker,
@@ -1045,6 +1077,8 @@ def _build_matchup_row(
         oi=oi,
         liq=liq,
         candidate_count=len(outcomes),
+        most_likely_outcome_label=_mol_label,
+        most_likely_probability=_mol_prob,
     )
 
 

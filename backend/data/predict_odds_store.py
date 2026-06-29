@@ -277,10 +277,15 @@ def get_snapshots_before(
     before_ts: float,
     window_seconds: int = 900,
     limit: int = 3,
+    market_id: Optional[str] = None,
 ) -> list[dict]:
     """
     Return up to `limit` snapshots for `family_key` whose captured_at is
     within [before_ts - window_seconds, before_ts].
+
+    When market_id is provided (Kalshi daily contracts), only snapshots for
+    that exact contract are returned — prevents cross-contract delta comparison
+    for families that rotate to a new market_id every day.
 
     Used for delta computation:
       - 1h delta:  before_ts = now - 3600,  window = 900 (±15 min)
@@ -296,17 +301,31 @@ def get_snapshots_before(
         target = datetime.fromtimestamp(before_ts, tz=timezone.utc)
         low    = datetime.fromtimestamp(before_ts - window_seconds, tz=timezone.utc)
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(
-            f"""
-            SELECT id, family_key, yes_probability, captured_at
-            FROM {_TABLE}
-            WHERE family_key = %s
-              AND captured_at BETWEEN %s AND %s
-            ORDER BY ABS(EXTRACT(EPOCH FROM (captured_at - %s)))
-            LIMIT %s
-            """,
-            (family_key, low, target, target, limit),
-        )
+        if market_id:
+            cur.execute(
+                f"""
+                SELECT id, family_key, market_id, yes_probability, captured_at
+                FROM {_TABLE}
+                WHERE family_key = %s
+                  AND market_id = %s
+                  AND captured_at BETWEEN %s AND %s
+                ORDER BY ABS(EXTRACT(EPOCH FROM (captured_at - %s)))
+                LIMIT %s
+                """,
+                (family_key, market_id, low, target, target, limit),
+            )
+        else:
+            cur.execute(
+                f"""
+                SELECT id, family_key, market_id, yes_probability, captured_at
+                FROM {_TABLE}
+                WHERE family_key = %s
+                  AND captured_at BETWEEN %s AND %s
+                ORDER BY ABS(EXTRACT(EPOCH FROM (captured_at - %s)))
+                LIMIT %s
+                """,
+                (family_key, low, target, target, limit),
+            )
         rows = cur.fetchall()
         cur.close()
         result = []

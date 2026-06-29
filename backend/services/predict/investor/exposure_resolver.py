@@ -613,6 +613,183 @@ def _invert_market_read(market_read: str) -> str:
     return _MARKET_READ_INVERSIONS.get(market_read, market_read)
 
 
+# ── Outcome-aware market_read derivation ──────────────────────────────────────
+#
+# Returns (market_read, bull_sectors_override_or_None, bear_sectors_override_or_None).
+# When sector overrides are None, the caller falls through to the static spec sectors.
+
+def _pick_outcome_aware_read(
+    family_key: str,
+    spec: dict,
+    most_likely_outcome_label: Optional[str],
+    yes_pct: Optional[float],
+    delta_24h: Optional[float],
+) -> tuple[str, Optional[list], Optional[list]]:
+    mol = (most_likely_outcome_label or "").lower()
+    yp  = yes_pct  or 0.0
+    d24 = delta_24h or 0.0
+
+    # ── fed_cuts_2026 ──────────────────────────────────────────────────────
+    if family_key == "fed_cuts_2026":
+        if any(k in mol for k in ("0 cut", "no cut", "0 bps", "zero cut", "0 rate")):
+            return (
+                "higher-for-longer",
+                ["Financials", "Regional Banks"],
+                ["REITs/Housing", "Long-Duration Growth Tech", "Utilities/Nuclear Power"],
+            )
+        if any(k in mol for k in ("1 cut", "1 rate", "-25 bps", "25 bps", "one cut")):
+            return (
+                "minimal easing",
+                ["Long-Duration Growth Tech", "Financials"],
+                [],
+            )
+        return (
+            "rates easing",
+            ["Long-Duration Growth Tech", "Software/Growth Tech", "REITs/Housing", "Small Caps"],
+            ["Financials", "Regional Banks"],
+        )
+
+    # ── spx_daily_direction / dow_daily_direction ──────────────────────────
+    if family_key in ("spx_daily_direction", "dow_daily_direction"):
+        if yp >= 60:
+            return (
+                "risk-on / broad market bid",
+                ["Software/Growth Tech", "Semiconductors", "Consumer Discretionary", "Financials"],
+                [],
+            )
+        if yp >= 50:
+            return ("risk-on", list(spec.get("bullish_sectors", [])), [])
+        if yp >= 40:
+            return ("market mixed", [], [])
+        return (
+            "risk appetite fading",
+            ["Gold/Metals/Commodities", "Utilities/Nuclear Power"],
+            ["Software/Growth Tech", "Semiconductors", "Consumer Discretionary"],
+        )
+
+    # ── nasdaq_daily_direction ─────────────────────────────────────────────
+    if family_key == "nasdaq_daily_direction":
+        if yp >= 60:
+            return (
+                "tech bullish",
+                ["Semiconductors", "Software/Growth Tech", "AI Infra/Data Centers"],
+                [],
+            )
+        if yp >= 50:
+            return ("tech bullish", list(spec.get("bullish_sectors", [])), [])
+        if yp >= 40:
+            return ("market mixed", [], [])
+        return (
+            "tech risk fading",
+            [],
+            ["Semiconductors", "Software/Growth Tech", "AI Infra/Data Centers"],
+        )
+
+    # ── spx_vs_gold_annual_return ──────────────────────────────────────────
+    if family_key == "spx_vs_gold_annual_return":
+        if yp >= 60:
+            return (
+                "risk assets outperforming safe haven",
+                ["Software/Growth Tech", "Semiconductors", "Consumer Discretionary", "Financials"],
+                ["Gold/Metals/Commodities"],
+            )
+        if yp >= 45:
+            return ("equities vs safe haven / mixed", [], [])
+        return (
+            "safe haven / hard asset leadership",
+            ["Gold/Metals/Commodities"],
+            ["Software/Growth Tech", "Semiconductors", "Consumer Discretionary"],
+        )
+
+    # ── recession_probability ──────────────────────────────────────────────
+    if family_key == "recession_probability":
+        if yp >= 50:
+            return (
+                "growth stress rising",
+                ["Gold/Metals/Commodities", "Utilities/Nuclear Power"],
+                ["Financials", "Consumer Discretionary", "Industrials"],
+            )
+        if yp >= 30:
+            return (
+                "growth uncertainty",
+                ["Gold/Metals/Commodities"],
+                ["Consumer Discretionary"],
+            )
+        return (
+            "soft landing / growth resilient",
+            ["Consumer Discretionary", "Financials", "Industrials"],
+            [],
+        )
+
+    # ── jobs_unemployment ──────────────────────────────────────────────────
+    if family_key == "jobs_unemployment":
+        if any(k in mol for k in ("above", "higher", "rising", "weaker", "weak")):
+            return (
+                "labor weakening",
+                ["Gold/Metals/Commodities", "Utilities/Nuclear Power"],
+                ["Consumer Discretionary", "Financials", "Industrials"],
+            )
+        return (
+            "labor resilient",
+            ["Consumer Discretionary", "Financials", "Industrials"],
+            [],
+        )
+
+    # ── spx_year_high_ladder / spx_month_end_high_ladder ──────────────────
+    if family_key in ("spx_year_high_ladder", "spx_month_end_high_ladder"):
+        if yp >= 60:
+            return (
+                "bullish index repricing",
+                ["Software/Growth Tech", "Semiconductors", "Consumer Discretionary", "Financials"],
+                [],
+            )
+        if yp < 35:
+            return (
+                "index upside fading",
+                ["Gold/Metals/Commodities"],
+                ["Software/Growth Tech", "Semiconductors"],
+            )
+        return (spec.get("market_read", "risk-on"), None, None)
+
+    # ── spx_dec31_milestone ────────────────────────────────────────────────
+    if family_key == "spx_dec31_milestone":
+        if yp >= 65:
+            return (
+                "bullish year-end",
+                list(spec.get("bullish_sectors", [])),
+                [],
+            )
+        if yp < 30:
+            return (
+                "index downside risk rising",
+                ["Gold/Metals/Commodities", "Utilities/Nuclear Power"],
+                ["Software/Growth Tech", "Semiconductors"],
+            )
+        return (spec.get("market_read", "risk-on"), None, None)
+
+    # ── Range markets (spx_year_end_close_range, etc.) ────────────────────
+    if family_key in (
+        "spx_year_end_close_range", "spx_tomorrow_close_ladder", "nasdaq_year_end_close_range"
+    ):
+        base_mr = spec.get("market_read", "risk-on")
+        if d24 > 2.0:
+            return (
+                "bullish index repricing",
+                list(spec.get("bullish_sectors", [])),
+                [],
+            )
+        if d24 < -2.0:
+            return (
+                "index downside risk rising",
+                ["Gold/Metals/Commodities", "Utilities/Nuclear Power"],
+                list(spec.get("bullish_sectors", [])),
+            )
+        return (base_mr, None, None)
+
+    # Default: use static spec value
+    return (spec.get("market_read", "mixed"), None, None)
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def get_market_read_for_theme_direction(theme_id: str, direction: str) -> str:
@@ -627,17 +804,21 @@ def resolve_family_exposure(
     delta_24h: Optional[float],
     watchlist_syms: set[str],
     canonical_ticker_map: dict[str, list[str]],
+    most_likely_outcome_label: Optional[str] = None,
+    most_likely_probability: Optional[float] = None,
 ) -> tuple[str, dict]:
     """
     Resolve market_read + full exposure dict for a tracked-odds registry family.
 
     Args:
-        family_key:           Registry family_key (e.g. "fed_rate_decision").
-        market_question:      The matched market question (used for dynamic parsing).
-        yes_pct:              Current YES probability as a percentage (0–100).
-        delta_24h:            24h probability shift in pp.
-        watchlist_syms:       User watchlist symbols (pass empty set for /live endpoint).
-        canonical_ticker_map: Pre-built ticker→theme_ids reverse map.
+        family_key:                Registry family_key (e.g. "fed_rate_decision").
+        market_question:           The matched market question (used for dynamic parsing).
+        yes_pct:                   Current YES probability as a percentage (0–100).
+        delta_24h:                 24h probability shift in pp.
+        watchlist_syms:            User watchlist symbols (empty set for /live endpoint).
+        canonical_ticker_map:      Pre-built ticker→theme_ids reverse map.
+        most_likely_outcome_label: Label of the highest-probability outcome bucket.
+        most_likely_probability:   Probability of that outcome (0–1).
 
     Returns:
         (market_read, exposure_dict)
@@ -668,14 +849,20 @@ def resolve_family_exposure(
         direct_bull:   list[str] = []
 
     else:
-        bull_sectors   = list(spec.get("bullish_sectors",      []))
-        bear_sectors   = list(spec.get("bearish_sectors",      []))
+        # ── Outcome-aware dynamic override ──────────────────────────────────
+        _dyn_read, _dyn_bull, _dyn_bear = _pick_outcome_aware_read(
+            family_key, spec, most_likely_outcome_label, yes_pct, delta_24h
+        )
+
+        bull_sectors   = list(_dyn_bull if _dyn_bull is not None else spec.get("bullish_sectors",      []))
+        bear_sectors   = list(_dyn_bear if _dyn_bear is not None else spec.get("bearish_sectors",      []))
         cond_sectors   = list(spec.get("conditional_sectors",  []))
         direct_bull    = list(spec.get("direct_tickers_bullish", []))
-        market_read    = spec.get("market_read", "mixed")
+        market_read    = _dyn_read
 
         # Invert polarity for "below" questions (oil below $60, gold below $2500…)
-        if spec.get("invert_on_below") and "below" in q_lower:
+        # Only apply when no dynamic outcome override fired (bull/bear come from static spec)
+        if _dyn_bull is None and spec.get("invert_on_below") and "below" in q_lower:
             bull_sectors, bear_sectors = bear_sectors, bull_sectors
             market_read = _invert_market_read(market_read)
 

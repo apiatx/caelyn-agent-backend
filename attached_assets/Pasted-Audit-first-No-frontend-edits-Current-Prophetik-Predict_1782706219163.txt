@@ -1,0 +1,302 @@
+Audit first. No frontend edits.
+
+Current Prophetik/Predict issues:
+
+1. Kalshi rows show no 24h / 7d change in Event Impact Ledger.
+   Example:
+   S&P 500 Daily Up/Down and NASDAQ-100 Daily Up/Down show “–” for 24h and 7d.
+
+2. Multi-outcome markets are selecting the wrong primary contract/outcome.
+   Example:
+   “Will 6 Fed rate cuts happen in 2026?” is shown as the main market, but the outcomes show:
+   0 cuts / 0 bps = ~78%, which is clearly the most likely outcome.
+   The main displayed outcome should be grounded in the highest-probability bucket, not a random/low-probability bucket.
+
+3. Market Read logic is wrong/too generic.
+   Market Read must be based on:
+
+* the most likely outcome
+* the odds level
+* the odds change over 24h and 7d
+* investment-relevant historical logic
+
+Market Read also drives Exposure, so this must be fixed at the backend layer.
+
+Do not edit frontend.
+Do not touch Gambler mode.
+Do not remove Kalshi.
+Do not remove Polymarket.
+Do not break LKG/stale_db.
+Do not reintroduce sports/culture.
+
+Audit:
+
+1. Inspect Kalshi snapshot persistence:
+
+   * Is provider/source saved?
+   * Is market_ticker saved as market_id or raw_json?
+   * Are Kalshi rows written every scan?
+   * Are Kalshi rows included in 24h/7d delta lookup?
+2. Inspect delta calculation:
+
+   * How are price_change_24h / price_change_7d computed?
+   * Are they keyed by family_key only, market_id, provider, or market_slug?
+   * Why do Kalshi rows show null / dash?
+3. Inspect multi-outcome selection:
+
+   * For Fed cuts, Fed decision, unemployment, ladder/range markets.
+   * Determine whether primary selected outcome is highest volume, highest probability, first candidate, or arbitrary.
+4. Inspect market_read and exposure_resolver:
+
+   * Determine whether market_read is based on family label only.
+   * Determine whether exposure is based on actual priced/likely outcome or generic family mapping.
+
+Part A — Fix Kalshi 24h / 7d deltas
+
+Requirement:
+Kalshi rows must get price_change_24h and price_change_7d when enough history exists.
+
+Rules:
+
+* Persist Kalshi snapshots with:
+
+  * provider/source = "kalshi"
+  * family_key
+  * market_ticker as stable market_id
+  * event_ticker
+  * series_ticker
+  * priced_probability
+  * outcomes[]
+  * volume_24h
+  * volume
+  * open_interest
+  * liquidity
+  * end_date / close_time
+  * raw_json fields
+* Delta lookup should support Kalshi:
+
+  * Prefer same provider + same market_ticker when available.
+  * For daily direction markets, same market_ticker is correct during the life of the daily contract.
+  * If a new daily contract just opened and has no 24h history, return null with diagnostic reason: insufficient_history_new_contract.
+  * Do not compare today’s daily SPX contract to yesterday’s expired daily SPX contract as if it were the same contract.
+* For long-lived Kalshi ladders, 24h/7d should work normally once snapshots exist.
+
+Diagnostics:
+
+* kalshi_snapshots_written
+* kalshi_delta_rows_found_24h
+* kalshi_delta_rows_found_7d
+* kalshi_delta_missing_reason_by_family
+
+Part B — Fix primary outcome selection for multi-outcome markets
+
+For any multi-outcome / negRisk / ladder / range market:
+
+* Determine the most likely outcome = max probability in outcomes[].
+* Use the most likely outcome as the default/priced display outcome unless there is a deliberate reason to show a different selected contract.
+* For Fed cuts example:
+
+  * If 0 cuts is 78%, the primary outcome label should be “0 cuts / 0 bps”
+  * The main question should not be “Will 6 Fed rate cuts happen?” as if that is the representative market.
+  * Better display question/title should be event-level:
+    “How many Fed rate cuts will happen in 2026?”
+    or family-level:
+    “Fed rate cuts in 2026”
+  * Then priced_outcome_label = “0 cuts / 0 bps”
+  * priced_probability = 78%
+
+Apply this to:
+
+* fed_cuts_2026
+* fed_rate_decision
+* unemployment buckets
+* Kalshi ladders/ranges
+* any negRisk/multi-outcome market
+
+Do not lose the full outcomes[] list.
+
+Part C — Rebuild Market Read logic
+
+Market Read must be generated from outcome-aware logic.
+
+Inputs:
+
+* family_key
+* provider
+* question
+* most_likely_outcome label
+* most_likely_probability
+* priced_probability
+* price_change_24h
+* price_change_7d
+* outcome_summary
+* contract_context
+* category
+
+General formula:
+market_read = scenario + momentum + investment interpretation
+
+Examples:
+
+Fed cuts:
+
+* Most likely 0 cuts at 78%, rising:
+  market_read: “higher-for-longer”
+  interpretation: restrictive rates / bearish duration / pressure on high-multiple growth, REITs, speculative tech; supportive for cash, financials/NIM depending curve.
+* More cuts rising:
+  market_read: “rates easing”
+  interpretation: bullish duration/growth/REITs, bearish dollar/financial NIM maybe.
+
+Fed hike:
+
+* Hike odds rising:
+  market_read: “rates restrictive”
+* Hike odds falling:
+  market_read: “policy risk easing”
+
+Fed no-change:
+
+* No-change high and rising:
+  market_read: “policy hold / higher-for-longer”
+* Cut/increase outcome rising:
+  reflect direction accordingly.
+
+Recession:
+
+* Recession odds high/rising:
+  “growth stress rising”
+* Recession odds low/falling:
+  “soft landing / growth resilient”
+
+Unemployment:
+
+* Higher unemployment bucket most likely/rising:
+  “labor weakening”
+* Lower/stable unemployment most likely:
+  “labor resilient”
+
+SPX/Nasdaq daily up:
+
+* Up probability high/rising:
+  “risk-on / broad market bid”
+* Up probability falling:
+  “risk appetite fading”
+
+S&P year-end / high ladder:
+
+* Higher strike odds rising:
+  “bullish index repricing”
+* Lower range most likely or high strikes falling:
+  “index upside fading”
+
+S&P vs Gold:
+
+* S&P winning probability high/rising:
+  “risk assets outperforming safe haven”
+* Gold winning probability high/rising:
+  “safe haven / hard asset leadership”
+
+Oil:
+
+* Higher oil outcome rising:
+  “energy inflation pressure”
+* Higher oil outcome falling:
+  “oil pressure easing”
+
+Gold:
+
+* Higher gold outcome rising:
+  “safe-haven / real-rate hedge bid”
+* Higher gold outcome falling:
+  “risk-on / safe-haven bid fading”
+
+BTC:
+
+* Higher BTC outcome rising:
+  “crypto risk-on”
+* Falling:
+  “crypto risk appetite fading”
+
+Geopolitics:
+
+* Stress/escalation outcome high/rising:
+  “geopolitical stress rising”
+* De-escalation outcome high/rising:
+  “geopolitical stress easing”
+
+Company/AI:
+
+* NVDA/AI positive outcome high/rising:
+  “AI leadership strengthening”
+* Falling:
+  “AI leadership premium fading”
+
+Part D — Exposure must use the Market Read scenario
+
+Exposure should be based on:
+
+* most likely outcome
+* whether that scenario is becoming more or less likely
+* investment logic
+
+Examples:
+
+* higher-for-longer:
+  bearish: REITs, long-duration growth, speculative high beta
+  mixed/positive: financials/cash-like yield, quality balance sheets
+* rates easing:
+  bullish: growth, software, semis, REITs, housing
+  bearish/mixed: banks/NIM depending curve
+* risk-on index:
+  bullish: broad market, semis, software, cyclicals
+  bearish relative: defensives/safe haven
+* recession risk rising:
+  bullish relative: gold/safe haven/defensives
+  bearish: cyclicals, financials, high beta
+* oil pressure rising:
+  bullish: energy
+  bearish: airlines/transports/consumer discretionary margins
+* gold bid rising:
+  bullish: gold/miners/safe haven
+  bearish relative: high-beta risk assets
+* S&P outperforming gold:
+  bullish: broad equities/cyclicals
+  bearish relative: gold/safe haven
+* gold outperforming S&P:
+  bullish: gold/miners/defensives
+  bearish: broad risk/cyclicals
+
+Use existing ENRICHED_THEME_RS_UNIVERSE/watchlist-first resolver.
+Do not hardcode frontend ticker maps.
+Do not resurrect SECTOR_STOCKS.
+
+Part E — Quality field
+
+Audit current quality field.
+If quality only means low-liquidity/low-confidence, keep it in backend but make it structured:
+
+* quality_score
+* quality_label: high / medium / low
+* quality_reason: low volume, low liquidity, stale, insufficient history, etc.
+
+Do not require frontend to show it as a full column.
+
+Validation:
+
+1. Fed cuts row uses 0 cuts / 0 bps as primary outcome when it is highest probability.
+2. Fed cuts market read reflects higher-for-longer if 0 cuts dominates.
+3. Kalshi SPX/Nasdaq rows have 24h/7d deltas once snapshots exist, or clear missing reason if newly opened.
+4. Kalshi long-lived ladders have deltas if history exists.
+5. Market Read changes when most likely outcome or odds momentum changes.
+6. Exposure changes consistently with Market Read.
+7. Existing Fed/geopolitical/AI/NVDA/Oil/Gold rows still render.
+8. No sports/culture rows appear.
+9. LKG/stale_db still works.
+10. Return sample rows for:
+
+* fed_cuts_2026
+* fed_rate_decision
+* spx_daily_direction
+* spx_year_end_close_ladder
+* spx_vs_gold_annual_return
+  including most_likely_outcome, market_read, exposure, 24h/7d delta.

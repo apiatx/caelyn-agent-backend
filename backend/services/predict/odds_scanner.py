@@ -234,10 +234,15 @@ def _compute_deltas(
     current_yes_pct: Optional[float],
     now_ts: float,
     api_fallbacks: dict,
+    market_id: Optional[str] = None,
 ) -> dict:
     """
     Compute 1h / 24h / 7d probability deltas in percentage-point (pp) units.
     Reads from DB history first; falls back to Polymarket's own price_change fields.
+
+    market_id: when provided (Kalshi daily direction families) the DB query is
+    filtered to that specific contract ticker so yesterday's expired contract
+    never pollutes today's delta.
 
     Returns:
         {"delta_1h_pp": float|None, "delta_24h_pp": float|None, "delta_7d_pp": float|None}
@@ -251,6 +256,7 @@ def _compute_deltas(
             before_ts=now_ts - target_secs,
             window_seconds=window_secs,
             limit=1,
+            market_id=market_id,
         )
         if not rows:
             return None
@@ -390,7 +396,15 @@ def _build_display_fields(
             })
         buckets.sort(key=lambda b: b["probability"], reverse=True)
         outcomes = buckets
-        priced_outcome_label = git if git else (buckets[0]["label"] if buckets else None)
+        # negRisk: use the highest-PROBABILITY bucket as the priced outcome, not
+        # the highest-VOLUME market's groupItemTitle.  buckets[] is already
+        # sorted by probability DESC (line above).  git comes from the
+        # volume-champion market and would wrongly surface a low-prob bucket
+        # (e.g. "6 cuts" at 2%) when the dominant outcome is "0 cuts" at 78%.
+        priced_outcome_label   = buckets[0]["label"] if buckets else (git or None)
+        _neg_risk_prob         = buckets[0]["probability"] if buckets else yes_prob
+        most_likely_outcome_label = priced_outcome_label
+        most_likely_probability   = _neg_risk_prob
         outcome_summary = " · ".join(
             f"{b['display_label']} {round(b['probability'] * 100, 1)}%"
             for b in buckets[:6]
@@ -417,6 +431,15 @@ def _build_display_fields(
             },
         ]
         priced_outcome_label = yes_label
+        _neg_risk_prob       = yes_prob
+        # most_likely: whichever side has ≥ 50% wins; binary markets are
+        # symmetric, so No is simply "Yes price < 50%"
+        most_likely_outcome_label = (
+            yes_label if (yes_pct is not None and yes_pct >= 50.0) else "No"
+        )
+        most_likely_probability = (
+            yes_prob if (yes_pct is not None and yes_pct >= 50.0) else no_prob
+        )
         outcome_summary = (
             f"{yes_label} {yes_pct}% · No {no_pct}%"
             if yes_pct is not None
@@ -426,9 +449,15 @@ def _build_display_fields(
     # display_title: label + meeting context when parseable
     display_title = f"{label} — {contract_context}" if contract_context else label
 
-    # display_subtitle: groupItemTitle (most informative) > raw question > ""
+    # display_subtitle:
+    #   negRisk  → event_title (event-level question, e.g. "How many Fed cuts in 2026?")
+    #              rather than a specific bucket label like "6 cuts / 300 bps"
+    #   binary   → groupItemTitle (describes what "Yes" means) > raw question > ""
     # Never invent text — use what Polymarket provides verbatim
-    display_subtitle = git if git else (question or "")
+    if neg_risk:
+        display_subtitle = event_title if event_title else label
+    else:
+        display_subtitle = git if git else (question or "")
 
     return {
         "question":             question,
@@ -442,7 +471,9 @@ def _build_display_fields(
         "contract_context":     contract_context,
         "priced_outcome":       "Yes",
         "priced_outcome_label": priced_outcome_label,
-        "priced_probability":   yes_prob,
+        "priced_probability":   _neg_risk_prob,
+        "most_likely_outcome_label": most_likely_outcome_label,
+        "most_likely_probability":   most_likely_probability,
         "outcomes":             outcomes,
         "outcome_summary":      outcome_summary,
         "clob_token_ids":       clob_ids,
@@ -609,6 +640,8 @@ def _make_kalshi_live_entry(
         "priced_outcome":       krow.get("priced_outcome", "Yes"),
         "priced_outcome_label": krow.get("priced_outcome_label", ""),
         "priced_probability":   krow.get("priced_probability"),
+        "most_likely_outcome_label": krow.get("most_likely_outcome_label"),
+        "most_likely_probability":   krow.get("most_likely_probability"),
         "outcomes":             krow.get("outcomes") or [],
         "outcome_summary":      krow.get("outcome_summary", ""),
         "clob_token_ids":       [],
@@ -1281,6 +1314,8 @@ class OddsScanner:
                 "priced_outcome":       _display["priced_outcome"],
                 "priced_outcome_label": _display["priced_outcome_label"],
                 "priced_probability":   _display["priced_probability"],
+                "most_likely_outcome_label": _display.get("most_likely_outcome_label"),
+                "most_likely_probability":   _display.get("most_likely_probability"),
                 "outcomes":             _display["outcomes"],
                 "outcome_summary":      _display["outcome_summary"],
                 "clob_token_ids":       _display["clob_token_ids"],
@@ -1455,6 +1490,11 @@ class OddsScanner:
         live_entries: list[dict] = []
         for entry in live_pre:
             entry.pop("_best_enriched", None)
+            _is_kalshi_daily = entry["family_key"] in _DAILY_DIRECTION_FAMILY_KEYS
+            _kalshi_mkt_id   = (
+                entry.get("_kalshi_market_ticker") or None
+                if _is_kalshi_daily else None
+            )
             deltas = _compute_deltas(
                 family_key=entry["family_key"],
                 current_yes_pct=entry.pop("_yes_pct_raw", None),
@@ -1464,6 +1504,7 @@ class OddsScanner:
                     "delta_24h_api": entry.pop("_api_24h", None),
                     "delta_7d_api":  entry.pop("_api_7d", None),
                 },
+                market_id=_kalshi_mkt_id,
             )
             entry.update(deltas)
             if _EXPOSURE_RESOLVER_OK:
@@ -1475,6 +1516,8 @@ class OddsScanner:
                         delta_24h=entry.get("delta_24h_pp"),
                         watchlist_syms=set(),  # canonical only — /live is a shared endpoint
                         canonical_ticker_map=_exp_ctmap,
+                        most_likely_outcome_label=entry.get("most_likely_outcome_label"),
+                        most_likely_probability=entry.get("most_likely_probability"),
                     )
                     entry["market_read"] = _mr
                     entry["exposure"]    = _exp
