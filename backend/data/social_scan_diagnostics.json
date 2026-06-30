@@ -1,25 +1,5 @@
 [
   {
-    "scan_ts": "2026-06-02T15:01:28.121735+00:00",
-    "accounts_count": 16,
-    "batch_count": 2,
-    "batches_returned": 2,
-    "sections_ok": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "sections_missing": [],
-    "lkg_sections_used": [],
-    "ticker_count": 42,
-    "mention_records": 15,
-    "consensus_picks": 10,
-    "top_tickers": 10,
-    "cache_write_status": "written_clean",
-    "error": null
-  },
-  {
     "scan_ts": "2026-06-03T17:10:40.990633+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -585,6 +565,26 @@
   },
   {
     "scan_ts": "2026-06-29T15:01:49.886715+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 50,
+    "mention_records": 15,
+    "consensus_picks": 10,
+    "top_tickers": 10,
+    "cache_write_status": "written_clean",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-06-30T15:33:35.474846+00:00",
     "accounts_count": 16,
     "batch_count": 2,
     "batches_returned": 2,

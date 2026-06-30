@@ -1267,14 +1267,278 @@ async def debug_fundamentals_refresh(
     return result
 
 
+# ── In-process backfill state ─────────────────────────────────────────────────
+_backfill_state: dict = {"status": "idle", "refreshed": 0, "failed": 0, "total": 0,
+                         "failed_symbols": [], "started_at": None, "finished_at": None}
+
+@router.post("/debug/fundamentals/backfill")
+async def debug_fundamentals_backfill(
+    watchlist_id: Optional[str] = None,
+    dev_force: bool = True,
+):
+    """
+    DEV-ONLY: Fire-and-forget full watchlist backfill.
+    Spawns as asyncio background task inside the running server.
+    Returns immediately; poll GET /debug/fundamentals/backfill/status for progress.
+    """
+    import asyncio as _aio, os as _os
+    global _backfill_state
+
+    if _backfill_state.get("status") == "running":
+        return {"status": "already_running", "state": _backfill_state}
+
+    wl_id = watchlist_id or "23eec278-074a-4706-a62a-c35d38b384ea"
+    fmp_key = _os.getenv("FMP_API_KEY", "")
+    if not fmp_key:
+        raise HTTPException(status_code=503, detail="FMP_API_KEY not configured")
+
+    store = load_watchlist(wl_id)
+    if not store:
+        raise HTTPException(status_code=404, detail=f"Watchlist {wl_id} not found")
+
+    from services.watchlist_quote_cache import is_fmp_symbol_eligible as _elig
+    from data.watchlist_fundamentals_store import get_snapshots_bulk as _snaps_bulk
+    all_tickers = store.get("tickers") or []
+    eligible = [s.strip().upper() for s in all_tickers if s and _elig(s.strip())]
+
+    if dev_force:
+        to_refresh = eligible
+    else:
+        snaps = _snaps_bulk(eligible)
+        to_refresh = [s for s in eligible if s not in snaps or not (snaps[s].get("fields") or {})]
+
+    _backfill_state.update({
+        "status": "running", "refreshed": 0, "failed": 0,
+        "total": len(to_refresh), "failed_symbols": [],
+        "started_at": __import__("datetime").datetime.utcnow().isoformat(),
+        "finished_at": None,
+    })
+
+    async def _run():
+        global _backfill_state
+        from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
+        from data.watchlist_fundamentals_store import upsert_snapshot as _upsert
+        refresher = FmpFundamentalsRefresher(fmp_key)
+        for sym in to_refresh:
+            try:
+                result = await refresher.normalize_symbol(sym)
+                ok = _upsert(symbol=sym, watchlist_id=wl_id,
+                             fields=result["fields"],
+                             missing_fields=result["missing_fields"],
+                             fmp_call_count=result["fmp_call_count"])
+                if ok:
+                    _backfill_state["refreshed"] += 1
+                else:
+                    _backfill_state["failed"] += 1
+                    _backfill_state["failed_symbols"].append(sym)
+            except Exception as _e:
+                _backfill_state["failed"] += 1
+                _backfill_state["failed_symbols"].append(sym)
+                print(f"[BACKFILL] {sym} error: {_e}")
+        _backfill_state["status"] = "done"
+        _backfill_state["finished_at"] = __import__("datetime").datetime.utcnow().isoformat()
+        print(f"[BACKFILL] complete: refreshed={_backfill_state['refreshed']} "
+              f"failed={_backfill_state['failed']} total={_backfill_state['total']}")
+
+    _aio.create_task(_run())
+    return {"status": "started", "total_to_refresh": len(to_refresh), "state": _backfill_state}
+
+
+@router.get("/debug/fundamentals/backfill/status")
+async def debug_fundamentals_backfill_status():
+    """DEV-ONLY: Poll progress of an in-progress backfill."""
+    return _backfill_state
+
+
 @router.get("/debug/fundamentals/status")
 async def debug_fundamentals_status(watchlist_id: Optional[str] = None):
     """
-    DEV-ONLY: Return the FMP fundamentals cache status for a watchlist.
+    DEV-ONLY: Full per-symbol coverage audit for the watchlist FMP fundamentals cache.
+
+    Returns:
+      summary           — aggregate counts (total, eligible, has_snapshot, by status, earnings coverage)
+      field_coverage    — per-column: fmp / csv / missing counts + csv_only_by_design flag
+      per_symbol        — one entry per watchlist symbol with status, refreshed_at,
+                          field counts, and earnings date provenance
     """
-    from data.watchlist_fundamentals_store import get_diagnostics as _get_diag
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_snaps
+    from services.watchlist_quote_cache import is_fmp_symbol_eligible as _eligible
+
+    _ET = ZoneInfo("America/New_York")
+    today_et = datetime.now(tz=_ET).strftime("%Y-%m-%d")
+    now_utc  = datetime.now(timezone.utc)
+
     wl_id = watchlist_id or "23eec278-074a-4706-a62a-c35d38b384ea"
-    return _get_diag(wl_id)
+    store = load_watchlist(wl_id)
+    if not store:
+        return {"error": f"Watchlist {wl_id} not found"}
+
+    csv_data: list[dict] = store.get("csv_data") or []
+    tickers:  list[str]  = store.get("tickers")  or []
+
+    # Index CSV rows by symbol
+    csv_by_sym: dict[str, dict] = {}
+    for row in csv_data:
+        sym = (row.get("Symbol") or row.get("symbol") or row.get("Ticker") or "").strip().upper()
+        if sym:
+            csv_by_sym[sym] = row
+
+    all_syms       = [s.strip().upper() for s in tickers if s and s.strip()]
+    eligible_syms  = [s for s in all_syms if _eligible(s)]
+    ineligible_syms = [s for s in all_syms if not _eligible(s)]
+
+    # Single bulk DB read for all eligible symbols
+    snaps = _get_snaps(eligible_syms) if eligible_syms else {}
+
+    # ── Tracked fields ──────────────────────────────────────────────────────
+    FMP_FIELDS = [
+        "Market Cap", "Revenue", "Revenue Growth (Q)", "Revenue Growth (YoY)",
+        "Gross Margin", "FCF Margin", "Free Cash Flow", "Operating Income", "EBIT",
+        "PE Ratio", "PS Ratio", "EV/EBITDA", "EPS Growth", "Debt / Equity",
+        "Net Debt / EBITDA", "Earnings Date",
+        "Rev Growth Next Quarter", "EPS Growth This Quarter",
+    ]
+    CSV_ONLY_FIELDS = [
+        "Shares Insiders", "Revenue Growth Est.", "Rev Growth Next Year",
+        "Rev Growth This Year", "EPS Growth Est.", "EPS Growth Next Quarter",
+        "EPS Growth This Year", "EPS Growth Next Year",
+    ]
+    ALL_TRACKED = FMP_FIELDS + CSV_ONLY_FIELDS
+    CSV_ONLY_SET = set(CSV_ONLY_FIELDS)
+
+    field_coverage: dict = {
+        f: {"fmp": 0, "csv": 0, "missing": 0, "csv_only_by_design": f in CSV_ONLY_SET}
+        for f in ALL_TRACKED
+    }
+
+    # ── Aggregate counters ───────────────────────────────────────────────────
+    summary: dict = {
+        "total":                   len(all_syms),
+        "fmp_eligible":            len(eligible_syms),
+        "fmp_ineligible":          len(ineligible_syms),
+        "has_snapshot":            0,
+        "fmp_refreshed":           0,        # ≥10 FMP fields populated
+        "fmp_missing_partial":     0,        # 1–9 FMP fields
+        "csv_fallback_only":       0,        # eligible but snapshot is empty/failed
+        "not_yet_scanned":         0,        # eligible, no snapshot at all
+        "fmp_ineligible_count":    len(ineligible_syms),
+        "has_future_earnings_date": 0,
+        "stale_or_no_earnings_date": 0,
+    }
+
+    per_symbol: list[dict] = []
+
+    for sym in all_syms:
+        csv_row = csv_by_sym.get(sym, {})
+        snap    = snaps.get(sym) if _eligible(sym) else None
+        elig    = _eligible(sym)
+
+        # ── Status classification ─────────────────────────────────────────
+        if not elig:
+            status = "fmp_ineligible"
+            fmp_fields_count = 0
+            missing_count    = 0
+            refreshed_at     = None
+            next_refresh_at  = None
+        elif snap is None:
+            status = "not_yet_scanned"
+            fmp_fields_count = 0
+            missing_count    = 0
+            refreshed_at     = None
+            next_refresh_at  = None
+        else:
+            snap_fields:  dict = snap.get("fields")        or {}
+            snap_missing: list = snap.get("missing_fields") or []
+            refreshed_at        = snap.get("refreshed_at")
+            next_refresh_at     = snap.get("next_refresh_at")
+            fmp_fields_count    = len(snap_fields)
+            missing_count       = len(snap_missing)
+
+            if fmp_fields_count >= 10:
+                status = "fmp_refreshed"
+            elif fmp_fields_count > 0:
+                status = "fmp_missing_partial"
+            elif missing_count > 0:
+                status = "csv_fallback_only"   # ran, got nothing; all marked missing
+            else:
+                status = "not_yet_scanned"     # row exists but fields empty
+
+        # ── Earnings date provenance (with stale rule) ────────────────────
+        snap_fields_d: dict = (snap.get("fields") or {}) if snap else {}
+        earn_fmp = (snap_fields_d.get("Earnings Date") or "").strip() or None
+        earn_csv = (csv_row.get("Earnings Date") or "").strip() or None
+
+        if earn_fmp and earn_fmp >= today_et:
+            earn_final  = earn_fmp
+            earn_source = "fmp"
+            has_future  = True
+        elif earn_csv and earn_csv >= today_et:
+            earn_final  = earn_csv
+            earn_source = "csv_fallback"
+            has_future  = True
+        else:
+            earn_final  = None
+            earn_source = "missing" if elig else "fmp_ineligible"
+            has_future  = False
+
+        # ── Counters ──────────────────────────────────────────────────────
+        if snap:
+            summary["has_snapshot"] += 1
+        if status == "fmp_refreshed":       summary["fmp_refreshed"]       += 1
+        elif status == "fmp_missing_partial": summary["fmp_missing_partial"] += 1
+        elif status == "csv_fallback_only": summary["csv_fallback_only"]    += 1
+        elif status == "not_yet_scanned":   summary["not_yet_scanned"]      += 1
+
+        if has_future:
+            summary["has_future_earnings_date"]    += 1
+        else:
+            summary["stale_or_no_earnings_date"]   += 1
+
+        # ── Field-level coverage ──────────────────────────────────────────
+        snap_missing_set: set = set((snap.get("missing_fields") or [])) if snap else set()
+        for field in ALL_TRACKED:
+            if not elig or snap is None:
+                field_coverage[field]["missing"] += 1
+            elif field in snap_fields_d and snap_fields_d[field] is not None:
+                field_coverage[field]["fmp"] += 1
+            elif field in snap_missing_set:
+                csv_val = str(csv_row.get(field) or "").strip()
+                if csv_val:
+                    field_coverage[field]["csv"] += 1
+                else:
+                    field_coverage[field]["missing"] += 1
+            else:
+                csv_val = str(csv_row.get(field) or "").strip()
+                if csv_val:
+                    field_coverage[field]["csv"] += 1
+                else:
+                    field_coverage[field]["missing"] += 1
+
+        per_symbol.append({
+            "symbol":               sym,
+            "status":               status,
+            "fmp_eligible":         elig,
+            "refreshed_at":         refreshed_at,
+            "next_refresh_at":      next_refresh_at,
+            "fmp_fields_count":     fmp_fields_count,
+            "missing_fields_count": missing_count,
+            "has_future_earnings_date":    has_future,
+            "final_earnings_date":         earn_final,
+            "final_earnings_date_source":  earn_source,
+            "csv_earnings_date":           earn_csv,
+            "fmp_earnings_date":           earn_fmp,
+        })
+
+    return {
+        "watchlist_id": wl_id,
+        "audited_at":   now_utc.isoformat(),
+        "today_et":     today_et,
+        "summary":      summary,
+        "field_coverage": field_coverage,
+        "per_symbol":   per_symbol,
+    }
 
 
 @router.get("/debug/fundamentals/provenance")

@@ -460,13 +460,28 @@ def apply_fmp_overlays(
     """
     Apply FMP fundamentals cache to the full CSV data list.
     Returns the updated list with FMP values overlaid per symbol.
+
+    Stale Earnings Date rule (Part C):
+      Earnings Date is only meaningful if it is today or in the future.
+      If the final value (from FMP or CSV) is before today (ET), blank it.
+      A past date is worse than no date — it misrepresents next earnings.
     """
+    from zoneinfo import ZoneInfo
+    today_et = datetime.now(tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+
     out = []
     for row in csv_data:
         sym = (row.get("Symbol") or row.get("symbol") or row.get("Ticker") or "").strip().upper()
         snap = snapshots.get(sym)
         if snap and snap.get("fields"):
-            out.append(merge_fmp_into_csv_row(row, snap["fields"]))
+            merged = merge_fmp_into_csv_row(row, snap["fields"])
         else:
-            out.append(row)
+            merged = dict(row)
+
+        # Stale Earnings Date rule: blank any past date regardless of source.
+        earn = str(merged.get("Earnings Date") or "").strip()
+        if earn and earn < today_et:
+            merged["Earnings Date"] = ""
+
+        out.append(merged)
     return out

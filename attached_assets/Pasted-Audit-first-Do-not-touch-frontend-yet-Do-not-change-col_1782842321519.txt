@@ -1,0 +1,240 @@
+Audit first. Do not touch frontend yet. Do not change column headers. Do not change CSV upload. Do not touch Tradier. Do not change the new Saturday-night FMP scheduler except if validation finds it is not running as designed. Do not add page-render FMP calls. Do not use LLMs.
+
+Problem:
+On Watchlist → Screener → Fundamental, many `Earn. Date` values are still in the past. That makes it unclear whether the new FMP fundamentals refresh is actually running across the full watchlist or only for manually refreshed sample tickers.
+
+We need confirmation that:
+
+1. the full watchlist has been scanned/refreshed by the FMP fundamentals overlay,
+2. FMP values are cached until the next Saturday-night refresh window,
+3. every ticker has a clear refresh status,
+4. Watchlist Fundamental Screener and Watchlist Earnings Calendar share the same FMP earnings source/cache instead of making separate duplicated FMP calls.
+
+Important:
+Do not undo the new scheduler:
+
+* production refresh should still run only during Sunday 2–5 AM America/New_York
+* dev force refresh can still run manually
+* no weekday production refreshes
+* no page-render FMP calls
+
+Part A — Full watchlist refresh coverage audit
+
+Audit the current primary watchlist.
+
+Report:
+
+* total watchlist symbols
+* FMP-eligible symbols
+* FMP-ineligible symbols, especially colon-prefixed foreign symbols
+* symbols with existing fundamentals snapshot
+* symbols refreshed successfully
+* symbols never refreshed
+* symbols failed refresh
+* symbols skipped because ineligible
+* symbols with stale snapshots
+* symbols with fresh snapshots
+* symbols where final GET row still uses CSV fallback for all fields
+
+For each ticker, classify:
+
+* `fmp_refreshed`
+* `fmp_missing_partial`
+* `csv_fallback_only`
+* `fmp_ineligible`
+* `refresh_failed`
+* `not_yet_scanned`
+
+Add or use an existing dev diagnostic endpoint:
+GET /api/watchlist/debug/fundamentals/status?watchlist_id=<id>
+
+It should return:
+
+* totals above
+* per-symbol status
+* refreshed_at
+* next_refresh_at
+* missing_fields count
+* populated_fmp_fields count
+* has_future_earnings_date true/false
+* final_earnings_date
+* final_earnings_date_source
+
+Part B — Full current-watchlist dev backfill
+
+After the audit, run a dev/manual force refresh for the entire current FMP-eligible watchlist, not just sample tickers.
+
+Use the existing pacing/governor and cap behavior.
+Do not blast FMP.
+Do not use bulk endpoints.
+Do not touch Tradier.
+
+This is a one-time development backfill so the UI can be tested immediately instead of waiting until Saturday night.
+
+After the backfill, report:
+
+* total attempted
+* refreshed
+* failed
+* skipped ineligible
+* elapsed time
+* FMP call count
+* rate limiter behavior
+* failed symbols and failure reasons
+
+Part C — Earnings Date correctness
+
+`Earn. Date` should mean next/upcoming earnings date.
+
+Audit the source currently used by the fundamentals overlay:
+
+* symbol earnings endpoint?
+* earnings calendar date-range endpoint?
+* cached Calendar page data?
+* CSV fallback?
+
+Problem:
+If FMP returns no future earnings date, the current no-null-overwrite behavior may preserve an old CSV date. That makes the UI show past dates, which is misleading.
+
+Fix rule for `Earn. Date` only:
+
+* If FMP provides a future/upcoming earnings date, use it.
+* If FMP provides no future/upcoming earnings date:
+
+  * do not overwrite with fiscal quarter-end dates
+  * do not show a stale CSV date if it is before today
+  * if CSV date is future, it may be used as fallback
+  * if CSV date is past, final value should be blank/`—` or marked missing, not shown as next earnings
+
+Do not apply this stricter stale-date rule to every field.
+This is specifically for `Earn. Date`.
+
+Use timezone-aware current date, preferably America/New_York.
+
+Part D — Shared earnings source with Calendar page
+
+There is already a Watchlist earnings calendar on the Calendar page, but it is not working.
+
+Audit:
+
+* where Watchlist Calendar earnings data is fetched
+* what FMP endpoint it uses
+* whether it calls FMP separately from the fundamentals refresher
+* whether it uses cached data
+* why it is not working
+
+Requirement:
+Watchlist Fundamental Screener `Earn. Date` and Calendar page Watchlist Earnings should share the same backend earnings cache/service.
+
+Do not create two separate systems that both call FMP for the same watchlist earnings data.
+
+Preferred architecture:
+Create or reuse a shared service like:
+
+`watchlist_earnings_cache_service`
+
+Responsibilities:
+
+* fetch/cache upcoming earnings dates for watchlist symbols
+* expose next earnings date by symbol
+* feed Fundamental Screener `Earn. Date`
+* feed Calendar page Watchlist Earnings
+* avoid duplicate FMP calls
+* respect FMP limiter/governor
+* no page-render provider calls
+
+If the existing Calendar page earnings service already has the right FMP path, reuse it.
+If the fundamentals refresher has the better path, let Calendar read from the fundamentals/earnings cache.
+Choose one canonical source.
+
+Important:
+The FMP call should be shared/cached.
+The frontend pages should not independently trigger FMP earnings calls.
+
+Part E — Full field coverage confirmation
+
+For the entire watchlist, report field coverage for every Fundamental Screener column:
+
+Columns:
+
+* Symbol
+* Theme
+* Mkt Cap
+* Revenue
+* Rev Grwth (Q)
+* Rev Grwth (Y)
+* Gross Mgn
+* FCF Mgn
+* Free CF
+* Op. Income
+* EBIT
+* P/E
+* P/S
+* EV/EBITDA
+* EPS Grwth
+* D/E
+* ND/EBITDA
+* Insider %
+* Earn. Date
+* Rev Grwth Est
+* Rev Grwth NQ
+* Rev Grwth NY
+* EPS Grwth Est
+* EPS Grwth TQ
+* EPS Grwth NQ
+* EPS Grwth TY
+* EPS Grwth NY
+
+For each field, report:
+
+* number populated from FMP
+* number populated from CSV fallback
+* number missing
+* whether FMP Starter plan can support it
+* whether field is intentionally CSV-only by design
+
+Known prior expectations to re-verify:
+
+* Insider % likely CSV-only
+* several future analyst estimate fields likely CSV-only due FMP Starter plan limitations
+* Rev Grwth NQ / EPS Grwth TQ only available when FMP has future earnings/estimate rows
+
+Part F — Real GET endpoint validation
+
+After full backfill, hit the actual Watchlist GET endpoint used by the frontend.
+
+For tickers with past earnings dates currently showing in the UI, report:
+
+* symbol
+* CSV Earn. Date
+* cached FMP future earnings date
+* final GET Earn. Date
+* final source
+* why it is still past/blank/future
+
+If final GET still shows past dates, explain exactly why.
+
+Validation checklist:
+
+1. Full current watchlist has been scanned or explicitly skipped with reason.
+2. FMP-eligible tickers have cached snapshots after dev backfill.
+3. FMP-ineligible colon symbols are skipped safely and keep CSV fallback where appropriate.
+4. Final Watchlist GET response uses FMP overlay where available.
+5. `Earn. Date` no longer shows stale past CSV dates as if they are next earnings.
+6. Fundamental Screener and Calendar Watchlist Earnings share one backend earnings cache/source.
+7. No duplicate FMP earnings calls across pages.
+8. No page-render FMP calls.
+9. Saturday-night production scheduler remains intact.
+10. Dev force refresh still works.
+11. No Tradier code touched.
+12. No frontend changes yet.
+13. No backend errors.
+
+Report back:
+
+* full coverage counts
+* list of tickers still missing FMP fundamentals after backfill
+* list of tickers with no future earnings date from FMP
+* list of tickers still using CSV-only estimate fields
+* confirmation that cached data will remain until next Saturday-night refresh
+* confirmation Calendar and Fundamental Screener now share earnings source/cache
