@@ -1,0 +1,324 @@
+Audit first, then implement. Do not edit until the Stage Analysis data source and cached OHLCV availability are confirmed.
+
+Goal:
+Upgrade Watchlist → Screener → Technical into a real entry/exit diagnostics view using only the same historical/current data already fetched or cached for Watchlist Stage Analysis.
+
+Do not add new API calls.
+Do not touch the Tradier dynamic pacer.
+Do not add page-render provider calls.
+Do not touch the Fundamental toggle.
+Do not touch CSV upload.
+Do not touch Options Flow.
+Do not use LLMs.
+Do not restart the backend if the fundamentals backfill task is still running.
+
+Important:
+These columns should be technical timing diagnostics, not a clone of Golden Zone / HC Trade Zone / Growth Momentum. Existing setup tabs answer “what should I focus on?” Technical columns answer “is this ticker buyable here, extended, coiling, breaking out, distributing, or broken?”
+
+Phase 0 — Safety check:
+
+1. Check:
+   GET /api/watchlist/debug/fundamentals/backfill/status
+
+2. If the fundamentals backfill is still running:
+
+   * stop this task
+   * report that technical implementation should wait until backfill completes
+   * do not restart backend
+   * do not edit files that trigger restart
+
+Only continue if backfill is complete or not running.
+
+Phase 1 — Audit Stage Analysis source:
+Find the exact backend service that computes Watchlist Stage Analysis.
+
+Report:
+
+* file/function names
+* provider path currently used
+* whether it uses Tradier daily history, FMP history, or cached history
+* whether it fetches on page load or from persisted LKG/cache
+* available OHLCV fields:
+
+  * open
+  * high
+  * low
+  * close
+  * volume
+  * adjusted close if available
+* available lookback length:
+
+  * approx bars per ticker
+  * whether 20D / 50D / 200D / 252D metrics are valid
+* where Stage Analysis is cached/persisted
+* whether frontend receives full stage payload or only label/score
+* whether any technical metrics are already computed but hidden
+
+Important history audit:
+The current Stage Analysis may be wrong for some tickers if only ~1Y of bars are available. Audit whether the Themes page already has a 5Y historical cache for the same watchlist/theme ticker universe. If yes, report whether that cache can be reused later as a canonical OHLCV cache. Do not add new FMP calls or switch Stage to a new history source in this pass unless it is already cached and obviously safe.
+
+Do not implement true ATH/ATL unless full lifetime history is already available without new calls. If only ~1Y bars exist, use 52W High/Low language only.
+
+Phase 2 — Backend technical metrics:
+Add derived technical metrics to the same cached technical/stage payload, using only existing cached bars and current price.
+
+Compute these fields when enough bars exist:
+
+Trend / MA:
+
+* sma_20
+* sma_50
+* sma_200
+* pct_vs_sma_20
+* pct_vs_sma_50
+* pct_vs_sma_200
+* ma_stack: bull / mixed / bear
+
+Extension:
+
+* extension_risk: healthy / extended / overheated / pullback_buy_zone / broken / neutral
+
+High/low proximity:
+
+* high_52w
+* low_52w
+* pct_from_52w_high
+* pct_from_52w_low
+* range_position_52w
+
+Entry/setup:
+
+* entry_zone: 20d_pullback / 50d_pullback / breakout_watch / fresh_breakout / extended / overheated / broken / neutral
+
+Breakout:
+
+* high_20d
+* high_50d
+* breakout_signal: coiling / near_trigger / fresh_breakout / confirmed_breakout / extended_breakout / failed_breakout / no_setup
+
+Volume / accumulation:
+
+* avg_volume_20d
+* accumulation_days_20d
+* distribution_days_20d
+* accumulation_distribution_score
+* accumulation_distribution_signal: heavy_accumulation / accumulation / neutral / distribution / dry_up
+
+Volatility / squeeze:
+
+* atr_14
+* atr_14_pct
+* range_20d_pct
+* squeeze_signal: tight / coiling / normal / volatile / expansion
+
+Momentum:
+
+* roc_20d
+* roc_50d
+* momentum_trend: accelerating / positive / cooling / diverging / negative / neutral
+
+Summary:
+
+* technical_state:
+
+  * coiling
+  * pullback_entry
+  * breakout_trigger
+  * trend_advance
+  * extended
+  * overheated
+  * distribution
+  * broken
+  * neutral
+
+Optional hidden/helper:
+
+* technical_timing_score 0–100
+
+Do not make the score compete with Golden Zone / HC Trade Zone. If exposed, call it “Technical Timing Score,” not “A+ Setup” or “Buy Score.”
+
+Guardrails:
+
+* fewer than 20 bars: compute only minimal metrics
+* fewer than 50 bars: no 50D metrics
+* fewer than 200 bars: no 200D metrics
+* fewer than 252 bars: no 52W metrics
+* null values must not break rows
+* failed refresh/null technical compute must not overwrite valid existing Stage Analysis LKG
+* foreign/colon symbols without history should show blank/— gracefully
+
+Phase 3 — Frontend Technical toggle columns:
+Add columns only to Watchlist → Screener → Technical.
+
+Do not change Fundamental toggle.
+Do not change CSV/fundamental columns.
+Do not remove existing user-facing Technical columns without asking.
+
+Preferred visible columns:
+
+* MA Stack
+* % vs 50D
+* % vs 200D
+* Extension Risk
+* 52W Pos
+* % From 52W High
+* Entry Zone
+* Breakout Signal
+* Accum/Dist
+* Squeeze
+* ATR %
+* Momentum Trend
+* Technical State
+
+If table width is too tight, use this shorter first version:
+
+* MA Stack
+* Extension Risk
+* 52W Pos
+* Entry Zone
+* Breakout Signal
+* Accum/Dist
+* Squeeze
+* Technical State
+
+Make useful columns sortable:
+
+* % vs 50D
+* % vs 200D
+* 52W Pos
+* % From 52W High
+* ATR %
+* Technical Timing Score, if exposed
+
+Formatting:
+
+* pct_vs_sma_50 and pct_vs_sma_200 as signed percent
+* pct_from_52w_high as negative percent or “At High”
+* range_position_52w as 0–100%
+* ATR % as percent
+* MA Stack as Bull / Mixed / Bear
+* Extension Risk as label
+* Entry Zone as label
+* Breakout Signal as label
+* Accum/Dist as label
+* Squeeze as label
+* Momentum Trend as label
+* Technical State as label
+
+Label intent:
+Technical State must describe chart condition, not portfolio action.
+
+Use:
+
+* Coiling
+* Pullback Entry
+* Breakout Trigger
+* Trend Advance
+* Extended
+* Overheated
+* Distribution
+* Broken
+* Neutral
+
+Avoid:
+
+* A+ Setup
+* Buy
+* Sell
+* Strong Buy
+* Golden
+* HC
+
+Phase 4 — Suggested signal logic:
+Use simple, transparent heuristics first. Do not overfit.
+
+Extension Risk:
+
+* Overheated if price is far above 20D and 50D, for example >12–15% above 20D or >25–35% above 50D
+* Extended if meaningfully above 50D but not extreme
+* Pullback Buy Zone if price is near 20D/50D while MA stack is constructive
+* Broken if below 50D and 200D
+* Healthy if above key MAs but not stretched
+
+Entry Zone:
+
+* 20D Pullback if constructive trend and price near 20D
+* 50D Pullback if constructive longer trend and price near 50D
+* Breakout Watch if within a few percent of 20D/50D/52W high and range is tight
+* Fresh Breakout if recently above recent high and not too extended
+* Extended/Overheated if chase risk
+* Broken if below support
+
+Breakout Signal:
+
+* Coiling if 20D range is tight and price is near trigger
+* Near Trigger if close to recent high
+* Fresh Breakout if price recently cleared recent high
+* Confirmed Breakout if breakout is holding with volume confirmation
+* Extended Breakout if breakout happened but price is now stretched
+* Failed Breakout if price lost breakout level
+* No Setup otherwise
+
+Accum/Dist:
+
+* Accumulation if more up-volume than down-volume days over 20D
+* Heavy Accumulation if clustered up-volume days are well above average
+* Distribution if repeated down-volume days
+* Dry-Up if volume contracts during tight base/pullback
+* Neutral otherwise
+
+Squeeze:
+
+* Tight/Coiling if 20D range and ATR% are low versus recent history and price is near trigger
+* Expansion if volatility is expanding after compression
+* Volatile if ATR%/range are high
+* Normal otherwise
+
+Momentum Trend:
+
+* Accelerating if 20D ROC and 50D ROC are positive and improving
+* Positive if trend is up
+* Cooling if still positive but weakening
+* Diverging if price near highs but momentum weakening
+* Negative if ROC is negative
+
+Phase 5 — Validation:
+Before final response, validate:
+
+1. No new API calls during Watchlist page load.
+2. No Tradier pacer changes.
+3. Stage Analysis still works.
+4. Technical metrics appear only on Technical toggle.
+5. Fundamental toggle unchanged.
+6. Existing setup tabs unchanged:
+
+   * Golden Zone
+   * Growth Momentum
+   * HC Investment Zone
+   * HC Trade Zone
+7. Columns sort correctly.
+8. Missing history/null values do not break page.
+9. Foreign/colon symbols handled gracefully.
+10. Backend syntax clean.
+11. Frontend build clean.
+12. Sample tickers checked:
+
+* NVDA
+* PLTR
+* AAOI
+* ASTS
+* OPTX
+* MU
+
+Final report required:
+
+* exact Stage Analysis data source
+* available lookback length
+* whether 52W metrics are valid
+* whether true ATH/ATL is possible without new calls
+* whether Themes 5Y history can be reused later
+* metrics added
+* frontend columns added
+* proof no additional API calls were introduced
+* proof Fundamental toggle was untouched
+* screenshots or route validation if available
