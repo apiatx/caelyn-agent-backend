@@ -1,0 +1,103 @@
+Targeted backend scheduler change only. Do not change the FMP fundamentals overlay logic. Do not change CSV upload. Do not change frontend. Do not touch Tradier. Do not touch the new Tradier dynamic pacer. Do not change column headers.
+
+Problem:
+The Watchlist Fundamental Screener FMP refresh scheduler currently checks hourly for due symbols. Even though it is capped and paced, this can still run during the market week.
+
+Requirement:
+The weekly FMP fundamentals refresh should run only in the middle of the night every Saturday night Eastern Time, so it does not disrupt service during the market week.
+
+Important timezone rule:
+Use `America/New_York`, not a fixed EST offset, so daylight saving time is handled automatically.
+
+Preferred schedule:
+Saturday night / early Sunday morning ET.
+
+Use one of these:
+
+* Saturday 2:00 AM ET
+* Sunday 2:00 AM ET
+
+Preferred:
+Sunday 2:00 AM America/New_York, because users think of it as Saturday night after market week is over.
+
+Keep existing safety controls:
+
+* job-level lock
+* per-run cap
+* shared FMP limiter/governor
+* sequential/paced processing
+* no overlapping runs
+* failed symbols stay due for next scheduled run
+* dev_force endpoint still works immediately when explicitly called
+
+Behavior:
+
+1. CSV upload still schedules next_refresh_at = upload_time + 7 days.
+2. Production scheduler should only process due symbols during the weekly Saturday-night/Sunday-morning ET window.
+3. Do not process due symbols hourly anymore during weekdays.
+4. Dev/debug force refresh endpoint should still bypass schedule/TTL only when explicitly called.
+5. If the weekly run exceeds the per-run cap, remaining due symbols should continue in later cycles within the same maintenance window if you implement multiple cycles, or next weekly run if you keep one cycle. Prefer processing capped batches during the maintenance window until either:
+
+   * due list is empty, or
+   * maintenance window ends.
+
+Suggested maintenance window:
+
+* Start: Sunday 2:00 AM America/New_York
+* End: Sunday 5:00 AM America/New_York
+
+Within this window:
+
+* process capped batches
+* sleep between batches if needed
+* never overlap jobs
+* stop when due list empty or window ends
+
+If simpler:
+Run one capped batch at Sunday 2:00 AM ET and leave remaining due for next week.
+But preferred is a 2–5 AM ET maintenance window so a full watchlist can finish without weekday disruption.
+
+Implementation guidance:
+Use timezone-aware datetime:
+
+from zoneinfo import ZoneInfo
+ET = ZoneInfo("America/New_York")
+
+Do not use:
+
+* fixed UTC offset
+* fixed EST offset
+* naive local server time
+
+Add helper:
+
+* is_fundamentals_maintenance_window(now_utc)
+  or
+* next_fundamentals_refresh_window()
+
+Diagnostics:
+Log clearly:
+
+* current ET time
+* whether inside maintenance window
+* due_symbols_total
+* processed_this_run
+* remaining_due_after_run
+* refreshed
+* failed
+* skipped because outside window
+* next_window_start_et
+* duration_seconds
+
+Validation:
+
+1. Outside the Sunday 2–5 AM ET window, production scheduler does not process due symbols.
+2. Inside the window, it processes due symbols using the existing cap and lock.
+3. Timezone uses `America/New_York` and handles EST/EDT automatically.
+4. Dev force refresh still works immediately.
+5. CSV upload still schedules next_refresh_at = upload + 7 days.
+6. No Tradier code touched.
+7. No frontend changes.
+8. No page-render FMP calls added.
+9. No LLM calls added.
+10. No backend errors.

@@ -1277,6 +1277,154 @@ async def debug_fundamentals_status(watchlist_id: Optional[str] = None):
     return _get_diag(wl_id)
 
 
+@router.get("/debug/fundamentals/provenance")
+async def debug_fundamentals_provenance(
+    symbol: str,
+    watchlist_id: Optional[str] = None,
+):
+    """
+    DEV-ONLY: Field-by-field provenance for one symbol.
+    Returns final_value, source (fmp/csv_fallback/canonical_theme/missing),
+    fmp_value, csv_value, source_endpoint, formula, missing_reason, refreshed_at.
+
+    Read-only — inspects Neon cache + current watchlist row only.
+    No live provider calls.
+    """
+    from data.watchlist_fundamentals_store import get_snapshot as _get_snap
+    from services.watchlist_fundamentals_refresh import apply_fmp_overlays, merge_fmp_into_csv_row
+
+    sym = symbol.strip().upper()
+    wl_id = watchlist_id or "23eec278-074a-4706-a62a-c35d38b384ea"
+
+    # ── Load CSV row ──────────────────────────────────────────────────────────
+    csv_row: dict = {}
+    try:
+        wl_store = load_watchlist(wl_id)
+        if wl_store:
+            for r in (wl_store.get("csv_data") or []):
+                if (r.get("Symbol") or r.get("Ticker") or "").upper() == sym:
+                    csv_row = dict(r)
+                    break
+    except Exception:
+        pass
+
+    # ── Load FMP snapshot ─────────────────────────────────────────────────────
+    snap = _get_snap(sym)
+    fmp_fields: dict = snap.get("fields", {}) if snap else {}
+    missing_fmp: list = snap.get("missing_fields", []) if snap else []
+    refreshed_at: str = snap.get("refreshed_at", "") if snap else ""
+
+    # ── Build merged row (same logic as GET endpoint) ─────────────────────────
+    merged_row: dict = {}
+    if csv_row and snap:
+        merged_row = merge_fmp_into_csv_row(dict(csv_row), fmp_fields)
+    elif csv_row:
+        merged_row = dict(csv_row)
+
+    # ── Field metadata table ──────────────────────────────────────────────────
+    # Maps screener column name → (source_endpoint, formula, plan_limited)
+    _META: dict[str, tuple[str, str, bool]] = {
+        "Symbol":                   ("—",                        "direct",                        False),
+        "Theme":                    ("canonical_watchlist",       "screener hub tag, not FMP",     False),
+        "Market Cap":               ("profile",                   "marketCap direct",              False),
+        "Revenue":                  ("income-statement 8Q",       "TTM sum rows[0:4].revenue",     False),
+        "Revenue Growth (Q)":       ("income-statement 8Q",       "rows[0].rev / rows[4].rev - 1", False),
+        "Revenue Growth (YoY)":     ("income-statement 8Q",       "TTM / prior_TTM - 1",           False),
+        "Gross Margin":             ("ratios-ttm",                "grossProfitMarginTTM",          False),
+        "FCF Margin":               ("cash-flow 5Q",              "TTM_FCF / TTM_rev × 100",       False),
+        "Free Cash Flow":           ("cash-flow 5Q",              "TTM sum freeCashFlow",          False),
+        "Operating Income":         ("income-statement 8Q",       "TTM sum operatingIncome",       False),
+        "EBIT":                     ("income-statement 8Q",       "TTM sum ebit",                  False),
+        "PE Ratio":                 ("ratios-ttm",                "priceToEarningsRatioTTM",       False),
+        "PS Ratio":                 ("ratios-ttm",                "priceToSalesRatioTTM",          False),
+        "EV/EBITDA":                ("key-metrics-ttm",           "evToEBITDATTM",                 False),
+        "EPS Growth":               ("income-statement-growth 2Q","growthEPSDiluted × 100",        False),
+        "Debt / Equity":            ("ratios-ttm",                "debtToEquityRatioTTM",          False),
+        "Net Debt / EBITDA":        ("key-metrics-ttm",           "netDebtToEBITDATTM",            False),
+        "Shares Insiders":          ("—",                         "no FMP Starter endpoint",       True),
+        "Earnings Date":            ("earnings 8",                "future_earn[0].date",           False),
+        "Revenue Growth Est.":      ("—",                         "analyst-estimates → 402 Starter",True),
+        "Rev Growth Next Quarter":  ("earnings 8",                "future[0]_est / py_actual - 1", False),
+        "Rev Growth Next Year":     ("—",                         "analyst-estimates → 402 Starter",True),
+        "EPS Growth Est.":          ("—",                         "analyst-estimates → 402 Starter",True),
+        "EPS Growth This Quarter":  ("earnings 8",                "future[0]_eps_est / py_eps - 1",False),
+        "EPS Growth Next Quarter":  ("—",                         "only 1 future Q in earnings",   True),
+        "EPS Growth This Year":     ("—",                         "analyst-estimates → 402 Starter",True),
+        "EPS Growth Next Year":     ("—",                         "analyst-estimates → 402 Starter",True),
+    }
+
+    out: list[dict] = []
+    all_cols = list(_META.keys())
+    # Also include any extra CSV keys not in meta
+    for k in csv_row:
+        if k not in all_cols:
+            all_cols.append(k)
+
+    for col in all_cols:
+        meta = _META.get(col, ("unknown", "unknown", False))
+        src_endpoint, formula, plan_limited = meta
+
+        fmp_val   = fmp_fields.get(col)        # may be None if not mapped
+        csv_val   = csv_row.get(col)
+        final_val = merged_row.get(col)
+
+        # Classify source
+        if col == "Theme":
+            source = "canonical_theme"
+            missing_reason = ""
+        elif col == "Symbol":
+            source = "csv_fallback"
+            missing_reason = ""
+        elif fmp_val is not None and str(final_val) == str(fmp_val):
+            source = "fmp"
+            missing_reason = ""
+        elif col in missing_fmp and csv_val:
+            source = "csv_fallback"
+            missing_reason = (
+                "plan_limited" if plan_limited else
+                f"fmp_missing: {col} not in snapshot fields"
+            )
+        elif col in missing_fmp and not csv_val:
+            source = "missing"
+            missing_reason = (
+                "plan_limited (no CSV value either)" if plan_limited else
+                "fmp_missing + no_csv_value"
+            )
+        elif not snap:
+            source = "csv_fallback"
+            missing_reason = "no_fmp_snapshot"
+        elif final_val == csv_val and fmp_val is None:
+            source = "csv_fallback"
+            missing_reason = "fmp_field_not_mapped_or_null"
+        else:
+            source = "csv_fallback"
+            missing_reason = ""
+
+        out.append({
+            "column":          col,
+            "final_value":     final_val,
+            "source":          source,
+            "fmp_value":       fmp_val,
+            "csv_value":       csv_val,
+            "source_endpoint": src_endpoint,
+            "formula":         formula,
+            "plan_limited":    plan_limited,
+            "missing_reason":  missing_reason,
+            "refreshed_at":    refreshed_at,
+        })
+
+    return {
+        "symbol":         sym,
+        "watchlist_id":   wl_id,
+        "cache_exists":   snap is not None,
+        "refreshed_at":   refreshed_at,
+        "fmp_field_count": len(fmp_fields),
+        "missing_count":  len(missing_fmp),
+        "missing_fields": sorted(missing_fmp),
+        "provenance":     out,
+    }
+
+
 @router.get("/debug")
 async def debug_endpoint():
     """Debug endpoint — returns file path, existence, Postgres availability."""

@@ -311,12 +311,13 @@ class FmpFundamentalsRefresher:
         past_earn   = [r for r in earn_rows if r.get("epsActual") is not None]
         future_earn = [r for r in earn_rows if r.get("epsActual") is None]
 
-        # Earnings Date: next upcoming report date
+        # Earnings Date: next upcoming report date only.
+        # If no future_earn rows exist (micro-cap with no analyst coverage,
+        # or FMP hasn't posted the next estimate yet), mark as missing so
+        # the no-null-overwrite rule preserves the CSV filing date.
+        # Writing a past fiscal quarter-end date would be WORSE than CSV.
         if future_earn:
             fields["Earnings Date"] = future_earn[0].get("date") or ""
-        elif past_earn:
-            # No upcoming — use most recent reported date as placeholder
-            fields["Earnings Date"] = past_earn[-1].get("date") or ""
         else:
             missing.append("Earnings Date")
 
