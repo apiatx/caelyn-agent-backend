@@ -509,18 +509,63 @@ async def lifespan(app):
     # Job-level lock — prevents overlap if a prior run is still in progress.
     _fund_weekly_lock = asyncio.Lock()
 
+    # ── Maintenance window helpers ────────────────────────────────────────────
+    # Sunday 02:00–05:00 America/New_York (handles EST/EDT automatically).
+    def _fund_in_window(now_utc) -> bool:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime, timezone
+        _ET = ZoneInfo("America/New_York")
+        now_et = now_utc.astimezone(_ET)
+        # weekday(): Monday=0 … Sunday=6
+        return now_et.weekday() == 6 and 2 <= now_et.hour < 5
+
+    def _fund_next_window_start(now_utc):
+        """Return UTC datetime of next Sunday 02:00 ET."""
+        from zoneinfo import ZoneInfo
+        from datetime import datetime, timezone, timedelta
+        _ET = ZoneInfo("America/New_York")
+        now_et = now_utc.astimezone(_ET)
+        days_until_sunday = (6 - now_et.weekday()) % 7
+        if days_until_sunday == 0 and now_et.hour >= 5:
+            # Already past today's window — next Sunday
+            days_until_sunday = 7
+        elif days_until_sunday == 0 and now_et.hour < 2:
+            days_until_sunday = 0   # window is later today
+        candidate = now_et.replace(hour=2, minute=0, second=0, microsecond=0)
+        candidate = candidate + timedelta(days=days_until_sunday)
+        return candidate.astimezone(timezone.utc)
+
     async def _watchlist_fundamentals_weekly_loop():
         import asyncio as _aio
         import os as _os
         from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        _ET = ZoneInfo("America/New_York")
 
         await _aio.sleep(300)   # 5-min startup delay — let other loops warm first
 
         while True:
-            # Non-blocking lock check: skip this cycle if prior run is still active.
+            now_utc = datetime.now(timezone.utc)
+            now_et  = now_utc.astimezone(_ET)
+
+            if not _fund_in_window(now_utc):
+                # Outside maintenance window — sleep until 10 min before next window,
+                # then poll every 10 min until inside.
+                _nxt = _fund_next_window_start(now_utc)
+                _wait = max(60.0, (_nxt - now_utc).total_seconds() - 600)
+                print(
+                    f"[FUND_WEEKLY] outside window "
+                    f"current_et={now_et.strftime('%a %Y-%m-%d %H:%M %Z')} "
+                    f"next_window_start_et={_nxt.astimezone(_ET).strftime('%a %Y-%m-%d %H:%M %Z')} "
+                    f"sleeping={_wait/3600:.2f}h"
+                )
+                await _aio.sleep(min(_wait, 600))   # wake at most every 10 min to check
+                continue
+
+            # ── Inside Sunday 02:00–05:00 ET maintenance window ──────────────
             if _fund_weekly_lock.locked():
-                print("[FUND_WEEKLY] prior run still active — skipping this cycle")
-                await _aio.sleep(3600)
+                print("[FUND_WEEKLY] prior batch still running — waiting 60s")
+                await _aio.sleep(60)
                 continue
 
             async with _fund_weekly_lock:
@@ -531,66 +576,63 @@ async def lifespan(app):
 
                     _fmp_key = _os.getenv("FMP_API_KEY", "")
                     if not _fmp_key or not _pg_ok():
-                        await _aio.sleep(3600)
+                        await _aio.sleep(300)
                         continue
 
-                    # Per-run cap: process at most this many symbols per hourly cycle.
-                    # Remaining due symbols are picked up in subsequent cycles.
                     _max_per_run = int(_os.getenv("WATCHLIST_FUNDAMENTALS_MAX_PER_RUN", "50"))
-
-                    _refresher = FmpFundamentalsRefresher(_fmp_key)
+                    _refresher   = FmpFundamentalsRefresher(_fmp_key)
                     _cycle_started = datetime.now(timezone.utc)
+                    _et_now_str    = _cycle_started.astimezone(_ET).strftime("%H:%M %Z")
 
                     # Collect due symbols across all known watchlists (oldest-due first).
                     _all_due: dict[str, list[str]] = {}
                     for _wl in (_wl_list() or []):
                         _wl_id = _wl.get("id") or ""
-                        if not _wl_id:
-                            continue
-                        _due = _due_syms(_wl_id)
-                        if _due:
-                            _all_due[_wl_id] = _due
+                        if _wl_id:
+                            _due = _due_syms(_wl_id)
+                            if _due:
+                                _all_due[_wl_id] = _due
 
                     _total_due = sum(len(v) for v in _all_due.values())
+
                     if _total_due == 0:
+                        print(f"[FUND_WEEKLY] window open at {_et_now_str} — no due symbols, done")
+                        # Sleep to end of window to avoid log spam
                         await _aio.sleep(3600)
                         continue
 
-                    # Distribute the cap proportionally across watchlists, then process.
-                    _budget_remaining = _max_per_run
-                    _run_refreshed = 0
-                    _run_failed = 0
-                    _run_skipped = 0
+                    # Process one capped batch; remaining stay due for next iteration
+                    # within this window, or next week's window.
+                    _budget = _max_per_run
+                    _run_refreshed = _run_failed = _run_skipped = 0
 
                     for _wl_id, _syms in _all_due.items():
-                        if _budget_remaining <= 0:
+                        if _budget <= 0:
                             break
-                        _batch = _syms[:_budget_remaining]
+                        _batch = _syms[:_budget]
                         _remaining_after = len(_syms) - len(_batch)
-
                         print(
-                            f"[FUND_WEEKLY] wl={_wl_id[:8]} "
+                            f"[FUND_WEEKLY] window={_et_now_str} wl={_wl_id[:8]} "
                             f"due_total={len(_syms)} batch={len(_batch)} "
-                            f"remaining_after={_remaining_after} "
-                            f"cap={_max_per_run}"
+                            f"remaining_after={_remaining_after} cap={_max_per_run}"
                         )
-
                         _res = await _refresher.refresh_symbols(_batch, _wl_id, dev_force=False)
                         _run_refreshed += _res.get("refreshed_symbols", 0)
                         _run_failed    += _res.get("failed_symbols", 0)
                         _run_skipped   += _res.get("skipped_fresh_symbols", 0)
-                        _budget_remaining -= len(_batch)
+                        _budget -= len(_batch)
 
                     _cycle_finished = datetime.now(timezone.utc)
                     _duration = (_cycle_finished - _cycle_started).total_seconds()
-                    _processed_this_run = _run_refreshed + _run_failed + _run_skipped
-                    _remaining_due = max(0, _total_due - _processed_this_run)
+                    _processed = _run_refreshed + _run_failed + _run_skipped
+                    _remaining = max(0, _total_due - _processed)
 
                     print(
-                        f"[FUND_WEEKLY] cycle done — "
+                        f"[FUND_WEEKLY] batch done — "
+                        f"window_et={_et_now_str} "
                         f"due_symbols_total={_total_due} "
-                        f"processed_this_run={_processed_this_run} "
-                        f"remaining_due_after_run={_remaining_due} "
+                        f"processed_this_run={_processed} "
+                        f"remaining_due_after_run={_remaining} "
                         f"refreshed={_run_refreshed} "
                         f"failed={_run_failed} "
                         f"skipped_fresh={_run_skipped} "
@@ -600,9 +642,11 @@ async def lifespan(app):
                     )
 
                 except Exception as _fund_loop_e:
-                    print(f"[FUND_WEEKLY] loop error (non-fatal): {_fund_loop_e}")
+                    print(f"[FUND_WEEKLY] batch error (non-fatal): {_fund_loop_e}")
 
-            await _aio.sleep(3600)   # re-check every hour
+            # Still inside window after batch? Sleep 60s then check again
+            # (will pick up remaining due symbols or exit when window closes).
+            await _aio.sleep(60)
 
     asyncio.create_task(_watchlist_fundamentals_weekly_loop())
 
