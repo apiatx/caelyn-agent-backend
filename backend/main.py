@@ -506,42 +506,101 @@ async def lifespan(app):
     except Exception as _fund_init_e:
         print(f"[STARTUP] watchlist_fundamentals_cache table init error (non-fatal): {_fund_init_e}")
 
+    # Job-level lock — prevents overlap if a prior run is still in progress.
+    _fund_weekly_lock = asyncio.Lock()
+
     async def _watchlist_fundamentals_weekly_loop():
         import asyncio as _aio
+        import os as _os
+        from datetime import datetime, timezone
+
         await _aio.sleep(300)   # 5-min startup delay — let other loops warm first
+
         while True:
-            try:
-                import os as _os
-                from data.pg_storage import watchlist_list as _wl_list, is_available as _pg_ok
-                from data.watchlist_fundamentals_store import list_due_symbols as _due_syms
-                from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
+            # Non-blocking lock check: skip this cycle if prior run is still active.
+            if _fund_weekly_lock.locked():
+                print("[FUND_WEEKLY] prior run still active — skipping this cycle")
+                await _aio.sleep(3600)
+                continue
 
-                _fmp_key = _os.getenv("FMP_API_KEY", "")
-                if not _fmp_key or not _pg_ok():
-                    await _aio.sleep(3600)
-                    continue
+            async with _fund_weekly_lock:
+                try:
+                    from data.pg_storage import watchlist_list as _wl_list, is_available as _pg_ok
+                    from data.watchlist_fundamentals_store import list_due_symbols as _due_syms
+                    from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
 
-                _refresher = FmpFundamentalsRefresher(_fmp_key)
-
-                # Collect due symbols across all known watchlists
-                _all_due: dict[str, list[str]] = {}
-                for _wl in (_wl_list() or []):
-                    _wl_id = _wl.get("id") or ""
-                    if not _wl_id:
+                    _fmp_key = _os.getenv("FMP_API_KEY", "")
+                    if not _fmp_key or not _pg_ok():
+                        await _aio.sleep(3600)
                         continue
-                    _due = _due_syms(_wl_id)
-                    if _due:
-                        _all_due[_wl_id] = _due
 
-                for _wl_id, _syms in _all_due.items():
-                    print(f"[FUND_WEEKLY] Refreshing {len(_syms)} due symbols for watchlist {_wl_id}")
-                    _res = await _refresher.refresh_symbols(_syms, _wl_id, dev_force=False)
-                    print(f"[FUND_WEEKLY] Done: refreshed={_res.get('refreshed_symbols')} "
-                          f"skipped={_res.get('skipped_fresh_symbols')} "
-                          f"failed={_res.get('failed_symbols')}")
+                    # Per-run cap: process at most this many symbols per hourly cycle.
+                    # Remaining due symbols are picked up in subsequent cycles.
+                    _max_per_run = int(_os.getenv("WATCHLIST_FUNDAMENTALS_MAX_PER_RUN", "50"))
 
-            except Exception as _fund_loop_e:
-                print(f"[FUND_WEEKLY] loop error (non-fatal): {_fund_loop_e}")
+                    _refresher = FmpFundamentalsRefresher(_fmp_key)
+                    _cycle_started = datetime.now(timezone.utc)
+
+                    # Collect due symbols across all known watchlists (oldest-due first).
+                    _all_due: dict[str, list[str]] = {}
+                    for _wl in (_wl_list() or []):
+                        _wl_id = _wl.get("id") or ""
+                        if not _wl_id:
+                            continue
+                        _due = _due_syms(_wl_id)
+                        if _due:
+                            _all_due[_wl_id] = _due
+
+                    _total_due = sum(len(v) for v in _all_due.values())
+                    if _total_due == 0:
+                        await _aio.sleep(3600)
+                        continue
+
+                    # Distribute the cap proportionally across watchlists, then process.
+                    _budget_remaining = _max_per_run
+                    _run_refreshed = 0
+                    _run_failed = 0
+                    _run_skipped = 0
+
+                    for _wl_id, _syms in _all_due.items():
+                        if _budget_remaining <= 0:
+                            break
+                        _batch = _syms[:_budget_remaining]
+                        _remaining_after = len(_syms) - len(_batch)
+
+                        print(
+                            f"[FUND_WEEKLY] wl={_wl_id[:8]} "
+                            f"due_total={len(_syms)} batch={len(_batch)} "
+                            f"remaining_after={_remaining_after} "
+                            f"cap={_max_per_run}"
+                        )
+
+                        _res = await _refresher.refresh_symbols(_batch, _wl_id, dev_force=False)
+                        _run_refreshed += _res.get("refreshed_symbols", 0)
+                        _run_failed    += _res.get("failed_symbols", 0)
+                        _run_skipped   += _res.get("skipped_fresh_symbols", 0)
+                        _budget_remaining -= len(_batch)
+
+                    _cycle_finished = datetime.now(timezone.utc)
+                    _duration = (_cycle_finished - _cycle_started).total_seconds()
+                    _processed_this_run = _run_refreshed + _run_failed + _run_skipped
+                    _remaining_due = max(0, _total_due - _processed_this_run)
+
+                    print(
+                        f"[FUND_WEEKLY] cycle done — "
+                        f"due_symbols_total={_total_due} "
+                        f"processed_this_run={_processed_this_run} "
+                        f"remaining_due_after_run={_remaining_due} "
+                        f"refreshed={_run_refreshed} "
+                        f"failed={_run_failed} "
+                        f"skipped_fresh={_run_skipped} "
+                        f"started_at={_cycle_started.isoformat()[:19]}Z "
+                        f"finished_at={_cycle_finished.isoformat()[:19]}Z "
+                        f"duration_seconds={_duration:.1f}"
+                    )
+
+                except Exception as _fund_loop_e:
+                    print(f"[FUND_WEEKLY] loop error (non-fatal): {_fund_loop_e}")
 
             await _aio.sleep(3600)   # re-check every hour
 
