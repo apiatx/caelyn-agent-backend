@@ -1,0 +1,117 @@
+Final validation only. Do not add features. Do not change frontend columns. Do not change CSV upload. Do not change the FMP refresh architecture unless validation finds a bug.
+
+Validate the Watchlist Fundamental Screener FMP overlay end-to-end.
+
+Checks:
+
+1. Cache key / overlay scope
+   Confirm whether `watchlist_fundamentals_cache` overlay reads are keyed by:
+
+* symbol only
+  or
+* watchlist_id + symbol
+
+Important:
+The dev refresh used `watchlist_id=manual` when symbols were passed. If overlay reads require the default watchlist_id, then the manual refresh did not validate the real Watchlist overlay.
+
+If the overlay is symbol-based, report that clearly.
+If it is watchlist_id-based, either:
+
+* dev refresh must accept/use the target watchlist_id, or
+* overlay lookup must intentionally support symbol-level fallback.
+
+2. Fundamental Screener API payload
+   Hit the real Watchlist GET endpoint used by the frontend.
+
+For sample tickers:
+
+* AAOI
+* NVDA
+* MU
+* PLTR
+* ASTS
+
+Confirm the returned row includes overlaid FMP values for fields such as:
+
+* Revenue
+* Rev Grwth (Q)
+* Rev Grwth (Y)
+* Gross Mgn
+* Free CF
+* Op. Income
+* EBIT
+* P/E
+* P/S
+* EV/EBITDA
+* D/E
+* ND/EBITDA
+* Earn. Date
+
+Also confirm CSV fallback values remain for fields FMP cannot populate:
+
+* Insider %
+* Rev Grwth Est, if unavailable
+* Rev Grwth NY, if unavailable
+* EPS Grwth NY, if unavailable
+* any analyst estimate fields that require premium FMP endpoint access
+
+3. No-null overwrite validation
+   Pick a ticker where FMP does not return a field.
+   Confirm:
+
+* existing CSV value remains visible
+* FMP null does not replace CSV with blank
+* cached null does not overwrite previous non-null value
+
+4. Frontend visual validation
+   Open Watchlist → Screener → Fundamental.
+
+Confirm:
+
+* same column headers as before
+* no added/removed/reordered columns
+* values now come from FMP overlay where available
+* CSV fallback values still appear where FMP is missing
+* canonical AI-enhanced Theme still shows, not CSV industry
+
+5. Weekly refresh scheduling
+   Confirm:
+
+* CSV upload schedules FMP refresh for upload_time + 7 days
+* production refresh does not run immediately after upload
+* dev_force endpoint bypasses TTL only when explicitly called
+* hourly background loop only processes due symbols
+* due-symbol processing is paced and uses the existing FMP limiter/governor
+* no bulk endpoints are used
+
+6. FMP call count / pacing
+   Report:
+
+* calls per ticker in normal refresh
+* max tickers processed per loop/run
+* delay/concurrency settings
+* whether the job can resume after partial failure
+
+7. Dev endpoint validation
+   Run:
+   POST /api/watchlist/debug/fundamentals/refresh?symbols=AAOI,NVDA,MU,PLTR,ASTS&dev_force=true
+
+Then confirm those exact symbols show updated FMP overlay values in the real Watchlist GET response used by the frontend.
+
+8. Safety checks
+   Confirm:
+
+* no Tradier calls added
+* no LLM calls added
+* no StockAnalysis scraping
+* no frontend page-render FMP calls
+* no provider storm
+* no console/backend errors
+
+Report final:
+
+* overlay cache key behavior
+* sample before/after values
+* fallback fields
+* weekly scheduler behavior
+* any fields still CSV-only by design
