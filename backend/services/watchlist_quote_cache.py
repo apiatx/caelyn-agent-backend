@@ -36,20 +36,24 @@ _quote_cache: dict[str, dict] = {}
 _cache_ts: float = 0.0
 _refresh_lock: asyncio.Lock | None = None
 
-# Prefixes that identify non-US-listed tickers Tradier cannot quote
-_FOREIGN_PREFIXES = (
-    "ASX:", "TSX:", "TSXV:", "OTC:", "LSE:", "HK:", "SHE:", "SHA:", "NSE:", "BSE:",
-    "KRX:", "STO:", "AIM:", "EPA:", "ETR:", "FRA:", "AMS:", "BIT:", "BME:", "JSE:",
-    "TYO:", "TPE:", "SET:", "SGX:", "IDX:", "BVMF:", "BVC:", "SZSE:", "SSE:",
-    # Additional exchange prefixes observed in watchlists
-    "LON:", "CSE:", "TPEX:", "WSE:", "XSAT:", "OSL:", "SWX:", "NZX:",
-    "KLSE:", "BKK:", "IST:", "BCBA:", "MCX:", "MOEX:", "JNB:", "CPH:", "OMX:",
-)
+def is_tradier_quote_eligible(symbol: str) -> bool:
+    """Return True if symbol should be sent to Tradier for a live quote.
+
+    Rules (in order):
+      1. Empty / blank → False
+      2. Contains ":" → False  (exchange-prefixed: AIM:FTC, LSE:VOD, OTC:XYZ, …)
+      3. Otherwise → True
+
+    This is intentionally simple so any future exchange prefix with ":"
+    is excluded automatically, without maintaining a prefix list.
+    """
+    if not symbol or not symbol.strip():
+        return False
+    return ":" not in symbol
 
 
-def _is_tradier_eligible(symbol: str) -> bool:
-    upper = symbol.upper()
-    return not any(upper.startswith(p) for p in _FOREIGN_PREFIXES)
+# Internal alias (keeps call sites readable)
+_is_tradier_eligible = is_tradier_quote_eligible
 
 
 def _get_lock() -> asyncio.Lock:

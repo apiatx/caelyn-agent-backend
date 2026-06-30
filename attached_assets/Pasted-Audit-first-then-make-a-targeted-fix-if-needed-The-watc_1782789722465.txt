@@ -1,0 +1,98 @@
+Audit first, then make a targeted fix if needed.
+
+The watchlist cold-cache quote fix is good and restored prices, but now we need to make sure we are not wasting Tradier API calls on foreign/exchange-prefixed symbols.
+
+Important:
+Do not touch the existing frontend “exclude foreign tickers” toggle.
+Do not remove foreign tickers from the watchlist.
+Do not change CSV upload behavior.
+Do not blank foreign ticker prices.
+Do not touch Predict/Kalshi/Polymarket.
+Do not clear caches.
+
+Goal:
+Any ticker containing “:” should never be sent to Tradier.
+
+Examples:
+
+* AIM:IQE
+* AIM:FTC
+* LSE:...
+* TSX:...
+* OTC-style exchange-prefixed symbols if they contain “:”
+
+These should be served from CSV/LKG/fallback fields only, not live Tradier.
+
+Audit:
+
+1. Find every code path that calls Tradier quote APIs for watchlist symbols:
+
+   * watchlist_quote_cache._do_refresh
+   * new cold-cache direct Tradier fallback
+   * shared home_service / batch quote path
+   * canonical quote service if used
+   * any watchlist detail endpoint quote overlay
+2. For each path, print:
+
+   * input symbol count
+   * tradier_eligible_count
+   * colon_excluded_count
+   * sample excluded symbols, max 10
+   * symbols actually sent to Tradier, max 20
+3. Confirm whether symbols containing “:” are currently included in any Tradier request.
+
+Fix requirements:
+
+1. Add a single helper if one does not already exist, for example:
+   is_tradier_quote_eligible(symbol: str) -> bool
+
+Minimum rule:
+
+* return False if symbol is empty
+* return False if ":" in symbol
+* return True otherwise
+
+2. Apply this helper before every Tradier quote batch request used by watchlist quote enrichment.
+
+3. For excluded colon symbols:
+
+* preserve their existing CSV price fields
+* preserve any LKG/cached price if available
+* do not request them from Tradier
+* mark quote_source as csv / lkg / foreign_excluded_from_tradier, whichever fits current schema
+
+4. The cold-cache direct fallback must also filter colon symbols before calling Tradier.
+   The direct fallback was added to fix cold-start blank prices, but it must not bypass the foreign-symbol exclusion.
+
+5. Do not reduce coverage for normal US tickers.
+   Examples that should still be eligible:
+
+* AAPL
+* NVDA
+* SPY
+* IWM
+* PLTR
+* any normal US symbol without “:”
+
+6. Validation:
+   Use the current watchlist.
+
+Return:
+
+* total watchlist symbols
+* colon_excluded_count
+* tradier_requested_count
+* priced_count
+* unpriced_count
+* sample colon-excluded rows with their final price source
+* sample US rows with Tradier source
+
+Expected:
+
+* 302 watchlist symbols still render.
+* 0 symbols containing “:” are sent to Tradier.
+* US tickers still receive Tradier price/change/%/volume.
+* Foreign colon tickers still retain CSV price if present.
+* Watchlist endpoint still returns in under ~1–2 seconds after cache warm.
+* Themes RS remains healthy.
+* No frontend edits.
