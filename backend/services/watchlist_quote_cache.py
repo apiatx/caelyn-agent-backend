@@ -56,6 +56,23 @@ def is_tradier_quote_eligible(symbol: str) -> bool:
 _is_tradier_eligible = is_tradier_quote_eligible
 
 
+def is_fmp_symbol_eligible(symbol: str) -> bool:
+    """Return True if symbol should be sent to FMP for fundamentals / quotes.
+
+    Same rule as is_tradier_quote_eligible:
+      1. Empty / blank → False
+      2. Contains ":" → False  (AIM:FTC, LSE:VOD, TSX:XYZ, FRA:APR, …)
+      3. Otherwise → True
+
+    Keeping a dedicated name makes call sites self-documenting and allows
+    the FMP and Tradier eligibility rules to diverge in the future without
+    a broad search-and-replace.
+    """
+    if not symbol or not symbol.strip():
+        return False
+    return ":" not in symbol
+
+
 def _get_lock() -> asyncio.Lock:
     global _refresh_lock
     if _refresh_lock is None:

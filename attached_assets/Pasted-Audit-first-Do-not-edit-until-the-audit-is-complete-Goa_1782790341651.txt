@@ -1,0 +1,90 @@
+Audit first. Do not edit until the audit is complete.
+
+Goal:
+Make sure we are not wasting FMP calls on foreign/exchange-prefixed watchlist symbols, especially symbols containing “:”.
+
+Examples that must not be sent to FMP fundamentals/financial endpoints:
+
+* AIM:FTC
+* FRA:APR
+* OSL:NAPA
+* TSXV:XBOT
+* STO:GAPW.B
+* any symbol where ":" in symbol
+
+Important:
+Do not remove foreign tickers from the watchlist.
+Do not touch the frontend “exclude foreign tickers” toggle.
+Do not change CSV upload behavior.
+Do not blank foreign ticker rows.
+Do not touch Tradier code unless the audit proves a shared helper is needed.
+Do not touch Predict/Kalshi/Polymarket.
+
+Audit all FMP call paths, especially background jobs:
+
+* watchlist fundamentals refresh
+* watchlist financial metrics refresh
+* screener enrichment
+* thematic/thematic screener enrichment
+* portfolio fundamentals
+* theme/company fundamentals
+* any weekly/nightly FMP refresh job
+* any startup warmer using FMP
+* any batch FMP quote/profile/income/balance/cash-flow/key-metrics/ratios/enterprise-values endpoints
+
+For each path, report:
+
+* file/function
+* input symbol count
+* fmp_eligible_count
+* colon_excluded_count
+* sample excluded symbols, max 10
+* sample symbols actually sent to FMP, max 20
+* whether the path runs on startup, manual refresh, weekly job, or page load
+
+Rule:
+Any symbol containing “:” is not FMP eligible.
+
+Create or reuse a helper if needed:
+
+def is_fmp_symbol_eligible(symbol: str) -> bool:
+if not symbol or not symbol.strip():
+return False
+return ":" not in symbol
+
+Apply before every FMP request path that uses watchlist/portfolio/theme symbols.
+
+Foreign/excluded behavior:
+
+* preserve CSV-provided fields if present
+* preserve existing cached/LKG/Neon fundamentals if already present
+* do not request new FMP fundamentals for colon symbols
+* mark source/reason if the schema supports it:
+  fmp_excluded_foreign_symbol
+  or similar
+
+Do not delete old cached data for foreign symbols. Just prevent new paid calls.
+
+Validation:
+Use the current 302-ticker watchlist.
+
+Return:
+
+* total symbols
+* colon_excluded_count
+* fmp_requested_count
+* sample colon-excluded symbols
+* sample FMP-requested symbols
+* endpoints/jobs audited
+
+Expected:
+
+* 0 symbols containing “:” are sent to FMP.
+* US/common symbols still work: AAPL, NVDA, SPY, IWM, PLTR, etc.
+* Weekly/background refreshes skip colon symbols.
+* Page-load FMP calls, if any, skip colon symbols.
+* Cached/CSV values for foreign symbols are preserved.
+* No frontend edits.
+* No Predict/Kalshi/Polymarket edits.
+
+Also check if FMP is being called for any ETF/fund symbols in places where fundamentals are not needed. Report separately but do not change ETF behavior unless obvious and safe.

@@ -1370,7 +1370,9 @@ class CaelynTerminalProvider:
             return []
 
         async def _news_for_ticker(t: str) -> list[dict]:
-            if self.fmp:
+            # Skip FMP for exchange-prefixed foreign symbols (AIM:*, LSE:*, etc.)
+            _fmp_eligible = ":" not in t
+            if self.fmp and _fmp_eligible:
                 try:
                     fmp_news = await asyncio.wait_for(
                         self.fmp.get_stock_news(t, limit=7), timeout=4.0
@@ -1515,9 +1517,20 @@ class CaelynTerminalProvider:
         except Exception as e:
             print(f"[CAELYN] fundamentals bulk_cache error: {e}")
 
-        # 2. Live FMP for cache misses
+        # 2. Live FMP for cache misses — colon-prefixed foreign tickers are
+        #    ineligible (FMP cannot quote AIM:FTC, LSE:VOD, etc.) and would
+        #    waste a paid API call; fall straight through to Finnhub below.
+        try:
+            from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_ok
+        except Exception:
+            _fmp_ok = lambda s: ":" not in s  # noqa: E731
+
         misses = [t for t in equity_tickers if not out.get(t, {}).get("name")]
-        if misses and self.fmp:
+        fmp_misses = [t for t in misses if _fmp_ok(t)]
+        fmp_excluded = [t for t in misses if not _fmp_ok(t)]
+        if fmp_excluded:
+            print(f"[CAELYN] FMP fundamentals skipped for {len(fmp_excluded)} colon symbols: {fmp_excluded[:10]}")
+        if fmp_misses and self.fmp:
             async def _fmp_one(sym: str) -> tuple[str, dict]:
                 try:
                     p = await asyncio.wait_for(self.fmp.get_company_profile(sym), timeout=6.0)
@@ -1525,7 +1538,7 @@ class CaelynTerminalProvider:
                 except Exception as e:
                     print(f"[CAELYN] FMP profile {sym}: {e}")
                     return sym, {}
-            fmp_res = await asyncio.gather(*[_fmp_one(t) for t in misses], return_exceptions=True)
+            fmp_res = await asyncio.gather(*[_fmp_one(t) for t in fmp_misses], return_exceptions=True)
             for item in fmp_res:
                 if isinstance(item, tuple):
                     sym, prof = item
