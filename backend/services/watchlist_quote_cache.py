@@ -236,14 +236,17 @@ async def _fetch_direct(symbols: list[str]) -> dict[str, dict]:
 # ── Refresh orchestration ──────────────────────────────────────────────────
 
 async def _do_refresh(symbols: list[str]) -> None:
-    """Refresh via shared home_service path; legacy direct path as startup-only fallback.
+    """Refresh via shared home_service path; direct Tradier as cold-cache fallback.
 
-    Once data_service is ready the shared path
-    (home_service._batch_quotes → TradierProvider → LKG → FMP) is used exclusively.
-    No limiter-bypass top-up is performed — if the rate window is saturated the
-    LKG rows served by the shared path are accepted until the next refresh cycle.
-    The legacy _fetch_direct path fires only when data_service is not yet initialised
-    (very early startup), not as a supplemental bypass when the limiter is saturated.
+    Primary path: home_service._batch_quotes → TradierProvider → LKG → FMP.
+    This path may return empty when the Tradier rate limiter is saturated (e.g.
+    during the post-restart THEME_RS warmup that consumes all 110 req/min slots)
+    AND the in-memory per-symbol LKG is also empty (cold restart).
+
+    Cold-cache fallback: when the primary path returns nothing AND _quote_cache is
+    still empty, a single direct Tradier batch is fired using TRADIER_API_KEY
+    (bypasses the shared rate limiter).  This fires at most once per cold restart —
+    subsequent requests hit the 10-minute module cache.
     """
     global _quote_cache, _cache_ts
 
@@ -270,6 +273,18 @@ async def _do_refresh(symbols: list[str]) -> None:
         )
     else:
         print(f"[WQ_CACHE] No quotes returned ({fetch_source}) — retaining LKG cache")
+        # Cold-cache guard: if the shared path returned nothing AND the module cache
+        # is still empty (cold restart, rate limiter saturated, in-memory LKG empty),
+        # fire one direct Tradier call so the Watchlist page isn't blank.
+        # This bypass is intentional — it fires at most once per server lifetime
+        # because subsequent requests find _quote_cache populated and skip refresh.
+        if not _quote_cache and fetch_source != "direct(tradier)":
+            print("[WQ_CACHE] Cold cache + empty shared result — direct Tradier fallback")
+            direct = await _fetch_direct(symbols)
+            if direct:
+                _quote_cache = {**_quote_cache, **direct}
+                _cache_ts = time.monotonic()
+                print(f"[WQ_CACHE] Direct fallback: {len(direct)} symbols cached")
 
 
 async def _locked_refresh(symbols: list[str]) -> None:

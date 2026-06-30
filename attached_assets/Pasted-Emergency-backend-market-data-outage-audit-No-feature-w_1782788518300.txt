@@ -1,0 +1,195 @@
+Emergency backend market-data outage audit. No feature work.
+
+Current user-facing regressions:
+
+1. Watchlist tickers appear, but price and % change data are missing.
+2. Themes page shows: “Theme data temporarily unavailable.”
+3. Theme performance is derived from Tradier/cached quote data.
+4. This started while working on prediction markets, but now affects shared market data.
+
+This is likely a shared Tradier / quote cache / LKG issue, not a Prophetik UI issue.
+
+Do not edit frontend.
+Do not touch Prophetik/Predict/Kalshi/Polymarket.
+Do not rewrite quote architecture.
+Do not burn API calls repeatedly.
+Do not clear caches.
+Do not print secrets.
+
+Audit first:
+
+1. Recent backend diff
+   Show recent changed files from today/last sessions.
+   Confirm whether any files related to these were changed:
+
+* Tradier client/service
+* canonical quote cache
+* market snapshot
+* watchlist service
+* theme performance / theme RS
+* Global market data endpoints
+* startup cache warmers
+* LKG paths
+* Neon quote/cache tables
+* env handling
+
+2. Tradier env / auth smoke test
+   Check whether required Tradier env vars are present, without printing values:
+
+* TRADIER token/key env
+* Tradier base URL / paper/live URL setting
+* any account/env mode variables
+
+Run exactly one small direct Tradier quote smoke test for:
+
+* SPY
+* AAPL
+
+Report:
+
+* HTTP status
+* error body if any, redacted
+* whether quote fields returned:
+
+  * last / price
+  * change
+  * change_percentage or equivalent
+  * volume
+  * timestamp
+
+Do not spam Tradier.
+
+3. Backend endpoint audit
+   Call the exact backend endpoints used by:
+
+* Watchlist tickers table
+* Themes performance page
+* Home market snapshot if relevant
+* any canonical quotes endpoint if one exists
+
+For each endpoint, report:
+
+* HTTP status
+* row count
+* whether tickers exist
+* whether price fields exist
+* whether change/% fields exist
+* whether error field exists
+* data_source / cache_source if available
+
+4. Cache / LKG audit
+   Find the canonical quote cache and LKG storage:
+
+* file cache path(s)
+* Neon table(s)
+* in-memory cache variable(s)
+
+Report:
+
+* Does cache exist?
+* number of symbols in cache
+* sample tickers present: SPY, AAPL, NVDA, TSLA
+* last updated timestamp
+* whether price/chg% fields exist in cached rows
+* whether startup loaded cache
+* whether frontend endpoints are using cache or bypassing it
+
+5. Market-close fallback rule
+   After market close or if Tradier is temporarily unavailable:
+   The app must use last known good quote data.
+   It must not blank price/% fields.
+
+Hard requirement:
+If live Tradier quote fetch fails, serve LKG quote/cache data with a stale/source label.
+Do not return blank price/% unless no cache exists for that ticker.
+
+6. Find the failure mode
+   Classify the root cause as one of:
+
+* Tradier auth/API failing
+* Tradier rate limit / temporary outage
+* quote cache file/table missing
+* cache path changed
+* startup cache not loaded
+* response shape changed
+* endpoint dropping quote overlay fields
+* frontend receiving quote fields but not rendering them
+* other
+
+7. Fix requirements
+   Only after audit identifies the root cause:
+
+A. If Tradier API is failing:
+
+* restore LKG fallback immediately
+* do not block pages on live Tradier
+* show stale cached data rather than blanks
+
+B. If cache exists but endpoint drops quote fields:
+
+* restore quote overlay fields:
+
+  * price
+  * change
+  * change_pct / percent_change
+  * volume
+  * rel_vol if available
+  * data_source / quote_source
+  * updated_at
+
+C. If cache file/table is missing:
+
+* do not invent data
+* rebuild with one controlled quote refresh if API works
+* persist LKG immediately
+* avoid repeated loops
+
+D. If response shape changed:
+
+* restore backward-compatible aliases expected by frontend:
+
+  * price / last
+  * change
+  * change_pct / changePercent / percent_change
+
+E. If startup cache load is broken:
+
+* fix startup to load LKG before serving pages
+
+8. Validation
+   Validate these exact user-facing outcomes:
+
+Watchlist:
+
+* tickers render
+* price renders
+* % change renders
+* source says live or LKG/stale
+* no blank quote columns for cached symbols
+
+Themes:
+
+* no “Theme data temporarily unavailable” if quote LKG exists
+* theme performance rows render from live or LKG data
+* source says live or LKG/stale
+
+Home/Market snapshot if impacted:
+
+* index/quote data renders or falls back to LKG
+
+Prediction Markets:
+
+* unchanged
+* no edits
+
+9. Output final report
+   Return a compact table:
+
+area | endpoint/cache | row_count | price_fields_present | source | issue | fix
+
+Also include:
+
+* Tradier smoke test result
+* quote cache symbol count
+* LKG timestamp
+* exact files changed
