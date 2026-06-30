@@ -1,0 +1,229 @@
+Audit first. Do not change frontend. Do not change column headers. Do not change CSV upload. Do not touch Tradier. Do not add new providers. Do not use LLMs. Do not change the weekly scheduler unless the audit finds a real bug.
+
+Problem:
+The Watchlist → Screener → Fundamental view still has missing data for some tickers, example OPTX. It is unclear whether:
+
+1. FMP does not provide the data,
+2. FMP provides it but our endpoint mapping misses it,
+3. FMP refresh did not run for that ticker,
+4. overlay did not apply,
+5. frontend is still showing CSV fallback,
+6. the field is intentionally CSV-only.
+
+Goal:
+Build a clear field-by-field audit for the Fundamental Screener columns, using OPTX as the first test case.
+
+Do not implement broad changes until the audit explains exactly where the data is missing.
+
+Columns to audit:
+
+* Symbol
+* Theme
+* Mkt Cap
+* Revenue
+* Rev Grwth (Q)
+* Rev Grwth (Y)
+* Gross Mgn
+* FCF Mgn
+* Free CF
+* Op. Income
+* EBIT
+* P/E
+* P/S
+* EV/EBITDA
+* EPS Grwth
+* D/E
+* ND/EBITDA
+* Insider %
+* Earn. Date
+* Rev Grwth Est
+* Rev Grwth NQ
+* Rev Grwth NY
+* EPS Grwth Est
+* EPS Grwth TQ
+* EPS Grwth NQ
+* EPS Grwth TY
+* EPS Grwth NY
+
+Audit ticker:
+
+* OPTX first
+
+Then sample:
+
+* AAOI
+* NVDA
+* MU
+* PLTR
+* ASTS
+
+Required audit steps:
+
+1. Confirm FMP eligibility
+   Check OPTX with the FMP eligibility helper.
+   Confirm it is not colon-prefixed and is eligible for FMP.
+
+2. Force refresh OPTX
+   Run the dev refresh endpoint:
+
+POST /api/watchlist/debug/fundamentals/refresh?symbols=OPTX&dev_force=true
+
+Report:
+
+* success/failure
+* FMP calls made
+* refreshed_at
+* missing_fields
+* normalized field count
+
+3. Inspect raw FMP payloads for OPTX
+   For each endpoint currently used by the refresher, report whether it returned usable data:
+
+* profile
+* income-statement quarterly / annual if used
+* income-statement-growth
+* cash-flow statement
+* ratios-ttm
+* key-metrics-ttm
+* earnings
+
+For each endpoint, report:
+
+* HTTP status
+* returned row count
+* top-level keys available
+* whether data is empty/null
+
+4. Inspect normalized snapshot
+   Read the stored normalized snapshot for OPTX from `watchlist_fundamentals_cache`.
+
+For each Fundamental Screener field, output:
+
+* column name
+* normalized FMP value
+* source endpoint
+* direct/derived
+* missing reason if null
+
+5. Inspect real Watchlist GET overlay
+   Hit the actual Watchlist GET endpoint used by the frontend.
+
+For OPTX, output every final field value in the row.
+
+For each field, classify source:
+
+* `fmp`
+* `csv_fallback`
+* `canonical_watchlist_theme`
+* `missing`
+
+Important:
+This is the most important report. I need to know if frontend is seeing FMP overlay or CSV fallback.
+
+6. Compare CSV vs FMP vs final row
+   Create a table:
+
+Column | CSV value | FMP normalized value | Final GET value | Final source | Status
+
+Status examples:
+
+* FMP overlay working
+* CSV fallback by design
+* FMP missing
+* Mapping missing
+* Frontend/GET overlay bug
+* Not available in FMP Starter
+* Needs derived formula
+
+7. Confirm every column is accounted for
+   Every column must fall into one of these categories:
+
+A. API-backed and currently populated from FMP
+B. API-backed but FMP returned missing for OPTX
+C. Derived from FMP and currently populated
+D. Derived from FMP but required inputs missing
+E. CSV fallback by design due FMP plan/endpoint limitation
+F. Theme/canonical watchlist field, not FMP
+G. True missing because neither FMP nor CSV has value
+
+Do not leave any column unexplained.
+
+Expected known CSV-only fields from prior audit:
+
+* Insider %
+* Rev Grwth Est
+* Rev Grwth NY
+* EPS Grwth Est
+* EPS Grwth NQ
+* EPS Grwth TY
+* EPS Grwth NY
+* possibly Rev Grwth NQ / EPS Grwth TQ depending available earnings estimate data
+
+Re-verify this. Do not assume.
+
+8. Check if OPTX is a data-coverage issue
+   Small/micro-cap tickers may have sparse FMP coverage.
+
+For OPTX specifically, determine whether missing fields are because:
+
+* no FMP statements exist
+* ratios-ttm missing
+* key-metrics-ttm missing
+* earnings date missing
+* estimate data missing due Starter plan
+* ticker symbol mismatch
+* company recently listed / SPAC / data gap
+
+9. Add dev diagnostic endpoint only if useful
+   If not already easy to inspect, add a dev-only diagnostic endpoint:
+
+GET /api/watchlist/debug/fundamentals/provenance?symbol=OPTX&watchlist_id=<id>
+
+It should return, for each column:
+
+* final_value
+* source: fmp/csv/canonical_theme/missing
+* fmp_value
+* csv_value
+* source_endpoint
+* formula
+* missing_reason
+* refreshed_at
+
+Do not expose this in normal frontend UI.
+Do not call providers from this endpoint.
+It should inspect cache + current watchlist row only.
+
+10. Do not change production behavior yet
+    After the audit, report findings first.
+
+Only implement fixes if the cause is obvious and low-risk, such as:
+
+* field alias mismatch
+* normalized key not included in overlay
+* earnings date mapped to wrong column
+* ratio key name changed
+* final GET row dropping cached value
+
+Do not invent formulas just to fill blanks.
+
+Validation report required:
+For OPTX, provide:
+
+* FMP refresh status
+* cache row exists yes/no
+* final GET row uses overlay yes/no
+* field-by-field table
+* list of fields FMP cannot provide
+* list of fields FMP provides but our code is not mapping
+* list of fields CSV fallback is preserving
+* whether frontend is showing stale CSV or real overlay
+
+Safety:
+
+* no Tradier changes
+* no frontend changes
+* no provider storm
+* no LLM calls
+* no StockAnalysis scraping
+* no column/header changes
