@@ -1,0 +1,125 @@
+Proceed with the consolidated next step.
+
+Goal:
+Publish the validated backend, confirm live status, then locate frontend source and only wire the Technical toggle columns if real frontend source exists.
+
+Do not run another full fundamentals backfill.
+Do not run another full technical warmup.
+Do not touch Tradier dynamic pacer.
+Do not touch Options Flow.
+Do not touch CSV upload.
+Do not edit compiled backend/static frontend bundles.
+Do not use LLMs.
+Do not add provider/page-load API calls.
+
+Step 1 — Publish backend
+The safety check passed:
+- fundamentals backfill idle
+- 304 stage LKG entries
+- Watchlist GET returns 302 rows
+- technical provenance endpoint works
+- fundamentals status works
+- no backend errors
+
+Publish/redeploy the backend now.
+
+Step 2 — Post-publish smoke test
+After publish, run only these checks:
+
+1. Backend health ok.
+2. Watchlist GET returns 302 ticker rows.
+3. Fundamentals status endpoint works:
+   GET /api/watchlist/debug/fundamentals/status?watchlist_id=23eec278-074a-4706-a62a-c35d38b384ea
+4. Technical provenance endpoint works:
+   GET /api/watchlist/debug/technical/provenance?symbol=NVDA
+5. Live Watchlist GET still has 0 past Earn. Date values.
+6. Report the remaining non-refreshed / failed FMP fundamental symbols only. Do not retry them unless I ask.
+
+Step 3 — Find frontend source
+Audit only. Search for the actual frontend source files:
+
+- package.json
+- src/
+- app/
+- pages/
+- components/
+- Watchlist page
+- Screener component
+- Technical toggle
+- Fundamental toggle
+- column definitions
+- sort handlers
+
+Report:
+- whether real frontend source exists in this workspace
+- exact path if found
+- exact file/component for Watchlist → Screener → Technical
+- whether current app is only serving compiled backend/static bundles
+- whether a separate frontend repo/workspace is needed
+
+Important:
+Do not edit compiled JS bundles in backend/static.
+
+Step 4 — If frontend source exists, wire Technical columns only
+If and only if real frontend source exists, add the backend-derived technical diagnostics to Watchlist → Screener → Technical.
+
+Use existing API fields only:
+- stage2_breakout
+- stage_analysis
+- technical_metrics
+- technical_state
+- technical_timing_score
+
+Do not change backend.
+Do not add API calls.
+Do not change Fundamental toggle.
+Do not change setup tabs:
+- Golden Zone
+- Growth Momentum
+- HC Investment Zone
+- HC Trade Zone
+
+Preferred visible columns:
+- MA Stack
+- % vs 50D
+- % vs 200D
+- Extension Risk
+- 52W Pos
+- % From 52W High
+- Entry Zone
+- Breakout Signal
+- Accum/Dist
+- Squeeze
+- ATR %
+- Momentum Trend
+- Technical State
+
+If width is too tight, use shorter first version:
+- MA Stack
+- Extension Risk
+- 52W Pos
+- Entry Zone
+- Breakout Signal
+- Accum/Dist
+- Squeeze
+- Technical State
+
+Formatting:
+- % vs 50D / 200D as signed %
+- 52W Pos as 0–100%
+- % From 52W High as negative % or At High
+- ATR % as %
+- labels title-cased
+
+Missing/old-format entries should show — gracefully.
+
+Validation:
+1. Technical toggle shows new columns.
+2. Fundamental toggle unchanged.
+3. Existing setup tabs unchanged.
+4. Sort works where available.
+5. No frontend build errors.
+6. No backend changes after publish.
+7. No provider calls added.
+
+If frontend source does not exist, stop after reporting that and do not patch compiled files.
