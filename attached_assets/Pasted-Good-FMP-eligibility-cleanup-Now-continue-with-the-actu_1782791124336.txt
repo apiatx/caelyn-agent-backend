@@ -1,0 +1,103 @@
+Good FMP eligibility cleanup. Now continue with the actual Watchlist Fundamental Screener weekly FMP refresh task.
+
+Do not undo the colon-symbol FMP guard.
+Do not touch the Tradier dynamic pacer.
+Do not touch frontend yet.
+Do not change CSV upload.
+Do not change Fundamental Screener columns/headers.
+Do not use Finnhub/Yahoo/LLMs/StockAnalysis scraping for this task.
+
+Use the new `is_fmp_symbol_eligible()` helper so colon-prefixed foreign symbols are skipped for FMP fundamentals and keep CSV fallback values.
+
+Goal:
+Build the backend audit/mapping layer for weekly FMP refresh of existing Watchlist Fundamental Screener values.
+
+Required next step:
+Audit FMP endpoint payloads for sample tickers and produce the field mapping table before implementing the full weekly job.
+
+Sample tickers:
+
+* NVDA
+* MSFT
+* AAPL
+* AAOI
+* ASTS
+* RKLB
+* PLTR
+* IREN
+* NNE
+* MU
+
+Audit these FMP endpoint families:
+
+* Company Profile / Company Market Cap
+* Income Statement
+* Balance Sheet Statement
+* Cash Flow Statement
+* Key Metrics
+* Key Metrics TTM
+* Financial Ratios
+* Financial Ratios TTM
+* Enterprise Values
+* Income Statement Growth
+* Cash Flow Statement Growth
+* Financial Statement Growth
+* Financial Estimates
+* Earnings Calendar / Earnings Report
+* Insider Trade Statistics
+* Acquisition Ownership
+
+For each Fundamental Screener field, report:
+
+* frontend column
+* FMP endpoint
+* raw FMP key
+* direct vs derived
+* formula if derived
+* confidence
+* CSV fallback required yes/no
+
+Fields:
+
+* Mkt Cap
+* Revenue
+* Rev Grwth (Q)
+* Rev Grwth (Y)
+* Gross Mgn
+* FCF Mgn
+* Free CF
+* Op. Income
+* EBIT
+* P/E
+* P/S
+* EV/EBITDA
+* EPS Grwth
+* D/E
+* ND/EBITDA
+* Insider %
+* Earn. Date
+* Rev Grwth Est
+* Rev Grwth NQ
+* Rev Grwth NY
+* EPS Grwth Est
+* EPS Grwth TQ
+* EPS Grwth NQ
+* EPS Grwth TY
+* EPS Grwth NY
+
+Important:
+For Insider %, do not assume availability. Inspect Insider Trade Statistics and Acquisition Ownership payloads. Only map Insider % if there is a clean ownership percentage field or clearly derivable insider ownership/share count. If only raw insider transactions exist, leave CSV fallback.
+
+For estimate growth fields, inspect Financial Estimates payloads and compare formulas against current CSV values for sample tickers. Do not claim exact StockAnalysis parity unless the values match closely.
+
+Do not implement the full weekly scheduler until this field mapping audit is complete.
+
+After audit, report:
+
+1. Which fields can be filled directly from FMP.
+2. Which fields must be derived.
+3. Which fields need CSV fallback.
+4. Whether Insider % is available.
+5. Which estimate-growth formulas best match the current CSV values.
+6. Expected FMP call count per ticker.
+7. Safe weekly refresh plan using existing FMP limiter/governor.
