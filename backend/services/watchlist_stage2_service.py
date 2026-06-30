@@ -122,14 +122,36 @@ def get_stage2(sym: str) -> dict:
     Return the cached stage2_breakout dict for *sym*.
     Returns {"score": None, "label": None, "reason": None} when not found.
     Never issues any I/O.
+
+    Includes expanded technical metrics and provenance fields when available
+    (populated by the Phase-2 warmup).  Old entries that pre-date Phase 2 will
+    have None for those fields — callers must handle None gracefully.
     """
     entry = _STAGE2_LKG.get(sym.upper())
     if entry is None:
         return {"score": None, "label": None, "reason": None}
     return {
+        # ── Backward-compat (always present) ─────────────────────────────────
         "score":  entry.get("score"),
         "label":  entry.get("label"),
         "reason": entry.get("reason"),
+        # ── Stage internals ───────────────────────────────────────────────────
+        "signals":                 entry.get("signals"),
+        "stage_confidence":        entry.get("stage_confidence"),
+        "stage_confidence_reason": entry.get("stage_confidence_reason"),
+        # ── Technical metrics ─────────────────────────────────────────────────
+        "technical_metrics":      entry.get("technical_metrics"),
+        "technical_state":        entry.get("technical_state"),
+        "technical_timing_score": entry.get("technical_timing_score"),
+        # ── Provenance ────────────────────────────────────────────────────────
+        "history_source":     entry.get("history_source"),
+        "bars_count":         entry.get("bars_count"),
+        "history_start_date": entry.get("history_start_date"),
+        "history_end_date":   entry.get("history_end_date"),
+        "has_ohlcv":          entry.get("has_ohlcv"),
+        "has_200d":           entry.get("has_200d"),
+        "has_252d":           entry.get("has_252d"),
+        "computed_at":        entry.get("computed_at"),
     }
 
 
@@ -183,33 +205,31 @@ def _is_null_entry(sym: str) -> bool:
     return entry.get("label") is None or entry.get("score") is None
 
 
-async def _fetch_bars(sym: str) -> tuple[list[dict], str]:
+async def _fetch_bars(sym: str) -> tuple[list[dict], str, str]:
     """
-    Return (daily_bars, fetch_status) for *sym*.
+    Return (daily_bars, fetch_status, history_source) for *sym*.
 
-    fetch_status is one of:
-      "ok"           — bars returned successfully
-      "no_bars"      — provider returned an empty list (normal for some symbols)
-      "fetch_failed" — exception or unexpected failure during the call
+    fetch_status   : "ok" | "no_bars" | "fetch_failed"
+    history_source : "fmp" | "tradier" | "unknown"
 
     Probe order:
       1. In-memory cache: fmp_hist:{sym}  (FMP bars, ~4h TTL, set by theme_rs)
       2. In-memory cache: tdier_hist:{sym}:400  (Tradier bars, 1h TTL)
       3. Live FMP /stable/historical-price-eod via theme_rs_service._fetch_fmp_daily_history
-         (uses the shared semaphore, FMP key, and writes back to fmp_hist:{sym} cache)
       4. Tradier daily history via theme_rs_service._fetch_tradier_daily_history
-         (writes back to tdier_hist:{sym}:400 cache)
 
-    Reuses theme_rs_service providers so rate-limiting and caching are shared
-    across the whole application — no independent httpx calls.
-    Returns ([], "fetch_failed") on any unexpected exception.
+    Reuses theme_rs_service providers so rate-limiting and caching are shared.
+    Returns ([], "fetch_failed", "unknown") on any unexpected exception.
     """
     s = sym.upper()
     try:
         from data.cache import cache as _cache
-        cached = _cache.get(f"fmp_hist:{s}") or _cache.get(f"tdier_hist:{s}:{_HIST_DAYS}")
-        if cached:
-            return cached, "ok"
+        fmp_cached = _cache.get(f"fmp_hist:{s}")
+        if fmp_cached:
+            return fmp_cached, "ok", "fmp"
+        tdier_cached = _cache.get(f"tdier_hist:{s}:{_HIST_DAYS}")
+        if tdier_cached:
+            return tdier_cached, "ok", "tradier"
     except Exception:
         pass
 
@@ -219,17 +239,15 @@ async def _fetch_bars(sym: str) -> tuple[list[dict], str]:
             _fetch_tradier_daily_history,
         )
         bars = await _fetch_fmp_daily_history(s)
-        if not bars:
-            bars = await _fetch_tradier_daily_history(s, days=_HIST_DAYS)
         if bars:
-            return bars, "ok"
-        # Both providers returned empty — could be a genuinely unsupported symbol
-        # OR a transient failure.  We classify this as "no_bars" at the _fetch level;
-        # the caller distinguishes further based on context (bulk run vs single call).
-        return [], "no_bars"
+            return bars, "ok", "fmp"
+        bars = await _fetch_tradier_daily_history(s, days=_HIST_DAYS)
+        if bars:
+            return bars, "ok", "tradier"
+        return [], "no_bars", "unknown"
     except Exception as exc:
         print(f"[STAGE2_WL] bar fetch exception {sym}: {exc}")
-        return [], "fetch_failed"
+        return [], "fetch_failed", "unknown"
 
 
 def _persist_lkg() -> None:
@@ -315,7 +333,7 @@ async def warmup_stage2(
     spy_weekly = None
     try:
         from services.stage_analysis import weekly_bars_from_daily
-        spy_bars_raw, _ = await _fetch_bars("SPY")
+        spy_bars_raw, _, _spy_src = await _fetch_bars("SPY")
         if spy_bars_raw:
             spy_weekly = weekly_bars_from_daily(spy_bars_raw)
     except Exception as _spy_err:
@@ -342,7 +360,7 @@ async def warmup_stage2(
         async with sem:
             try:
                 await asyncio.sleep(0.3)
-                bars, fetch_status = await _fetch_bars(sym)
+                bars, fetch_status, hist_source = await _fetch_bars(sym)
 
                 if fetch_status == "fetch_failed" or (not bars and fetch_status == "no_bars"):
                     if fetch_status == "fetch_failed":
@@ -371,13 +389,57 @@ async def warmup_stage2(
                     spy_weekly_bars=spy_weekly,
                     source="watchlist_stage2_warmup",
                 )
+
+                # ── Technical metrics from daily bars ─────────────────────────
+                from services.stage_analysis import compute_technical_metrics
+                tech = compute_technical_metrics(bars)
+
+                # ── Provenance / diagnostics ──────────────────────────────────
+                has_ohlcv = any(b.get("high") is not None for b in bars)
+                bar_dates = sorted(
+                    str(b.get("date", ""))[:10] for b in bars if b.get("date")
+                )
+
+                def _conf_reason(bc: int, ohlcv: bool, conf: str) -> str:
+                    if bc < 175:
+                        return "insufficient_weekly_bars_for_stage"
+                    if bc < 200:
+                        return "no_200d_tradier_path"
+                    if bc < 252:
+                        return "no_52w_tradier_path"
+                    if bc >= 700:
+                        return "fmp_multi_year_history"
+                    if bc >= 350:
+                        return "adequate_fmp_or_tradier_history"
+                    return "tradier_400d_history"
+
+                bar_count = len(bars)
+                conf_reason = _conf_reason(bar_count, has_ohlcv, result.get("stage_confidence", "low"))
+
                 computed += 1
                 new_results[sym] = {
-                    "score":       result.get("stage_score"),
-                    "label":       result.get("stage_label"),
-                    "reason":      result.get("stage_reason"),
-                    "status":      "ok",
-                    "computed_at": now_ts,
+                    # ── Backward-compat fields (always present) ────────────────
+                    "score":  result.get("stage_score"),
+                    "label":  result.get("stage_label"),
+                    "reason": result.get("stage_reason"),
+                    # ── Stage internals ────────────────────────────────────────
+                    "signals": result.get("stage_signals"),
+                    "stage_confidence":        result.get("stage_confidence"),
+                    "stage_confidence_reason": conf_reason,
+                    # ── Technical metrics ──────────────────────────────────────
+                    "technical_metrics":       tech,
+                    "technical_state":         tech.get("technical_state"),
+                    "technical_timing_score":  tech.get("technical_timing_score"),
+                    # ── Provenance ────────────────────────────────────────────
+                    "history_source":     hist_source,
+                    "bars_count":         bar_count,
+                    "history_start_date": bar_dates[0]  if bar_dates else None,
+                    "history_end_date":   bar_dates[-1] if bar_dates else None,
+                    "has_ohlcv":          has_ohlcv,
+                    "has_200d":           bar_count >= 200,
+                    "has_252d":           bar_count >= 252,
+                    "status":             "ok",
+                    "computed_at":        now_ts,
                 }
             except Exception as exc:
                 errors += 1

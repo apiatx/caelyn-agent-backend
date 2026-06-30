@@ -674,7 +674,24 @@ async def _fetch_fmp_daily_history(symbol: str) -> list[dict]:
                 c = b.get("close") or b.get("adjClose")
                 if d and c is not None:
                     try:
-                        bars.append({"date": str(d)[:10], "close": float(c)})
+                        bar: dict = {"date": str(d)[:10], "close": float(c)}
+                        # Preserve full OHLCV — same call, richer storage, no extra requests
+                        for _fld, _keys in (
+                            ("open",      ("open",)),
+                            ("high",      ("high",)),
+                            ("low",       ("low",)),
+                            ("volume",    ("volume",)),
+                            ("adj_close", ("adjClose", "adjustedClose")),
+                        ):
+                            for _k in _keys:
+                                _v = b.get(_k)
+                                if _v is not None:
+                                    try:
+                                        bar[_fld] = float(_v)
+                                    except (TypeError, ValueError):
+                                        pass
+                                    break
+                        bars.append(bar)
                     except (TypeError, ValueError):
                         pass
 
@@ -737,7 +754,17 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
             cls = d.get("close")
             if dt and cls is not None:
                 try:
-                    bars.append({"date": str(dt)[:10], "close": float(cls)})
+                    bar: dict = {"date": str(dt)[:10], "close": float(cls)}
+                    # Preserve full OHLCV — same call, richer storage, no extra requests
+                    for _fld, _key in (("open", "open"), ("high", "high"),
+                                       ("low", "low"), ("volume", "volume")):
+                        _v = d.get(_key)
+                        if _v is not None:
+                            try:
+                                bar[_fld] = float(_v)
+                            except (TypeError, ValueError):
+                                pass
+                    bars.append(bar)
                 except (TypeError, ValueError):
                     pass
 

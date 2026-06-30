@@ -1,0 +1,248 @@
+Proceed with backend Phase 2 only.
+
+Do not touch frontend static bundles.
+Do not edit compiled frontend files.
+Do not add API calls.
+Do not touch Tradier dynamic pacer.
+Do not touch Fundamental toggle.
+Do not touch CSV upload.
+Do not touch Options Flow.
+Do not use LLMs.
+
+Decision:
+Use option 2 — augment the existing Stage Analysis bar parsers to preserve OHLCV data from the same existing API responses.
+
+Important:
+Both FMP and Tradier already return OHLCV, but the parsers currently discard open/high/low/volume and keep only date/close. Change the parsers to preserve:
+
+- date
+- open
+- high
+- low
+- close
+- volume
+- adjusted close if available
+
+This must not add any new API calls. It should only store more fields from responses we already fetch.
+
+Files from audit:
+- backend/services/watchlist_stage2_service.py
+- backend/services/stage_analysis.py
+- backend/data/watchlist_stage2_lkg.json
+
+Phase 2A — Preserve OHLCV bars
+
+Update:
+- _fetch_fmp_daily_history()
+- _fetch_tradier_daily_history()
+
+So returned bars include full OHLCV when available.
+
+Backward compatibility:
+- Existing stage_analysis logic currently expects date/close.
+- Do not break it.
+- Ensure close-only bars still work.
+- If old cached bars only have date/close, technical metrics should degrade gracefully.
+
+Phase 2B — Persist richer technical payload
+
+Currently analyze_symbol_stage() computes useful stage_signals but they are dropped before _STAGE2_LKG persistence.
+
+Persist an expanded technical payload in the Stage LKG, for example:
+
+stage2_breakout: {
+  score,
+  label,
+  reason,
+  signals,
+  technical_metrics,
+  technical_state,
+  technical_timing_score,
+  history_source,
+  bars_count,
+  has_ohlcv,
+  computed_at
+}
+
+Also mirror into stage_analysis if that is what frontend reads.
+
+Do not remove existing keys:
+- score
+- label
+- reason
+
+Phase 2C — Compute technical metrics from existing bars
+
+Using OHLCV when available, compute:
+
+Trend / MA:
+- sma_20
+- sma_50
+- sma_200
+- pct_vs_sma_20
+- pct_vs_sma_50
+- pct_vs_sma_200
+- ma_stack: bull / mixed / bear
+
+Extension:
+- extension_risk: healthy / extended / overheated / pullback_buy_zone / broken / neutral
+
+High/low proximity:
+- high_52w
+- low_52w
+- pct_from_52w_high
+- pct_from_52w_low
+- range_position_52w
+
+Entry/setup:
+- entry_zone: 20d_pullback / 50d_pullback / breakout_watch / fresh_breakout / extended / overheated / broken / neutral
+
+Breakout:
+- high_20d
+- high_50d
+- breakout_signal: coiling / near_trigger / fresh_breakout / confirmed_breakout / extended_breakout / failed_breakout / no_setup
+
+Volume / accumulation:
+- avg_volume_20d
+- accumulation_days_20d
+- distribution_days_20d
+- accumulation_distribution_score
+- accumulation_distribution_signal: heavy_accumulation / accumulation / neutral / distribution / dry_up
+
+Volatility / squeeze:
+- atr_14
+- atr_14_pct
+- range_20d_pct
+- squeeze_signal: tight / coiling / normal / volatile / expansion
+
+Momentum:
+- roc_20d
+- roc_50d
+- momentum_trend: accelerating / positive / cooling / diverging / negative / neutral
+
+Summary:
+- technical_state:
+  - coiling
+  - pullback_entry
+  - breakout_trigger
+  - trend_advance
+  - extended
+  - overheated
+  - distribution
+  - broken
+  - neutral
+
+Optional:
+- technical_timing_score 0–100
+
+Do not use labels like:
+- Buy
+- Sell
+- A+ Setup
+- Golden
+- HC
+- Strong Buy
+
+This must stay chart-condition language, not portfolio-action language.
+
+Phase 2D — Stage accuracy diagnostics
+
+Because some Stage Analysis labels may be wrong due to insufficient history, add diagnostics per ticker:
+
+- history_source: fmp / tradier / cache / unknown
+- bars_count
+- history_start_date
+- history_end_date
+- has_200d
+- has_252d
+- has_ohlcv
+- stage_confidence: high / medium / low
+- stage_confidence_reason
+
+If ticker only has ~276 Tradier bars, mark long-term stage confidence lower than tickers with ~5Y FMP bars.
+
+Do not switch to new history sources in this pass.
+Do not add FMP historical calls.
+Just expose whether the current stage is based on enough history.
+
+Phase 2E — Dev/debug endpoint
+
+Add or update a backend-only diagnostic endpoint:
+
+GET /api/watchlist/debug/technical/provenance?symbol=NVDA
+
+It should return:
+- stage label/score/reason
+- history_source
+- bars_count
+- history_start/end
+- has_ohlcv
+- computed_at
+- all technical_metrics
+- technical_state
+- technical_timing_score
+- missing_metric_reasons
+
+No provider calls from this endpoint.
+It should read only LKG/cache.
+
+Also add a status endpoint if useful:
+
+GET /api/watchlist/debug/technical/status?watchlist_id=<id>
+
+Return:
+- total symbols
+- valid stage labels
+- missing stage labels
+- has_ohlcv count
+- FMP-history count
+- Tradier-history count
+- low-confidence stage count
+- average bars_count
+- tickers missing 200D
+- tickers missing 252D
+
+Phase 2F — Validation
+
+Validate sample tickers:
+- NVDA
+- PLTR
+- AAOI
+- ASTS
+- OPTX
+- MU
+
+For each, report:
+- stage label
+- history_source
+- bars_count
+- has_ohlcv
+- ma_stack
+- pct_vs_sma_50
+- pct_vs_sma_200
+- extension_risk
+- range_position_52w
+- pct_from_52w_high
+- entry_zone
+- breakout_signal
+- accumulation_distribution_signal
+- squeeze_signal
+- atr_14_pct
+- momentum_trend
+- technical_state
+
+Safety validation:
+1. No new API calls added.
+2. No page-render provider calls added.
+3. No Tradier pacer changes.
+4. Existing Stage Analysis still works.
+5. Existing stage2_breakout score/label/reason keys still present.
+6. Old close-only cache entries degrade gracefully.
+7. Backend syntax clean.
+8. Watchlist GET still works.
+9. Fundamental toggle untouched.
+10. Frontend untouched.
+
+Stop after backend Phase 2 validation.
+
+Do not attempt Phase 3 UI column work until frontend source files are available.

@@ -566,6 +566,404 @@ def analyze_symbol_stage(
     }
 
 
+def _empty_technical_metrics() -> dict:
+    """Return all technical metric keys set to None / neutral defaults."""
+    return {
+        "sma_20": None, "sma_50": None, "sma_200": None,
+        "pct_vs_sma_20": None, "pct_vs_sma_50": None, "pct_vs_sma_200": None,
+        "ma_stack": None,
+        "extension_risk": "neutral",
+        "high_52w": None, "low_52w": None,
+        "pct_from_52w_high": None, "pct_from_52w_low": None,
+        "range_position_52w": None,
+        "high_20d": None, "high_50d": None,
+        "breakout_signal": None,
+        "entry_zone": "neutral",
+        "avg_volume_20d": None,
+        "accumulation_days_20d": None, "distribution_days_20d": None,
+        "accumulation_distribution_score": None,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": None, "atr_14_pct": None,
+        "range_20d_pct": None,
+        "squeeze_signal": None,
+        "roc_20d": None, "roc_50d": None,
+        "momentum_trend": "neutral",
+        "technical_state": "neutral",
+        "technical_timing_score": None,
+        "missing_metric_reasons": [],
+    }
+
+
+def compute_technical_metrics(
+    daily_bars: list[dict],
+    current_price: Optional[float] = None,
+) -> dict:
+    """
+    Compute daily-bar technical timing metrics from cached OHLCV history.
+
+    daily_bars    : list of {date, close, [open, high, low, volume]} oldest→newest.
+    current_price : live-quote override for "today's close" (e.g. from Tradier).
+
+    Returns a flat dict with all metric keys.  Keys are always present; missing
+    data yields None or the neutral label string.  Never raises.
+
+    Guardrails
+    ----------
+    < 20 bars  → minimal metrics only (most are None)
+    < 50 bars  → no 50D SMA / ROC
+    < 200 bars → no 200D SMA
+    < 252 bars → no 52W high/low metrics
+    """
+    null = _empty_technical_metrics()
+    if not daily_bars:
+        null["missing_metric_reasons"] = ["no_bars"]
+        return null
+
+    try:
+        bars_s = sorted(daily_bars, key=lambda b: str(b.get("date", ""))[:10])
+        n = len(bars_s)
+
+        closes  = [float(b["close"]) for b in bars_s]
+        highs   = [float(b["high"])   if b.get("high")   is not None else None for b in bars_s]
+        lows    = [float(b["low"])    if b.get("low")    is not None else None for b in bars_s]
+        volumes = [float(b["volume"]) if b.get("volume") is not None else None for b in bars_s]
+
+        has_ohlcv  = any(h is not None for h in highs) and any(l is not None for l in lows)
+        has_volume = any(v is not None for v in volumes)
+
+        price = float(current_price) if current_price is not None else closes[-1]
+        missing: list[str] = []
+        out: dict = {}
+
+        # ── SMA helpers ──────────────────────────────────────────────────────────
+        def _sma_d(period: int) -> Optional[float]:
+            if n < period:
+                return None
+            return round(sum(closes[-period:]) / period, 4)
+
+        def _pct_vs(ma_val: Optional[float]) -> Optional[float]:
+            if ma_val is None or ma_val <= 0:
+                return None
+            return round((price - ma_val) / ma_val * 100, 2)
+
+        # ── Trend / MA ───────────────────────────────────────────────────────────
+        s20  = _sma_d(20)  if n >= 20  else None
+        s50  = _sma_d(50)  if n >= 50  else None
+        s200 = _sma_d(200) if n >= 200 else None
+
+        out["sma_20"]        = s20
+        out["sma_50"]        = s50
+        out["sma_200"]       = s200
+        out["pct_vs_sma_20"] = _pct_vs(s20)
+        out["pct_vs_sma_50"] = _pct_vs(s50)
+        out["pct_vs_sma_200"]= _pct_vs(s200)
+
+        if s20 is not None and s50 is not None and s200 is not None:
+            out["ma_stack"] = "bull" if s20 > s50 > s200 else ("bear" if s20 < s50 < s200 else "mixed")
+        elif s20 is not None and s50 is not None:
+            out["ma_stack"] = "bull" if s20 > s50 else ("bear" if s20 < s50 else "mixed")
+        else:
+            out["ma_stack"] = None
+        if n < 50:  missing.append("no_50d_sma")
+        if n < 200: missing.append("no_200d_sma")
+
+        pct20 = out["pct_vs_sma_20"]
+        pct50 = out["pct_vs_sma_50"]
+
+        # ── Extension Risk ───────────────────────────────────────────────────────
+        if pct20 is None and pct50 is None:
+            out["extension_risk"] = "neutral"
+        elif s50 is not None and price < s50 and (s200 is None or price < s200):
+            out["extension_risk"] = "broken"
+        elif pct20 is not None and pct50 is not None:
+            if pct20 > 15 or pct50 > 35:
+                out["extension_risk"] = "overheated"
+            elif pct20 > 8 or pct50 > 20:
+                out["extension_risk"] = "extended"
+            elif -8 <= pct20 <= 2 and out.get("ma_stack") in ("bull", "mixed"):
+                out["extension_risk"] = "pullback_buy_zone"
+            elif pct50 is not None and -10 <= pct50 <= 2 and out.get("ma_stack") in ("bull", "mixed"):
+                out["extension_risk"] = "pullback_buy_zone"
+            else:
+                out["extension_risk"] = "healthy"
+        else:
+            out["extension_risk"] = "neutral"
+
+        # ── 52W High/Low (highest/lowest close over 252 bars) ───────────────────
+        if n >= 252:
+            tail = closes[-252:]
+            h52w, l52w = max(tail), min(tail)
+            out["high_52w"] = round(h52w, 4)
+            out["low_52w"]  = round(l52w, 4)
+            if h52w > l52w > 0:
+                out["pct_from_52w_high"]  = round((price - h52w) / h52w * 100, 2)
+                out["pct_from_52w_low"]   = round((price - l52w) / l52w * 100, 2)
+                out["range_position_52w"] = round((price - l52w) / (h52w - l52w) * 100, 1)
+            else:
+                out["pct_from_52w_high"] = out["pct_from_52w_low"] = out["range_position_52w"] = None
+        else:
+            out["high_52w"] = out["low_52w"] = None
+            out["pct_from_52w_high"] = out["pct_from_52w_low"] = out["range_position_52w"] = None
+            missing.append("no_52w_metrics")
+
+        pct_h52 = out.get("pct_from_52w_high")
+
+        # ── High 20D / 50D (close-based) ─────────────────────────────────────────
+        out["high_20d"] = round(max(closes[-20:]), 4) if n >= 20 else None
+        out["high_50d"] = round(max(closes[-50:]), 4) if n >= 50 else None
+
+        # ── Breakout Signal ──────────────────────────────────────────────────────
+        h20 = out["high_20d"]
+        ext = out["extension_risk"]
+        if h20 is None or h20 <= 0:
+            out["breakout_signal"] = None
+        else:
+            pf20 = (price - h20) / h20 * 100
+            rng20_raw = (max(closes[-20:]) - min(closes[-20:])) / price * 100 if n >= 20 else None
+            if pf20 >= 0:
+                if pf20 <= 3:
+                    out["breakout_signal"] = "fresh_breakout"
+                elif ext in ("extended", "overheated"):
+                    out["breakout_signal"] = "extended_breakout"
+                else:
+                    out["breakout_signal"] = "confirmed_breakout"
+            elif pf20 > -5:
+                out["breakout_signal"] = "coiling" if (rng20_raw is not None and rng20_raw < 8) else "near_trigger"
+            elif pf20 <= -10 and s20 is not None and price < s20:
+                out["breakout_signal"] = "failed_breakout"
+            else:
+                out["breakout_signal"] = "no_setup"
+
+        # ── Entry Zone ───────────────────────────────────────────────────────────
+        ms   = out.get("ma_stack")
+        bsig = out.get("breakout_signal")
+        if s20 is None:
+            out["entry_zone"] = "neutral"
+        elif ext in ("overheated",) and (pct20 or 0) > 12:
+            out["entry_zone"] = "overheated"
+        elif ext == "extended":
+            out["entry_zone"] = "extended"
+        elif ext == "broken":
+            out["entry_zone"] = "broken"
+        elif ms in ("bull", "mixed") and pct20 is not None and -8 <= pct20 <= 2:
+            out["entry_zone"] = "20d_pullback"
+        elif s50 is not None and ms in ("bull", "mixed") and pct50 is not None and -10 <= pct50 <= 2:
+            out["entry_zone"] = "50d_pullback"
+        elif bsig in ("coiling", "near_trigger"):
+            out["entry_zone"] = "breakout_watch"
+        elif bsig in ("fresh_breakout", "confirmed_breakout") and ext == "healthy":
+            out["entry_zone"] = "fresh_breakout"
+        else:
+            out["entry_zone"] = "neutral"
+
+        # ── Volume / Accumulation (requires volume bars) ─────────────────────────
+        if has_volume and n >= 20:
+            vols20 = [v for v in volumes[-20:] if v is not None]
+            if len(vols20) >= 10:
+                avg_v20 = sum(vols20) / len(vols20)
+                out["avg_volume_20d"] = round(avg_v20, 0)
+                acc = dist = 0
+                for i in range(max(1, n - 20), n):
+                    c_cur, c_prv = closes[i], closes[i - 1]
+                    v = volumes[i] if volumes[i] is not None else 0
+                    vr = v / avg_v20 if avg_v20 > 0 else 1.0
+                    if c_cur > c_prv and vr >= 1.2:
+                        acc += 1
+                    elif c_cur < c_prv and vr >= 1.2:
+                        dist += 1
+                out["accumulation_days_20d"]  = acc
+                out["distribution_days_20d"]  = dist
+                ad_score = acc - dist
+                out["accumulation_distribution_score"] = ad_score
+                if ad_score >= 4:
+                    out["accumulation_distribution_signal"] = "heavy_accumulation"
+                elif ad_score >= 2:
+                    out["accumulation_distribution_signal"] = "accumulation"
+                elif ad_score <= -4:
+                    out["accumulation_distribution_signal"] = "distribution"
+                else:
+                    # Check for dry-up: price tight + volume contracting
+                    prior_vols = [v for v in volumes[-40:-20] if v is not None]
+                    prior_avg  = sum(prior_vols) / len(prior_vols) if prior_vols else avg_v20
+                    rng20_v    = (max(closes[-20:]) - min(closes[-20:])) / price * 100
+                    if rng20_v < 8 and avg_v20 < prior_avg * 0.75:
+                        out["accumulation_distribution_signal"] = "dry_up"
+                    else:
+                        out["accumulation_distribution_signal"] = "neutral"
+            else:
+                out["avg_volume_20d"] = None
+                out["accumulation_days_20d"] = out["distribution_days_20d"] = None
+                out["accumulation_distribution_score"] = None
+                out["accumulation_distribution_signal"] = "neutral"
+                missing.append("insufficient_volume_data")
+        else:
+            out["avg_volume_20d"] = None
+            out["accumulation_days_20d"] = out["distribution_days_20d"] = None
+            out["accumulation_distribution_score"] = None
+            out["accumulation_distribution_signal"] = "neutral"
+            if not has_volume:
+                missing.append("no_volume_in_bars")
+
+        # ── ATR 14 (requires high/low) ───────────────────────────────────────────
+        if has_ohlcv and n >= 15:
+            tr_vals = []
+            for i in range(max(1, n - 20), n):
+                h, l, cp = highs[i], lows[i], closes[i - 1]
+                if h is None or l is None:
+                    continue
+                tr_vals.append(max(h - l, abs(h - cp), abs(l - cp)))
+            if len(tr_vals) >= 14:
+                atr = round(sum(tr_vals[-14:]) / 14, 4)
+                out["atr_14"]     = atr
+                out["atr_14_pct"] = round(atr / price * 100, 2) if price > 0 else None
+            else:
+                out["atr_14"] = out["atr_14_pct"] = None
+        else:
+            out["atr_14"] = out["atr_14_pct"] = None
+            if not has_ohlcv:
+                missing.append("no_high_low_for_atr")
+
+        # ── Range 20D % (OHLC true range if available, else close-based) ─────────
+        if n >= 20:
+            if has_ohlcv:
+                h20v = [highs[i] for i in range(n - 20, n) if highs[i] is not None]
+                l20v = [lows[i]  for i in range(n - 20, n) if lows[i]  is not None]
+                if h20v and l20v:
+                    out["range_20d_pct"] = round((max(h20v) - min(l20v)) / price * 100, 2)
+                else:
+                    out["range_20d_pct"] = round((max(closes[-20:]) - min(closes[-20:])) / price * 100, 2)
+            else:
+                out["range_20d_pct"] = round((max(closes[-20:]) - min(closes[-20:])) / price * 100, 2)
+        else:
+            out["range_20d_pct"] = None
+
+        # ── Squeeze Signal ───────────────────────────────────────────────────────
+        atr_pct = out.get("atr_14_pct")
+        rng_20  = out.get("range_20d_pct")
+        if atr_pct is not None and has_ohlcv and n >= 55:
+            hist_trs = []
+            for i in range(n - 55, n - 15):
+                h, l, cp = highs[i], lows[i], closes[i - 1] if i > 0 else closes[i]
+                if h is not None and l is not None:
+                    hist_trs.append(max(h - l, abs(h - cp), abs(l - cp)))
+            if hist_trs:
+                hist_avg = sum(hist_trs) / len(hist_trs)
+                ratio    = (out["atr_14"] or 0) / hist_avg if hist_avg > 0 else 1.0
+                if ratio < 0.6 and (rng_20 or 99) < 12:
+                    out["squeeze_signal"] = "tight"
+                elif ratio < 0.75:
+                    out["squeeze_signal"] = "coiling"
+                elif ratio > 1.5:
+                    out["squeeze_signal"] = "expansion"
+                elif atr_pct > 5:
+                    out["squeeze_signal"] = "volatile"
+                else:
+                    out["squeeze_signal"] = "normal"
+            else:
+                out["squeeze_signal"] = "normal"
+        elif atr_pct is not None:
+            if atr_pct < 1.5 and (rng_20 or 99) < 10:
+                out["squeeze_signal"] = "tight"
+            elif atr_pct < 2.5:
+                out["squeeze_signal"] = "coiling"
+            elif atr_pct > 5:
+                out["squeeze_signal"] = "volatile"
+            else:
+                out["squeeze_signal"] = "normal"
+        elif rng_20 is not None:
+            if rng_20 < 8:
+                out["squeeze_signal"] = "coiling"
+            elif rng_20 > 25:
+                out["squeeze_signal"] = "volatile"
+            else:
+                out["squeeze_signal"] = "normal"
+        else:
+            out["squeeze_signal"] = None
+
+        # ── Momentum / ROC ───────────────────────────────────────────────────────
+        def _roc(period: int) -> Optional[float]:
+            if n <= period or closes[-(period + 1)] <= 0:
+                return None
+            return round((closes[-1] / closes[-(period + 1)] - 1) * 100, 2)
+
+        r20 = _roc(20) if n > 20 else None
+        r50 = _roc(50) if n > 50 else None
+        out["roc_20d"] = r20
+        out["roc_50d"] = r50
+        if n <= 50: missing.append("no_50d_roc")
+
+        if r20 is None:
+            out["momentum_trend"] = "neutral"
+        elif r20 > 0 and r50 is not None and r50 > 0 and r20 > r50:
+            out["momentum_trend"] = "accelerating"
+        elif r20 > 0 and (r50 is None or r50 >= 0):
+            out["momentum_trend"] = "positive"
+        elif r20 > 0 and r50 is not None and r50 < 0:
+            out["momentum_trend"] = "cooling"
+        elif r20 > 0 and (pct_h52 or 0) > -5:
+            out["momentum_trend"] = "diverging"
+        elif r20 < 0:
+            out["momentum_trend"] = "negative"
+        else:
+            out["momentum_trend"] = "neutral"
+
+        # ── Technical State ──────────────────────────────────────────────────────
+        ext  = out.get("extension_risk", "neutral")
+        ms   = out.get("ma_stack")
+        bsig = out.get("breakout_signal")
+        mom  = out.get("momentum_trend", "neutral")
+        adst = out.get("accumulation_distribution_signal", "neutral")
+        sqz  = out.get("squeeze_signal")
+
+        if ext == "broken":
+            out["technical_state"] = "broken"
+        elif adst == "distribution" and ext in ("extended", "overheated"):
+            out["technical_state"] = "distribution"
+        elif ext == "overheated":
+            out["technical_state"] = "overheated"
+        elif ext == "extended":
+            out["technical_state"] = "extended"
+        elif bsig in ("fresh_breakout", "confirmed_breakout") and ext in ("healthy", "pullback_buy_zone"):
+            out["technical_state"] = "breakout_trigger"
+        elif sqz in ("tight", "coiling") and bsig in ("coiling", "near_trigger"):
+            out["technical_state"] = "coiling"
+        elif ext == "pullback_buy_zone" and ms in ("bull", "mixed"):
+            out["technical_state"] = "pullback_entry"
+        elif ms == "bull" and mom in ("accelerating", "positive"):
+            out["technical_state"] = "trend_advance"
+        else:
+            out["technical_state"] = "neutral"
+
+        # ── Technical Timing Score 0–100 ─────────────────────────────────────────
+        sc = 50.0
+        if ms == "bull":     sc += 20
+        elif ms == "mixed":  sc += 5
+        elif ms == "bear":   sc -= 20
+        if ext == "pullback_buy_zone": sc += 10
+        elif ext == "healthy":         sc += 5
+        elif ext == "extended":        sc -= 5
+        elif ext == "overheated":      sc -= 15
+        elif ext == "broken":          sc -= 20
+        if mom == "accelerating":  sc += 15
+        elif mom == "positive":    sc += 8
+        elif mom == "cooling":     sc += 2
+        elif mom == "negative":    sc -= 10
+        elif mom == "diverging":   sc -= 5
+        if adst == "heavy_accumulation": sc += 10
+        elif adst == "accumulation":     sc += 5
+        elif adst == "distribution":     sc -= 10
+        if sqz in ("tight", "coiling") and bsig in ("near_trigger", "coiling", "fresh_breakout"):
+            sc += 8
+        out["technical_timing_score"] = round(max(0.0, min(100.0, sc)), 1)
+
+        out["missing_metric_reasons"] = missing
+        return out
+
+    except Exception as exc:
+        null["missing_metric_reasons"] = [f"compute_error: {exc}"]
+        return null
+
+
 def analyze_theme_stage(
     proxy_type: str,
     proxy_daily_bars_map: dict[str, list[dict]],

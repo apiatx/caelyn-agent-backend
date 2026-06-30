@@ -1344,6 +1344,138 @@ async def debug_fundamentals_backfill(
     return {"status": "started", "total_to_refresh": len(to_refresh), "state": _backfill_state}
 
 
+@router.get("/debug/technical/provenance")
+async def debug_technical_provenance(symbol: str = ""):
+    """
+    DEV-ONLY: Full technical diagnostics for a single symbol from LKG cache.
+    No provider calls — reads only the in-memory LKG.
+
+    Returns stage label/score/reason, provenance, all technical_metrics,
+    technical_state, technical_timing_score, and missing_metric_reasons.
+    """
+    from services.watchlist_stage2_service import get_stage2, _STAGE2_LKG
+
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return {"error": "symbol query param required"}
+
+    raw = _STAGE2_LKG.get(sym)
+    if raw is None:
+        return {"error": f"{sym} not found in Stage2 LKG", "symbol": sym}
+
+    tech = raw.get("technical_metrics") or {}
+    return {
+        "symbol":         sym,
+        "stage_label":    raw.get("label"),
+        "stage_score":    raw.get("score"),
+        "stage_reason":   raw.get("reason"),
+        "stage_confidence":        raw.get("stage_confidence"),
+        "stage_confidence_reason": raw.get("stage_confidence_reason"),
+        "history_source":     raw.get("history_source"),
+        "bars_count":         raw.get("bars_count"),
+        "history_start_date": raw.get("history_start_date"),
+        "history_end_date":   raw.get("history_end_date"),
+        "has_ohlcv":          raw.get("has_ohlcv"),
+        "has_200d":           raw.get("has_200d"),
+        "has_252d":           raw.get("has_252d"),
+        "computed_at":        raw.get("computed_at"),
+        "technical_state":         raw.get("technical_state"),
+        "technical_timing_score":  raw.get("technical_timing_score"),
+        "technical_metrics":       tech,
+        "missing_metric_reasons":  tech.get("missing_metric_reasons", []),
+        "signals":            raw.get("signals"),
+        "status":             raw.get("status"),
+    }
+
+
+@router.get("/debug/technical/status")
+async def debug_technical_status(watchlist_id: Optional[str] = None):
+    """
+    DEV-ONLY: Aggregate technical coverage stats across all LKG entries.
+    No provider calls — reads only the in-memory LKG.
+
+    Returns counts: total, valid stage labels, missing, has_ohlcv, FMP-history,
+    Tradier-history, low-confidence stage, average bars_count, tickers missing
+    200D, tickers missing 252D.
+    """
+    from services.watchlist_stage2_service import _STAGE2_LKG
+
+    wl_id  = watchlist_id or "23eec278-074a-4706-a62a-c35d38b384ea"
+    store  = load_watchlist(wl_id)
+    tickers: list[str] = []
+    if store:
+        tickers = [t.strip().upper() for t in (store.get("tickers") or []) if t.strip()]
+
+    # Collect LKG entries for this watchlist's tickers (fall back to all LKG if wl empty)
+    scope: dict[str, dict] = {}
+    if tickers:
+        for sym in tickers:
+            e = _STAGE2_LKG.get(sym)
+            if e is not None:
+                scope[sym] = e
+    else:
+        scope = dict(_STAGE2_LKG)
+
+    total          = len(scope)
+    valid_label    = 0
+    missing_label  = 0
+    has_ohlcv_cnt  = 0
+    fmp_cnt        = 0
+    tradier_cnt    = 0
+    low_conf_cnt   = 0
+    no_200d_syms: list[str] = []
+    no_252d_syms: list[str] = []
+    bars_counts: list[int]  = []
+
+    for sym, e in scope.items():
+        lbl = e.get("label")
+        sc  = e.get("score")
+        if lbl is not None and sc is not None:
+            valid_label += 1
+        else:
+            missing_label += 1
+        if e.get("has_ohlcv"):
+            has_ohlcv_cnt += 1
+        src = e.get("history_source") or "unknown"
+        if src == "fmp":
+            fmp_cnt += 1
+        elif src == "tradier":
+            tradier_cnt += 1
+        if (e.get("stage_confidence") or "low") == "low":
+            low_conf_cnt += 1
+        bc = e.get("bars_count")
+        if bc is not None:
+            bars_counts.append(int(bc))
+            if bc < 200:
+                no_200d_syms.append(sym)
+            if bc < 252:
+                no_252d_syms.append(sym)
+
+    avg_bars = round(sum(bars_counts) / len(bars_counts), 1) if bars_counts else None
+
+    # Also tally technical_state distribution
+    state_dist: dict[str, int] = {}
+    for e in scope.values():
+        st = e.get("technical_state") or "unknown"
+        state_dist[st] = state_dist.get(st, 0) + 1
+
+    return {
+        "watchlist_id":         wl_id,
+        "scope":                "watchlist" if tickers else "all_lkg",
+        "total":                total,
+        "valid_stage_labels":   valid_label,
+        "missing_stage_labels": missing_label,
+        "has_ohlcv_count":      has_ohlcv_cnt,
+        "fmp_history_count":    fmp_cnt,
+        "tradier_history_count": tradier_cnt,
+        "low_confidence_count": low_conf_cnt,
+        "average_bars_count":   avg_bars,
+        "tickers_missing_200d": no_200d_syms,
+        "tickers_missing_252d": no_252d_syms,
+        "technical_state_distribution": state_dist,
+    }
+
+
 @router.get("/debug/fundamentals/backfill/status")
 async def debug_fundamentals_backfill_status():
     """DEV-ONLY: Poll progress of an in-progress backfill."""
