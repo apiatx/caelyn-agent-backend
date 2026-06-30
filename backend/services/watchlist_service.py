@@ -134,6 +134,21 @@ def save_watchlist(
     except Exception as _inv_e:
         print(f"[Watchlist] earnings cache invalidation skipped: {_inv_e}")
 
+    # Register each US-eligible ticker for weekly FMP fundamentals refresh.
+    # next_refresh_at = upload_time + 7 days (production; dev endpoint bypasses TTL).
+    try:
+        from data.watchlist_fundamentals_store import schedule_refresh as _sched_refresh
+        from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_ok
+        _scheduled = 0
+        for _t in tickers:
+            if _fmp_ok(_t):
+                _sched_refresh(_t, watchlist_id, days=7)
+                _scheduled += 1
+        if _scheduled:
+            print(f"[Watchlist] {_scheduled} tickers scheduled for FMP fundamentals refresh in 7 days")
+    except Exception as _fund_e:
+        print(f"[Watchlist] fundamentals schedule_refresh skipped (non-fatal): {_fund_e}")
+
     return {"success": True, "saved_at": saved_at, "ticker_count": len(tickers), "watchlist_id": watchlist_id, "name": name}
 
 

@@ -335,6 +335,24 @@ def init_tables():
             ALTER TABLE public.watchlist ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'Watchlist'
         """)
 
+        # ── Watchlist Fundamentals Cache (weekly FMP refresh) ─────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.watchlist_fundamentals_cache (
+                symbol           TEXT        PRIMARY KEY,
+                watchlist_id     TEXT,
+                refreshed_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                next_refresh_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                fields           JSONB       NOT NULL DEFAULT '{}',
+                missing_fields   JSONB       NOT NULL DEFAULT '[]',
+                fmp_call_count   INT         NOT NULL DEFAULT 0,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_wl_fund_cache_watchlist_due
+            ON public.watchlist_fundamentals_cache (watchlist_id, next_refresh_at ASC)
+        """)
+
         # ── Live options flow snapshots for intraday signal history ───────
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.options_flow_snapshots (

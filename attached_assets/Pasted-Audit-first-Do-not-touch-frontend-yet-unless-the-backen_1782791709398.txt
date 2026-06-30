@@ -1,0 +1,394 @@
+Audit first. Do not touch frontend yet unless the backend response shape already supports this. Do not change CSV upload behavior. Do not change Fundamental Screener columns/headers. Do not add live per-page API calls.
+
+Goal:
+Add a weekly FMP-backed refresh system for the existing Watchlist → Screener → Fundamental view values.
+
+Important:
+The existing CSV upload stays exactly as-is.
+
+Do not remove CSV upload.
+Do not change CSV parsing.
+Do not change the Fundamental Screener column headers.
+Do not add/remove/reorder columns.
+Do not change the current Watchlist UI in this pass.
+
+The only goal is:
+Existing Fundamental Screener fields should be refreshed from FMP once per week, with CSV values remaining as fallback.
+
+Current behavior:
+Fundamental Screener values are purely from uploaded CSV.
+
+Desired behavior:
+After CSV upload:
+
+* CSV values remain visible immediately.
+* No automatic FMP refresh should run until 1 week after initial upload.
+* After 1 week, backend can refresh the same fields from FMP.
+* Once refreshed, FMP values should overlay/replace CSV values for the same existing columns.
+* If FMP cannot provide a field, keep the CSV value as fallback.
+* If both FMP and CSV are missing, show blank/— as current UI does.
+
+Testing requirement:
+For development/testing, add a dev-only/manual force refresh path so we can test immediately after implementation without waiting 1 week.
+
+Do not make the production/default behavior refresh immediately after upload.
+
+Architecture:
+Create a cached normalized weekly snapshot per ticker.
+
+Suggested storage:
+
+* Neon table if existing DB pattern is available
+* otherwise existing backend disk/LKG cache if that matches current architecture better
+
+Suggested normalized record:
+
+* symbol
+* source: "fmp"
+* refreshed_at
+* next_refresh_at
+* upload_batch_id or watchlist_id if available
+* missing_fields
+* raw_audit_summary
+* all normalized fields matching current Fundamental Screener values
+
+Do not store giant raw payloads unless existing cache architecture does that safely.
+
+Refresh cadence:
+
+* weekly TTL: 7 days
+* do not refresh a ticker if refreshed_at is less than 7 days old, unless dev_force=true
+* queue/paced job only
+* never refresh on page render
+* never refresh all tickers in a tight loop without pacing
+
+Provider:
+Use FMP only for this pass.
+
+Do not use:
+
+* Tradier
+* LLMs
+* StockAnalysis scraping
+* Finnhub
+* Yahoo
+* Perplexity
+* browser scraping
+
+FMP endpoint families to audit/use:
+
+* Company Profile / Company Market Cap
+* Income Statement
+* Balance Sheet Statement
+* Cash Flow Statement
+* Key Metrics
+* Key Metrics TTM
+* Financial Ratios
+* Financial Ratios TTM
+* Enterprise Values
+* Income Statement Growth
+* Cash Flow Statement Growth
+* Financial Statement Growth
+* Financial Estimates
+* Earnings Calendar / Earnings Report
+* Insider Trade Statistics
+* Acquisition Ownership
+
+Important:
+Your FMP plan does not include bulk endpoints, so do not use bulk endpoints.
+Use paced per-symbol calls with existing FMP limiter/governor.
+
+Fields to normalize:
+Keep these exact frontend columns/fields. Do not rename headers.
+
+* Symbol
+* Theme
+* Mkt Cap
+* Revenue
+* Rev Grwth (Q)
+* Rev Grwth (Y)
+* Gross Mgn
+* FCF Mgn
+* Free CF
+* Op. Income
+* EBIT
+* P/E
+* P/S
+* EV/EBITDA
+* EPS Grwth
+* D/E
+* ND/EBITDA
+* Insider %
+* Earn. Date
+* Rev Grwth Est
+* Rev Grwth NQ
+* Rev Grwth NY
+* EPS Grwth Est
+* EPS Grwth TQ
+* EPS Grwth NQ
+* EPS Grwth TY
+* EPS Grwth NY
+
+Theme rule:
+Do not source Theme from FMP or CSV industry.
+Theme must remain the existing canonical AI-enhanced Watchlist theme.
+
+CSV industry should not override Theme.
+
+Field derivation guidance:
+Use FMP directly where possible, derive where necessary.
+
+Suggested mapping:
+
+Mkt Cap:
+
+* FMP Company Market Cap or profile marketCap
+
+Revenue:
+
+* latest TTM revenue if available from ratios/key metrics/profile
+* otherwise latest annual revenue from income statement
+* preserve CSV fallback if unavailable
+
+Rev Grwth (Q):
+
+* prefer FMP quarterly income statement growth if accessible
+* otherwise derive latest quarter revenue vs same quarter prior year
+* if quarterly data is unavailable on plan, leave CSV fallback
+
+Rev Grwth (Y):
+
+* annual revenue YoY growth from income statement growth
+* or derive latest annual revenue vs prior annual revenue
+
+Gross Mgn:
+
+* FMP ratios TTM / ratios
+* or derive grossProfit / revenue
+
+FCF Mgn:
+
+* freeCashFlow / revenue
+
+Free CF:
+
+* cash flow statement freeCashFlow
+* or operatingCashFlow - capitalExpenditure
+
+Op. Income:
+
+* income statement operatingIncome
+
+EBIT:
+
+* income statement EBIT
+* or operatingIncome if EBIT unavailable and current CSV appears to use EBIT≈operating income
+
+P/E:
+
+* ratios TTM or key metrics TTM
+
+P/S:
+
+* ratios TTM or key metrics TTM
+
+EV/EBITDA:
+
+* ratios/key metrics/enterprise values
+* derive EV / EBITDA only if both are available
+
+EPS Grwth:
+
+* income statement growth EPS growth if available
+* otherwise derive latest diluted EPS vs prior period
+
+D/E:
+
+* ratios or derive totalDebt / totalStockholdersEquity
+
+ND/EBITDA:
+
+* derive netDebt / EBITDA
+* netDebt = totalDebt - cashAndCashEquivalents
+* use enterprise values/key metrics if already available
+
+Earn. Date:
+
+* earnings calendar/report latest upcoming or next earnings date
+
+Estimate fields:
+Use FMP Financial Estimates.
+
+Do not guess blindly. First inspect the FMP estimates payload for 10–20 representative tickers and map available fields.
+
+Derive estimate growth fields as follows, then compare against current CSV values:
+
+Rev Grwth Est:
+
+* likely current/next fiscal year revenue estimate growth vs comparable prior actual/estimate
+* audit against CSV values to pick the closest formula
+
+Rev Grwth NQ:
+
+* next quarter revenue estimate growth vs same quarter prior-year actual, if available
+* fallback: next quarter estimate vs current quarter estimate
+
+Rev Grwth NY:
+
+* next fiscal year revenue estimate growth vs current fiscal year estimate or latest actual annual revenue
+
+EPS Grwth Est:
+
+* likely current/next fiscal year EPS estimate growth vs comparable prior actual/estimate
+* audit against CSV values to pick the closest formula
+
+EPS Grwth TQ:
+
+* current quarter EPS estimate growth vs same quarter prior year, if available
+
+EPS Grwth NQ:
+
+* next quarter EPS estimate growth vs same quarter prior year, if available
+
+EPS Grwth TY:
+
+* current fiscal year EPS estimate growth vs prior fiscal year actual EPS
+
+EPS Grwth NY:
+
+* next fiscal year EPS estimate growth vs current fiscal year estimate or latest actual EPS
+
+Important:
+Do not claim exact StockAnalysis formula unless audit confirms close match.
+Use existing CSV as comparison baseline for initial validation.
+
+Insider % audit:
+Do not assume this field is available.
+
+Audit these FMP endpoints for sample tickers:
+
+* Insider Trade Statistics
+* Acquisition Ownership
+
+Sample tickers:
+
+* NVDA
+* MSFT
+* AAPL
+* AAOI
+* ASTS
+* RKLB
+* PLTR
+* IREN
+* NNE
+* MU
+
+Look for fields like:
+
+* insiderOwnershipPercent
+* insiderOwnership
+* ownershipPercent
+* percentOwned
+* sharesOwnedPercent
+* sharesHeldByInsiders
+* beneficialOwnershipPercent
+* totalInsiderShares / sharesOutstanding
+
+If a clean percent exists:
+
+* map it to Insider %
+
+If only raw transactions exist:
+
+* do not derive Insider % from transactions
+* leave CSV fallback
+
+If acquisition ownership gives shares owned and shares outstanding:
+
+* derive Insider % only if the ownership population clearly represents insiders/management/directors
+* otherwise leave CSV fallback
+
+Output an audit table:
+field -> endpoint -> raw key -> formula -> confidence -> fallback
+
+Merge precedence:
+For Fundamental Screener values:
+
+1. Fresh FMP normalized snapshot, if field exists
+2. Existing FMP normalized snapshot, if not stale beyond acceptable fallback window
+3. CSV uploaded value
+4. blank/—
+
+Do not let missing FMP fields erase CSV values.
+
+No-null overwrite rule:
+If the FMP refresh returns null/missing for a field, do not overwrite an existing non-null CSV or cached API value with null.
+
+Use field-level merge.
+
+Refresh behavior:
+
+* after initial CSV upload, set next_fmp_refresh_at = upload_time + 7 days
+* production scheduler only refreshes when now >= next_fmp_refresh_at
+* dev force refresh bypasses TTL only when explicitly requested
+
+Dev/test endpoint:
+Add a dev-only endpoint or CLI function to force refresh a small set or all current Watchlist symbols.
+
+Example:
+POST /api/debug/watchlist-fundamentals/refresh?symbols=AAOI,NVDA,MU
+or
+POST /api/debug/watchlist-fundamentals/refresh-all?dev_force=true
+
+Protect it behind existing auth/dev checks if available.
+
+This endpoint is only for testing. It should not be called by normal frontend page load.
+
+Pacing:
+Use the existing FMP limiter/governor.
+
+Do not exceed plan limits.
+Do not use bulk endpoints.
+Do not run all endpoint families for all tickers at once.
+
+Suggested:
+
+* process tickers sequentially or low concurrency
+* small delay between calls
+* cache individual endpoint payloads where useful
+* stop/resume safely if job is interrupted
+* write partial successes
+
+Diagnostics:
+Expose or log:
+
+* total_required_symbols
+* refreshed_symbols
+* skipped_fresh_symbols
+* failed_symbols
+* missing_field_counts
+* fmp_call_count
+* started_at
+* finished_at
+* next_refresh_at
+* sample normalized rows
+
+Validation:
+
+1. Do not change Fundamental Screener column headers.
+2. Do not change CSV upload flow.
+3. Upload CSV values still show immediately.
+4. No production FMP refresh runs immediately after upload.
+5. next_fmp_refresh_at is upload_time + 7 days.
+6. Dev force refresh can refresh sample tickers immediately.
+7. FMP refreshed values overlay the same existing columns.
+8. Missing FMP values fall back to CSV.
+9. FMP null values do not erase CSV values.
+10. Theme still comes from canonical AI-enhanced Watchlist theme.
+11. Insider % is mapped only if the endpoint audit proves a clean value.
+12. Estimate growth fields are derived from FMP estimates and compared against CSV sample values.
+13. No page-render API calls are added.
+14. No Tradier calls are added.
+15. No LLM calls are added.
+16. No provider storm.
+17. Report the final field mapping table before calling the task done.

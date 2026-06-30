@@ -1224,6 +1224,59 @@ async def save_endpoint(body: WatchlistSaveRequest):
     return result
 
 
+@router.post("/debug/fundamentals/refresh")
+async def debug_fundamentals_refresh(
+    symbols: Optional[str] = None,
+    dev_force: bool = True,
+    watchlist_id: Optional[str] = None,
+):
+    """
+    DEV-ONLY: Force an immediate FMP fundamentals refresh for testing.
+    Does not affect production weekly scheduler behavior.
+    Never called by normal frontend page loads.
+
+    Usage:
+      POST /api/watchlist/debug/fundamentals/refresh?symbols=AAOI,NVDA,MU
+      POST /api/watchlist/debug/fundamentals/refresh?dev_force=true           (all tickers in default watchlist)
+      POST /api/watchlist/debug/fundamentals/refresh?watchlist_id=<id>&dev_force=true
+    """
+    import os as _os
+    from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
+
+    _fmp_key = _os.getenv("FMP_API_KEY", "")
+    if not _fmp_key:
+        raise HTTPException(status_code=503, detail="FMP_API_KEY not configured")
+
+    refresher = FmpFundamentalsRefresher(_fmp_key)
+
+    # Resolve symbol list
+    if symbols:
+        sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        wl_id = watchlist_id or "manual"
+    else:
+        wl_id = watchlist_id or "23eec278-074a-4706-a62a-c35d38b384ea"
+        store = load_watchlist(wl_id)
+        if not store:
+            raise HTTPException(status_code=404, detail=f"Watchlist {wl_id} not found")
+        sym_list = store.get("tickers") or []
+
+    if not sym_list:
+        raise HTTPException(status_code=400, detail="No symbols to refresh")
+
+    result = await refresher.refresh_symbols(sym_list, wl_id, dev_force=dev_force)
+    return result
+
+
+@router.get("/debug/fundamentals/status")
+async def debug_fundamentals_status(watchlist_id: Optional[str] = None):
+    """
+    DEV-ONLY: Return the FMP fundamentals cache status for a watchlist.
+    """
+    from data.watchlist_fundamentals_store import get_diagnostics as _get_diag
+    wl_id = watchlist_id or "23eec278-074a-4706-a62a-c35d38b384ea"
+    return _get_diag(wl_id)
+
+
 @router.get("/debug")
 async def debug_endpoint():
     """Debug endpoint — returns file path, existence, Postgres availability."""
@@ -2217,6 +2270,24 @@ async def get_by_id_endpoint(watchlist_id: str):
         store = await _enrich_store_with_quotes(store)
     except Exception as _enrich_err:
         print(f"[WATCHLIST] Quote enrichment failed (returning raw): {_enrich_err}")
+
+    # ── FMP fundamentals overlay (weekly cache, non-blocking read) ────────────
+    # Overlays cached FMP values onto csv_data. No-null overwrite: FMP null/missing
+    # values never erase existing CSV values. Theme column is never sourced from FMP.
+    try:
+        from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_snaps
+        from services.watchlist_fundamentals_refresh import apply_fmp_overlays as _apply_fmp
+        _raw_csv = store.get("csv_data") or []
+        if _raw_csv:
+            _syms = [
+                (r.get("Symbol") or r.get("symbol") or r.get("Ticker") or "").strip().upper()
+                for r in _raw_csv
+            ]
+            _snaps = _get_fund_snaps([s for s in _syms if s])
+            if _snaps:
+                store["csv_data"] = _apply_fmp(_raw_csv, _snaps)
+    except Exception as _fund_err:
+        pass  # non-fatal — serve unmodified CSV data
 
     # ── Alert bus hook: watchlist full-activity metrics ───────────────────────
     # Fire-and-forget; runs after response is already built. No provider calls.

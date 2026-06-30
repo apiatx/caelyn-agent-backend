@@ -496,6 +496,57 @@ async def lifespan(app):
             except Exception as _arc_e:
                 print(f"[ALERT_BUS] Retention cleanup error (non-fatal): {_arc_e}")
     asyncio.create_task(_alert_bus_retention_loop())
+
+    # Watchlist Fundamentals weekly FMP refresh — checks every hour, refreshes
+    # symbols whose next_refresh_at <= NOW (set to upload_time + 7 days on CSV save).
+    # Never runs on page render. Never storms FMP. Uses existing rate limiter cadence.
+    try:
+        from data.watchlist_fundamentals_store import ensure_table as _fund_ensure_table
+        _fund_ensure_table()
+    except Exception as _fund_init_e:
+        print(f"[STARTUP] watchlist_fundamentals_cache table init error (non-fatal): {_fund_init_e}")
+
+    async def _watchlist_fundamentals_weekly_loop():
+        import asyncio as _aio
+        await _aio.sleep(300)   # 5-min startup delay — let other loops warm first
+        while True:
+            try:
+                import os as _os
+                from data.pg_storage import watchlist_list as _wl_list, is_available as _pg_ok
+                from data.watchlist_fundamentals_store import list_due_symbols as _due_syms
+                from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
+
+                _fmp_key = _os.getenv("FMP_API_KEY", "")
+                if not _fmp_key or not _pg_ok():
+                    await _aio.sleep(3600)
+                    continue
+
+                _refresher = FmpFundamentalsRefresher(_fmp_key)
+
+                # Collect due symbols across all known watchlists
+                _all_due: dict[str, list[str]] = {}
+                for _wl in (_wl_list() or []):
+                    _wl_id = _wl.get("id") or ""
+                    if not _wl_id:
+                        continue
+                    _due = _due_syms(_wl_id)
+                    if _due:
+                        _all_due[_wl_id] = _due
+
+                for _wl_id, _syms in _all_due.items():
+                    print(f"[FUND_WEEKLY] Refreshing {len(_syms)} due symbols for watchlist {_wl_id}")
+                    _res = await _refresher.refresh_symbols(_syms, _wl_id, dev_force=False)
+                    print(f"[FUND_WEEKLY] Done: refreshed={_res.get('refreshed_symbols')} "
+                          f"skipped={_res.get('skipped_fresh_symbols')} "
+                          f"failed={_res.get('failed_symbols')}")
+
+            except Exception as _fund_loop_e:
+                print(f"[FUND_WEEKLY] loop error (non-fatal): {_fund_loop_e}")
+
+            await _aio.sleep(3600)   # re-check every hour
+
+    asyncio.create_task(_watchlist_fundamentals_weekly_loop())
+
     # Thematic context warmup: load LKG from disk immediately, then rebuild from caches.
     # Runs after a 5s delay so sector rotation loop has a head start.
     # No LLM calls, no API calls — pure cache/disk reads + static registry.
