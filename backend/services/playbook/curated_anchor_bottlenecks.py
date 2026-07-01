@@ -19,6 +19,7 @@ try:
     from services.playbook.curated_anchor_bottlenecks_msft import _ANCHOR_DATA as _MSFT_DATA
     from services.playbook.curated_anchor_bottlenecks_meta import _ANCHOR_DATA as _META_DATA
     from services.playbook.curated_anchor_bottlenecks_amzn import _ANCHOR_DATA as _AMZN_DATA
+    from services.playbook.curated_anchor_bottlenecks_mu   import _ANCHOR_DATA as _MU_DATA
     _PHASE2_AVAILABLE = True
 except ImportError:
     _PHASE2_AVAILABLE = False
@@ -6235,7 +6236,7 @@ _ANCHOR_RAW: dict[str, dict] = {
 }
 
 
-# ── Phase-2 anchors merged in (AAPL, AMD, AVGO, MSFT, META, AMZN) ─────────────
+# ── Phase-2 anchors merged in (AAPL, AMD, AVGO, MSFT, META, AMZN, MU) ─────────
 if _PHASE2_AVAILABLE:
     for _key, _data in [
         ("AAPL",  _AAPL_DATA),
@@ -6244,6 +6245,7 @@ if _PHASE2_AVAILABLE:
         ("MSFT",  _MSFT_DATA),
         ("META",  _META_DATA),
         ("AMZN",  _AMZN_DATA),
+        ("MU",    _MU_DATA),
     ]:
         _ANCHOR_RAW[_key] = _data
 
@@ -6266,18 +6268,19 @@ def get_curated_anchor_bottlenecks(anchor_key: str) -> list[dict]:
 
 
 _ANCHOR_META: dict[str, dict] = {
-    "SPCX":      {"visible_name": "X / X Ecosystem",    "subtitle": "SpaceX / Tesla / xAI",          "display_order": 1},
-    "NVDA":      {"visible_name": "NVIDIA",              "subtitle": "AI GPU & Accelerators",          "display_order": 2},
-    "AMZN":      {"visible_name": "Amazon",              "subtitle": "AWS & Logistics",                "display_order": 3},
-    "MSFT":      {"visible_name": "Microsoft",           "subtitle": "Azure & AI Platform",            "display_order": 4},
-    "GOOG":      {"visible_name": "Google / Alphabet",   "subtitle": "GCP & Custom Silicon",           "display_order": 5},
-    "META":      {"visible_name": "Meta",                "subtitle": "AI Infrastructure & AR/VR",      "display_order": 6},
-    "AAPL":      {"visible_name": "Apple",               "subtitle": "Device & Silicon Supply Chain",  "display_order": 7},
-    "TSM":       {"visible_name": "TSMC",                "subtitle": "Advanced Foundry",               "display_order": 8},
-    "AVGO":      {"visible_name": "Broadcom",            "subtitle": "Custom Silicon & Networking",    "display_order": 9},
-    "AMD":       {"visible_name": "AMD",                 "subtitle": "GPU & CPU for AI",               "display_order": 10},
-    "OPENAI":    {"visible_name": "OpenAI",              "subtitle": "AI Research & Deployment",       "display_order": 11},
-    "ANTHROPIC": {"visible_name": "Anthropic",           "subtitle": "AI Safety & Cloud Inference",    "display_order": 12},
+    "NVDA":      {"visible_name": "NVIDIA",              "subtitle": "AI GPU & Accelerators",          "display_order": 1},
+    "SPCX":      {"visible_name": "X / X Ecosystem",    "subtitle": "SpaceX / Tesla / xAI",          "display_order": 2},
+    "MU":        {"visible_name": "Micron",              "subtitle": "Memory / HBM / Semiconductor Supply Chain", "display_order": 3},
+    "ANTHROPIC": {"visible_name": "Anthropic",           "subtitle": "AI Safety & Cloud Inference",    "display_order": 4},
+    "OPENAI":    {"visible_name": "OpenAI",              "subtitle": "AI Research & Deployment",       "display_order": 5},
+    "TSM":       {"visible_name": "TSMC",                "subtitle": "Advanced Foundry",               "display_order": 6},
+    "GOOG":      {"visible_name": "Google / Alphabet",   "subtitle": "GCP & Custom Silicon",           "display_order": 7},
+    "AAPL":      {"visible_name": "Apple",               "subtitle": "Device & Silicon Supply Chain",  "display_order": 8},
+    "AMD":       {"visible_name": "AMD",                 "subtitle": "GPU & CPU for AI",               "display_order": 9},
+    "AVGO":      {"visible_name": "Broadcom",            "subtitle": "Custom Silicon & Networking",    "display_order": 10},
+    "MSFT":      {"visible_name": "Microsoft",           "subtitle": "Azure & AI Platform",            "display_order": 11},
+    "META":      {"visible_name": "Meta",                "subtitle": "AI Infrastructure & AR/VR",      "display_order": 12},
+    "AMZN":      {"visible_name": "Amazon",              "subtitle": "AWS & Logistics",                "display_order": 13},
 }
 
 # Normalise external-facing aliases → internal registry key

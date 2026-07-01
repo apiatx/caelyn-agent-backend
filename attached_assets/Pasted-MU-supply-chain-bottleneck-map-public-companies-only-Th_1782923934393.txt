@@ -1,0 +1,281 @@
+MU supply-chain bottleneck map — public companies only
+
+This is not “every company that could theoretically sell into semis.” This is the investable MU-critical map: companies tied to Micron directly, or public companies controlling inputs Micron explicitly says matter: advanced equipment, wafers, chemicals, gases, photoresists, substrates, PCBs, reticle blanks, assembly/test, external manufacturing, construction, utilities, and facilities. Micron’s own 10-K says certain materials/components/services are limited-source or sole-source, and names the exact categories that can constrain shipments: chemicals, silicon wafers, gases, photoresists, semiconductors, substrates, lead frames, PCBs, targets, reticle glass blanks, outsourced assembly/test, contract manufacturers, logistics, utilities, and advanced equipment.
+
+Scoring: 90–100 = true chokepoint / scarce / highest leverage to MU capex or HBM. 80–89 = critical supplier layer. 70–79 = important bottleneck with competition. 60–69 = useful but less scarce. Below 60 = mostly infrastructure/IT/logistics, still relevant but not where the alpha usually hides.
+
+Micron is in record expansion mode: FQ3 2026 capex was $7.1B, Q4 guide implied continued huge spend, and Micron highlighted HBM4 high-volume shipments plus HBM4E volume production expected in calendar 2027. Reuters also reported $22B of strategic customer commitments and tight memory conditions expected beyond calendar 2027, so the bottleneck stack matters now — not “someday.”
+
+Top 25 MU bottleneck suppliers by score
+Rank	Company	Ticker	Layer	MU link	Bottleneck score
+1	ASML	ASML	EUV/DUV lithography	Direct Micron supplier award	99
+2	Lam Research	LRCX	Etch/deposition/front-end tools	Direct award	96
+3	Applied Materials	AMAT	Deposition/metals/materials engineering	Direct award	94
+4	Tokyo Electron	8035.T / TOELY	Coater/developer, etch, deposition, clean	Direct award	91
+5	KLA	KLAC	Metrology/inspection/yield control	High-confidence MU-critical	90
+6	Hanmi Semiconductor	042700.KS	HBM thermo-compression bonding	Direct award	89
+7	Siltronic	WAF.DE	300mm silicon wafers	Direct award	88
+8	Shin-Etsu Chemical	4063.T / SHECY	Silicon wafers/materials	Direct award	88
+9	DISCO	6146.T	Wafer dicing/grinding/thinning	Direct award	86
+10	SUMCO	3436.T	300mm silicon wafers	Critical wafer supplier	85
+11	Entegris	ENTG	Filtration, contamination control, CMP chemicals	Critical materials bottleneck	84
+12	Ajinomoto	2802.T	ABF/advanced substrate materials	HBM substrate layer	83
+13	SCREEN Holdings	7735.T	Wafer cleaning/wet process	Direct award	82
+14	GlobalWafers	6488.TWO	Silicon wafers	Critical wafer supplier	82
+15	Fujifilm Holdings	4901.T	Electronic materials/photoresists/CMP	Direct award	81
+16	Tokyo Ohka Kogyo	4186.T	Photoresists/chemicals	Direct award	80
+17	Air Liquide	AI.PA	Ultra-high purity gases/on-site gas	Critical fab input	79
+18	Ibiden	4062.T	IC substrates/advanced packaging	HBM substrate bottleneck	79
+19	Tripod Technology	3044.TW	Assembly/test materials/PCBs	Direct award	78
+20	Phison	8299.TWO	NAND/SSD controllers	Direct award	78
+21	Advantest	6857.T	Memory/SoC test equipment	Critical test layer	77
+22	Montage Technology	688008.SS	DDR module components/RCD/SPD/PMIC	Direct award	77
+23	Linde	LIN	Industrial/specialty gases	Critical fab input	76
+24	Teradyne	TER	Test equipment	Critical test layer	75
+25	Powertech Technology	6239.TW	External manufacturing/OSAT	Direct award	75
+
+Blunt take: The cleanest MU bottleneck basket is ASML / LRCX / AMAT / KLAC / TEL / Hanmi / DISCO / Siltronic / Shin-Etsu / Entegris / SCREEN / Fujifilm / TOK / Tripod / Phison / Montage / Powertech. That is the spine.
+
+Direct-confirmed public Micron supplier list
+
+Micron’s 2025 Supplier Awards named Lam Research, Siltronic, Hanmi Semiconductor, Tripod, TSMT, Phison, AWS, United Integrated Services, Schneider Electric, Applied Materials, Fujifilm Electronic Materials, Murata, and Tokyo Electron across front-end equipment/materials, assembly/test, semiconductors, construction/facilities, and quality categories. Its 2024 awards also named ASML, Shin-Etsu, DISCO, SCREEN, Powertech, Monolithic Power Systems, JSR Micro, Resonac, Google Cloud, and others; I am excluding non-public names like JSR and Exyte from the investable list.
+
+Company	Ticker	Layer	Score
+ASML	ASML	Lithography	99
+Lam Research	LRCX	Etch/deposition/front-end capital	96
+Applied Materials	AMAT	Deposition/materials engineering/front-end tools	94
+Tokyo Electron	8035.T / TOELY	Lithography track, etch, deposition, clean	91
+Hanmi Semiconductor	042700.KS	HBM/assembly & test capital equipment	89
+Siltronic	WAF.DE	Silicon wafers	88
+Shin-Etsu Chemical	4063.T / SHECY	Silicon wafers/materials	88
+DISCO	6146.T	Dicing, grinding, wafer thinning	86
+SCREEN Holdings	7735.T	Wet clean / wafer process	82
+Fujifilm Holdings	4901.T	Electronic materials	81
+Tokyo Ohka Kogyo	4186.T	Photoresists / front-end materials	80
+Tripod Technology	3044.TW	Assembly/test materials, PCB/substrates	78
+Phison Electronics	8299.TWO	SSD/NAND controllers	78
+Montage Technology	688008.SS	Memory module ICs/components	77
+Murata	6981.T	Passive components / assembly quality	75
+Resonac	4004.T	Packaging/electronic materials	74
+Powertech Technology	6239.TW	External manufacturing / OSAT	75
+United Integrated Services	2404.TW	Construction/facilities	73
+Schneider Electric	SU.PA	Facilities, energy management, power systems	72
+Monolithic Power Systems	MPWR	Power-management semiconductors	70
+Neosem	253590.KQ	Memory test equipment	70
+SIMMTECH	222800.KQ	Assembly/test substrates/materials	70
+Taiwan Surface Mounting Technology	6278.TW	External manufacturing	68
+Universal Scientific Industrial	601231.SS	External manufacturing	66
+Nordson	NDSN	Inspection/metrology via CyberOptics acquisition	65
+Amazon	AMZN	AWS / IT services	55
+Alphabet	GOOGL	Google Cloud / IT services	54
+Dell Technologies	DELL	IT/professional services	50
+Full public-only map by layer
+1) Lithography, masks, resists — highest chokepoint layer
+
+Micron explicitly says photolithography tools can be single-supplier dependent, and ASML says its EUV systems are used in high-volume manufacturing of advanced logic and memory chips.
+
+Company	Ticker	Role	Score
+ASML	ASML	EUV/DUV lithography	99
+Tokyo Electron	8035.T	Coater/developer + litho track	91
+Tokyo Ohka Kogyo	4186.T	Photoresist	80
+Fujifilm Holdings	4901.T	Photoresist/electronic materials	81
+Shin-Etsu Chemical	4063.T	Wafers + litho materials	88
+Lasertec	6920.T	EUV mask inspection	78
+HOYA	7741.T	Mask blanks / optical materials	76
+AGC	5201.T	Glass/materials/photomask supply chain	72
+Photronics	PLAB	Photomasks	68
+Dai Nippon Printing	7912.T	Photomasks / electronics materials	66
+TOPPAN Holdings	7911.T	Photomasks / packaging materials	66
+Canon	7751.T	DUV/nanoimprint lithography optionality	62
+Nikon	7731.T	DUV lithography	60
+2) Front-end wafer-fab equipment — MU capex torque
+Company	Ticker	Role	Score
+Lam Research	LRCX	Etch/deposition	96
+Applied Materials	AMAT	Deposition, process tools, materials engineering	94
+Tokyo Electron	8035.T	Etch/deposition/clean/track	91
+KLA	KLAC	Metrology/inspection/yield	90
+ASM International	ASM.AS	ALD/epitaxy	78
+SCREEN Holdings	7735.T	Cleaning/wet process	82
+Ebara	6361.T	CMP/pumps	73
+ULVAC	6728.T	Vacuum/deposition	71
+Axcelis	ACLS	Ion implantation	69
+Nova	NVMI	Process control/metrology	70
+Onto Innovation	ONTO	Metrology/inspection, packaging process control	72
+Camtek	CAMT	Inspection/metrology, packaging	70
+MKS Instruments	MKSI	RF power, lasers, vacuum subsystems	76
+VAT Group	VACN.SW	Vacuum valves	74
+Atlas Copco	ATCO-A.ST	Edwards vacuum / abatement	73
+Ichor Holdings	ICHR	Fluid delivery subsystems	68
+3) Silicon wafers — quiet but brutal bottleneck
+Company	Ticker	Role	Score
+Shin-Etsu Chemical	4063.T	300mm wafers	88
+Siltronic	WAF.DE	300mm wafers	88
+SUMCO	3436.T	300mm wafers	85
+GlobalWafers	6488.TWO	Silicon wafers	82
+Wafer Works	6182.TW	Silicon wafers, smaller-cap supplier	60
+Soitec	SOI.PA	Engineered substrates; less DRAM-core, more specialty	58
+4) Specialty chemicals, gases, filters, CMP — high-margin “don’t contaminate the fab” layer
+Company	Ticker	Role	Score
+Entegris	ENTG	Filtration, contamination control, specialty chemicals	84
+Fujifilm Holdings	4901.T	Electronic chemicals/materials	81
+Merck KGaA	MRK.DE	Semiconductor materials	78
+Air Liquide	AI.PA	Ultra-high purity gases	79
+Linde	LIN	Industrial/specialty gases	76
+Air Products	APD	Specialty gases	74
+Resonac	4004.T	Electronic/packaging materials	74
+ADEKA	4401.T	High-k / semiconductor chemicals	70
+Fujimi	5384.T	CMP slurries	70
+Nitto Denko	6988.T	Films, tapes, process materials	69
+Stella Chemifa	4109.T	Fluorochemicals	65
+Kanto Denka Kogyo	4047.T	Specialty gases/chemicals	65
+UBE Corp	4208.T	Chemicals/materials	63
+Solvay	SOLB.BR	Specialty chemicals	62
+Syensqo	SYENS.BR	Advanced materials	62
+KC Tech	281820.KS	CMP/cleaning equipment/materials	64
+5) HBM advanced packaging equipment — the best under-the-hood MU/HBM layer
+
+Micron is building a roughly $7B HBM advanced-packaging facility in Singapore, scheduled to begin operations in 2026, with meaningful capacity expansion beginning in 2027. That makes HBM packaging equipment and materials one of the most important MU supplier hunting zones.
+
+Company	Ticker	Role	Score
+Hanmi Semiconductor	042700.KS	TC bonders / HBM bonding	89
+DISCO	6146.T	Wafer thinning, grinding, dicing	86
+ASMPT	0522.HK	Advanced packaging/bonding	77
+BE Semiconductor	BESI.AS	Hybrid/advanced bonding	76
+Kulicke & Soffa	KLIC	Wire/advanced packaging bonders	68
+Shibaura Mechatronics	6590.T	Packaging/cleaning/semiconductor equipment	67
+TOWA	6315.T	Molding/encapsulation	66
+Tokyo Seimitsu / Accretech	7729.T	Probers, dicing/metrology	66
+Onto Innovation	ONTO	Advanced packaging metrology	72
+Camtek	CAMT	Advanced packaging inspection	70
+Cohu	COHU	Test/handlers	65
+Nordson	NDSN	Inspection/dispense/test via CyberOptics	65
+6) IC substrates, PCBs, ABF, package materials — HBM substrate choke layer
+Company	Ticker	Role	Score
+Ajinomoto	2802.T	ABF film	83
+Ibiden	4062.T	Advanced IC substrates	79
+Unimicron	3037.TW	IC substrates/PCBs	78
+Tripod Technology	3044.TW	PCBs / assembly-test materials	78
+Samsung Electro-Mechanics	009150.KS	IC substrates/MLCC	76
+Kinsus	3189.TW	IC substrates	74
+AT&S	ATS.VI	Advanced substrates	73
+Nan Ya PCB	8046.TW	PCB/substrates	72
+SIMMTECH	222800.KQ	Memory module/semiconductor substrates	70
+Lintec	7966.T	Semiconductor tapes/films	67
+Compeq	2313.TW	PCBs	65
+Korea Circuit	007810.KS	PCBs/substrates	64
+Daeduck Electronics	353200.KS	PCBs/substrates	64
+Shennan Circuits	002916.SZ	PCBs/substrates	63
+TTM Technologies	TTMI	PCBs	58
+7) Test, burn-in, handlers, probes — yield gatekeeper layer
+
+Micron says it tests products at multiple stages and performs high-temperature burn-in; higher-end products require progressively higher testing speeds and quality levels.
+
+Company	Ticker	Role	Score
+Advantest	6857.T	Memory/SoC test systems	77
+Teradyne	TER	Semiconductor test	75
+FormFactor	FORM	Probe cards	71
+Neosem	253590.KQ	Memory test equipment	70
+Cohu	COHU	Test handlers/inspection	65
+Aehr Test Systems	AEHR	Burn-in/test; less direct to MU memory	54
+8) OSAT / external manufacturing / EMS — important, but less scarce than EUV/HBM tools
+
+Micron says it assembles many products in-house but outsources some assembly services for packaged die, memory modules, SSDs, and MCPs.
+
+Company	Ticker	Role	Score
+Powertech Technology	6239.TW	Memory OSAT / external manufacturing	75
+Taiwan Surface Mounting Technology	6278.TW	EMS/external manufacturing	68
+Universal Scientific Industrial	601231.SS	EMS/external manufacturing	66
+ASE Technology	ASX / 3711.TW	OSAT	70
+Amkor	AMKR	OSAT	68
+JCET	600584.SS	OSAT	65
+ChipMOS	IMOS	Memory/driver IC test & assembly	64
+Hana Micron	067310.KQ	Memory packaging/OSAT	62
+9) SSD controllers, module ICs, analog/power semiconductors — less visible, real MU product dependency
+Company	Ticker	Role	Score
+Phison	8299.TWO	NAND/SSD controllers	78
+Montage Technology	688008.SS	DDR5 RCD/SPD hub/module ICs	77
+Monolithic Power Systems	MPWR	Power-management ICs	70
+Silicon Motion	SIMO	SSD controllers	69
+Rambus	RMBS	DDR interface chips/IP	67
+Renesas	6723.T	Timing/power/logic ICs	63
+Marvell	MRVL	Storage/data-center controllers	62
+Microchip	MCHP	Controllers/mixed signal	58
+10) Fab construction, cleanroom, power/facilities — massive spend, but direct-public visibility is spotty
+
+Micron says fab construction depends on specialized equipment, labor, materials, skilled subcontractors, and service providers; industrywide expansion can create shortages and cost inflation. Micron also says operations depend on reliable power, gas, and water.
+
+Company	Ticker	Role	Score
+United Integrated Services	2404.TW	Construction/facilities; direct award	73
+Schneider Electric	SU.PA	Energy management/facilities; direct award	72
+Eaton	ETN	Electrical distribution/power systems	68
+Vertiv	VRT	Power/cooling infrastructure	67
+Comfort Systems USA	FIX	Mechanical/electrical contractors	65
+EMCOR	EME	Mechanical/electrical construction	64
+Quanta Services	PWR	Electrical infrastructure	63
+Jacobs	J	Engineering/construction services	62
+AECOM	ACM	Engineering/construction services	61
+Fluor	FLR	EPC/construction	60
+Trane Technologies	TT	HVAC/chillers	60
+Johnson Controls	JCI	Building systems/HVAC	58
+Carrier	CARR	HVAC/cooling	57
+Hubbell	HUBB	Electrical components	56
+Atkore	ATKR	Electrical conduit/infrastructure	55
+Idaho Power / IDACORP	IDA	Idaho power exposure	53
+National Grid	NGG	New York power/grid exposure	52
+Sembcorp Industries	U96.SI	Singapore utilities/energy exposure	51
+Tenaga Nasional	TNB.KL	Malaysia utility exposure	50
+Best asymmetric smaller/mid-cap angles
+
+The mega-cap equipment names are the obvious toll roads. The less obvious “could still surprise” names are:
+
+Hanmi Semiconductor — probably the cleanest HBM packaging bottleneck. Direct MU supplier award, tied to assembly/test capital equipment, and the TC-bonder narrative is exactly where HBM scaling gets ugly. This is the kind of thing the market eventually treats like “picks and shovels with a chokehold.”
+
+Siltronic / GlobalWafers / SUMCO — wafer supply is boring until everyone needs 300mm capacity at the same time. Siltronic has direct MU award evidence.
+
+Tripod / SIMMTECH / Unimicron / Kinsus / Nan Ya PCB — substrate/PCB layer. Less sexy than HBM, but HBM packages and memory modules don’t ship on vibes. They need boards/substrates.
+
+Phison / Montage / Silicon Motion / Rambus — downstream controller/module-chip exposure. More cyclical and less “hard chokepoint” than tools/materials, but potentially more asymmetric than ASML/AMAT if memory stays hot.
+
+FormFactor / Neosem / Cohu / Onto / Camtek — test/metrology small/mid-cap basket. This is where yield pain becomes revenue.
+
+Bias
+
+Bullish on the MU supplier ecosystem, but not equally bullish on every name. The best setup is not “buy everything semicap.” It is HBM packaging + lithography/etch/metrology + wafers/materials + substrates/test. That’s where scarcity meets spend.
+
+Macro overlay
+
+Risk-on for AI memory capex, but cyclical-risk high. Micron’s customer commitments and HBM/advanced DRAM demand are screaming “hot table,” but memory is still memory: when supply finally catches up, pricing power can compress fast. Reuters explicitly flagged that the bull case depends on tightness staying tight.
+
+Technical summary
+
+No chart trade here yet. For entries, I would only buy individual suppliers if they are in Stage 2 / continuation breakout or pulling back constructively to rising key moving averages. No falling knives, no “it’s a bottleneck so I can ignore the chart.” That’s how portfolios get turned into confetti.
+
+Best setup
+
+Highest-quality basket: ASML, LRCX, AMAT, KLAC, TEL, Hanmi, DISCO, Siltronic, Shin-Etsu, Entegris, SCREEN, Fujifilm, TOK, Tripod, Phison, Montage, Powertech.
+
+Most explosive research candidates: Hanmi, Neosem, Tripod, SIMMTECH, Montage, Phison, GlobalWafers, FormFactor, Onto, Camtek.
+
+Invalidation
+
+If Micron or SK Hynix starts signaling HBM supply normalization, capex digestion, lower tool intensity, or substrate/test bottleneck easing, reduce the long-tail suppliers first. The big equipment names can survive cycles; the smaller suppliers get body-slammed when orders pause.
+
+Social sentiment overlay
+
+Sentiment is hot-to-euphoric around MU/HBM right now. That helps momentum, but crowding risk is rising. The less crowded edge is not MU itself anymore; it’s the suppliers the market still treats like boring plumbing.
+
+Trade grade
+
+Theme grade: A- / 84. Strong macro alignment, strong catalyst support, excellent bottleneck structure. Not A+ because a lot of obvious names have already rerated and memory cyclicality can turn violent.
+
+Position size
+
+For a diversified supplier basket: 6–10% total portfolio max unless you already own heavy semis/memory. For a single small/mid-cap supplier: 0.5–1.5% risk-defined position, depending on chart and liquidity. Do not put five “different” HBM suppliers in the portfolio and pretend correlation does not exist. It’s one trade wearing five costumes.
+
+Portfolio risk check
+
+If you already own MU, NVDA, AVGO, AMD, WDC/SNDK, semicap, or AI infra, this basket is highly correlated. Treat the whole thing as one AI-memory-capex exposure bucket.
+
+Biggest risk to thesis
+
+The biggest risk is supply catches up faster than expected or customer qualification shifts away from premium HBM economics. Second biggest: the public supplier you buy is real but already priced like the bottleneck has been discovered by everyone with a Bloomberg terminal and three coffees.

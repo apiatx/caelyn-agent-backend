@@ -1,0 +1,255 @@
+Backend only.
+
+Add a new Chain Reaction / Bottlenecks anchor for Micron, but do this in a controlled two-step process.
+
+New anchor:
+
+* anchor_key: `MU`
+* anchor_name: `Micron`
+* visible_name: `Micron`
+* subtitle: `Memory / HBM / Semiconductor Supply Chain`
+* display label: `MU`
+
+Do not edit frontend yet.
+Do not use Claude/OpenAI/web search.
+Do not change `/api/bottlenecks/current`.
+Do not break existing anchors.
+Do not break manual overlay.
+Do not break overlap.
+Do not make live quote/fundamental calls.
+
+I am going to paste the full MU bottleneck research below.
+
+Important:
+The pasted MU source is the source of truth. Do not use only this prompt summary. Do not stop at the Top 25 table.
+
+PHASE 1 — Save full source verbatim
+
+Create or overwrite:
+
+`backend/services/playbook/curated_sources/mu_bottleneck_map.md`
+
+The file must contain the full pasted MU research response verbatim.
+
+Do not summarize.
+Do not compress.
+Do not convert it to only a ranked table.
+Do not remove narrative sections.
+Do not remove scoring key.
+Do not remove direct-confirmed supplier list.
+Do not remove layer explanations.
+Do not remove smaller/mid-cap angles.
+Do not remove bias / macro / technical / invalidation / sentiment / trade grade / position size / portfolio risk / biggest risk sections.
+
+After writing the source file, verify:
+
+* file path
+* character count
+* first 5 lines
+* last 5 lines
+* detected major headings
+* whether it appears full or compressed/truncated
+
+PHASE 2 — Extraction audit before generating Python
+
+Before creating `_mu.py`, parse/read the full markdown and produce a coverage audit.
+
+Extract public-company rows from every MU section:
+
+1. Intro / thesis / scoring key
+2. Top 25 MU bottleneck suppliers by score
+3. Direct-confirmed public Micron supplier list
+4. Full public-only map by layer:
+
+   * Lithography, masks, resists
+   * Front-end wafer-fab equipment
+   * Silicon wafers
+   * Specialty chemicals, gases, filters, CMP
+   * HBM advanced packaging equipment
+   * IC substrates, PCBs, ABF, package materials
+   * Test, burn-in, handlers, probes
+   * OSAT / external manufacturing / EMS
+   * SSD controllers, module ICs, analog/power semiconductors
+   * Fab construction, cleanroom, power/facilities
+5. Best asymmetric smaller/mid-cap angles
+6. Highest-quality basket
+7. Most explosive research candidates
+8. Invalidation / bias / trade grade / portfolio risk sections
+9. Exclusions
+
+Do not generate `_mu.py` until this audit is complete.
+
+The audit must report:
+
+Section | Public tickers found | Companies found | Duplicates merged | Exclusions
+
+The audit must specifically check for these source tickers/names where present:
+
+ASML, LRCX, AMAT, 8035.T, TOELY, KLAC, 042700.KS, WAF.DE, 4063.T, SHECY, 6146.T, 3436.T, ENTG, 2802.T, 7735.T, 6488.TWO, 4901.T, 4186.T, AI.PA, 4062.T, 3044.TW, 8299.TWO, 6857.T, 688008.SS, LIN, TER, 6239.TW, 6981.T, 4004.T, 2404.TW, SU.PA, MPWR, 253590.KQ, 222800.KQ, 6278.TW, 601231.SS, NDSN, AMZN, GOOGL, DELL, 6920.T, 7741.T, 5201.T, PLAB, 7912.T, 7911.T, 7751.T, 7731.T, ASMI.AS, 6361.T, 6728.T, ACLS, NVMI, ONTO, CAMT, MKSI, VACN.SW, ATCO-A.ST, ICHR, 6182.TW, SOI.PA, MRK.DE, APD, 4401.T, 5384.T, 6988.T, 4109.T, 4047.T, 4208.T, SOLB.BR, SYENS.BR, 281820.KS, 0522.HK, BESI.AS, KLIC, 6590.T, 6315.T, 7729.T, COHU, 3037.TW, 009150.KS, 3189.TW, ATS.VI, 8046.TW, 7966.T, 2313.TW, 007810.KS, 353200.KS, 002916.SZ, TTMI, FORM, AEHR, ASX, 3711.TW, AMKR, 600584.SS, IMOS, 067310.KQ, SIMO, RMBS, 6723.T, MRVL, MCHP, ETN, VRT, FIX, EME, PWR, J, ACM, FLR, TT, JCI, CARR, HUBB, ATKR, IDA, NGG, U96.SI, TNB.KL.
+
+Acceptable exclusions only:
+
+* private company
+* delisted / no longer public
+* no public ticker provided or reasonably inferable
+* duplicate merged under the same MU anchor
+
+If excluding anything, report:
+
+* company
+* ticker if present
+* exact reason
+
+Do not exclude foreign-listed public tickers.
+Do not exclude OTC tickers.
+Do not exclude rows because market cap, quote, exchange, FMP profile, or TradingView symbol is missing.
+
+PHASE 3 — Generate curated MU anchor data
+
+After the extraction audit is complete, create:
+
+`backend/services/playbook/curated_anchors/_mu.py`
+
+Use the same structure as the other curated anchor files.
+
+Every MU row should include:
+
+* anchor_key: `MU`
+* anchor_name: `Micron`
+* ticker
+* bottleneck_ticker
+* company_name
+* tradingview_symbol
+* category_name
+* category_order
+* category_rank if available
+* layer_name
+* supply_chain_role
+* bottleneck_score
+* final_score if available
+* directness / status / confidence if available
+* relationship_type
+* relationship_specificity
+* evidence
+* why_it_matters
+* why_hidden if available
+* why_now if available
+* what_would_break_thesis if applicable
+* basket_tier / basket_name if applicable
+* risk_notes / invalidation_notes if applicable
+* source_type: `curated_static`
+* manual_added: false
+* giant_anchors containing `MU`
+
+Category objects should preserve useful section explanations where possible:
+
+* category_name
+* category_order
+* row_count
+* category_summary
+* bottleneck_read
+* rows
+
+Do not use generic placeholder research. Pull useful language from the MU source.
+
+Anchor-level metadata should preserve:
+
+* core thesis
+* scoring key
+* blunt take / cleanest MU basket
+* bias
+* macro overlay
+* technical summary
+* best setup
+* invalidation
+* sentiment overlay
+* trade grade
+* position size
+* portfolio risk
+* biggest risk
+
+If the current API does not expose these top-level fields yet, add them additively without breaking existing frontend consumers.
+
+PHASE 4 — Wire MU into backend
+
+Update imports/registry so MU appears in:
+
+* `/api/bottlenecks/anchors`
+* `/api/bottlenecks/anchor/MU`
+* `/api/bottlenecks/anchor/MU/ticker/{ticker}`
+* `/api/bottlenecks/multi-anchor-screener?min_anchors=2&limit=1000`
+* `/api/bottlenecks/anchor-overlap`
+
+Preferred visible anchor order after Multi-anchor:
+
+1. NVDA
+2. X
+3. MU
+4. ANTHROPIC
+5. OPENAI
+6. TSM
+7. GOOG
+8. AAPL
+9. AMD
+10. AVGO
+11. MSFT
+12. META
+13. AMZN
+
+If frontend controls order, still expose MU with display_order metadata.
+
+PHASE 5 — Validation
+
+Run:
+
+* `/api/bottlenecks/anchors`
+* `/api/bottlenecks/anchor/MU`
+* `/api/bottlenecks/anchor/MU/ticker/ASML`
+* `/api/bottlenecks/anchor/MU/ticker/042700.KS`
+* `/api/bottlenecks/anchor/MU/ticker/8299.TWO`
+* `/api/bottlenecks/multi-anchor-screener?min_anchors=2&limit=1000`
+* `/api/bottlenecks/current`
+
+Validate:
+
+* MU appears in anchor list
+* MU endpoint returns status ok
+* MU rows exists
+* MU categories exists
+* row_count equals len(rows)
+* category_count equals len(categories)
+* every row has bottleneck_ticker
+* every row has company_name
+* every row has category_name
+* every row has category_order
+* every row has evidence and/or why_it_matters
+* important MU source tickers are represented
+* no rows disappear because market data is missing
+* `/api/bottlenecks/current` unchanged
+* old LLM routes still disabled
+* no Bottlenecks endpoint calls Claude/OpenAI/web
+* manual overlay still works
+* overlap still works
+
+Return:
+
+Anchor | Source tickers found | API rows | Category count | Missing public tickers | Exclusions
+
+Also return:
+
+* files changed
+* source file character count
+* curated MU row count
+* MU category count
+* 20 sample MU rows across different categories
+* top 25 MU rows by bottleneck_score
+* top multi-anchor rows newly affected by MU
+* proof `/api/bottlenecks/current` is unchanged
+
+Do not mark complete if the MU anchor only contains the Top 25 or excludes the layer-map/smaller-player/facilities/controller/test names.
+
+After this prompt, I will paste the MU source using this delimiter:
+
+===== MU SOURCE START =====
+[paste full MU supply-chain bottleneck map]
+===== MU SOURCE END =====
