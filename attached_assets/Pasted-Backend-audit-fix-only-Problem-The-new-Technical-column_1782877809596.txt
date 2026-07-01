@@ -1,0 +1,63 @@
+Backend audit/fix only.
+
+Problem:
+The new Technical columns work for AAOI and MU, but most rows show —. That proves frontend wiring works, but most backend stage2_breakout rows likely do not have technical_metrics populated yet.
+
+Audit first.
+
+Confirm:
+1. how many Watchlist rows have stage2_breakout.technical_metrics
+2. which tickers have it
+3. which tickers are missing it
+4. whether technical_metrics are computed only through the existing Stage Analysis warmup/history path
+5. whether frontend makes zero new technical/provider calls
+6. whether Watchlist page load makes zero new Tradier/FMP calls for technical columns
+7. whether any new ungoverned provider call path was added
+
+Do not touch frontend.
+Do not touch Tradier dynamic pacer.
+Do not add page-render API/provider calls.
+Do not touch Fundamental toggle.
+Do not touch setup tabs.
+
+If the root cause is old-format Stage LKG entries, add/use a controlled backend technical backfill:
+
+- process only watchlist symbols missing technical_metrics
+- use existing Stage Analysis warmup path
+- use existing _fetch_bars/history path
+- use existing limiter/governor
+- no frontend fetches
+- no page-render fetches
+- preserve existing score/label/reason
+- do not overwrite valid stage labels with null
+- cap batch size
+- job-level lock
+- resumable
+- status endpoint
+
+Suggested endpoints:
+POST /api/watchlist/debug/technical/backfill/start?watchlist_id=<id>&missing_only=true&cap=50
+GET /api/watchlist/debug/technical/backfill/status
+
+Validate:
+1. Watchlist GET returns 302 rows
+2. stage2_breakout score/label/reason still present
+3. technical_metrics present for all symbols that successfully have stage history
+4. missing-history rows show — gracefully
+5. no page-render provider calls
+6. no Tradier pacer changes
+7. sample tickers show values:
+   - AAOI
+   - MU
+   - NVDA
+   - PLTR
+   - ASTS
+   - OPTX
+
+Report:
+- exact reason only AAOI/MU had values before
+- proof values come from existing Stage Analysis history path
+- no new page-load calls
+- no Tradier pacer changes
+- backfill status counts
+- number of rows with technical_metrics after backfill

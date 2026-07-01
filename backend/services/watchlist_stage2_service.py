@@ -590,3 +590,166 @@ async def warmup_stage2_all_watchlists(startup_delay_s: float = 0.0) -> dict:
         return {"status": "skipped", "reason": "no_tickers_in_any_watchlist"}
 
     return await warmup_stage2(tickers)
+
+
+# ── Technical metrics backfill ────────────────────────────────────────────────
+
+_TECH_BACKFILL_STATE: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "total_missing": 0,
+    "cap": 0,
+    "attempted": 0,
+    "merged": 0,
+    "no_bars": 0,
+    "fetch_failed": 0,
+    "still_missing_after": None,
+    "failed_symbols": [],
+}
+
+
+async def backfill_technical_metrics(
+    tickers: list[str],
+    *,
+    cap: int = 50,
+    missing_only: bool = True,
+) -> dict:
+    """
+    For LKG entries that have a valid stage entry but no technical_metrics,
+    fetch bars and MERGE technical fields in WITHOUT touching score/label/reason.
+
+    Uses the existing _fetch_bars() + compute_technical_metrics() path.
+    Job-level lock prevents concurrent runs.
+    Capped at `cap` symbols per call (resumable — next call picks up remaining).
+
+    Does NOT call analyze_symbol_stage() — stage labels are preserved as-is.
+    """
+    global _TECH_BACKFILL_STATE
+
+    if _TECH_BACKFILL_STATE.get("status") == "running":
+        return {"status": "already_running", "state": dict(_TECH_BACKFILL_STATE)}
+
+    started_at = datetime.now(timezone.utc).isoformat()
+
+    deduped = list(dict.fromkeys(s.strip().upper() for s in tickers if s.strip()))
+
+    if missing_only:
+        candidates = [
+            sym for sym in deduped
+            if _STAGE2_LKG.get(sym) is not None
+            and _STAGE2_LKG[sym].get("technical_metrics") is None
+        ]
+    else:
+        candidates = [sym for sym in deduped if _STAGE2_LKG.get(sym) is not None]
+
+    total_missing = len(candidates)
+    to_process = candidates[:cap]
+
+    _TECH_BACKFILL_STATE.update({
+        "status":          "running",
+        "started_at":      started_at,
+        "finished_at":     None,
+        "total_missing":   total_missing,
+        "cap":             cap,
+        "attempted":       0,
+        "merged":          0,
+        "no_bars":         0,
+        "fetch_failed":    0,
+        "still_missing_after": None,
+        "failed_symbols":  [],
+    })
+
+    print(
+        f"[TECH_BACKFILL] start: {total_missing} missing technical_metrics, "
+        f"cap={cap}, processing {len(to_process)}"
+    )
+
+    if not to_process:
+        _TECH_BACKFILL_STATE.update({
+            "status":      "done",
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "still_missing_after": 0,
+        })
+        return {"status": "nothing_to_do", "total_missing": total_missing}
+
+    from services.stage_analysis import compute_technical_metrics
+
+    sem = asyncio.Semaphore(_CONCURRENCY)
+
+    async def _fill_one(sym: str) -> None:
+        async with sem:
+            try:
+                await asyncio.sleep(0.3)
+                bars, fetch_status, hist_source = await _fetch_bars(sym)
+                _TECH_BACKFILL_STATE["attempted"] += 1
+
+                if not bars:
+                    if fetch_status == "no_bars":
+                        _TECH_BACKFILL_STATE["no_bars"] += 1
+                    else:
+                        _TECH_BACKFILL_STATE["fetch_failed"] += 1
+                        _TECH_BACKFILL_STATE["failed_symbols"].append(sym)
+                    return
+
+                tech = compute_technical_metrics(bars)
+                has_ohlcv = any(b.get("high") is not None for b in bars)
+                bar_dates = sorted(
+                    str(b.get("date", ""))[:10] for b in bars if b.get("date")
+                )
+                bar_count = len(bars)
+
+                existing = dict(_STAGE2_LKG.get(sym) or {})
+                existing.update({
+                    "technical_metrics":      tech,
+                    "technical_state":        tech.get("technical_state"),
+                    "technical_timing_score": tech.get("technical_timing_score"),
+                    "history_source":         hist_source,
+                    "bars_count":             bar_count,
+                    "history_start_date":     bar_dates[0]  if bar_dates else None,
+                    "history_end_date":       bar_dates[-1] if bar_dates else None,
+                    "has_ohlcv":              has_ohlcv,
+                    "has_200d":               bar_count >= 200,
+                    "has_252d":               bar_count >= 252,
+                    "tech_backfill_at":       datetime.now(timezone.utc).isoformat(),
+                })
+                _STAGE2_LKG[sym] = existing
+                _TECH_BACKFILL_STATE["merged"] += 1
+
+            except Exception as exc:
+                _TECH_BACKFILL_STATE["fetch_failed"] += 1
+                _TECH_BACKFILL_STATE["failed_symbols"].append(sym)
+                print(f"[TECH_BACKFILL] error {sym}: {exc}")
+
+    tasks = [_fill_one(sym) for sym in to_process]
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    _persist_lkg()
+
+    still_missing = sum(
+        1 for sym in deduped
+        if _STAGE2_LKG.get(sym) is not None
+        and _STAGE2_LKG[sym].get("technical_metrics") is None
+    )
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    _TECH_BACKFILL_STATE.update({
+        "status":              "done",
+        "finished_at":         finished_at,
+        "still_missing_after": still_missing,
+    })
+
+    summary = {
+        "status":               "done",
+        "total_missing_before": total_missing,
+        "cap":                  cap,
+        "attempted":            _TECH_BACKFILL_STATE["attempted"],
+        "merged":               _TECH_BACKFILL_STATE["merged"],
+        "no_bars":              _TECH_BACKFILL_STATE["no_bars"],
+        "fetch_failed":         _TECH_BACKFILL_STATE["fetch_failed"],
+        "still_missing_after":  still_missing,
+        "started_at":           started_at,
+        "finished_at":          finished_at,
+    }
+    print(f"[TECH_BACKFILL] done: {summary}")
+    return summary

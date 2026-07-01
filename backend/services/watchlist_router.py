@@ -1476,6 +1476,71 @@ async def debug_technical_status(watchlist_id: Optional[str] = None):
     }
 
 
+@router.post("/debug/technical/backfill/start")
+async def debug_technical_backfill_start(
+    watchlist_id: Optional[str] = None,
+    missing_only: bool = True,
+    cap: int = 50,
+):
+    """
+    DEV-ONLY: Fire-and-forget technical metrics backfill.
+
+    Processes LKG entries that have stage labels but no technical_metrics.
+    Merges technical fields only — does NOT overwrite score/label/reason/signals.
+    Uses the same _fetch_bars() + compute_technical_metrics() path as warmup_stage2.
+    Capped at `cap` symbols per call (resumable — re-POST picks up remaining).
+
+    Returns immediately; poll GET /debug/technical/backfill/status for progress.
+    """
+    from services.watchlist_stage2_service import (
+        backfill_technical_metrics,
+        _TECH_BACKFILL_STATE,
+        _STAGE2_LKG,
+    )
+
+    if _TECH_BACKFILL_STATE.get("status") == "running":
+        return {"status": "already_running", "state": dict(_TECH_BACKFILL_STATE)}
+
+    wl_id = watchlist_id or "23eec278-074a-4706-a62a-c35d38b384ea"
+    tickers: list[str] = []
+    try:
+        store = load_watchlist(wl_id)
+        if store:
+            tickers = [t.strip().upper() for t in (store.get("tickers") or []) if t.strip()]
+    except Exception:
+        pass
+
+    if not tickers:
+        tickers = list(_STAGE2_LKG.keys())
+
+    missing_count = sum(
+        1 for sym in tickers
+        if _STAGE2_LKG.get(sym) is not None
+        and _STAGE2_LKG[sym].get("technical_metrics") is None
+    )
+
+    import asyncio as _asyncio
+    _asyncio.create_task(
+        backfill_technical_metrics(tickers, cap=cap, missing_only=missing_only)
+    )
+
+    return {
+        "status":                    "started",
+        "watchlist_id":              wl_id,
+        "watchlist_tickers":         len(tickers),
+        "missing_technical_metrics": missing_count,
+        "cap":                       cap,
+        "missing_only":              missing_only,
+    }
+
+
+@router.get("/debug/technical/backfill/status")
+async def debug_technical_backfill_status():
+    """DEV-ONLY: Poll progress of an in-progress technical metrics backfill."""
+    from services.watchlist_stage2_service import _TECH_BACKFILL_STATE
+    return dict(_TECH_BACKFILL_STATE)
+
+
 @router.get("/debug/fundamentals/backfill/status")
 async def debug_fundamentals_backfill_status():
     """DEV-ONLY: Poll progress of an in-progress backfill."""
