@@ -1,0 +1,108 @@
+Backend validation only.
+
+Do not implement new features unless this validation finds a real bug.
+
+MU was added, but I need final proof before frontend updates.
+
+Concerns from your summary:
+
+1. `/api/bottlenecks/multi-anchor-screener` reported only 10 rows / 7 MU-anchored. That seems suspiciously low.
+2. I need the exact response shape and count for the frontend default query:
+   `/api/bottlenecks/multi-anchor-screener?min_anchors=2&limit=1000`
+3. I also need the MU source coverage report that compares source tickers to API rows.
+
+Please run these exact validations:
+
+1. MU source coverage
+
+Read:
+`backend/services/playbook/curated_sources/mu_bottleneck_map.md`
+
+Compare against:
+`/api/bottlenecks/anchor/MU`
+
+Report:
+
+Anchor | Source tickers found | API rows | Category count | Missing public tickers | Exclusions
+
+Acceptable exclusions only:
+
+* private company
+* delisted / no longer public
+* no public ticker provided or reasonably inferable
+* duplicate merged under MU
+
+Do not exclude foreign-listed public tickers.
+
+2. MU endpoint shape
+
+Call:
+`/api/bottlenecks/anchor/MU`
+
+Report:
+
+* status
+* row_count
+* len(rows)
+* category_count
+* len(categories)
+* whether every row has bottleneck_ticker
+* whether every row has company_name
+* whether every row has category_name
+* whether every row has category_order
+* whether every row has evidence or why_it_matters
+
+3. MU drawer routes
+
+Call:
+
+* `/api/bottlenecks/anchor/MU/ticker/ASML`
+* `/api/bottlenecks/anchor/MU/ticker/042700.KS`
+* `/api/bottlenecks/anchor/MU/ticker/8299.TWO`
+* `/api/bottlenecks/anchor/MU/ticker/688008.SS`
+* `/api/bottlenecks/anchor/MU/ticker/2404.TW`
+
+Confirm each returns a valid drawer/detail response.
+
+4. Multi-anchor screener exact frontend query
+
+Call this exact URL:
+`/api/bottlenecks/multi-anchor-screener?min_anchors=2&limit=1000`
+
+Report:
+
+* exact top-level keys in the response
+* whether rows are under `rows` or `items`
+* total count returned
+* whether any backend cap is being applied
+* whether MU appears in anchor badges / anchors for overlapping tickers
+* top 25 rows by anchor_count / max_bottleneck_score
+
+Important:
+If the endpoint only returns 10 rows because of a hardcoded/default cap, fix it so the frontend query with `limit=1000` can return all matching rows.
+
+5. Anchor list
+
+Call:
+`/api/bottlenecks/anchors`
+
+Confirm:
+
+* 13 anchors
+* MU display_order=3
+* Nvidia first
+* X Ecosystem second
+* MU third
+* Google label unaffected / still frontend-compatible
+
+6. Existing behavior
+
+Confirm:
+
+* `/api/bottlenecks/current` unchanged
+* old LLM routes still disabled
+* manual overlay still works
+* `/api/bottlenecks/anchor-overlap` still works
+* no Claude/OpenAI/web calls were added
+
+Do not mark complete until the exact frontend query `/api/bottlenecks/multi-anchor-screener?min_anchors=2&limit=1000` returns the full expected multi-anchor result set, not an accidental 10-row sample.
