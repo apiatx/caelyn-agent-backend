@@ -35,3 +35,5 @@
 - [Odds scanner _persist_catalog_bg hang](odds-scanner-persist-hang.md) — connect_timeout kwarg silently ignored by libpq when DSN is a URL; must embed in URL query string; run_in_executor needs wait_for guard
 - [Odds scanner catalog Option C](odds-scanner-option-c.md) — 29k-row catalog upsert removed; in-memory _last_raw_markets fallback; only 26 snapshot rows persisted per cycle
 - [Odds scanner LKG cold-start](odds-scanner-lkg.md) — 3-tier fallback (memory→file LKG→DB snapshot→warming); LKG file at backend/data/predict_odds_live_lkg.json; get_latest_per_family() is the DB fallback source
+- [Watchlist skeleton theme path](watchlist-skeleton-theme.md) — skeleton fallback (no analysis sections) must call theme_ticker_mapper; previously returned before reclassification block with theme=None hardcoded
+- [Watchlist upload stage2 trigger](watchlist-upload-warmup.md) — save_endpoint POST /save now fires background warmup_stage2 for LKG-missing symbols; state in _UPLOAD_WARMUP_STATE; save_watchlist() sync fn cannot call async warmup directly

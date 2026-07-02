@@ -842,15 +842,57 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
     # table always renders saved symbols, even for large watchlists that are
     # still being analysed in the background.
     if not sections:
+        # ── Pre-load theme mapper once for the entire skeleton pass ───────────
+        _skl_theme_fn = None
+        _skl_theme_id_fn = None
+        _skl_ind_fn = None
+        try:
+            from services.theme_ticker_mapper import (
+                map_ticker_to_primary_theme as _skl_theme_fn,
+                map_ticker_to_theme_id      as _skl_theme_id_fn,
+                map_industry_to_theme       as _skl_ind_fn,
+            )
+        except ImportError:
+            pass
+
         skeleton: list[dict] = []
         for sym in tickers:
-            row = _build_ticker_row(sym, {
-                "symbol":       sym.strip().upper(),
-                "catalyst":     None,
-                "sentiment":    None,
-                "action_note":  None,
-                "conviction":   None,
-                "theme":        None,
+            _s = sym.strip().upper()
+
+            # ── Canonical theme lookup (symbol → theme) ───────────────────────
+            _canon_theme: str | None = None
+            _canon_theme_id: str | None = None
+            _theme_src: str | None = None
+
+            if _skl_theme_fn:
+                _canon_theme    = _skl_theme_fn(_s)
+                _canon_theme_id = _skl_theme_id_fn(_s) if _skl_theme_id_fn else None
+                if _canon_theme:
+                    _theme_src = "canonical_map"
+
+            # ── Industry fallback for unmapped symbols ────────────────────────
+            if not _canon_theme and _skl_ind_fn:
+                _csv_r = csv_map.get(_s) or {}
+                _ind   = (_csv_r.get("Industry") or _csv_r.get("industry") or "").strip()
+                if _ind:
+                    _ind_result = _skl_ind_fn(_ind)
+                    if _ind_result:
+                        _canon_theme, _canon_theme_id = _ind_result
+                        _theme_src = "industry_fallback"
+
+            if not _canon_theme and _skl_theme_fn:
+                _theme_src = "no_mapping"
+
+            row = _build_ticker_row(_s, {
+                "symbol":               _s,
+                "catalyst":             None,
+                "sentiment":            None,
+                "action_note":          None,
+                "conviction":           None,
+                "theme":                _canon_theme,
+                "canonical_theme_name": _canon_theme,
+                "canonical_theme_id":   _canon_theme_id,
+                "theme_source":         _theme_src,
             })
             skeleton.append(row)
 
@@ -1220,7 +1262,55 @@ async def list_endpoint():
 @router.post("/save")
 async def save_endpoint(body: WatchlistSaveRequest):
     """Save CSV data + AI analysis to the watchlist store."""
+    import asyncio as _aio
+    global _UPLOAD_WARMUP_STATE
     result = save_watchlist(body.csv_data, body.analysis, body.watchlist_id, body.name)
+
+    # ── Background Stage2 warmup for symbols missing from LKG ─────────────────
+    # Fires a non-blocking task so the upload response returns immediately.
+    # Eligible = US/non-foreign symbols (no colon). Skips symbols already in LKG
+    # with a valid label (they'll be refreshed by the regular 20h cadence).
+    try:
+        from services.watchlist_stage2_service import warmup_stage2 as _ws2, _STAGE2_LKG as _lkg
+        from services.watchlist_quote_cache import is_fmp_symbol_eligible as _elig
+        import datetime as _dt
+
+        _wl_id = result.get("watchlist_id") or body.watchlist_id
+        _store = load_watchlist(_wl_id) if _wl_id else None
+        _all_tickers: list[str] = [
+            t.strip().upper() for t in (_store.get("tickers") or []) if t.strip()
+        ] if _store else []
+
+        _eligible  = [s for s in _all_tickers if _elig(s)]
+        _missing   = [s for s in _eligible if not _lkg.get(s) or _lkg[s].get("label") is None]
+        _in_lkg    = len(_eligible) - len(_missing)
+
+        _UPLOAD_WARMUP_STATE.update({
+            "watchlist_id":   _wl_id,
+            "triggered_at":   _dt.datetime.utcnow().isoformat(),
+            "finished_at":    None,
+            "total_eligible": len(_eligible),
+            "already_in_lkg": _in_lkg,
+            "queued":         len(_missing),
+            "running":        len(_missing) > 0,
+        })
+
+        if _missing:
+            async def _run_upload_warmup() -> None:
+                try:
+                    await _ws2(_missing, force_nulls=True)
+                finally:
+                    _UPLOAD_WARMUP_STATE["running"]     = False
+                    _UPLOAD_WARMUP_STATE["finished_at"] = _dt.datetime.utcnow().isoformat()
+
+            _aio.create_task(_run_upload_warmup())
+            print(
+                f"[WATCHLIST_SAVE] stage2 warmup queued: "
+                f"{len(_missing)} symbols (of {len(_eligible)} eligible, {_in_lkg} already in LKG)"
+            )
+    except Exception as _wup_e:
+        print(f"[WATCHLIST_SAVE] stage2 warmup trigger skipped (non-fatal): {_wup_e}")
+
     return result
 
 
@@ -1270,6 +1360,17 @@ async def debug_fundamentals_refresh(
 # ── In-process backfill state ─────────────────────────────────────────────────
 _backfill_state: dict = {"status": "idle", "refreshed": 0, "failed": 0, "total": 0,
                          "failed_symbols": [], "started_at": None, "finished_at": None}
+
+# ── Upload-triggered Stage2 warmup state ──────────────────────────────────────
+_UPLOAD_WARMUP_STATE: dict = {
+    "watchlist_id":   None,
+    "triggered_at":   None,
+    "finished_at":    None,
+    "total_eligible": 0,
+    "already_in_lkg": 0,
+    "queued":         0,
+    "running":        False,
+}
 
 @router.post("/debug/fundamentals/backfill")
 async def debug_fundamentals_backfill(
@@ -1455,24 +1556,45 @@ async def debug_technical_status(watchlist_id: Optional[str] = None):
 
     # Also tally technical_state distribution
     state_dist: dict[str, int] = {}
+    tech_metrics_cnt = 0
     for e in scope.values():
         st = e.get("technical_state") or "unknown"
         state_dist[st] = state_dist.get(st, 0) + 1
+        if e.get("technical_metrics") is not None:
+            tech_metrics_cnt += 1
+
+    # Tally all watchlist tickers not in LKG scope (ineligible or never computed)
+    skipped_ineligible = 0
+    not_in_lkg_cnt = 0
+    if tickers:
+        from services.watchlist_quote_cache import is_fmp_symbol_eligible as _st_elig
+        for _s in tickers:
+            if _STAGE2_LKG.get(_s) is None:
+                if not _st_elig(_s):
+                    skipped_ineligible += 1
+                else:
+                    not_in_lkg_cnt += 1
 
     return {
-        "watchlist_id":         wl_id,
-        "scope":                "watchlist" if tickers else "all_lkg",
-        "total":                total,
-        "valid_stage_labels":   valid_label,
-        "missing_stage_labels": missing_label,
-        "has_ohlcv_count":      has_ohlcv_cnt,
-        "fmp_history_count":    fmp_cnt,
-        "tradier_history_count": tradier_cnt,
-        "low_confidence_count": low_conf_cnt,
-        "average_bars_count":   avg_bars,
-        "tickers_missing_200d": no_200d_syms,
-        "tickers_missing_252d": no_252d_syms,
-        "technical_state_distribution": state_dist,
+        "watchlist_id":                  wl_id,
+        "scope":                         "watchlist" if tickers else "all_lkg",
+        "total_watchlist_tickers":       len(tickers),
+        "total_in_lkg":                  total,
+        "valid_stage_labels":            valid_label,
+        "missing_stage_labels":          missing_label,
+        "existing_technical_metrics":    tech_metrics_cnt,
+        "missing_technical_metrics":     total - tech_metrics_cnt,
+        "not_in_lkg_eligible":           not_in_lkg_cnt,
+        "skipped_ineligible":            skipped_ineligible,
+        "has_ohlcv_count":               has_ohlcv_cnt,
+        "fmp_history_count":             fmp_cnt,
+        "tradier_history_count":         tradier_cnt,
+        "low_confidence_count":          low_conf_cnt,
+        "average_bars_count":            avg_bars,
+        "tickers_missing_200d":          no_200d_syms,
+        "tickers_missing_252d":          no_252d_syms,
+        "technical_state_distribution":  state_dist,
+        "upload_warmup":                 dict(_UPLOAD_WARMUP_STATE),
     }
 
 

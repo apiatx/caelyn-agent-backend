@@ -1,0 +1,231 @@
+[BACKEND PROMPT]
+
+Audit first. Do not edit until the new watchlist upload path, Watchlist GET payload, theme assignment, and Stage/Technical enrichment hooks are fully traced.
+
+Problem:
+A new watchlist CSV was uploaded.
+
+Old watchlist:
+- 302 total tickers
+- 248 FMP/Tradier-eligible non-foreign tickers
+
+New watchlist:
+- 370 total tickers
+- 312 non-foreign tickers
+- many symbols overlap with the old 302-ticker watchlist
+- extra new tickers were added
+
+Regressions:
+1. Newly added tickers have no Technical toggle data.
+2. Even overlapping tickers from the old watchlist do not show Technical data in the new watchlist.
+3. New watchlist rows have no Theme assigned, even for tickers that existed in the original watchlist and had themes before.
+4. Fundamental data is present because it came from the uploaded CSV.
+
+This suggests the new watchlist upload path is not dynamically merging/reusing existing symbol-level caches and not queuing new symbols for paced enrichment.
+
+Do not touch frontend yet unless the API payload already contains the correct data and frontend is dropping it.
+Do not add page-load API calls.
+Do not bypass Tradier dynamic pacer.
+Do not create a provider storm.
+Do not clear existing caches.
+Do not remove the old watchlist.
+Do not touch Options Flow.
+Do not touch Fundamental Screener CSV behavior.
+Do not use LLMs.
+
+Part A — Identify the new watchlist
+
+Find:
+- old watchlist_id
+- new watchlist_id
+- total symbols for each
+- FMP/Tradier-eligible symbols for each
+- foreign/colon excluded symbols for each
+- overlap count between old and new watchlist
+- new-only eligible symbols
+- old-only symbols
+
+Report:
+- total_old
+- eligible_old
+- total_new
+- eligible_new
+- overlap_total
+- overlap_eligible
+- new_only_total
+- new_only_eligible
+
+Part B — Audit the real new Watchlist GET payload
+
+Hit the actual GET endpoint for the new watchlist.
+
+For sample overlapping tickers:
+- AAOI
+- MU
+- NVDA
+- PLTR
+- ASTS
+- OPTX
+
+For sample new-only tickers, pick 5 eligible symbols from the new CSV.
+
+For each sample, report whether the GET row contains:
+- Theme
+- stage2_breakout.label
+- stage2_breakout.score
+- stage2_breakout.technical_metrics
+- stage2_breakout.technical_state
+- stage2_breakout.technical_timing_score
+- change_pct / change_pct_1d
+- relative_volume / volx
+- vol_mc_pct
+- fundamentals CSV fields
+
+Classify each missing field as:
+- missing from backend payload
+- present in payload but frontend likely dropping it
+- symbol not eligible
+- cache missing
+- enrichment not scheduled
+- no provider data
+
+Part C — Technical/Stage cache reuse audit
+
+Technical metrics should be symbol-level, not watchlist-id locked.
+
+Audit:
+- watchlist_stage2_lkg.json lookup key
+- get_stage2(sym)
+- _get_stage2_breakout(sym)
+- Watchlist GET row construction
+- any merge path that attaches stage2_breakout/stage_analysis to rows
+
+Confirm:
+1. If AAOI/MU/NVDA already have stage/technical data in LKG, the new watchlist row should reuse it immediately.
+2. LKG lookup is by symbol, not watchlist_id.
+3. New watchlist upload does not accidentally bypass the stage merge.
+4. Old-format entries do not overwrite expanded technical_metrics.
+5. Null incoming stage data does not overwrite valid LKG.
+
+If overlapping symbols have LKG technical_metrics but new Watchlist GET does not include them, fix the merge path.
+
+Part D — Dynamic technical enrichment for new watchlist symbols
+
+New-only eligible tickers should be queued for paced Stage/Technical enrichment after upload.
+
+Requirement:
+On watchlist CSV upload / save / activation:
+- compute eligible symbols
+- compare against existing stage LKG
+- immediately reuse existing symbol-level LKG for overlapping tickers
+- enqueue missing eligible symbols for Stage/Technical warmup/backfill
+- do not fetch on page render
+- use existing _fetch_bars / Stage Analysis warmup path
+- use existing Tradier/FMP limiter/governor
+- cap per cycle
+- job-level lock
+- resumable
+- no overlapping runs
+- failed symbols retain old/null state and retry later
+- foreign/colon symbols are skipped gracefully
+
+Do not require manual debug backfill every time a new watchlist is uploaded.
+
+If a background task already exists, wire upload to it.
+If not, add a small queue/start hook that uses the existing technical backfill service.
+
+Expose status:
+GET /api/watchlist/debug/technical/status?watchlist_id=<new_id>
+
+It should show:
+- total symbols
+- eligible symbols
+- existing_stage_count
+- existing_technical_metrics_count
+- missing_technical_metrics_count
+- queued_count
+- running true/false
+- processed
+- succeeded
+- failed
+- skipped_ineligible
+
+Part E — Theme assignment audit
+
+The new watchlist has no Theme assigned, even for symbols from the original watchlist.
+
+Audit:
+- where Theme is assigned in the old watchlist response
+- whether Theme comes from:
+  - canonical AI-enhanced watchlist theme map
+  - CSV industry
+  - Screener Hub tagging layer
+  - theme universe membership
+  - persisted watchlist row metadata
+- whether the map is keyed by symbol or watchlist_id
+- whether new CSV upload overwrites theme with blank/null
+- whether the new watchlist row merge order puts CSV fields over canonical theme fields
+- whether frontend expects `theme`, `Theme`, `industry`, or another key
+
+Requirement:
+Theme assignment should be symbol-level and canonical.
+
+Rules:
+1. If symbol exists in canonical AI-enhanced theme map, use that Theme.
+2. CSV industry should not overwrite canonical Theme.
+3. New CSV upload should preserve/add raw CSV industry separately if needed, e.g. csv_industry/raw_industry.
+4. If symbol is new and no canonical theme exists:
+   - assign deterministic fallback if current system supports it
+   - or mark as `Unassigned` / `Needs Theme`
+   - queue for dev theme mapping if applicable
+5. Overlapping symbols from the old watchlist must show the same Theme in the new watchlist.
+
+Do not use LLMs for this fix.
+Do not invent random themes.
+Do not break the old watchlist.
+
+Part F — New watchlist fundamentals refresh status
+
+Fundamental CSV data is present, but confirm FMP overlay scheduling works for the new watchlist.
+
+Audit:
+- total eligible new watchlist symbols
+- existing fundamentals snapshots reused by symbol
+- new-only symbols missing snapshots
+- next_refresh_at for new watchlist
+- whether upload scheduled Sunday-night FMP refresh correctly
+- whether no page-render FMP calls are added
+
+Do not run a full FMP fundamentals refresh unless explicitly asked.
+This audit is for scheduling/coverage only.
+
+Part G — Validation after fix
+
+Validate with the real new watchlist GET endpoint.
+
+Required:
+1. New watchlist returns 370 rows.
+2. Eligible count is 312.
+3. Overlapping tickers immediately reuse existing technical_metrics where present.
+4. Newly added eligible tickers are queued for Stage/Technical enrichment.
+5. Technical metrics start populating without page-load calls.
+6. Theme appears for overlapping symbols from the old watchlist.
+7. CSV industry does not overwrite canonical Theme.
+8. New/unmapped symbols are clearly marked `Unassigned` / `Needs Theme`, not blank.
+9. Fundamental CSV fields still present.
+10. FMP fundamentals overlay scheduling still intact.
+11. Old watchlist still works.
+12. No Tradier pacer changes.
+13. No page-render provider calls.
+14. No backend errors.
+
+Report:
+- root cause of missing Technical data on new watchlist
+- root cause of missing Themes on new watchlist
+- exact files changed
+- old vs new watchlist counts
+- overlap reuse count
+- new-only queued count
+- technical_metrics count before/after
+- theme count before/after
+- any remaining unmapped symbols
