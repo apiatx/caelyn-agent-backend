@@ -1282,8 +1282,20 @@ async def save_endpoint(body: WatchlistSaveRequest):
         ] if _store else []
 
         _eligible  = [s for s in _all_tickers if _elig(s)]
-        _missing   = [s for s in _eligible if not _lkg.get(s) or _lkg[s].get("label") is None]
-        _in_lkg    = len(_eligible) - len(_missing)
+        # Queue a symbol if it is absent from LKG, has a null label/score,
+        # or has a valid stage entry but is missing Phase-2 technical_metrics
+        # or technical_state (old-format entries from pre-Phase-2 warmups).
+        _missing = [
+            s for s in _eligible
+            if (
+                not _lkg.get(s)
+                or _lkg[s].get("label")            is None
+                or _lkg[s].get("score")            is None
+                or _lkg[s].get("technical_metrics") is None
+                or _lkg[s].get("technical_state")   is None
+            )
+        ]
+        _in_lkg    = len(_eligible) - len(_missing)  # fully-covered (label + metrics)
 
         _UPLOAD_WARMUP_STATE.update({
             "watchlist_id":   _wl_id,
