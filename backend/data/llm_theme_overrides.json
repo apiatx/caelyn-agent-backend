@@ -18,5 +18,890 @@
     "display_name": "Semiconductors",
     "theme_id": "semiconductors",
     "confidence": "medium"
+  },
+  "ADPT": {
+    "display_name": "AI Infrastructure",
+    "theme_id": "ai_infrastructure",
+    "confidence": "manual"
+  },
+  "ADUR": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "ALGM": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "ALMU": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "ALOY": {
+    "display_name": "Rare Earth Metals",
+    "theme_id": "rare_earth",
+    "confidence": "fmp_industry"
+  },
+  "AME": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "AMPG": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "AOSL": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "APH": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "APLD": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "ARM": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "ASYS": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "ATOM": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "AUR": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "AVEX": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "AXTI": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "BAND": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "BB": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "BKSY": {
+    "display_name": "Cloud Software",
+    "theme_id": "cloud_software",
+    "confidence": "fmp_industry"
+  },
+  "BTDR": {
+    "display_name": "Cloud Software",
+    "theme_id": "cloud_software",
+    "confidence": "fmp_industry"
+  },
+  "BTQ": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "BWA": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "BZAI": {
+    "display_name": "Cloud Software",
+    "theme_id": "cloud_software",
+    "confidence": "fmp_industry"
+  },
+  "CBRS": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "CEVA": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "CGNX": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "CLFD": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "CLS": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "CORZ": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "CPSH": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "CRML": {
+    "display_name": "Rare Earth Metals",
+    "theme_id": "rare_earth",
+    "confidence": "fmp_industry"
+  },
+  "CRUS": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "CSE:FTEL": {
+    "display_name": "Rare Earth Metals",
+    "theme_id": "rare_earth",
+    "confidence": "fmp_industry"
+  },
+  "CSE:MAXX": {
+    "display_name": "Rare Earth Metals",
+    "theme_id": "rare_earth",
+    "confidence": "fmp_industry"
+  },
+  "CSIQ": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "DELL": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "DGXX": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "DIOD": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "DNN": {
+    "display_name": "Uranium & Nuclear Energy",
+    "theme_id": "uranium_nuclear",
+    "confidence": "fmp_industry"
+  },
+  "DRS": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "DVLT": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "ELVA": {
+    "display_name": "Power / Cooling",
+    "theme_id": "power_cooling",
+    "confidence": "fmp_industry"
+  },
+  "ENLT": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "EOSE": {
+    "display_name": "Power / Cooling",
+    "theme_id": "power_cooling",
+    "confidence": "fmp_industry"
+  },
+  "EQT": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "ESLT": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "FCEL": {
+    "display_name": "Power / Cooling",
+    "theme_id": "power_cooling",
+    "confidence": "fmp_industry"
+  },
+  "FJET": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "FLNC": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "FLR": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "FLY": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "FRMI": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "FTAI": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "GFS": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "GILT": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "GLW": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "GSIT": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "HIMX": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "HLIT": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "HNRG": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "HPE": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "HYLN": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "IMSR": {
+    "display_name": "Nuclear / Grid",
+    "theme_id": "nuclear___grid",
+    "confidence": "fmp_industry"
+  },
+  "INDI": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "INTT": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "IPWR": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "KEEL": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "KEYS": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "KOPN": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "KRMN": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "KULR": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "LIDR": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "LOGI": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "LSCC": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "LWLG": {
+    "display_name": "Semi Materials",
+    "theme_id": "semi_materials",
+    "confidence": "fmp_industry"
+  },
+  "MCHP": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "MDA": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "MEI": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "MNTS": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "MPWR": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "MTSI": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "MX": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "MXL": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "NKLR": {
+    "display_name": "Nuclear / Grid",
+    "theme_id": "nuclear___grid",
+    "confidence": "fmp_industry"
+  },
+  "NNBR": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "NNE": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "NOK": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "NRGV": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "NTSK": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "NUAI": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "NVTS": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "NXT": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "NXXT": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "OCC": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "OKTA": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "ON": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "OPTX": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "ORA": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "OSL:NAPA": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "OSL:SMOP": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "OSS": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "OUST": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "P": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "PATH": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "PDFS": {
+    "display_name": "Cloud Software",
+    "theme_id": "cloud_software",
+    "confidence": "fmp_industry"
+  },
+  "PI": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "PL": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "PLAB": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "PLTR": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "POET": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "POWI": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "POWL": {
+    "display_name": "Power / Cooling",
+    "theme_id": "power_cooling",
+    "confidence": "fmp_industry"
+  },
+  "PPSI": {
+    "display_name": "Power / Cooling",
+    "theme_id": "power_cooling",
+    "confidence": "fmp_industry"
+  },
+  "Q": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "QNT": {
+    "display_name": "Cloud Software",
+    "theme_id": "cloud_software",
+    "confidence": "fmp_industry"
+  },
+  "QRVO": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "QUIK": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "RBRK": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "ROK": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "RR": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "SANM": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "SDRL": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "SES": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "SHA:603986": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "SHA:688008": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "SHAZ": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "SHLS": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "SHMD": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "SILC": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "SITM": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "SKYT": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "SLAB": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "SMTC": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "SPAI": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "SPCX": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "SSYS": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "STEM": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "STM": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "SVCO": {
+    "display_name": "Cloud Software",
+    "theme_id": "cloud_software",
+    "confidence": "fmp_industry"
+  },
+  "SWX:HUBN": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "SYNA": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "TAC": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "TE": {
+    "display_name": "Power / Cooling",
+    "theme_id": "power_cooling",
+    "confidence": "fmp_industry"
+  },
+  "TEL": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "TOYO": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "TPE:3661": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "TPE:8271": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "TPEX:6643": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "TPL": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "TRMB": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "TSEM": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "TSXV:AAG": {
+    "display_name": "Rare Earth Metals",
+    "theme_id": "rare_earth",
+    "confidence": "fmp_industry"
+  },
+  "TSXV:XBOT": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "TTI": {
+    "display_name": "Industrials",
+    "theme_id": "industrials",
+    "confidence": "fmp_industry"
+  },
+  "TYGO": {
+    "display_name": "Clean Energy",
+    "theme_id": "clean_energy",
+    "confidence": "fmp_industry"
+  },
+  "UAMY": {
+    "display_name": "Rare Earth Metals",
+    "theme_id": "rare_earth",
+    "confidence": "fmp_industry"
+  },
+  "UMC": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "USAR": {
+    "display_name": "Rare Earth Metals",
+    "theme_id": "rare_earth",
+    "confidence": "fmp_industry"
+  },
+  "VECO": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "VELO": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "VICR": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "VIVO": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "VLN": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "VOYG": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "VPG": {
+    "display_name": "Semiconductor Equipment",
+    "theme_id": "semicap_equipment",
+    "confidence": "fmp_industry"
+  },
+  "VSAT": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "fmp_industry"
+  },
+  "VSH": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "WOLF": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "WSE:VGO": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "WYFI": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "XNDU": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "XSAT:SMOL": {
+    "display_name": "Semiconductors",
+    "theme_id": "semiconductors",
+    "confidence": "fmp_industry"
+  },
+  "XTIA": {
+    "display_name": "Defense",
+    "theme_id": "defense",
+    "confidence": "fmp_industry"
+  },
+  "XYZ": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "ZETA": {
+    "display_name": "Data Center Infrastructure",
+    "theme_id": "datacenter_infra",
+    "confidence": "fmp_industry"
+  },
+  "TSAT": {
+    "display_name": "Space Economy",
+    "theme_id": "space",
+    "confidence": "manual"
+  },
+  "RDDT": {
+    "display_name": "AI Networking",
+    "theme_id": "ai_networking",
+    "confidence": "manual"
   }
 }

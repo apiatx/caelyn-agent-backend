@@ -305,6 +305,7 @@ async def _do_classify(
     mapped_existing      = 0
     mapped_fmp_industry  = 0
     to_classify: list[str] = []
+    fmp_persist_batch: list[dict] = []  # persist industry-mapped tickers to disk
 
     for sym in eligible:
         theme = map_ticker_to_primary_theme(sym)
@@ -317,14 +318,31 @@ async def _do_classify(
         csv_ind = (row.get("Industry") or row.get("industry") or "").strip()
         fmp_ind = csv_ind  # already in csv_map from upload
 
-        if fmp_ind and map_industry_to_theme(fmp_ind):
-            mapped_fmp_industry += 1
-            continue
+        if fmp_ind:
+            ind_result = map_industry_to_theme(fmp_ind)
+            if ind_result:
+                _ind_display, _ind_theme_id = ind_result
+                mapped_fmp_industry += 1
+                # Persist so provenance/status can track this mapping
+                fmp_persist_batch.append({
+                    "ticker":     sym,
+                    "theme":      _ind_display,
+                    "confidence": "fmp_industry",
+                })
+                continue
 
         if not missing_only:
             to_classify.append(sym)
         else:
             to_classify.append(sym)
+
+    # Persist FMP-industry mappings in one batch (disk + in-memory mapper update)
+    if fmp_persist_batch:
+        try:
+            n_fmp = register_llm_classified_tickers(fmp_persist_batch)
+            print(f"[THEME_CLASSIFIER] fmp_industry: persisted {n_fmp}/{len(fmp_persist_batch)} to mapper")
+        except Exception as _fmp_err:
+            print(f"[THEME_CLASSIFIER] fmp_industry persist error (non-fatal): {_fmp_err}")
 
     _upd(
         mapped_existing=mapped_existing,
@@ -457,11 +475,11 @@ def get_theme_provenance(symbol: str) -> dict:
     except Exception:
         pass
 
-    # Neon manual override (category_overrides)
-    neon_override: dict | None = None
+    # Neon manual override (category_overrides) — highest priority
+    neon_override: str | None = None
     try:
-        from services.category_overrides import get_override
-        neon_override = get_override(sym)
+        from services.category_overrides import get_overrides as _get_overrides
+        neon_override = _get_overrides("default").get(sym)
     except Exception:
         pass
 
@@ -470,21 +488,56 @@ def get_theme_provenance(symbol: str) -> dict:
     llm_entry       = llm_overrides.get(sym)
     needs_review    = _load_needs_review().get(sym)
 
-    source = "none"
+    # Themes-page store: check if this symbol is in ENRICHED_THEME_RS_UNIVERSE
+    themes_page_theme: str | None = None
+    themes_page_theme_id: str | None = None
+    try:
+        from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _etrs
+        for _tid, _tmeta in _etrs.items():
+            if sym in _tmeta.get("proxy_symbols", []) or sym in _tmeta.get("candidate_symbols", []):
+                themes_page_theme    = _tmeta.get("display_name")
+                themes_page_theme_id = _tid
+                break
+    except Exception:
+        pass
+
+    # Final source: manual_override wins, then themes_page membership, then llm, then canonical
+    final_theme    = neon_override or themes_page_theme or canonical_theme
+    final_theme_id = None
     if neon_override:
         source = "neon_manual_override"
+        try:
+            from services.theme_rs_universe import THEME_RS_UNIVERSE as _trs
+            final_theme_id = next(
+                (tid for tid, m in _trs.items()
+                 if m.get("display_name", "").lower() == neon_override.lower()),
+                canonical_id,
+            )
+        except Exception:
+            final_theme_id = canonical_id
+    elif themes_page_theme:
+        source         = "themes_page_membership"
+        final_theme_id = themes_page_theme_id
     elif llm_entry:
-        source = "llm_classified"
+        source         = "llm_classified"
+        final_theme_id = canonical_id
     elif canonical_theme and canonical_theme not in ("Other / Uncategorized",):
-        source = "canonical_map_or_industry"
+        source         = "canonical_map_or_industry"
+        final_theme_id = canonical_id
+    else:
+        source = "none"
 
     return {
-        "symbol":            sym,
-        "canonical_theme":   canonical_theme,
-        "canonical_theme_id":canonical_id,
-        "source":            source,
-        "llm_override":      llm_entry,
-        "neon_override":     neon_override,
-        "needs_review":      needs_review,
-        "is_mapped":         bool(canonical_theme and canonical_theme not in ("Other / Uncategorized",)),
+        "symbol":              sym,
+        "final_theme":         final_theme,
+        "final_theme_id":      final_theme_id,
+        "canonical_theme":     canonical_theme,
+        "canonical_theme_id":  canonical_id,
+        "source":              source,
+        "llm_override":        llm_entry,
+        "neon_override":       {"category": neon_override} if neon_override else None,
+        "themes_page_theme":   themes_page_theme,
+        "themes_page_theme_id":themes_page_theme_id,
+        "needs_review":        needs_review,
+        "is_mapped":           bool(final_theme and final_theme not in ("Other / Uncategorized",)),
     }

@@ -1,0 +1,189 @@
+[BACKEND PROMPT]
+
+Audit first. Do not implement until all theme mapping paths are traced.
+
+Problem:
+New watchlist tickers still show “Unassigned / Needs Theme” on the Watchlist page. Some of these tickers were manually added to the correct theme bucket on the Themes page, but the Watchlist page still shows Unassigned. That means Themes page edits are not updating the same canonical symbol → theme mapping used by Watchlist, Options Flow, and other theme-aware pages.
+
+Desired architecture:
+There must be one canonical symbol-level theme mapping used everywhere:
+- Watchlist Theme column
+- Watchlist Theme grouping tab
+- Watchlist Theme chips/filter
+- Themes page
+- Options Flow theme/sector grouping
+- any screener/theme universe logic
+- future AI classifier output
+
+Manual edits on the Themes page must update this canonical mapping and immediately affect the ticker everywhere else.
+
+Do not touch frontend yet unless backend payload is already correct and frontend is dropping it.
+Do not add page-render LLM calls.
+Do not add page-render FMP calls.
+Do not touch Tradier dynamic pacer.
+Do not touch Options Flow provider scanning.
+Do not clear existing user theme edits.
+Do not break old watchlist.
+Do not use Claude by default.
+
+Part A — Audit all theme sources
+
+Find every theme source/mapping currently used:
+
+1. canonical ticker → theme mapper
+2. THEME_RS_UNIVERSE / theme universe definitions
+3. llm_theme_overrides.json
+4. user/manual theme overrides
+5. Neon watchlist_category_overrides or similar
+6. CSV industry fallback
+7. Theme page editable mapping
+8. Watchlist Theme column mapping
+9. Options Flow theme grouping mapping
+10. any frontend-only theme mapping
+
+Report for each:
+- file/function/table
+- keyed by symbol or watchlist_id
+- read path
+- write path
+- used by which pages
+- precedence order
+- whether it is persisted
+- whether manual Themes page edits write to it
+
+Part B — Root cause
+
+Explain why:
+1. tickers manually added to a Theme bucket on Themes page do not update Watchlist Theme column
+2. unassigned Watchlist tickers are not automatically AI-classified
+3. Options Flow may not share the same theme mapping
+4. new watchlist uploads still produce Unassigned rows
+
+Part C — Define canonical theme precedence
+
+Implement one canonical resolver used by all backend pages:
+
+Priority:
+1. user/manual symbol theme override from Themes page
+2. LLM-classified symbol theme override
+3. existing canonical symbol map
+4. deterministic FMP sector/industry → theme mapping
+5. CSV/raw industry fallback
+6. Unassigned / Needs Theme
+
+Rules:
+- CSV industry must never overwrite a canonical/manual/LLM theme.
+- Manual user theme edit should win over LLM.
+- LLM should win over raw CSV industry.
+- Mapping is symbol-level, not watchlist-level, unless explicitly scoped.
+- Same symbol should show same theme across Watchlist, Themes, Options Flow, and Screener.
+
+Part D — Themes page manual edits
+
+Audit the endpoint/action used when user manually adds a ticker to a theme bucket on the Themes page.
+
+Fix so that manual edit:
+1. persists symbol → canonical_theme_id/canonical_theme_name
+2. writes to the canonical override store
+3. invalidates or refreshes relevant cached theme payloads
+4. affects Watchlist GET immediately or on next fetch
+5. affects Options Flow theme grouping on next fetch
+6. does not require re-uploading the watchlist
+7. does not use LLM
+8. does not delete the ticker from other valid mappings unless intended
+
+Add provenance:
+GET /api/watchlist/debug/themes/provenance?symbol=<symbol>
+
+Should show:
+- final theme
+- source: manual_override / llm_override / canonical_map / fmp_industry / csv_industry / needs_theme
+- raw CSV industry
+- FMP sector/industry if cached
+- confidence
+- updated_at
+- write source if manual
+
+Part E — AI classification for all Unassigned tickers
+
+All Watchlist tickers that resolve to Unassigned / Needs Theme should be queued for AI classification.
+
+Trigger conditions:
+1. CSV upload
+2. manual add of 10+ tickers
+3. explicit retry/classify button or debug endpoint
+4. optionally one-off manual add only after deterministic FMP mapping fails
+
+Batch classifier requirements:
+- classify only currently unmapped symbols
+- include ticker, company name, FMP sector, FMP industry, CSV industry, exchange, description if cached
+- include canonical theme universe/taxonomy
+- return strict JSON only
+- persist symbol → canonical theme mapping with source=llm_override
+- no page-render LLM calls
+- no LLM call for symbols already mapped
+- no Claude default
+- env-configurable provider/model:
+  THEME_CLASSIFIER_PROVIDER=gemini/openai/deepseek/grok
+  THEME_CLASSIFIER_MODEL=<model>
+- default to cheap fast structured model if configured, preferably Gemini Flash or OpenAI mini/nano style
+- if provider key missing, mark Needs Theme and expose status
+
+Part F — Sync to Options Flow
+
+Audit Options Flow theme/sector grouping source.
+
+Fix so Options Flow reads the same canonical symbol → theme resolver.
+
+Requirements:
+- ticker manually moved on Themes page must show under same theme in Options Flow
+- LLM-classified ticker must show under same theme in Options Flow
+- Watchlist page and Options Flow must not disagree on theme for same symbol
+- no options provider scans triggered by theme sync
+- no Tradier pacer changes
+
+Part G — Status endpoint
+
+Enhance/add:
+GET /api/watchlist/debug/themes/status?watchlist_id=<id>
+
+Return:
+- total symbols
+- mapped_manual
+- mapped_llm
+- mapped_canonical
+- mapped_fmp_industry
+- mapped_csv_fallback
+- needs_theme
+- queued_for_classification
+- classifier_running
+- classifier_failed
+- list of Needs Theme symbols
+- list of recently classified symbols
+
+Part H — Validation
+
+Validate with new watchlist:
+00a0e3ea-31dc-4223-97bc-470720dd3215
+
+Checks:
+1. New watchlist returns 370 rows.
+2. Every eligible ticker with a manual Themes-page assignment shows that theme on Watchlist.
+3. Overlapping old-watchlist tickers keep their canonical themes.
+4. All Unassigned tickers are either classified by AI or listed in Needs Theme with reason.
+5. Theme chips count canonical themes.
+6. Theme grouping tab groups by canonical theme, not Untitled.
+7. Options Flow uses same theme for sample tickers.
+8. Manual theme edit on Themes page updates Watchlist and Options Flow.
+9. Old 302-ticker watchlist still works.
+10. No page-render LLM/FMP/Tradier calls.
+11. No options scans triggered.
+12. No backend errors.
+
+Report:
+- root cause
+- canonical resolver precedence
+- files changed
+- remaining Needs Theme tickers
+- proof manual Themes-page edit syncs to Watchlist
+- proof same mapping is used by Options Flow

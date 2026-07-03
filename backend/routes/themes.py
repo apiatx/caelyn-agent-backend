@@ -329,6 +329,19 @@ async def admin_upsert_membership(
 
     _invalidate_caches()
 
+    # ── Cross-sync to Watchlist (category_overrides + theme_ticker_mapper) ────
+    if body.action == "add":
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_now
+            _display = _eu_now.get(body.theme_id, {}).get("display_name") or body.theme_id
+            from services.category_overrides import upsert_override as _upsert_cat
+            _upsert_cat("default", body.symbol, _display, "themes_page_manual",
+                        f"themes_page:{body.theme_id}")
+            from services.theme_ticker_mapper import register_llm_classified_tickers as _xsync
+            _xsync([{"ticker": body.symbol, "theme": _display, "confidence": "manual"}])
+        except Exception as _xse:
+            print(f"[THEMES_ADMIN] watchlist cross-sync failed (non-fatal): {_xse}")
+
     return {
         "ok":            True,
         "theme_id":      body.theme_id,
@@ -383,6 +396,31 @@ async def admin_bulk_memberships(
 
     if result["succeeded"] > 0:
         _invalidate_caches()
+
+    # ── Cross-sync adds to Watchlist (category_overrides + theme_ticker_mapper) ─
+    add_edits = [e for e in body.edits if e.action == "add"]
+    if add_edits and result["succeeded"] > 0:
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_bulk
+            from services.category_overrides import bulk_upsert as _bulk_cat
+            from services.theme_ticker_mapper import register_llm_classified_tickers as _xsync_bulk
+            cat_updates = []
+            mapper_items = []
+            for _ae in add_edits:
+                _dn = _eu_bulk.get(_ae.theme_id, {}).get("display_name") or _ae.theme_id
+                cat_updates.append({
+                    "ticker":   _ae.symbol,
+                    "category": _dn,
+                    "source":   "themes_page_manual",
+                    "reason":   f"themes_page:{_ae.theme_id}",
+                })
+                mapper_items.append({"ticker": _ae.symbol, "theme": _dn, "confidence": "manual"})
+            if cat_updates:
+                _bulk_cat("default", cat_updates)
+            if mapper_items:
+                _xsync_bulk(mapper_items)
+        except Exception as _bxse:
+            print(f"[THEMES_ADMIN] bulk watchlist cross-sync failed (non-fatal): {_bxse}")
 
     return {
         "ok":        result["failed"] == 0,

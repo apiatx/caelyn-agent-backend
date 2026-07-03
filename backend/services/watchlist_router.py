@@ -855,6 +855,28 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         except ImportError:
             pass
 
+        # Load manual category overrides once — they always win over all static maps
+        _skl_cat_overrides: dict[str, str] = {}
+        try:
+            from services.category_overrides import get_overrides as _skl_get_overrides
+            _skl_cat_overrides = _skl_get_overrides("default")
+        except Exception:
+            pass
+
+        # Pre-load Themes-page universe symbols for fast O(1) lookup
+        _skl_themes_page_map: dict[str, str] = {}  # symbol → display_name
+        _skl_themes_page_id_map: dict[str, str] = {}  # symbol → theme_id
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _skl_etrs
+            for _stid, _stmeta in _skl_etrs.items():
+                _sdn = _stmeta.get("display_name", "")
+                for _ssym in _stmeta.get("proxy_symbols", []):
+                    if _ssym not in _skl_themes_page_map:
+                        _skl_themes_page_map[_ssym]    = _sdn
+                        _skl_themes_page_id_map[_ssym] = _stid
+        except Exception:
+            pass
+
         skeleton: list[dict] = []
         for sym in tickers:
             _s = sym.strip().upper()
@@ -882,6 +904,35 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
 
             if not _canon_theme and _skl_theme_fn:
                 _theme_src = "no_mapping"
+
+            # ── Themes-page membership (ENRICHED_THEME_RS_UNIVERSE) ──────────
+            # Wins over canonical_map / industry_fallback — admin-curated assignment
+            if _s in _skl_themes_page_map:
+                _tp_name = _skl_themes_page_map[_s]
+                _tp_id   = _skl_themes_page_id_map.get(_s)
+                # Only override if the themes-page source is different (don't
+                # downgrade a specific canonical mapping to a generic sector)
+                if _tp_name and _tp_name != _canon_theme:
+                    _canon_theme    = _tp_name
+                    _canon_theme_id = _tp_id
+                    _theme_src      = "themes_page_membership"
+
+            # ── Manual category override always wins — highest priority ───────
+            _manual_cat = _skl_cat_overrides.get(_s)
+            if _manual_cat:
+                _canon_theme = _manual_cat
+                _theme_src   = "manual_override"
+                # Derive theme_id from display name via THEME_RS_UNIVERSE lookup
+                if not _canon_theme_id or _theme_src == "manual_override":
+                    try:
+                        from services.theme_rs_universe import THEME_RS_UNIVERSE as _skl_trs
+                        _canon_theme_id = next(
+                            (tid for tid, m in _skl_trs.items()
+                             if m.get("display_name", "").lower() == _manual_cat.lower()),
+                            _canon_theme_id,
+                        )
+                    except Exception:
+                        pass
 
             row = _build_ticker_row(_s, {
                 "symbol":               _s,
@@ -2107,15 +2158,110 @@ async def debug_themes_provenance(symbol: str):
     """
     Return full theme resolution trace for a single symbol.
 
-    Shows:
-      canonical_theme, canonical_theme_id, source (neon_manual_override /
-      llm_classified / canonical_map_or_industry / none),
-      llm_override entry, neon_override entry, needs_review reason, is_mapped.
-
-    Read-only — no provider calls.
+    Shows final_theme, source (neon_manual_override / themes_page_membership /
+    llm_classified / canonical_map_or_industry / none), all intermediate stores,
+    and is_mapped. Read-only — no provider calls.
     """
     from services.watchlist_theme_classifier import get_theme_provenance
     return get_theme_provenance(symbol)
+
+
+@router.get("/debug/themes/status")
+async def debug_themes_status(watchlist_id: str = ""):
+    """
+    GET /api/watchlist/debug/themes/status?watchlist_id=<id>
+
+    Returns per-watchlist theme coverage breakdown:
+      total_symbols, mapped_manual, mapped_themes_page, mapped_llm,
+      mapped_canonical, mapped_fmp_industry, mapped_csv_fallback, needs_theme,
+      queued_for_classification, classifier_running, classifier_failed,
+      needs_theme_symbols, recently_classified_symbols.
+
+    Read-only — no provider or LLM calls.
+    """
+    import json as _j
+    from pathlib import Path as _Path
+    from services.watchlist_theme_classifier import get_theme_provenance, get_classifier_status
+
+    # Load watchlist tickers
+    tickers: list[str] = []
+    try:
+        if watchlist_id:
+            from data.pg_storage import watchlist_read as _lws
+            store = _lws(watchlist_id)
+            if store:
+                tickers = [t.strip().upper() for t in (store.get("tickers") or []) if t.strip()]
+        if not tickers:
+            from services.watchlist_service import load_watchlist as _lw
+            _store = _lw()
+            if _store:
+                tickers = [t.strip().upper() for t in (_store.get("tickers") or []) if t.strip()]
+    except Exception as _te:
+        print(f"[THEMES_STATUS] ticker load failed: {_te}")
+
+    # Count per source
+    counts: dict[str, int] = {
+        "mapped_manual":        0,
+        "mapped_themes_page":   0,
+        "mapped_llm":           0,
+        "mapped_canonical":     0,
+        "mapped_fmp_industry":  0,
+        "mapped_csv_fallback":  0,
+        "needs_theme":          0,
+    }
+    needs_theme_symbols: list[str] = []
+    recently_classified: list[str] = []
+
+    for sym in tickers:
+        try:
+            prov = get_theme_provenance(sym)
+            src  = prov.get("source", "none")
+            if src == "neon_manual_override":
+                counts["mapped_manual"] += 1
+            elif src == "themes_page_membership":
+                counts["mapped_themes_page"] += 1
+            elif src == "llm_classified":
+                counts["mapped_llm"] += 1
+                recently_classified.append(sym)
+            elif src == "canonical_map_or_industry":
+                counts["mapped_canonical"] += 1
+            else:
+                counts["needs_theme"] += 1
+                needs_theme_symbols.append(sym)
+        except Exception:
+            counts["needs_theme"] += 1
+            needs_theme_symbols.append(sym)
+
+    # Classifier state
+    cl_state = get_classifier_status()
+
+    # Needs-review list (permanent failures)
+    needs_review_syms: list[str] = []
+    try:
+        _nr_path = _Path(__file__).parent.parent / "data" / "theme_needs_review.json"
+        if _nr_path.exists():
+            needs_review_syms = list(_j.loads(_nr_path.read_text()).keys())
+    except Exception:
+        pass
+
+    return {
+        "watchlist_id":              watchlist_id or "default",
+        "total_symbols":             len(tickers),
+        "mapped_manual":             counts["mapped_manual"],
+        "mapped_themes_page":        counts["mapped_themes_page"],
+        "mapped_llm":                counts["mapped_llm"],
+        "mapped_canonical":          counts["mapped_canonical"],
+        "mapped_fmp_industry":       counts["mapped_fmp_industry"],
+        "mapped_csv_fallback":       counts["mapped_csv_fallback"],
+        "needs_theme":               counts["needs_theme"],
+        "queued_for_classification": len(needs_theme_symbols),
+        "classifier_running":        cl_state.get("running", False),
+        "classifier_failed":         cl_state.get("last_error") is not None,
+        "needs_theme_symbols":       needs_theme_symbols,
+        "needs_review_symbols":      needs_review_syms,
+        "recently_classified_symbols": recently_classified[-20:],
+        "classifier_state":          cl_state,
+    }
 
 
 # ── Strategy report endpoints ─────────────────────────────────────────────────
@@ -2828,6 +2974,39 @@ async def patch_category_endpoint(request: Request, body: dict):
     ok = _upsert(user_id, ticker, category, source, reason)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to persist override")
+
+    # ── Cross-sync 1: update theme_ticker_mapper in-memory index ────────────
+    try:
+        from services.theme_ticker_mapper import register_llm_classified_tickers as _sync_mapper
+        _sync_mapper([{"ticker": ticker, "theme": category, "confidence": "manual"}])
+    except Exception as _me:
+        print(f"[WATCHLIST_CAT] mapper sync failed (non-fatal): {_me}")
+
+    # ── Cross-sync 2: write to theme_ticker_overrides → Options Flow ─────────
+    try:
+        from services.theme_rs_universe import THEME_RS_UNIVERSE as _trs_uni
+        _theme_id = next(
+            (tid for tid, m in _trs_uni.items()
+             if m.get("display_name", "").lower() == category.lower()),
+            None,
+        )
+        if _theme_id:
+            from data.pg_storage import upsert_theme_ticker_override as _upsert_tto
+            _upsert_tto(
+                theme_id=_theme_id,
+                symbol=ticker,
+                action="add",
+                source="watchlist_category_sync",
+                note="synced from PATCH /category",
+                created_by="system",
+            )
+            from services.theme_merge_layer import refresh_enriched_universe as _ref_uni
+            _ref_uni()
+            from data.options_flow_sectors import invalidate_sectors_cache as _inv_sec
+            _inv_sec()
+    except Exception as _ue:
+        print(f"[WATCHLIST_CAT] Options Flow sync failed (non-fatal): {_ue}")
+
     return {"success": True, "ticker": ticker, "category": category, "user_id": user_id}
 
 
@@ -2891,6 +3070,46 @@ async def bulk_categories_endpoint(request: Request, body: dict):
 
     from services.category_overrides import bulk_upsert as _bulk
     count = _bulk(user_id, updates)
+
+    # ── Cross-sync bulk updates to theme_ticker_mapper + Options Flow ─────────
+    if count > 0 and updates:
+        try:
+            from services.theme_ticker_mapper import register_llm_classified_tickers as _bsync_mapper
+            from services.theme_rs_universe import THEME_RS_UNIVERSE as _btrs_uni
+            mapper_items = []
+            tto_edits: list[dict] = []
+            for _upd in updates:
+                _bt = str(_upd.get("ticker") or "").strip().upper()
+                _bc = str(_upd.get("category") or "").strip()
+                if not _bt or not _bc:
+                    continue
+                mapper_items.append({"ticker": _bt, "theme": _bc, "confidence": "manual"})
+                _btid = next(
+                    (tid for tid, m in _btrs_uni.items()
+                     if m.get("display_name", "").lower() == _bc.lower()),
+                    None,
+                )
+                if _btid:
+                    tto_edits.append({
+                        "theme_id":   _btid,
+                        "symbol":     _bt,
+                        "action":     "add",
+                        "source":     "watchlist_category_sync",
+                        "note":       "bulk category sync",
+                        "created_by": "system",
+                    })
+            if mapper_items:
+                _bsync_mapper(mapper_items)
+            if tto_edits:
+                from data.pg_storage import bulk_upsert_theme_ticker_overrides as _bulk_tto
+                _bulk_tto(tto_edits)
+                from services.theme_merge_layer import refresh_enriched_universe as _bref
+                _bref()
+                from data.options_flow_sectors import invalidate_sectors_cache as _binv
+                _binv()
+        except Exception as _bsync_err:
+            print(f"[WATCHLIST_CAT_BULK] cross-sync failed (non-fatal): {_bsync_err}")
+
     return {
         "success": True,
         "upserted": count,
