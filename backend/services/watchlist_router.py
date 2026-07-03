@@ -1323,6 +1323,18 @@ async def save_endpoint(body: WatchlistSaveRequest):
     except Exception as _wup_e:
         print(f"[WATCHLIST_SAVE] stage2 warmup trigger skipped (non-fatal): {_wup_e}")
 
+    # ── Background theme classifier for unmapped symbols ──────────────────────
+    # Fires after stage2 warmup. Skips symbols already covered by canonical map
+    # or industry fallback. Job-level lock prevents duplicate runs.
+    try:
+        from services.watchlist_theme_classifier import classify_watchlist_themes as _classify
+        _wl_id_cls = result.get("watchlist_id") or body.watchlist_id
+        if _wl_id_cls:
+            _aio.create_task(_classify(_wl_id_cls, missing_only=True))
+            print(f"[WATCHLIST_SAVE] theme classifier queued for watchlist {_wl_id_cls}")
+    except Exception as _cls_e:
+        print(f"[WATCHLIST_SAVE] theme classifier trigger skipped (non-fatal): {_cls_e}")
+
     return result
 
 
@@ -2018,6 +2030,167 @@ async def debug_fundamentals_provenance(
         "missing_fields": sorted(missing_fmp),
         "provenance":     out,
     }
+
+
+# ── Theme classifier endpoints ─────────────────────────────────────────────────
+
+
+@router.post("/debug/themes/classify/start")
+async def debug_themes_classify_start(
+    watchlist_id: Optional[str] = None,
+    missing_only: bool = True,
+    cap: int = 40,
+):
+    """
+    Trigger background LLM batch classification for unmapped watchlist symbols.
+
+    Skips symbols already in canonical map, industry fallback, or LLM overrides.
+    Job-level lock — only one run at a time. Returns immediately; poll /status.
+
+    Provider: THEME_CLASSIFIER_PROVIDER env var (gemini default, openai fallback).
+    Model:    THEME_CLASSIFIER_MODEL env var (gemini-2.0-flash-lite / gpt-4o-mini default).
+
+    Query params:
+      watchlist_id  — target watchlist (None = all mapped watchlists)
+      missing_only  — true: only classify unmapped symbols (default true)
+      cap           — max symbols per batch (default 40)
+    """
+    from services.watchlist_theme_classifier import (
+        classify_watchlist_themes,
+        get_classifier_status,
+        _lock,
+    )
+
+    if _lock().locked():
+        return {
+            "status": "already_running",
+            "state":  get_classifier_status(),
+        }
+
+    await classify_watchlist_themes(watchlist_id, missing_only=missing_only, cap=cap)
+    return {
+        "status": "started",
+        "state":  get_classifier_status(),
+    }
+
+
+@router.get("/debug/themes/classify/status")
+async def debug_themes_classify_status(watchlist_id: Optional[str] = None):
+    """
+    Poll progress of the background theme classifier job.
+
+    Returns:
+      running, total_symbols, mapped_existing, mapped_from_fmp_industry,
+      mapped_from_llm, needs_theme, queued, processed, failed,
+      current_batch, started_at, updated_at, failures, last_provider, last_model
+    """
+    from services.watchlist_theme_classifier import get_classifier_status, get_needs_review
+
+    state  = get_classifier_status()
+    review = get_needs_review()
+
+    if watchlist_id and state.get("watchlist_id") != watchlist_id:
+        return {
+            "note":          f"Last run was for watchlist {state.get('watchlist_id')!r}, not {watchlist_id!r}",
+            "state":         state,
+            "needs_review":  review,
+        }
+
+    return {
+        "state":        state,
+        "needs_review": review,
+    }
+
+
+@router.get("/debug/themes/provenance")
+async def debug_themes_provenance(symbol: str):
+    """
+    Return full theme resolution trace for a single symbol.
+
+    Shows:
+      canonical_theme, canonical_theme_id, source (neon_manual_override /
+      llm_classified / canonical_map_or_industry / none),
+      llm_override entry, neon_override entry, needs_review reason, is_mapped.
+
+    Read-only — no provider calls.
+    """
+    from services.watchlist_theme_classifier import get_theme_provenance
+    return get_theme_provenance(symbol)
+
+
+# ── Strategy report endpoints ─────────────────────────────────────────────────
+
+
+@router.post("/strategy-report/generate")
+async def strategy_report_generate(body: dict):
+    """
+    Generate a strategy report for a watchlist using only cached data.
+
+    No FMP, Tradier, or LLM calls. Uses stage2 LKG (technical) +
+    fundamentals store + BOTTLENECK_MAP (static) + theme mapper.
+
+    POST body:
+      {
+        "watchlist_id": "...",
+        "strategy_id":  "bottlenecks" | "asymmetry",   (or "serenity" | "sjcapital")
+        "save":         true
+      }
+
+    strategy_id aliases:
+      "bottlenecks" → serenity playbook (Bottlenecks strategy)
+      "asymmetry"   → sjcapital playbook (Asymmetry strategy)
+    """
+    import asyncio
+    from services.watchlist_strategy_report import generate_report
+
+    watchlist_id = body.get("watchlist_id", "")
+    strategy_id  = body.get("strategy_id", "")
+    save         = bool(body.get("save", True))
+
+    if not watchlist_id:
+        raise HTTPException(status_code=400, detail="watchlist_id is required")
+    if not strategy_id:
+        raise HTTPException(status_code=400, detail="strategy_id is required (bottlenecks or asymmetry)")
+
+    try:
+        report = await generate_report(watchlist_id, strategy_id, save=save)
+        return report
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}")
+
+
+@router.get("/strategy-report/history")
+async def strategy_report_history(watchlist_id: Optional[str] = None):
+    """
+    Return list of saved strategy report summaries.
+
+    Query params:
+      watchlist_id — filter by watchlist (optional)
+
+    Returns list of {report_id, watchlist_id, strategy_id, strategy_name,
+                      generated_at, ticker_count, matched_count}.
+    """
+    from services.watchlist_strategy_report import get_report_history
+    return {"history": get_report_history(watchlist_id)}
+
+
+@router.get("/strategy-report/{report_id}")
+async def strategy_report_get(report_id: str):
+    """
+    Retrieve a saved strategy report by ID.
+
+    Returns the full report including ranked_results, factor_scores,
+    filter reasons, missing_data_notes, and cache_freshness.
+    """
+    from services.watchlist_strategy_report import get_report
+    report = get_report(report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"Report {report_id!r} not found")
+    return report
 
 
 @router.get("/debug")

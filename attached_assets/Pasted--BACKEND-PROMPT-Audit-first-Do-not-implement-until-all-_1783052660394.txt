@@ -1,0 +1,240 @@
+[BACKEND PROMPT]
+
+Audit first. Do not implement until all current paths are traced.
+
+Context:
+A new watchlist upload has 370 total tickers / 312 non-foreign tickers. Many new tickers show “Unassigned / Needs Theme.” The old behavior was that a cheap AI/LLM classifier categorized newly added watchlist tickers into themes/industries. Current fallback only uses existing canonical symbol mappings and CSV industry fallback, which is not enough.
+
+Also audit the Strategy dropdown and Refresh behavior. The desired behavior is that selecting a strategy and clicking Refresh generates a saved strategy report popup, not a destructive page refresh or provider scan.
+
+Do not touch frontend.
+Do not touch Tradier dynamic pacer.
+Do not trigger options scans.
+Do not add page-render provider calls.
+Do not clear caches.
+Do not use LLMs on page render.
+Do not change Fundamental CSV behavior.
+Do not break old watchlist.
+Do not use Claude by default because of cost.
+Do not hardcode one LLM provider.
+
+PART A — Audit current theme categorization
+
+Find and report:
+1. where theme assignment happens on CSV upload
+2. where theme assignment happens on manual ticker add
+3. whether the old AI/LLM classifier still exists
+4. provider/model previously used, if present
+5. prompt/config/file used for old AI categorization, if present
+6. where canonical theme taxonomy is stored
+7. where symbol → theme mappings are persisted
+8. whether mappings are symbol-level or watchlist-level
+9. why new uploaded tickers remain Unassigned
+10. why the Theme tab can show Untitled / Unassigned instead of real canonical themes
+11. whether CSV industry can overwrite canonical theme anywhere
+
+PART B — Backend theme classification design
+
+Implement only after audit confirms the safest path.
+
+Rules:
+1. Reuse existing symbol-level theme mapping first.
+2. For one manual ticker add:
+   - check existing symbol mapping
+   - if missing, use FMP company profile sector/industry if already available or through the existing controlled FMP path
+   - map to closest canonical theme if deterministic mapping exists
+   - only use LLM if FMP/profile mapping is insufficient
+3. For CSV upload or 10+ manual tickers:
+   - batch only unmapped symbols
+   - include ticker, company name, FMP sector, FMP industry, exchange, CSV industry, and description if cached
+   - include the canonical theme taxonomy
+   - LLM must return strict JSON only
+   - persist symbol → canonical_theme_id / canonical_theme_name / confidence / source / refreshed_at
+4. Do not classify already mapped symbols.
+5. Do not call LLM on page render.
+6. Do not call LLM on normal Watchlist GET.
+7. If LLM unavailable, mark Needs Theme and allow retry.
+8. Preserve raw CSV industry separately as csv_industry/raw_industry.
+9. CSV industry must not overwrite canonical theme.
+10. Old and new watchlists should share symbol-level mappings.
+
+Provider config:
+Add env-configurable provider/model, for example:
+- THEME_CLASSIFIER_PROVIDER=gemini/openai/deepseek/grok
+- THEME_CLASSIFIER_MODEL=<model_name>
+
+Preferred default:
+- cheap fast model suitable for structured JSON batch classification
+- recommend Gemini Flash or OpenAI mini/nano style model if configured
+- do not default to Claude
+
+PART C — Theme classifier queue
+
+Create or reuse a background queue for unmapped symbols.
+
+Requirements:
+1. triggered after CSV upload
+2. triggered after 10+ manual ticker add
+3. triggered after one-off manual add only if deterministic FMP mapping fails
+4. capped batch size
+5. job-level lock
+6. resumable
+7. status endpoint
+8. no page-render LLM calls
+9. no page-render FMP calls
+10. no provider storm
+11. stores failures/missing reasons
+
+Suggested endpoints:
+- POST /api/watchlist/debug/themes/classify/start?watchlist_id=<id>&missing_only=true
+- GET /api/watchlist/debug/themes/classify/status?watchlist_id=<id>
+- GET /api/watchlist/debug/themes/provenance?symbol=<symbol>
+
+Status should include:
+- total_symbols
+- mapped_existing
+- mapped_from_fmp_industry
+- mapped_from_llm
+- needs_theme
+- queued
+- processed
+- failed
+- running
+- current_batch
+- started_at
+- updated_at
+- failures
+
+PART D — Strategy dropdown / Refresh audit
+
+Audit backend and frontend-facing APIs, but do not edit frontend.
+
+Find:
+1. what the top-right Refresh button currently calls
+2. whether Refresh currently triggers quotes, options, FMP, LLM, AI analysis, or strategy logic
+3. whether it mutates watchlist rows/sections/themes
+4. whether it clears or regenerates data
+5. where strategy playbooks are stored
+6. what Default / Serenity / S&J currently mean
+7. whether backend files already define Serenity and S&J
+8. whether Refresh uses selected strategy today
+
+PART E — Strategy report backend
+
+Implement backend report generation only after audit.
+
+Desired behavior:
+1. Selecting Bottlenecks or Asymmetry and clicking Refresh should generate a strategy report.
+2. It should not mutate the watchlist page data.
+3. It should not rerun options scans.
+4. It should not clear or reorder the watchlist.
+5. It should use current saved watchlist tickers and cached data as much as possible.
+6. It should save the report.
+7. It should expose report history APIs.
+
+Rename/alias:
+- Serenity → Bottlenecks
+- S&J → Asymmetry
+
+If internal IDs are used in backend files, preserve internal IDs if safer and expose display aliases.
+
+Strategy report inputs:
+Use cached/current data only where available:
+- theme
+- technical_state
+- technical_timing_score
+- fundamentals overlay
+- options flow cache if already present
+- bottleneck/supply-chain fields if already cached
+- price/volume fields already present
+- earnings/catalyst data if cached
+- missing data notes
+
+Do not trigger new options scans.
+Do not trigger page-render provider calls.
+Do not touch Tradier pacer.
+
+Suggested backend endpoints:
+- POST /api/watchlist/strategy-report/generate
+- GET /api/watchlist/strategy-report/history?watchlist_id=<id>
+- GET /api/watchlist/strategy-report/<report_id>
+
+POST body:
+{
+  "watchlist_id": "...",
+  "strategy_id": "bottlenecks" | "asymmetry",
+  "save": true
+}
+
+Saved report fields:
+- report_id
+- watchlist_id
+- strategy_id
+- strategy_name
+- generated_at
+- ticker_count
+- matched_tickers
+- ranked_results
+- reasons
+- supporting_fields
+- missing_data_notes
+- cache_freshness
+- model_used if LLM used
+- provider_calls_used
+
+PART F — Strategy report logic
+
+Audit existing playbook files first. If playbooks already exist, reuse them.
+
+Bottlenecks should focus on:
+- supply-chain / bottleneck relevance
+- structurally important infrastructure companies
+- technical timing
+- volume/accumulation
+- options flow if cached
+- theme fit
+
+Asymmetry should focus on:
+- high upside / asymmetric risk-reward
+- small/mid cap if relevant
+- strong technical setup
+- high growth or future-growth fundamentals
+- options/volume confirmation if cached
+- downside/red-flag notes
+
+Do not call these buy/sell recommendations.
+Call them strategy matches or candidates.
+
+PART G — Validation
+
+Theme validation:
+1. New 370-ticker watchlist has themes for overlapping symbols.
+2. New unmapped symbols are batch-classified or marked Needs Theme.
+3. Theme tab groups by canonical theme, not Untitled.
+4. CSV industry does not overwrite canonical theme.
+5. Manual single ticker add uses FMP profile/industry mapping where possible.
+6. Bulk CSV / 10+ adds use batch LLM only for unmapped symbols.
+7. Old 302-ticker watchlist still works.
+
+Strategy validation:
+1. Refresh endpoint/report generation does not mutate watchlist rows.
+2. Refresh/report generation does not trigger options scans.
+3. Refresh/report generation does not clear anything.
+4. Strategy report is generated and saved.
+5. Report history endpoint works.
+6. Serenity exposed as Bottlenecks.
+7. S&J exposed as Asymmetry.
+8. Existing playbook logic preserved.
+9. No Tradier pacer changes.
+10. No page-render LLM calls.
+11. No backend errors.
+
+Final report:
+- root cause of unassigned themes
+- old AI classifier status
+- selected/recommended LLM provider/model
+- exact theme classification flow after fix
+- exact Refresh behavior before/after
+- exact Strategy dropdown behavior before/after
+- report endpoints added
+- files changed
