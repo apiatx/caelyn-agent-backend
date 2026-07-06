@@ -360,7 +360,7 @@ async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
         from services.news_signal_scorer import score_article as _score_archive_article
         loop = asyncio.get_event_loop()
         archive_map: dict[str, list[dict]] = await loop.run_in_executor(
-            None, query_recent_articles_for_scoring, list(tickers), 24
+            None, query_recent_articles_for_scoring, list(tickers), 72
         )
         all_hyp: list[dict] = []
         for arch_ticker, arch_articles in archive_map.items():
