@@ -1,0 +1,664 @@
+Audit and fix the broken Watchlist Screener VOL RANK column.
+
+CURRENT USER-VISIBLE BUG
+
+Watchlist → Screener / Ticker table has a VOL RANK column.
+
+It currently displays:
+
+—
+
+for essentially every ticker.
+
+This feature worked previously but was slow to calculate.
+
+Do not redesign the metric.
+
+Do not replace VOL RANK with raw relative volume.
+
+Do not calculate rank movement in the frontend.
+
+Do not add FMP calls.
+
+Do not add Tradier calls merely for this feature.
+
+The intended metric is already reflected in the current frontend rendering contract.
+
+INTENDED METRIC
+
+VOL RANK means:
+
+change in a ticker's relative-volume rank POSITION versus the other stocks in the same active Watchlist between the current and previous rank snapshot.
+
+Example:
+
+Previous snapshot:
+
+1 NVDA
+2 MU
+3 AMD
+4 IREN
+
+Current snapshot ranked by relative_volume descending:
+
+1 MU
+2 AMD
+3 IREN
+4 NVDA
+
+Result:
+
+MU:
+previous_rank=2
+current_rank=1
+rel_vol_rank_delta=+1
+rel_vol_trend="up"
+
+AMD:
+previous_rank=3
+current_rank=2
+rel_vol_rank_delta=+1
+rel_vol_trend="up"
+
+IREN:
+previous_rank=4
+current_rank=3
+rel_vol_rank_delta=+1
+rel_vol_trend="up"
+
+NVDA:
+previous_rank=1
+current_rank=4
+rel_vol_rank_delta=-3
+rel_vol_trend="down"
+
+The column is NOT:
+
+current rank
+volume percent change
+change in raw volume
+change in relative_volume itself
+
+It is rank-position movement in relative-volume leadership across the Watchlist universe.
+
+PART A — AUDIT THE EXISTING IMPLEMENTATION BEFORE EDITING
+
+Search the full backend repo for every reference to:
+
+rel_vol_rank_delta
+rel_vol_trend
+relative_volume rank
+rel vol rank
+volume rank
+rank snapshot
+previous snapshot
+
+Also search the frontend repo only as necessary to confirm the response contract.
+
+Report:
+
+1. every file that reads/writes rel_vol_rank_delta
+2. every file that reads/writes rel_vol_trend
+3. where current relative_volume comes from
+4. where the Watchlist row response is assembled
+5. whether current rank is calculated
+6. whether previous rank is persisted
+7. where rank snapshots are stored
+8. snapshot cadence
+9. snapshot scope:
+
+   * global
+   * per user
+   * per watchlist
+10. whether the calculation currently runs:
+
+* on page GET
+* on Watchlist refresh
+* on quote refresh
+* scheduled/background
+
+11. any TTL/LKG involved
+12. any Neon table or local-file persistence involved
+
+Do not infer from comments.
+
+Trace the actual live path.
+
+PART B — CONFIRM THE FRONTEND CONTRACT
+
+The current Watchlist table renderer expects:
+
+stock.rel_vol_trend
+
+and:
+
+stock.rel_vol_rank_delta
+
+Current rendering behavior is conceptually:
+
+trend == "up" and delta != null
+→ +N ranks
+
+trend == "down" and delta != null
+→ -N ranks
+
+trend == "flat"
+→ Flat
+
+trend == "unknown"
+→ New
+
+otherwise
+→ —
+
+Confirm the live Watchlist API response currently contains or omits these fields.
+
+Using the actual Primary Watchlist, inspect at least 20 row objects.
+
+Return:
+
+ticker
+relative_volume
+rel_vol_rank_delta
+rel_vol_trend
+field keys present yes/no
+
+Then report counts:
+
+rows_with_relative_volume
+rows_with_rel_vol_rank_delta
+rows_with_rel_vol_trend
+rows_rendering_dash_by_contract
+
+The purpose is to prove why the frontend currently displays —.
+
+PART C — FIND THE REGRESSION POINT
+
+This feature previously worked.
+
+Use git/history or existing code paths where available to identify the last working implementation.
+
+Do not blindly restore an old file.
+
+Compare the previous logic with the current canonical Watchlist/quote architecture.
+
+Specifically audit whether a recent change caused one of these:
+
+1. rel_vol_rank_delta stopped being calculated
+2. rel_vol_trend stopped being calculated
+3. fields are calculated but no longer merged into Watchlist rows
+4. the realtime quote overlay replaces row objects and drops rank fields
+5. previous snapshot storage is no longer written
+6. previous snapshot storage is read under an obsolete key
+7. snapshot scope changed from Watchlist ID to another identity
+8. all rows are treated as first-seen / no previous snapshot
+9. colon-prefixed symbols break snapshot matching
+10. a background calculation loop stopped registering
+11. a TTL/cadence guard never resets
+12. an exception is swallowed and defaults to missing fields
+
+Return the exact root cause.
+
+Do not patch the frontend to fabricate values.
+
+PART D — AUDIT THE RANK INPUT METRIC
+
+The rank ordering must use the canonical relative-volume value already used by the Watchlist screener.
+
+Trace the current canonical relative_volume overlay.
+
+The frontend currently displays backend relative_volume when available and otherwise can display volume / average_volume.
+
+The backend rank calculator should use the canonical backend relative-volume value available for the row.
+
+Do not make a new provider call.
+
+Preferred input precedence should follow the actual current canonical Watchlist row/quote architecture.
+
+Report the exact field/source used.
+
+For every ticker included in a rank snapshot:
+
+relative_volume must be:
+
+numeric
+finite
+
+> = 0
+
+Missing/unavailable relative-volume tickers must not be assigned a fake zero rank unless the old intended behavior explicitly did so.
+
+Preferred:
+
+valid relative_volume tickers
+→ ranked
+
+missing relative_volume ticker
+→ current_rank null
+→ rank delta unavailable
+
+Do not let 50 foreign/unsupported symbols with missing data distort rank positions for valid tickers.
+
+PART E — SNAPSHOT SCOPE MUST BE PER WATCHLIST
+
+Rank position is relative to the stocks in that Watchlist.
+
+Therefore snapshot identity should be scoped by:
+
+watchlist_id
++
+ticker
+
+A ticker may have different rank positions in two Watchlists with different member universes.
+
+Do not use one global rank position for NVDA across every Watchlist.
+
+Audit current implementation.
+
+If the existing working implementation was already per-Watchlist, preserve it.
+
+If it drifted to global scope, fix it.
+
+PART F — DEFINE THE RANK MATH EXPLICITLY
+
+For one Watchlist snapshot:
+
+1. collect all Watchlist tickers with valid canonical relative_volume
+2. normalize ticker identity using the existing canonical Watchlist symbol rules
+3. sort:
+   relative_volume descending
+4. deterministic tie breaker:
+   canonical ticker ascending
+5. assign ranks starting at 1
+
+Then compare with the immediately previous completed snapshot for that same watchlist_id.
+
+Use:
+
+rank_delta =
+previous_rank - current_rank
+
+Therefore:
+
+previous 20
+current 5
+→ +15
+
+Ticker moved UP 15 positions.
+
+previous 5
+current 20
+→ -15
+
+Ticker moved DOWN 15 positions.
+
+Required response fields:
+
+rel_vol_current_rank
+rel_vol_previous_rank
+rel_vol_rank_delta
+rel_vol_trend
+
+Trend rules:
+
+delta > 0
+→ "up"
+
+delta < 0
+→ "down"
+
+delta == 0
+→ "flat"
+
+no prior rank for ticker
+→ "unknown"
+
+No current valid relative_volume
+→ preserve unavailable state following current row conventions
+
+Do not invert the sign.
+
+PART G — DEFINE WHAT "PREVIOUS SNAPSHOT" MEANS
+
+Audit the old intended cadence before changing it.
+
+The previous implementation was reported as slow.
+
+Do not calculate a new snapshot on every GET /api/watchlist/{id} request because that can make every page view become the comparison baseline and is unnecessarily expensive.
+
+The rank movement should represent a meaningful recent movement interval.
+
+Preferred architecture unless the existing implementation has a clearly established better cadence:
+
+Use a lightweight backend rank snapshot driven by existing canonical quote refresh state.
+
+Target snapshot cadence:
+
+approximately every 5 minutes during active market-data operation
+
+Do not use page-load cadence.
+
+Do not fetch quotes inside the rank job.
+
+At snapshot time:
+
+read the already-warm canonical relative-volume values
+rank the Watchlist universe in memory
+persist the latest completed snapshot
+
+Keep:
+
+current completed snapshot
+previous completed snapshot
+
+or an equivalent bounded history sufficient for rank delta.
+
+If an existing rank-snapshot cadence already exists, preserve it unless audit proves it is the performance problem.
+
+Report the final cadence explicitly.
+
+PART H — DO NOT CREATE ANOTHER QUOTE SYSTEM
+
+Hard constraint:
+
+The app already has canonical real-time quote / relative-volume reuse across Watchlist and other pages.
+
+VOL RANK must consume existing warm relative-volume data.
+
+Do not:
+
+call Tradier for all 370 tickers
+call FMP
+fetch historical bars
+calculate average volume from a new provider path
+create a second quote cache
+
+This feature is ranking existing values.
+
+PART I — PERSIST SNAPSHOTS CHEAPLY
+
+Audit whether a current Neon table/store already exists for rank history.
+
+Reuse it when possible.
+
+If no working persistent store exists, use a small bounded Neon snapshot design following current project DB conventions.
+
+Conceptual options:
+
+snapshot header:
+
+watchlist_id
+snapshot_at
+
+rank rows:
+
+watchlist_id
+snapshot_at
+ticker
+relative_volume
+rank_position
+
+or a compact JSONB snapshot if that better matches existing project conventions.
+
+Required behavior:
+
+persist enough to survive process restarts
+
+retain only a bounded history
+
+Preferred:
+
+last 2–12 snapshots per Watchlist
+
+Do not create unbounded intraday history.
+
+Do not write one row per ticker every few seconds.
+
+At approximately 5-minute cadence:
+
+370 tickers
+× bounded snapshot retention
+
+is acceptable.
+
+Use upsert/bounded prune patterns.
+
+PART J — DO NOT LET FIRST SNAPSHOT SHOW DASH FOREVER
+
+Cold-start behavior:
+
+No previous snapshot:
+→ rel_vol_trend = "unknown"
+→ frontend renders New
+
+After the second completed snapshot:
+→ calculate movement
+
+If ticker exists now but not in prior valid-rank snapshot:
+→ unknown / New
+
+If ticker existed prior but currently lacks valid relative_volume:
+→ unavailable
+
+Validate that the previous snapshot actually advances.
+
+Report:
+
+snapshot_1 timestamp
+snapshot_2 timestamp
+whether snapshot_2 compares to snapshot_1
+
+Then:
+
+snapshot_3 must compare to snapshot_2
+
+not permanently compare to snapshot_1.
+
+PART K — RESPONSE MERGE PATH
+
+Once rank movement is computed, ensure the fields survive every Watchlist row merge/overlay.
+
+Trace:
+
+saved Watchlist analysis row
+canonical quote overlay
+realtime hydration
+options enrichment
+technical metrics enrichment
+final Watchlist response
+
+Report the exact step where these fields are attached:
+
+rel_vol_current_rank
+rel_vol_previous_rank
+rel_vol_rank_delta
+rel_vol_trend
+
+Then verify no later:
+
+{...rankFields, ...quote}
+
+or other spread order overwrites them with null/missing values.
+
+The backend response consumed by the Watchlist page must contain them directly.
+
+Do not rely on the frontend to join another request unless the repo already has an established rank endpoint and the old feature intentionally used it.
+
+Prefer preserving the existing response path.
+
+PART L — PREFIXED / FOREIGN TICKERS
+
+Canonical symbols such as:
+
+AIM:ENSI
+EPA:SOI
+KRX:000660
+
+must retain exact identity in rank snapshot keys.
+
+Do not strip exchange prefixes.
+
+This metric is independent of RSS provider normalization.
+
+If these tickers lack canonical relative_volume because the quote source does not support them:
+
+do not assign them a fake zero rank.
+
+Report them as unavailable for Vol Rank.
+
+The existing Hide Foreign toggle behavior is unrelated and must remain unchanged.
+
+PART M — PERFORMANCE
+
+Measure the old/current broken path before the fix where possible.
+
+After the fix, measure:
+
+1. reading warm relative-volume values for the Watchlist
+2. ranking 370 tickers
+3. loading previous snapshot
+4. persisting current snapshot
+5. computing all deltas
+6. overlaying rank fields into final rows
+
+Return a timing table.
+
+The rank computation itself for ~370 numeric rows should be extremely cheap.
+
+The expensive part must not be provider I/O.
+
+Target:
+
+ranking/comparison in memory
+→ preferably single-digit milliseconds
+
+full snapshot read/write path
+→ comfortably below 1 second on warm Neon
+
+Do not claim success by simply increasing a request timeout.
+
+PART N — LIVE VALIDATION
+
+Using the actual Primary Watchlist:
+
+Return at least 20 tickers with:
+
+ticker
+relative_volume
+previous_rank
+current_rank
+rel_vol_rank_delta
+rel_vol_trend
+expected frontend text
+
+Include:
+
+5 positive movers
+5 negative movers
+3 flat if available
+3 unknown/New if available
+missing relative-volume examples if available
+
+Example:
+
+MU
+relative_volume=8.2
+previous_rank=18
+current_rank=3
+delta=15
+trend=up
+frontend="+15 ranks"
+
+NVDA
+relative_volume=1.7
+previous_rank=4
+current_rank=22
+delta=-18
+trend=down
+frontend="-18 ranks"
+
+PART O — TWO-SNAPSHOT CONTROLLED TEST
+
+Because a live 5-minute cadence may make validation slow, also run one deterministic controlled test.
+
+Snapshot A:
+
+AAA 5.0x
+BBB 4.0x
+CCC 3.0x
+DDD 2.0x
+
+Snapshot B:
+
+DDD 6.0x
+CCC 5.0x
+AAA 2.0x
+BBB 1.0x
+
+Expected:
+
+DDD:
+4 → 1
++3
+up
+
+CCC:
+3 → 2
++1
+up
+
+AAA:
+1 → 3
+-2
+down
+
+BBB:
+2 → 4
+-2
+down
+
+Prove the final rank-delta function produces exactly these results.
+
+PART P — REGRESSION
+
+Confirm:
+
+1. REL VOL display still works.
+2. VOL RANK column no longer shows — for all valid ranked rows.
+3. Main ticker table sorting remains unchanged.
+4. VolX / relative-volume canonical source remains unchanged.
+5. Vol/MC remains unchanged.
+6. Options columns remain unchanged.
+7. Technical columns remain unchanged.
+8. Hide Foreign remains unchanged.
+9. Close Watch remains unchanged.
+10. No new provider calls were added.
+11. No frontend changes are required if response fields are restored correctly.
+12. Watchlist page-load performance does not regress.
+
+FINAL RETURN
+
+Return:
+
+* exact root cause
+* old implementation/source chain
+* last-working behavior found in history if available
+* current live response field-presence counts
+* canonical relative-volume source used for ranking
+* final snapshot cadence
+* final snapshot storage
+* final rank math
+* exact files changed
+* timing table
+* deterministic two-snapshot test
+* 20-ticker live validation
+* confirmation frontend receives rel_vol_rank_delta and rel_vol_trend again
+* regression checklist
+
+Do not modify frontend code unless the backend audit proves the frontend contract itself changed.
+
+Do not replace VOL RANK with a new metric.
+
+Do not call providers for rank calculation.
+
+Do not report completion while valid relative-volume rows still render — in VOL RANK.

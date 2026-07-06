@@ -1291,17 +1291,46 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             f"[WATCHLIST_ENRICH] analysis_pending — built {len(skeleton)} skeleton rows "
             f"({quoted_count} quoted) from {len(tickers)} saved tickers in {elapsed_ms}ms"
         )
+
+        # ── RANK PASSES on skeleton (mirrors normal-path behaviour at line 1556)
+        # The skeleton path early-returns here, so the rank passes at line 1556
+        # are never reached.  We must compute ranks before returning so
+        # rel_vol_rank / rel_vol_rank_delta / rel_vol_trend appear in every row.
+        # Skeleton rows already have relative_volume from _build_ticker_row above.
+        _skl_sections: list[dict] = [{
+            "name":              "All Tickers",
+            "id":                "all_tickers",
+            "subtitle":          "Showing saved tickers — AI analysis running in background",
+            "tickers":           skeleton,
+            "_analysis_pending": True,
+        }]
+        _skl_saved_norm: list[str] = []
+        _skl_seen: set[str] = set()
+        for _t in tickers:
+            _s2 = _t.strip().upper()
+            if _s2 and _s2 not in _skl_seen:
+                _skl_saved_norm.append(_s2)
+                _skl_seen.add(_s2)
+        _skl_wl_id = store.get("id") or ""
+        if _skl_wl_id:
+            try:
+                _skl_sections = await _apply_rv_rank_fields(
+                    _skl_wl_id, _skl_sections, _skl_saved_norm
+                )
+            except Exception as _skl_rv_err:
+                print(f"[WATCHLIST_ENRICH] skeleton rv_rank pass failed: {_skl_rv_err}")
+            try:
+                _skl_sections = await _apply_volmc_rank_fields(
+                    _skl_wl_id, _skl_sections, _skl_saved_norm
+                )
+            except Exception as _skl_vm_err:
+                print(f"[WATCHLIST_ENRICH] skeleton volmc_rank pass failed: {_skl_vm_err}")
+
         return {
             **store,
             "analysis": {
                 **analysis,
-                "sections": [{
-                    "name":              "All Tickers",
-                    "id":                "all_tickers",
-                    "subtitle":          "Showing saved tickers — AI analysis running in background",
-                    "tickers":           skeleton,
-                    "_analysis_pending": True,
-                }],
+                "sections": _skl_sections,
                 "_analysis_pending": True,
                 "_skeleton_reason":  "analysis_not_yet_run",
             },
