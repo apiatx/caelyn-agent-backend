@@ -1,0 +1,564 @@
+Audit and fix the production Watchlist /news endpoint failure.
+
+CURRENT USER-VISIBLE ERROR:
+
+The Watchlist LIVE NEWS card now displays:
+
+"News data unavailable — server error. Will retry automatically."
+
+All three views fail together:
+
+NEWS ACTIVITY
+ALL NEWS
+HYPERSCALER DEALS
+
+The frontend has already been fixed to surface non-2xx responses instead of silently converting them to {}.
+
+Do not modify frontend code.
+
+Do not tell the user to hard refresh.
+
+Do not validate only helper functions.
+
+The exact production endpoint consumed by the frontend must return successfully:
+
+GET /api/watchlist/{watchlist_id}/news
+
+CRITICAL CONTEXT
+
+Your previous implementation report explicitly said:
+
+"The news endpoint is timing out because it needs to load the full watchlist. Let me use direct Python validation instead."
+
+That is not an acceptable completion state.
+
+The actual runtime /news endpoint is the feature.
+
+Direct Python validation of:
+
+query_ticker_activity()
+_coverage_status()
+resolve_anchor_symbols()
+or hyperscaler helper logic
+
+does not prove the production endpoint works.
+
+AUDIT FIRST.
+
+Do not edit until the exact failing request has been reproduced and timed.
+
+PART A — REPRODUCE THE EXACT PRODUCTION FAILURE
+
+Use the actual Primary Watchlist:
+
+watchlist_id:
+00a0e3ea-31dc-4223-97bc-470720dd3215
+
+or resolve the current Primary Watchlist ID from the canonical Watchlist store if that ID has changed.
+
+Call the exact FastAPI endpoint:
+
+GET /api/watchlist/{watchlist_id}/news
+
+Use the same authentication/API-key requirements as the Express frontend proxy.
+
+Also call the frontend Express proxy if available:
+
+GET /api/watchlist/{watchlist_id}/news
+
+For both requests report:
+
+HTTP status
+total duration_ms
+time to first byte if measurable
+response bytes
+top-level response keys
+error body if non-2xx
+
+Do not stop at a generic "timed out."
+
+Report the exact failing hop.
+
+PART B — READ THE SERVER TRACEBACK / REQUEST LOG
+
+For the failed or timed-out request, capture:
+
+exception type
+exception message
+stack trace
+last completed stage
+last entered function
+
+Determine whether the failure is:
+
+database connection timeout
+Neon pool exhaustion
+query timeout
+Python CPU/scoring time
+JSON serialization time
+Express 90-second AbortSignal timeout
+FastAPI exception
+memory pressure
+process restart
+another exact cause
+
+Do not guess.
+
+Return the exact root cause from logs and timing instrumentation.
+
+PART C — INSTRUMENT THE CURRENT /news REQUEST STAGES
+
+Add temporary structural timing instrumentation around the existing canonical request path.
+
+Measure at minimum:
+
+1. watchlist load
+2. ticker normalization
+3. _get_news_for_watchlist base LKG retrieval
+4. query_ticker_activity
+5. activity row construction
+6. query_recent_articles_for_scoring
+7. archive rows returned for hyperscaler scoring
+8. score_article loop
+9. hyperscaler first-pass cluster aggregation
+10. hyperscaler second-pass representative construction
+11. dedup/sort
+12. _attach_live_fields total
+13. response dict construction
+14. JSON serialization / total route duration where measurable
+
+Return one timing table from the real 370-ticker Primary Watchlist.
+
+Example:
+
+stage                          ms
+watchlist_load                 20
+base_news_lkg                   2
+ticker_activity_query          80
+archive_scoring_query        8500
+score_article_loop           4200
+cluster_pass                   900
+response_build                  5
+TOTAL                        13707
+
+Use the actual numbers.
+
+Do not leave high-volume per-article logs in production.
+
+PART D — AUDIT WHETHER HYPERSCALER SCORING IS RUNNING ON EVERY GET /news
+
+Trace the exact current chain:
+
+GET /api/watchlist/{wid}/news
+→ _get_news_for_watchlist(...)
+→ _news_response(...)
+→ _attach_live_fields(...)
+
+or the actual current path.
+
+Report:
+
+Does every GET /news call execute:
+
+query_recent_articles_for_scoring(tickers, 72)
+
+Does every GET /news call rerun:
+
+score_article()
+
+for every returned archive association?
+
+Does every GET /news call rebuild:
+
+cluster_tickers
+hyperscaler representatives
+anchor symbols
+highlighted_tickers
+
+from scratch?
+
+Report:
+
+archive rows scored per request
+
+For the real Primary Watchlist.
+
+If the answer is yes, this is an architectural regression.
+
+The frontend polls /news approximately once per minute.
+
+The continuous RSS sweeper already changes source data on an approximately 120-second cadence.
+
+There is no reason to rescore the entire 72-hour RSS archive more frequently than the underlying collector changes.
+
+PART E — PRESERVE THE EXISTING /news PATH
+
+Do not create a replacement endpoint.
+
+Preserve:
+
+GET /api/watchlist/{watchlist_id}/news
+
+Preserve the Express proxy path already fixed to call this FastAPI endpoint directly.
+
+Preserve all response fields:
+
+articles
+top_articles
+high_signal_count
+by_catalyst_type
+news_signal_meta
+cached_at
+cache_age_s
+is_building
+ticker_activity
+hyperscaler_articles
+rss_activity_meta
+
+Do not remove /news/major.
+
+Do not restore the internal Express bare-RSS proxy.
+
+PART F — MOVE HEAVY HYPERSCALER WORK OFF THE REQUEST HOT PATH
+
+If audit confirms that the 72-hour archive is queried and rescored on every GET /news, fix that.
+
+Preferred architecture:
+
+The RSS source state changes when a sweeper completes.
+
+Therefore hyperscaler archive scoring should be computed once per completed RSS sweep or once per archive generation/version, then served from warm memory.
+
+Do not rescore the full 72-hour archive every 60-second browser poll.
+
+A clean acceptable design is:
+
+MODULE-LEVEL HYPERSCALER CACHE
+
+Store:
+
+hyperscaler_cache_articles
+hyperscaler_cache_built_at
+hyperscaler_cache_sweep_id or source_generation
+hyperscaler_cache_ticker_universe signature
+
+The exact shape should follow existing project conventions.
+
+After a successful RSS full sweep:
+
+1. archive writes complete
+2. query the 72-hour archive once for the canonical union of Watchlist tickers
+3. run existing score_article()
+4. select catalyst_type == "hyperscaler_anchor"
+5. perform the current correct two-pass cluster aggregation
+6. attach:
+   watchlist_symbols
+   anchor_symbols
+   highlight_symbols
+   highlighted_tickers
+   symbol
+7. deduplicate/sort
+8. atomically replace the warm hyperscaler cache
+
+Then GET /news:
+
+1. load the requested Watchlist ticker Set
+2. read the warm hyperscaler cache
+3. filter cached articles to clusters with at least one watchlist_symbols entry in the requested ticker Set
+4. return the filtered list
+
+Do not query and rescore the full archive on each GET.
+
+If the existing backend already has a cleaner LKG/cache generation mechanism that can store the same result, use that instead.
+
+Do not invent a second scheduler.
+
+Use the existing RSS sweeper lifecycle.
+
+PART G — COLD START / CACHE WARMING
+
+The endpoint must remain usable immediately after a process restart.
+
+Preferred behavior:
+
+At RSS sweeper startup:
+
+1. warm _SEEN_CACHE from Neon
+2. build the hyperscaler cache once from the existing 72-hour Neon archive
+3. start normal continuous sweep cadence
+
+Do not require a new RSS provider sweep before hyperscaler news is readable.
+
+If the initial hyperscaler cache is still building:
+
+GET /news must still return:
+
+articles
+ticker_activity
+rss_activity_meta
+
+and either:
+
+the prior in-memory LKG if available
+
+or:
+
+hyperscaler_articles: []
+
+with an explicit metadata/building indicator
+
+Do not make the entire /news endpoint fail because hyperscaler cache warming is in progress.
+
+A failure in hyperscaler cache enrichment must not take down NEWS ACTIVITY and ALL NEWS.
+
+PART H — MAKE _attach_live_fields NON-FATAL
+
+Audit the current exception behavior.
+
+The three additive fields must not make the entire existing /news endpoint return 500.
+
+Use isolated enrichment boundaries.
+
+Conceptually:
+
+base_response = existing news response
+
+try:
+attach ticker_activity
+except:
+log structural error
+ticker_activity = []
+activity meta indicates unavailable/error
+
+try:
+attach hyperscaler_articles from warm cache
+except:
+log structural error
+hyperscaler_articles = []
+
+return base_response
+
+Follow existing project error-handling conventions.
+
+Do not silently hide errors in logs.
+
+But additive RSS activity/hyperscaler enrichment must not destroy the existing ALL NEWS payload.
+
+This is especially important because ALL NEWS existed before this feature.
+
+PART I — AUDIT TICKER ACTIVITY QUERY PERFORMANCE
+
+The activity query now uses:
+
+current 48h
+previous 48h
+MIN(first_seen_at)
+
+for approximately 370 tickers.
+
+Measure query_ticker_activity independently on the live archive.
+
+Report:
+
+rows in archive
+rows within 120h
+ticker count requested
+query duration_ms
+
+Confirm the query uses the existing ticker/published_at index or the exact relevant index.
+
+Run EXPLAIN ANALYZE if safe.
+
+If the activity query is already fast, leave it alone.
+
+Do not over-optimize it merely because the endpoint is failing elsewhere.
+
+PART J — PRUNE THE PRE-CHANGE ARCHIVE NOW IF IT IS HURTING THE ENDPOINT
+
+The previous report said:
+
+total_rows: 34,543
+rows older than 120h: 30,695
+
+and chose to wait for prune cycle 10.
+
+Audit current archive state.
+
+If tens of thousands of rows older than the new 120-hour retention are still present, run the existing canonical prune_old_rows(retention_hours=120) path once.
+
+Do not use ad hoc DELETE SQL if the existing prune helper works.
+
+Report:
+
+rows before
+rows pruned
+rows after
+prune duration
+
+Then reconcile/warm _SEEN_CACHE using the existing path.
+
+This is not a substitute for fixing request-path rescoring.
+
+It is only archive hygiene.
+
+PART K — EXPRESS PROXY VALIDATION
+
+The frontend Express route currently calls FastAPI directly and has approximately a 90-second timeout.
+
+Do not increase the timeout as the primary fix.
+
+After backend optimization, validate:
+
+FastAPI direct /news
+
+and:
+
+Express /api/watchlist/{wid}/news
+
+Both must return 200 comfortably inside the current timeout.
+
+Target:
+
+warm FastAPI /news:
+preferably < 2 seconds
+
+acceptable:
+< 5 seconds
+
+The exact measured result matters more than the target.
+
+Do not claim success if the endpoint regularly takes 30–90 seconds.
+
+PART L — CONSECUTIVE REQUEST VALIDATION
+
+After the fix, call the exact /news endpoint 10 consecutive times against the Primary Watchlist.
+
+For each report:
+
+request number
+status
+duration_ms
+response_bytes
+ticker_activity length
+articles ticker-key count
+flattened visible article count
+hyperscaler_articles length
+last_full_sweep_at
+
+All 10 must return 200.
+
+Also report:
+
+archive scoring query executions during those 10 GET requests
+score_article executions during those 10 GET requests
+
+Expected after hot-path cache fix:
+
+archive scoring query executions due solely to GET requests = 0
+
+full archive score_article executions due solely to GET requests = 0
+
+The normal RSS sweeper may rebuild the cache during the test if a sweep completes.
+
+Distinguish sweeper-triggered builds from GET-triggered builds.
+
+PART M — VALIDATE FRONTEND RUNTIME CONTRACT
+
+After fixing backend runtime performance, call the Express endpoint and show:
+
+top-level keys
+
+Required:
+
+articles
+ticker_activity
+hyperscaler_articles
+rss_activity_meta
+
+Report:
+
+ticker_activity length
+first 3 activity rows with:
+ticker
+articles_48h
+previous_articles_48h
+coverage_status
+
+articles ticker-key count
+flattened visible article count
+
+hyperscaler_articles length
+first 3 hyperscaler articles with:
+title
+watchlist_symbols
+anchor_symbols
+highlighted_tickers
+
+rss_activity_meta:
+window_hours
+comparison_window_hours
+retention_hours
+last_full_sweep_at
+
+Expected semantics:
+
+window_hours = 48
+comparison_window_hours = 48
+retention_hours = 120
+
+PART N — FINAL BROWSER VALIDATION
+
+Only after the exact backend and Express endpoints return 200:
+
+Load the Watchlist page.
+
+Verify:
+
+NEWS ACTIVITY populated
+48H NEWS values visible
+NEWS/MC visible
+warming delta displays —
+ALL NEWS populated
+HYPERSCALER DEALS populated
+ticker role badges visible
+
+Switch all three toggles.
+
+Confirm the red:
+
+"News data unavailable — server error. Will retry automatically."
+
+banner is gone.
+
+Do not modify frontend JSX to hide that banner.
+
+The error must disappear because the server request succeeds.
+
+FINAL RETURN
+
+Return:
+
+1. exact root cause
+2. exact HTTP status/error before fix
+3. exact failing stage
+4. real 370-ticker /news stage timing table before fix
+5. whether the 72h archive was rescored on every GET
+6. archive rows scored per GET before fix
+7. cache/precompute architecture implemented
+8. exact files changed
+9. archive prune before/pruned/after if performed
+10. query_ticker_activity duration
+11. warm hyperscaler cache build duration
+12. 10 consecutive FastAPI /news request table
+13. archive-scoring executions caused by those 10 GETs
+14. 10 consecutive Express /news request result summary
+15. final response structural counts
+16. confirmation all three frontend toggles are populated
+17. screenshot of NEWS ACTIVITY
+18. screenshot of ALL NEWS
+19. screenshot of HYPERSCALER DEALS
+
+Do not modify frontend code.
+Do not increase the proxy timeout as the primary solution.
+Do not validate only helper functions.
+Do not report completion while GET /api/watchlist/{watchlist_id}/news is timing out or returning non-2xx.

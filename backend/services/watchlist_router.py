@@ -60,6 +60,22 @@ _news_lkg: dict[str, dict] = {}    # watchlist_id -> {"data": dict, "ts": float}
 _news_bg_building: set[str] = set()
 _NEWS_LKG_SERVE_TTL = 20 * 60      # 20 min — after this, serve stale + bg-refresh
 
+# ── Hyperscaler article cache (module-level — NOT rebuilt on every GET /news) ──
+#
+# Architecture: the 72-hour archive query + score_article loop runs at most once
+# per _HYP_CACHE_TTL_S seconds (typically triggered by the RSS sweeper after each
+# completed sweep), then GET /news simply filters the in-memory cache to the
+# requested ticker set.  This prevents the ~60s browser polling cadence from
+# re-scoring thousands of archive rows on every request.
+#
+# Lifecycle:
+#   Cold start        → first _attach_live_fields call awaits _rebuild_hyperscaler_cache
+#   After each sweep  → sweeper calls _rebuild_hyperscaler_cache as a background task
+#   Stale (> TTL)     → next GET /news fires _rebuild_hyperscaler_cache as a bg task
+_HYP_CACHE: dict        = {"articles": [], "built_at": 0.0}
+_HYP_CACHE_BUILDING     = False
+_HYP_CACHE_TTL_S: int   = 180   # rebuild at most every 3 min (sweeper cadence ≈120s)
+
 
 # ── User identity helper (same pattern as routes/screener_hub._get_user_id) ──
 
@@ -342,10 +358,104 @@ def _build_hyperscaler_articles(enriched_map: dict) -> list[dict]:
     return deduped
 
 
+async def _rebuild_hyperscaler_cache(tickers: list[str]) -> None:
+    """
+    Query the 72-hour Neon archive, score all articles, run the two-pass cluster
+    aggregation, and atomically replace _HYP_CACHE["articles"].
+
+    Called:
+      • Awaited synchronously on cold start (first ever GET /news for this process).
+      • As asyncio.create_task() after each RSS sweep completes (sweeper hook).
+      • As asyncio.create_task() when cache is stale at GET /news time (TTL guard).
+
+    NEVER called inline on the hot GET /news path after the first cold build.
+    The 72-hour hyperscaler lookback is intentional and separate from retention.
+    """
+    global _HYP_CACHE, _HYP_CACHE_BUILDING
+    if _HYP_CACHE_BUILDING:
+        return
+    _HYP_CACHE_BUILDING = True
+    t0 = _time.time()
+    try:
+        from data.rss_article_archive import query_recent_articles_for_scoring
+        from services.news_signal_scorer import (
+            score_article    as _score_archive_article,
+            resolve_anchor_symbols as _resolve_anchor_syms,
+        )
+        loop = asyncio.get_event_loop()
+        archive_map: dict[str, list[dict]] = await loop.run_in_executor(
+            None, query_recent_articles_for_scoring, list(tickers), 72
+        )
+
+        # Pass 1 — accumulate ALL ticker associations per cluster
+        cluster_article: dict[str, dict] = {}
+        cluster_tickers: dict[str, set]  = {}
+        archive_rows = 0
+        scored_ct    = 0
+        for arch_ticker, arch_articles in archive_map.items():
+            archive_rows += len(arch_articles)
+            for a in arch_articles:
+                scored = _score_archive_article(a, arch_ticker)
+                scored_ct += 1
+                if scored.get("catalyst_type") == "hyperscaler_anchor":
+                    ck = _mk_ck(scored.get("title") or "", scored.get("url") or "")
+                    if ck not in cluster_article:
+                        cluster_article[ck] = scored
+                    cluster_tickers.setdefault(ck, set()).add(arch_ticker.upper())
+
+        # Pass 2 — resolve symbol fields for each surviving cluster
+        deduped_hyp: list[dict] = []
+        for ck, article in cluster_article.items():
+            wl_syms  = sorted(cluster_tickers.get(ck, set()))
+            entities = article.get("matched_entities") or []
+            anc_syms = _resolve_anchor_syms(entities)
+            seen_hl: dict[str, bool] = {}
+            highlight: list[str] = []
+            for s in wl_syms + anc_syms:
+                if s not in seen_hl:
+                    seen_hl[s] = True
+                    highlight.append(s)
+            sym_roles: dict[str, str] = {}
+            for s in wl_syms:
+                sym_roles[s] = "watchlist"
+            for s in anc_syms:
+                if s not in sym_roles:
+                    sym_roles[s] = "anchor"
+            deduped_hyp.append({
+                **article,
+                "watchlist_symbols":   wl_syms,
+                "anchor_symbols":      anc_syms,
+                "highlight_symbols":   highlight,
+                "highlighted_tickers": [{"ticker": t, "role": sym_roles[t]} for t in highlight],
+                "symbol": wl_syms[0] if wl_syms else None,
+            })
+
+        deduped_hyp.sort(
+            key=lambda a: (
+                -(a.get("major_news_score") or 0),
+                -_mk_parse_ts(a.get("published_at") or ""),
+            )
+        )
+        _HYP_CACHE["articles"] = deduped_hyp
+        _HYP_CACHE["built_at"] = _time.time()
+        elapsed_ms = round((_time.time() - t0) * 1000)
+        print(
+            f"[HYP_CACHE] built {len(deduped_hyp)} clusters "
+            f"from {archive_rows} archive rows ({scored_ct} scored) "
+            f"for {len(tickers)} tickers  elapsed={elapsed_ms}ms"
+        )
+    except Exception as _e:
+        print(f"[HYP_CACHE] rebuild error (non-fatal): {_e}")
+    finally:
+        _HYP_CACHE_BUILDING = False
+
+
 async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
     """
     Attach ticker_activity, hyperscaler_articles, rss_activity_meta to a
     news response dict in-place.  Never raises — fields default to safe empties.
+    Each section is independently isolated: a failure in one section does not
+    affect the others or the base /news response.
     """
     now_ts = _time.time()
     enriched_map = data.get("articles") or {}
@@ -360,97 +470,31 @@ async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
         print(f"[NEWS_LKG] ticker_activity error (non-fatal): {e}")
         data["ticker_activity"] = _build_ticker_activity_list(tickers, {}, now_ts)
 
-    # ── 2. hyperscaler_articles — full archive surface (not limited to [:15]) ──
+    # ── 2. hyperscaler_articles — served from module-level cache ─────────────
     #
-    # The normal display path truncates to articles[:15] per ticker before scoring.
-    # Hyperscaler Deals must inspect the full untruncated RSS surface, so we
-    # query the rolling 72-hour archive directly, score each article with
-    # score_article(), and filter to catalyst_type == "hyperscaler_anchor".
+    # The 72-hour archive query + score_article loop lives in
+    # _rebuild_hyperscaler_cache(), which runs at most once per
+    # _HYP_CACHE_TTL_S seconds.  This function NEVER re-scores the archive;
+    # it only filters the warm in-memory cache to the requested ticker set.
     #
-    # Two-pass deduplication strategy:
-    #   Pass 1 — collect ALL (cluster_key → watchlist ticker) associations.
-    #             The archive stores one row per (ticker, article) pair, so the
-    #             same article cluster may appear under multiple watchlist tickers.
-    #             First-wins dedup would silently discard the extra associations.
-    #   Pass 2 — for each surviving cluster attach the union of all associated
-    #             watchlist tickers, resolve public anchor ticker symbols from
-    #             matched_entities, and build the display symbol fields.
-    #
-    # The 72-hour hyperscaler lookback is intentional and independent of the
-    # 120-hour NEWS ACTIVITY archive retention.
+    # Cold start  → await the rebuild synchronously (once per process lifetime)
+    # Stale cache → fire background task, serve current cache immediately
+    # Fresh cache → filter and return instantly, zero I/O
     try:
-        from data.rss_article_archive import query_recent_articles_for_scoring
-        from services.news_signal_scorer import (
-            score_article as _score_archive_article,
-            resolve_anchor_symbols as _resolve_anchor_syms,
-        )
-        loop = asyncio.get_event_loop()
-        archive_map: dict[str, list[dict]] = await loop.run_in_executor(
-            None, query_recent_articles_for_scoring, list(tickers), 72
-        )
+        cache_age_hyp = now_ts - _HYP_CACHE["built_at"]
+        if _HYP_CACHE["built_at"] == 0.0:
+            # Cold start: build once and await so the first response has real data
+            await _rebuild_hyperscaler_cache(tickers)
+        elif cache_age_hyp > _HYP_CACHE_TTL_S and not _HYP_CACHE_BUILDING:
+            # Stale: rebuild in background; serve the current (slightly stale) cache
+            asyncio.create_task(_rebuild_hyperscaler_cache(tickers))
 
-        # Pass 1 — accumulate all ticker associations per cluster
-        cluster_article: dict[str, dict]       = {}   # ck → representative article
-        cluster_tickers: dict[str, set]        = {}   # ck → set of watchlist tickers
-        for arch_ticker, arch_articles in archive_map.items():
-            for a in arch_articles:
-                scored = _score_archive_article(a, arch_ticker)
-                if scored.get("catalyst_type") == "hyperscaler_anchor":
-                    ck = _mk_ck(scored.get("title") or "", scored.get("url") or "")
-                    if ck not in cluster_article:
-                        cluster_article[ck] = scored
-                    cluster_tickers.setdefault(ck, set()).add(arch_ticker.upper())
-
-        # Pass 2 — resolve symbol fields for each surviving cluster
-        deduped_hyp: list[dict] = []
-        for ck, article in cluster_article.items():
-            # watchlist_symbols: all Watchlist tickers whose archive rows
-            # matched this article cluster, sorted deterministically
-            wl_syms: list[str] = sorted(cluster_tickers.get(ck, set()))
-
-            # anchor_symbols: public tickers for the hyperscaler entities already
-            # matched in the article by score_article (no re-classification)
-            entities: list[str] = article.get("matched_entities") or []
-            anc_syms: list[str] = _resolve_anchor_syms(entities)
-
-            # highlight_symbols: watchlist subjects first, anchors second, deduped
-            seen_hl: dict[str, bool] = {}
-            highlight: list[str] = []
-            for s in wl_syms + anc_syms:
-                if s not in seen_hl:
-                    seen_hl[s] = True
-                    highlight.append(s)
-
-            # highlighted_tickers: explicit typed list so the frontend can render
-            # role badges without inferring from array position
-            sym_roles: dict[str, str] = {}
-            for s in wl_syms:
-                sym_roles[s] = "watchlist"
-            for s in anc_syms:
-                if s not in sym_roles:
-                    sym_roles[s] = "anchor"
-            highlighted_tickers = [
-                {"ticker": t, "role": sym_roles[t]} for t in highlight
-            ]
-
-            deduped_hyp.append({
-                **article,
-                "watchlist_symbols":   wl_syms,
-                "anchor_symbols":      anc_syms,
-                "highlight_symbols":   highlight,
-                "highlighted_tickers": highlighted_tickers,
-                # symbol: first watchlist subject for backward compat (never null
-                # when the archive association clearly identifies a ticker)
-                "symbol": wl_syms[0] if wl_syms else None,
-            })
-
-        deduped_hyp.sort(
-            key=lambda a: (
-                -(a.get("major_news_score") or 0),
-                -_mk_parse_ts(a.get("published_at") or ""),
-            )
-        )
-        data["hyperscaler_articles"] = deduped_hyp
+        # Filter to this watchlist's ticker set — O(n) over cached articles
+        ticker_set = {t.upper() for t in tickers}
+        data["hyperscaler_articles"] = [
+            a for a in _HYP_CACHE["articles"]
+            if any(ws in ticker_set for ws in (a.get("watchlist_symbols") or []))
+        ]
     except Exception as e:
         print(f"[NEWS_LKG] hyperscaler_articles error (non-fatal): {e}")
         data["hyperscaler_articles"] = []

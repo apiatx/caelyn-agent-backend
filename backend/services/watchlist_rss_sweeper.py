@@ -453,6 +453,18 @@ async def run_rss_sweep() -> dict:
     except Exception:
         pass
 
+    # ── 6. Notify hyperscaler cache to rebuild with latest archive data ──────
+    # After each successful sweep new articles are in Neon; the hyperscaler
+    # cache needs to incorporate them.  Mark it stale so the next GET /news
+    # fires a background rebuild, OR trigger one immediately if no request is
+    # imminent.  Uses lazy import to avoid circular dependencies.
+    try:
+        from services import watchlist_router as _wr
+        if hasattr(_wr, "_HYP_CACHE") and not getattr(_wr, "_HYP_CACHE_BUILDING", False):
+            asyncio.ensure_future(_wr._rebuild_hyperscaler_cache(tickers))
+    except Exception:
+        pass
+
     print(
         f"[RSS_SWEEPER] sweep_id={sweep_id} "
         f"tickers={len(tickers)} "
