@@ -414,6 +414,97 @@ def query_ticker_activity(tickers: list[str]) -> dict[str, dict]:
         _put_conn(conn)
 
 
+def query_ticker_activity_articles(
+    ticker: str,
+    window_hours: int = 48,
+) -> tuple[list[dict], float | None]:
+    """
+    Return (articles, first_seen_ts) for one ticker in a SINGLE connection
+    round-trip.  Two lightweight queries are issued on the same connection
+    to avoid paying the Neon round-trip cost twice.
+
+    articles       — exact archive rows contributing to articles_48h.
+                     Identical window: published_at >= now-window_hours AND <= now.
+                     Sorted newest-first.  No [:15] cap.  No score_article().
+
+    first_seen_ts  — unix timestamp of MIN(first_seen_at) across ALL rows for
+                     this ticker (not bounded by the time window) — used by the
+                     endpoint to compute coverage_status.  None when no rows exist.
+
+    Invariant:  len(articles) == articles_48h  for the same archive snapshot.
+    Zero provider calls.
+
+    Fields in each article dict:
+        ticker, article_key, title, summary, source, url,
+        published_at (ISO string), rss_providers (list[str])
+    """
+    if not ticker:
+        return [], None
+
+    conn = _get_conn()
+    if conn is None:
+        return [], None
+
+    now    = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=window_hours)
+
+    try:
+        cur = conn.cursor()
+
+        # ── Query 1: articles in the activity window ─────────────────────────
+        cur.execute(
+            """
+            SELECT
+                ticker,
+                article_key,
+                title,
+                COALESCE(summary, '') AS summary,
+                COALESCE(source,  '') AS source,
+                COALESCE(url,     '') AS url,
+                published_at,
+                rss_providers
+            FROM  public.watchlist_rss_article_archive
+            WHERE ticker      = %s
+              AND published_at >= %s
+              AND published_at <= %s
+            ORDER BY published_at DESC
+            """,
+            (ticker, cutoff, now),
+        )
+        rows: list[dict] = []
+        for row in cur.fetchall():
+            t, art_key, title, summary, source, url, pub_at, providers = row
+            rows.append({
+                "ticker":        t,
+                "article_key":   art_key,
+                "title":         title or "",
+                "summary":       summary or "",
+                "source":        source or "",
+                "url":           url or "",
+                "published_at":  pub_at.isoformat() if pub_at else "",
+                "rss_providers": list(providers or []),
+            })
+
+        # ── Query 2: overall first_seen_at (no time filter) ───────────────────
+        cur.execute(
+            "SELECT MIN(first_seen_at) FROM public.watchlist_rss_article_archive "
+            "WHERE ticker = %s",
+            (ticker,),
+        )
+        first_seen_row = cur.fetchone()
+        first_seen_ts: float | None = None
+        if first_seen_row and first_seen_row[0] is not None:
+            first_seen_ts = first_seen_row[0].timestamp()
+
+        cur.close()
+        return rows, first_seen_ts
+    except Exception as e:
+        print(f"[RSS_ARCHIVE] query_ticker_activity_articles error: {e}")
+        return [], None
+    finally:
+        _put_conn(conn)
+
+
 def query_recent_articles_for_scoring(
     tickers: list[str],
     hours: int = 24,

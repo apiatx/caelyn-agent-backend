@@ -1,0 +1,474 @@
+Audit and unify Watchlist per-ticker News verification with the existing continuous RSS News Activity archive.
+
+CURRENT PRODUCT ISSUE
+
+Watchlist → LIVE NEWS → NEWS ACTIVITY now continuously counts unique Yahoo + Google RSS article associations over the last 48 hours.
+
+However, when the user clicks a ticker in the Watchlist and opens:
+
+StockDetailModal
+→ News tab
+
+the displayed articles appear old and are not visibly refreshing with the continuous RSS collector.
+
+The user must be able to verify the actual articles behind a ticker's 48H NEWS count.
+
+Core required invariant:
+
+If NEWS ACTIVITY says:
+
+TICKER XYZ
+48H NEWS = 12
+
+then clicking XYZ and opening the News tab must expose the exact 12 unique RSS article associations currently contributing to XYZ's articles_48h count.
+
+Do not implement frontend work.
+
+Do not add a provider.
+
+Do not call FMP for News Activity.
+
+Do not call RSS providers on modal open.
+
+Do not create another independent news collector.
+
+The continuously refreshed Neon RSS article archive is the source of truth.
+
+PART A — AUDIT THE CURRENT THREE NEWS ARTICLE SOURCES
+
+Trace and report the exact source chain for:
+
+1. NEWS ACTIVITY articles_48h count
+2. ALL NEWS newsData.articles
+3. StockDetailModal → News tab
+
+The known frontend architecture currently passes ticker-filtered allNews into StockDetailModal.
+
+The modal historically only calls:
+
+/api/proxy/news/ticker?tickers=...
+
+when parent-provided items are empty.
+
+Report the backend source behind the parent allNews items and the backend source behind /api/proxy/news/ticker.
+
+For each path report:
+
+provider/source
+cache/LKG
+TTL
+maximum articles per ticker
+date-window semantics
+whether sourced from watchlist_rss_article_archive
+whether updated by the continuous ~120-second RSS sweeper
+
+Create a three-row comparison table.
+
+The purpose is to prove why News Activity can be current while the popup News tab appears old.
+
+PART B — DEFINE ONE AUDITABLE NEWS ACTIVITY ARTICLE SET
+
+The canonical 48H News Activity metric already uses:
+
+watchlist_rss_article_archive
+
+with:
+
+canonical ticker association
+cross-feed deduplicated article_key
+Yahoo + Google RSS only
+current rolling 48-hour window
+
+Expose the exact article rows contributing to this count.
+
+For a ticker:
+
+articles_48h
+
+must equal:
+
+the number of unique article associations returned by the canonical current-48H article query for that same ticker
+
+Required consistency:
+
+# count(query_current_activity_articles(ticker))
+
+articles_48h
+
+Do not count one dataset and display another.
+
+PART C — ADD A CANONICAL ARCHIVE READ FOR ONE TICKER
+
+In the existing RSS archive data module, add or reuse a query that returns the current 48-hour counted articles for one canonical ticker.
+
+Conceptually:
+
+query_ticker_activity_articles(
+ticker,
+window_hours=48
+)
+
+Required filtering:
+
+ticker = exact canonical Watchlist ticker
+
+published_at >= now - 48h
+
+published_at <= now
+
+Return unique archived associations only.
+
+The UNIQUE(ticker, article_key) archive identity already prevents duplicate rows for the same ticker/article key.
+
+Return fields already persisted in the archive where available:
+
+ticker
+article_key
+title
+summary
+source
+url
+published_at
+rss_providers
+
+Sort:
+
+published_at descending
+
+Newest first.
+
+Do not apply articles[:15].
+
+Do not use top_articles.
+
+Do not use the normal visible-news cache.
+
+Do not call score_article merely to return the News Activity verification list.
+
+This is a raw audited list of the exact articles contributing to the count.
+
+PART D — ADD A TICKER NEWS ACTIVITY READ ENDPOINT UNDER THE EXISTING WATCHLIST NEWS ARCHITECTURE
+
+Audit current route conventions first.
+
+Add the narrowest route that fits the existing watchlist_router architecture.
+
+Preferred concept:
+
+GET /api/watchlist/{watchlist_id}/news/ticker/{ticker}
+
+The exact route naming may differ if an existing canonical ticker-news route already exists.
+
+Do not replace:
+
+GET /api/watchlist/{watchlist_id}/news
+
+Do not remove:
+
+/news/major
+
+Do not change the three-toggle /news response contract.
+
+The ticker endpoint must:
+
+1. load the requested Watchlist using the existing canonical Watchlist store
+2. confirm the requested canonical ticker belongs to that Watchlist
+3. query the current 48-hour RSS archive associations for the exact canonical ticker
+4. return the articles newest-first
+5. return count metadata
+
+Preferred response shape:
+
+{
+"ticker": "IREN",
+"window_hours": 48,
+"articles_48h": 12,
+"articles": [
+{
+"ticker": "IREN",
+"article_key": "...",
+"title": "...",
+"summary": "...",
+"source": "...",
+"url": "...",
+"published_at": "...",
+"rss_providers": ["google"]
+}
+],
+"activity_as_of": "...",
+"last_full_sweep_at": "...",
+"coverage_status": "warming"
+}
+
+Use the current exact backend field conventions where possible.
+
+Critical invariant:
+
+# response.articles_48h
+
+response.articles.length
+
+and:
+
+# response.articles_48h
+
+ticker_activity row articles_48h
+
+for the same Watchlist/ticker at the same archive snapshot.
+
+Allow small race awareness only if a sweep commits between the two separate requests.
+
+Do not fabricate reconciliation.
+
+PART E — ZERO PROVIDER CALLS ON TICKER NEWS OPEN
+
+The new ticker activity-news endpoint must be read-only against:
+
+Neon RSS archive
+existing sweeper metadata
+canonical Watchlist store
+
+It must make zero calls to:
+
+Yahoo RSS
+Google News RSS
+FMP
+Tradier
+Perplexity
+any LLM
+
+Opening a ticker modal must not trigger provider collection.
+
+The collector already continuously refreshes the source archive.
+
+PART F — AUDIT EQUAL RSS COLLECTION COVERAGE ACROSS THE WATCHLIST
+
+The user wants every Watchlist stock to receive equal news search treatment.
+
+Audit the actual current full-sweep behavior for the Primary Watchlist.
+
+For every canonical ticker, collect diagnostics for the most recent completed full sweep:
+
+canonical_ticker
+prefixed yes/no
+Yahoo attempted
+Yahoo HTTP result category
+Google attempted
+Google HTTP result category
+ticker sweep outcome:
+success
+provider_partial
+failed
+
+The collector's equal-treatment invariant is:
+
+Every canonical ticker in the sweep universe receives:
+
+one Yahoo attempt
+one Google attempt
+
+under the same sweep cadence and same provider timeout/retry rules.
+
+Provider query construction may be ticker-specific for correct company identity.
+
+Equal treatment does NOT require an ambiguous foreign ticker to use the exact same query string format as NVDA.
+
+Report:
+
+total required tickers
+Yahoo attempts
+Google attempts
+both-provider attempts
+tickers with both success
+tickers Yahoo-only success
+tickers Google-only success
+tickers both failed
+
+List every ticker that did not receive both provider attempts.
+
+FMP activity calls must remain zero.
+
+PART G — DO NOT EQUATE YAHOO 404 WITH ZERO NEWS
+
+Foreign symbols may not resolve through the current Yahoo RSS symbol format.
+
+The collector still attempts Yahoo and Google.
+
+If Yahoo returns 404 and Google succeeds:
+
+the ticker's Google RSS article associations remain valid candidates for News Activity
+
+and:
+
+articles_48h may be non-zero
+
+Do not force the activity count to zero merely because Yahoo did not support the foreign ticker.
+
+Do not label the count complete/provider health in a way not supported by the current coverage model.
+
+Preserve current warming/complete semantics.
+
+PART H — CHECK ARTICLE RELEVANCE USING THE EXACT CLICK-THROUGH DATA
+
+For the top 25 tickers by current articles_48h:
+
+query the exact new ticker activity-news article list.
+
+Return:
+
+ticker
+articles_48h
+first 5 article titles
+first 5 sources
+
+For at least:
+
+5 high-count US tickers
+5 high-count prefixed/foreign tickers
+5 low-count/zero tickers
+
+inspect the actual returned titles.
+
+The user wants the article set to be directly verifiable in the popup.
+
+Do not validate only:
+
+raw Google count
+
+or:
+
+raw Yahoo count.
+
+Validate the exact archived current-window associations that the UI count uses.
+
+Flag obvious broad-query contamination.
+
+Do not add an LLM relevance classifier during this task.
+
+If a current query is clearly returning unrelated companies, report the exact ticker and article examples rather than hiding them.
+
+PART I — AUDIT NORMAL VISIBLE NEWS PATH AFTER THE ARCHIVE WORK
+
+Do not automatically delete the existing:
+
+fetch_news_for_ticker
+_news_cache
+/news normal articles path
+/api/proxy/news/ticker
+
+They may have other consumers.
+
+Search every consumer first.
+
+Report all consumers of:
+
+/api/proxy/news/ticker
+
+and:
+
+fetch_news_for_ticker
+
+The StockDetailModal must stop depending on the old visible-news path for News Activity verification.
+
+Other consumers may remain unchanged.
+
+Do not broadly migrate Portfolio news or unrelated pages in this task unless the audit proves they intentionally expect the same Watchlist activity semantics.
+
+PART J — PERFORMANCE
+
+The one-ticker activity-news endpoint should be cheap.
+
+Measure against:
+
+ticker with 0 articles
+ticker with median activity
+ticker with highest articles_48h
+
+Report:
+
+status
+duration_ms
+response_bytes
+article count
+
+Target:
+
+warm response comfortably under 1 second
+
+Prefer much faster.
+
+Do not add archive scoring or HYP_CACHE rebuilds to this route.
+
+PART K — VALIDATE COUNT-TO-ARTICLE RECONCILIATION
+
+Using at least 20 live Watchlist tickers:
+
+Compare:
+
+ticker_activity[ticker].articles_48h
+
+against:
+
+GET ticker activity-news endpoint:
+articles_48h
+articles.length
+
+Return a table:
+
+ticker
+activity_count
+ticker_endpoint_count
+ticker_endpoint_array_length
+match
+
+All 20 must match at the same tested archive state.
+
+Include:
+
+one zero
+one low count
+one high count
+prefixed tickers where available
+
+If a sweep race occurs, rerun the comparison against a stable post-sweep snapshot.
+
+Do not declare completion with unexplained mismatches.
+
+PART L — RESPONSE FRESHNESS
+
+Return:
+
+activity_as_of
+last_full_sweep_at
+
+on the ticker activity-news response.
+
+These timestamps must reflect the continuous RSS collection system.
+
+Do not use the old visible-news _NEWS_CACHE_TTL timestamp as the freshness timestamp for this endpoint.
+
+PART M — FINAL VALIDATION
+
+Return:
+
+1. exact current source of NEWS ACTIVITY count
+2. exact current source of ALL NEWS
+3. exact current source of StockDetailModal News
+4. root cause of apparently old popup news
+5. all current /api/proxy/news/ticker consumers
+6. final ticker activity-news endpoint path
+7. exact response shape
+8. confirmation zero provider calls on ticker endpoint
+9. full-sweep equal-provider-attempt diagnostics
+10. list of tickers missing Yahoo or Google attempts
+11. FMP activity calls = 0
+12. top-25 activity article-title relevance sample
+13. 20-ticker count/article reconciliation table
+14. one-ticker endpoint performance samples
+15. exact files changed
+
+Do not modify frontend code.
+Do not replace the main /news endpoint.
+Do not rescore the archive on ticker click.
+Do not fetch Yahoo or Google when the user opens the modal.
+Do not report completion until articles_48h can be reconciled to the exact returned article list.

@@ -4252,6 +4252,88 @@ async def news_major_by_id_endpoint(watchlist_id: str):
     }
 
 
+@router.get("/{watchlist_id}/news/ticker/{ticker:path}")
+async def ticker_activity_news_endpoint(watchlist_id: str, ticker: str):
+    """
+    News Activity click-through: return the exact archived RSS articles that
+    contribute to a ticker's articles_48h count.
+
+    Invariant:
+        response["articles_48h"]  ==  len(response["articles"])
+        response["articles_48h"]  ≈   ticker_activity[ticker].articles_48h
+          (approximate — a sweep may commit between two separate requests)
+
+    Zero provider calls.  Reads from watchlist_rss_article_archive only.
+    The ticker must belong to the named Watchlist.
+
+    Response shape:
+        {
+          "ticker":            str,
+          "window_hours":      48,
+          "articles_48h":      int,
+          "articles":          [{ticker, article_key, title, summary,
+                                  source, url, published_at, rss_providers}, ...],
+          "activity_as_of":    "ISO timestamp",
+          "last_full_sweep_at": str | null,
+          "coverage_status":   "warming" | "complete",
+        }
+    """
+    ticker_canon = ticker.strip().upper()
+
+    store = load_watchlist(watchlist_id)
+    if store is None:
+        raise HTTPException(status_code=404, detail="watchlist not found")
+
+    wl_tickers_upper = {t.strip().upper() for t in (store.get("tickers") or [])}
+    if ticker_canon not in wl_tickers_upper:
+        raise HTTPException(
+            status_code=404,
+            detail=f"ticker {ticker_canon!r} not in watchlist {watchlist_id!r}",
+        )
+
+    try:
+        from data.rss_article_archive import query_ticker_activity_articles
+        loop = asyncio.get_event_loop()
+
+        # Single executor call — two queries on one Neon connection round-trip
+        articles, first_seen_ts = await loop.run_in_executor(
+            None, query_ticker_activity_articles, ticker_canon, 48
+        )
+
+        # articles_48h derived from the article list itself — never mismatches
+        articles_48h = len(articles)
+
+        # coverage_status: same 96h threshold as _build_ticker_activity_list
+        now_ts = _time.time()
+        collector_age_h = (now_ts - first_seen_ts) / 3600 if first_seen_ts else None
+        coverage_status = (
+            "complete" if (collector_age_h is not None and collector_age_h >= 96)
+            else "warming"
+        )
+
+        # Sweeper freshness metadata
+        try:
+            from services.watchlist_rss_sweeper import get_sweeper_meta
+            last_sweep = get_sweeper_meta().get("last_full_sweep_at")
+        except Exception:
+            last_sweep = None
+
+        return {
+            "ticker":             ticker_canon,
+            "window_hours":       48,
+            "articles_48h":       articles_48h,
+            "articles":           articles,
+            "activity_as_of":     datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "last_full_sweep_at": last_sweep,
+            "coverage_status":    coverage_status,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[ticker-activity-news] {ticker_canon}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get("/{watchlist_id}/news")
 async def news_by_id_endpoint(watchlist_id: str):
     """
