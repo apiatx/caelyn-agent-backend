@@ -1,0 +1,279 @@
+Audit and harden the newly implemented Watchlist RSS News Activity backend before frontend work begins.
+
+Do not broadly redesign the feature.
+
+The overall Yahoo + Google continuous RSS collector architecture is approved.
+
+Focus only on the three concerns below.
+
+IMPORTANT:
+
+You are inside the live repo and have stronger ground truth than this prompt.
+
+Audit the actual implemented paths before changing them.
+
+CONCERN 1 — FIRST-SWEEP COVERAGE IS INCORRECTLY REPORTING COMPLETE
+
+Your validation reported:
+
+first sweep
+SPCX:
+articles_24h=25
+delta_count=23
+delta_pct=1150%
+coverage_status="complete"
+
+This was a newly created rolling archive.
+
+A newly created collector must not claim a complete previous-24-hour comparison merely because the initial RSS responses contain publication timestamps extending 48+ hours backward.
+
+Seeing old articles in the current feed does not prove the collector observed the complete RSS surface throughout the previous comparison window.
+
+Audit the exact implementation of:
+
+_coverage_status(...)
+
+and all collector metadata used by it.
+
+Report the current complete/warming rule before editing.
+
+Required behavior:
+
+Current 24-hour counts may be exposed immediately from collected RSS articles.
+
+However previous-24-hour comparison coverage must remain:
+
+coverage_status="warming"
+
+until the collector has at least 48 hours of continuous observation history for that ticker.
+
+Prefer tracking per ticker:
+
+first_successful_both_provider_collection_at
+
+or the closest equivalent following the current archive/collector design.
+
+A ticker may become complete only when:
+
+1. the first successful collection where BOTH Yahoo and Google completed is at least 48 hours old
+2. the ticker still has sufficiently recent successful collection coverage
+3. the latest collector state is not provider_partial or stale
+
+During warming:
+
+articles_24h may be a numeric value including zero
+
+previous_articles_24h may remain null
+
+delta_count must be null
+
+delta_pct must be null
+
+delta_label must be null
+
+coverage_status="warming"
+
+Do not show a historical change comparison as complete from a first-sweep RSS backfill.
+
+After the fix, restart with a new/test ticker collector state and prove that the first sweep returns warming.
+
+Also prove that the status logic becomes complete after a synthetic or controlled 48-hour observation-history test.
+
+CONCERN 2 — VERIFY HYPERSCALER ARTICLES ARE NOT LIMITED BY articles[:15]
+
+The pre-existing Watchlist news path had:
+
+articles = [_score_article(a, ticker) for a in articles[:15]]
+
+Your audit explicitly confirmed the hard truncation occurs before scoring.
+
+Your implementation summary says:
+
+hyperscaler_articles is filtered from enriched_map by:
+catalyst_type == "hyperscaler_anchor"
+
+Audit the full actual source chain for:
+
+_build_hyperscaler_articles(...)
+
+Report explicitly:
+
+hyperscaler_articles source =
+[exact source chain]
+
+Determine whether the current source chain is:
+
+full Yahoo + Google RSS article archive
+
+OR
+
+fetch_news_for_ticker → articles[:15] → enriched_map
+
+If hyperscaler_articles can only inspect the first 15 articles per ticker, fix it.
+
+The Hyperscaler Deals toggle must use the full untruncated merged RSS collection surface.
+
+Do not remove the existing articles[:15] limit from the visible normal-news path merely to fix this.
+
+Do not expand the normal /news article payload to 30,000 RSS rows.
+
+Instead reuse the new rolling RSS archive.
+
+Preferred behavior:
+
+1. query recent untruncated archived RSS article associations for the requested Watchlist ticker set
+2. convert archive records to the existing article dict shape
+3. run the existing deterministic score_article(article, ticker) function
+4. select only:
+   catalyst_type == "hyperscaler_anchor"
+5. deduplicate using the existing shared _cluster_key logic
+6. sort by:
+   major_news_score descending
+   published_at descending
+7. return hyperscaler_articles
+
+Do not create a new hyperscaler classifier.
+
+Do not duplicate _HYPERSCALERS.
+
+Do not duplicate _DEAL_PATTERNS.
+
+Do not use title matching in watchlist_router.py.
+
+The existing news_signal_scorer remains the only classification authority.
+
+Validate with at least one archived article positioned beyond index 15 in its ticker's merged RSS results.
+
+Prove that a valid hyperscaler_anchor article at index 16+ can still appear in hyperscaler_articles.
+
+CONCERN 3 — AUDIT REPEATED NEON WRITE AMPLIFICATION
+
+First sweep reported:
+
+30,188 unique article associations upserted.
+
+That is expected for an empty archive.
+
+Now inspect at least 3 consecutive completed sweeps using the current implementation.
+
+Add or expose separate diagnostics:
+
+articles_observed
+db_insert_attempts
+db_update_attempts
+new_rows_inserted
+provider_sets_updated
+unchanged_existing_articles_skipped
+conflicts_encountered
+
+Do not use one ambiguous "upserted" counter for all of these.
+
+Report the real values for:
+
+sweep N
+sweep N+1
+sweep N+2
+
+Critical question:
+
+Does every 120-second sweep submit approximately 30,000 existing article associations to Neon again?
+
+If yes, fix the write amplification.
+
+Do not repeatedly upsert unchanged archived articles merely to update last_seen_at.
+
+Preferred design:
+
+Maintain an in-memory 72-hour seen-article cache keyed by:
+
+(ticker, article_key)
+
+and storing the known rss_provider set.
+
+Warm this cache from the existing Neon archive when the RSS sweeper starts.
+
+During each sweep:
+
+new article key:
+→ INSERT into Neon
+→ add to memory cache
+
+existing article key with identical provider set:
+→ skip database write entirely
+
+existing article key where a new provider surfaced the same article:
+→ UPDATE rss_providers only
+→ update memory cache
+
+expired article:
+→ remove through existing 72-hour retention/prune path
+→ remove from memory cache during prune/cache reconciliation
+
+The exact implementation may differ if the current archive module has a cleaner existing bulk-diff path.
+
+Preserve the current UNIQUE(ticker, article_key) source of truth.
+
+Do not create a second database table.
+
+Do not persist the in-memory cache separately.
+
+After any fix, prove that a stable second sweep does NOT produce approximately 30,000 DB writes/upserts.
+
+CONCERN 4 — RSS RATE-LIMIT SOAK VALIDATION
+
+The first full sweep completed in 22.1 seconds for:
+
+370 Yahoo requests
+370 Google requests
+
+This is excellent performance, but one successful first sweep does not prove long-running RSS stability.
+
+Run at least 10 consecutive collector sweeps.
+
+Report per sweep:
+
+duration_ms
+yahoo_success
+yahoo_429
+yahoo_403
+yahoo_timeout
+yahoo_5xx
+google_success
+google_429
+google_403
+google_timeout
+google_5xx
+tickers_partial
+tickers_failed
+
+If all 10 sweeps remain healthy, preserve the current Semaphore(15) behavior.
+
+Do not slow it down merely because of a theoretical concern.
+
+If repeated 429/403/provider failures emerge, pace ticker processing more evenly across the approximately 120-second target interval rather than completing the entire request burst in ~22 seconds and then idling.
+
+Do not increase concurrency.
+
+FINAL VALIDATION
+
+Return:
+
+1. exact current coverage_status bug/root cause
+2. exact coverage fix
+3. first-sweep warming validation
+4. controlled complete-coverage validation
+5. exact hyperscaler_articles source chain before fix
+6. whether articles[:15] was limiting Hyperscaler Deals
+7. index-16+ hyperscaler validation
+8. three consecutive DB-write diagnostic samples
+9. whether repeated unchanged upserts were occurring
+10. write-amplification fix if required
+11. 10-sweep RSS provider health table
+12. measured average effective RSS freshness
+13. confirmation NEWS ACTIVITY still makes zero FMP calls
+14. confirmation existing /news/major behavior is unchanged
+15. exact files changed
+
+Do not implement frontend work.
+Do not redesign the feature.
+Do not change the three intended frontend toggle concepts.

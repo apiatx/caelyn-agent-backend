@@ -194,17 +194,25 @@ async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict
 
 # ── Live-field helpers (ticker_activity, hyperscaler_articles, rss_activity_meta) ──
 
-def _coverage_status(oldest_pub_ts: float | None, now_ts: float) -> str:
+def _coverage_status(first_seen_ts: float | None, now_ts: float) -> str:
     """
     Determine coverage quality for the previous-24h comparison window.
 
-    complete       — archive has ≥48h of history → full previous window visible
-    provider_partial — 24–48h of history → current window ok, previous partial
-    warming        — <24h of history → warming phase, delta unreliable
+    Uses first_seen_ts = MIN(first_seen_at) from the archive — the time the
+    COLLECTOR first wrote data for this ticker.  NOT oldest published_at.
+
+    RSS feeds contain articles published 3-5 days ago, so MIN(published_at)
+    would immediately appear >48h old on the very first sweep, giving a false
+    "complete" on a brand-new archive.  first_seen_at records when we actually
+    observed the data, not when the article was authored.
+
+    complete         — collector has ≥48h continuous history for this ticker
+    provider_partial — 24–48h of collector history
+    warming          — <24h of collector history, or no rows at all
     """
-    if oldest_pub_ts is None:
+    if first_seen_ts is None:
         return "warming"
-    age_hours = (now_ts - oldest_pub_ts) / 3600.0
+    age_hours = (now_ts - first_seen_ts) / 3600.0
     if age_hours >= 48:
         return "complete"
     if age_hours >= 24:
@@ -220,10 +228,22 @@ def _build_ticker_activity_list(
     """
     Build the ticker_activity list from Neon query results.
 
-    delta_pct semantics:
-      previous > 0          → ((current - previous) / previous) * 100
-      previous == 0, current == 0 → 0.0
-      previous == 0, current > 0  → None  (delta_label = "new")
+    coverage_status is derived from first_seen_ts — when the COLLECTOR first
+    wrote data for this ticker — not from the article's publication date.
+
+    During warming (collector < 48h old for ticker): the previous-24h comparison
+    window is not reliably populated, so comparison fields are null:
+        previous_articles_24h = null
+        delta_count           = null
+        delta_pct             = null
+        delta_label           = null
+
+    articles_24h is always populated (may be zero).
+
+    delta_pct semantics (non-warming only):
+      previous > 0                 → ((current - previous) / previous) * 100
+      previous == 0, current == 0  → 0.0
+      previous == 0, current > 0   → None  (delta_label = "new")
     """
     result = []
     activity_as_of = datetime.utcfromtimestamp(now_ts).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -231,13 +251,31 @@ def _build_ticker_activity_list(
     for ticker in tickers:
         row = activity_raw.get(ticker)
         if row:
-            cur_24  = int(row.get("articles_24h", 0))
-            prev_24 = int(row.get("previous_articles_24h", 0))
-            oldest  = row.get("oldest_pub_ts")
+            cur_24     = int(row.get("articles_24h", 0))
+            prev_24    = int(row.get("previous_articles_24h", 0))
+            first_seen = row.get("first_seen_ts")   # MIN(first_seen_at) unix ts
         else:
             cur_24 = prev_24 = 0
-            oldest = None
+            first_seen = None
 
+        cov_status = _coverage_status(first_seen, now_ts)
+
+        if cov_status == "warming":
+            # Collector has not yet completed 48h of continuous observation.
+            # Do not expose a comparison that is based solely on RSS backfill.
+            result.append({
+                "ticker":                ticker,
+                "articles_24h":          cur_24,
+                "previous_articles_24h": None,
+                "delta_count":           None,
+                "delta_pct":             None,
+                "delta_label":           None,
+                "activity_as_of":        activity_as_of,
+                "coverage_status":       "warming",
+            })
+            continue
+
+        # coverage_status is "complete" or "provider_partial" — safe to compare
         if prev_24 > 0:
             delta_count = cur_24 - prev_24
             delta_pct   = round(((cur_24 - prev_24) / prev_24) * 100.0, 1)
@@ -247,7 +285,7 @@ def _build_ticker_activity_list(
             delta_pct   = 0.0
             delta_label = None
         else:
-            # previous == 0, current > 0 — genuine new activity
+            # previous == 0, current > 0 — genuine new activity signal
             delta_count = cur_24
             delta_pct   = None
             delta_label = "new"
@@ -260,7 +298,7 @@ def _build_ticker_activity_list(
             "delta_pct":             delta_pct,
             "delta_label":           delta_label,
             "activity_as_of":        activity_as_of,
-            "coverage_status":       _coverage_status(oldest, now_ts),
+            "coverage_status":       cov_status,
         })
 
     result.sort(key=lambda r: (-r["articles_24h"], r["ticker"]))
@@ -311,9 +349,39 @@ async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
         print(f"[NEWS_LKG] ticker_activity error (non-fatal): {e}")
         data["ticker_activity"] = _build_ticker_activity_list(tickers, {}, now_ts)
 
-    # ── 2. hyperscaler_articles — derived from enriched_map ──────────────
+    # ── 2. hyperscaler_articles — full archive surface (not limited to [:15]) ──
+    #
+    # The normal display path truncates to articles[:15] per ticker before scoring.
+    # Hyperscaler Deals must inspect the full untruncated RSS surface, so we
+    # query the rolling archive directly, score each article with score_article(),
+    # and filter to catalyst_type == "hyperscaler_anchor".
     try:
-        data["hyperscaler_articles"] = _build_hyperscaler_articles(enriched_map)
+        from data.rss_article_archive import query_recent_articles_for_scoring
+        from services.news_signal_scorer import score_article as _score_archive_article
+        loop = asyncio.get_event_loop()
+        archive_map: dict[str, list[dict]] = await loop.run_in_executor(
+            None, query_recent_articles_for_scoring, list(tickers), 24
+        )
+        all_hyp: list[dict] = []
+        for arch_ticker, arch_articles in archive_map.items():
+            for a in arch_articles:
+                scored = _score_archive_article(a, arch_ticker)
+                if scored.get("catalyst_type") == "hyperscaler_anchor":
+                    all_hyp.append(scored)
+        seen_ck: dict[str, bool] = {}
+        deduped_hyp: list[dict] = []
+        for a in all_hyp:
+            ck = _mk_ck(a.get("title") or "", a.get("url") or "")
+            if ck not in seen_ck:
+                seen_ck[ck] = True
+                deduped_hyp.append(a)
+        deduped_hyp.sort(
+            key=lambda a: (
+                -(a.get("major_news_score") or 0),
+                -_mk_parse_ts(a.get("published_at") or ""),
+            )
+        )
+        data["hyperscaler_articles"] = deduped_hyp
     except Exception as e:
         print(f"[NEWS_LKG] hyperscaler_articles error (non-fatal): {e}")
         data["hyperscaler_articles"] = []
