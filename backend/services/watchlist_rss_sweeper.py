@@ -42,6 +42,25 @@ _STARTUP_DELAY_S     = 30     # delay before first sweep
 
 _USER_AGENT = "Mozilla/5.0 (compatible; CaelynAI/1.0)"
 
+
+def _rss_provider_symbol(ticker: str) -> str:
+    """
+    Return the provider query symbol for a canonical Watchlist ticker.
+
+    Exchange-prefixed tickers (e.g. AIM:ENSI, ETR:AIXA, TSX:MAL) must be
+    queried using only the bare symbol portion so Yahoo Finance and Google News
+    can resolve them.  The canonical ticker (AIM:ENSI) is preserved everywhere
+    else: archive rows, ticker_activity keys, Watchlist scoping.
+
+    Examples:
+        "AIM:ENSI"    → "ENSI"
+        "ETR:AIXA"    → "AIXA"
+        "NASDAQ:NVDA" → "NVDA"
+        "NVDA"        → "NVDA"
+    """
+    t = ticker.strip().upper()
+    return t.rsplit(":", 1)[1].strip() if ":" in t else t
+
 # ── Sweeper diagnostics ────────────────────────────────────────────────────────
 
 _SWEEPER_DIAG: dict[str, Any] = {
@@ -124,7 +143,8 @@ def get_sweeper_meta(tickers: list[str] | None = None) -> dict[str, Any]:
 async def _sweep_yahoo_rss(
     ticker: str, client: httpx.AsyncClient
 ) -> tuple[list[dict], str | None]:
-    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+    provider_sym = _rss_provider_symbol(ticker)   # "AIM:ENSI" → "ENSI"
+    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={provider_sym}&region=US&lang=en-US"
     try:
         resp = await client.get(url, timeout=_FETCH_TIMEOUT_S)
         sc = resp.status_code
@@ -149,7 +169,8 @@ async def _sweep_yahoo_rss(
 async def _sweep_google_rss(
     ticker: str, client: httpx.AsyncClient
 ) -> tuple[list[dict], str | None]:
-    url = f"https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
+    provider_sym = _rss_provider_symbol(ticker)   # "AIM:ENSI" → "ENSI"
+    url = f"https://news.google.com/rss/search?q={provider_sym}+stock+news&hl=en-US&gl=US&ceid=US:en"
     try:
         resp = await client.get(url, timeout=_FETCH_TIMEOUT_S)
         sc = resp.status_code

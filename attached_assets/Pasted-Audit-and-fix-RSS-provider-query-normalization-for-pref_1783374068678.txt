@@ -1,0 +1,408 @@
+Audit and fix RSS provider query normalization for prefixed / foreign Watchlist symbols.
+
+CURRENT USER-VISIBLE ISSUE:
+
+In Watchlist → LIVE NEWS → NEWS ACTIVITY, foreign/prefixed symbols such as:
+
+AIM:ENSI
+AIM:IQE
+AIM:TRT
+
+are showing:
+
+48H NEWS = 0
+NEWS/MC = 0.0
+
+The likely issue is that Yahoo Finance RSS and Google News RSS are being queried using the full canonical Watchlist ticker:
+
+AIM:ENSI
+
+instead of the provider-search symbol:
+
+ENSI
+
+Audit the actual current RSS fetch path before editing.
+
+Do not modify frontend code.
+
+Do not change NEWS ACTIVITY window semantics.
+
+Do not change the 96-hour comparison warm-up.
+
+Do not change NEWS/MC.
+
+Do not change the hyperscaler cache.
+
+Do not send colon-containing symbols to Tradier or any unrelated provider.
+
+PART A — AUDIT CURRENT RSS QUERY SYMBOL CONSTRUCTION
+
+Trace:
+
+watchlist_rss_sweeper.py
+→ ticker universe
+→ _fetch_yahoo_rss(...)
+→ _fetch_google_news_rss(...)
+→ actual provider URL/query
+
+Also trace the normal visible-news RSS path in:
+
+watchlist_service.py
+
+Report the exact Yahoo and Google request produced today for:
+
+AIM:ENSI
+AIM:IQE
+AIM:TRT
+
+Confirm whether the current requests contain:
+
+AIM:ENSI
+
+AIM:IQE
+
+AIM:TRT
+
+inside the provider query.
+
+For each current provider request report:
+
+canonical_ticker
+Yahoo request symbol/query
+Google request query
+
+PART B — PRESERVE CANONICAL WATCHLIST IDENTITY
+
+Canonical Watchlist symbols must remain unchanged.
+
+Examples:
+
+AIM:ENSI
+AIM:IQE
+AIM:TRT
+
+These exact canonical strings must continue to be used for:
+
+archive ticker association
+UNIQUE(ticker, article_key)
+ticker_activity.ticker
+Watchlist response scoping
+frontend activity row matching
+NEWS/MC market-cap join
+Watchlist badges
+hyperscaler watchlist_symbols where applicable
+
+Do not globally normalize:
+
+AIM:ENSI
+→ ENSI
+
+Do not rewrite saved Watchlist tickers.
+
+Do not change the canonical ticker universe.
+
+This task only changes the symbol/query sent to RSS providers.
+
+PART C — ADD OR REUSE ONE RSS PROVIDER QUERY-SYMBOL HELPER
+
+Audit the codebase for an existing canonical helper that separates exchange-prefixed symbols.
+
+If a suitable helper exists, reuse it.
+
+Otherwise add one small RSS-specific normalization helper in the existing news/RSS service layer.
+
+Required behavior:
+
+provider_query_symbol("AIM:ENSI")
+→ "ENSI"
+
+provider_query_symbol("AIM:IQE")
+→ "IQE"
+
+provider_query_symbol("AIM:TRT")
+→ "TRT"
+
+provider_query_symbol("NASDAQ:NVDA")
+→ "NVDA"
+
+provider_query_symbol("NYSE:IBM")
+→ "IBM"
+
+provider_query_symbol("NVDA")
+→ "NVDA"
+
+Conceptually:
+
+ticker = String(ticker).strip().upper()
+
+if ":" in ticker:
+provider_symbol = ticker.rsplit(":", 1)[1].strip()
+else:
+provider_symbol = ticker
+
+Use the portion to the RIGHT of the final colon.
+
+Do not mutate the original canonical ticker variable used for archive storage.
+
+Keep both concepts explicit:
+
+canonical_ticker
+provider_query_symbol
+
+Do not name both variables `ticker` in the same function if that obscures which identity is being used.
+
+PART D — USE THE PROVIDER QUERY SYMBOL FOR BOTH RSS SOURCES
+
+Yahoo Finance RSS:
+
+Use provider_query_symbol in the Yahoo `s=` parameter.
+
+Example:
+
+canonical_ticker:
+AIM:ENSI
+
+Yahoo request:
+...headline?s=ENSI&region=US&lang=en-US
+
+Do not request:
+
+s=AIM:ENSI
+
+Google News RSS:
+
+Use provider_query_symbol in the Google search query.
+
+Example:
+
+canonical_ticker:
+AIM:ENSI
+
+Google query should search using:
+
+ENSI
+
+not:
+
+AIM:ENSI
+
+Preserve the current stock/news query wording unless audit shows a foreign-symbol-specific improvement is required.
+
+Yahoo AND Google must still run for every ticker.
+
+Do not restore fallback-only provider order.
+
+PART E — AUDIT COMPANY-NAME AVAILABILITY FOR FOREIGN TICKER DISAMBIGUATION
+
+Bare foreign ticker symbols can be ambiguous.
+
+Audit whether the RSS sweeper already has access, without new provider calls, to a cached/canonical company name for each Watchlist ticker.
+
+Possible existing sources include:
+
+saved Watchlist ticker metadata
+Watchlist analysis sections
+existing profile/fundamentals cache
+existing canonical ticker metadata
+
+Do not call FMP.
+
+Do not call Tradier.
+
+Do not add an LLM.
+
+Report whether company name is already cheaply available at RSS sweep time.
+
+If company name is NOT already available:
+
+Use the provider query symbol only.
+
+Do not add a new data dependency for this fix.
+
+If company name IS already available through an existing warm local/cache path:
+
+For prefixed symbols only, consider a Google News query using the existing company name plus provider symbol.
+
+Example conceptually:
+
+"IQE plc" IQE stock news
+
+rather than only:
+
+IQE stock news
+
+Do not alter Yahoo's `s=` query based on company name.
+
+Do not require company-name lookup for RSS collection to proceed.
+
+The simple right-of-colon ticker normalization remains the required fix.
+
+PART F — DO NOT LOSE THE CANONICAL TICKER WHEN ARCHIVING
+
+Validate the exact sweeper flow.
+
+Required:
+
+canonical_ticker = "AIM:ENSI"
+provider_symbol = "ENSI"
+
+Yahoo/Google fetched with:
+ENSI
+
+Merged articles archived as:
+ticker = "AIM:ENSI"
+
+ticker_activity response:
+ticker = "AIM:ENSI"
+
+The archive must NOT contain a new parallel ENSI identity merely because the provider was queried with ENSI.
+
+Specifically verify there is no new split such as:
+
+AIM:ENSI rows
+and
+ENSI rows
+
+for the same Watchlist ticker due to this change.
+
+PART G — APPLY THE SAME NORMALIZATION TO THE EXISTING VISIBLE-NEWS RSS PATH
+
+The project currently has:
+
+continuous RSS activity sweeper
+
+and
+
+existing normal visible-news fetch path
+
+Audit both.
+
+The same canonical/provider-symbol distinction must apply consistently to Yahoo and Google RSS in both paths.
+
+Do not fix only the activity collector while leaving ALL NEWS querying `AIM:ENSI`.
+
+Do not create duplicate normalization implementations in two files if one shared helper can cleanly be reused.
+
+Preserve existing FMP display-only fallback semantics:
+
+FMP may remain fallback for the old visible ALL NEWS path only when both RSS sources are empty.
+
+FMP must still contribute zero articles to NEWS ACTIVITY counts.
+
+PART H — VALIDATE LIVE FOREIGN TICKERS
+
+After the fix, run the actual Yahoo + Google RSS fetch path for at least:
+
+AIM:ENSI
+AIM:IQE
+AIM:TRT
+
+Also test at least 2 additional colon-prefixed Watchlist symbols from the current Primary Watchlist.
+
+For each report:
+
+canonical_ticker
+provider_query_symbol
+Yahoo HTTP status
+Yahoo raw article count
+Google HTTP status
+Google raw article count
+merged pre-dedup count
+duplicates removed
+unique article count
+
+Then show the first 3 article titles where available.
+
+Do not claim success solely because the requests return 200.
+
+The purpose is to determine whether stripping the exchange prefix materially improves actual article discovery.
+
+PART I — FALSE-POSITIVE / COLLISION CHECK
+
+For every prefixed test ticker that returns articles after normalization, inspect at least the first 5 titles.
+
+Report whether the article appears relevant to the intended Watchlist company.
+
+Use:
+
+title
+summary
+source
+
+Do not add a new LLM classifier.
+
+Do not create a broad new fuzzy matching system.
+
+If one bare symbol produces obvious unrelated results because the symbol is ambiguous, report it explicitly.
+
+If the existing article scoring/relevance system already filters these correctly, preserve it.
+
+If a narrow company-name-enhanced Google query is possible from existing cached metadata, use that rather than building a new classifier.
+
+PART J — ARCHIVE AND ACTIVITY VALIDATION
+
+After at least one successful post-fix sweep, show for the tested prefixed symbols:
+
+ticker
+articles_48h
+previous_articles_48h
+coverage_status
+
+It is expected that:
+
+coverage_status may still be warming
+
+and:
+
+Δ VS PREV 48H may still display —
+
+That is unrelated to this fix.
+
+The important validation is whether current:
+
+articles_48h
+
+can now become non-zero for correctly matched foreign ticker news.
+
+Also confirm:
+
+rss_activity_meta.window_hours = 48
+rss_activity_meta.comparison_window_hours = 48
+rss_activity_meta.retention_hours = 120
+
+PART K — REGRESSION VALIDATION
+
+Confirm:
+
+1. Normal US symbols still query unchanged.
+2. NVDA remains NVDA.
+3. Yahoo AND Google still run.
+4. FMP activity calls remain zero.
+5. Archive keys remain canonical Watchlist symbols.
+6. NEWS ACTIVITY response tickers remain canonical symbols.
+7. ALL NEWS remains populated.
+8. Hyperscaler cache behavior is unchanged.
+9. /news warm response performance remains healthy.
+10. No Tradier call receives a colon-containing symbol because of this task.
+11. No new provider/API calls were added beyond the existing RSS requests.
+
+FINAL RETURN
+
+Return:
+
+* exact root cause
+* exact current pre-fix Yahoo/Google queries for 3 prefixed symbols
+* normalization helper used or added
+* exact files changed
+* canonical ticker vs provider query symbol examples
+* 5+ live foreign ticker RSS validation table
+* first article titles for successful examples
+* collision/relevance audit
+* post-fix articles_48h values for tested foreign tickers
+* confirmation archive associations remain AIM:ENSI-style canonical symbols
+* confirmation FMP activity calls remain zero
+* confirmation /news performance did not regress
+
+Do not modify frontend code.
+Do not globally strip ticker prefixes.
+Do not rewrite saved Watchlist symbols.

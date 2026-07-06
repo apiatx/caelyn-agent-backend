@@ -311,13 +311,37 @@ async def _fetch_news_perplexity(ticker: str) -> List[Dict[str, Any]]:
         return []
 
 
+def _rss_provider_symbol(ticker: str) -> str:
+    """
+    Return the provider query symbol for a canonical Watchlist ticker.
+
+    Exchange-prefixed tickers (e.g. AIM:ENSI, ETR:AIXA, TSX:MAL) must be
+    queried using only the bare symbol portion so Yahoo Finance and Google News
+    can resolve them.  The canonical ticker (AIM:ENSI) is preserved everywhere
+    else: archive rows, ticker_activity keys, Watchlist scoping.
+
+    NOTE: watchlist_rss_sweeper.py carries an identical copy of this function.
+    They share the same 3-line logic; a shared module would require resolving
+    the sweeper → service import cycle.  Keep in sync if the logic ever changes.
+
+    Examples:
+        "AIM:ENSI"    → "ENSI"
+        "ETR:AIXA"    → "AIXA"
+        "NASDAQ:NVDA" → "NVDA"
+        "NVDA"        → "NVDA"
+    """
+    t = ticker.strip().upper()
+    return t.rsplit(":", 1)[1].strip() if ":" in t else t
+
+
 async def _fetch_yahoo_rss(ticker: str, client: httpx.AsyncClient) -> List[Dict[str, Any]]:
     """
     Fetch Yahoo Finance RSS for a ticker.
     Tags each article with rss_provider="yahoo".
     Never raises — returns [] on any error.
     """
-    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+    provider_sym = _rss_provider_symbol(ticker)   # "AIM:ENSI" → "ENSI"
+    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={provider_sym}&region=US&lang=en-US"
     try:
         resp = await client.get(url, timeout=8.0)
         if resp.status_code == 200:
@@ -339,7 +363,8 @@ async def _fetch_google_news_rss(ticker: str, client: httpx.AsyncClient) -> List
     Tags each article with rss_provider="google".
     Never raises — returns [] on any error.
     """
-    url = f"https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
+    provider_sym = _rss_provider_symbol(ticker)   # "AIM:ENSI" → "ENSI"
+    url = f"https://news.google.com/rss/search?q={provider_sym}+stock+news&hl=en-US&gl=US&ceid=US:en"
     try:
         resp = await client.get(url, timeout=8.0)
         if resp.status_code == 200:
