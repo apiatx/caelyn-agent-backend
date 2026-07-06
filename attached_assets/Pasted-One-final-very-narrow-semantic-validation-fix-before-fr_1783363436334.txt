@@ -1,0 +1,198 @@
+One final very narrow semantic validation/fix before frontend implementation.
+
+Do not redesign the RSS collector.
+
+Do not change 48H News Activity.
+
+Do not change 120-hour retention.
+
+Do not change hyperscaler symbol metadata.
+
+Do not modify the classifier.
+
+Audit only the two inconsistencies below.
+
+CONCERN 1 — EXACT 48-HOUR WINDOW BOUNDARY REPORT IS INCONSISTENT WITH THE REPORTED SQL
+
+The final report says the implemented SQL is conceptually:
+
+CURRENT:
+published_at >= t_48h
+AND published_at <= now
+
+PREVIOUS:
+published_at >= t_96h
+AND published_at < t_48h
+
+But the validation report says:
+
+now - 48h exactly
+→ previous_48h
+
+Those statements cannot both be true.
+
+With the reported predicates:
+
+published_at == t_48h
+
+matches:
+
+published_at >= t_48h
+
+and does NOT match:
+
+published_at < t_48h
+
+Therefore the exact 48-hour boundary belongs to CURRENT.
+
+Audit the actual SQL in:
+
+backend/data/rss_article_archive.py
+
+Do not rely on the prior written report.
+
+Run a controlled boundary test with five synthetic timestamps or direct predicate evaluation:
+
+now - 47h59m59s
+now - 48h exactly
+now - 48h00m01s
+now - 95h59m59s
+now - 96h exactly
+now - 96h00m01s
+
+Report for each:
+
+current_match
+previous_match
+
+Required invariant:
+
+Every timestamp from now through exactly 96 hours of history must match at most one window.
+
+No overlap.
+
+No double-counting.
+
+No gap between current and previous windows.
+
+Preferred window convention:
+
+CURRENT:
+[now - 48h, now]
+
+PREVIOUS:
+[now - 96h, now - 48h)
+
+Under this convention:
+
+47h59m59s → current
+48h exactly → current
+48h00m01s → previous
+95h59m59s → previous
+96h exactly → previous
+96h00m01s → excluded
+
+If the implementation already behaves this way:
+
+* do not change the SQL
+* correct the validation/report understanding only
+
+If the implementation differs:
+
+* fix it to one explicit mutually exclusive convention
+* use the preferred convention above unless an existing project standard requires otherwise
+
+CONCERN 2 — provider_partial MUST NOT MEAN "HISTORY STILL WARMING"
+
+The current report says:
+
+no first_seen → warming
+47h59m → warming
+48h exactly → provider_partial
+72h → provider_partial
+95h59m → provider_partial
+96h exactly → complete
+
+This conflates collector-history warm-up with provider failure.
+
+Required semantics:
+
+warming:
+The ticker has not yet accumulated the full 96 hours of collector observation history required for current 48H vs previous 48H comparison.
+
+provider_partial:
+Yahoo or Google collection coverage is genuinely incomplete/failed for the relevant current collector state.
+
+stale:
+Collector state or ticker refresh is outside the existing freshness threshold.
+
+complete:
+At least 96 hours of observation history exists and current provider/freshness coverage is healthy.
+
+Therefore, for a ticker with healthy Yahoo AND Google collection:
+
+0h through 95h59m59s
+→ warming
+
+96h+
+→ complete
+
+A healthy ticker at 48h or 72h must NOT return provider_partial merely because comparison history is not complete yet.
+
+Audit the actual _coverage_status implementation and all arguments passed into it.
+
+Report whether provider health is currently available per ticker.
+
+If provider health is available:
+use it to distinguish provider_partial.
+
+If provider health is not currently available per ticker:
+do not fabricate provider_partial from elapsed collection age.
+
+In that case use:
+
+age < 96h → warming
+age >= 96h and fresh → complete
+stale according to current existing freshness rule → stale
+
+Preserve provider_partial only where the collector actually has evidence of partial Yahoo/Google coverage.
+
+VALIDATION
+
+Show controlled coverage tests for:
+
+healthy providers, age 0h
+healthy providers, age 48h
+healthy providers, age 72h
+healthy providers, age 95h59m
+healthy providers, age 96h
+healthy providers, age 120h
+
+Then show:
+
+Yahoo failed / Google healthy
+Yahoo healthy / Google failed
+
+if per-ticker provider health is supported by the existing collector state.
+
+Expected healthy age progression:
+
+0h → warming
+48h → warming
+72h → warming
+95h59m → warming
+96h → complete
+120h → complete
+
+Return:
+
+* actual SQL predicates
+* six boundary-test results
+* confirmation of no gap/overlap
+* actual current _coverage_status rule before fix
+* whether provider_partial was being used as a warm-up status
+* final coverage-status semantics
+* controlled status test table
+* exact files changed
+
+Do not implement frontend work.

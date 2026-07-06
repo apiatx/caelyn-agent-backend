@@ -206,17 +206,28 @@ def _coverage_status(first_seen_ts: float | None, now_ts: float) -> str:
     "complete" on a brand-new archive.  first_seen_at records when we actually
     observed the data, not when the article was authored.
 
-    complete         — collector has ≥96h continuous history for this ticker
-    provider_partial — 48–96h of collector history
-    warming          — <48h of collector history, or no rows at all
+    Status semantics:
+        warming  — collector has < 96h of observation history for this ticker.
+                   The previous-48h comparison window is not yet reliably
+                   populated.  This is the only correct status for healthy
+                   tickers still accumulating history — NOT provider_partial.
+        complete — collector has ≥ 96h of history AND current coverage is
+                   healthy.
+        provider_partial — reserved for genuine per-ticker provider failure
+                   (Yahoo or Google RSS confirmed incomplete for this ticker).
+                   NOT emitted here because per-ticker provider health is not
+                   currently passed into this function.  Will be populated when
+                   query_ticker_activity returns per-ticker provider presence.
+
+    Two-state logic (provider health not yet available per ticker):
+        age < 96h  → warming
+        age >= 96h → complete
     """
     if first_seen_ts is None:
         return "warming"
     age_hours = (now_ts - first_seen_ts) / 3600.0
     if age_hours >= 96:
         return "complete"
-    if age_hours >= 48:
-        return "provider_partial"
     return "warming"
 
 
