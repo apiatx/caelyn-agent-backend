@@ -1,0 +1,476 @@
+Audit first, then make a narrow extension to the completed Watchlist RSS news feature.
+
+Do not redesign the collector.
+
+The existing continuous Yahoo Finance RSS + Google News RSS collector, Neon article archive, seen cache, cross-feed deduplication, write-amplification controls, and FMP exclusion from NEWS ACTIVITY are approved.
+
+This task has two backend changes:
+
+1. Change NEWS ACTIVITY from current 24h vs previous 24h to current 48h vs previous 48h.
+2. Make hyperscaler_articles explicitly identify the Watchlist ticker(s) and public anchor ticker(s) involved in each article.
+
+Do not implement frontend work.
+
+PART A — AUDIT CURRENT ACTIVITY FIELD CONSUMERS
+
+Before editing, trace all consumers of:
+
+articles_24h
+previous_articles_24h
+window_hours
+comparison_window_hours
+retention_hours
+coverage_status
+
+Report every backend and frontend reference found.
+
+The frontend has only recently adopted these fields, so do not assume backward compatibility is required.
+
+Preferred canonical field names after this change:
+
+articles_48h
+previous_articles_48h
+
+If another real consumer requires the 24h fields, preserve them additively.
+
+If the only consumer is the newly implemented Watchlist frontend, replace the recently-added 24h field names with the truthful 48h names rather than retaining misleading duplicate semantics.
+
+PART B — CHANGE NEWS ACTIVITY TO 48H VS PREVIOUS 48H
+
+New windows:
+
+CURRENT WINDOW:
+
+now - 48 hours <= published_at <= now
+
+PREVIOUS WINDOW:
+
+now - 96 hours <= published_at < now - 48 hours
+
+Return per ticker:
+
+ticker
+articles_48h
+previous_articles_48h
+delta_count
+delta_pct
+delta_label
+activity_as_of
+coverage_status
+
+Definitions:
+
+articles_48h =
+count of unique Yahoo + Google RSS article associations in the current rolling 48-hour window
+
+previous_articles_48h =
+count of unique Yahoo + Google RSS article associations in the immediately preceding 48-hour window
+
+delta_count =
+articles_48h - previous_articles_48h
+
+If previous_articles_48h > 0:
+
+delta_pct =
+((articles_48h - previous_articles_48h) / previous_articles_48h) * 100
+
+If previous_articles_48h == 0 and articles_48h == 0:
+
+delta_pct = 0.0
+
+If previous_articles_48h == 0 and articles_48h > 0:
+
+delta_pct = null
+delta_label = "new"
+
+Preserve the current null-delta behavior during warming.
+
+PART C — RETENTION MUST EXPAND BECAUSE 72 HOURS IS MATHEMATICALLY INSUFFICIENT
+
+The current archive retains 72 hours.
+
+That cannot support:
+
+current 48h
++
+previous 48h
+
+because a full comparison requires at least 96 hours of retained history.
+
+Change RSS activity archive retention to:
+
+120 hours
+
+This provides:
+
+96 hours required comparison history
++
+24-hour operational buffer
+
+Update all relevant:
+
+retention constants
+prune SQL
+diagnostic metadata
+comments
+rss_activity_meta.retention_hours
+
+Do not change the Hyperscaler Deals lookback merely because archive retention expands.
+
+HYPERSCALER DEALS should remain:
+
+72-hour lookback
+
+The archive may retain 120 hours while the hyperscaler feed intentionally queries only the most recent 72 hours.
+
+PART D — COVERAGE WARM-UP MUST CHANGE FROM 48 HOURS TO 96 HOURS
+
+The existing first_seen_at coverage fix is correct.
+
+Update the threshold.
+
+coverage_status must remain:
+
+warming
+
+until the ticker has at least 96 hours of collector observation history.
+
+Conceptually:
+
+now - first_successful_collection_at >= 96 hours
+
+or the exact current first_seen_ts equivalent.
+
+During warming:
+
+articles_48h = numeric when available
+
+previous_articles_48h = null
+delta_count = null
+delta_pct = null
+delta_label = null
+coverage_status = "warming"
+
+Do not claim a complete previous-48-hour comparison after only 48 hours of collection.
+
+Validate:
+
+first 95h59m:
+warming
+
+96h+:
+complete, assuming current provider health is good
+
+PART E — UPDATE rss_activity_meta
+
+Required semantics:
+
+window_hours = 48
+comparison_window_hours = 48
+retention_hours = 120
+
+Preserve:
+
+providers
+collector_started_at
+last_full_sweep_at
+sweep_in_progress
+current_sweep_started_at
+last_sweep_duration_ms
+ticker_count
+
+Do not alter collector cadence.
+
+Do not alter Semaphore(15).
+
+Do not alter the approximately 120-second target interval.
+
+PART F — HYPERSCALER ARTICLE TICKER IDENTIFICATION
+
+CURRENT USER PROBLEM:
+
+The HYPERSCALER DEALS toggle shows the article, but it is unclear which Watchlist stock is the subject of the signal.
+
+A recent frontend workaround allowed symbol:null hyperscaler articles to render, but that does not tell the user which stock the article is actually associated with.
+
+Example desired behavior:
+
+Watchlist ticker WYFI signs a deal with Amazon.
+
+The article should explicitly expose:
+
+Watchlist ticker:
+WYFI
+
+Anchor ticker:
+AMZN
+
+The frontend should be able to render:
+
+[ WYFI ] [ AMZN • ANCHOR ]
+
+without parsing the article title.
+
+Audit the exact current:
+
+query_recent_articles_for_scoring(...)
+score_article(...)
+_build_hyperscaler_articles(...)
+hyperscaler_articles response construction
+
+Also inspect:
+
+related_watchlist_symbols
+matched_entities
+symbol
+archive ticker association
+
+Report why current hyperscaler article objects can return symbol=null.
+
+PART G — AGGREGATE WATCHLIST SYMBOLS BY ARTICLE CLUSTER
+
+The archive is stored as ticker/article associations.
+
+The same deduplicated article may be associated with one or multiple Watchlist tickers.
+
+When building hyperscaler_articles:
+
+1. score the full 72-hour archive candidate set using the existing score_article authority
+2. select:
+   catalyst_type == "hyperscaler_anchor"
+3. cluster/deduplicate using the existing shared _cluster_key
+4. for each surviving article cluster, collect all Watchlist ticker associations belonging to that cluster
+
+Return:
+
+watchlist_symbols: string[]
+
+Example:
+
+{
+"watchlist_symbols": ["WYFI"]
+}
+
+If the same article was surfaced for WYFI and another Watchlist ticker:
+
+{
+"watchlist_symbols": ["WYFI", "XYZ"]
+}
+
+Deduplicate and sort deterministically.
+
+Do not rely only on the representative article's symbol field.
+
+For backward compatibility:
+
+symbol may remain the first watchlist_symbols entry when available.
+
+Do not return symbol=null when the archive association clearly identifies a Watchlist ticker.
+
+PART H — EXPOSE PUBLIC ANCHOR SYMBOLS WITHOUT DUPLICATING THE CLASSIFIER
+
+The existing news_signal_scorer remains the only hyperscaler classification authority.
+
+Do not duplicate:
+
+_HYPERSCALERS
+_DEAL_PATTERNS
+hyperscaler_anchor matching logic
+
+The scorer already returns:
+
+matched_entities
+
+For hyperscaler_anchor articles, resolve matched public anchor entities to their canonical public ticker symbols.
+
+Return:
+
+anchor_symbols: string[]
+
+Also preserve:
+
+matched_entities
+
+Preferred design:
+
+Add or reuse one display-resolution helper adjacent to the existing scorer/entity definitions so the entity-to-public-symbol mapping has one backend authority.
+
+This helper is not a second classifier.
+
+It only converts already-matched entity names into public ticker symbols for display.
+
+Example:
+
+Amazon / AWS
+→ AMZN
+
+Microsoft / Azure
+→ MSFT
+
+Google / Google Cloud
+→ GOOGL
+
+Meta
+→ META
+
+NVIDIA
+→ NVDA
+
+Apple
+→ AAPL
+
+For an entity without a public ticker:
+
+OpenAI
+xAI
+or another private entity
+
+do not invent a ticker.
+
+Keep the entity in matched_entities.
+
+Do not add it to anchor_symbols.
+
+Audit whether the project already has a canonical company/entity-to-ticker map that should be reused before adding a new small mapping.
+
+PART I — ADD highlight_symbols AS A FRONTEND-SAFE DISPLAY FIELD
+
+For hyperscaler_articles, add:
+
+watchlist_symbols: string[]
+anchor_symbols: string[]
+highlight_symbols: string[]
+
+Definition:
+
+highlight_symbols =
+unique watchlist_symbols first
++
+unique anchor_symbols second
+
+Example:
+
+watchlist_symbols = ["WYFI"]
+anchor_symbols = ["AMZN"]
+
+highlight_symbols = ["WYFI", "AMZN"]
+
+If the Watchlist stock itself is also an anchor entity, deduplicate it.
+
+Order must be deterministic:
+
+Watchlist subjects first.
+Anchor symbols second.
+
+Also return enough role metadata so the frontend can distinguish the cards.
+
+Preferred:
+
+symbol_roles: {
+"WYFI": "watchlist",
+"AMZN": "anchor"
+}
+
+or an equivalent typed list:
+
+highlighted_tickers: [
+{ ticker: "WYFI", role: "watchlist" },
+{ ticker: "AMZN", role: "anchor" }
+]
+
+Choose the shape that best fits current project conventions.
+
+Do not force the frontend to infer roles from array position if a clean explicit role field is easy to provide.
+
+PART J — HYPERSCALER CLASSIFICATION MUST REMAIN UNCHANGED
+
+Do not modify the rule:
+
+hyperscaler entity in title
++
+deal language in title or summary
+→ catalyst_type == "hyperscaler_anchor"
+
+Do not modify existing score thresholds.
+
+Do not add frontend-oriented keyword hacks to the scorer.
+
+This task is about exposing which symbols the already-classified article concerns.
+
+PART K — VALIDATION
+
+48H NEWS ACTIVITY:
+
+Validate exact window boundaries using controlled timestamps:
+
+now - 47h59m
+→ current
+
+now - 48h exactly
+→ follow the implemented inclusive/exclusive boundary consistently and report it
+
+now - 48h01m
+→ previous
+
+now - 95h59m
+→ previous
+
+older than 96h
+→ excluded
+
+Show live response:
+
+window_hours = 48
+comparison_window_hours = 48
+retention_hours = 120
+
+Show current coverage distribution.
+
+It is expected that the live collector returns warming until 96 hours of observation history have accumulated.
+
+Confirm FMP activity calls remain zero.
+
+HYPERSCALER SYMBOL VALIDATION:
+
+Use at least 3 live hyperscaler articles.
+
+For each show:
+
+title
+archive ticker associations
+matched_entities
+watchlist_symbols
+anchor_symbols
+highlight_symbols or highlighted_tickers
+symbol
+
+Include one article with a public anchor ticker.
+
+Prefer one Amazon/AWS, Microsoft/Azure, Google, Meta, NVIDIA, Apple, or similar current live example.
+
+Show that:
+
+Watchlist stock is present.
+Public anchor ticker is present.
+Private anchor entities do not receive fabricated ticker symbols.
+Duplicate symbols are removed.
+
+Confirm the existing 72-hour hyperscaler lookback remains unchanged.
+
+FINAL RETURN:
+
+* audit findings
+* current field consumers
+* exact files changed
+* final 48h activity response field names
+* archive retention before/after
+* coverage threshold before/after
+* live rss_activity_meta sample
+* current coverage distribution
+* confirmation FMP activity calls = 0
+* exact cause of symbol=null hyperscaler articles
+* final hyperscaler article response shape
+* 3 symbol-identification validation examples
+* confirmation hyperscaler classifier behavior is unchanged
+
+Do not implement frontend work.

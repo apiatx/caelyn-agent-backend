@@ -352,13 +352,20 @@ def upsert_with_cache(ticker: str, articles: list[dict]) -> dict:
 def query_ticker_activity(tickers: list[str]) -> dict[str, dict]:
     """
     For each ticker return:
-        articles_24h          int    — articles published in [now-24h, now]
-        previous_articles_24h int    — articles published in [now-48h, now-24h)
+        articles_48h          int    — articles published in [now-48h, now]
+        previous_articles_48h int    — articles published in [now-96h, now-48h)
         first_seen_ts         float  — unix ts of MIN(first_seen_at): when the
                                        collector FIRST observed this ticker.
                                        Used by coverage_status to distinguish
-                                       "collector has 48h history" from
+                                       "collector has 96h history" from
                                        "RSS feed has old articles".
+
+    Window semantics:
+        current window  : now-48h  <= published_at <= now
+        previous window : now-96h  <= published_at <  now-48h
+
+    A full comparison requires at least 96h of archive history; the archive
+    retains 120h to provide a 24h operational buffer beyond that requirement.
 
     Runs a single query across all tickers.
     """
@@ -370,8 +377,8 @@ def query_ticker_activity(tickers: list[str]) -> dict[str, dict]:
         return {}
 
     now   = datetime.now(timezone.utc)
-    t_24h = now - timedelta(hours=24)
     t_48h = now - timedelta(hours=48)
+    t_96h = now - timedelta(hours=96)
 
     try:
         cur = conn.cursor()
@@ -379,22 +386,22 @@ def query_ticker_activity(tickers: list[str]) -> dict[str, dict]:
             """
             SELECT
                 ticker,
-                COUNT(*) FILTER (WHERE published_at >= %s AND published_at <= %s) AS articles_24h,
-                COUNT(*) FILTER (WHERE published_at >= %s AND published_at < %s)  AS previous_24h,
+                COUNT(*) FILTER (WHERE published_at >= %s AND published_at <= %s) AS articles_48h,
+                COUNT(*) FILTER (WHERE published_at >= %s AND published_at < %s)  AS previous_48h,
                 MIN(first_seen_at) AS first_seen
             FROM public.watchlist_rss_article_archive
             WHERE ticker = ANY(%s)
             GROUP BY ticker
             """,
-            (t_24h, now, t_48h, t_24h, list(tickers)),
+            (t_48h, now, t_96h, t_48h, list(tickers)),
         )
         result: dict[str, dict] = {}
         for row in cur.fetchall():
-            t, cur_24, prev_24, first_seen = row
+            t, cur_48, prev_48, first_seen = row
             result[t] = {
-                "articles_24h":          int(cur_24 or 0),
-                "previous_articles_24h": int(prev_24 or 0),
-                # first_seen_at = time the collector FIRST wrote data for this ticker
+                "articles_48h":          int(cur_48 or 0),
+                "previous_articles_48h": int(prev_48 or 0),
+                # first_seen_ts = time the collector FIRST wrote data for this ticker
                 # (not the article's publication date).
                 "first_seen_ts": first_seen.timestamp() if first_seen else None,
             }
@@ -487,12 +494,16 @@ def count_all_rows() -> int:
         _put_conn(conn)
 
 
-def prune_old_rows(retention_hours: int = 72) -> int:
+def prune_old_rows(retention_hours: int = 120) -> int:
     """
     Delete rows where published_at < NOW() - retention_hours.
     Re-warms the in-memory seen cache after deletion so stale keys
     are removed and won't prevent re-insertion of new articles.
     Returns number of rows deleted.
+
+    Default retention is 120 hours:
+      96h  — minimum required for current-48h + previous-48h comparison
+      24h  — operational buffer beyond comparison requirement
     """
     conn = _get_conn()
     if conn is None:

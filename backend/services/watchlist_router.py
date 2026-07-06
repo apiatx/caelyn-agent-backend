@@ -196,26 +196,26 @@ async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict
 
 def _coverage_status(first_seen_ts: float | None, now_ts: float) -> str:
     """
-    Determine coverage quality for the previous-24h comparison window.
+    Determine coverage quality for the previous-48h comparison window.
 
     Uses first_seen_ts = MIN(first_seen_at) from the archive — the time the
     COLLECTOR first wrote data for this ticker.  NOT oldest published_at.
 
     RSS feeds contain articles published 3-5 days ago, so MIN(published_at)
-    would immediately appear >48h old on the very first sweep, giving a false
+    would immediately appear >96h old on the very first sweep, giving a false
     "complete" on a brand-new archive.  first_seen_at records when we actually
     observed the data, not when the article was authored.
 
-    complete         — collector has ≥48h continuous history for this ticker
-    provider_partial — 24–48h of collector history
-    warming          — <24h of collector history, or no rows at all
+    complete         — collector has ≥96h continuous history for this ticker
+    provider_partial — 48–96h of collector history
+    warming          — <48h of collector history, or no rows at all
     """
     if first_seen_ts is None:
         return "warming"
     age_hours = (now_ts - first_seen_ts) / 3600.0
-    if age_hours >= 48:
+    if age_hours >= 96:
         return "complete"
-    if age_hours >= 24:
+    if age_hours >= 48:
         return "provider_partial"
     return "warming"
 
@@ -231,14 +231,14 @@ def _build_ticker_activity_list(
     coverage_status is derived from first_seen_ts — when the COLLECTOR first
     wrote data for this ticker — not from the article's publication date.
 
-    During warming (collector < 48h old for ticker): the previous-24h comparison
+    During warming (collector < 96h old for ticker): the previous-48h comparison
     window is not reliably populated, so comparison fields are null:
-        previous_articles_24h = null
+        previous_articles_48h = null
         delta_count           = null
         delta_pct             = null
         delta_label           = null
 
-    articles_24h is always populated (may be zero).
+    articles_48h is always populated (may be zero).
 
     delta_pct semantics (non-warming only):
       previous > 0                 → ((current - previous) / previous) * 100
@@ -251,22 +251,22 @@ def _build_ticker_activity_list(
     for ticker in tickers:
         row = activity_raw.get(ticker)
         if row:
-            cur_24     = int(row.get("articles_24h", 0))
-            prev_24    = int(row.get("previous_articles_24h", 0))
+            cur_48     = int(row.get("articles_48h", 0))
+            prev_48    = int(row.get("previous_articles_48h", 0))
             first_seen = row.get("first_seen_ts")   # MIN(first_seen_at) unix ts
         else:
-            cur_24 = prev_24 = 0
+            cur_48 = prev_48 = 0
             first_seen = None
 
         cov_status = _coverage_status(first_seen, now_ts)
 
         if cov_status == "warming":
-            # Collector has not yet completed 48h of continuous observation.
+            # Collector has not yet completed 96h of continuous observation.
             # Do not expose a comparison that is based solely on RSS backfill.
             result.append({
                 "ticker":                ticker,
-                "articles_24h":          cur_24,
-                "previous_articles_24h": None,
+                "articles_48h":          cur_48,
+                "previous_articles_48h": None,
                 "delta_count":           None,
                 "delta_pct":             None,
                 "delta_label":           None,
@@ -276,24 +276,24 @@ def _build_ticker_activity_list(
             continue
 
         # coverage_status is "complete" or "provider_partial" — safe to compare
-        if prev_24 > 0:
-            delta_count = cur_24 - prev_24
-            delta_pct   = round(((cur_24 - prev_24) / prev_24) * 100.0, 1)
+        if prev_48 > 0:
+            delta_count = cur_48 - prev_48
+            delta_pct   = round(((cur_48 - prev_48) / prev_48) * 100.0, 1)
             delta_label = None
-        elif cur_24 == 0:
+        elif cur_48 == 0:
             delta_count = 0
             delta_pct   = 0.0
             delta_label = None
         else:
             # previous == 0, current > 0 — genuine new activity signal
-            delta_count = cur_24
+            delta_count = cur_48
             delta_pct   = None
             delta_label = "new"
 
         result.append({
             "ticker":                ticker,
-            "articles_24h":          cur_24,
-            "previous_articles_24h": prev_24,
+            "articles_48h":          cur_48,
+            "previous_articles_48h": prev_48,
             "delta_count":           delta_count,
             "delta_pct":             delta_pct,
             "delta_label":           delta_label,
@@ -301,7 +301,7 @@ def _build_ticker_activity_list(
             "coverage_status":       cov_status,
         })
 
-    result.sort(key=lambda r: (-r["articles_24h"], r["ticker"]))
+    result.sort(key=lambda r: (-r["articles_48h"], r["ticker"]))
     return result
 
 
@@ -353,28 +353,86 @@ async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
     #
     # The normal display path truncates to articles[:15] per ticker before scoring.
     # Hyperscaler Deals must inspect the full untruncated RSS surface, so we
-    # query the rolling archive directly, score each article with score_article(),
-    # and filter to catalyst_type == "hyperscaler_anchor".
+    # query the rolling 72-hour archive directly, score each article with
+    # score_article(), and filter to catalyst_type == "hyperscaler_anchor".
+    #
+    # Two-pass deduplication strategy:
+    #   Pass 1 — collect ALL (cluster_key → watchlist ticker) associations.
+    #             The archive stores one row per (ticker, article) pair, so the
+    #             same article cluster may appear under multiple watchlist tickers.
+    #             First-wins dedup would silently discard the extra associations.
+    #   Pass 2 — for each surviving cluster attach the union of all associated
+    #             watchlist tickers, resolve public anchor ticker symbols from
+    #             matched_entities, and build the display symbol fields.
+    #
+    # The 72-hour hyperscaler lookback is intentional and independent of the
+    # 120-hour NEWS ACTIVITY archive retention.
     try:
         from data.rss_article_archive import query_recent_articles_for_scoring
-        from services.news_signal_scorer import score_article as _score_archive_article
+        from services.news_signal_scorer import (
+            score_article as _score_archive_article,
+            resolve_anchor_symbols as _resolve_anchor_syms,
+        )
         loop = asyncio.get_event_loop()
         archive_map: dict[str, list[dict]] = await loop.run_in_executor(
             None, query_recent_articles_for_scoring, list(tickers), 72
         )
-        all_hyp: list[dict] = []
+
+        # Pass 1 — accumulate all ticker associations per cluster
+        cluster_article: dict[str, dict]       = {}   # ck → representative article
+        cluster_tickers: dict[str, set]        = {}   # ck → set of watchlist tickers
         for arch_ticker, arch_articles in archive_map.items():
             for a in arch_articles:
                 scored = _score_archive_article(a, arch_ticker)
                 if scored.get("catalyst_type") == "hyperscaler_anchor":
-                    all_hyp.append(scored)
-        seen_ck: dict[str, bool] = {}
+                    ck = _mk_ck(scored.get("title") or "", scored.get("url") or "")
+                    if ck not in cluster_article:
+                        cluster_article[ck] = scored
+                    cluster_tickers.setdefault(ck, set()).add(arch_ticker.upper())
+
+        # Pass 2 — resolve symbol fields for each surviving cluster
         deduped_hyp: list[dict] = []
-        for a in all_hyp:
-            ck = _mk_ck(a.get("title") or "", a.get("url") or "")
-            if ck not in seen_ck:
-                seen_ck[ck] = True
-                deduped_hyp.append(a)
+        for ck, article in cluster_article.items():
+            # watchlist_symbols: all Watchlist tickers whose archive rows
+            # matched this article cluster, sorted deterministically
+            wl_syms: list[str] = sorted(cluster_tickers.get(ck, set()))
+
+            # anchor_symbols: public tickers for the hyperscaler entities already
+            # matched in the article by score_article (no re-classification)
+            entities: list[str] = article.get("matched_entities") or []
+            anc_syms: list[str] = _resolve_anchor_syms(entities)
+
+            # highlight_symbols: watchlist subjects first, anchors second, deduped
+            seen_hl: dict[str, bool] = {}
+            highlight: list[str] = []
+            for s in wl_syms + anc_syms:
+                if s not in seen_hl:
+                    seen_hl[s] = True
+                    highlight.append(s)
+
+            # highlighted_tickers: explicit typed list so the frontend can render
+            # role badges without inferring from array position
+            sym_roles: dict[str, str] = {}
+            for s in wl_syms:
+                sym_roles[s] = "watchlist"
+            for s in anc_syms:
+                if s not in sym_roles:
+                    sym_roles[s] = "anchor"
+            highlighted_tickers = [
+                {"ticker": t, "role": sym_roles[t]} for t in highlight
+            ]
+
+            deduped_hyp.append({
+                **article,
+                "watchlist_symbols":   wl_syms,
+                "anchor_symbols":      anc_syms,
+                "highlight_symbols":   highlight,
+                "highlighted_tickers": highlighted_tickers,
+                # symbol: first watchlist subject for backward compat (never null
+                # when the archive association clearly identifies a ticker)
+                "symbol": wl_syms[0] if wl_syms else None,
+            })
+
         deduped_hyp.sort(
             key=lambda a: (
                 -(a.get("major_news_score") or 0),
@@ -394,9 +452,9 @@ async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
         print(f"[NEWS_LKG] rss_activity_meta error (non-fatal): {e}")
         data["rss_activity_meta"] = {
             "providers":               ["yahoo_rss", "google_news_rss"],
-            "window_hours":            24,
-            "comparison_window_hours": 24,
-            "retention_hours":         72,
+            "window_hours":            48,
+            "comparison_window_hours": 48,
+            "retention_hours":         120,
             "collector_started_at":    None,
             "last_full_sweep_at":      None,
             "sweep_in_progress":       False,

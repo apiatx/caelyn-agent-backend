@@ -48,6 +48,58 @@ _HYPERSCALERS: list[tuple[str, str]] = [
     (r"\basml\b",          "ASML"),
 ]
 
+# ── Entity → public ticker resolution (display helper only, not a classifier) ──
+#
+# Maps the display_name strings produced by _HYPERSCALERS → canonical public ticker.
+# Entities without a listed public ticker (OpenAI, xAI) are intentionally absent
+# so resolve_anchor_symbols() never fabricates a symbol for a private company.
+# Azure and AWS are mapped to their parent company tickers.
+# Source of truth for the single backend authority on this mapping.
+
+_HYPERSCALER_ANCHOR_SYMBOLS: dict[str, str] = {
+    "Microsoft":    "MSFT",
+    "Azure":        "MSFT",     # Azure is Microsoft's cloud brand
+    "Amazon":       "AMZN",
+    "AWS":          "AMZN",     # AWS is Amazon's cloud brand
+    "Google Cloud": "GOOGL",
+    "Google":       "GOOGL",
+    "Meta":         "META",
+    "Oracle":       "ORCL",
+    "NVIDIA":       "NVDA",
+    "CoreWeave":    "CRWV",     # public since March 2025
+    "Apple":        "AAPL",
+    "Broadcom":     "AVGO",
+    "Marvell":      "MRVL",
+    "Arista":       "ANET",
+    "TSMC":         "TSM",
+    "ASML":         "ASML",
+    # OpenAI → absent (private)
+    # xAI    → absent (private)
+}
+
+
+def resolve_anchor_symbols(matched_entities: list[str]) -> list[str]:
+    """
+    Convert entity display names (already matched by score_article) to canonical
+    public ticker symbols for display in hyperscaler_articles.
+
+    Uses _HYPERSCALER_ANCHOR_SYMBOLS — the single backend authority.
+    Entities without a public ticker (OpenAI, xAI) are silently omitted.
+    Azure/AWS are collapsed to their parent ticker (MSFT/AMZN).
+    Deduplicates while preserving first-occurrence order.
+
+    This is NOT a classifier — it does not re-examine article text.
+    It only converts already-matched entity names into tickers.
+    """
+    seen: dict[str, bool] = {}
+    result: list[str] = []
+    for entity in (matched_entities or []):
+        ticker = _HYPERSCALER_ANCHOR_SYMBOLS.get(entity)
+        if ticker and ticker not in seen:
+            seen[ticker] = True
+            result.append(ticker)
+    return result
+
 _GOV_ENTITIES: list[tuple[str, str]] = [
     (r"\bdepartment of defense\b",  "DoD"),
     (r"\b(?:the\s+)?dod\b",         "DoD"),

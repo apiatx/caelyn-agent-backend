@@ -37,7 +37,7 @@ _TARGET_INTERVAL_S   = 120    # target full-sweep interval seconds
 _SWEEP_SEM_SIZE      = 15     # max concurrent ticker workers
 _PRUNE_EVERY_N       = 10     # prune old rows every N sweeps
 _FETCH_TIMEOUT_S     = 8.0    # per-provider request timeout
-_RETAIN_HOURS        = 72     # archive retention window
+_RETAIN_HOURS        = 120    # archive retention: 96h comparison + 24h buffer
 _STARTUP_DELAY_S     = 30     # delay before first sweep
 
 _USER_AGENT = "Mozilla/5.0 (compatible; CaelynAI/1.0)"
@@ -105,8 +105,8 @@ def get_sweeper_meta(tickers: list[str] | None = None) -> dict[str, Any]:
     d = _SWEEPER_DIAG
     return {
         "providers":                ["yahoo_rss", "google_news_rss"],
-        "window_hours":             24,
-        "comparison_window_hours":  24,
+        "window_hours":             48,
+        "comparison_window_hours":  48,
         "retention_hours":          _RETAIN_HOURS,
         "collector_started_at":     d["collector_started_at"],
         "last_full_sweep_at":       d["last_full_sweep_at"],
@@ -424,29 +424,29 @@ async def run_rss_sweep() -> dict:
         **sweep_diag,
     })
 
-    # ── 5. Log top-20 tickers by 24h activity and positive delta ─────────────
+    # ── 5. Log top-20 tickers by 48h activity and positive delta ─────────────
     try:
         from data.rss_article_archive import query_ticker_activity
         loop = asyncio.get_event_loop()
         act  = await loop.run_in_executor(None, query_ticker_activity, tickers)
-        top_24h = sorted(act.items(), key=lambda kv: -kv[1]["articles_24h"])[:20]
+        top_48h = sorted(act.items(), key=lambda kv: -kv[1]["articles_48h"])[:20]
         top_delta = sorted(
             [
                 (t, d) for t, d in act.items()
-                if d["articles_24h"] > d["previous_articles_24h"]
+                if d["articles_48h"] > d["previous_articles_48h"]
             ],
-            key=lambda kv: -(kv[1]["articles_24h"] - kv[1]["previous_articles_24h"]),
+            key=lambda kv: -(kv[1]["articles_48h"] - kv[1]["previous_articles_48h"]),
         )[:20]
-        if top_24h:
+        if top_48h:
             print(
-                f"[RSS_SWEEPER] sweep_id={sweep_id} top-24h: "
-                + " ".join(f"{t}={d['articles_24h']}" for t, d in top_24h[:10])
+                f"[RSS_SWEEPER] sweep_id={sweep_id} top-48h: "
+                + " ".join(f"{t}={d['articles_48h']}" for t, d in top_48h[:10])
             )
         if top_delta:
             print(
                 f"[RSS_SWEEPER] sweep_id={sweep_id} top-delta: "
                 + " ".join(
-                    f"{t}=+{d['articles_24h']-d['previous_articles_24h']}"
+                    f"{t}=+{d['articles_48h']-d['previous_articles_48h']}"
                     for t, d in top_delta[:10]
                 )
             )
