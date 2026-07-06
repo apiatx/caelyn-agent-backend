@@ -1,0 +1,151 @@
+One final narrow audit before frontend work.
+
+Do not redesign the RSS collector.
+
+Do not change NEWS ACTIVITY.
+
+The continuous Yahoo + Google collector, Neon archive, coverage fix, seen cache, and write-amplification fix are approved.
+
+Audit only the two items below.
+
+CONCERN 1 — HYPERSCALER DEALS APPEARS TO HAVE ACCIDENTALLY BECOME 24H-ONLY
+
+The hardening report says:
+
+_attach_live_fields now calls:
+
+query_recent_articles_for_scoring(tickers, 24)
+
+and then scores/filter catalyst_type == "hyperscaler_anchor".
+
+This appears to introduce a new 24-hour cutoff for hyperscaler_articles.
+
+That was not the requested behavior.
+
+The rolling 24-hour window belongs only to NEWS ACTIVITY.
+
+The user described HYPERSCALER DEALS as the already-working Watchlist hyperscaler deal/partnership news moved behind its own toggle.
+
+Audit and report:
+
+1. Before the archive hardening, how many hyperscaler_articles were returned?
+2. After changing the source to query_recent_articles_for_scoring(tickers, 24), how many are returned?
+3. For every hyperscaler article that disappeared, report:
+
+   * ticker
+   * title
+   * published_at
+   * age_hours
+   * catalyst_type
+   * major_news_score
+4. Confirm whether the drop from the previously reported 13 hyperscaler articles to the later reported 3 hyperscaler articles is caused by the new 24-hour cutoff.
+
+Do not make HYPERSCALER DEALS inherit NEWS ACTIVITY's 24-hour window.
+
+The archive currently retains 72 hours.
+
+Preferred implementation, if audit confirms the 24h cutoff caused semantic drift:
+
+query_recent_articles_for_scoring(tickers, 72)
+
+Then:
+
+score_article(existing article shape, ticker)
+→ catalyst_type == "hyperscaler_anchor"
+→ deduplicate with shared _cluster_key
+→ major_news_score descending
+→ published_at descending
+
+The Hyperscaler Deals toggle should therefore represent recent hyperscaler deal/partnership signals available in the rolling RSS archive.
+
+Do not use the normal visible-news articles[:15] path.
+
+Do not reintroduce the truncation bug.
+
+Do not create a second classifier.
+
+Do not modify NEWS ACTIVITY's 24-hour/current-versus-previous windows.
+
+Do not modify /news/major.
+
+CONCERN 2 — VERIFY RSS ARCHIVE PERSISTS SUMMARY/DESCRIPTION
+
+Audit the exact schema in:
+
+backend/data/rss_article_archive.py
+
+and the article fields passed through:
+
+watchlist_rss_sweeper.py
+→ archive insert/update
+→ query_recent_articles_for_scoring(...)
+→ score_article(...)
+
+The existing news_signal_scorer intentionally uses:
+
+title + summary
+
+for keyword/deal-pattern detection.
+
+For hyperscaler_anchor specifically:
+
+* the hyperscaler entity must appear in the title
+* deal language may appear in the combined title + summary text
+
+Therefore archived article scoring must preserve the RSS summary/description.
+
+Report:
+
+1. Does watchlist_rss_article_archive currently have a summary column?
+2. Does the sweeper persist article["summary"]?
+3. Does query_recent_articles_for_scoring return summary?
+4. Does the reconstructed article dict passed to score_article contain summary?
+
+If all four are yes:
+
+* do not change anything
+* show one validation article where deal-pattern detection is supported by summary text
+
+If any answer is no:
+
+Add summary TEXT NULL to the existing archive table following the current idempotent schema-migration convention.
+
+Preserve summary during INSERT.
+
+For an existing article, update summary only when:
+
+* stored summary is null/empty
+* incoming summary is non-empty
+
+Do not repeatedly rewrite unchanged summaries on every sweep.
+
+Return summary from query_recent_articles_for_scoring.
+
+Pass summary unchanged into score_article.
+
+After the fix, validate one article where:
+
+hyperscaler entity is in title
+AND
+the deal/partnership keyword used by score_article is present in summary
+
+Prove it classifies as:
+
+catalyst_type="hyperscaler_anchor"
+
+FINAL VALIDATION
+
+Return:
+
+* exact cause of 13 → 3 hyperscaler article count change
+* before/after hyperscaler age distribution
+* final hyperscaler archive lookback hours
+* confirmation NEWS ACTIVITY remains exactly 24h vs previous 24h
+* archive summary column status
+* sweeper summary persistence status
+* scoring-query summary status
+* one title + summary hyperscaler classification example
+* confirmation zero FMP calls in NEWS ACTIVITY
+* exact files changed
+
+Do not implement frontend work.
