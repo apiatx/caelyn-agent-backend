@@ -33,7 +33,11 @@ from services.watchlist_service import (
     _WATCHLIST_FILE,
 )
 from services.watchlist_analysis import run_analysis_pipeline
-from services.news_major_service import build_major_developments as _build_major
+from services.news_major_service import (
+    build_major_developments as _build_major,
+    _cluster_key as _mk_ck,
+    _parse_ts as _mk_parse_ts,
+)
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
@@ -146,6 +150,11 @@ async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict
       - Hit  & fresh  (<20 min) → instant return, no I/O
       - Hit  & stale (≥20 min) → instant return of stale data + bg refresh
       - Miss (first call)       → blocking build, then cache
+
+    Always attaches three additive live fields before returning:
+      ticker_activity      — 24h/previous-24h counts from Neon archive
+      hyperscaler_articles — catalyst_type==hyperscaler_anchor, deduped
+      rss_activity_meta    — sweeper diagnostics
     """
     now = _time.time()
     lkg = _news_lkg.get(watchlist_id)
@@ -158,6 +167,7 @@ async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict
         if age > _NEWS_LKG_SERVE_TTL and watchlist_id not in _news_bg_building:
             asyncio.create_task(_bg_refresh_news(watchlist_id, tickers))
             data["is_building"] = True
+        await _attach_live_fields(data, tickers)
         return data
 
     # Cold start — build synchronously (only happens once per process restart)
@@ -178,7 +188,154 @@ async def _get_news_for_watchlist(watchlist_id: str, tickers: list[str]) -> dict
     data = _news_response(enriched_map, major_summary, ts,
                           debug_reason=cold_error)
     _news_lkg[watchlist_id] = {"data": data, "ts": ts}
+    await _attach_live_fields(data, tickers)
     return data
+
+
+# ── Live-field helpers (ticker_activity, hyperscaler_articles, rss_activity_meta) ──
+
+def _coverage_status(oldest_pub_ts: float | None, now_ts: float) -> str:
+    """
+    Determine coverage quality for the previous-24h comparison window.
+
+    complete       — archive has ≥48h of history → full previous window visible
+    provider_partial — 24–48h of history → current window ok, previous partial
+    warming        — <24h of history → warming phase, delta unreliable
+    """
+    if oldest_pub_ts is None:
+        return "warming"
+    age_hours = (now_ts - oldest_pub_ts) / 3600.0
+    if age_hours >= 48:
+        return "complete"
+    if age_hours >= 24:
+        return "provider_partial"
+    return "warming"
+
+
+def _build_ticker_activity_list(
+    tickers: list[str],
+    activity_raw: dict,
+    now_ts: float,
+) -> list[dict]:
+    """
+    Build the ticker_activity list from Neon query results.
+
+    delta_pct semantics:
+      previous > 0          → ((current - previous) / previous) * 100
+      previous == 0, current == 0 → 0.0
+      previous == 0, current > 0  → None  (delta_label = "new")
+    """
+    result = []
+    activity_as_of = datetime.utcfromtimestamp(now_ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    for ticker in tickers:
+        row = activity_raw.get(ticker)
+        if row:
+            cur_24  = int(row.get("articles_24h", 0))
+            prev_24 = int(row.get("previous_articles_24h", 0))
+            oldest  = row.get("oldest_pub_ts")
+        else:
+            cur_24 = prev_24 = 0
+            oldest = None
+
+        if prev_24 > 0:
+            delta_count = cur_24 - prev_24
+            delta_pct   = round(((cur_24 - prev_24) / prev_24) * 100.0, 1)
+            delta_label = None
+        elif cur_24 == 0:
+            delta_count = 0
+            delta_pct   = 0.0
+            delta_label = None
+        else:
+            # previous == 0, current > 0 — genuine new activity
+            delta_count = cur_24
+            delta_pct   = None
+            delta_label = "new"
+
+        result.append({
+            "ticker":                ticker,
+            "articles_24h":          cur_24,
+            "previous_articles_24h": prev_24,
+            "delta_count":           delta_count,
+            "delta_pct":             delta_pct,
+            "delta_label":           delta_label,
+            "activity_as_of":        activity_as_of,
+            "coverage_status":       _coverage_status(oldest, now_ts),
+        })
+
+    result.sort(key=lambda r: (-r["articles_24h"], r["ticker"]))
+    return result
+
+
+def _build_hyperscaler_articles(enriched_map: dict) -> list[dict]:
+    """
+    Select catalyst_type==hyperscaler_anchor articles from the enriched news map.
+    Deduplicates using the same _cluster_key as news_major_service.
+    Sorts by major_news_score desc, recency desc.
+    Does NOT reuse or replace the top-20 major developments list.
+    """
+    all_hyp: list[dict] = []
+    for articles in enriched_map.values():
+        for a in articles:
+            if a.get("catalyst_type") == "hyperscaler_anchor":
+                all_hyp.append(a)
+
+    seen_ck: dict[str, bool] = {}
+    deduped: list[dict] = []
+    for a in all_hyp:
+        ck = _mk_ck(a.get("title") or "", a.get("url") or "")
+        if ck not in seen_ck:
+            seen_ck[ck] = True
+            deduped.append(a)
+
+    deduped.sort(key=lambda a: (-(a.get("major_news_score") or 0),
+                                 -_mk_parse_ts(a.get("published_at") or "")))
+    return deduped
+
+
+async def _attach_live_fields(data: dict, tickers: list[str]) -> None:
+    """
+    Attach ticker_activity, hyperscaler_articles, rss_activity_meta to a
+    news response dict in-place.  Never raises — fields default to safe empties.
+    """
+    now_ts = _time.time()
+    enriched_map = data.get("articles") or {}
+
+    # ── 1. ticker_activity — live Neon query ──────────────────────────────
+    try:
+        from data.rss_article_archive import query_ticker_activity
+        loop = asyncio.get_event_loop()
+        activity_raw = await loop.run_in_executor(None, query_ticker_activity, list(tickers))
+        data["ticker_activity"] = _build_ticker_activity_list(tickers, activity_raw, now_ts)
+    except Exception as e:
+        print(f"[NEWS_LKG] ticker_activity error (non-fatal): {e}")
+        data["ticker_activity"] = _build_ticker_activity_list(tickers, {}, now_ts)
+
+    # ── 2. hyperscaler_articles — derived from enriched_map ──────────────
+    try:
+        data["hyperscaler_articles"] = _build_hyperscaler_articles(enriched_map)
+    except Exception as e:
+        print(f"[NEWS_LKG] hyperscaler_articles error (non-fatal): {e}")
+        data["hyperscaler_articles"] = []
+
+    # ── 3. rss_activity_meta — sweeper diagnostics ────────────────────────
+    try:
+        from services.watchlist_rss_sweeper import get_sweeper_meta
+        data["rss_activity_meta"] = get_sweeper_meta(list(tickers))
+    except Exception as e:
+        print(f"[NEWS_LKG] rss_activity_meta error (non-fatal): {e}")
+        data["rss_activity_meta"] = {
+            "providers":               ["yahoo_rss", "google_news_rss"],
+            "window_hours":            24,
+            "comparison_window_hours": 24,
+            "retention_hours":         72,
+            "collector_started_at":    None,
+            "last_full_sweep_at":      None,
+            "sweep_in_progress":       False,
+            "current_sweep_started_at": None,
+            "last_sweep_duration_ms":  None,
+            "ticker_count":            len(tickers),
+        }
 
 
 # ── Market-cap string parser ─────────────────────────────────────────────────

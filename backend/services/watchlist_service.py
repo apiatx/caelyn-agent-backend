@@ -224,6 +224,10 @@ def clear_watchlist(watchlist_id: Optional[str] = None) -> Dict[str, Any]:
 _news_cache: Dict[str, Dict[str, Any]] = {}  # ticker -> {"fetched_at": float, "articles": [...]}
 _NEWS_CACHE_TTL = 1800  # 30 minutes — reduce per-ticker refetch frequency
 
+# Import canonical cluster key for cross-feed deduplication (same function used by
+# news_major_service so we don't invent a second incompatible normalizer).
+from services.news_major_service import _cluster_key as _rss_cluster_key  # noqa: E402
+
 
 def _parse_rss_xml(xml_text: str, source_label: str) -> List[Dict[str, Any]]:
     """Parse RSS XML and extract articles."""
@@ -307,39 +311,115 @@ async def _fetch_news_perplexity(ticker: str) -> List[Dict[str, Any]]:
         return []
 
 
+async def _fetch_yahoo_rss(ticker: str, client: httpx.AsyncClient) -> List[Dict[str, Any]]:
+    """
+    Fetch Yahoo Finance RSS for a ticker.
+    Tags each article with rss_provider="yahoo".
+    Never raises — returns [] on any error.
+    """
+    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+    try:
+        resp = await client.get(url, timeout=8.0)
+        if resp.status_code == 200:
+            arts = _parse_rss_xml(resp.text, "Yahoo Finance")
+            for a in arts:
+                a["rss_provider"]  = "yahoo"
+                a["rss_providers"] = ["yahoo"]
+            if arts:
+                print(f"[WATCHLIST-NEWS] Yahoo RSS: {len(arts)} articles for {ticker}")
+            return arts
+    except Exception as e:
+        print(f"[WATCHLIST-NEWS] Yahoo RSS failed for {ticker}: {e}")
+    return []
+
+
+async def _fetch_google_news_rss(ticker: str, client: httpx.AsyncClient) -> List[Dict[str, Any]]:
+    """
+    Fetch Google News RSS for a ticker.
+    Tags each article with rss_provider="google".
+    Never raises — returns [] on any error.
+    """
+    url = f"https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
+    try:
+        resp = await client.get(url, timeout=8.0)
+        if resp.status_code == 200:
+            arts = _parse_rss_xml(resp.text, "Google News")
+            for a in arts:
+                a["rss_provider"]  = "google"
+                a["rss_providers"] = ["google"]
+            if arts:
+                print(f"[WATCHLIST-NEWS] Google News RSS: {len(arts)} articles for {ticker}")
+            return arts
+    except Exception as e:
+        print(f"[WATCHLIST-NEWS] Google News RSS failed for {ticker}: {e}")
+    return []
+
+
+async def _fetch_merged_rss_for_ticker(
+    ticker: str, client: httpx.AsyncClient
+) -> List[Dict[str, Any]]:
+    """
+    Fetch Yahoo Finance RSS and Google News RSS concurrently.
+    Merge and deduplicate by cluster_key (same canonical function used by
+    news_major_service — not a second incompatible normalizer).
+
+    Cross-feed duplicates (same article in both feeds) produce a single
+    merged article with rss_providers=["yahoo","google"].
+
+    Returns the deduplicated list. An empty list means both providers failed
+    or returned nothing.
+    """
+    yahoo_arts, google_arts = await asyncio.gather(
+        _fetch_yahoo_rss(ticker, client),
+        _fetch_google_news_rss(ticker, client),
+    )
+
+    merged: List[Dict[str, Any]] = []
+    seen_key_idx: Dict[str, int] = {}   # cluster_key → index in merged
+
+    for arts, provider in [(yahoo_arts, "yahoo"), (google_arts, "google")]:
+        for a in arts:
+            ck = _rss_cluster_key(a.get("title") or "", a.get("url") or "")
+            if ck in seen_key_idx:
+                # Same article seen in the other feed — union providers only
+                existing = merged[seen_key_idx[ck]]
+                providers = list(existing.get("rss_providers") or [])
+                if provider not in providers:
+                    providers.append(provider)
+                existing["rss_providers"] = providers
+                # Keep the canonical rss_provider as the first feed that saw it
+            else:
+                copy = dict(a)
+                copy["rss_providers"] = [provider]
+                seen_key_idx[ck] = len(merged)
+                merged.append(copy)
+
+    return merged
+
+
 async def fetch_news_for_ticker(ticker: str, client: httpx.AsyncClient) -> List[Dict[str, Any]]:
-    """Fetch news for a single ticker. Tries RSS feeds first, falls back to Perplexity."""
-    # Check cache
+    """
+    Fetch news for a single ticker.
+
+    Provider order:
+      Yahoo Finance RSS ─┐
+                          ├─ concurrent → merge → dedupe  (primary, always attempted)
+      Google News RSS  ───┘
+      FMP news fallback                                    (only when merged RSS is empty)
+      Perplexity fallback                                  (only if PERPLEXITY_FALLBACK_ENABLED=true)
+
+    FMP articles are tagged rss_providers=[] so they never enter the RSS archive
+    or contribute to 24h activity counts.
+    """
+    # Check in-memory cache
     cached = _news_cache.get(ticker)
     if cached and (time.time() - cached["fetched_at"]) < _NEWS_CACHE_TTL:
         return cached["articles"]
 
-    articles = []
+    # ── Primary: parallel Yahoo + Google RSS (always attempted) ──────────────
+    articles = await _fetch_merged_rss_for_ticker(ticker, client)
 
-    # Try Yahoo Finance RSS
-    yahoo_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
-    try:
-        resp = await client.get(yahoo_url, timeout=8.0)
-        if resp.status_code == 200:
-            articles = _parse_rss_xml(resp.text, "Yahoo Finance")
-            if articles:
-                print(f"[WATCHLIST-NEWS] Yahoo RSS: {len(articles)} articles for {ticker}")
-    except Exception as e:
-        print(f"[WATCHLIST-NEWS] Yahoo RSS failed for {ticker}: {e}")
-
-    # Try Google News RSS if Yahoo returned nothing
-    if not articles:
-        google_url = f"https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
-        try:
-            resp = await client.get(google_url, timeout=8.0)
-            if resp.status_code == 200:
-                articles = _parse_rss_xml(resp.text, "Google News")
-                if articles:
-                    print(f"[WATCHLIST-NEWS] Google News RSS: {len(articles)} articles for {ticker}")
-        except Exception as e:
-            print(f"[WATCHLIST-NEWS] Google News RSS failed for {ticker}: {e}")
-
-    # FMP stock news fallback (replaces Perplexity — FMP is the primary paid news source)
+    # ── FMP fallback: only when both RSS are empty ────────────────────────────
     if not articles:
         from config import FMP_API_KEY as _fmp_key
         if _fmp_key:
@@ -359,13 +439,15 @@ async def fetch_news_for_ticker(ticker: str, client: httpx.AsyncClient) -> List[
                                 "url":          item.get("url", ""),
                                 "published_at": item.get("publishedDate", ""),
                                 "source":       item.get("site", "") or item.get("publisher", "FMP"),
+                                # FMP articles: no rss_providers — excluded from activity counts
+                                "rss_providers": [],
                             })
                         if articles:
                             print(f"[WATCHLIST-NEWS] FMP: {len(articles)} articles for {ticker}")
             except Exception as _fmp_err:
                 print(f"[WATCHLIST-NEWS] FMP news failed for {ticker}: {_fmp_err}")
 
-    # Perplexity fallback only if PERPLEXITY_FALLBACK_ENABLED=true (default: false)
+    # ── Perplexity fallback: only if explicitly enabled ───────────────────────
     if not articles:
         from data.perplexity_guards import pplx_fallback_allowed, pplx_blocked
         if pplx_fallback_allowed():

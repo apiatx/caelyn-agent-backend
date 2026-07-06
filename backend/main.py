@@ -761,6 +761,23 @@ async def lifespan(app):
     # dashboard is ready before the first user request arrives.
     asyncio.create_task(_terminal_prewarm())
 
+    # Watchlist RSS sweeper — continuous ~2-min full-universe RSS archive sweep.
+    # Creates the watchlist_rss_article_archive Neon table, then registers one
+    # background loop that fetches Yahoo + Google RSS in parallel for every
+    # active Watchlist ticker and upserts 72-hour rolling article associations.
+    # FMP is never called by this sweeper. Registered exactly once.
+    try:
+        from data.rss_article_archive import ensure_table as _rss_ensure_table
+        _rss_ensure_table()
+    except Exception as _rss_tbl_err:
+        print(f"[STARTUP] RSS archive table init error (non-fatal): {_rss_tbl_err}")
+    try:
+        from services.watchlist_rss_sweeper import rss_sweeper_loop as _rss_sweeper_loop
+        asyncio.create_task(_rss_sweeper_loop())
+        print("[STARTUP] Watchlist RSS sweeper loop registered")
+    except Exception as _rss_err:
+        print(f"[STARTUP] RSS sweeper loop registration error: {_rss_err}")
+
     yield
 
 app = FastAPI(title="Trading Agent API", lifespan=lifespan)

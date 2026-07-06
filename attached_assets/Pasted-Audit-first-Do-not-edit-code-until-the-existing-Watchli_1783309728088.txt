@@ -1,0 +1,598 @@
+Audit first. Do not edit code until the existing Watchlist RSS fetch path, news scoring path, major-development path, Watchlist /news response, PostgreSQL conventions, and startup background-loop registration are fully traced.
+
+FEATURE:
+
+Redesign the existing Watchlist Live News data path so the existing Live News card can support three frontend toggles from one shared backend response:
+
+1. NEWS ACTIVITY — default
+
+   * per-Watchlist-ticker count of unique Yahoo Finance RSS + Google News RSS articles published in the rolling last 24 hours
+   * previous rolling 24-hour comparison window: 48h ago through 24h ago
+   * count increase/decrease and percent increase/decrease versus that previous 24-hour window
+
+2. ALL NEWS
+
+   * all merged Watchlist ticker news from the existing RSS news path
+   * chronological newest-first
+   * Yahoo Finance RSS AND Google News RSS must both contribute
+
+3. HYPERSCALER DEALS
+
+   * existing hyperscaler deal/partnership intelligence
+   * reuse the existing news_signal_scorer classification
+   * specifically catalyst_type == "hyperscaler_anchor"
+   * do not invent a new hyperscaler classifier
+
+CRITICAL USER CONSTRAINT:
+
+Do not use FMP for the 24-hour article-count/news-activity metric.
+
+The activity/count provider scope is strictly:
+
+* Yahoo Finance RSS
+* Google News RSS
+
+No FMP.
+No Finnhub.
+No Perplexity.
+No Gemini.
+No LLM.
+No paid search API.
+
+The existing FMP fallback in fetch_news_for_ticker may remain for backward compatibility only when both RSS sources are empty, if that is the current working path.
+
+However:
+
+* FMP articles must never contribute to articles_24h
+* FMP articles must never contribute to previous_articles_24h
+* FMP articles must never contribute to delta_count or delta_pct
+* the NEWS ACTIVITY metric is RSS-only
+
+PART A — REPORT THE CURRENT ARCHITECTURE BEFORE EDITING
+
+Trace and report:
+
+1. backend/services/watchlist_service.py
+
+   * _parse_rss_xml
+   * fetch_news_for_ticker
+   * fetch_news_for_tickers
+   * _news_cache
+   * _NEWS_CACHE_TTL
+   * exact Yahoo RSS URL
+   * exact Google News RSS URL
+   * exact current provider order
+   * every article limit/truncation
+
+2. backend/services/news_signal_scorer.py
+
+   * score_article
+   * _HYPERSCALERS
+   * _DEAL_PATTERNS
+   * exact hyperscaler_anchor classification rule
+
+3. backend/services/news_major_service.py
+
+   * build_major_developments
+   * current deduplication
+   * current top-20 cap
+   * current article cluster-key logic
+
+4. backend/services/watchlist_router.py
+
+   * _news_lkg
+   * _NEWS_LKG_SERVE_TTL
+   * _news_response
+   * _bg_refresh_news
+   * _get_news_for_watchlist
+   * GET /api/watchlist/{watchlist_id}/news
+   * GET /api/watchlist/{watchlist_id}/news/major
+   * exact current response shape
+
+5. backend/main.py
+
+   * FastAPI lifespan/startup path
+   * current asyncio.create_task background-loop registration conventions
+   * whether an existing generic recurring job runner should be reused instead
+
+6. backend/data/pg_storage.py and related DB modules
+
+   * canonical Neon connection helper
+   * init_tables convention
+   * transaction/connection return convention
+   * whether a more feature-specific DB module is preferred for new service tables
+
+Do not create duplicate infrastructure before completing this audit.
+
+PART B — CHANGE RSS FETCHING FROM FALLBACK TO PARALLEL MERGE
+
+Current known behavior is conceptually:
+
+Yahoo RSS
+→ if empty, Google News RSS
+→ if empty, FMP fallback
+
+For RSS collection, change this to:
+
+Yahoo Finance RSS ─┐
+├─ concurrent fetch → merge → dedupe
+Google News RSS ───┘
+
+For every ticker.
+
+Create/reuse the smallest clean helpers, conceptually:
+
+_fetch_yahoo_rss(ticker, client)
+_fetch_google_news_rss(ticker, client)
+_fetch_merged_rss_for_ticker(ticker, client)
+
+The two RSS HTTP requests for a ticker should run concurrently with asyncio.gather.
+
+Preserve:
+
+* existing httpx client conventions
+* existing User-Agent
+* existing RSS XML parser unless audit proves it cannot safely parse required fields
+* existing score_article enrichment
+* existing FMP fallback only after the merged RSS result is empty, for backward-compatible visible-news behavior
+
+Do not call FMP when Yahoo returned articles.
+Do not call FMP when Google returned articles.
+Do not call FMP for count/activity collection.
+
+PART C — PRESERVE RAW PROVIDER PROVENANCE
+
+Each RSS article must know which collection feed surfaced it.
+
+Additive internal field:
+
+rss_provider = "yahoo" | "google"
+
+Do not overwrite the existing article "source" field.
+
+The existing source field may represent Reuters, CNBC, Business Wire, etc.
+
+rss_provider means the collection path.
+
+Example:
+
+{
+"title": "...",
+"source": "Reuters",
+"rss_provider": "google"
+}
+
+If the same deduplicated article was surfaced by both feeds, preserve:
+
+rss_providers = ["yahoo", "google"]
+
+Do not count it twice.
+
+PART D — DEDUPLICATE YAHOO + GOOGLE BEFORE COUNTING
+
+NEWS ACTIVITY should show unique merged articles, not raw feed appearances.
+
+Do not calculate:
+
+len(yahoo_articles) + len(google_articles)
+
+without deduplication.
+
+Audit the existing news_major_service normalized-title cluster logic first.
+
+Prefer reusing or safely extracting the existing deterministic article cluster-key logic instead of inventing a second incompatible title normalizer.
+
+Important:
+
+Google News URLs and Yahoo URLs may not be identical for the same publisher article, so URL alone must not be the only cross-feed deduplication key.
+
+Preferred identity:
+
+1. existing normalized title cluster key when sufficiently specific
+2. source/publisher as a secondary discriminator where necessary
+3. publication timestamp proximity as a duplicate guard where necessary
+4. URL fallback for titles too short to normalize
+
+The final NEWS ACTIVITY number is:
+
+unique Yahoo + Google RSS article associations per ticker
+
+An article can legitimately count for two different Watchlist tickers if it is surfaced in each ticker's targeted feed.
+
+It counts once per ticker.
+
+PART E — ADD A ROLLING RSS ARTICLE ARCHIVE IN NEON
+
+Do not derive the previous-24-hour comparison only from the current visible Live News arrays.
+
+Do not use the post-score articles[:15] visible-news truncation as the activity-count source.
+
+We need rolling article history so the application can calculate:
+
+CURRENT WINDOW:
+now - 24h <= published_at <= now
+
+PREVIOUS WINDOW:
+now - 48h <= published_at < now - 24h
+
+Create the smallest persistent RSS article-association archive following current Neon/Postgres project conventions.
+
+Conceptual shape:
+
+ticker TEXT NOT NULL
+article_key TEXT NOT NULL
+title TEXT NOT NULL
+source TEXT NULL
+url TEXT NULL
+published_at TIMESTAMPTZ NOT NULL
+rss_providers JSONB or TEXT[] NOT NULL
+first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+UNIQUE (ticker, article_key)
+
+The exact schema should follow the existing project's DB conventions after audit.
+
+This is not a permanent historical news warehouse.
+
+Retention:
+
+keep 72 hours only.
+
+Delete records older than 72 hours based on published_at.
+
+Use an indexed path suitable for:
+
+ticker + published_at
+
+Do not append duplicate rows on every sweep.
+
+UPSERT the same ticker/article_key and update:
+
+* last_seen_at
+* rss_providers union
+
+PART F — CONTINUOUS NEAR-REAL-TIME RSS SWEEPER
+
+The user wants this updated continuously and as close to real time as practical for RSS.
+
+Do not make Watchlist page load trigger a full RSS universe scan.
+
+Do not make React Query trigger provider calls.
+
+Add one backend-managed continuous Watchlist RSS sweep using the project's existing startup/background-loop convention.
+
+Current project convention appears to register long-running loops through asyncio.create_task in the FastAPI lifespan path. Confirm this in audit and preserve the established pattern.
+
+Target:
+
+full active Watchlist RSS universe freshness approximately every 2 minutes.
+
+However:
+
+* never overlap full sweeps
+* use bounded concurrency
+* do not launch all Yahoo + Google requests for 300+ tickers simultaneously
+* Yahoo and Google may be fetched concurrently for the same ticker
+* use a semaphore for ticker-level concurrency
+* start conservatively at 12–20 ticker workers after testing
+* apply provider-specific retry/backoff for 429, 403, timeout, and 5xx
+* do not spin retry loops indefinitely
+* stale data must remain readable during provider errors
+
+Preferred loop behavior:
+
+1. load all saved Watchlists using the existing canonical Watchlist store
+2. build the union of current Watchlist tickers
+3. deduplicate symbols so the same ticker in multiple Watchlists is fetched once
+4. run a bounded full RSS sweep
+5. merge/dedupe Yahoo + Google articles per ticker
+6. upsert article associations into Neon
+7. prune >72h rows on a lower-frequency cadence
+8. record sweep diagnostics
+9. wait only as needed so the target full-sweep interval is approximately 120 seconds
+10. immediately continue the next sweep
+11. never start a second sweep while one is still running
+
+Effective freshness may be slower than two minutes when an upstream feed is slow. Report measured sweep duration honestly.
+
+On startup:
+
+* allow PostgreSQL initialization to complete
+* hydrate/read existing Neon archive immediately
+* perform a catch-up sweep without deleting existing data
+* register the loop exactly once
+
+PART G — CALCULATE 24H NEWS ACTIVITY
+
+For a requested Watchlist's current ticker set, calculate per ticker:
+
+articles_24h
+previous_articles_24h
+delta_count
+delta_pct
+
+Definitions:
+
+articles_24h =
+count of unique RSS article associations where:
+published_at >= now - 24 hours
+AND published_at <= now
+
+previous_articles_24h =
+count of unique RSS article associations where:
+published_at >= now - 48 hours
+AND published_at < now - 24 hours
+
+delta_count =
+articles_24h - previous_articles_24h
+
+delta_pct:
+
+if previous_articles_24h > 0:
+((articles_24h - previous_articles_24h) / previous_articles_24h) * 100
+
+if previous_articles_24h == 0 and articles_24h == 0:
+0.0
+
+if previous_articles_24h == 0 and articles_24h > 0:
+null
+
+Also provide:
+
+delta_label = "new"
+
+for the final case.
+
+Do not fabricate +100%, +500%, or another percent when the prior denominator is zero.
+
+PART H — COVERAGE / WARM-UP
+
+A brand-new article archive cannot truthfully claim a full previous 24-hour comparison until enough history has accumulated.
+
+Expose a coverage status.
+
+Recommended statuses:
+
+warming
+complete
+stale
+provider_partial
+
+Track enough collector metadata to know:
+
+* collector_started_at
+* oldest_tracked_published_at
+* last_successful_ticker_refresh
+* last_full_sweep_at
+* Yahoo success/failure
+* Google success/failure
+
+Rules:
+
+A ticker may show articles_24h based on currently collected RSS results during warm-up.
+
+However the previous-24-hour delta should expose coverage_status="warming" until the archive has sufficient comparison history, unless the initial feeds independently provide verified full 48-hour coverage.
+
+Do not call a partial previous-period comparison "complete".
+
+The frontend can display "—" for change during warm-up.
+
+PART I — BUILD EXACT HYPERSCALER FEED FROM THE EXISTING CLASSIFIER
+
+Do not create a new keyword list.
+
+Reuse existing score_article output.
+
+From the full enriched merged Watchlist article map:
+
+select articles where:
+
+catalyst_type == "hyperscaler_anchor"
+
+Deduplicate using the existing article-cluster logic.
+
+Sort:
+
+1. major_news_score descending
+2. published_at descending
+
+Return a separate additive list:
+
+hyperscaler_articles
+
+Do not use the general top-20 Major Developments list as the Hyperscaler toggle source.
+
+The general Major Developments list also contains government/defense, M&A, earnings, financing, and other classifications.
+
+Preserve the existing /news/major endpoint unchanged for backward compatibility.
+
+PART J — EXTEND THE EXISTING /NEWS RESPONSE
+
+Do not remove any existing response field.
+
+Preserve:
+
+articles
+top_articles
+high_signal_count
+by_catalyst_type
+news_signal_meta
+cached_at
+cache_age_s
+is_building
+debug_reason where applicable
+
+Add:
+
+ticker_activity
+hyperscaler_articles
+rss_activity_meta
+
+Conceptual response:
+
+{
+"articles": {
+"NVDA": [...],
+"NBIS": [...]
+},
+"top_articles": [...],
+"ticker_activity": [
+{
+"ticker": "NVDA",
+"articles_24h": 42,
+"previous_articles_24h": 25,
+"delta_count": 17,
+"delta_pct": 68.0,
+"delta_label": null,
+"activity_as_of": "...",
+"coverage_status": "complete"
+}
+],
+"hyperscaler_articles": [...],
+"rss_activity_meta": {
+"providers": ["yahoo_rss", "google_news_rss"],
+"window_hours": 24,
+"comparison_window_hours": 24,
+"retention_hours": 72,
+"collector_started_at": "...",
+"last_full_sweep_at": "...",
+"sweep_in_progress": false,
+"current_sweep_started_at": null,
+"last_sweep_duration_ms": 0,
+"ticker_count": 0
+}
+}
+
+ticker_activity should be returned for every ticker in the requested Watchlist.
+
+A successfully covered ticker with zero articles returns:
+
+articles_24h = 0
+
+An unavailable ticker must not silently become zero if coverage failed.
+
+PART K — ALL NEWS MUST USE THE MERGED RSS ARTICLE MAP
+
+The articles map returned by /api/watchlist/{watchlist_id}/news should now represent the merged Yahoo + Google RSS path for each ticker.
+
+Both providers must be attempted.
+
+Continue existing score_article enrichment.
+
+Continue existing per-article signal fields.
+
+Keep the existing FMP fallback only when the merged Yahoo + Google RSS result is empty if preserving that fallback is required for backward compatibility.
+
+Any FMP fallback article may appear in ALL NEWS.
+
+It must not enter the RSS activity archive or 24-hour counts.
+
+PART L — DIAGNOSTICS
+
+Add diagnostics for the collector.
+
+Required fields/log output:
+
+loop_registered
+sweep_id
+sweep_started_at
+sweep_completed_at
+sweep_duration_ms
+target_interval_seconds
+total_watchlists
+total_unique_tickers
+tickers_scanned
+tickers_successful
+tickers_partial
+tickers_failed
+yahoo_requests
+yahoo_success
+yahoo_failures
+google_requests
+google_success
+google_failures
+fmp_requests_for_activity = 0
+rss_articles_raw_yahoo
+rss_articles_raw_google
+merged_articles_before_dedupe
+cross_feed_duplicates_removed
+unique_article_associations_upserted
+archive_rows_before_prune
+archive_rows_pruned
+archive_rows_after_prune
+last_full_sweep_at
+next_sweep_target_at
+
+Also log the top 20 tickers by articles_24h and by positive delta_count after a completed full sweep.
+
+PART M — VALIDATION
+
+Use the real active Watchlist.
+
+Validate at least:
+
+* 10 high-news tickers
+* 10 small/mid-cap Watchlist tickers
+* one ticker Yahoo returns articles for
+* one ticker Google returns articles for
+* one ticker where both return articles
+* one ticker where the same article is surfaced through both feeds
+* one zero-news ticker if present
+
+For selected examples show:
+
+ticker
+Yahoo raw article count
+Google raw article count
+merged pre-dedupe count
+duplicates removed
+unique current-24h count
+unique previous-24h count
+delta_count
+delta_pct
+coverage_status
+
+Verify:
+
+1. Yahoo and Google are both requested for each scanned ticker.
+2. Google is no longer only a fallback after Yahoo.
+3. FMP requests made by the NEWS ACTIVITY collector = 0.
+4. The same Yahoo/Google article is not counted twice for a ticker.
+5. RSS article rows survive backend restart.
+6. Rows older than 72h are pruned.
+7. current 24h and previous 24h windows are mutually exclusive.
+8. previous=0/current>0 produces delta_pct=null and delta_label="new".
+9. existing score_article behavior remains intact.
+10. existing hyperscaler_anchor classification remains intact.
+11. existing /news/major endpoint remains intact.
+12. /api/watchlist/{watchlist_id}/news returns all old fields plus the three new additive fields.
+13. GET /api/watchlist/{watchlist_id}/news performs zero provider calls because it reads warm RSS/Neon state.
+14. The background RSS sweep is registered exactly once.
+15. Repeated page refreshes do not create repeated RSS sweeps.
+16. The measured full-universe sweep interval and duration are reported honestly.
+
+STOP CONDITIONS:
+
+Do not add FMP to NEWS ACTIVITY.
+Do not use visible-news array length as articles_24h.
+Do not count Yahoo + Google duplicates twice.
+Do not create a second hyperscaler classifier.
+Do not replace news_signal_scorer.
+Do not remove /news/major.
+Do not remove the existing FMP empty-RSS fallback unless the audit proves it is safe and the change is explicitly necessary.
+Do not create a page-load RSS fanout.
+Do not implement frontend changes.
+
+Return:
+
+* audit findings
+* exact files changed
+* DB schema/table added or reused
+* background-loop registration path
+* actual measured full-universe sweep duration
+* actual effective freshness
+* Yahoo/Google validation samples
+* duplicate-removal validation
+* 24h/current-versus-previous validation
+* final /news response sample
