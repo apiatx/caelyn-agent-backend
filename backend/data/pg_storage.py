@@ -1770,18 +1770,28 @@ def _sanitize_analysis(analysis: dict, ticker: str) -> dict:
 def watchlist_add_ticker(
     watchlist_id: str,
     canonical_ticker: str,
+    family_aliases: list | None = None,
 ) -> dict:
     """
     Atomically add canonical_ticker to watchlist_id.
     Uses advisory lock to prevent concurrent lost-update.
+
+    family_aliases: optional list of alternative canonical forms in the same
+        exchange family (e.g. ['AIM:IQE'] when adding 'LON:IQE').  If any
+        alias is already a Watchlist member, returns a conflict response
+        (Part H: exchange-family duplicate hardening).
+
     Returns:
         {"added": True,  "duplicate": False, "ticker_count": N}
         {"added": False, "duplicate": True,  "ticker_count": N}
+        {"added": False, "duplicate": True,  "ticker_count": N,
+         "existing_ticker": "AIM:IQE", "conflict_type": "exchange_family_alias"}
         {"added": False, "error": "<reason>"}
     """
     t = canonical_ticker.strip().upper()
     if not t:
         return {"added": False, "error": "empty_ticker"}
+    aliases = [a.strip().upper() for a in (family_aliases or []) if a.strip()]
 
     conn = _get_conn()
     if conn is None:
@@ -1808,6 +1818,22 @@ def watchlist_add_ticker(
             conn.rollback()
             cur.close()
             return {"added": False, "duplicate": True, "ticker_count": len(tickers)}
+
+        for alias in aliases:
+            if alias in tickers:
+                conn.rollback()
+                cur.close()
+                print(
+                    f"[PG_STORAGE] watchlist_add_ticker: exchange-family conflict "
+                    f"wl={watchlist_id} requested={t} existing_alias={alias}"
+                )
+                return {
+                    "added":           False,
+                    "duplicate":       True,
+                    "ticker_count":    len(tickers),
+                    "existing_ticker": alias,
+                    "conflict_type":   "exchange_family_alias",
+                }
 
         tickers.append(t)
         csv_data.append({"Symbol": t})

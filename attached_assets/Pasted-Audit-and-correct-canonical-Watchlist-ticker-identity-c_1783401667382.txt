@@ -1,0 +1,509 @@
+Audit and correct canonical Watchlist ticker identity construction in the newly added security-search/manual-add backend before frontend integration.
+
+Do not modify frontend code.
+
+Do not redesign add/delete membership mutation.
+
+Do not undo:
+
+POST /api/watchlist/{id}/ticker
+
+DELETE /api/watchlist/{id}/ticker/{ticker:path}
+
+transaction locking
+
+duplicate guards
+
+delete sanitization
+
+cache invalidations
+
+The current membership mutation architecture is approved.
+
+CURRENT CONCERN
+
+The security-search implementation report states:
+
+US exchanges
+→ bare ticker
+
+non-US exchanges
+→ EXCHANGE_CODE:BARE_SYMBOL
+
+with examples:
+
+LSE:IQE
+PAR:SOI
+
+This may conflict with the application's existing canonical Watchlist identities.
+
+The existing Watchlist currently uses canonical examples such as:
+
+AIM:IQE
+AIM:ENSI
+EPA:SOI
+KRX:000660
+TSX:MAL
+
+The existing frontend/backend already contain explicit handling for canonical prefixes such as:
+
+AIM
+EPA
+TSX
+TSXV
+
+The FMP search provider's exchange field must not silently redefine Caelyn's canonical Watchlist ticker identity.
+
+PART A — AUDIT THE EXISTING CANONICAL SYMBOL VOCABULARY
+
+Search the entire backend and frontend repos for existing colon-prefixed ticker identities.
+
+Collect every distinct prefix currently present in:
+
+Primary Watchlist tickers
+other saved Watchlists
+csv_data
+analysis sections
+theme registries
+quote normalization
+TradingView symbol resolution
+RSS handling
+FMP eligibility handling
+options eligibility handling
+company identity handling
+
+Return a table:
+
+canonical_prefix
+live_ticker_count
+example_tickers
+known exchange/provider meaning
+current consumers
+
+At minimum audit:
+
+AIM
+EPA
+ETR
+FRA
+LON
+LSE
+TSX
+TSXV
+ASX
+KRX
+TYO
+TPE
+TPEX
+STO
+SWX
+OSL
+WSE
+CSE
+OTC
+
+Do not infer the canonical vocabulary solely from FMP's exchange field.
+
+Use actual existing stored symbols and code consumers.
+
+PART B — COMPARE FMP SEARCH IDENTITIES TO EXISTING WATCHLIST IDENTITIES
+
+For every current prefixed Primary Watchlist ticker:
+
+1. identify the existing canonical Watchlist ticker
+2. search/resolve the same security through the new FMP search implementation
+3. capture:
+   FMP symbol
+   FMP exchange
+   FMP company name
+   current search canonical_ticker
+
+Return:
+
+existing_canonical_ticker
+FMP_symbol
+FMP_exchange
+new_search_canonical_ticker
+exact_match yes/no
+
+Calculate:
+
+total prefixed Watchlist securities tested
+exact canonical matches
+canonical mismatches
+
+List every mismatch.
+
+Explicitly test:
+
+AIM:IQE
+AIM:ENSI
+AIM:TRT if currently present in a test Watchlist
+EPA:SOI
+ETR:AIXA
+KRX:000660
+TSX:MAL
+
+PART C — PROVE OR DISPROVE THE DUPLICATE-IDENTITY RISK
+
+Using a disposable Watchlist, reproduce this exact scenario where applicable.
+
+Example 1:
+
+existing member:
+AIM:IQE
+
+run security search:
+IQE
+
+inspect the suggestion canonical_ticker.
+
+If suggestion returns:
+
+LSE:IQE
+
+attempt add.
+
+Report whether the Watchlist can contain both:
+
+AIM:IQE
+LSE:IQE
+
+Example 2:
+
+existing member:
+EPA:SOI
+
+run security search:
+Soitec
+
+If suggestion returns:
+
+PAR:SOI
+
+attempt add.
+
+Report whether both identities can coexist.
+
+Do not rely on company-name equality to claim safety.
+
+The current add duplicate guard operates on canonical membership identity.
+
+The question is whether the same security can be persisted twice under different canonical strings.
+
+PART D — FIND THE EXISTING SOURCE OF CANONICAL FOREIGN SYMBOLS
+
+Audit how current Watchlist canonical strings such as:
+
+AIM:IQE
+EPA:SOI
+ETR:AIXA
+KRX:000660
+
+were originally created.
+
+Search:
+
+CSV import normalization
+Watchlist upload
+ticker normalization helpers
+company identity services
+FMP adapters
+exchange mapping dictionaries
+theme normalization
+TradingView mapping
+
+Report the exact helper/source if one exists.
+
+If one canonical exchange-prefix adapter already exists:
+
+reuse it.
+
+Do not create another mapping.
+
+If the old symbols came directly from imported user data and there is no formal canonical helper:
+
+state that clearly.
+
+Then derive one canonical adapter from the existing persisted vocabulary and existing provider translation rules.
+
+PART E — SEPARATE THREE IDENTITIES EXPLICITLY
+
+The security-search backend should explicitly distinguish:
+
+provider_symbol
+
+provider_exchange
+
+canonical_ticker
+
+Example conceptually:
+
+{
+"provider_symbol": "IQE.L",
+"provider_exchange": "LSE",
+"canonical_ticker": "AIM:IQE"
+}
+
+These are not interchangeable.
+
+FMP symbol/exchange:
+reference-provider identity
+
+canonical_ticker:
+Caelyn Watchlist membership identity
+
+TradingView symbol:
+chart-provider identity
+
+Tradier symbol:
+quote-provider identity
+
+RSS provider symbol:
+news-query identity
+
+Do not reuse one provider's exchange code as canonical merely because it is available.
+
+PART F — CANONICAL PREFIX MAPPING
+
+Only if no existing canonical helper already solves this, add one small shared canonical security-identity adapter in the appropriate backend reference-data/service layer.
+
+The mapping must be based on existing Caelyn canonical identity conventions.
+
+Audit exact required translations from live data.
+
+Potential examples to verify, NOT blindly hardcode without audit:
+
+FMP LSE security specifically listed on AIM
+→ AIM:{symbol}
+
+FMP Paris / Euronext Paris
+→ EPA:{symbol}
+
+FMP Frankfurt/Xetra
+→ ETR:{symbol} or existing canonical prefix actually used
+
+FMP Korea
+→ KRX:{symbol}
+
+FMP Toronto
+→ TSX:{symbol}
+
+The critical complication is:
+
+LSE does not automatically mean AIM.
+
+A London-listed security may be:
+
+main LSE
+or
+AIM
+
+Therefore do not globally map:
+
+LSE → AIM
+
+unless the security's actual exchange/listing metadata supports AIM.
+
+Use available FMP reference fields, exchange variants, or existing local canonical metadata to identify the actual listing.
+
+If FMP does not expose enough information to distinguish AIM from main-market LSE:
+
+prefer matching against existing canonical/security metadata where available.
+
+For a brand-new ambiguous London listing, preserve enough exchange metadata and do not falsely label it AIM.
+
+PART G — EXISTING MEMBER MATCH MUST WIN
+
+For search results, before constructing a new canonical identity from provider exchange metadata:
+
+check whether the security resolves to an existing canonical identity already known to the application.
+
+Possible authority sources:
+
+current active Watchlist members
+all saved Watchlist canonical ticker identities
+existing company identity/reference cache
+existing canonical foreign symbol metadata
+
+Match using a safe security identity combination such as:
+
+provider symbol/exchange variant
+company/reference identity
+
+Do not match only on bare symbol.
+
+If the same security is already known as:
+
+AIM:IQE
+
+then search must return:
+
+canonical_ticker = AIM:IQE
+
+not:
+
+LSE:IQE
+
+This prevents autocomplete from generating a parallel identity.
+
+PART H — ADD MUTATION DUPLICATE HARDENING
+
+The add endpoint should continue using exact canonical identity as the authoritative membership key.
+
+However, audit whether a selected search result can represent the same security as an existing member under a legacy canonical alias.
+
+If the backend has enough deterministic identity metadata to prove equivalence:
+
+return a duplicate/conflict response instead of adding a parallel alias.
+
+Conceptual response:
+
+{
+"success": true,
+"added": false,
+"duplicate": true,
+"existing_ticker": "AIM:IQE",
+"selected_ticker": "LSE:IQE"
+}
+
+Prefer fixing search canonicalization so this case is rare.
+
+Do not add broad fuzzy company-name duplicate blocking.
+
+Do not block genuinely distinct dual-listed securities merely because company names resemble each other.
+
+PART I — TRT CONTROL REMAINS VALID
+
+Preserve the successful exact-identity semantics:
+
+TRT
+
+and:
+
+AIM:TRT
+
+may coexist because they represent different companies.
+
+The fix must not collapse them based on bare symbol.
+
+Repeat:
+
+TRT
+→ Trio-Tech International
+
+AIM:TRT
+→ Tribal Group PLC
+
+Both identities remain independently addable/deletable.
+
+PART J — MULTI-LISTING TEST
+
+Add at least one controlled test for a company that genuinely has multiple exchange listings/variants.
+
+Report:
+
+company
+provider results
+canonical tickers
+
+Explain whether they should:
+
+coexist as distinct selectable securities
+
+or:
+
+collapse to one canonical Watchlist identity
+
+Use deterministic exchange/security identity, not company-name fuzzy matching.
+
+PART K — SEARCH VALIDATION AFTER FIX
+
+Run:
+
+TRT
+Trio Tech
+Tribal Group
+IQE
+Soitec
+AIXA
+000660
+MAL
+
+Return first 10 normalized results for each:
+
+canonical_ticker
+provider_symbol
+provider_exchange
+company_name
+country
+
+Explicitly report:
+
+IQE search returns the canonical identity expected by existing Watchlist paths.
+
+Soitec search returns the canonical identity expected by existing Watchlist paths.
+
+TRT search still distinguishes two companies.
+
+PART L — EXISTING WATCHLIST DUPLICATE AUDIT
+
+Audit all saved Watchlists for likely same-security canonical aliases created by exchange vocabulary differences.
+
+Examples:
+
+AIM:XYZ vs LSE:XYZ
+EPA:XYZ vs PAR:XYZ
+ETR:XYZ vs FRA:XYZ
+
+Do not automatically delete anything.
+
+Return candidate alias pairs with:
+
+ticker A
+ticker B
+company identity evidence
+same security likely yes/no/ambiguous
+
+This is an audit only.
+
+PART M — REGRESSION
+
+Confirm:
+
+1. Add endpoint remains atomic.
+2. Delete endpoint remains exact.
+3. Delete sanitization remains intact.
+4. Restart persistence remains intact.
+5. TRT and AIM:TRT remain separate.
+6. Existing canonical prefixed symbols are preserved.
+7. Search does not invent a parallel provider-prefix identity for a known existing security.
+8. FMP remains reference-search provider only.
+9. Tradier quote architecture unchanged.
+10. RSS normalization unchanged.
+11. TradingView symbol translation unchanged.
+12. No frontend changes yet.
+
+FINAL RETURN
+
+Return:
+
+* existing canonical prefix inventory
+* FMP-vs-existing identity comparison
+* exact duplicate-identity reproduction before fix
+* source of existing canonical foreign identities
+* final canonical identity adapter/helper
+* exact mapping/authority rules
+* exact files changed
+* add duplicate hardening if required
+* TRT control test
+* genuine multi-listing test
+* eight-query search validation
+* saved-Watchlist canonical alias audit
+* regression checklist
+
+Do not modify frontend code.
+Do not globally map LSE to AIM.
+Do not let FMP exchange codes silently become Caelyn canonical prefixes.
+Do not merge securities by bare ticker.
+Do not report completion while search for an existing AIM:IQE security returns a different addable canonical identity such as LSE:IQE.

@@ -3799,6 +3799,11 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
     paths (weekly fundamentals, quote cache) fill in additional fields.
 
     Idempotent: adding a ticker that already exists returns duplicate=true, 200.
+
+    Part H (exchange-family alias detection): if the same security is already
+    present under a different canonical prefix in the same exchange family
+    (e.g. AIM:IQE when adding LON:IQE), returns duplicate=true with
+    existing_ticker and conflict_type=exchange_family_alias.
     """
     t = body.canonical_ticker.strip().upper()
     if not t:
@@ -3806,9 +3811,11 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
 
     try:
         from data.pg_storage import watchlist_add_ticker, is_available
+        from services.canonical_security_adapter import exchange_family_aliases
         if not is_available():
             raise HTTPException(status_code=503, detail="Database unavailable")
-        result = watchlist_add_ticker(watchlist_id, t)
+        aliases = exchange_family_aliases(t)
+        result = watchlist_add_ticker(watchlist_id, t, family_aliases=aliases)
     except HTTPException:
         raise
     except Exception as exc:
@@ -3829,7 +3836,7 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         _volmc_registry.pop(watchlist_id, None)
         _news_lkg.pop(watchlist_id, None)
 
-    return {
+    resp = {
         "success":      True,
         "watchlist_id": watchlist_id,
         "ticker":       t,
@@ -3838,6 +3845,10 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         "duplicate":    result.get("duplicate", False),
         "ticker_count": result.get("ticker_count", 0),
     }
+    if result.get("conflict_type"):
+        resp["existing_ticker"] = result.get("existing_ticker", "")
+        resp["conflict_type"]   = result["conflict_type"]
+    return resp
 
 
 @router.delete("/{watchlist_id}/ticker/{ticker:path}")
