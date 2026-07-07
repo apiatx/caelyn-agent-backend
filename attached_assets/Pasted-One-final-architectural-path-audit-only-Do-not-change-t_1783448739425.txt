@@ -1,0 +1,185 @@
+One final architectural-path audit only.
+
+Do not change the successful Net Flow premium_scope_id isolation.
+Do not change breadth P/C math.
+Do not change instrument classification.
+Do not change the Tradier scanner/pacer.
+Do not change the current high-priority queue implementation unless this audit proves the hook is attached to the wrong write path.
+
+There is one concern with the controlled COIN priority test:
+
+The test used:
+
+PATCH /api/watchlist/category
+
+and the priority hook was added in watchlist_router.py.
+
+Historically this project has had separate stores/write paths involving:
+
+* watchlist category overrides
+* canonical Themes-page memberships / admin membership writes
+
+The actual Themes page may use an endpoint such as:
+
+* /api/themes/admin/memberships
+
+or another current canonical Themes membership mutation route.
+
+Do not assume PATCH /api/watchlist/category is the route used by the Themes page.
+
+==================================================
+AUDIT THE ACTUAL THEMES PAGE WRITE PATH
+=======================================
+
+Trace from the CURRENT frontend Themes page UI.
+
+Use the actual code/network call path for:
+
+1. adding a ticker to a theme
+2. adding a ticker to a sub-theme
+3. removing a ticker from a theme/sub-theme
+4. bulk membership edits, if supported
+
+Report:
+
+FRONTEND ACTION
+→ frontend function
+→ HTTP method + exact route
+→ backend router/function
+→ persistence table/store
+→ universe invalidation/rebuild path
+→ Options Flow required-universe reconciliation path
+→ high-priority queue hook
+
+Do not infer from route names.
+
+Read the actual current frontend caller and backend handler.
+
+Specifically determine whether the current Themes page writes through:
+
+A.
+PATCH /api/watchlist/category
+
+B.
+/api/themes/admin/memberships
+
+C.
+another route
+
+There may be multiple legacy write paths. Identify which one is authoritative for the current Themes page.
+
+==================================================
+PRIORITY HOOK REQUIREMENT
+=========================
+
+The high-priority Options Flow first-snapshot hook must fire from the actual canonical Themes-page membership mutation path.
+
+Correct sequence:
+
+Themes page add ticker
+→ canonical membership persisted
+→ authoritative theme universe sees ticker
+→ Options Flow required universe reconciles
+→ add_high_priority_symbols([ticker])
+→ existing paced scanner
+→ canonical Net Flow snapshot
+→ priority clears
+
+If the hook is currently only in watchlist_router.py but the Themes page writes through themes.py or another router:
+
+Move/add the hook to the canonical membership mutation service/path.
+
+Do not remove a legacy hook if another valid workflow still uses it, unless it creates duplicate behavior.
+
+Prefer hooking priority at the shared canonical membership mutation/service layer if one exists, so:
+
+* single add
+* bulk add
+* sub-theme add
+
+cannot drift apart.
+
+Do not duplicate theme taxonomy persistence logic.
+
+==================================================
+REAL CONTROLLED TEST THROUGH THEMES PAGE PATH
+=============================================
+
+After identifying the actual current Themes page mutation route, run one controlled test through THAT exact route.
+
+Use a symbol with listed options that is not currently a member of the selected test theme.
+
+BEFORE:
+
+* symbol
+* membership absent from canonical theme store
+* current required-universe state
+* high_priority_pending state
+* canonical Net Flow snapshot state
+
+Perform the exact API mutation the current Themes page uses.
+
+AFTER WRITE:
+Prove:
+
+1. canonical membership persisted
+2. canonical theme universe contains symbol
+3. Options Flow required universe contains symbol
+4. high_priority_pending contains symbol
+5. symbol is ahead of general backlog
+
+AFTER SCAN:
+Prove:
+6. existing paced scanner selected symbol
+7. scan_result = sectors_chain_summarized
+8. premium_scope_id = net_flow_single_expiry_7_60dte_v1
+9. canonical Net Flow premiums populated
+10. supplement cache/LKG populated
+11. Options Flow ticker node populated
+12. high-priority state cleared
+13. affected theme coverage/breadth updated
+
+Then remove the temporary test membership through the same canonical Themes-page path if appropriate.
+
+Do not use PATCH /api/watchlist/category for this validation unless the current frontend Themes page is proven to actually use that route.
+
+==================================================
+CHECK REMOVAL BEHAVIOR
+======================
+
+Also verify removal semantics:
+
+theme membership removed
+→ required universe reconciled
+
+If another source still requires the ticker:
+
+* watchlist
+* portfolio
+* another theme
+* another sub-theme
+
+the ticker remains required.
+
+If no source requires it:
+it may fall out of the required universe according to existing policy.
+
+Do not delete its LKG merely because membership was removed unless existing retention policy explicitly requires that.
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+* exact current Themes page write route
+* exact backend handler
+* exact persistence store/table
+* exact priority-hook location
+* exact controlled-test evidence
+
+If PATCH /api/watchlist/category truly is the current Themes page path, prove it from the frontend caller and no code change is needed.
+
+If it is not, fix the priority hook at the canonical path and validate there.
+
+This is an architectural-path audit, not a feature rewrite.

@@ -329,6 +329,15 @@ async def admin_upsert_membership(
 
     _invalidate_caches()
 
+    # ── Options Flow: mark newly-added symbol as high-priority for backfill ───
+    # Fires before the cross-sync so the scanner can start while sync completes.
+    if body.action == "add":
+        try:
+            from data.options_theme_supplement import add_high_priority_symbols as _add_hi
+            _add_hi([body.symbol])
+        except Exception as _hpe:
+            print(f"[THEMES_ADMIN] high-priority hook failed (non-fatal): {_hpe}")
+
     # ── Cross-sync to Watchlist (category_overrides + theme_ticker_mapper) ────
     if body.action == "add":
         try:
@@ -412,8 +421,16 @@ async def admin_bulk_memberships(
     if result["succeeded"] > 0:
         _invalidate_caches()
 
-    # ── Cross-sync adds to Watchlist (category_overrides + theme_ticker_mapper) ─
+    # ── Options Flow: mark newly-added symbols as high-priority for backfill ──
     add_edits = [e for e in body.edits if e.action == "add"]
+    if add_edits and result["succeeded"] > 0:
+        try:
+            from data.options_theme_supplement import add_high_priority_symbols as _add_hi_bulk
+            _add_hi_bulk([e.symbol for e in add_edits])
+        except Exception as _hpe:
+            print(f"[THEMES_ADMIN] bulk high-priority hook failed (non-fatal): {_hpe}")
+
+    # ── Cross-sync adds to Watchlist (category_overrides + theme_ticker_mapper) ─
     if add_edits and result["succeeded"] > 0:
         try:
             from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_bulk
