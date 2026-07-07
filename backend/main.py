@@ -12691,6 +12691,22 @@ async def _sectors_fast_backfill_loop():
                     "expiration_used": r.get("expiration_used"),
                     "scanned_at":      _scan_ts,   # explicit audit timestamp
                     "updated_at":      _scan_ts,
+                    # ── Interval trade-side classification pass-through ────────
+                    # Direct copy from summarize_ticker_chain() — no recomputation.
+                    # _build_ticker_node() strips these to None for stale LKG rows
+                    # (source in ("supplement_lkg", "watchlist_cache")).
+                    "interval_ask_premium":                  r.get("interval_ask_premium"),
+                    "interval_bid_premium":                  r.get("interval_bid_premium"),
+                    "interval_midpoint_unknown_premium":     r.get("interval_midpoint_unknown_premium"),
+                    "interval_total_premium":                r.get("interval_total_premium"),
+                    "interval_new_contract_volume":          r.get("interval_new_contract_volume"),
+                    "interval_ask_premium_pct":              r.get("interval_ask_premium_pct"),
+                    "interval_bid_premium_pct":              r.get("interval_bid_premium_pct"),
+                    "interval_midpoint_unknown_premium_pct": r.get("interval_midpoint_unknown_premium_pct"),
+                    "interval_classified_trade_side_pct":    r.get("interval_classified_trade_side_pct"),
+                    "interval_started_at":                   r.get("interval_started_at"),
+                    "interval_ended_at":                     r.get("interval_ended_at"),
+                    "interval_seconds":                      r.get("interval_seconds"),
                 }
                 supplement_rows.append(row)
                 _sbf_session_completed += 1

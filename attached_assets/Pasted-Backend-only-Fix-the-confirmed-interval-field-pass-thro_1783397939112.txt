@@ -1,0 +1,126 @@
+Backend only. Fix the confirmed interval field pass-through bug in the Net Flow supplement cache write path.
+
+Audit confirmed:
+
+* `sectors_chain_summarizer.py -> summarize_ticker_chain()` correctly computes the 12 `interval_*` fields.
+* Per-contract snapshot and volume-delta arithmetic are correct.
+* `options_flow_sectors.py -> _build_ticker_node()` already reads/exposes the interval fields.
+* BUT the sectors backfill loop in `main.py` manually constructs the supplement cache row with explicit fields and omits every `interval_*` field.
+
+Result:
+The interval data is computed, then discarded before reaching the API.
+The frontend therefore always receives null interval Ask/Bid metrics.
+
+Fix only this pass-through path first.
+
+In the supplement cache row built from the result of `summarize_ticker_chain()`, preserve all current fields and add exact pass-through of:
+
+* interval_ask_premium
+* interval_bid_premium
+* interval_midpoint_unknown_premium
+* interval_total_premium
+* interval_new_contract_volume
+* interval_ask_premium_pct
+* interval_bid_premium_pct
+* interval_midpoint_unknown_premium_pct
+* interval_classified_trade_side_pct
+* interval_started_at
+* interval_ended_at
+* interval_seconds
+
+Use the values directly from the summarizer result `r`.
+
+Do not recompute percentages in `main.py`.
+
+Do not rename fields.
+
+Do not derive interval data from cumulative:
+
+* call_premium
+* put_premium
+* call_volume
+* put_volume
+
+Preserve existing LKG freshness behavior:
+
+* stale supplement_lkg/watchlist_cache rows must not masquerade as current interval flow
+* `_build_ticker_node()` should continue stripping interval fields from stale/LKG rows as already implemented
+
+Important cache behavior:
+For a fresh live `sectors_chain_summarized` result with non-null interval fields:
+
+* write the interval fields into the in-memory supplement cache row
+* allow the current live API response to expose them
+
+Audit persistence before changing anything else:
+Determine whether the supplement cache write is also persisted to `options_supplement_lkg_v1.json`.
+
+Because interval metrics are short-window signals:
+
+* it is acceptable for the raw fields to exist in the stored row if `_build_ticker_node()` reliably strips them for LKG/stale sources
+* do not create a second persistence system
+* do not present stale interval values as live
+
+Validation:
+
+1. Synthetic pass-through:
+   Create/inspect a summarizer result with:
+   interval_ask_premium = 80000
+   interval_bid_premium = 15000
+   interval_midpoint_unknown_premium = 5000
+   interval_total_premium = 100000
+   interval_new_contract_volume = 250
+   interval_ask_premium_pct = 0.80
+   interval_bid_premium_pct = 0.15
+   interval_midpoint_unknown_premium_pct = 0.05
+   interval_classified_trade_side_pct = 0.95
+   interval_started_at = <timestamp>
+   interval_ended_at = <timestamp>
+   interval_seconds = 600
+
+   Verify the supplement cache row preserves all 12 values exactly.
+
+2. Verify `_build_ticker_node()` exposes those same values for a fresh live `sectors_chain_summarized` row.
+
+3. Verify a stale/LKG row still exposes all interval fields as null.
+
+4. Verify ticker → theme rollup sums raw interval premium dollars and recomputes percentages.
+
+5. Verify sector rollup uses unique ticker aggregation.
+
+6. Verify both:
+   `/api/options-flow/sectors?view=sectors`
+   `/api/options-flow/sectors?view=themes`
+   contain the interval fields.
+
+7. During regular market hours, find one ticker with:
+   previous contract volume
+   current contract volume
+   volume_delta > 0
+
+   Show:
+
+   * ticker
+   * contract key
+   * previous volume
+   * current volume
+   * delta
+   * bid
+   * ask
+   * last
+   * side classification
+   * interval premium contribution
+
+   Then prove the API ticker node contains non-null interval fields.
+
+8. Confirm zero new Tradier calls.
+
+Do not modify:
+
+* scanner cadence
+* Tradier pacer
+* expiration selection
+* Premium P/C
+* Vol P/C
+* Net Premium
+* frontend
