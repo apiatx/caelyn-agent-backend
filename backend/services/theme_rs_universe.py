@@ -213,7 +213,7 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
 
     "crypto_equities": {
         "classification": "theme",
-        "parent_sector":  "financials",
+        "parent_sector":  "technology",
         "display_name": "Crypto Equities / Blockchain",
         "proxy_type": "etf",
         # BLOK = Amplify Transformational Data Sharing ETF (primary crypto equity basket)

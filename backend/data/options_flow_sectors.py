@@ -754,6 +754,7 @@ def _build_ticker_node(
     no_options_syms: set[str],
     instrument_type_by_sym: "dict[str, str] | None" = None,
     supplement_by_ticker: "dict[str, dict] | None" = None,
+    display_name_by_sym: "dict[str, str] | None" = None,
 ) -> dict:
     """
     Build a per-ticker options-flow node with full 9-state classification.
@@ -954,6 +955,7 @@ def _build_ticker_node(
 
         return {
             "symbol":            sym,
+            "display_name":      ((display_name_by_sym or {}).get(sym) or None),
             "ticker_state":      state,
             "instrument_type":   _instrument_type,
             "call_premium":      round(call_p, 2) if has_prem else (0.0 if _neutral_confirmed else None),
@@ -1046,6 +1048,7 @@ def _build_ticker_node(
     if sym in no_options_syms:
         return {
             "symbol":                sym,
+            "display_name":          ((display_name_by_sym or {}).get(sym) or None),
             "ticker_state":          "confirmed_no_options",
             "instrument_type":       _itype_fallback,
             "call_premium":          None,
@@ -1096,6 +1099,7 @@ def _build_ticker_node(
 
     return {
         "symbol":                sym,
+        "display_name":          ((display_name_by_sym or {}).get(sym) or None),
         "ticker_state":          "generic_pending",
         "instrument_type":       _itype_fallback,
         "call_premium":          None,
@@ -1154,6 +1158,7 @@ def _build_theme_node(
     no_options_syms: set[str],
     instrument_type_by_sym: "dict[str, str] | None" = None,
     supplement_by_ticker: "dict[str, dict] | None" = None,
+    display_name_by_sym: "dict[str, str] | None" = None,
 ) -> dict:
     """
     Build a theme-level aggregation node.
@@ -1165,7 +1170,7 @@ def _build_theme_node(
     """
     proxy_syms   = [s.upper() for s in (meta.get("proxy_symbols") or [])]
     ticker_nodes = [
-        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker)
+        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker, display_name_by_sym)
         for sym in proxy_syms
     ]
     totals       = _rollup_ticker_nodes(ticker_nodes)
@@ -1188,6 +1193,7 @@ def _build_sector_node(
     sector_names: dict[str, str],
     instrument_type_by_sym: "dict[str, str] | None" = None,
     supplement_by_ticker: "dict[str, dict] | None" = None,
+    display_name_by_sym: "dict[str, str] | None" = None,
 ) -> dict:
     """
     Build a sector-level aggregation node using unique-ticker dedup.
@@ -1211,13 +1217,13 @@ def _build_sector_node(
     # This preserves unique-ticker dedup semantics while using the same
     # aggregation code path as the Themes view.
     sector_ticker_nodes = [
-        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker)
+        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker, display_name_by_sym)
         for sym in sector_unique_syms
     ]
     totals = _rollup_ticker_nodes(sector_ticker_nodes)
 
     themes_built = [
-        _build_theme_node(tid, meta, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker)
+        _build_theme_node(tid, meta, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker, display_name_by_sym)
         for tid, meta in theme_items
     ]
     themes_built.sort(
@@ -1303,8 +1309,20 @@ def build_sector_tree(
     except Exception:
         instrument_type_by_sym = {}
 
+    # Bulk-load display names from screener_fundamentals_cache (no API calls)
+    try:
+        from services.fmp_cache_service import get_company_profiles_bulk_cached as _get_profiles
+        _profiles = _get_profiles(list(all_theme_syms))
+        display_name_by_sym: dict[str, str] = {
+            s: (p.get("name") or "")
+            for s, p in _profiles.items()
+            if p.get("name")
+        }
+    except Exception:
+        display_name_by_sym = {}
+
     sector_nodes = [
-        _build_sector_node(sid, theme_items, combined_ticker_data, no_options_syms, sector_names, instrument_type_by_sym, supplement_by_ticker)
+        _build_sector_node(sid, theme_items, combined_ticker_data, no_options_syms, sector_names, instrument_type_by_sym, supplement_by_ticker, display_name_by_sym)
         for sid, theme_items in sectors.items()
     ]
 
@@ -1991,11 +2009,23 @@ def build_theme_tree(
     except Exception:
         instrument_type_by_sym = {}
 
+    # Bulk-load display names from screener_fundamentals_cache (no API calls)
+    try:
+        from services.fmp_cache_service import get_company_profiles_bulk_cached as _get_profiles_t
+        _profiles_t = _get_profiles_t(list(all_theme_syms))
+        display_name_by_sym_t: dict[str, str] = {
+            s: (p.get("name") or "")
+            for s, p in _profiles_t.items()
+            if p.get("name")
+        }
+    except Exception:
+        display_name_by_sym_t = {}
+
     theme_nodes: list[dict] = []
     for theme_id, meta in theme_universe.items():
         if not meta.get("proxy_symbols"):
             continue
-        node = _build_theme_node(theme_id, meta, combined_ticker_data, no_options_syms, instrument_type_by_sym, supplement_by_ticker)
+        node = _build_theme_node(theme_id, meta, combined_ticker_data, no_options_syms, instrument_type_by_sym, supplement_by_ticker, display_name_by_sym_t)
         node["parent_sector"] = meta.get("parent_sector")
         theme_nodes.append(node)
 

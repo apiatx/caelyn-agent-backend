@@ -1,0 +1,298 @@
+Implement three targeted Options Flow backend fixes together.
+
+Do not broadly refactor Options Flow.
+
+Preserve:
+
+* canonical Net Flow premium_scope_id semantics
+* breadth P/C math
+* stock vs ETF analytical separation
+* options required-universe reconciliation
+* Tradier pacer/scanner
+* supplement cache/LKG
+* high-priority theme membership queue
+* existing routes
+* existing response fields
+* existing Themes membership write paths
+
+Three requirements:
+
+1. Move Crypto Equities / Blockchain to Technology sector.
+2. Prove/fix canonical stock-vs-ETF classification for every Options Flow ticker leaf.
+3. Expose a reliable security/company/fund display name on every ticker leaf.
+
+==================================================
+PART 1 — CRYPTO EQUITIES / BLOCKCHAIN → TECHNOLOGY
+==================================================
+
+Current problem:
+The canonical theme:
+
+Crypto Equities / Blockchain
+
+currently appears under Financials.
+
+The desired canonical parent sector is:
+
+Technology
+
+This is intentional product taxonomy.
+
+Audit the CURRENT canonical theme taxonomy source used by:
+
+* Themes page
+* Options Flow Themes grouped view
+* Options Flow sector/theme tree
+* any theme universe resolver
+
+Do not patch the frontend label.
+
+Do not create an Options Flow-only override.
+
+Update the existing canonical taxonomy so:
+
+Crypto Equities / Blockchain
+→ sector = Technology
+
+The change must flow naturally through the current existing taxonomy/universe paths.
+
+Preserve:
+
+* theme id
+* display name
+* theme memberships
+* manually added ticker overrides
+* sub-theme relationships
+* theme RS data
+* existing ticker membership
+
+Only the canonical parent sector should change.
+
+After the change verify:
+
+* Themes page shows Crypto Equities / Blockchain under Technology
+* Options Flow → Themes grouped shows it inside Technology
+* it no longer appears under Financials
+* child ticker memberships are unchanged
+* theme P/C values are not recomputed differently merely because of the sector move
+* Technology grouped parent uses its canonical stock breadth aggregate, not child-theme averaging
+
+Do not duplicate the theme into both sectors.
+
+==================================================
+PART 2 — STRICT CANONICAL STOCK VS ETF CLASSIFICATION
+=====================================================
+
+Current frontend reports that some ETFs still appear in All Stocks.
+
+Backend previously reported 100% current required-universe classification coverage.
+
+Audit the ACTUAL leaked ETF symbols from the live Options Flow payload.
+
+First:
+
+1. Fetch current /api/options-flow/sectors payload.
+2. Flatten every ticker leaf that can reach the frontend.
+3. Identify all known/canonically classified ETFs.
+4. Report for every ETF:
+
+   * symbol
+   * instrument_type
+   * instrument_type_source
+   * instrument_type_inferred
+   * theme memberships
+   * number of ticker-node appearances
+   * whether any ticker-node appearance is missing instrument_type
+   * whether any appearance says stock
+   * whether any appearance says unknown
+
+Important:
+Do not assume the top-level classification service result is automatically being threaded into every nested ticker node.
+
+Required invariant:
+
+Every ticker leaf returned to Options Flow must carry:
+
+instrument_type = "stock"
+or
+instrument_type = "etf"
+
+No required ticker leaf may omit instrument_type.
+
+No classified ETF may appear as:
+
+* stock
+* unknown
+* null
+* undefined/missing
+
+No classified stock may appear as ETF.
+
+If the canonical classifier says ETF but _build_ticker_node or an early-return branch omits instrument_type:
+Fix the node builder/early-return path.
+
+Audit:
+
+* canonical Net Flow rows
+* pending rows
+* no_options rows
+* generic_pending rows
+* supplement rows
+* LKG rows
+* grouped theme ticker leaves
+* sector tree ticker leaves
+
+Every branch must include the canonical instrument_type.
+
+Do not add frontend symbol heuristics.
+
+Do not add a hardcoded ETF list.
+
+Do not use ticker-name guessing.
+
+Use the existing options_instrument_type_service as the canonical Options Flow classifier.
+
+If any genuinely failed classification rows remain:
+Expose their explicit failed status.
+Do not silently label them stock.
+
+However, the previously reported current required-universe classification coverage was 100%, so first prove whether the current problem is response propagation rather than classification itself.
+
+Validation:
+
+* produce exact ETF symbol count in current Options Flow required universe
+* every one returns instrument_type="etf" on all ticker-node appearances
+* zero ETF ticker nodes return stock
+* zero ETF ticker nodes omit instrument_type
+* zero stock ticker nodes return etf incorrectly
+
+==================================================
+PART 3 — COMPANY / ETF DISPLAY NAME
+===================================
+
+The frontend needs a human-readable name beneath each ticker.
+
+Examples conceptually:
+
+NVDA
+NVIDIA Corporation
+
+SMH
+VanEck Semiconductor ETF
+
+QQQ
+Invesco QQQ Trust
+
+Expose one canonical frontend-ready field on every ticker node:
+
+display_name
+
+or use an existing canonical field if one already exists consistently.
+
+Audit current ticker node/raw row/profile fields first:
+
+* company_name
+* name
+* display_name
+* short_name
+* profile companyName
+* ETF/fund name
+
+Do not create another duplicate name field if a reliable canonical field already exists.
+
+Preferred name precedence:
+
+For stocks:
+
+1. existing cached canonical company/profile name
+2. screener_fundamentals_cache profile company name
+3. existing cached FMP profile/reference name
+4. symbol fallback only if truly unavailable
+
+For ETFs:
+
+1. existing cached canonical ETF/fund name
+2. existing ETF/fund metadata cache
+3. cached FMP ETF & Mutual Fund Information/profile/reference name
+4. symbol fallback only if truly unavailable
+
+Important:
+No per-page FMP calls.
+No API calls from the Options Flow response builder.
+No Tradier calls for names.
+No synchronous lookup per ticker during render/API response.
+
+Use already persisted/cacheable profile/reference metadata.
+
+If names are missing:
+Extend the existing background reference/profile enrichment path to fill them and persist/cache them.
+
+Do not build a second profile service solely for Options Flow if the project already has canonical reference metadata.
+
+Every ticker-node branch should expose the same frontend name field:
+
+* normal canonical Net Flow
+* pending
+* no_options
+* generic_pending
+
+Name must not disappear just because options data is pending.
+
+Recommended ticker response semantics:
+
+{
+"symbol": "NVDA",
+"display_name": "NVIDIA Corporation",
+"instrument_type": "stock",
+...
+}
+
+{
+"symbol": "SMH",
+"display_name": "VanEck Semiconductor ETF",
+"instrument_type": "etf",
+...
+}
+
+==================================================
+DO NOT
+======
+
+Do not change the Net Flow P/C calculation.
+
+Do not change geometric breadth math.
+
+Do not change canonical premium_scope_id.
+
+Do not reintroduce unusual-flow premiums into Net Flow.
+
+Do not touch the heatmap.
+
+Do not create new frontend-specific taxonomy truth.
+
+Do not create a hardcoded ETF list.
+
+Do not remove ETFs from the options scanning universe.
+
+Do not move Crypto Equities ticker memberships.
+
+Do not create per-ticker FMP calls inside the Options Flow endpoint.
+
+==================================================
+VALIDATION
+==========
+
+1. Crypto Equities / Blockchain canonical parent sector is Technology.
+2. It no longer appears under Financials.
+3. Its ticker memberships are unchanged.
+4. Every ETF Options Flow ticker node has instrument_type="etf".
+5. Every stock Options Flow ticker node has instrument_type="stock".
+6. No required ticker leaf omits instrument_type.
+7. Pending/no_options/generic rows also include instrument_type.
+8. Every ticker node has a usable display_name or explicit symbol fallback.
+9. Validate at least 10 ETFs and 10 stocks with actual display names.
+10. No extra API calls occur when /api/options-flow/sectors is fetched.
+11. Existing live/LKG/pending diagnostics remain intact.
+12. Existing scanner and high-priority queue remain intact.
+
+Return the exact leaked ETF symbols found before the fix and prove their ticker-node instrument_type after the fix.

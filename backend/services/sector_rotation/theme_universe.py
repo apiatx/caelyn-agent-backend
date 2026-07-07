@@ -124,7 +124,7 @@ THEME_ETF_UNIVERSE: dict[str, dict] = {
     "crypto_equities": {
         "label": "Crypto Equities / Blockchain",
         "symbols": ["BLOK", "BITQ", "BKCH", "WGMI"],
-        "parent_sector": "Technology / Financials",
+        "parent_sector": "Technology",
         "theme_type": "Crypto Beta",
     },
     "quantum": {
