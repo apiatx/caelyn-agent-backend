@@ -162,6 +162,24 @@ class FMPProvider:
                     "url": item.get("url", ""),
                 })
         return results
+    async def get_etf_flag(self, ticker: str) -> str:
+        """
+        Classify a ticker as 'etf', 'stock', or 'unknown' using FMP /v3/profile.
+        Called only from background tasks (options_instrument_type_service).
+        Never call from request handlers.
+        """
+        try:
+            data = await self._get_stable("profile", {"symbol": ticker.upper()})
+            if data and isinstance(data, list) and len(data) > 0:
+                item = data[0]
+                if item.get("isEtf"):
+                    return "etf"
+                if item.get("companyName"):
+                    return "stock"
+            return "unknown"
+        except Exception:
+            return "unknown"
+
     async def get_company_profile(self, ticker: str) -> dict:
         """
         Get company profile from FMP stable API.

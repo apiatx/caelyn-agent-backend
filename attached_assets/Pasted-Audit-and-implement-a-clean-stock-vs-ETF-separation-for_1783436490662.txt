@@ -1,0 +1,355 @@
+Audit and implement a clean stock-vs-ETF separation for Options Flow → Net Flow, while preserving the existing dynamic options ingestion architecture.
+
+There are THREE related requirements:
+
+1. Audit suspicious exact-zero premium P/C values.
+2. Separate ETF and stock universes semantically.
+3. Make Sectors/Themes stock-breadth metrics exclude ETFs while retaining ETFs in the canonical options scan universe.
+
+Do not edit until the full data flow is traced.
+
+==================================================
+PART A — AUDIT EXACT 0.00 PREMIUM P/C
+==================================================
+
+Observed problem:
+Many ETFs and some stocks on Options Flow → Net Flow show premium P/C exactly 0.00.
+
+This is suspicious because several ETFs show extreme call-heavy P/C during a broadly weak/crashing market.
+
+Do not assume the values are wrong.
+Do not fix this through formatting only.
+
+Audit the actual data lineage.
+
+Trace:
+- raw Tradier chains
+- expiration scope selected
+- chain filtering
+- premium calculation
+- call premium aggregation
+- put premium aggregation
+- premium P/C derivation
+- master screener cache
+- supplement cache
+- supplement LKG
+- _build_ticker_node or equivalent Net Flow ticker builder
+- frontend/API field returned
+
+For at least:
+- 5 ETFs currently showing 0.00 P/C
+- 5 stocks currently showing 0.00 P/C
+
+Output:
+- symbol
+- instrument type
+- scan source: live/master/supplement/LKG
+- scan status
+- snapshot timestamp
+- expiration_used
+- dte_used
+- number of expirations scanned
+- call contracts considered
+- put contracts considered
+- call contracts rejected by filters, if tracked
+- put contracts rejected by filters, if tracked
+- raw call premium
+- raw put premium
+- raw unrounded P/C
+- formatted displayed P/C
+- exact formula used
+- whether snapshot was complete/partial
+- whether ratio 0 came from true put_premium === 0
+- whether ratio was merely rounded to 0.00
+
+Confirm this invariant:
+
+If call_premium > 0:
+raw_pcr = put_premium / call_premium
+
+The P/C displayed by Net Flow must be derived from the same premium dollar fields displayed by Net Flow.
+
+Do not use:
+- volume P/C
+- OI P/C
+- pc_ratio from another signal engine
+- a filtered numerator with an unfiltered denominator
+
+unless explicitly labeled as a different metric.
+
+Correct raw/effective ratio semantics:
+
+A. call_premium > 0 and put_premium >= 0:
+raw_pcr = put_premium / call_premium
+
+B. call_premium === 0 and put_premium > 0:
+raw_pcr is one-sided put flow / mathematically infinite
+effective_pcr = 100 for bounded log/geometric calculations
+
+C. put_premium === 0 and call_premium > 0:
+raw_pcr = 0
+effective_pcr = 0.01 for bounded log/geometric calculations
+
+D. call_premium === 0 and put_premium === 0:
+raw_pcr = null
+effective_pcr = null
+
+Do not overwrite raw premium values.
+
+Expose, if needed:
+- raw_premium_pcr
+- effective_premium_pcr
+- one_sided_flow: "call_only" | "put_only" | null
+
+For normal finite ratios:
+effective_premium_pcr = clamp(raw_premium_pcr, 0.01, 100)
+
+The effective ratio is for:
+- geometric breadth aggregation
+- log deviation
+- heatmap scoring
+
+The raw ratio remains the factual underlying value.
+
+Before claiming complete:
+Explain exactly why the audited 0.00 examples were zero.
+
+==================================================
+PART B — CANONICAL INSTRUMENT TYPE
+==================================================
+
+Audit whether a canonical instrument type already exists for every Options Flow symbol.
+
+Look for existing:
+- instrument_type
+- security_type
+- asset_type
+- is_etf
+- profile/reference cache metadata
+- ETF symbol cache/list
+
+Do not create a second classification system if one already exists.
+
+Goal:
+Every required Options Flow symbol should resolve to:
+
+instrument_type = "stock"
+or
+instrument_type = "etf"
+
+Other unsupported types should retain their existing behavior.
+
+Do not classify ETFs with:
+- ticker-name guessing
+- symbol suffix guessing
+- a frontend hardcoded ETF list
+
+Preferred source:
+Use the project's existing canonical reference/profile metadata.
+
+Only if canonical instrument type is absent:
+Use an existing cached reference source already available in the backend to persist instrument type.
+
+Do not add new per-page or per-refresh FMP calls.
+
+Any FMP/reference enrichment should be cached/persisted and use existing service paths.
+
+==================================================
+PART C — SPLIT STOCK AND ETF ANALYTICS
+==================================================
+
+The scanner universe must continue to include BOTH stocks and ETFs.
+
+Do NOT remove ETFs from:
+- canonical options required universe
+- master/supplement scan eligibility merely because they are ETFs
+- paced scan queue
+- usable LKG persistence
+
+Display/aggregation separation is not scan exclusion.
+
+Required conceptual sets:
+
+required_options_symbols =
+    required_stock_symbols
+    UNION
+    required_etf_symbols
+
+stock_symbols =
+    required symbols where instrument_type == "stock"
+
+etf_symbols =
+    required symbols where instrument_type == "etf"
+
+Preserve the existing dynamic theme-membership requirement:
+Newly added stock OR ETF theme members must dynamically enter the canonical required options universe and existing paced scanner.
+
+==================================================
+STOCK CATEGORY P/C
+==================================================
+
+For:
+- Sectors
+- Themes
+- Sub-Themes
+
+Primary breadth P/C must use UNIQUE VALID STOCK TICKERS ONLY.
+
+Exclude ETFs.
+
+For unique stock effective ratios r_i:
+
+breadth_pcr =
+    exp(
+        average(log(r_i))
+    )
+
+Requirements:
+- equal weight per unique stock
+- dedupe symbol inside each aggregate
+- exclude pending
+- exclude deferred
+- exclude no-options
+- exclude missing/null snapshots
+- do not substitute missing tickers with P/C 1
+- ETFs do not contribute
+
+A valid P/C row requires a usable completed snapshot.
+
+For raw call-only flow:
+effective ratio = 0.01
+
+For raw put-only flow:
+effective ratio = 100
+
+For no premium on either side:
+exclude as null
+
+Retain secondary stock premium concentration metric:
+
+stock_premium_weighted_pcr =
+    sum(stock put premium)
+    /
+    sum(stock call premium)
+
+Expose:
+- breadth_pcr
+- premium_weighted_pcr
+- total_stock_tickers
+- valid_stock_pcr_tickers
+- missing_stock_pcr_tickers
+- stock_pcr_coverage_pct
+
+If existing field names are already consumed broadly:
+Audit all callers before repurposing them.
+
+Do not blindly change put_call_ratio semantics.
+
+==================================================
+ETF ANALYTICS
+==================================================
+
+Create backend-ready ETF data from the same existing Net Flow ticker rows.
+
+Per ETF:
+- symbol
+- name
+- instrument_type = etf
+- theme memberships
+- raw_premium_pcr
+- effective_premium_pcr
+- call_premium
+- put_premium
+- net_premium
+- contracts/volume
+- scan_status
+- data timestamp/source
+- existing modal fields where available
+
+ETF theme aggregate primary P/C:
+
+etf_breadth_pcr =
+    exp(
+        average(log(unique valid ETF effective_pcr))
+    )
+
+Secondary:
+
+etf_premium_weighted_pcr =
+    sum(ETF put premium)
+    /
+    sum(ETF call premium)
+
+Coverage:
+- total_etfs
+- valid_etf_pcr
+- missing_etf_pcr
+- etf_pcr_coverage_pct
+
+An ETF assigned to multiple themes may appear in multiple GROUPED ETF parent groups.
+
+In ETF UNGROUPED view:
+Each ETF symbol appears once.
+
+Do not double-count an ETF inside one aggregate.
+
+==================================================
+API / ROUTE PRESERVATION
+==================================================
+
+Audit existing Options Flow sectors/themes response before creating anything new.
+
+Prefer extending the existing payload or existing route structure.
+
+Do not create parallel duplicate aggregation engines.
+
+Do not change:
+- scanner path
+- Tradier pacer
+- refresh path
+- LKG behavior
+- live/supplement behavior
+- coverage warmup behavior
+
+If the existing payload can expose instrument_type and ETF rows cleanly, do that.
+
+==================================================
+DIAGNOSTICS
+==================================================
+
+Extend admin/ingestion diagnostics if needed:
+
+- total_required_tickers
+- required_stock_tickers
+- required_etf_tickers
+- scanned_stock_tickers
+- scanned_etf_tickers
+- missing_stock_tickers
+- missing_etf_tickers
+- no_options_stock_tickers
+- no_options_etf_tickers
+- exact_zero_raw_pcr_count
+- call_only_count
+- put_only_count
+- null_premium_pcr_count
+
+Provide sample symbol arrays for admin diagnostics.
+
+==================================================
+VALIDATION
+==================================================
+
+1. Audit actual 0.00 ETFs and explain exact cause.
+2. Confirm raw P/C matches displayed call/put premium math.
+3. Confirm ETF classification is canonical, not guessed.
+4. Confirm ETFs remain in the paced scan universe.
+5. Confirm newly added theme ETFs dynamically enter scan reconciliation.
+6. Confirm Sectors primary breadth P/C excludes ETFs.
+7. Confirm Themes primary breadth P/C excludes ETFs.
+8. Confirm ETF theme breadth uses unique ETFs only.
+9. Confirm All Stocks stock dataset can be filtered to stocks only.
+10. Confirm no scanner/LKG regression.
+11. Confirm no new uncontrolled Tradier calls.
+12. Validate with one sector, Biotech, and at least 10 audited ETF symbols.
+
+Do not claim complete until the exact-zero P/C audit is shown with actual raw premium math.

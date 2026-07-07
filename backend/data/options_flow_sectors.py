@@ -43,6 +43,7 @@ scan_status values:
 """
 from __future__ import annotations
 
+import math
 import time
 from typing import Optional
 
@@ -168,6 +169,50 @@ def _ppc(premium, volume) -> Optional[float]:
     return None
 
 
+def _effective_pcr_vals(
+    call_p: float, put_p: float
+) -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """
+    Compute (raw_premium_pcr, effective_premium_pcr, one_sided_flow).
+
+    raw_premium_pcr:
+      put_p / call_p  when call_p > 0  (6-dp precision)
+      None            when call_p == 0 (put-only or both-zero)
+
+    effective_premium_pcr (log-safe for geometric breadth):
+      clamp(raw_pcr, 0.01, 100)  for finite ratios  (call_p > 0)
+      100.0                       for pure put-only  (call_p == 0, put_p > 0)
+      None                        for null-null      (both == 0)
+
+    one_sided_flow:
+      "call_only"  when call_p > 0 and put_p == 0
+      "put_only"   when call_p == 0 and put_p > 0
+      None         otherwise
+    """
+    if call_p > 0:
+        raw = put_p / call_p
+        effective = max(0.01, min(100.0, raw))
+        one_sided = "call_only" if put_p == 0.0 else None
+        return round(raw, 6), round(effective, 6), one_sided
+    elif put_p > 0:
+        return None, 100.0, "put_only"
+    else:
+        return None, None, None
+
+
+def _geometric_mean_pcr(ratios: list[float]) -> Optional[float]:
+    """
+    Geometric mean of effective P/C ratios for stock/ETF breadth aggregation.
+    Returns None when ratios is empty.  Ratios must be > 0 (enforced by callers).
+    """
+    if not ratios:
+        return None
+    try:
+        return round(math.exp(sum(math.log(r) for r in ratios) / len(ratios)), 4)
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
 def _dte_from_exp(exp_str: str) -> Optional[int]:
     """Compute days-to-expiry from a YYYY-MM-DD string. Returns None on parse error."""
     try:
@@ -247,6 +292,17 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
     state_counts:   dict[str, int] = {}
     flow_count:     int = 0
     represented:    int = 0
+    # Stock/ETF split — for breadth P/C and coverage metrics
+    _stock_call:     float      = 0.0
+    _stock_put:      float      = 0.0
+    _etf_call:       float      = 0.0
+    _etf_put:        float      = 0.0
+    _stock_eff_pcrs: list[float] = []
+    _etf_eff_pcrs:   list[float] = []
+    _total_stock:    int = 0
+    _total_etf:      int = 0
+    _valid_stock_pcr: int = 0
+    _valid_etf_pcr:   int = 0
     # Track premium-contributing tickers by their expiration scope so rollup
     # nodes can expose whether aggregated premiums come from one methodology
     # or a mix of two.  Only tickers with at least one non-None premium field
@@ -311,6 +367,33 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
                 pub_scope = None
             if pub_scope:
                 _scope_counts[pub_scope] = _scope_counts.get(pub_scope, 0) + 1
+
+        # ── Stock/ETF breadth split ───────────────────────────────────────────
+        # Accumulate stock/ETF premiums and collect effective_pcr values for
+        # the geometric breadth computation.  Only valid completed snapshots
+        # (scan_status not pending/missing/no_options) contribute to breadth.
+        _itype   = t.get("instrument_type", "unknown")
+        _eff_pcr = t.get("effective_premium_pcr")
+        _ss      = t.get("scan_status", "")
+        _valid_snap = _ss not in ("pending", "missing_data", "no_options") and _eff_pcr is not None
+        if _itype == "stock":
+            _total_stock += 1
+            if cp is not None:
+                _stock_call += cp
+            if pp is not None:
+                _stock_put  += pp
+            if _valid_snap:
+                _stock_eff_pcrs.append(_eff_pcr)
+                _valid_stock_pcr += 1
+        elif _itype == "etf":
+            _total_etf += 1
+            if cp is not None:
+                _etf_call += cp
+            if pp is not None:
+                _etf_put  += pp
+            if _valid_snap:
+                _etf_eff_pcrs.append(_eff_pcr)
+                _valid_etf_pcr += 1
 
         # Interval trade-side accumulation — sum raw delta dollars from tickers
         # that have non-None interval_total_premium (chain-summarizer rows in the
@@ -465,6 +548,24 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         "deferred_retry_count":       state_counts.get("deferred_retry",          0),
         "unsupported_count":          state_counts.get("unsupported_foreign_otc", 0),
         "generic_pending_count":      state_counts.get("generic_pending",         0),
+        # ── Stock-only breadth P/C ─────────────────────────────────────────────
+        # Primary sector/theme breadth metric — geometric mean of per-stock
+        # effective_premium_pcr.  Excludes ETFs, pending, missing, no_options.
+        # effective_premium_pcr = clamp(raw_pcr, 0.01, 100) for finite ratios,
+        # 0.01 for call-only flow, 100 for put-only flow.
+        "breadth_pcr":              _geometric_mean_pcr(_stock_eff_pcrs),
+        "premium_weighted_pcr":     _pcr(_stock_call, _stock_put) if (_stock_call + _stock_put) > 0 else None,
+        "total_stock_tickers":      _total_stock,
+        "valid_stock_pcr_tickers":  _valid_stock_pcr,
+        "missing_stock_pcr_tickers": max(0, _total_stock - _valid_stock_pcr),
+        "stock_pcr_coverage_pct":   round(_valid_stock_pcr / max(_total_stock, 1) * 100, 1) if _total_stock else None,
+        # ── ETF breadth P/C ────────────────────────────────────────────────────
+        "etf_breadth_pcr":          _geometric_mean_pcr(_etf_eff_pcrs),
+        "etf_premium_weighted_pcr": _pcr(_etf_call, _etf_put) if (_etf_call + _etf_put) > 0 else None,
+        "total_etf_tickers":        _total_etf,
+        "valid_etf_pcr_tickers":    _valid_etf_pcr,
+        "missing_etf_pcr_tickers":  max(0, _total_etf - _valid_etf_pcr),
+        "etf_pcr_coverage_pct":     round(_valid_etf_pcr / max(_total_etf, 1) * 100, 1) if _total_etf else None,
     }
 
 
@@ -564,6 +665,7 @@ def _build_ticker_node(
     sym: str,
     cache_by_ticker: dict[str, dict],
     no_options_syms: set[str],
+    instrument_type_by_sym: "dict[str, str] | None" = None,
 ) -> dict:
     """
     Build a per-ticker options-flow node with full 9-state classification.
@@ -686,13 +788,31 @@ def _build_ticker_node(
             v = row.get(k)
             return int(v) if v is not None else None
 
+        # ── Canonical instrument type ─────────────────────────────────────────
+        _itype_map = instrument_type_by_sym or {}
+        _instrument_type = _itype_map.get(sym, "unknown")
+
+        # ── Effective P/C for geometric breadth aggregation ───────────────────
+        # Always compute from the actual call_p / put_p values (even zero).
+        # raw_premium_pcr  — factual ratio (6-dp) or None for put-only/null-null
+        # effective_premium_pcr — log-safe clamp: 0.01 (call-only) … 100 (put-only)
+        # one_sided_flow   — "call_only" | "put_only" | None
+        if has_prem:
+            _raw_pcr, _eff_pcr, _one_sided = _effective_pcr_vals(call_p, put_p)
+        else:
+            _raw_pcr = _eff_pcr = _one_sided = None
+
         return {
             "symbol":            sym,
             "ticker_state":      state,
+            "instrument_type":   _instrument_type,
             "call_premium":      round(call_p, 2) if has_prem else (0.0 if _neutral_confirmed else None),
             "put_premium":       round(put_p, 2)  if has_prem else (0.0 if _neutral_confirmed else None),
             "net_premium":       round(net_p, 2)  if has_prem else (0.0 if _neutral_confirmed else None),
             "put_call_ratio":         _pcr(call_p, put_p) if has_prem else None,
+            "raw_premium_pcr":        _raw_pcr,
+            "effective_premium_pcr":  _eff_pcr,
+            "one_sided_flow":         _one_sided,
             "bias":                   bias_val,
             "call_volume":            row.get("call_volume") if row.get("call_volume") is not None else (0 if _neutral_confirmed else None),
             "put_volume":             row.get("put_volume")  if row.get("put_volume")  is not None else (0 if _neutral_confirmed else None),
@@ -751,14 +871,20 @@ def _build_ticker_node(
             "interval_ended_at":                     _ifield("interval_ended_at"),
         }
 
+    _itype_fallback = (instrument_type_by_sym or {}).get(sym, "unknown")
+
     if sym in no_options_syms:
         return {
             "symbol":                sym,
             "ticker_state":          "confirmed_no_options",
+            "instrument_type":       _itype_fallback,
             "call_premium":          None,
             "put_premium":           None,
             "net_premium":           None,
             "put_call_ratio":        None,
+            "raw_premium_pcr":       None,
+            "effective_premium_pcr": None,
+            "one_sided_flow":        None,
             "bias":                  None,
             "call_volume":           None,
             "put_volume":            None,
@@ -798,10 +924,14 @@ def _build_ticker_node(
     return {
         "symbol":                sym,
         "ticker_state":          "generic_pending",
+        "instrument_type":       _itype_fallback,
         "call_premium":          None,
         "put_premium":           None,
         "net_premium":           None,
         "put_call_ratio":        None,
+        "raw_premium_pcr":       None,
+        "effective_premium_pcr": None,
+        "one_sided_flow":        None,
         "bias":                  None,
         "call_volume":           None,
         "put_volume":            None,
@@ -846,6 +976,7 @@ def _build_theme_node(
     meta: dict,
     cache_by_ticker: dict[str, dict],
     no_options_syms: set[str],
+    instrument_type_by_sym: "dict[str, str] | None" = None,
 ) -> dict:
     """
     Build a theme-level aggregation node.
@@ -856,7 +987,10 @@ def _build_theme_node(
     because _build_ticker_node emits the same shape for both.
     """
     proxy_syms   = [s.upper() for s in (meta.get("proxy_symbols") or [])]
-    ticker_nodes = [_build_ticker_node(sym, cache_by_ticker, no_options_syms) for sym in proxy_syms]
+    ticker_nodes = [
+        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym)
+        for sym in proxy_syms
+    ]
     totals       = _rollup_ticker_nodes(ticker_nodes)
     return {
         "theme_id":       theme_id,
@@ -875,6 +1009,7 @@ def _build_sector_node(
     cache_by_ticker: dict[str, dict],
     no_options_syms: set[str],
     sector_names: dict[str, str],
+    instrument_type_by_sym: "dict[str, str] | None" = None,
 ) -> dict:
     """
     Build a sector-level aggregation node using unique-ticker dedup.
@@ -898,13 +1033,13 @@ def _build_sector_node(
     # This preserves unique-ticker dedup semantics while using the same
     # aggregation code path as the Themes view.
     sector_ticker_nodes = [
-        _build_ticker_node(sym, cache_by_ticker, no_options_syms)
+        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym)
         for sym in sector_unique_syms
     ]
     totals = _rollup_ticker_nodes(sector_ticker_nodes)
 
     themes_built = [
-        _build_theme_node(tid, meta, cache_by_ticker, no_options_syms)
+        _build_theme_node(tid, meta, cache_by_ticker, no_options_syms, instrument_type_by_sym)
         for tid, meta in theme_items
     ]
     themes_built.sort(
@@ -982,8 +1117,15 @@ def build_sector_tree(
         sector_id = tid if cls == "sector" else (meta.get("parent_sector") or "other")
         sectors.setdefault(sector_id, []).append((tid, meta))
 
+    # Load canonical instrument types for the full theme universe
+    try:
+        from data.options_instrument_type_service import get_instrument_type_bulk as _get_itypes
+        instrument_type_by_sym = _get_itypes(all_theme_syms)
+    except Exception:
+        instrument_type_by_sym = {}
+
     sector_nodes = [
-        _build_sector_node(sid, theme_items, combined_ticker_data, no_options_syms, sector_names)
+        _build_sector_node(sid, theme_items, combined_ticker_data, no_options_syms, sector_names, instrument_type_by_sym)
         for sid, theme_items in sectors.items()
     ]
 
@@ -1624,11 +1766,18 @@ def build_theme_tree(
         for sym in (meta.get("proxy_symbols") or []):
             all_theme_syms.add(sym.upper())
 
+    # Load canonical instrument types for the full theme universe
+    try:
+        from data.options_instrument_type_service import get_instrument_type_bulk as _get_itypes_t
+        instrument_type_by_sym = _get_itypes_t(all_theme_syms)
+    except Exception:
+        instrument_type_by_sym = {}
+
     theme_nodes: list[dict] = []
     for theme_id, meta in theme_universe.items():
         if not meta.get("proxy_symbols"):
             continue
-        node = _build_theme_node(theme_id, meta, combined_ticker_data, no_options_syms)
+        node = _build_theme_node(theme_id, meta, combined_ticker_data, no_options_syms, instrument_type_by_sym)
         node["parent_sector"] = meta.get("parent_sector")
         theme_nodes.append(node)
 

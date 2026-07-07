@@ -455,6 +455,13 @@ async def lifespan(app):
         _load_sectors_lkg()
     except Exception as _sectors_lkg_err:
         print(f"[STARTUP] Sectors universe LKG load failed (non-fatal): {_sectors_lkg_err}")
+    # Warm options instrument type LKG (ETF vs stock) from screener_fundamentals_cache DB
+    try:
+        from data.options_instrument_type_service import warm_up_from_db as _warm_itype
+        _itype_count = _warm_itype()
+        print(f"[STARTUP] instrument_type warm-up: classified {_itype_count} symbols from screener cache")
+    except Exception as _itype_err:
+        print(f"[STARTUP] instrument_type warm-up failed (non-fatal): {_itype_err}")
     asyncio.create_task(_master_screener_loop())
     asyncio.create_task(_sectors_fast_backfill_loop())
     asyncio.create_task(_theme_options_supplement_loop())

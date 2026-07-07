@@ -124,14 +124,20 @@ def get_theme_proxy_symbols_for_supplement(max_symbols: int = 60) -> list[str]:
             if sym in seen or sym in static_seeds:
                 continue
             seen.add(sym)
-            is_etf = (
-                meta.get("proxy_type") == "etf"
-                or (3 <= len(sym) <= 5 and sym.isalpha())
-            )
-            if is_etf:
+            try:
+                from data.options_instrument_type_service import get_instrument_type as _get_itype
+                _itype = _get_itype(sym)
+            except Exception:
+                _itype = "unknown"
+            if _itype == "etf":
                 etf_proxies.append(sym)
-            else:
+            elif _itype == "stock":
                 stock_proxies.append(sym)
+            else:
+                if meta.get("proxy_type") == "etf":
+                    etf_proxies.append(sym)
+                else:
+                    stock_proxies.append(sym)
 
     return (etf_proxies + stock_proxies)[:max_symbols]
 
