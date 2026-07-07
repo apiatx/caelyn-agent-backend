@@ -1309,17 +1309,24 @@ def build_sector_tree(
     except Exception:
         instrument_type_by_sym = {}
 
-    # Bulk-load display names from screener_fundamentals_cache (no API calls)
+    # Bulk-load display names.
+    # Primary: options_display_name_service LKG (memory-only, fast, background-enriched).
+    # Secondary: screener_fundamentals_cache via fmp_cache_service (DB, no API calls).
+    # LKG names take priority; cache fills remaining gaps.
+    try:
+        from data.options_display_name_service import get_display_name_bulk as _get_dnames
+        display_name_by_sym: dict[str, str] = _get_dnames(all_theme_syms)
+    except Exception:
+        display_name_by_sym = {}
     try:
         from services.fmp_cache_service import get_company_profiles_bulk_cached as _get_profiles
         _profiles = _get_profiles(list(all_theme_syms))
-        display_name_by_sym: dict[str, str] = {
-            s: (p.get("name") or "")
-            for s, p in _profiles.items()
-            if p.get("name")
-        }
+        for _s, _p in _profiles.items():
+            _n = (_p.get("name") or "").strip()
+            if _n and _s not in display_name_by_sym:
+                display_name_by_sym[_s] = _n
     except Exception:
-        display_name_by_sym = {}
+        pass
 
     sector_nodes = [
         _build_sector_node(sid, theme_items, combined_ticker_data, no_options_syms, sector_names, instrument_type_by_sym, supplement_by_ticker, display_name_by_sym)
@@ -2009,17 +2016,21 @@ def build_theme_tree(
     except Exception:
         instrument_type_by_sym = {}
 
-    # Bulk-load display names from screener_fundamentals_cache (no API calls)
+    # Bulk-load display names (same two-layer strategy as build_sector_tree).
+    try:
+        from data.options_display_name_service import get_display_name_bulk as _get_dnames_t
+        display_name_by_sym_t: dict[str, str] = _get_dnames_t(all_theme_syms)
+    except Exception:
+        display_name_by_sym_t = {}
     try:
         from services.fmp_cache_service import get_company_profiles_bulk_cached as _get_profiles_t
         _profiles_t = _get_profiles_t(list(all_theme_syms))
-        display_name_by_sym_t: dict[str, str] = {
-            s: (p.get("name") or "")
-            for s, p in _profiles_t.items()
-            if p.get("name")
-        }
+        for _s, _p in _profiles_t.items():
+            _n = (_p.get("name") or "").strip()
+            if _n and _s not in display_name_by_sym_t:
+                display_name_by_sym_t[_s] = _n
     except Exception:
-        display_name_by_sym_t = {}
+        pass
 
     theme_nodes: list[dict] = []
     for theme_id, meta in theme_universe.items():

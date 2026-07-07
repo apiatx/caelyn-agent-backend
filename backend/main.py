@@ -455,13 +455,28 @@ async def lifespan(app):
         _load_sectors_lkg()
     except Exception as _sectors_lkg_err:
         print(f"[STARTUP] Sectors universe LKG load failed (non-fatal): {_sectors_lkg_err}")
-    # Warm options instrument type LKG (ETF vs stock) from screener_fundamentals_cache DB
+    # Warm options instrument type LKG — three-pass sequence:
+    #   1. theme_universe:  classify proxy_symbols=ETF, candidate_symbols=stock (highest authority)
+    #   2. screener DB:     upgrade lkg-sourced entries when explicit isEtf=True/False is available
+    # The theme_universe pass runs FIRST so DB sector_inference cannot overwrite ETF proxies.
     try:
-        from data.options_instrument_type_service import warm_up_from_db as _warm_itype
+        from data.options_instrument_type_service import (
+            warm_up_from_theme_universe as _warm_itype_universe,
+            warm_up_from_db             as _warm_itype,
+        )
+        _itype_universe_count = _warm_itype_universe()
+        print(f"[STARTUP] instrument_type theme-universe pass: {_itype_universe_count} symbols")
         _itype_count = _warm_itype()
-        print(f"[STARTUP] instrument_type warm-up: classified {_itype_count} symbols from screener cache")
+        print(f"[STARTUP] instrument_type DB pass: {_itype_count} symbols upgraded from screener cache")
     except Exception as _itype_err:
         print(f"[STARTUP] instrument_type warm-up failed (non-fatal): {_itype_err}")
+    # Warm display names from screener_fundamentals_cache (sync, no API calls)
+    try:
+        from data.options_display_name_service import warm_up_display_names_from_db as _warm_dnames
+        _dname_count = _warm_dnames()
+        print(f"[STARTUP] display_name warm-up: loaded {_dname_count} names from screener cache")
+    except Exception as _dname_err:
+        print(f"[STARTUP] display_name warm-up failed (non-fatal): {_dname_err}")
     # Continuous background classification loop for ETF vs stock resolution.
     # Runs a startup pass after 30 s, then repeats every 30 min to resolve any
     # symbols that were added to the required universe after startup.
@@ -469,15 +484,21 @@ async def lifespan(app):
     # already-classified symbols are skipped.
     async def _itype_classify_loop():
         """
-        Periodic instrument-type FMP classification loop.
+        Periodic instrument-type classification + display-name enrichment loop.
 
         Startup pass: 30 s after boot.
         Repeat cadence: every 30 min.
-        Per-pass limit: 40 symbols (FMP rate-limit headroom).
 
-        Classifies symbols in the required theme universe that are still
-        "unknown" (or not yet in the classification cache).  This catches
-        symbols newly added to themes mid-session that were absent at startup.
+        Pass 1 — instrument type:
+          Classifies symbols in the full required universe (proxy_symbols +
+          candidate_symbols) that are still unresolved or lkg-sourced.
+          theme_universe_proxy/candidate sources are always skipped (already
+          classified with highest authority at startup).
+
+        Pass 2 — display names:
+          Enriches symbols whose display_name is still missing from the LKG
+          via FMP /stable/profile.  Paced at 0.35 s/call (same as itype).
+          max_per_pass=60 per cycle; remaining gaps are filled on next cycle.
         """
         _PERIOD_S = 1800   # 30 min between passes
         await asyncio.sleep(30)   # let the master screener initialize first
@@ -488,26 +509,47 @@ async def lifespan(app):
                     classify_symbols_background               as _ityp_classify,
                     get_unresolved_symbols                    as _ityp_unresolved,
                 )
+                from data.options_display_name_service import (
+                    enrich_display_names_background as _dname_enrich,
+                    get_display_name_stats          as _dname_stats,
+                )
                 from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _ityp_univ
+                # Full required universe = ETF proxies + stock candidates
                 _ityp_all: set[str] = set()
                 for _m in _ityp_univ.values():
                     for _s in (_m.get("proxy_symbols") or []):
                         _ityp_all.add(_s.upper())
-                _ityp_unresolved_syms = _ityp_unresolved(list(_ityp_all))
-                if _ityp_unresolved_syms and data_service and data_service.fmp:
-                    _classified = await _ityp_classify(
-                        _ityp_unresolved_syms,
+                    for _s in (_m.get("candidate_symbols") or []):
+                        _ityp_all.add(_s.upper())
+                _ityp_all_list = list(_ityp_all)
+                _ityp_unresolved_syms = _ityp_unresolved(_ityp_all_list)
+                if data_service and data_service.fmp:
+                    # Pass 1: instrument-type classification
+                    if _ityp_unresolved_syms:
+                        _classified = await _ityp_classify(
+                            _ityp_all_list,
+                            fmp_provider=data_service.fmp,
+                        )
+                        _st = _ityp_req_stats(_ityp_all)
+                        print(
+                            f"[ITYPE_LOOP] classified {_classified} new symbols; "
+                            f"unresolved={_st.get('unresolved_instrument_type_tickers', '?')}"
+                            f"/{_st.get('required_total', '?')}"
+                        )
+                    # Pass 2: display-name enrichment (always run — fills missing names)
+                    _dname_new = await _dname_enrich(
+                        _ityp_all_list,
                         fmp_provider=data_service.fmp,
-                        # No max_per_pass cap — drain the full required universe
-                        # each pass (97 symbols × 0.35 s ≈ 34 s per drain pass).
-                        # Default is 300 in classify_symbols_background.
+                        max_per_pass=60,
                     )
-                    _st = _ityp_req_stats(_ityp_all)
-                    print(
-                        f"[ITYPE_LOOP] classified {_classified} new symbols; "
-                        f"unresolved={_st.get('unresolved_instrument_type_tickers', '?')}"
-                        f"/{_st.get('required_total', '?')}"
-                    )
+                    if _dname_new:
+                        _ds = _dname_stats(_ityp_all)
+                        print(
+                            f"[DNAME_LOOP] enriched {_dname_new} display names; "
+                            f"coverage={_ds.get('display_name_coverage_pct', '?')}% "
+                            f"({_ds.get('display_name_resolved', '?')}"
+                            f"/{_ds.get('display_name_total', '?')})"
+                        )
                 else:
                     if _ityp_unresolved_syms:
                         print(f"[ITYPE_LOOP] {len(_ityp_unresolved_syms)} unresolved but FMP unavailable — skipping")

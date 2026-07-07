@@ -164,18 +164,33 @@ class FMPProvider:
         return results
     async def get_etf_flag(self, ticker: str) -> str:
         """
-        Classify a ticker as 'etf', 'stock', or 'unknown' using FMP /v3/profile.
+        Classify a ticker as 'etf', 'stock', or 'unknown' using FMP /stable/profile.
         Called only from background tasks (options_instrument_type_service).
         Never call from request handlers.
+
+        Precedence:
+          isEtf=True OR isFund=True              → "etf"
+          isEtf=False AND isFund=False/None      → "stock" (requires companyName)
+          isEtf=None  (ambiguous — no flag set)  → "unknown"  (do NOT infer stock
+                                                    from companyName; ETFs like IAU
+                                                    have companyName but isEtf=None
+                                                    in some FMP response shapes)
         """
         try:
             data = await self._get_stable("profile", {"symbol": ticker.upper()})
             if data and isinstance(data, list) and len(data) > 0:
                 item = data[0]
-                if item.get("isEtf"):
+                is_etf  = item.get("isEtf")
+                is_fund = item.get("isFund")
+                # Explicit ETF or Fund flag → ETF
+                if is_etf is True or is_fund is True:
                     return "etf"
-                if item.get("companyName"):
+                # Explicit non-ETF with a company name → stock
+                if is_etf is False and not is_fund and item.get("companyName"):
                     return "stock"
+                # isEtf=None — ambiguous; do not infer stock from companyName alone.
+                # Trusts and some ETFs (e.g. IAU) present with isEtf=None + companyName.
+                # Return "unknown" so theme_universe_proxy classification prevails.
             return "unknown"
         except Exception:
             return "unknown"

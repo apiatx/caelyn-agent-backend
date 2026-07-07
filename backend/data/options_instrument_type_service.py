@@ -283,32 +283,43 @@ def warm_up_from_db(symbols: list[str] | None = None) -> int:
         cur.close()
         _put_conn(conn)
 
+        # Authoritative sources that must never be downgraded by this pass.
+        _AUTHORITATIVE = frozenset({"theme_universe_proxy", "theme_universe_candidate",
+                                    "fmp_is_etf", "fmp_profile"})
+
         count = 0
         for sym, pj in rows:
             sym = sym.upper()
-            if _MEM.get(sym) in ("stock", "etf"):
-                # Already classified with authority — skip unless sector_inference
-                # (an explicit isEtf value is more authoritative than sector inference)
-                existing_src = _MEM_SOURCE.get(sym, "lkg")
-                if existing_src != "sector_inference":
-                    continue
+            existing_src = _MEM_SOURCE.get(sym, "unresolved") if sym in _MEM else "unresolved"
+
+            # Theme-universe classifications are the highest authority — never overwrite.
+            if existing_src in ("theme_universe_proxy", "theme_universe_candidate"):
+                continue
+
             d = (json.loads(pj) if isinstance(pj, str) else pj) or {}
             is_etf = d.get("isEtf")
+
             if is_etf is True:
-                _set(sym, "etf",   source="fmp_is_etf")
+                # Explicit ETF flag: always upgrade, even over lkg/fmp_profile/sector_inference.
+                # Corrects wrong "stock" classifications frozen in old LKG versions.
+                _set(sym, "etf", source="fmp_is_etf")
                 count += 1
             elif is_etf is False:
-                _set(sym, "stock", source="fmp_is_etf")
-                count += 1
-            elif is_etf is None:
-                # FMP returned null for isEtf — infer from other profile fields.
-                # ETFs never carry a fundamental sector/industry classification;
-                # any non-empty sector value is a strong stock indicator.
-                # This is a TEMPORARY inference — superseded by explicit fmp_profile.
-                sector = (d.get("sector") or "").strip()
-                if sector:
-                    _set(sym, "stock", source="sector_inference")
+                # Explicit non-ETF: upgrade from lkg/sector_inference, but not from fmp_is_etf.
+                if existing_src not in _AUTHORITATIVE or existing_src == "fmp_profile":
+                    _set(sym, "stock", source="fmp_is_etf")
                     count += 1
+            elif is_etf is None:
+                # isEtf=None — sector inference is a weak temporary signal.
+                # Only apply when the symbol has no classification at all.
+                # Must not overwrite any existing classification (including lkg)
+                # because lkg entries may be correctly classified ETFs whose FMP
+                # profile simply omits isEtf.
+                if sym not in _MEM:
+                    sector = (d.get("sector") or "").strip()
+                    if sector:
+                        _set(sym, "stock", source="sector_inference")
+                        count += 1
 
         if count > 0:
             _save_disk()
@@ -316,6 +327,86 @@ def warm_up_from_db(symbols: list[str] | None = None) -> int:
     except Exception as e:
         print(f"[INSTRUMENT_TYPE] warm_up_from_db: {e}")
         return 0
+
+
+def warm_up_from_theme_universe() -> int:
+    """
+    Classify symbols from the canonical THEME_RS_UNIVERSE.
+
+    proxy_symbols  → "etf"   (source: theme_universe_proxy)
+    candidate_symbols → "stock" (source: theme_universe_candidate)
+
+    This is the highest-authority classification pass — it runs BEFORE
+    warm_up_from_db so that explicit isEtf=True/False from FMP can still
+    upgrade the source tagging, but a theme_universe_proxy ETF can never
+    be downgraded to stock by a bad isEtf=None profile.
+
+    Returns count of newly classified or corrected symbols.
+    """
+    if not _LOADED:
+        _load_disk()
+    try:
+        from services.theme_rs_universe import THEME_RS_UNIVERSE as _TRU
+    except Exception as e:
+        print(f"[INSTRUMENT_TYPE] warm_up_from_theme_universe: import failed: {e}")
+        return 0
+
+    proxy_syms: set[str] = set()
+    candidate_syms: set[str] = set()
+    for meta in _TRU.values():
+        for s in (meta.get("proxy_symbols") or []):
+            proxy_syms.add(s.upper())
+        for s in (meta.get("candidate_symbols") or []):
+            candidate_syms.add(s.upper())
+
+    # Symbols that are unambiguously one type (not in both)
+    proxy_only     = proxy_syms - candidate_syms
+    candidate_only = candidate_syms - proxy_syms
+    # Overlap: appears in both lists — defer to FMP-based classification
+    # (these are typically dual-listed instruments; the theme provides no tiebreak)
+
+    count = 0
+    for sym in proxy_only:
+        # Always set ETF — corrects any frozen stock misclassifications.
+        if _MEM.get(sym) != "etf" or _MEM_SOURCE.get(sym) != "theme_universe_proxy":
+            _set(sym, "etf", source="theme_universe_proxy")
+            count += 1
+    for sym in candidate_only:
+        # Only set stock if no higher-authority ETF classification exists.
+        existing_src = _MEM_SOURCE.get(sym, "unresolved")
+        if existing_src not in ("theme_universe_proxy", "fmp_is_etf", "fmp_profile") \
+                or _MEM.get(sym) != "etf":
+            if _MEM.get(sym) != "stock" or existing_src != "theme_universe_candidate":
+                _set(sym, "stock", source="theme_universe_candidate")
+                count += 1
+
+    if count > 0:
+        _save_disk()
+        print(f"[INSTRUMENT_TYPE] warm_up_from_theme_universe: classified {count} symbols "
+              f"({len(proxy_only)} ETF proxies, {len(candidate_only)} stock candidates)")
+    return count
+
+
+def force_reclassify_symbols(symbols: list[str]) -> int:
+    """
+    Clear LKG entries for specific symbols so they are re-classified on the
+    next background pass.  Call from admin endpoints or repair scripts.
+
+    Returns count of symbols cleared.
+    """
+    count = 0
+    for s in symbols:
+        sym = s.upper()
+        if sym in _MEM:
+            del _MEM[sym]
+            count += 1
+        _MEM_SOURCE.pop(sym, None)
+        _MEM_QUEUED_AT.pop(sym, None)
+        _MEM_FAILED.pop(sym, None)
+    if count:
+        global _SAVE_NEEDED
+        _SAVE_NEEDED = True
+    return count
 
 
 # ── FMP background classification ─────────────────────────────────────────────
@@ -354,15 +445,20 @@ async def classify_symbols_background(
         if _MEM.get(sym, "unknown") == "unknown" and sym not in _MEM_QUEUED_AT:
             _MEM_QUEUED_AT[sym] = now
 
-    # Prioritise symbols that are genuinely missing OR only sector_inferred
-    # (sector_inference is temporary and should be upgraded to fmp_profile when possible).
+    # Prioritise symbols that are genuinely missing, sector_inferred, or lkg-sourced.
+    # lkg-sourced entries may contain old misclassifications (e.g., ETFs frozen as stock
+    # before source tracking was added).  Including them allows background FMP calls to
+    # upgrade their classification.
+    # theme_universe_proxy/candidate classifications are authoritative — skip those.
     # Exclude symbols already marked classification_failed — FMP gave a definitive null.
+    _SKIP_SOURCES = frozenset({"theme_universe_proxy", "theme_universe_candidate"})
     missing = [
         s.upper() for s in symbols
         if (
             _MEM.get(s.upper()) not in ("stock", "etf")
-            or _MEM_SOURCE.get(s.upper()) == "sector_inference"
+            or _MEM_SOURCE.get(s.upper()) in ("sector_inference", "lkg")
         )
+        and _MEM_SOURCE.get(s.upper()) not in _SKIP_SOURCES
         and s.upper() not in _MEM_FAILED
     ][:max_per_pass]
 

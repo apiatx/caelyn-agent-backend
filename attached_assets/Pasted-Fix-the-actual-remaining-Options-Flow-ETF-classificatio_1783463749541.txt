@@ -1,0 +1,381 @@
+Fix the actual remaining Options Flow ETF classification and display-name coverage failures.
+
+This is a production bug fix.
+
+Do not give me another broad architecture plan.
+Do not stop after an audit.
+Audit the exact live path, fix it, and validate the exact reported symbols.
+
+Known production failures:
+
+ETFs visibly appearing in Options Flow → Net Flow → All Stocks:
+
+* SOXX
+* PSI
+* XSD
+* XLE
+* IAU
+
+These are ETFs but are appearing in the stock-only heatmap.
+
+The previous backend audit claimed:
+
+* zero ETF leaves typed as stock
+* zero ETF leaves missing instrument_type
+
+However, the previous canonical ETF list did NOT include:
+
+* SOXX
+* PSI
+* XSD
+* XLE
+* IAU
+
+Therefore the previous audit did not cover the exact symbol/data surface the frontend is rendering.
+
+There is also a display-name coverage failure:
+
+* only 158 / 270 ticker leaves had real display_name values
+* 112 / 270 were null
+
+That is not sufficient.
+
+==================================================
+PART 1 — TRACE THE EXACT FRONTEND OPTIONS FLOW DATA PATH
+========================================================
+
+Do not audit a nearby endpoint and assume it is the frontend source.
+
+Trace the CURRENT frontend Options Flow → Net Flow fetch path from the actual frontend code.
+
+Report:
+
+frontend fetch function
+→ exact frontend URL
+→ Express/proxy route if present
+→ exact backend URL
+→ backend handler
+→ cache/LKG layer
+→ tree builder
+→ ticker leaf returned to frontend
+
+Specifically identify the exact response used to construct:
+
+allTickers
+
+in the current frontend options.tsx.
+
+Then fetch THAT exact backend payload/path and find:
+
+SOXX
+PSI
+XSD
+XLE
+IAU
+
+For each exact symbol report:
+
+* every ticker-node appearance
+* tree path / theme
+* instrument_type returned in the exact frontend payload
+* instrument_type_source
+* instrument_type_inferred
+* canonical classifier result
+* classification LKG result
+* screener_fundamentals_cache isEtf value
+* display_name
+* premium_scope_id
+
+There is no acceptable response of:
+“they are not in the ETF list I audited.”
+
+They are visibly on the page.
+
+Find the exact rows the page is rendering.
+
+==================================================
+PART 2 — FIX ETF CLASSIFICATION FOR THE ACTUAL REQUIRED UNIVERSE
+================================================================
+
+Required invariant:
+
+SOXX = etf
+PSI = etf
+XSD = etf
+XLE = etf
+IAU = etf
+
+And more broadly:
+
+Every listed ETF in the current Options Flow required universe must resolve:
+
+instrument_type = "etf"
+
+Every common stock must resolve:
+
+instrument_type = "stock"
+
+Do not use frontend heuristics.
+
+Do not use ticker length.
+
+Do not use symbol naming.
+
+Use the existing canonical Options Flow instrument type service.
+
+Audit classification precedence carefully.
+
+A likely problem is that sector-based inference:
+
+isEtf is None
+
+* sector exists
+  → stock
+
+may incorrectly classify ETF symbols when cached profile metadata is incomplete or malformed.
+
+Sector inference must NOT override an authoritative ETF/fund identity.
+
+Correct precedence must be:
+
+1. explicit persisted ETF/fund reference metadata
+2. explicit FMP/profile isEtf=true
+3. explicit canonical ETF symbol/reference result already cached
+4. explicit FMP/profile isEtf=false for a company
+5. persisted authoritative instrument classification
+6. stock inference only when no ETF evidence exists
+7. unresolved/failed
+
+An inferred stock classification must be replaceable when ETF reference metadata confirms ETF.
+
+Audit whether _MEM_FAILED or classification LKG is freezing bad inferred stock classifications.
+
+If an incorrect stock classification is persisted for:
+SOXX / PSI / XSD / XLE / IAU
+
+repair the persisted classification and ensure reconciliation can correct previous inferred classifications.
+
+Do not merely patch these five symbols.
+
+Use them as regression cases for the general classifier.
+
+==================================================
+PART 3 — CLASSIFY AGAINST THE FULL OPTIONS FLOW REQUIRED UNIVERSE
+=================================================================
+
+The previous audit reported:
+
+* required universe counts around 247
+* another live tree audit saw only 123 unique symbols
+* live tree had 270 leaf appearances
+
+Reconcile these numbers.
+
+Define and log:
+
+required_unique_symbols
+ticker_leaf_appearances
+unique_stock_symbols
+unique_etf_symbols
+unique_unresolved_symbols
+
+ETF classification validation must run against:
+
+ALL unique symbols capable of appearing as ticker leaves in the exact frontend Net Flow payload.
+
+Not only:
+
+* one sector tree slice
+* one cache
+* previously recognized ETFs
+
+For every ticker leaf symbol:
+canonical classifier result must equal ticker-node instrument_type.
+
+Add a validation invariant in an admin/debug helper if appropriate:
+
+# classifier_type_by_symbol[symbol]
+
+ticker_node.instrument_type
+
+Report mismatches.
+
+Expected mismatch count after fix:
+0
+
+==================================================
+PART 4 — DISPLAY NAME COVERAGE MUST BE COMPLETED
+================================================
+
+Current result:
+
+158 / 270 leaf appearances with real display names
+112 / 270 null
+
+Do not call that complete.
+
+The frontend needs names for stocks and ETFs.
+
+Use the existing cached/profile/reference infrastructure.
+
+Do not add per-request API calls to /api/options-flow/sectors.
+
+Do not call FMP inside _build_ticker_node.
+
+Do not make per-ticker synchronous calls from the hot response path.
+
+Build or extend the EXISTING background profile/reference reconciliation so the CURRENT Options Flow required unique universe is continuously checked for missing display names.
+
+Required name sources:
+
+STOCK:
+
+1. existing canonical company/reference cache
+2. screener_fundamentals_cache profile company name
+3. cached FMP company profile/reference result
+4. background existing FMP provider enrichment
+
+ETF:
+
+1. canonical ETF/fund metadata cache
+2. cached ETF/fund information
+3. cached FMP ETF/fund/profile/reference name
+4. background existing FMP provider enrichment
+
+The user's paid FMP access supports company profile/reference data and ETF & Mutual Fund Information. Use existing provider/cache services.
+
+Do not build a frontend name service.
+
+Required background behavior:
+
+current Options Flow required universe
+→ find symbols with display_name null
+→ classify stock/ETF
+→ existing paced profile/reference enrichment
+→ persist/cache real display name
+→ future Options Flow payload returns name
+
+Continue draining missing names until:
+
+* resolved with a real name
+  OR
+* explicitly name_resolution_failed
+
+Do not retry definitive failures forever.
+
+Expose diagnostics:
+
+display_name_required_symbols
+display_name_resolved_symbols
+display_name_missing_symbols
+display_name_failed_symbols
+display_name_coverage_pct
+display_name_queue_depth
+display_name_missing_sample
+
+Target:
+
+> = 99% real display-name coverage for current Options Flow required symbols, excluding explicit failed/unsupported instruments.
+
+==================================================
+PART 5 — EXACT VALIDATION
+=========================
+
+Do not claim complete from compilation.
+
+Validate the exact current frontend payload.
+
+A. ETF regression symbols
+
+For:
+
+* SOXX
+* PSI
+* XSD
+* XLE
+* IAU
+
+prove:
+
+symbol
+instrument_type
+instrument_type_source
+display_name
+
+Expected:
+SOXX | etf | authoritative source | real fund name
+PSI  | etf | authoritative source | real fund name
+XSD  | etf | authoritative source | real fund name
+XLE  | etf | authoritative source | real fund name
+IAU  | etf | authoritative source | real fund name
+
+B. Classification
+
+Report:
+
+required unique symbols
+unique ETFs
+unique stocks
+unresolved
+ticker leaf appearances
+classifier-vs-node mismatches
+
+Acceptance:
+
+unresolved = 0 or explicitly failed
+classifier-vs-node mismatches = 0
+
+C. Names
+
+Report unique-symbol display name coverage, not only leaf-appearance coverage.
+
+Validate at least:
+
+* SOXX
+* PSI
+* XSD
+* XLE
+* IAU
+* SMH
+* IBB
+* NVDA
+* AVGO
+* ANET
+* COIN
+* MSTR
+
+All should have real human-readable display names unless an exact provider failure is shown.
+
+D. Hot path
+
+Fetch the Options Flow endpoint and prove:
+
+* no new FMP calls occur during response generation
+* no Tradier name lookup exists
+* profile/name resolution stays background/cached
+
+==================================================
+DO NOT
+======
+
+Do not touch Net Flow P/C math.
+
+Do not touch premium_scope_id.
+
+Do not touch geometric breadth.
+
+Do not touch the Tradier scanner.
+
+Do not touch high-priority options queue.
+
+Do not move ETFs out of the options required universe.
+
+Do not hardcode the five ETFs as a permanent classification list.
+
+Do not return symbol as display_name fallback.
+
+Do not claim “fills naturally later” with 112 missing names.
+
+Fix the full current required universe.
+
+Return the exact before/after results for SOXX, PSI, XSD, XLE, and IAU.
