@@ -839,24 +839,94 @@ def load_sectors_universe_lkg_from_disk() -> None:
         print(f"[SECTORS_LKG] Disk load failed (non-fatal): {exc}")
 
 
+# ── Priority queue for newly required theme symbols ───────────────────────────
+# When a symbol is added to the Options Flow required universe mid-session
+# (e.g. via a theme ticker override write), it starts as generic_pending.
+# Without prioritisation it lands at an arbitrary alphabetical position in the
+# missing_syms tier and may take the full backfill cycle (up to ~30 min in
+# background mode) before being scanned.
+#
+# add_high_priority_symbols() marks symbols for front-of-queue placement.
+# get_sectors_pending_symbols() puts high-priority AND pending symbols first.
+# clear_scanned_high_priority() removes symbols after the backfill loop scans them.
+#
+# Dict value is the add_at timestamp for age diagnostics.
+_HIGH_PRIORITY_SYMBOLS: dict[str, float] = {}
+
+
+def add_high_priority_symbols(symbols: list[str]) -> None:
+    """
+    Mark symbols as high-priority for the next backfill pass.
+
+    Called when a symbol is added to the Options Flow required universe
+    mid-session (e.g. theme ticker override write).  Only marks symbols that
+    are not yet scanned — symbols already in the supplement/live cache are
+    ignored (they already have data).
+
+    Safe to call from any sync or async context (pure in-memory write).
+    """
+    now = _time.time()
+    for sym in symbols:
+        s = sym.upper()
+        if s not in _HIGH_PRIORITY_SYMBOLS:
+            _HIGH_PRIORITY_SYMBOLS[s] = now
+    if symbols:
+        print(f"[PRIORITY_QUEUE] Marked {len(symbols)} symbol(s) high-priority: {[s.upper() for s in symbols[:5]]}")
+
+
+def clear_scanned_high_priority(symbols: list[str]) -> None:
+    """
+    Remove symbols from the high-priority set after the backfill loop scans them.
+    Call this after every successful scan batch so the priority dict stays current.
+    """
+    for sym in symbols:
+        _HIGH_PRIORITY_SYMBOLS.pop(sym.upper(), None)
+
+
+def get_priority_queue_diag() -> dict:
+    """
+    Return diagnostics for the priority queue — how many symbols are
+    queued as high-priority and waiting for a scan.
+    """
+    pending = get_sectors_pending_symbols()
+    pending_set = set(pending)
+    now = _time.time()
+    hi_pending = [s for s in sorted(_HIGH_PRIORITY_SYMBOLS) if s in pending_set]
+    oldest_ts = min(
+        (_HIGH_PRIORITY_SYMBOLS[s] for s in hi_pending), default=None
+    )
+    return {
+        "pending_total":                len(pending),
+        "high_priority_pending":        len(hi_pending),
+        "high_priority_pending_sample": hi_pending[:10],
+        "high_priority_total_marked":   len(_HIGH_PRIORITY_SYMBOLS),
+        "oldest_pending_age_seconds":   int(now - oldest_ts) if oldest_ts else None,
+    }
+
+
 def get_sectors_pending_symbols() -> list[str]:
     """
     Return theme universe symbols that need scanning this session, in priority
     order so the backfill loop drains the most important gaps first.
 
     Priority order (highest → lowest):
-      1. generic_pending  — not in any cache at all (missing_data).
-                            These MUST be scanned before stale rows are refreshed;
-                            they are the primary coverage gap.
-      2. stale_lkg        — loaded from LKG (supplement_lkg source), needs refresh.
-                            Real prior-session data exists, but it should be freshed.
+      1. high_priority_pending — symbols explicitly marked via add_high_priority_symbols()
+                                 that are also generic_pending (not in any cache).
+                                 These are symbols newly added to the theme universe
+                                 mid-session that would otherwise wait at an arbitrary
+                                 alphabetical position.
+      2. generic_pending       — not in any cache at all (missing_data).
+                                 Must be scanned before stale rows are refreshed.
+      3. stale_lkg             — loaded from LKG (supplement_lkg source), needs refresh.
+                                 Real prior-session data exists, but it should be freshed.
 
     Excludes:
     - live / supplement / watchlist_cache  (current-session data, already good)
     - confirmed no-options symbols
 
-    Within each priority tier, symbols are sorted alphabetically for a deterministic
-    rolling cursor so every symbol in that tier is visited in a predictable order.
+    Within each priority tier (except high_priority_pending), symbols are sorted
+    alphabetically for a deterministic rolling cursor so every symbol in that
+    tier is visited in a predictable order.
     """
     try:
         from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
@@ -872,7 +942,7 @@ def get_sectors_pending_symbols() -> list[str]:
     combined = get_combined_ticker_data()
     no_opts  = get_no_options_symbols()
 
-    missing_syms:  list[str] = []   # generic_pending — highest priority
+    missing_syms:  list[str] = []   # generic_pending — high priority
     stale_lkg_syms: list[str] = []  # supplement_lkg with real data — lower priority
 
     for sym in sorted(all_theme_syms):
@@ -894,6 +964,16 @@ def get_sectors_pending_symbols() -> list[str]:
             else:
                 missing_syms.append(sym)           # placeholder, no real data — FIRST
         # live / supplement / watchlist_cache = current-session data → skip
+
+    # ── Priority queue: newly required symbols go to the very front ───────────
+    # Symbols explicitly marked via add_high_priority_symbols() that are also
+    # generic_pending get hoisted to the front of the batch queue so the backfill
+    # loop reaches them on the next pass, not after a full alphabetical sweep.
+    if _HIGH_PRIORITY_SYMBOLS:
+        hi_set = set(_HIGH_PRIORITY_SYMBOLS.keys())
+        hi_missing    = [s for s in missing_syms if s in hi_set]
+        other_missing = [s for s in missing_syms if s not in hi_set]
+        missing_syms  = hi_missing + other_missing
 
     return missing_syms + stale_lkg_syms
 

@@ -3362,6 +3362,13 @@ async def patch_category_endpoint(request: Request, body: dict):
             _ref_uni()
             from data.options_flow_sectors import invalidate_sectors_cache as _inv_sec
             _inv_sec()
+            # Mark the newly required symbol as high-priority in the backfill queue
+            # so it is scanned on the next batch pass, not after a full alphabetical sweep.
+            try:
+                from data.options_theme_supplement import add_high_priority_symbols as _add_hi_pri
+                _add_hi_pri([ticker])
+            except Exception:
+                pass
     except Exception as _ue:
         print(f"[WATCHLIST_CAT] Options Flow sync failed (non-fatal): {_ue}")
 
@@ -3465,6 +3472,12 @@ async def bulk_categories_endpoint(request: Request, body: dict):
                 _bref()
                 from data.options_flow_sectors import invalidate_sectors_cache as _binv
                 _binv()
+                # Mark newly required symbols as high-priority in the backfill queue
+                try:
+                    from data.options_theme_supplement import add_high_priority_symbols as _add_hi_bulk
+                    _add_hi_bulk([e["symbol"] for e in tto_edits if e.get("action") == "add"])
+                except Exception:
+                    pass
         except Exception as _bsync_err:
             print(f"[WATCHLIST_CAT_BULK] cross-sync failed (non-fatal): {_bsync_err}")
 

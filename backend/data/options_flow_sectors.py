@@ -297,14 +297,24 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
     _stock_put:      float      = 0.0
     _etf_call:       float      = 0.0
     _etf_put:        float      = 0.0
-    _stock_eff_pcrs: list[float] = []
-    _etf_eff_pcrs:   list[float] = []
+    # Canonical Net Flow breadth: only single_expiry_7_60dte_preferred rows
+    # (premium_scope_id == "net_flow_single_expiry_7_60dte_v1").
+    # Unusual-flow rows (top_unusual_contracts scope) are tracked separately and
+    # EXCLUDED from breadth_pcr — they use different contract sampling and DTE
+    # windows and produce non-comparable P/C ratios.
+    _stock_eff_pcrs:         list[float] = []  # net_flow scope only
+    _etf_eff_pcrs:           list[float] = []  # net_flow scope only
+    _unusual_stock_eff_pcrs: list[float] = []  # unusual_flow scope (excluded from breadth)
+    _unusual_etf_eff_pcrs:   list[float] = []  # unusual_flow scope ETFs
     _total_stock:    int = 0
     _total_etf:      int = 0
     _total_unknown:  int = 0
     _unknown_sample: list = []
-    _valid_stock_pcr: int = 0
-    _valid_etf_pcr:   int = 0
+    _valid_stock_pcr:        int = 0   # net_flow scope valid stocks → breadth_pcr denominator
+    _valid_etf_pcr:          int = 0   # net_flow scope valid ETFs
+    _unusual_valid_stock_pcr: int = 0  # unusual_flow scope valid stocks
+    _unusual_valid_etf_pcr:   int = 0  # unusual_flow scope valid ETFs
+    _net_flow_missing_stock:  int = 0  # stocks with only unusual scope (no net_flow snapshot)
     # Track premium-contributing tickers by their expiration scope so rollup
     # nodes can expose whether aggregated premiums come from one methodology
     # or a mix of two.  Only tickers with at least one non-None premium field
@@ -372,14 +382,28 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
 
         # ── Stock/ETF breadth split ───────────────────────────────────────────
         # Accumulate stock/ETF premiums and collect effective_pcr values for
-        # the geometric breadth computation.  Only valid completed snapshots
-        # (scan_status not pending/missing/no_options) contribute to breadth.
-        # Unresolved ("unknown") tickers are counted separately so breadth
-        # coverage denominators correctly expose classification gaps.
-        _itype   = t.get("instrument_type", "unknown")
-        _eff_pcr = t.get("effective_premium_pcr")
-        _ss      = t.get("scan_status", "")
+        # geometric breadth computation.
+        #
+        # CANONICAL NET FLOW BREADTH RULE:
+        #   breadth_pcr accumulates ONLY tickers with premium_scope_id ==
+        #   "net_flow_single_expiry_7_60dte_v1" (chain summarizer, all-session,
+        #   single expiry).  Tickers with "unusual_flow_7_45dte_2exp_5k_v1"
+        #   (master screener unusual-flow contracts) use a different DTE window,
+        #   contract eligibility, and min-premium filter — mixing them into the
+        #   same geometric mean produces a non-comparable breadth ratio.
+        #   Unusual-flow tickers are aggregated separately in unusual_flow_breadth_pcr.
+        #
+        # Only valid completed snapshots (scan_status not pending/missing/no_options)
+        # contribute to any breadth.  Unresolved ("unknown") tickers are counted
+        # separately so breadth coverage denominators remain honest.
+        _itype      = t.get("instrument_type", "unknown")
+        _eff_pcr    = t.get("effective_premium_pcr")
+        _pscope_id  = t.get("premium_scope_id", "none")
+        _ss         = t.get("scan_status", "")
         _valid_snap = _ss not in ("pending", "missing_data", "no_options") and _eff_pcr is not None
+        _is_net_flow = _pscope_id == "net_flow_single_expiry_7_60dte_v1"
+        _is_unusual  = _pscope_id == "unusual_flow_7_45dte_2exp_5k_v1"
+
         if _itype == "stock":
             _total_stock += 1
             if cp is not None:
@@ -387,8 +411,15 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
             if pp is not None:
                 _stock_put  += pp
             if _valid_snap:
-                _stock_eff_pcrs.append(_eff_pcr)
-                _valid_stock_pcr += 1
+                if _is_net_flow:
+                    # Canonical Net Flow breadth — chain summarizer scope
+                    _stock_eff_pcrs.append(_eff_pcr)
+                    _valid_stock_pcr += 1
+                elif _is_unusual:
+                    # Unusual-flow master screener scope — separate bucket
+                    _unusual_stock_eff_pcrs.append(_eff_pcr)
+                    _unusual_valid_stock_pcr += 1
+                    _net_flow_missing_stock += 1  # has data but not net_flow scope
         elif _itype == "etf":
             _total_etf += 1
             if cp is not None:
@@ -396,8 +427,12 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
             if pp is not None:
                 _etf_put  += pp
             if _valid_snap:
-                _etf_eff_pcrs.append(_eff_pcr)
-                _valid_etf_pcr += 1
+                if _is_net_flow:
+                    _etf_eff_pcrs.append(_eff_pcr)
+                    _valid_etf_pcr += 1
+                elif _is_unusual:
+                    _unusual_etf_eff_pcrs.append(_eff_pcr)
+                    _unusual_valid_etf_pcr += 1
         else:
             # instrument_type == "unknown" — classification not yet resolved.
             # These tickers are in the category but cannot be sorted into the
@@ -562,23 +597,49 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         "deferred_retry_count":       state_counts.get("deferred_retry",          0),
         "unsupported_count":          state_counts.get("unsupported_foreign_otc", 0),
         "generic_pending_count":      state_counts.get("generic_pending",         0),
-        # ── Stock-only breadth P/C ─────────────────────────────────────────────
-        # Primary sector/theme breadth metric — geometric mean of per-stock
-        # effective_premium_pcr.  Excludes ETFs, pending, missing, no_options.
+        # ── Stock-only breadth P/C (canonical Net Flow) ───────────────────────
+        # PRIMARY BREADTH METRIC: geometric mean of per-stock effective_premium_pcr.
+        # CANONICAL SCOPE: only tickers with premium_scope_id ==
+        #   "net_flow_single_expiry_7_60dte_v1" (chain summarizer, all-session,
+        #   single expiry per ticker) contribute to breadth_pcr.
+        # Tickers with "unusual_flow_7_45dte_2exp_5k_v1" scope are EXCLUDED
+        #   — they come from the master screener's unusual-flow contract filter
+        #   (different DTE window, multi-expiry, min-premium gate) and produce
+        #   non-comparable P/C ratios when mixed into the same geometric mean.
+        #   Their breadth is captured separately in unusual_flow_breadth_pcr.
+        # Excludes ETFs, pending, missing, no_options regardless of scope.
         # effective_premium_pcr = clamp(raw_pcr, 0.01, 100) for finite ratios,
-        # 0.01 for call-only flow, 100 for put-only flow.
+        #   0.01 for call-only flow, 100 for put-only flow.
         "breadth_pcr":              _geometric_mean_pcr(_stock_eff_pcrs),
+        # net_flow_breadth_pcr: explicit alias emphasising canonical scope
+        "net_flow_breadth_pcr":     _geometric_mean_pcr(_stock_eff_pcrs),
+        # unusual_flow_breadth_pcr: breadth among master-screener-only tickers
+        "unusual_flow_breadth_pcr": _geometric_mean_pcr(_unusual_stock_eff_pcrs),
         "premium_weighted_pcr":     _pcr(_stock_call, _stock_put) if (_stock_call + _stock_put) > 0 else None,
         "total_stock_tickers":      _total_stock,
+        # valid_stock_pcr_tickers: count contributing to canonical Net Flow breadth
         "valid_stock_pcr_tickers":  _valid_stock_pcr,
-        "missing_stock_pcr_tickers": max(0, _total_stock - _valid_stock_pcr),
+        # net_flow_scoped_stock_tickers: explicit alias
+        "net_flow_scoped_stock_tickers":    _valid_stock_pcr,
+        # unusual_flow_scoped_stock_tickers: stocks covered only by unusual-flow scope
+        "unusual_flow_scoped_stock_tickers": _unusual_valid_stock_pcr,
+        # net_flow_missing_snapshot_stock_tickers: stocks that have unusual-flow data
+        # but no Net Flow (chain summarizer) snapshot yet.  These are excluded from
+        # breadth_pcr / net_flow_breadth_pcr — they are not truly "missing" (they
+        # have premium data) but they cannot contribute to canonical Net Flow breadth.
+        "net_flow_missing_snapshot_stock_tickers": _net_flow_missing_stock,
+        "missing_stock_pcr_tickers": max(0, _total_stock - _valid_stock_pcr - _unusual_valid_stock_pcr),
         "stock_pcr_coverage_pct":   round(_valid_stock_pcr / max(_total_stock, 1) * 100, 1) if _total_stock else None,
-        # ── ETF breadth P/C ────────────────────────────────────────────────────
+        # ── ETF breadth P/C (canonical Net Flow) ──────────────────────────────
         "etf_breadth_pcr":          _geometric_mean_pcr(_etf_eff_pcrs),
+        "etf_net_flow_breadth_pcr": _geometric_mean_pcr(_etf_eff_pcrs),
+        "etf_unusual_flow_breadth_pcr": _geometric_mean_pcr(_unusual_etf_eff_pcrs),
         "etf_premium_weighted_pcr": _pcr(_etf_call, _etf_put) if (_etf_call + _etf_put) > 0 else None,
         "total_etf_tickers":        _total_etf,
         "valid_etf_pcr_tickers":    _valid_etf_pcr,
-        "missing_etf_pcr_tickers":  max(0, _total_etf - _valid_etf_pcr),
+        "net_flow_scoped_etf_tickers":    _valid_etf_pcr,
+        "unusual_flow_scoped_etf_tickers": _unusual_valid_etf_pcr,
+        "missing_etf_pcr_tickers":  max(0, _total_etf - _valid_etf_pcr - _unusual_valid_etf_pcr),
         "etf_pcr_coverage_pct":     round(_valid_etf_pcr / max(_total_etf, 1) * 100, 1) if _total_etf else None,
         # ── Unresolved classification ──────────────────────────────────────────
         # Tickers whose instrument_type is still "unknown" are excluded from
@@ -793,6 +854,32 @@ def _build_ticker_node(
         # Tells the frontend exactly what the dollar values represent so columns
         # can be labeled "Call Premium (est.)" not "Call Volume".
         _scope, _exp_used, _dte_used, _prem_method = _expiry_scope(row)
+
+        # ── premium_scope_id — canonical scope identifier ─────────────────────
+        # Maps the raw expiration_scope string to a versioned canonical ID.
+        # net_flow_single_expiry_7_60dte_v1  — chain summarizer (all-session, single expiry)
+        # unusual_flow_7_45dte_2exp_5k_v1   — master screener unusual-flow subset
+        # "none"                             — pending, no_options, or no data
+        _SCOPE_ID_MAP = {
+            "single_expiry_7_60dte_preferred": "net_flow_single_expiry_7_60dte_v1",
+            "top_unusual_contracts":           "unusual_flow_7_45dte_2exp_5k_v1",
+        }
+        _premium_scope_id = _SCOPE_ID_MAP.get(_scope, "none")
+
+        # ── Instrument-type source provenance ─────────────────────────────────
+        # Tells the frontend how this symbol was classified (etf vs stock).
+        # fmp_is_etf      — screener_fundamentals_cache.isEtf explicit True/False
+        # fmp_profile     — FMP /stable/profile background pass
+        # sector_inference — isEtf=None, non-empty FMP sector → inferred stock [TEMPORARY]
+        # lkg             — loaded from persisted LKG (source not re-derived on load)
+        # unresolved      — not yet classified
+        _itype_src = "unresolved"
+        try:
+            from data.options_instrument_type_service import get_instrument_type_source as _git_src
+            _itype_src = _git_src(sym)
+        except Exception:
+            pass
+        _itype_inferred = (_itype_src == "sector_inference")
         _tv = row.get("total_volume") if row.get("total_volume") is not None else (0 if _neutral_confirmed else None)
 
         # ── Interval trade-side classification pass-through ───────────────────
@@ -877,8 +964,18 @@ def _build_ticker_node(
             "premium_metric_label": "Estimated Premium (USD)",
             "premium_calc_method":  _prem_method,
             "expiration_scope":     _scope,
+            # premium_scope_id: versioned canonical identifier for the data-collection
+            # methodology used for this ticker's premium values.
+            # "net_flow_single_expiry_7_60dte_v1" — chain summarizer, all-session, one expiry
+            # "unusual_flow_7_45dte_2exp_5k_v1"   — master screener unusual-flow contracts
+            # "none"                               — pending, no_options, or no data
+            # Only "net_flow_single_expiry_7_60dte_v1" tickers contribute to breadth_pcr.
+            "premium_scope_id":     _premium_scope_id,
             "expiration_used":      _exp_used,
             "dte_used":             _dte_used,
+            # instrument_type_source: how this ticker's etf/stock classification was obtained
+            "instrument_type_source":   _itype_src,
+            "instrument_type_inferred": _itype_inferred,
             # ── Interval trade-side classification ────────────────────────────
             # Based on volume_delta since the prior snapshot — not cumulative volume.
             # LKG rows: all None (prior-session interval, not current).
@@ -898,6 +995,15 @@ def _build_ticker_node(
         }
 
     _itype_fallback = (instrument_type_by_sym or {}).get(sym, "unknown")
+
+    # Instrument-type source for the two early-return paths (no_options, generic_pending).
+    # The main data path computes its own _itype_src inside that block.
+    _itype_src_fb = "unresolved"
+    try:
+        from data.options_instrument_type_service import get_instrument_type_source as _git_src_fb
+        _itype_src_fb = _git_src_fb(sym)
+    except Exception:
+        pass
 
     if sym in no_options_syms:
         return {
@@ -931,8 +1037,11 @@ def _build_ticker_node(
             "premium_metric_label":  "Estimated Premium (USD)",
             "premium_calc_method":   "n/a (no tradeable options)",
             "expiration_scope":      "none",
+            "premium_scope_id":      "none",
             "expiration_used":       None,
             "dte_used":              None,
+            "instrument_type_source":   _itype_src_fb,
+            "instrument_type_inferred": _itype_src_fb == "sector_inference",
             "interval_ask_premium":                  None,
             "interval_bid_premium":                  None,
             "interval_midpoint_unknown_premium":     None,
@@ -978,8 +1087,11 @@ def _build_ticker_node(
         "premium_metric_label":  "Estimated Premium (USD)",
         "premium_calc_method":   "n/a (pending scan)",
         "expiration_scope":      "none",
+        "premium_scope_id":      "none",
         "expiration_used":       None,
         "dte_used":              None,
+        "instrument_type_source":   _itype_src_fb,
+        "instrument_type_inferred": _itype_src_fb == "sector_inference",
         "interval_ask_premium":                  None,
         "interval_bid_premium":                  None,
         "interval_midpoint_unknown_premium":     None,
@@ -1338,19 +1450,24 @@ def build_sector_tree(
         #   unresolved_sample       — up to 20 example unknown symbols
         #   cache_updated_at        — unix timestamp of last LKG save
         #   precedence_note         — how resolution works
-        "instrument_type_classification": (lambda _s: {
-            "classified_stocks":   _s.get("stocks",  0),
-            "classified_etfs":     _s.get("etfs",    0),
-            "unresolved_total":    _s.get("unknown", 0),
-            "unresolved_sample":   _s.get("unknown_sample", []),
-            "cache_updated_at":    _s.get("updated_at"),
-            "precedence_note": (
-                "1. screener_fundamentals_cache.isEtf (explicit True/False); "
-                "2. screener_fundamentals_cache.sector (non-empty → stock); "
-                "3. FMP /stable/profile background-only; "
-                "4. unknown only when genuinely unresolved"
-            ),
-        })(__import__('data.options_instrument_type_service', fromlist=['get_stats']).get_stats()),
+        # ── Instrument-type classification diagnostics (required-universe basis) ──
+        # Computes against the ACTUAL required Options Flow universe (all_theme_syms),
+        # not just symbols explicitly stored in the LKG.  A symbol absent from the
+        # classification cache is "unresolved" — the old get_stats()-based approach
+        # only counted symbols explicitly set to "unknown" in _MEM, producing a
+        # false-green unresolved_total=0 when symbols were simply missing from cache.
+        "instrument_type_classification": (lambda: {
+            **__import__(
+                'data.options_instrument_type_service',
+                fromlist=['get_required_universe_classification_stats'],
+            ).get_required_universe_classification_stats(all_theme_syms),
+            "precedence": [
+                "1. fmp_is_etf — screener_fundamentals_cache.isEtf explicit True/False",
+                "2. fmp_profile — FMP /stable/profile background pass",
+                "3. sector_inference — isEtf=None, non-empty FMP sector → inferred stock [TEMPORARY]",
+                "4. unresolved — absent from cache or classified as unknown",
+            ],
+        })(),
         # ── Premium labeling metadata ──────────────────────────────────────────
         # Allows the frontend to label dollar values as "Estimated Premium"
         # rather than guessing whether they are contract counts.

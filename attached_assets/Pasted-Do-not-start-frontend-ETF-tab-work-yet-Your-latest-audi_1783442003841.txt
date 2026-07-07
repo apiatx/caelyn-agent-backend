@@ -1,0 +1,390 @@
+Do not start frontend ETF-tab work yet.
+
+Your latest audit made useful progress, but three items were marked complete without proving the requested invariant.
+
+Preserve the working stock/ETF fields, breadth math, LKG behavior, existing routes, and paced Tradier architecture.
+
+This is a targeted hardening pass.
+
+==================================================
+PART 1 — NET FLOW SCAN SCOPE IS NOT CURRENTLY PARITY
+====================================================
+
+Your own audit shows:
+
+MASTER SCREENER
+
+* 7–45 DTE
+* up to 2 expirations
+* unusual-only contracts
+* $5K minimum premium filter
+
+CHAIN SUMMARIZER / SUPPLEMENT
+
+* 7–60 DTE
+* 1 preferred expiry
+* all-session contracts
+* no minimum premium
+
+These are not analytically equivalent.
+
+The fact that both use:
+mid × volume × 100
+
+does not make the resulting premium P/C values comparable.
+
+Do not mark scan-scope parity complete.
+
+Core semantic requirement:
+
+OPTIONS FLOW → NET FLOW must use one canonical Net Flow premium methodology across every ticker shown together or included in breadth aggregation.
+
+OPTIONS FLOW → UNUSUAL FLOW may retain the master screener unusual-contract methodology.
+
+Audit the existing paths before editing:
+
+* options_master_screener_v1
+* options_master_lkg_v1
+* supplement cache
+* supplement LKG
+* sectors_chain_summarizer
+* get_combined_ticker_data()
+* _build_ticker_node()
+* Net Flow API tree
+* Unusual Flow callers
+
+Determine whether Net Flow currently prefers a master-screener row over a supplement Net Flow row for the same symbol.
+
+If yes, this is the metric-contamination point.
+
+RECOMMENDED ARCHITECTURE:
+
+Canonical Net Flow premium row:
+
+* all-session options premium
+* one explicitly defined DTE window
+* one explicitly defined expiry-selection rule
+* same number of expirations per ticker
+* same call/put contract eligibility
+* same mid × volume × 100 pricing
+
+Use canonical Net Flow rows for:
+
+* ticker raw_premium_pcr
+* effective_premium_pcr
+* stock breadth_pcr
+* sector breadth_pcr
+* theme/sub-theme breadth_pcr
+* ETF breadth P/C
+* premium-weighted Net Flow P/C
+* Net Flow heatmap
+
+Keep unusual-only master metrics separate for:
+
+* Unusual Flow
+* unusual signals
+* composite score
+* unusual-contract modal details
+
+Do not destroy or replace the master screener.
+
+The page already has separate Net Flow and Unusual Flow concepts. Preserve that architectural separation in data semantics.
+
+Before implementing:
+Report the exact existing shared helper, if any, that can produce canonical all-session premium aggregation without creating another Tradier fetch path.
+
+Prefer reusing the existing sectors_chain_summarizer/supplement premium methodology or extracting its premium math into a shared helper.
+
+Do not create a parallel uncontrolled scanner.
+
+Use the existing required-symbol queue, Tradier pacer, caches, and LKG.
+
+If canonical Net Flow scope should be:
+
+* single nearest/preferred expiry 7–60 DTE
+
+then enforce that consistently for all Net Flow-required symbols.
+
+If another scope is already canonical elsewhere in the codebase, prove why it should be used instead.
+
+Do not mix rows with:
+expiration_scope = top_unusual_contracts
+
+into Net Flow breadth P/C with rows using:
+expiration_scope = single_expiry_7_60dte_preferred
+
+unless you can prove the premium numerator and denominator represent the same contract universe.
+
+Add a machine-readable field:
+
+* premium_scope_id
+
+Example:
+net_flow_single_expiry_7_60dte_v1
+unusual_flow_7_45dte_2exp_5k_v1
+
+Breadth aggregation must only aggregate rows with the canonical Net Flow premium_scope_id.
+
+If a required ticker lacks a canonical Net Flow snapshot:
+
+* pending/missing
+* do not silently fall back to unusual-flow P/C for breadth
+
+VALIDATION:
+Select at least:
+
+* 5 master-screener-covered stocks
+* 5 supplement-only stocks
+* 5 ETFs
+
+For every symbol show:
+
+* premium_scope_id
+* expiration_used
+* DTE
+* expirations included
+* call premium
+* put premium
+* raw premium P/C
+
+Prove every symbol entering one Net Flow breadth aggregate uses the same premium_scope_id.
+
+Then audit Biotech again using only canonical Net Flow rows.
+
+==================================================
+PART 2 — FIX FALSE-GREEN INSTRUMENT TYPE DIAGNOSTICS
+====================================================
+
+Current diagnostics are contradictory.
+
+Top-level instrument_type_classification reports:
+
+* unresolved_total = 0
+
+But Technology sector reports:
+
+* unresolved_instrument_type_tickers = 18
+
+This means get_stats() and sector rollups are not measuring the same required universe.
+
+Fix diagnostics against the canonical current Options Flow required universe.
+
+Required diagnostic math:
+
+required_symbols =
+the exact current canonical Options Flow required symbol set
+
+For every required symbol:
+
+* stock
+* etf
+* unresolved
+
+Then:
+
+# required_total
+
+required_stock_tickers
+
+* required_etf_tickers
+* unresolved_instrument_type_tickers
+
+Expose top-level:
+
+* required_total
+* required_stock_tickers
+* required_etf_tickers
+* unresolved_instrument_type_tickers
+* unresolved_instrument_type_sample
+* classification_coverage_pct
+* classification_cache_updated_at
+
+Do not calculate unresolved_total only from symbols already present in the instrument-type cache.
+
+A symbol absent from the type map is unresolved.
+
+Per-sector/theme unresolved counts must reconcile with the same classification snapshot.
+
+Also audit whether instrument_types is captured once before background reconciliation and then remains stale inside a response/build cycle.
+
+Classification precedence:
+
+1. authoritative existing persisted reference/security metadata
+2. explicit isEtf true/false from existing cached FMP profile/reference data
+3. explicit existing ETF/fund metadata
+4. persisted classification LKG
+5. sector-based stock inference as TEMPORARY inferred classification
+6. unresolved
+
+If sector-based inference remains:
+Expose provenance:
+
+* instrument_type_source
+* instrument_type_confidence or instrument_type_inferred
+
+Examples:
+fmp_is_etf
+etf_reference
+classification_lkg
+sector_inference
+unresolved
+
+Do not treat sector inference as indistinguishable from authoritative classification.
+
+Background classification:
+The current startup max-40 FMP pass must not be the only route for unresolved required symbols.
+
+Audit what happens if:
+
+* 100 required symbols are unresolved
+* 10 new theme tickers are added after startup
+
+Required behavior:
+current unresolved required symbols are reconciled through an existing paced/background classification queue until resolved or explicitly failed.
+
+No page-render FMP calls.
+No synchronous membership-write FMP calls.
+
+==================================================
+PART 3 — ACTUAL CONTROLLED THEME-TICKER SCAN TEST
+=================================================
+
+The previous report did not complete the controlled test.
+
+“AFTER state (expected)” is not an AFTER state.
+
+Use an actual manually-added theme ticker currently:
+
+* present in ENRICHED_THEME_RS_UNIVERSE
+* present in Options Flow tree
+* currently missing supplement/cache P/C
+* known to have listed options
+
+IBRX, HIMS, HALO, GRAL or another proven manually-added symbol may be used.
+
+Pick ONE actual symbol with listed options.
+
+BEFORE:
+Report:
+
+* symbol
+* membership source/provenance
+* theme/sub-theme
+* present in canonical required universe
+* instrument_type
+* canonical Net Flow snapshot present
+* master cache present
+* supplement cache present
+* supplement LKG present
+* pending position/state
+* deferred state
+* no_options state
+* last scan timestamp
+* theme valid_stock_pcr_tickers
+* theme total_stock_tickers
+
+Then force/allow that symbol through the EXISTING paced reconciliation path.
+
+Do not directly call Tradier outside the scanner to fake the test.
+
+The existing scanner should do the work.
+
+AFTER:
+Report actual observed:
+
+* symbol entered scanner batch
+* scan started timestamp
+* scan completed timestamp
+* scan_result
+* premium_scope_id
+* expiration_used
+* raw call premium
+* raw put premium
+* raw_premium_pcr
+* effective_premium_pcr
+* supplement memory present
+* supplement LKG present
+* get_combined_ticker_data present
+* Options Flow ticker node populated
+* included in stock breadth calculation
+* theme valid_stock_pcr_tickers before → after
+* theme breadth_pcr before → after
+
+Do not say expected.
+
+Show the real API/cache result.
+
+==================================================
+PART 4 — PRIORITIZE NEWLY REQUIRED THEME SYMBOLS
+================================================
+
+Audit queue ordering.
+
+Current audit reported:
+
+* 247 pending symbols
+* 8 symbols per off-hours batch
+* 600 seconds between batches
+
+A newly manually-added ticker should not necessarily sit behind the full historic backlog for hours.
+
+Do not bypass the Tradier pacer.
+
+Add or preserve a priority mechanism inside the EXISTING queue.
+
+Suggested priority:
+
+1. newly required due to current theme membership mutation
+2. portfolio underlyings
+3. watchlist/close-watch required symbols
+4. required symbols with no canonical Net Flow snapshot
+5. stale LKG refresh
+6. general backlog
+
+Exact order may follow existing architecture, but newly required theme symbols need a bounded path to first snapshot.
+
+Theme membership write sequence remains:
+
+membership saved
+→ required universe invalidated/reconciled
+→ new required symbol detected
+→ high-priority pending state
+→ existing paced scanner
+→ canonical Net Flow snapshot
+→ LKG/cache
+→ Options Flow coverage updates
+
+Do not perform Tradier calls inside membership POST/PATCH.
+
+Expose queue diagnostics:
+
+* pending_total
+* high_priority_pending
+* oldest_pending_age
+* newly_required_pending
+* sample high-priority symbols
+
+VALIDATION:
+Add one actual manually-added ticker and prove it does not sit behind the entire 247-symbol general backlog.
+
+==================================================
+FINAL ACCEPTANCE
+================
+
+Do not mark complete until:
+
+1. Net Flow P/C uses a single canonical premium_scope_id across aggregated ticker rows.
+2. Unusual Flow remains semantically separate.
+3. Biotech breadth uses comparable stock P/C rows only.
+4. Top-level classification unresolved count reconciles with the current required universe.
+5. Sector/theme unresolved counts reconcile with top-level diagnostics.
+6. Sector inference provenance is visible if retained.
+7. Unresolved required symbols continue through background classification beyond a max-40 startup pass.
+8. One actual manually-added theme ticker completes a real paced scan.
+9. Its real options snapshot appears in Options Flow without restart.
+10. Theme coverage and breadth update from the actual scan.
+11. Newly required theme symbols receive appropriate queue priority.
+12. No new uncontrolled Tradier path exists.
+13. Existing routes, LKG, live/pending diagnostics, and master screener remain intact.
+
+Return evidence, not expected-state descriptions.

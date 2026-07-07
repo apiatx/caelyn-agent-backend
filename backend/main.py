@@ -462,35 +462,57 @@ async def lifespan(app):
         print(f"[STARTUP] instrument_type warm-up: classified {_itype_count} symbols from screener cache")
     except Exception as _itype_err:
         print(f"[STARTUP] instrument_type warm-up failed (non-fatal): {_itype_err}")
-    # Launch background FMP classification pass for any symbols still "unknown"
-    # after the DB warm-up (symbols absent from screener_fundamentals_cache).
-    async def _itype_classify_startup():
+    # Continuous background classification loop for ETF vs stock resolution.
+    # Runs a startup pass after 30 s, then repeats every 30 min to resolve any
+    # symbols that were added to the required universe after startup.
+    # Only processes symbols that are still "unknown" (or newly required) —
+    # already-classified symbols are skipped.
+    async def _itype_classify_loop():
+        """
+        Periodic instrument-type FMP classification loop.
+
+        Startup pass: 30 s after boot.
+        Repeat cadence: every 30 min.
+        Per-pass limit: 40 symbols (FMP rate-limit headroom).
+
+        Classifies symbols in the required theme universe that are still
+        "unknown" (or not yet in the classification cache).  This catches
+        symbols newly added to themes mid-session that were absent at startup.
+        """
+        _PERIOD_S = 1800   # 30 min between passes
         await asyncio.sleep(30)   # let the master screener initialize first
-        try:
-            from data.options_instrument_type_service import (
-                get_stats as _ityp_stats,
-                classify_symbols_background as _ityp_classify,
-            )
-            from data.options_theme_supplement import get_theme_proxy_symbols_for_supplement as _ityp_theme_syms
-            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _ityp_univ
-            _ityp_all = set()
-            for _m in _ityp_univ.values():
-                for _s in (_m.get("proxy_symbols") or []):
-                    _ityp_all.add(_s.upper())
-            _ityp_all.update(s.upper() for s in _ityp_theme_syms())
-            _ityp_s0 = _ityp_stats()
-            if _ityp_s0.get("unknown", 0) > 0 and data_service and data_service.fmp:
-                _classified = await _ityp_classify(
-                    list(_ityp_all), fmp_provider=data_service.fmp, max_per_pass=40
+        while True:
+            try:
+                from data.options_instrument_type_service import (
+                    get_required_universe_classification_stats as _ityp_req_stats,
+                    classify_symbols_background               as _ityp_classify,
+                    get_unresolved_symbols                    as _ityp_unresolved,
                 )
-                _ityp_s1 = _ityp_stats()
-                print(
-                    f"[STARTUP] instrument_type FMP pass: classified {_classified} new symbols; "
-                    f"unknown remaining={_ityp_s1.get('unknown', 0)}"
-                )
-        except Exception as _ityp_e:
-            print(f"[STARTUP] instrument_type FMP pass error (non-fatal): {_ityp_e}")
-    asyncio.create_task(_itype_classify_startup())
+                from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _ityp_univ
+                _ityp_all: set[str] = set()
+                for _m in _ityp_univ.values():
+                    for _s in (_m.get("proxy_symbols") or []):
+                        _ityp_all.add(_s.upper())
+                _ityp_unresolved_syms = _ityp_unresolved(list(_ityp_all))
+                if _ityp_unresolved_syms and data_service and data_service.fmp:
+                    _classified = await _ityp_classify(
+                        _ityp_unresolved_syms,
+                        fmp_provider=data_service.fmp,
+                        max_per_pass=40,
+                    )
+                    _st = _ityp_req_stats(_ityp_all)
+                    print(
+                        f"[ITYPE_LOOP] classified {_classified} new symbols; "
+                        f"unresolved={_st.get('unresolved_instrument_type_tickers', '?')}"
+                        f"/{_st.get('required_total', '?')}"
+                    )
+                else:
+                    if _ityp_unresolved_syms:
+                        print(f"[ITYPE_LOOP] {len(_ityp_unresolved_syms)} unresolved but FMP unavailable — skipping")
+            except Exception as _ityp_e:
+                print(f"[ITYPE_LOOP] classification pass error (non-fatal): {_ityp_e}")
+            await asyncio.sleep(_PERIOD_S)
+    asyncio.create_task(_itype_classify_loop())
     asyncio.create_task(_master_screener_loop())
     asyncio.create_task(_sectors_fast_backfill_loop())
     asyncio.create_task(_theme_options_supplement_loop())
@@ -12749,6 +12771,17 @@ async def _sectors_fast_backfill_loop():
 
             if supplement_rows:
                 _sbf_update_supp(supplement_rows)
+
+            # ── Priority queue cleanup ─────────────────────────────────────────
+            # After scanning a batch, remove those symbols from the high-priority
+            # set.  Successfully scanned symbols now have supplement data and will
+            # not appear in get_sectors_pending_symbols() next pass anyway, but
+            # cleaning the dict keeps it from growing stale indefinitely.
+            try:
+                from data.options_theme_supplement import clear_scanned_high_priority as _sbf_clr_hi
+                _sbf_clr_hi(batch)
+            except Exception:
+                pass
 
             # Update no-options set from expiry cache (gated to regular session)
             _sbf_upd_no_opts(_sbf_local_expiry)
