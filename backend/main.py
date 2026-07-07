@@ -650,6 +650,110 @@ async def lifespan(app):
 
     asyncio.create_task(_watchlist_fundamentals_weekly_loop())
 
+    # Watchlist rank snapshot cadence — advances RV + vol/MC rank baselines every
+    # ~5 minutes using warm quote-cache data.  GET path is read-only (never writes
+    # new rank snapshots); this loop is the sole writer of current/previous snapshots.
+    async def _watchlist_rank_snapshot_loop():
+        import asyncio as _aio
+        import math   as _math
+        import time   as _time
+
+        await _aio.sleep(120)   # let quote cache warm before first snapshot
+
+        while True:
+            try:
+                from services.watchlist_router import (
+                    _rv_registry,    _rv_mem,    _rv_neon_save,
+                    _volmc_registry, _volmc_mem, _volmc_neon_save,
+                )
+                from services.watchlist_quote_cache import _quote_cache as _qc
+
+                _t0 = _time.monotonic()
+                _rv_count = _vm_count = 0
+
+                # ── RV rank snapshots ─────────────────────────────────────────
+                for _wl_id, _tickers in list(_rv_registry.items()):
+                    try:
+                        _elig: list[tuple[str, float]] = []
+                        for _sym in _tickers:
+                            _rv_val = _qc.get(_sym, {}).get("relative_volume")
+                            if (
+                                isinstance(_rv_val, (int, float))
+                                and _math.isfinite(_rv_val)
+                                and _rv_val > 0
+                            ):
+                                _elig.append((_sym, float(_rv_val)))
+                        _us_elig = sum(1 for _s in _tickers if ":" not in _s)
+                        if not _us_elig:
+                            continue
+                        _cov = len(_elig) / _us_elig
+                        if _cov < 0.5:
+                            print(f"[RV_SNAP_BG] wl={_wl_id} coverage={_cov:.0%} <50% — skip")
+                            continue
+                        _elig.sort(key=lambda x: (-x[1], x[0]))
+                        _rv_snap = {
+                            _s: {"rank": _i + 1, "rel_vol": round(_rv, 6)}
+                            for _i, (_s, _rv) in enumerate(_elig)
+                        }
+                        _rv_mem[_wl_id] = {
+                            "previous": (_rv_mem.get(_wl_id) or {}).get("current"),
+                            "current":  _rv_snap,
+                        }
+                        await _aio.get_event_loop().run_in_executor(
+                            None,
+                            lambda wid=_wl_id, snap=_rv_snap: _rv_neon_save(wid, snap),
+                        )
+                        _rv_count += 1
+                        print(
+                            f"[RV_SNAP_BG] wl={_wl_id} ranked={len(_rv_snap)} "
+                            f"coverage={_cov:.0%}"
+                        )
+                    except Exception as _rv_e:
+                        print(f"[RV_SNAP_BG] error wl={_wl_id}: {_rv_e}")
+
+                # ── vol/MC rank snapshots ─────────────────────────────────────
+                for _wl_id, _vm_data in list(_volmc_registry.items()):
+                    try:
+                        _tickers_vm  = _vm_data.get("tickers", [])
+                        _pcts        = _vm_data.get("pcts", {})
+                        _elig_vm     = [
+                            (_s, _p) for _s, _p in _pcts.items()
+                            if isinstance(_p, (int, float)) and _p > 0
+                        ]
+                        _us_elig_vm  = sum(1 for _s in _tickers_vm if ":" not in _s)
+                        if not _us_elig_vm or len(_elig_vm) / _us_elig_vm < 0.5:
+                            continue
+                        _elig_vm.sort(key=lambda x: (-x[1], x[0]))
+                        _vm_snap = {
+                            _s: {"rank": _i + 1, "vol_mc_pct": round(_p, 6)}
+                            for _i, (_s, _p) in enumerate(_elig_vm)
+                        }
+                        _volmc_mem[_wl_id] = {
+                            "previous": (_volmc_mem.get(_wl_id) or {}).get("current"),
+                            "current":  _vm_snap,
+                        }
+                        await _aio.get_event_loop().run_in_executor(
+                            None,
+                            lambda wid=_wl_id, snap=_vm_snap: _volmc_neon_save(wid, snap),
+                        )
+                        _vm_count += 1
+                    except Exception as _vm_e:
+                        print(f"[VOLMC_SNAP_BG] error wl={_wl_id}: {_vm_e}")
+
+                _elapsed_ms = round((_time.monotonic() - _t0) * 1000)
+                print(
+                    f"[RANK_SNAP_BG] cycle complete: "
+                    f"rv_watchlists={_rv_count} vm_watchlists={_vm_count} "
+                    f"elapsed={_elapsed_ms}ms"
+                )
+
+            except Exception as _outer_e:
+                print(f"[RANK_SNAP_BG] outer loop error: {_outer_e}")
+
+            await _aio.sleep(300)   # ~5-minute cadence
+
+    asyncio.create_task(_watchlist_rank_snapshot_loop())
+
     # Thematic context warmup: load LKG from disk immediately, then rebuild from caches.
     # Runs after a 5s delay so sector rotation loop has a head start.
     # No LLM calls, no API calls — pure cache/disk reads + static registry.

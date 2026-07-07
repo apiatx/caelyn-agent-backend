@@ -1,0 +1,369 @@
+Audit only the snapshot cadence/trigger semantics of the now-working Watchlist VOL RANK feature.
+
+The missing-field bug is fixed.
+
+Do not undo the skeleton-path rank-pass fix.
+
+Do not redesign the metric.
+
+Do not modify frontend code.
+
+Do not add provider calls.
+
+CURRENT VERIFIED STATE
+
+The skeleton path now runs the same:
+
+_apply_rv_rank_fields(...)
+_apply_volmc_rank_fields(...)
+
+passes as the normal analyzed path.
+
+Validation showed:
+
+257/257 valid relative-volume rows now receive RV rank fields.
+
+370/370 rows receive rel_vol_trend.
+
+The frontend no longer falls through to "—" for valid rows.
+
+However, the validation report also says:
+
+"After the second GET, the Neon snapshot has a previous entry and real deltas appear."
+
+and:
+
+"The snapshot taken between GET2 and GET3 was only ~2 seconds apart, so all 257 ranks stayed identical → flat."
+
+This suggests the rank snapshot may currently advance on Watchlist GET requests.
+
+That is a semantic concern.
+
+VOL RANK should represent movement over a stable recent interval.
+
+It should not depend on how frequently the user opens or refreshes the Watchlist page.
+
+AUDIT FIRST.
+
+PART A — TRACE THE EXACT SNAPSHOT WRITE TRIGGER
+
+Trace:
+
+GET /api/watchlist/{watchlist_id}
+
+through:
+
+_enrich_store_with_quotes(...)
+_apply_rv_rank_fields(...)
+
+and the snapshot persistence functions in pg_storage.py or the actual current store.
+
+Report:
+
+1. exact function that writes the current RV rank snapshot
+2. exact call site
+3. whether every Watchlist GET can write a new snapshot
+4. whether the skeleton path writes a snapshot
+5. whether the normal analyzed path writes a snapshot
+6. any minimum-age/TTL guard before a snapshot advances
+7. exact timestamp field used
+8. how "previous snapshot" is selected
+9. whether two GET requests 2 seconds apart produce two distinct snapshots
+10. whether repeated browser polling/page refresh can continuously advance the comparison baseline
+
+Do not infer from comments.
+
+Prove with the live Primary Watchlist.
+
+PART B — SHOW THE CURRENT LIVE SNAPSHOT HISTORY
+
+For the Primary Watchlist:
+
+00a0e3ea-31dc-4223-97bc-470720dd3215
+
+return the last 10 RV rank snapshot timestamps currently stored.
+
+For each show:
+
+snapshot_at
+ticker row count
+age from prior snapshot in seconds
+
+Also report the configured snapshot retention.
+
+If the store keeps only current/previous, report those exact timestamps instead.
+
+The purpose is to determine the real cadence.
+
+PART C — CONTROLLED GET TEST
+
+Record the current latest snapshot timestamp.
+
+Then call the Watchlist GET endpoint three times:
+
+GET 1
+
+wait 2 seconds
+
+GET 2
+
+wait 2 seconds
+
+GET 3
+
+After each request report:
+
+HTTP status
+latest snapshot_at
+previous snapshot_at
+whether a new snapshot was persisted
+number of rank deltas:
+up
+down
+flat
+unknown
+
+Required audit question:
+
+Does a plain page GET mutate the comparison baseline?
+
+If yes, state that clearly.
+
+PART D — PRESERVE THE EXISTING RANK MATH
+
+Do not alter:
+
+rank ordering by canonical relative_volume descending
+
+ticker ascending deterministic tie-break
+
+rank_delta = previous_rank - current_rank
+
+trend:
+delta > 0 → up
+delta < 0 → down
+delta == 0 → flat
+no previous rank → unknown
+
+The current math already passed the controlled test.
+
+This task is only about snapshot timing.
+
+PART E — REQUIRED CADENCE SEMANTICS
+
+VOL RANK should compare stable periodic snapshots.
+
+Preferred target:
+
+approximately 5-minute rank snapshots during active canonical quote operation.
+
+The exact existing project cadence may be used if a similar canonical quote snapshot loop already exists.
+
+Do not calculate provider data.
+
+At snapshot time:
+
+1. read the existing warm Watchlist-relative-volume values
+2. rank valid rows
+3. persist a completed snapshot
+4. compare current completed snapshot against previous completed snapshot
+
+A page GET should READ the latest completed current/previous snapshots.
+
+A page GET should not normally advance the snapshot baseline.
+
+PART F — REUSE EXISTING BACKGROUND/CADENCE INFRASTRUCTURE
+
+Audit existing loops/services for:
+
+canonical quote refresh
+watchlist quote cache refresh
+realtime quote refresh
+periodic Watchlist enrichment
+five-minute scheduled work
+
+Prefer hooking rank snapshot creation into the closest existing canonical quote-data lifecycle.
+
+Do not create a second quote system.
+
+Do not fetch Tradier inside the rank snapshot job.
+
+Do not fetch FMP.
+
+Do not create a new per-page timer.
+
+If an existing current rank snapshot helper can be called after the canonical quote cache refresh, reuse it.
+
+PART G — IF A BACKGROUND MOVE IS REQUIRED
+
+If the audit confirms snapshots currently write on GET, move snapshot advancement off the GET hot path.
+
+Keep the existing rank-field overlay behavior.
+
+Conceptually:
+
+BACKGROUND/CADENCE PATH
+
+every ~5 minutes:
+→ load each active saved Watchlist ticker universe
+→ read existing warm canonical relative_volume values
+→ build rank snapshot
+→ persist bounded snapshot
+→ advance current/previous
+
+GET PATH
+
+→ load Watchlist
+→ overlay quote values
+→ load latest two completed rank snapshots
+→ attach:
+rel_vol_current_rank
+rel_vol_previous_rank
+rel_vol_rank_delta
+rel_vol_trend
+→ return
+
+Do not make GET wait for a new snapshot.
+
+Do not persist a new comparison snapshot because the user opened the page.
+
+PART H — COLD START
+
+After process restart:
+
+If persisted current + previous snapshots exist:
+→ immediately restore real rank movement
+
+Do not reset every ticker to New solely because the process restarted.
+
+If only one persisted snapshot exists:
+→ unknown/New is valid until the next scheduled completed snapshot
+
+If zero snapshots exist:
+→ first scheduled snapshot establishes baseline
+→ second scheduled snapshot creates movement
+
+A GET may display unknown while waiting.
+
+It must not manufacture the second baseline by refreshing the page repeatedly.
+
+PART I — PERFORMANCE
+
+Measure:
+
+background snapshot rank computation
+snapshot persistence
+GET rank snapshot read
+GET rank-field overlay
+
+Report actual timings for the 370-ticker Primary Watchlist.
+
+The current in-memory rank calculation was reported as:
+
+0.209ms
+
+Preserve that cheap computation.
+
+Target:
+
+GET rank read/overlay should remain cheap and should not add a provider call.
+
+PART J — LIVE CADENCE VALIDATION
+
+After final implementation:
+
+show two consecutive completed scheduled snapshots approximately one cadence interval apart.
+
+For each show:
+
+snapshot_at
+valid ranked ticker count
+
+Then return at least:
+
+5 up movers
+5 down movers
+3 flat movers if available
+
+with:
+
+ticker
+relative_volume
+previous_rank
+current_rank
+delta
+trend
+frontend text
+
+The key validation is that the comparison interval is stable and not created by GET frequency.
+
+PART K — GET NON-MUTATION TEST
+
+After the final fix:
+
+record latest snapshot_at
+
+Call GET /api/watchlist/{watchlist_id} 10 times within 30 seconds.
+
+Then inspect latest snapshot_at again.
+
+Expected:
+
+No new rank snapshot caused solely by those GET requests.
+
+Archive/snapshot writes caused by an independently scheduled rank cadence during the test must be distinguished from GET-triggered writes.
+
+Report:
+
+GET count
+snapshot timestamp before
+snapshot timestamp after
+scheduled snapshot occurred yes/no
+GET-triggered snapshot writes
+
+Expected:
+
+GET-triggered snapshot writes = 0
+
+PART L — REGRESSION
+
+Confirm:
+
+1. Skeleton-path rank fields remain fixed.
+2. Normal analyzed path still receives rank fields.
+3. REL VOL unchanged.
+4. VOL RANK no longer shows "—" for valid ranked rows.
+5. Vol/MC rank pass remains functional.
+6. Foreign/missing-RV tickers remain unavailable/unknown rather than fake-ranked.
+7. Main Watchlist GET remains healthy.
+8. No provider calls were added.
+9. Rank math unchanged.
+10. Frontend contract remains:
+    rel_vol_current_rank
+    rel_vol_previous_rank
+    rel_vol_rank_delta
+    rel_vol_trend
+
+FINAL RETURN
+
+Return:
+
+* exact current snapshot write trigger before fix
+* whether GET mutated the baseline
+* last 10/current snapshot timestamps before fix
+* controlled 3-GET test before fix
+* final cadence architecture
+* existing loop/service reused
+* exact files changed
+* background snapshot timings
+* GET rank read/overlay timings
+* cold-start behavior
+* scheduled snapshot validation
+* 10-GET non-mutation test
+* live up/down/flat examples
+* regression checklist
+
+Do not undo the skeleton-path fix.
+Do not modify frontend code.
+Do not change the rank math.
+Do not add quote/provider calls.

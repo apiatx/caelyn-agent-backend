@@ -47,6 +47,18 @@ router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 _rv_mem: dict[str, dict] = {}
 _volmc_mem: dict[str, dict] = {}
 
+# ── Snapshot cadence registries ───────────────────────────────────────────────
+# GET path populates these registries then returns — it never writes new rank
+# snapshots.  The ~5-minute background loop (_watchlist_rank_snapshot_loop in
+# main.py) reads these registries, builds fresh snapshots from the warm quote
+# cache, and advances current/previous.  This keeps the comparison baseline
+# stable regardless of page-refresh frequency.
+#
+# _rv_registry:    watchlist_id → [full normalized ticker list]
+# _volmc_registry: watchlist_id → {"tickers": [...], "pcts": {SYM: vol_mc_pct}}
+_rv_registry:    dict[str, list[str]] = {}
+_volmc_registry: dict[str, dict]      = {}
+
 
 # ── News endpoint LKG (last-known-good) cache ────────────────────────────────
 # Keyed by watchlist_id (use "default" for the no-id endpoint).
@@ -726,29 +738,17 @@ async def _apply_rv_rank_fields(
             })
         section["tickers"] = augmented
 
-    # ── 5. Save current snapshot (fire-and-forget) ────────────────────────────
-    if should_save and current_snap:
-        # Update in-memory immediately
-        _rv_mem[watchlist_id] = {
-            "previous": _rv_mem[watchlist_id]["current"] if watchlist_id in _rv_mem else None,
-            "current":  current_snap,
-        }
-        # Persist to Neon in background
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            None,
-            lambda: _rv_neon_save(watchlist_id, current_snap),
-        )
-        print(
-            f"[RV_RANK] wl={watchlist_id} ranked={len(current_snap)} "
-            f"prev_known={prev_snap is not None} "
-            f"coverage={rv_coverage:.0%} saved={should_save}"
-        )
-    else:
-        print(
-            f"[RV_RANK] wl={watchlist_id} ranked={len(current_snap)} "
-            f"coverage={rv_coverage:.0%} snapshot_skipped (coverage<50%)"
-        )
+    # ── 5. Register ticker universe for the background snapshot loop ──────────
+    # GET never writes a new rank snapshot.  The ~5-minute background loop
+    # (_watchlist_rank_snapshot_loop in main.py) reads _rv_registry, builds a
+    # fresh snapshot from the warm quote cache, and advances current/previous.
+    # This keeps the comparison baseline stable across page refreshes.
+    _rv_registry[watchlist_id] = list(saved_normalized)
+    print(
+        f"[RV_RANK] wl={watchlist_id} ranked={len(current_snap)} "
+        f"prev_known={prev_snap is not None} "
+        f"coverage={rv_coverage:.0%} (snapshot advanced by background loop)"
+    )
 
     return dedup_sections
 
@@ -905,27 +905,18 @@ async def _apply_volmc_rank_fields(
             })
         section["tickers"] = augmented
 
-    # ── 5. Save current snapshot (fire-and-forget) ────────────────────────────
-    if should_save and current_snap:
-        _volmc_mem[watchlist_id] = {
-            "previous": _volmc_mem[watchlist_id]["current"] if watchlist_id in _volmc_mem else None,
-            "current":  current_snap,
-        }
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            None,
-            lambda: _volmc_neon_save(watchlist_id, current_snap),
-        )
-        print(
-            f"[VOLMC_RANK] wl={watchlist_id} ranked={len(current_snap)} "
-            f"prev_known={prev_snap is not None} "
-            f"coverage={vm_coverage:.0%} saved={should_save}"
-        )
-    else:
-        print(
-            f"[VOLMC_RANK] wl={watchlist_id} ranked={len(current_snap)} "
-            f"coverage={vm_coverage:.0%} snapshot_skipped (coverage<50%)"
-        )
+    # ── 5. Register vol/MC values for the background snapshot loop ────────────
+    # GET never writes a new rank snapshot.  The ~5-minute background loop
+    # reads _volmc_registry and advances the vol/MC comparison baseline.
+    _volmc_registry[watchlist_id] = {
+        "tickers": list(saved_normalized),
+        "pcts":    {sym: ent["vol_mc_pct"] for sym, ent in current_snap.items()},
+    }
+    print(
+        f"[VOLMC_RANK] wl={watchlist_id} ranked={len(current_snap)} "
+        f"prev_known={prev_snap is not None} "
+        f"coverage={vm_coverage:.0%} (snapshot advanced by background loop)"
+    )
 
     return dedup_sections
 
