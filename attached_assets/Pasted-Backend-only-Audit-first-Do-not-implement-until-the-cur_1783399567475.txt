@@ -1,0 +1,139 @@
+Backend only. Audit first. Do not implement until the current Net Flow persistence and daily semantics are fully traced.
+
+New feature goal:
+Options Flow → Net Flow needs historical Net Premium direction/change.
+
+For every ticker, theme, and sector expose:
+- net_premium_delta_1d
+- net_premium_delta_7d
+- net_premium_delta_30d
+
+These should show whether Net Premium is becoming more positive, less positive, more negative, or less negative over time.
+
+Example:
+
+Today Net Premium = +48M
+Previous trading session = +12M
+
+1D Δ = +36M
+
+Another example:
+
+Today = +48M
+Previous trading session = +110M
+
+1D Δ = -62M
+
+Important:
+Use prior AVAILABLE TRADING SESSIONS, not calendar-day subtraction.
+
+Definitions:
+- 1D = previous completed/available trading session
+- 7D = 7 prior trading sessions
+- 30D = 30 prior trading sessions
+
+Audit first:
+
+1. Trace exactly what current `net_premium` represents for a `sectors_chain_summarized` ticker:
+   - current-day cumulative option volume?
+   - selected single expiry only?
+   - updated repeatedly intraday?
+   - does it reset naturally on a new Tradier trading session?
+
+2. Trace current persistence:
+   - supplement in-memory cache
+   - options_supplement_lkg_v1.json
+   - any Neon/Postgres tables already storing Net Flow history
+   - any daily snapshot/history service that can be reused
+
+3. Confirm whether any existing history already contains:
+   - ticker net_premium by trade date
+   - theme net_premium by trade date
+   - sector net_premium by trade date
+
+4. Confirm whether today's Net Flow row is progressively refreshed throughout the day as scanner coverage improves.
+
+5. Determine the safest daily snapshot model.
+
+Preferred conceptual model:
+One row per:
+- trade_date
+- node_type: ticker | theme | sector
+- node_key
+
+Fields:
+- call_premium
+- put_premium
+- net_premium
+- put_call_ratio
+- call_volume
+- put_volume
+- volume_put_call_ratio
+- total_contract_volume
+- premium_per_contract
+- captured_at
+
+Unique key:
+trade_date + node_type + node_key
+
+Today's row should be UPSERTED as newer Net Flow scans improve the day's data.
+
+Do not append a new history row every scanner cycle for this feature.
+
+6. Audit whether Neon is the correct existing persistence layer or whether there is already a project-standard historical snapshot store that should be reused.
+
+Do not invent a parallel persistence architecture if an existing pattern exists.
+
+7. Determine how trading dates are currently resolved.
+Reuse existing ET/market-session utilities.
+Do not use UTC date boundaries for trading-day history.
+
+8. Determine how to handle:
+- weekends
+- market holidays
+- missing historical sessions
+- newly added tickers/themes with fewer than 30 sessions of history
+
+Delta rule:
+Use nth previous AVAILABLE historical trading-session row.
+
+If fewer than N prior rows exist:
+return null.
+
+9. Confirm aggregation architecture remains:
+- Theme = aggregate of ticker nodes in that theme
+- Sector = aggregate of UNIQUE ticker nodes in that sector
+- Never compute sector history by summing overlapping theme histories
+
+10. Report whether historical ticker rows should be stored first and theme/sector history recomputed from ticker history, OR whether canonical ticker/theme/sector daily nodes should each be snapshotted.
+
+Consider taxonomy edits:
+Themes can change membership over time.
+Explain whether historical theme values should preserve the membership that existed on that date or be retroactively recomputed using today's taxonomy.
+
+This is important. Do not implement until this is decided.
+
+11. Proposed API fields:
+- net_premium_delta_1d
+- net_premium_delta_7d
+- net_premium_delta_30d
+- net_premium_trend
+
+Suggested trend classification:
+- current > 0 and 1D delta > 0 = strengthening_bullish
+- current > 0 and 1D delta < 0 = fading_bullish
+- current < 0 and 1D delta < 0 = strengthening_bearish
+- current < 0 and 1D delta > 0 = easing_bearish
+- near-flat delta = stable
+
+Audit whether a reasonable flat threshold should be dollar-based, percentage-of-total-premium based, or omitted initially.
+
+Do not:
+- fake history from current LKG
+- use calendar-day subtraction
+- average P/C ratios
+- derive 7D/30D from the interval Ask/Bid metrics
+- add Tradier calls
+- modify frontend
+
+Report exact existing paths and recommended architecture first.
