@@ -253,6 +253,15 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
     # are counted — pending / no_options tickers with scope="none" add nothing
     # to the dollar total and are excluded from the scope breakdown.
     _scope_counts:  dict[str, int] = {}
+    # ── Ask/Bid side classification accumulators ──────────────────────────────
+    # Raw dollar sums from tickers that have chain-summarizer classification data.
+    # Master screener rows (None fields) are excluded — they cannot be classified
+    # without new Tradier calls.  Percentages are derived from summed dollars,
+    # never by averaging per-ticker percentages.
+    _total_ask:     float = 0.0
+    _total_bid:     float = 0.0
+    _total_mid:     float = 0.0
+    _has_side_data: bool  = False
 
     for t in ticker_nodes:
         cp = t.get("call_premium")
@@ -295,6 +304,21 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
             if pub_scope:
                 _scope_counts[pub_scope] = _scope_counts.get(pub_scope, 0) + 1
 
+        # Side premium accumulation — sum raw dollars across tickers that have
+        # chain-summarizer classification data (None for master screener rows).
+        _ap = t.get("ask_premium")
+        _bp = t.get("bid_premium")
+        _mp = t.get("midpoint_unknown_premium")
+        if _ap is not None:
+            _total_ask += _ap
+            _has_side_data = True
+        if _bp is not None:
+            _total_bid += _bp
+            _has_side_data = True
+        if _mp is not None:
+            _total_mid += _mp
+            _has_side_data = True
+
     total_net = total_call - total_put
     has_data  = (total_call + total_put) > 0
     avg_net   = round(total_net / flow_count, 2) if flow_count else None
@@ -310,6 +334,27 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         _agg_scope = "top_unusual_contracts"
     else:
         _agg_scope = "none"   # all tickers are pending / no_options
+
+    # ── Rollup side-classification percentages ────────────────────────────────
+    # Compute from summed raw dollars — never by averaging per-ticker percentages.
+    # Only chain-summarizer rows contribute (_has_side_data=True).
+    # Master screener rows have None side fields → excluded from side scope.
+    if _has_side_data:
+        _side_scope = _total_ask + _total_bid + _total_mid
+        if _side_scope > 0:
+            _r_ask_pct = round(_total_ask / _side_scope * 100, 1)
+            _r_bid_pct = round(_total_bid / _side_scope * 100, 1)
+            _r_mid_pct = round(_total_mid / _side_scope * 100, 1)
+            _r_cls_pct = round((_total_ask + _total_bid) / _side_scope * 100, 1)
+        else:
+            _r_ask_pct = _r_bid_pct = _r_mid_pct = _r_cls_pct = None
+        _r_ask = round(_total_ask, 2)
+        _r_bid = round(_total_bid, 2)
+        _r_mid = round(_total_mid, 2)
+        _r_cls = round(_total_ask + _total_bid, 2)
+    else:
+        _r_ask = _r_bid = _r_mid = _r_cls = None
+        _r_ask_pct = _r_bid_pct = _r_mid_pct = _r_cls_pct = None
 
     return {
         "call_premium":               round(total_call, 2) if has_data else None,
@@ -334,6 +379,17 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         "ticker_count":               len(ticker_nodes),
         "represented_count":          represented,
         "contributing_ticker_count":  flow_count,
+        # ── Ask/Bid side classification (rollup) ──────────────────────────────
+        # Raw dollar sums first; percentages derived from those sums.
+        # None when no tickers have chain-summarizer classification data.
+        "ask_premium":                  _r_ask,
+        "bid_premium":                  _r_bid,
+        "midpoint_unknown_premium":     _r_mid,
+        "classified_premium":           _r_cls,
+        "ask_premium_pct":              _r_ask_pct,
+        "bid_premium_pct":              _r_bid_pct,
+        "midpoint_unknown_premium_pct": _r_mid_pct,
+        "classified_trade_side_pct":    _r_cls_pct,
         # ── Aggregation scope ──────────────────────────────────────────────────
         # Tells the frontend whether the dollar totals above were built from one
         # methodology or a blend of two.
@@ -581,6 +637,17 @@ def _build_ticker_node(
         _scope, _exp_used, _dte_used, _prem_method = _expiry_scope(row)
         _tv = row.get("total_volume") if row.get("total_volume") is not None else (0 if _neutral_confirmed else None)
 
+        # ── Ask/Bid side classification (chain-summarizer rows only) ──────────
+        # These fields are populated by sectors_chain_summarizer.py when
+        # scan_result == "sectors_chain_summarized".  Master screener rows
+        # (live/supplement source) do not carry per-contract bid/ask/last data
+        # at the aggregated level, so they leave these as None.
+        # classified_trade_side_pct signals what fraction of the premium was
+        # definitively classified (the remainder is midpoint_or_unknown).
+        _ask_prem = _safe_float(row.get("ask_premium"))
+        _bid_prem = _safe_float(row.get("bid_premium"))
+        _mid_prem = _safe_float(row.get("midpoint_unknown_premium"))
+
         return {
             "symbol":            sym,
             "ticker_state":      state,
@@ -628,6 +695,15 @@ def _build_ticker_node(
             "expiration_scope":     _scope,
             "expiration_used":      _exp_used,
             "dte_used":             _dte_used,
+            # ── Ask/Bid side classification ────────────────────────────────────
+            "ask_premium":                  _ask_prem,
+            "bid_premium":                  _bid_prem,
+            "midpoint_unknown_premium":     _mid_prem,
+            "classified_premium":           _safe_float(row.get("classified_premium")),
+            "ask_premium_pct":              _safe_float(row.get("ask_premium_pct")),
+            "bid_premium_pct":              _safe_float(row.get("bid_premium_pct")),
+            "midpoint_unknown_premium_pct": _safe_float(row.get("midpoint_unknown_premium_pct")),
+            "classified_trade_side_pct":    _safe_float(row.get("classified_trade_side_pct")),
         }
 
     if sym in no_options_syms:
@@ -660,6 +736,14 @@ def _build_ticker_node(
             "expiration_scope":      "none",
             "expiration_used":       None,
             "dte_used":              None,
+            "ask_premium":                  None,
+            "bid_premium":                  None,
+            "midpoint_unknown_premium":     None,
+            "classified_premium":           None,
+            "ask_premium_pct":              None,
+            "bid_premium_pct":              None,
+            "midpoint_unknown_premium_pct": None,
+            "classified_trade_side_pct":    None,
         }
 
     return {
@@ -691,6 +775,14 @@ def _build_ticker_node(
         "expiration_scope":      "none",
         "expiration_used":       None,
         "dte_used":              None,
+        "ask_premium":                  None,
+        "bid_premium":                  None,
+        "midpoint_unknown_premium":     None,
+        "classified_premium":           None,
+        "ask_premium_pct":              None,
+        "bid_premium_pct":              None,
+        "midpoint_unknown_premium_pct": None,
+        "classified_trade_side_pct":    None,
     }
 
 

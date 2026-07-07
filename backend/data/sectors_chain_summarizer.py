@@ -52,6 +52,12 @@ from typing import Optional
 # Tradier load on every scan.
 _EXPIRY_CACHE_TTL = 12 * 3600   # 12 hours
 
+# Absolute dollar tolerance for last-price bid/ask side classification.
+# A contract whose last traded price falls within _SIDE_TOL of the ask
+# (or bid) is classified as ask-side (or bid-side).  Contracts between
+# the two boundaries are left as midpoint_or_unknown.
+_SIDE_TOL = 0.02
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -88,6 +94,31 @@ def _best_price(bid, ask, last) -> Optional[float]:
     if a is not None and a > 0:
         return round(a, 4)
     return None
+
+
+def _classify_side(bid: Optional[float], ask: Optional[float], last: Optional[float]) -> str:
+    """
+    Classify a single contract trade as ask-side, bid-side, or midpoint/unknown.
+
+    Uses the last traded price relative to the current bid/ask spread:
+      last >= ask - _SIDE_TOL  → "ask_side"   (traded at/near the offer)
+      last <= bid + _SIDE_TOL  → "bid_side"   (traded at/near the bid)
+      otherwise                → "midpoint_or_unknown"
+
+    Never classifies by option type — calls are not automatically ask-side,
+    puts are not automatically bid-side.
+
+    Returns "midpoint_or_unknown" whenever last, bid, or ask are missing/invalid.
+    """
+    if last is None or last <= 0:
+        return "midpoint_or_unknown"
+    if bid is None or ask is None or ask <= 0 or bid < 0 or ask < bid:
+        return "midpoint_or_unknown"
+    if last >= ask - _SIDE_TOL:
+        return "ask_side"
+    if last <= bid + _SIDE_TOL:
+        return "bid_side"
+    return "midpoint_or_unknown"
 
 
 def _dte(exp_str: str) -> Optional[int]:
@@ -290,32 +321,73 @@ async def summarize_ticker_chain(
     puts  = chain.get("puts",  []) or []
 
     # ── 4. Summarize ALL contracts (volume > 0 only) ──────────────────────────
+    #
+    # For each contract we:
+    #   a. compute estimated premium using _best_price (mid → last → bid → ask)
+    #   b. classify the trade side using last relative to bid/ask
+    #
+    # Side buckets accumulate the same dollar amounts as the net-premium totals
+    # so ask_prem + bid_prem + mid_prem == call_prem + put_prem (within rounding).
     call_prem = 0.0
     put_prem  = 0.0
     call_vol  = 0
     put_vol   = 0
+    ask_prem  = 0.0   # contracts traded at/near the ask
+    bid_prem  = 0.0   # contracts traded at/near the bid
+    mid_prem  = 0.0   # midpoint or unclassifiable
 
     for c in calls:
         vol = _si(c.get("volume"))
         if vol <= 0:
             continue
-        price = _best_price(c.get("bid"), c.get("ask"), c.get("last"))
+        b, a, l = _sf(c.get("bid")), _sf(c.get("ask")), _sf(c.get("last"))
+        price = _best_price(b, a, l)
         if price is not None and price > 0:
-            call_prem += vol * price * 100.0
-            call_vol  += vol
+            dollars     = vol * price * 100.0
+            call_prem  += dollars
+            call_vol   += vol
+            side = _classify_side(b, a, l)
+            if side == "ask_side":
+                ask_prem += dollars
+            elif side == "bid_side":
+                bid_prem += dollars
+            else:
+                mid_prem += dollars
 
     for p in puts:
         vol = _si(p.get("volume"))
         if vol <= 0:
             continue
-        price = _best_price(p.get("bid"), p.get("ask"), p.get("last"))
+        b, a, l = _sf(p.get("bid")), _sf(p.get("ask")), _sf(p.get("last"))
+        price = _best_price(b, a, l)
         if price is not None and price > 0:
-            put_prem += vol * price * 100.0
-            put_vol  += vol
+            dollars    = vol * price * 100.0
+            put_prem  += dollars
+            put_vol   += vol
+            side = _classify_side(b, a, l)
+            if side == "ask_side":
+                ask_prem += dollars
+            elif side == "bid_side":
+                bid_prem += dollars
+            else:
+                mid_prem += dollars
 
     total_vol = call_vol + put_vol
     net_prem  = call_prem - put_prem
     pcr       = round(put_prem / call_prem, 3) if call_prem > 0 else None
+
+    # Side-classification percentages.
+    # Denominator = ask_prem + bid_prem + mid_prem (== total estimated premium).
+    # classified_trade_side_pct = (ask + bid) / total — tells consumers what
+    # fraction of the premium was definitively classified (not midpoint/unknown).
+    _side_scope = ask_prem + bid_prem + mid_prem
+    if _side_scope > 0:
+        _ask_pct = round(ask_prem / _side_scope * 100, 1)
+        _bid_pct = round(bid_prem / _side_scope * 100, 1)
+        _mid_pct = round(mid_prem / _side_scope * 100, 1)
+        _cls_pct = round((ask_prem + bid_prem) / _side_scope * 100, 1)
+    else:
+        _ask_pct = _bid_pct = _mid_pct = _cls_pct = None
 
     return {
         "ticker":           sym,
@@ -328,6 +400,22 @@ async def summarize_ticker_chain(
         "put_volume":       put_vol,
         "total_volume":     total_vol,
         "put_call_ratio":   pcr,
+        # ── Ask/Bid side classification ───────────────────────────────────────
+        # Derived from last vs bid/ask per contract — zero extra Tradier calls.
+        # ask_premium: total estimated premium where last >= ask - $0.02
+        # bid_premium: total estimated premium where last <= bid + $0.02
+        # midpoint_unknown_premium: remainder (last between bid and ask, or
+        #   last/bid/ask fields absent/invalid for that contract)
+        # classified_trade_side_pct: (ask+bid) / (ask+bid+mid) — coverage signal
+        #   telling consumers what fraction of premium was definitively classified.
+        "ask_premium":                  round(ask_prem, 2),
+        "bid_premium":                  round(bid_prem, 2),
+        "midpoint_unknown_premium":     round(mid_prem, 2),
+        "classified_premium":           round(ask_prem + bid_prem, 2),
+        "ask_premium_pct":              _ask_pct,
+        "bid_premium_pct":              _bid_pct,
+        "midpoint_unknown_premium_pct": _mid_pct,
+        "classified_trade_side_pct":    _cls_pct,
         "scan_result":      "sectors_chain_summarized",
         "expiration_used":  primary_exp,
         "updated_at":       now,

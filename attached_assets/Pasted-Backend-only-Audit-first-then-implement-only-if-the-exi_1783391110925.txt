@@ -1,0 +1,141 @@
+Backend only. Audit first, then implement only if the existing Tradier option-chain responses already contain enough fields to derive bid-side vs ask-side premium without new provider calls.
+
+Goal:
+Add Ask Premium and Bid Premium metrics to Options Flow → Net Flow for ticker, theme, and sector rollups.
+
+Desired UI data:
+
+Semiconductors
+
+Premium P/C      0.42
+Vol P/C          0.71
+
+Ask Premium      81%
+Bid Premium      19%
+
+Net Premium      +$48M
+
+Important:
+Do NOT confuse resting stock bid/ask liquidity with option trade-side classification.
+
+We want estimated option premium associated with contracts trading at/near the ask versus at/near the bid.
+
+Audit the raw Tradier option-chain contract shape currently used by sectors_chain_summarizer.py.
+
+Confirm whether each contract already includes:
+
+* bid
+* ask
+* last
+* volume
+* trade timestamp, if available
+* any explicit trade side / tick / bid-ask classification field
+
+Report whether ask-side vs bid-side premium can be derived from the existing chain response with ZERO additional Tradier calls.
+
+If derivable, implement.
+
+Classification rules:
+
+1. For each contract with volume > 0:
+
+   * determine mid = (bid + ask) / 2 when bid/ask are valid
+   * classify contract activity using last relative to bid/ask
+
+Preferred classification:
+
+* last >= ask, or within a small tolerance of ask:
+  ask_side
+* last <= bid, or within a small tolerance of bid:
+  bid_side
+* last between bid and ask:
+  midpoint_or_unknown
+
+Do not force midpoint/unknown contracts into bid or ask.
+
+Do not classify purely from option type.
+Calls are not automatically ask-side.
+Puts are not automatically bid-side.
+
+Premium estimate:
+contract_estimated_premium = volume × chosen option price × 100
+
+Use the same pricing basis as the existing Net Flow premium calculation unless the audit proves a better existing field is already available.
+
+Add ticker fields:
+
+* ask_premium
+* bid_premium
+* midpoint_unknown_premium
+* classified_premium
+* ask_premium_pct
+* bid_premium_pct
+* midpoint_unknown_premium_pct
+
+Percent denominator:
+ask_premium + bid_premium + midpoint_unknown_premium
+
+Also expose:
+
+* classified_trade_side_pct
+
+Formula:
+(ask_premium + bid_premium) / total_estimated_premium
+
+This is important because the frontend must know whether an 81% Ask Premium reading is based on 95% classified coverage or only 12% classified coverage.
+
+Rollups:
+Aggregate raw premium dollars first, then calculate percentages.
+
+For theme and sector nodes:
+ask_premium = sum ticker ask_premium
+bid_premium = sum ticker bid_premium
+midpoint_unknown_premium = sum ticker midpoint_unknown_premium
+
+ask_premium_pct =
+ask_premium / (ask_premium + bid_premium + midpoint_unknown_premium)
+
+bid_premium_pct =
+bid_premium / same denominator
+
+Do NOT average ticker percentages.
+
+Use the existing shared _rollup_ticker_nodes() path so:
+
+* ticker → theme
+* unique ticker → sector
+
+remain consistent.
+
+Preserve current aggregation model:
+
+* Theme = aggregate of tickers in that theme
+* Sector = aggregate of UNIQUE tickers in that sector
+* Do not sum overlapping theme totals into sectors
+
+Hard constraints:
+
+* Zero new Tradier calls
+* No new scanner
+* No pacer changes
+* No scan cadence changes
+* No frontend changes
+* Preserve Premium P/C, Vol P/C, Net Premium, Prem/Contract, and Contracts
+
+If existing Tradier chain data does NOT contain enough fields to derive this honestly:
+STOP after the audit and report exactly why.
+Do not invent Ask Premium / Bid Premium percentages.
+
+Validation if implemented:
+
+1. Show one ticker's raw bid/ask/last/volume contracts and classification math.
+2. Verify:
+   ask + bid + midpoint_unknown premium = total classified-scope premium within rounding tolerance.
+3. Verify theme percentages are calculated from summed premium dollars, not averaged ticker percentages.
+4. Verify sector percentages use unique sector tickers.
+5. Verify cached_data rows carry and contribute these fields when persisted.
+6. Verify both:
+   /api/options-flow/sectors?view=sectors
+   /api/options-flow/sectors?view=themes
+   expose the new metrics.
+7. Confirm zero additional Tradier calls.
