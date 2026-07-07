@@ -1,0 +1,256 @@
+Backend only. Proceed with the volume-delta approach.
+
+First revert/remove the just-added cumulative-volume Ask/Bid Premium implementation because the audit proved it is misleading.
+
+Then implement incremental trade-side premium estimation using only NEW option volume observed between existing chain snapshots.
+
+Goal:
+For Net Flow, estimate whether newly observed option premium during the interval was ask-side, bid-side, or midpoint/unknown.
+
+Zero new Tradier calls.
+
+Core model:
+
+For each option contract:
+
+current_volume = cumulative day volume from current Tradier chain snapshot
+previous_volume = cumulative day volume from prior snapshot
+
+volume_delta = current_volume - previous_volume
+
+Only classify volume_delta.
+
+Never classify current_volume in full.
+
+Contract identity key must include enough fields to uniquely identify the contract:
+
+* symbol
+* expiration
+* strike
+* option type
+
+Prefer the provider option symbol if already available and stable.
+
+Classification:
+Using the CURRENT snapshot:
+
+* valid bid
+* valid ask
+* last
+
+Classify newly observed delta volume only:
+
+ask_side:
+last is at/near ask
+
+bid_side:
+last is at/near bid
+
+midpoint_or_unknown:
+last lies between bid/ask or quote fields are missing/invalid
+
+Retain the existing small tolerance only if clearly documented.
+
+Do not force midpoint volume into bid or ask.
+
+Estimated incremental premium:
+
+price basis:
+Use the same existing Net Flow option price basis unless there is a strong reason not to.
+
+For each contract:
+delta_estimated_premium =
+volume_delta × option_price × 100
+
+Then accumulate:
+
+* interval_ask_premium
+* interval_bid_premium
+* interval_midpoint_unknown_premium
+* interval_total_premium
+* interval_new_contract_volume
+
+Derived:
+ask_premium_pct =
+interval_ask_premium / interval_total_premium
+
+bid_premium_pct =
+interval_bid_premium / interval_total_premium
+
+midpoint_unknown_premium_pct =
+interval_midpoint_unknown_premium / interval_total_premium
+
+classified_trade_side_pct =
+(interval_ask_premium + interval_bid_premium) / interval_total_premium
+
+Naming:
+Use clear names that reflect this is incremental interval flow.
+
+Suggested ticker fields:
+
+* interval_ask_premium
+* interval_bid_premium
+* interval_midpoint_unknown_premium
+* interval_total_premium
+* interval_new_contract_volume
+* interval_ask_premium_pct
+* interval_bid_premium_pct
+* interval_midpoint_unknown_premium_pct
+* interval_classified_trade_side_pct
+* interval_seconds
+
+Do NOT call these true executed ask/bid premium.
+
+Snapshot state:
+Add an in-memory per-contract volume snapshot cache.
+
+Key:
+contract identity
+
+Value minimally:
+
+* cumulative volume
+* observed_at
+
+The cache should survive between normal supplement scan cycles within the running backend session.
+
+No new provider calls.
+No disk persistence required for the per-contract snapshot cache.
+
+First observation behavior:
+On the first snapshot for a contract:
+
+* store current cumulative volume
+* do NOT classify that historical cumulative volume
+* volume_delta = 0 for interval classification
+
+This means after backend restart or first scan:
+
+* interval Ask/Bid metrics may initially be null/empty
+* this is correct
+
+Subsequent observation:
+If current_volume >= previous_volume:
+volume_delta = current_volume - previous_volume
+
+If current_volume < previous_volume:
+Treat as session reset / rollover / anomalous reset.
+
+* do not classify the old cumulative history
+* replace previous snapshot with current volume
+* volume_delta = 0
+
+This is important across trading days.
+
+Snapshot lifecycle:
+Prevent unbounded memory growth.
+
+Evict or reset contract snapshots when appropriate:
+
+* expiration is past
+* symbol/contract has not been observed for a reasonable TTL
+* new trading session/day is detected
+
+Explicitly audit whether backend timezone/session utilities already exist and reuse them rather than inventing a separate market-day system.
+
+Aggregation:
+Ticker interval metrics are summed from delta-classified contracts.
+
+Theme rollup:
+sum raw ticker interval premium dollars first, then calculate percentages.
+
+Sector rollup:
+sum raw interval premium dollars from UNIQUE sector tickers first, then calculate percentages.
+
+Preserve canonical aggregation model:
+
+* Theme = tickers in theme
+* Sector = unique tickers in sector
+* Never aggregate overlapping theme totals into sector totals
+
+Do not average percentages.
+
+Important temporal behavior:
+These are INTERVAL metrics.
+
+Do not silently persist them into the existing supplement LKG and present old interval side-flow indefinitely as if current.
+
+Audit the serve/cache behavior and design a freshness rule.
+
+At minimum expose:
+
+* interval_started_at
+* interval_ended_at
+* interval_seconds
+* trade_side_data_age_seconds
+
+The API/frontend must be able to distinguish:
+
+* current/recent interval estimate
+* stale interval estimate
+* first-snapshot/no-delta-yet
+
+Do not modify the existing cumulative Net Flow metrics:
+
+* Premium P/C
+* Vol P/C
+* Net Premium
+* Prem/Contract
+* Contracts
+* Call Premium
+* Put Premium
+
+Those remain session/cumulative scan metrics.
+
+Do not change:
+
+* scanner cadence
+* Tradier pacer
+* Tradier call count
+* expiration selection
+* frontend
+
+Validation:
+
+1. First snapshot:
+   previous absent, current volume 500
+   result delta = 0
+   no side premium classified
+
+2. Second snapshot:
+   previous volume 500
+   current volume 540
+   result delta = 40
+   classify only 40 contracts
+
+3. Show one real contract with:
+   contract key
+   previous volume
+   current volume
+   delta volume
+   bid
+   ask
+   last
+   classification
+   price basis
+   delta estimated premium
+
+4. Verify cumulative session volume is never assigned wholesale to one side.
+
+5. Verify volume decrease/reset produces delta 0 and resets baseline.
+
+6. Verify ticker:
+   ask + bid + midpoint_unknown premium
+   equals interval_total_premium within rounding tolerance.
+
+7. Verify theme rollup from summed ticker interval premium dollars.
+
+8. Verify sector rollup uses unique tickers.
+
+9. Verify first post-restart scan does not fabricate historical Ask/Bid Premium.
+
+10. Confirm zero additional Tradier calls.
+
+11. Report exact memory cache structure and estimated entry count/memory footprint for the current Net Flow universe.
+
+Do not implement frontend changes yet.

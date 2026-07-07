@@ -253,15 +253,23 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
     # are counted — pending / no_options tickers with scope="none" add nothing
     # to the dollar total and are excluded from the scope breakdown.
     _scope_counts:  dict[str, int] = {}
-    # ── Ask/Bid side classification accumulators ──────────────────────────────
-    # Raw dollar sums from tickers that have chain-summarizer classification data.
-    # Master screener rows (None fields) are excluded — they cannot be classified
-    # without new Tradier calls.  Percentages are derived from summed dollars,
-    # never by averaging per-ticker percentages.
-    _total_ask:     float = 0.0
-    _total_bid:     float = 0.0
-    _total_mid:     float = 0.0
-    _has_side_data: bool  = False
+    # ── Interval trade-side classification accumulators ───────────────────────
+    # Sum raw delta-dollar amounts from tickers that have non-None
+    # interval_total_premium (chain-summarizer rows, current session only).
+    # LKG rows (supplement_lkg source) have interval fields stripped to None
+    # in _build_ticker_node to prevent stale prior-session interval data from
+    # being presented as current interval flow.
+    # Master screener rows (live/supplement) also contribute None — they carry
+    # no per-contract prior-snapshot data.
+    # Percentages are derived from summed raw dollars — never per-ticker averages.
+    _int_ask:        float = 0.0
+    _int_bid:        float = 0.0
+    _int_mid:        float = 0.0
+    _int_total:      float = 0.0
+    _int_new_vol:    int   = 0
+    _has_int_data:   bool  = False
+    _int_started_at  = None   # float | None — earliest prior snapshot timestamp
+    _int_ended_at    = None   # float | None — latest scan timestamp
 
     for t in ticker_nodes:
         cp = t.get("call_premium")
@@ -304,20 +312,31 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
             if pub_scope:
                 _scope_counts[pub_scope] = _scope_counts.get(pub_scope, 0) + 1
 
-        # Side premium accumulation — sum raw dollars across tickers that have
-        # chain-summarizer classification data (None for master screener rows).
-        _ap = t.get("ask_premium")
-        _bp = t.get("bid_premium")
-        _mp = t.get("midpoint_unknown_premium")
-        if _ap is not None:
-            _total_ask += _ap
-            _has_side_data = True
-        if _bp is not None:
-            _total_bid += _bp
-            _has_side_data = True
-        if _mp is not None:
-            _total_mid += _mp
-            _has_side_data = True
+        # Interval trade-side accumulation — sum raw delta dollars from tickers
+        # that have non-None interval_total_premium (chain-summarizer rows in the
+        # current session only; LKG rows have interval fields stripped in
+        # _build_ticker_node so they never contribute stale interval data here).
+        _itp = t.get("interval_total_premium")
+        if _itp is not None and _itp > 0:
+            _iap = t.get("interval_ask_premium") or 0.0
+            _ibp = t.get("interval_bid_premium") or 0.0
+            _imp = t.get("interval_midpoint_unknown_premium") or 0.0
+            _ivl = t.get("interval_new_contract_volume")
+            _int_ask    += _iap
+            _int_bid    += _ibp
+            _int_mid    += _imp
+            _int_total  += _itp
+            _int_new_vol += int(_ivl) if _ivl is not None else 0
+            _has_int_data = True
+            # Track interval timing window.
+            _ist = t.get("interval_started_at")
+            _iet = t.get("interval_ended_at")
+            if _ist is not None:
+                if _int_started_at is None or _ist < _int_started_at:
+                    _int_started_at = _ist
+            if _iet is not None:
+                if _int_ended_at is None or _iet > _int_ended_at:
+                    _int_ended_at = _iet
 
     total_net = total_call - total_put
     has_data  = (total_call + total_put) > 0
@@ -335,26 +354,31 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
     else:
         _agg_scope = "none"   # all tickers are pending / no_options
 
-    # ── Rollup side-classification percentages ────────────────────────────────
-    # Compute from summed raw dollars — never by averaging per-ticker percentages.
-    # Only chain-summarizer rows contribute (_has_side_data=True).
-    # Master screener rows have None side fields → excluded from side scope.
-    if _has_side_data:
-        _side_scope = _total_ask + _total_bid + _total_mid
-        if _side_scope > 0:
-            _r_ask_pct = round(_total_ask / _side_scope * 100, 1)
-            _r_bid_pct = round(_total_bid / _side_scope * 100, 1)
-            _r_mid_pct = round(_total_mid / _side_scope * 100, 1)
-            _r_cls_pct = round((_total_ask + _total_bid) / _side_scope * 100, 1)
-        else:
-            _r_ask_pct = _r_bid_pct = _r_mid_pct = _r_cls_pct = None
-        _r_ask = round(_total_ask, 2)
-        _r_bid = round(_total_bid, 2)
-        _r_mid = round(_total_mid, 2)
-        _r_cls = round(_total_ask + _total_bid, 2)
+    # ── Rollup interval trade-side percentages ────────────────────────────────
+    # Derived from summed raw delta dollars — never per-ticker averages.
+    # None for all fields when no tickers contributed interval data (all LKG,
+    # all master screener, all first-scan post-restart, or no new volume).
+    if _has_int_data and _int_total > 0:
+        _r_int_ask     = round(_int_ask,   2)
+        _r_int_bid     = round(_int_bid,   2)
+        _r_int_mid     = round(_int_mid,   2)
+        _r_int_tot     = round(_int_total, 2)
+        _r_int_vol     = _int_new_vol
+        _r_int_ask_pct = round(_int_ask / _int_total * 100, 1)
+        _r_int_bid_pct = round(_int_bid / _int_total * 100, 1)
+        _r_int_mid_pct = round(_int_mid / _int_total * 100, 1)
+        _r_int_cls_pct = round((_int_ask + _int_bid) / _int_total * 100, 1)
+        _r_int_secs    = (
+            round(_int_ended_at - _int_started_at)
+            if _int_started_at is not None and _int_ended_at is not None
+            else None
+        )
     else:
-        _r_ask = _r_bid = _r_mid = _r_cls = None
-        _r_ask_pct = _r_bid_pct = _r_mid_pct = _r_cls_pct = None
+        _r_int_ask = _r_int_bid = _r_int_mid = _r_int_tot = None
+        _r_int_vol = None
+        _r_int_ask_pct = _r_int_bid_pct = _r_int_mid_pct = _r_int_cls_pct = None
+        _r_int_secs    = None
+        _int_started_at = _int_ended_at = None
 
     return {
         "call_premium":               round(total_call, 2) if has_data else None,
@@ -379,17 +403,23 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         "ticker_count":               len(ticker_nodes),
         "represented_count":          represented,
         "contributing_ticker_count":  flow_count,
-        # ── Ask/Bid side classification (rollup) ──────────────────────────────
-        # Raw dollar sums first; percentages derived from those sums.
-        # None when no tickers have chain-summarizer classification data.
-        "ask_premium":                  _r_ask,
-        "bid_premium":                  _r_bid,
-        "midpoint_unknown_premium":     _r_mid,
-        "classified_premium":           _r_cls,
-        "ask_premium_pct":              _r_ask_pct,
-        "bid_premium_pct":              _r_bid_pct,
-        "midpoint_unknown_premium_pct": _r_mid_pct,
-        "classified_trade_side_pct":    _r_cls_pct,
+        # ── Interval trade-side classification (rollup) ───────────────────────
+        # Summed raw delta dollars from chain-summarizer tickers in the current
+        # session.  None when no interval data is available (all LKG, all master
+        # screener, first scan post-restart, or no new contracts since last cycle).
+        # LKG rows always contribute None here (stripped in _build_ticker_node).
+        "interval_ask_premium":                  _r_int_ask,
+        "interval_bid_premium":                  _r_int_bid,
+        "interval_midpoint_unknown_premium":     _r_int_mid,
+        "interval_total_premium":                _r_int_tot,
+        "interval_new_contract_volume":          _r_int_vol,
+        "interval_ask_premium_pct":              _r_int_ask_pct,
+        "interval_bid_premium_pct":              _r_int_bid_pct,
+        "interval_midpoint_unknown_premium_pct": _r_int_mid_pct,
+        "interval_classified_trade_side_pct":    _r_int_cls_pct,
+        "interval_seconds":                      _r_int_secs,
+        "interval_started_at":                   _int_started_at,
+        "interval_ended_at":                     _int_ended_at,
         # ── Aggregation scope ──────────────────────────────────────────────────
         # Tells the frontend whether the dollar totals above were built from one
         # methodology or a blend of two.
@@ -637,16 +667,24 @@ def _build_ticker_node(
         _scope, _exp_used, _dte_used, _prem_method = _expiry_scope(row)
         _tv = row.get("total_volume") if row.get("total_volume") is not None else (0 if _neutral_confirmed else None)
 
-        # ── Ask/Bid side classification (chain-summarizer rows only) ──────────
-        # These fields are populated by sectors_chain_summarizer.py when
-        # scan_result == "sectors_chain_summarized".  Master screener rows
-        # (live/supplement source) do not carry per-contract bid/ask/last data
-        # at the aggregated level, so they leave these as None.
-        # classified_trade_side_pct signals what fraction of the premium was
-        # definitively classified (the remainder is midpoint_or_unknown).
-        _ask_prem = _safe_float(row.get("ask_premium"))
-        _bid_prem = _safe_float(row.get("bid_premium"))
-        _mid_prem = _safe_float(row.get("midpoint_unknown_premium"))
+        # ── Interval trade-side classification pass-through ───────────────────
+        # interval_* fields are present only for current-session chain-summarizer
+        # rows (scan_result="sectors_chain_summarized", source="supplement").
+        # LKG rows (supplement_lkg / watchlist_cache) have their interval fields
+        # stripped to None here — interval data represents a prior-session scan
+        # window and must not be served as current interval flow.
+        # Master screener rows (live/supplement source with no chain snapshot) also
+        # contribute None since no per-contract prior volume is available there.
+        _is_lkg = source in ("supplement_lkg", "watchlist_cache")
+
+        def _ifield(k):
+            return None if _is_lkg else _safe_float(row.get(k))
+
+        def _ifield_int(k):
+            if _is_lkg:
+                return None
+            v = row.get(k)
+            return int(v) if v is not None else None
 
         return {
             "symbol":            sym,
@@ -695,15 +733,22 @@ def _build_ticker_node(
             "expiration_scope":     _scope,
             "expiration_used":      _exp_used,
             "dte_used":             _dte_used,
-            # ── Ask/Bid side classification ────────────────────────────────────
-            "ask_premium":                  _ask_prem,
-            "bid_premium":                  _bid_prem,
-            "midpoint_unknown_premium":     _mid_prem,
-            "classified_premium":           _safe_float(row.get("classified_premium")),
-            "ask_premium_pct":              _safe_float(row.get("ask_premium_pct")),
-            "bid_premium_pct":              _safe_float(row.get("bid_premium_pct")),
-            "midpoint_unknown_premium_pct": _safe_float(row.get("midpoint_unknown_premium_pct")),
-            "classified_trade_side_pct":    _safe_float(row.get("classified_trade_side_pct")),
+            # ── Interval trade-side classification ────────────────────────────
+            # Based on volume_delta since the prior snapshot — not cumulative volume.
+            # LKG rows: all None (prior-session interval, not current).
+            # Master screener rows: all None (no per-contract snapshot available).
+            "interval_ask_premium":                  _ifield("interval_ask_premium"),
+            "interval_bid_premium":                  _ifield("interval_bid_premium"),
+            "interval_midpoint_unknown_premium":     _ifield("interval_midpoint_unknown_premium"),
+            "interval_total_premium":                _ifield("interval_total_premium"),
+            "interval_new_contract_volume":          _ifield_int("interval_new_contract_volume"),
+            "interval_ask_premium_pct":              _ifield("interval_ask_premium_pct"),
+            "interval_bid_premium_pct":              _ifield("interval_bid_premium_pct"),
+            "interval_midpoint_unknown_premium_pct": _ifield("interval_midpoint_unknown_premium_pct"),
+            "interval_classified_trade_side_pct":    _ifield("interval_classified_trade_side_pct"),
+            "interval_seconds":                      _ifield_int("interval_seconds"),
+            "interval_started_at":                   _ifield("interval_started_at"),
+            "interval_ended_at":                     _ifield("interval_ended_at"),
         }
 
     if sym in no_options_syms:
@@ -736,14 +781,18 @@ def _build_ticker_node(
             "expiration_scope":      "none",
             "expiration_used":       None,
             "dte_used":              None,
-            "ask_premium":                  None,
-            "bid_premium":                  None,
-            "midpoint_unknown_premium":     None,
-            "classified_premium":           None,
-            "ask_premium_pct":              None,
-            "bid_premium_pct":              None,
-            "midpoint_unknown_premium_pct": None,
-            "classified_trade_side_pct":    None,
+            "interval_ask_premium":                  None,
+            "interval_bid_premium":                  None,
+            "interval_midpoint_unknown_premium":     None,
+            "interval_total_premium":                None,
+            "interval_new_contract_volume":          None,
+            "interval_ask_premium_pct":              None,
+            "interval_bid_premium_pct":              None,
+            "interval_midpoint_unknown_premium_pct": None,
+            "interval_classified_trade_side_pct":    None,
+            "interval_seconds":                      None,
+            "interval_started_at":                   None,
+            "interval_ended_at":                     None,
         }
 
     return {
@@ -775,14 +824,18 @@ def _build_ticker_node(
         "expiration_scope":      "none",
         "expiration_used":       None,
         "dte_used":              None,
-        "ask_premium":                  None,
-        "bid_premium":                  None,
-        "midpoint_unknown_premium":     None,
-        "classified_premium":           None,
-        "ask_premium_pct":              None,
-        "bid_premium_pct":              None,
-        "midpoint_unknown_premium_pct": None,
-        "classified_trade_side_pct":    None,
+        "interval_ask_premium":                  None,
+        "interval_bid_premium":                  None,
+        "interval_midpoint_unknown_premium":     None,
+        "interval_total_premium":                None,
+        "interval_new_contract_volume":          None,
+        "interval_ask_premium_pct":              None,
+        "interval_bid_premium_pct":              None,
+        "interval_midpoint_unknown_premium_pct": None,
+        "interval_classified_trade_side_pct":    None,
+        "interval_seconds":                      None,
+        "interval_started_at":                   None,
+        "interval_ended_at":                     None,
     }
 
 

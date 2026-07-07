@@ -17,6 +17,22 @@ Premium formula (per contract)
   price  = mid(bid, ask) if both > 0 → last → bid → ask
   prem $ = volume × price × 100
 
+Interval trade-side classification
+-----------------------------------
+  volume_delta = current_snapshot_volume − prior_snapshot_volume
+
+  Only the delta volume (newly observed contracts since the previous scan
+  cycle) is classified as ask-side, bid-side, or midpoint/unknown using the
+  current snapshot last / bid / ask.  The prior cumulative session volume is
+  never assigned to a side wholesale.
+
+  On the first observation for a contract (no prior snapshot), volume_delta=0
+  and no premium is classified.  This is the correct behavior after a backend
+  restart or a new trading session.
+
+  If current_volume < prior_volume (session rollover or anomalous reset),
+  the baseline is reset and delta=0.
+
 Budget
 ------
 Caller must wrap scan_batch_for_sectors() in the appropriate lane() context:
@@ -45,18 +61,43 @@ import time
 from datetime import date, datetime
 from typing import Optional
 
-# How long to reuse a cached expiration list before refetching from Tradier.
-# Exchange-listed expirations change slowly (new monthly series added ~quarterly,
-# new weekly series added weekly on Thursday evening), so 12 h gives a good
-# balance: stale lists are refreshed at least twice a day without creating extra
-# Tradier load on every scan.
 _EXPIRY_CACHE_TTL = 12 * 3600   # 12 hours
 
 # Absolute dollar tolerance for last-price bid/ask side classification.
-# A contract whose last traded price falls within _SIDE_TOL of the ask
-# (or bid) is classified as ask-side (or bid-side).  Contracts between
-# the two boundaries are left as midpoint_or_unknown.
+# Applied only to delta volume (new contracts since prior snapshot).
+#   last >= ask - _SIDE_TOL  → "ask_side"
+#   last <= bid + _SIDE_TOL  → "bid_side"
+#   otherwise                → "midpoint_or_unknown"
 _SIDE_TOL = 0.02
+
+# ── Per-contract volume snapshot cache ────────────────────────────────────────
+#
+# Stores the most recently observed cumulative volume per option contract so the
+# next scan cycle can compute:
+#   volume_delta = current_snapshot_volume − prior_snapshot_volume
+# and classify ONLY the newly observed contracts.
+#
+# Key  : provider option symbol (e.g. "AAPL250117C00150000") when available,
+#         otherwise "{sym}:{expiry}:{strike:.2f}:{option_type}" as a fallback.
+# Value: {"volume": int, "observed_at": float, "expiry": str}
+#
+# No disk persistence — survives between scan cycles within the same server
+# session.  Cleared on restart (correct: cumulative session volume from a
+# previous session must not be used as a prior baseline).
+#
+# Memory footprint estimate:
+#   ~300–500 tickers × ~50–150 contracts per expiry × ~130 bytes per entry
+#   → approximately 2–10 MB depending on universe size.  Well within budget.
+#
+# Eviction (rate-limited to once per _EVICTION_INTERVAL):
+#   - Contracts whose expiry date has passed (options expired).
+#   - Entries not refreshed within _SNAPSHOT_TTL seconds (26 h covers
+#     overnight without evicting during an active session, while still
+#     clearing symbols that drop out of the scan universe).
+_CONTRACT_SNAPSHOTS: dict[str, dict] = {}
+_SNAPSHOT_TTL       = 26 * 3600   # 26 hours
+_EVICTION_INTERVAL  =  1 * 3600   # run eviction at most once per hour
+_last_eviction: float = 0.0
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -81,6 +122,7 @@ def _best_price(bid, ask, last) -> Optional[float]:
       mid(bid, ask) → last → bid → ask
 
     Mirrors the _midpoint() logic used in options_flow_engine.
+    This is the price basis for both cumulative and delta premium estimates.
     """
     b = _sf(bid)
     a = _sf(ask)
@@ -96,19 +138,23 @@ def _best_price(bid, ask, last) -> Optional[float]:
     return None
 
 
-def _classify_side(bid: Optional[float], ask: Optional[float], last: Optional[float]) -> str:
+def _classify_side(bid: Optional[float], ask: Optional[float],
+                   last: Optional[float]) -> str:
     """
-    Classify a single contract trade as ask-side, bid-side, or midpoint/unknown.
+    Classify a contract's most recent trade as ask-side, bid-side, or
+    midpoint/unknown.
 
-    Uses the last traded price relative to the current bid/ask spread:
+    Applied ONLY to delta volume (newly observed contracts since the prior
+    snapshot) — never to cumulative session volume.
+
+    Tolerance _SIDE_TOL = $0.02 (absolute):
       last >= ask - _SIDE_TOL  → "ask_side"   (traded at/near the offer)
       last <= bid + _SIDE_TOL  → "bid_side"   (traded at/near the bid)
       otherwise                → "midpoint_or_unknown"
 
-    Never classifies by option type — calls are not automatically ask-side,
-    puts are not automatically bid-side.
-
-    Returns "midpoint_or_unknown" whenever last, bid, or ask are missing/invalid.
+    Returns "midpoint_or_unknown" whenever last, bid, or ask are
+    missing, zero, or produce an inverted spread (ask < bid).
+    Does NOT force classification by option type.
     """
     if last is None or last <= 0:
         return "midpoint_or_unknown"
@@ -148,6 +194,54 @@ def _select_primary_exp(expirations: list[str]) -> Optional[str]:
     return expirations[0]
 
 
+def _contract_key(opt_symbol: Optional[str], sym: str, expiry: str,
+                  strike: Optional[float], option_type: Optional[str]) -> str:
+    """
+    Unique key for the per-contract snapshot cache.
+
+    Prefers the provider option symbol (e.g. "AAPL250117C00150000") because it
+    is already unique and compact.  Falls back to a composite key when the
+    provider symbol is absent or empty.
+    """
+    if opt_symbol:
+        return opt_symbol
+    strike_s = f"{strike:.2f}" if strike is not None else "?"
+    return f"{sym.upper()}:{expiry}:{strike_s}:{option_type or '?'}"
+
+
+def _evict_stale_contracts() -> None:
+    """
+    Remove expired and idle entries from _CONTRACT_SNAPSHOTS.
+
+    Rate-limited to once per _EVICTION_INTERVAL so repeated backfill-loop
+    calls within the same hour pay no eviction cost after the first run.
+    """
+    global _last_eviction
+    now = time.time()
+    if now - _last_eviction < _EVICTION_INTERVAL:
+        return
+    _last_eviction = now
+    today_str = date.today().isoformat()
+    cutoff = now - _SNAPSHOT_TTL
+    keys_to_delete = [
+        key for key, snap in _CONTRACT_SNAPSHOTS.items()
+        if snap.get("observed_at", 0) < cutoff           # idle too long
+        or snap.get("expiry", "") < today_str             # expiry has passed
+    ]
+    for key in keys_to_delete:
+        _CONTRACT_SNAPSHOTS.pop(key, None)
+
+
+def snapshot_cache_stats() -> dict:
+    """Return diagnostic stats for the per-contract snapshot cache."""
+    return {
+        "entry_count":       len(_CONTRACT_SNAPSHOTS),
+        "last_eviction_ago": round(time.time() - _last_eviction) if _last_eviction else None,
+        "snapshot_ttl_h":    _SNAPSHOT_TTL / 3600,
+        "eviction_interval_h": _EVICTION_INTERVAL / 3600,
+    }
+
+
 # ── core chain summarizer ──────────────────────────────────────────────────────
 
 def _budget_ok() -> bool:
@@ -179,48 +273,50 @@ async def summarize_ticker_chain(
     """
     Fetch expirations + primary chain for *sym*, then summarize ALL contracts.
 
-    Returns a dict with:
-      ticker, call_premium, put_premium, net_premium,
-      call_volume, put_volume, total_volume,
-      put_call_ratio, scan_result, expiration_used, updated_at
+    Returns a dict containing:
+
+    Cumulative session metrics (unchanged from original design):
+      call_premium, put_premium, net_premium, call_volume, put_volume,
+      total_volume, put_call_ratio — estimated dollar premium and contract
+      counts summed over all contracts with volume > 0 in the selected expiry.
+      These are cumulative/session metrics and are NOT modified by this change.
+
+    Incremental interval trade-side metrics (new, volume-delta based):
+      interval_ask_premium, interval_bid_premium,
+      interval_midpoint_unknown_premium, interval_total_premium,
+      interval_new_contract_volume — estimated dollar premium and contract
+      count from the delta volume observed since the prior snapshot.
+
+      interval_ask_premium_pct, interval_bid_premium_pct,
+      interval_midpoint_unknown_premium_pct,
+      interval_classified_trade_side_pct — percentage breakdown derived from
+      summed delta dollars (never per-contract averages).
+
+      interval_seconds    — wall-clock seconds between the earliest prior
+                            contract snapshot and this scan.
+      interval_started_at — epoch of that earliest prior snapshot.
+      interval_ended_at   — epoch of this scan (= now).
+
+      All interval_* fields are None when:
+        • This is the first scan for the symbol post-restart (no prior snapshots).
+        • All contracts had identical volume to their prior snapshot (no new trades).
+        • A session reset was detected for all contracts (current < prior volume).
 
     Special scan_result values:
       "sectors_chain_summarized"  — chain fetched and summarized (real data)
-      "confirmed_no_options"      — Tradier returned no expirations (empty list,
-                                    ONLY set when we had budget headroom before
-                                    the call, reducing false no-options risk)
-      "deferred_retry"            — budget exhausted or Tradier call failed;
-                                    retry next cycle
+      "confirmed_no_options"      — Tradier returned no expirations
+      "deferred_retry"            — budget exhausted or Tradier call failed
 
     Budget safety
     -------------
-    TradierProvider._get() returns None when the lane budget is exceeded.
-    This propagates as [] from get_option_expirations(), which would be
-    indistinguishable from a genuine "no options" result.  We add a
-    pre-check: if the lane has no headroom, we return deferred_retry
-    immediately without calling Tradier.  After the call, if we get []
-    back but the budget is now exhausted, we return deferred_retry rather
-    than confirmed_no_options.
+    TradierProvider._get() returns None when the lane budget is exceeded,
+    propagating as [] from get_option_expirations().  A pre-check + post-check
+    distinguishes genuine no-options from budget deferral.
     """
     sym = sym.upper()
     now = time.time()
 
     # ── 1. Get expirations (cache-first, _EXPIRY_CACHE_TTL) ───────────────────
-    #
-    # Cache format: {sym: ([exp_date_strings, ...], checked_at_float)}
-    #
-    # TTL logic:
-    #   FRESH  (age < TTL)  → use cached list, skip fetch entirely.
-    #   STALE  (age >= TTL) → refetch; on failure fall back to stale list.
-    #   MISS   (no entry)   → fetch unconditionally.
-    #
-    # Stale-fallback rules:
-    #   - Exception during fetch AND cached list is non-empty → use old list,
-    #     log warning, leave checked_at unchanged so next scan retries sooner.
-    #   - Budget-deferral post-check (empty result + no budget) AND cached list
-    #     is non-empty → same stale fallback.
-    #   - If cached list is empty (confirmed_no_options at prior scan) OR missing
-    #     → return deferred_retry as before; do not fabricate a no-options result.
     expirations: Optional[list[str]] = None
     cached = expiry_cache.get(sym)
     if cached and isinstance(cached, (list, tuple)) and len(cached) >= 2:
@@ -229,7 +325,6 @@ async def summarize_ticker_chain(
             expirations = _cached_exps  # within TTL — skip Tradier call
 
     if expirations is None:
-        # Pre-check budget before any Tradier call.
         if not _budget_ok():
             return {
                 "ticker":      sym,
@@ -240,7 +335,6 @@ async def summarize_ticker_chain(
         try:
             raw = await tradier.get_option_expirations(sym)
         except Exception as exc:
-            # Fetch failed — fall back to stale list if one exists and is non-empty.
             if cached and isinstance(cached, (list, tuple)) and cached[0]:
                 expirations = cached[0]
                 print(
@@ -258,10 +352,7 @@ async def summarize_ticker_chain(
                 }
 
         if expirations is None:
-            # `raw` was successfully fetched.  Apply budget post-check.
             if not raw and not _budget_ok():
-                # Empty result while budget exhausted → budget deferral.
-                # Fall back to stale list rather than marking confirmed_no_options.
                 if cached and isinstance(cached, (list, tuple)) and cached[0]:
                     expirations = cached[0]
                     print(
@@ -277,7 +368,6 @@ async def summarize_ticker_chain(
                         "updated_at":  now,
                     }
             else:
-                # Successful fetch (possibly empty = confirmed_no_options later).
                 expiry_cache[sym] = (raw or [], now)
                 expirations = raw or []
 
@@ -322,19 +412,41 @@ async def summarize_ticker_chain(
 
     # ── 4. Summarize ALL contracts (volume > 0 only) ──────────────────────────
     #
-    # For each contract we:
-    #   a. compute estimated premium using _best_price (mid → last → bid → ask)
-    #   b. classify the trade side using last relative to bid/ask
+    # Cumulative session premium (call_prem, put_prem):
+    #   Sum over ALL contracts with volume > 0.  Unchanged from original design.
+    #   price = _best_price(bid, ask, last) = mid → last → bid → ask.
     #
-    # Side buckets accumulate the same dollar amounts as the net-premium totals
-    # so ask_prem + bid_prem + mid_prem == call_prem + put_prem (within rounding).
+    # Incremental interval trade-side classification (int_ask, int_bid, int_mid):
+    #   For each contract:
+    #     1. Look up prior snapshot in _CONTRACT_SNAPSHOTS.
+    #     2. If no prior snapshot OR current_volume < prior_volume:
+    #          Store current as new baseline.  delta = 0.  Classify nothing.
+    #          (First-observation rule / session-reset rule.)
+    #     3. Else:
+    #          delta = current_volume - prior_volume
+    #          If delta > 0:
+    #            classify delta using _classify_side(bid, ask, last)
+    #            accumulate delta_dollars = delta × price × 100
+    #          Update snapshot with current volume and observed_at = now.
+    #
+    # Eviction of stale/expired snapshots is rate-limited to once per hour.
+
+    _evict_stale_contracts()
+
     call_prem = 0.0
     put_prem  = 0.0
     call_vol  = 0
     put_vol   = 0
-    ask_prem  = 0.0   # contracts traded at/near the ask
-    bid_prem  = 0.0   # contracts traded at/near the bid
-    mid_prem  = 0.0   # midpoint or unclassifiable
+
+    # Interval (incremental delta) accumulators.
+    int_ask     = 0.0   # delta premium traded at/near the ask
+    int_bid     = 0.0   # delta premium traded at/near the bid
+    int_mid     = 0.0   # delta premium at midpoint or unclassifiable
+    int_new_vol = 0     # total delta contract volume across all contracts
+
+    # Earliest prior snapshot observed_at among contracts with non-zero delta.
+    # Used to compute interval_seconds = now - int_started_at.
+    int_started_at: Optional[float] = None
 
     for c in calls:
         vol = _si(c.get("volume"))
@@ -342,17 +454,42 @@ async def summarize_ticker_chain(
             continue
         b, a, l = _sf(c.get("bid")), _sf(c.get("ask")), _sf(c.get("last"))
         price = _best_price(b, a, l)
-        if price is not None and price > 0:
-            dollars     = vol * price * 100.0
-            call_prem  += dollars
-            call_vol   += vol
-            side = _classify_side(b, a, l)
-            if side == "ask_side":
-                ask_prem += dollars
-            elif side == "bid_side":
-                bid_prem += dollars
-            else:
-                mid_prem += dollars
+        if price is None or price <= 0:
+            continue
+
+        call_prem += vol * price * 100.0
+        call_vol  += vol
+
+        # Volume-delta interval classification.
+        ckey = _contract_key(
+            c.get("symbol"), sym, primary_exp,
+            _sf(c.get("strike")), "call",
+        )
+        prev = _CONTRACT_SNAPSHOTS.get(ckey)
+        if prev is None or vol < prev["volume"]:
+            # First observation or session reset — store baseline, no delta.
+            _CONTRACT_SNAPSHOTS[ckey] = {
+                "volume": vol, "observed_at": now, "expiry": primary_exp,
+            }
+        else:
+            delta = vol - prev["volume"]
+            if delta > 0:
+                d_dollars = delta * price * 100.0
+                side = _classify_side(b, a, l)
+                if side == "ask_side":
+                    int_ask += d_dollars
+                elif side == "bid_side":
+                    int_bid += d_dollars
+                else:
+                    int_mid += d_dollars
+                int_new_vol += delta
+                p_at = prev["observed_at"]
+                if int_started_at is None or p_at < int_started_at:
+                    int_started_at = p_at
+            # Update snapshot (even for delta=0 — refreshes observed_at TTL).
+            _CONTRACT_SNAPSHOTS[ckey] = {
+                "volume": vol, "observed_at": now, "expiry": primary_exp,
+            }
 
     for p in puts:
         vol = _si(p.get("volume"))
@@ -360,37 +497,67 @@ async def summarize_ticker_chain(
             continue
         b, a, l = _sf(p.get("bid")), _sf(p.get("ask")), _sf(p.get("last"))
         price = _best_price(b, a, l)
-        if price is not None and price > 0:
-            dollars    = vol * price * 100.0
-            put_prem  += dollars
-            put_vol   += vol
-            side = _classify_side(b, a, l)
-            if side == "ask_side":
-                ask_prem += dollars
-            elif side == "bid_side":
-                bid_prem += dollars
-            else:
-                mid_prem += dollars
+        if price is None or price <= 0:
+            continue
+
+        put_prem += vol * price * 100.0
+        put_vol  += vol
+
+        # Volume-delta interval classification.
+        ckey = _contract_key(
+            p.get("symbol"), sym, primary_exp,
+            _sf(p.get("strike")), "put",
+        )
+        prev = _CONTRACT_SNAPSHOTS.get(ckey)
+        if prev is None or vol < prev["volume"]:
+            _CONTRACT_SNAPSHOTS[ckey] = {
+                "volume": vol, "observed_at": now, "expiry": primary_exp,
+            }
+        else:
+            delta = vol - prev["volume"]
+            if delta > 0:
+                d_dollars = delta * price * 100.0
+                side = _classify_side(b, a, l)
+                if side == "ask_side":
+                    int_ask += d_dollars
+                elif side == "bid_side":
+                    int_bid += d_dollars
+                else:
+                    int_mid += d_dollars
+                int_new_vol += delta
+                p_at = prev["observed_at"]
+                if int_started_at is None or p_at < int_started_at:
+                    int_started_at = p_at
+            _CONTRACT_SNAPSHOTS[ckey] = {
+                "volume": vol, "observed_at": now, "expiry": primary_exp,
+            }
 
     total_vol = call_vol + put_vol
     net_prem  = call_prem - put_prem
     pcr       = round(put_prem / call_prem, 3) if call_prem > 0 else None
 
-    # Side-classification percentages.
-    # Denominator = ask_prem + bid_prem + mid_prem (== total estimated premium).
-    # classified_trade_side_pct = (ask + bid) / total — tells consumers what
-    # fraction of the premium was definitively classified (not midpoint/unknown).
-    _side_scope = ask_prem + bid_prem + mid_prem
-    if _side_scope > 0:
-        _ask_pct = round(ask_prem / _side_scope * 100, 1)
-        _bid_pct = round(bid_prem / _side_scope * 100, 1)
-        _mid_pct = round(mid_prem / _side_scope * 100, 1)
-        _cls_pct = round((ask_prem + bid_prem) / _side_scope * 100, 1)
+    # ── Interval trade-side percentages ───────────────────────────────────────
+    # Derived from summed delta dollars only — never per-contract averages.
+    # All interval_* fields are None when no delta volume was classified.
+    int_total    = int_ask + int_bid + int_mid
+    has_interval = int_total > 0
+
+    if has_interval:
+        int_ask_pct = round(int_ask / int_total * 100, 1)
+        int_bid_pct = round(int_bid / int_total * 100, 1)
+        int_mid_pct = round(int_mid / int_total * 100, 1)
+        int_cls_pct = round((int_ask + int_bid) / int_total * 100, 1)
+        int_secs    = (
+            round(now - int_started_at)
+            if int_started_at is not None else None
+        )
     else:
-        _ask_pct = _bid_pct = _mid_pct = _cls_pct = None
+        int_ask_pct = int_bid_pct = int_mid_pct = int_cls_pct = None
+        int_secs    = None
 
     return {
         "ticker":           sym,
+        # ── Cumulative session metrics ─────────────────────────────────────────
         "call_premium":     round(call_prem, 2),
         "put_premium":      round(put_prem, 2),
         "net_premium":      round(net_prem, 2),
@@ -400,22 +567,38 @@ async def summarize_ticker_chain(
         "put_volume":       put_vol,
         "total_volume":     total_vol,
         "put_call_ratio":   pcr,
-        # ── Ask/Bid side classification ───────────────────────────────────────
-        # Derived from last vs bid/ask per contract — zero extra Tradier calls.
-        # ask_premium: total estimated premium where last >= ask - $0.02
-        # bid_premium: total estimated premium where last <= bid + $0.02
-        # midpoint_unknown_premium: remainder (last between bid and ask, or
-        #   last/bid/ask fields absent/invalid for that contract)
-        # classified_trade_side_pct: (ask+bid) / (ask+bid+mid) — coverage signal
-        #   telling consumers what fraction of premium was definitively classified.
-        "ask_premium":                  round(ask_prem, 2),
-        "bid_premium":                  round(bid_prem, 2),
-        "midpoint_unknown_premium":     round(mid_prem, 2),
-        "classified_premium":           round(ask_prem + bid_prem, 2),
-        "ask_premium_pct":              _ask_pct,
-        "bid_premium_pct":              _bid_pct,
-        "midpoint_unknown_premium_pct": _mid_pct,
-        "classified_trade_side_pct":    _cls_pct,
+        # ── Incremental interval trade-side classification ─────────────────────
+        # Based on volume_delta = current_snapshot_volume − prior_snapshot_volume.
+        # Only NEW contracts observed since the last scan cycle are classified.
+        # The prior cumulative session volume is never assigned to a side.
+        #
+        # All interval_* fields are None when:
+        #   • First scan for this symbol post-restart (no prior snapshots).
+        #   • All contracts had identical volume to the prior snapshot.
+        #   • A session reset was detected for every contract.
+        #
+        # interval_ask_premium  — delta premium where last >= ask − $0.02
+        # interval_bid_premium  — delta premium where last <= bid + $0.02
+        # interval_midpoint_unknown_premium — remainder (last between bid/ask,
+        #   or bid/ask/last missing/invalid)
+        # interval_total_premium  — ask + bid + mid (equals sum of the above)
+        # interval_new_contract_volume — delta contract count classified
+        # interval_classified_trade_side_pct — (ask+bid)/total, coverage signal
+        # interval_started_at — observed_at of the earliest prior snapshot used
+        # interval_ended_at   — timestamp of this scan (= now)
+        # interval_seconds    — interval_ended_at − interval_started_at
+        "interval_ask_premium":                  round(int_ask,   2) if has_interval else None,
+        "interval_bid_premium":                  round(int_bid,   2) if has_interval else None,
+        "interval_midpoint_unknown_premium":     round(int_mid,   2) if has_interval else None,
+        "interval_total_premium":                round(int_total, 2) if has_interval else None,
+        "interval_new_contract_volume":          int_new_vol if has_interval else None,
+        "interval_ask_premium_pct":              int_ask_pct,
+        "interval_bid_premium_pct":              int_bid_pct,
+        "interval_midpoint_unknown_premium_pct": int_mid_pct,
+        "interval_classified_trade_side_pct":    int_cls_pct,
+        "interval_seconds":                      int_secs,
+        "interval_started_at":                   int_started_at if has_interval else None,
+        "interval_ended_at":                     now if has_interval else None,
         "scan_result":      "sectors_chain_summarized",
         "expiration_used":  primary_exp,
         "updated_at":       now,
