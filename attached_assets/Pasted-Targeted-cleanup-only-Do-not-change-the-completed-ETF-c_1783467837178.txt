@@ -1,0 +1,44 @@
+Targeted cleanup only. Do not change the completed ETF classification or display-name results.
+
+The Options Flow display-name backfill is now complete:
+- 373 required unique symbols
+- 371 resolved names
+- 2 explicit failures
+- 99.5% coverage
+- results persisted in options_display_name_lkg.json
+
+Remove display-name FMP enrichment from the unconditional 30-minute recurring background loop.
+
+Company/fund names are stable reference metadata and the project already has existing company/profile caches used by Watchlist and other pages.
+
+Required behavior:
+
+1. Preserve the current display-name LKG and all 371 resolved names.
+2. On startup, warm display names from existing persisted/cached sources only:
+   - existing canonical company/profile cache
+   - screener_fundamentals_cache
+   - existing Watchlist/profile metadata path where applicable
+   - options_display_name_lkg
+3. Do not call FMP for display names merely because 30 minutes elapsed.
+4. FMP display-name enrichment should run only for NEW required Options Flow symbols that:
+   - have no name in existing canonical/profile caches
+   - have no name in options_display_name_lkg
+   - are not already marked name_resolution_failed
+5. When a new ticker enters the required Options Flow universe through theme membership/watchlist/portfolio reconciliation:
+   - check existing cached names first
+   - if still missing, queue that symbol for one background FMP name lookup
+   - persist the successful name to the existing LKG
+6. Do not perform FMP calls inside the Options Flow response builder or page request.
+7. Do not retry explicit permanent failures every cycle.
+8. IBIT or other symbols with an empty provider response should have a bounded retry policy; after a small number of failed background attempts, mark name_resolution_failed so they do not retry forever.
+9. Do not create a second company-name source of truth. Reuse the existing project profile/reference caches before FMP fallback.
+
+Validation:
+- Restart backend.
+- Existing 371 names load without FMP name backfill calls.
+- Fetch /api/options-flow/sectors: zero FMP calls caused by the request.
+- Wait through the old 30-minute cadence path: no unconditional display-name enrichment pass runs.
+- Add one genuinely new required symbol with no cached name and prove only that missing symbol enters background name enrichment.
+- Existing names remain unchanged.
+
+This is an operational cleanup only. Do not re-audit or modify ETF classification, Net Flow P/C, taxonomy, scanner, or heatmap behavior.
