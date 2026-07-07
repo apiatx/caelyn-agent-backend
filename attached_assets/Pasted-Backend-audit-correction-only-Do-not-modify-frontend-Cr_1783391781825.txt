@@ -1,0 +1,72 @@
+Backend audit/correction only. Do not modify frontend.
+
+Critical issue with the newly implemented Ask Premium / Bid Premium classification.
+
+The current implementation appears to classify an option contract's ENTIRE cumulative volume/premium using that contract's single `last` price relative to its current `bid` and `ask`.
+
+Example:
+volume = 5,000
+bid = 4.90
+ask = 5.00
+last = 5.00
+
+Current implementation appears to classify:
+all 5,000 contracts × premium as ask_side.
+
+That is not necessarily executed ask premium.
+
+The 5,000 cumulative contracts may have traded across bid, midpoint, and ask throughout the session. A single chain snapshot's `last` plus current bid/ask cannot prove the side of every contract represented by cumulative `volume`.
+
+Audit the exact Tradier field semantics and the current implementation.
+
+Answer explicitly:
+
+1. Is `volume` cumulative session volume for the option contract?
+2. Is `last` only the most recent trade price?
+3. Are `bid` and `ask` the current quote snapshot rather than historical bid/ask at each execution?
+4. Does the current classifier assign the ENTIRE contract volume to ask_side/bid_side based on one `last` observation?
+5. If yes, confirm that the resulting:
+   - ask_premium
+   - bid_premium
+   - ask_premium_pct
+   - bid_premium_pct
+
+are NOT true executed-at-ask / executed-at-bid premium totals.
+
+Do not defend the metric because last-vs-bid/ask is a common trade-side heuristic. The question is whether that heuristic can honestly be applied to the entire cumulative contract volume from a snapshot chain response.
+
+Then determine whether ANY data already available in the existing Net Flow scan can produce true or reasonably incremental ask-side vs bid-side premium with zero new Tradier calls.
+
+Check for:
+- per-trade/timesales data already fetched
+- incremental volume deltas between chain snapshots
+- previous contract-level snapshot state containing prior volume
+- prior last/bid/ask values
+- any existing options trade tape cache
+
+Important possible approach:
+If repeated chain snapshots already occur and prior per-contract volume is retained, we may be able to classify only NEW volume:
+
+volume_delta = current_volume - previous_volume
+
+Then classify only volume_delta using the latest last relative to bid/ask.
+
+This is still an estimate, but it is materially more honest than assigning total cumulative volume to one last-trade side.
+
+Report:
+A. whether true executed trade-side premium is available
+B. whether incremental volume-delta classification is possible using existing scan/cache behavior with zero new Tradier calls
+C. exact scan frequency and whether previous per-contract snapshots currently survive between scans
+D. whether the just-added side fields should be removed/reverted, renamed as a weaker proxy, or replaced with incremental classification
+
+Do not implement a replacement until the audit is complete.
+
+Do not modify:
+- Premium P/C
+- Vol P/C
+- Net Premium
+- Premium/Contract
+- Contracts
+- expiration selection
+- scanner cadence
+- Tradier pacer
