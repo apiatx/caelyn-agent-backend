@@ -1,0 +1,249 @@
+Do not add frontend work yet.
+
+The stock/ETF separation and breadth P/C implementation is directionally correct, but three audit gaps remain. Close these before frontend consumes instrument_type/breadth_pcr.
+
+Do not broadly refactor the implementation that is now working.
+
+==================================================
+PART 1 — PROVE OPTIONS P/C SCAN-SCOPE PARITY
+==================================================
+
+Your audit proved that exact-zero P/C rows are mathematically correct for the data scanned.
+
+However, you also reported that the 0.00 examples came from sectors_chain_summarizer scanning a single primary expiry.
+
+That proves arithmetic correctness, not cross-symbol analytical consistency.
+
+Audit every source that can feed _build_ticker_node / Net Flow:
+
+- options_master_screener_v1
+- options_master_lkg_v1
+- supplement cache
+- supplement LKG
+- sectors_chain_summarizer
+- watchlist_cache bridge
+- portfolio options cache if applicable
+
+For each source report:
+- expirations scanned
+- expiry selection rule
+- DTE range
+- number of expirations included
+- premium contract filters
+- quote/mid pricing rule
+- whether call and put premiums use identical eligibility rules
+- stored call premium field
+- stored put premium field
+- stored premium P/C field
+
+Then build a scope parity table:
+
+SOURCE | EXPIRY RULE | EXPIRATIONS | DTE | PREMIUM FILTER | PRICE RULE
+
+Specifically compare:
+- master screener
+- sectors_chain_summarizer / supplement
+
+Question to answer:
+Are ticker premium P/C values shown side by side in Net Flow based on the same analytical expiration scope?
+
+If YES:
+Prove it from the exact code paths.
+
+If NO:
+Do not hide it.
+
+Identify the canonical existing Options Flow premium scan scope that should be used for Net Flow comparisons.
+
+Preserve the existing Tradier pacer/cache architecture.
+
+Do not create a second fetch loop.
+
+Prefer normalizing computation through an existing shared premium aggregation helper/path if one exists.
+
+Do not change scope blindly until all existing callers are audited.
+
+Validation:
+For 10 symbols spanning:
+- master cache
+- supplement
+- ETF
+- stock
+
+Report:
+symbol
+source
+expiration_used
+DTE
+number of expirations
+call premium
+put premium
+raw P/C
+
+The values displayed in one Net Flow heatmap must be analytically comparable.
+
+==================================================
+PART 2 — REMOVE SILENT UNKNOWN CLASSIFICATION DROPOUT
+==================================================
+
+Current live validation still showed symbols such as MU with:
+
+instrument_type = "unknown"
+
+The statement “background FMP will resolve” is not sufficient because the new frontend will filter:
+- ETFs tab by etf
+- All Stocks by stock
+
+And breadth_pcr currently includes stock rows only.
+
+An unresolved required symbol must not silently disappear from:
+- All Stocks
+- stock breadth coverage
+- ETF coverage
+- classification diagnostics
+
+Audit the new options_instrument_type_service.py against existing canonical symbol/reference/profile services.
+
+First determine:
+Is this new service merely a read-through/cache adapter over existing authoritative metadata, or has it become a second instrument classification source of truth?
+
+Do not maintain duplicate classification truth.
+
+If an existing canonical company/security metadata service already resolves ETF vs equity:
+Use it.
+
+If no canonical resolver exists:
+The new service may remain, but its precedence must be explicit:
+
+1. existing persisted canonical/reference metadata
+2. screener_fundamentals_cache.profile_json.isEtf
+3. existing ETF/fund metadata cache
+4. background cached FMP profile/reference resolution
+5. unknown only when genuinely unresolved
+
+No page-level FMP calls.
+No per-render FMP calls.
+No synchronous FMP calls from Options Flow response builders.
+
+For required Options Flow symbols:
+Trigger classification reconciliation as part of existing background universe reconciliation.
+
+Expose:
+- required_stock_tickers
+- required_etf_tickers
+- unresolved_instrument_type_tickers
+- unresolved symbol sample list
+- instrument_type_cache_updated_at
+
+Important:
+breadth coverage must account for unresolved classification.
+
+Example:
+total category members = 10
+resolved stocks = 7
+resolved ETFs = 2
+unknown = 1
+
+Do not report stock coverage as though the unknown symbol does not exist.
+
+Expose unresolved count separately.
+
+Frontend must be able to distinguish:
+7 / 7 resolved stocks have P/C
+but
+1 category symbol is still unresolved
+
+Before completion:
+MU must not merely be asserted to resolve later.
+
+Run classification reconciliation and verify actual previously-unknown examples.
+
+==================================================
+PART 3 — CONTROLLED TEST OF DYNAMIC THEME OPTIONS UNIVERSE
+==================================================
+
+The earlier production issue remains:
+
+A ticker manually added through the Themes page appears in the correct theme in Options Flow, but often has no options data because taxonomy membership and scan universe may drift.
+
+Your completion report did not prove this is fixed.
+
+Do one controlled test with an actual currently manually-added theme ticker that:
+- appears in Options Flow
+- previously lacked premium P/C
+
+Report BEFORE:
+- symbol
+- canonical theme/sub-theme membership
+- present in Options Flow tree
+- instrument_type
+- present in required options universe
+- present in master cache
+- present in supplement cache
+- present in supplement LKG
+- queued
+- pending
+- deferred
+- no_options
+- last scan timestamp
+
+Then trace the exact required-universe resolver currently used by options ingestion.
+
+Confirm whether current canonical theme membership is dynamically unioned into the required Options Flow universe.
+
+If not:
+Fix through the EXISTING required-universe / scan reconciliation path.
+
+Do not create a parallel scanner.
+
+Required sequence:
+
+theme membership saved
+→ existing Options Flow required universe invalidated/reconciled
+→ symbol identified as required
+→ instrument type classification reconciled
+→ symbol enters existing paced options queue
+→ existing scanner scans it
+→ snapshot/cache/LKG updated
+→ Options Flow tree displays P/C
+→ category valid P/C coverage increases
+
+Do not synchronously fetch Tradier inside the theme membership write request.
+
+Tradier calls must stay inside the existing paced ingestion architecture.
+
+AFTER controlled test report:
+- required universe: yes
+- queue state
+- completed scan state
+- cache source
+- raw_premium_pcr
+- effective_premium_pcr
+- instrument_type
+- theme breadth inclusion
+- coverage before/after
+
+If the test symbol legitimately has no listed options:
+Use another manually-added symbol with listed options for the controlled success test.
+Still verify no_options classification on the original symbol.
+
+==================================================
+FINAL VALIDATION
+==================================================
+
+Do not call complete until all are true:
+
+1. Net Flow premium P/C scan scope is proven comparable across master and supplement sources, or explicitly normalized.
+2. Exact 0.00 cases are explained under that canonical scope.
+3. Required symbols do not silently disappear because instrument_type is unknown.
+4. Unknown classification is visible diagnostically.
+5. All Stocks can safely consume instrument_type=stock.
+6. ETFs can safely consume instrument_type=etf.
+7. Sector/Theme breadth excludes ETFs.
+8. Breadth coverage exposes unresolved classification.
+9. An actual manually-added theme ticker dynamically enters the existing options scan queue.
+10. Its successful scan appears in Options Flow without restart.
+11. No parallel Tradier scanner or uncontrolled call path was introduced.
+12. Existing route paths and live/LKG/pending behavior remain intact.
+
+Return the audit evidence and exact controlled-test results.

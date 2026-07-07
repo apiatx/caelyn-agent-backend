@@ -462,6 +462,35 @@ async def lifespan(app):
         print(f"[STARTUP] instrument_type warm-up: classified {_itype_count} symbols from screener cache")
     except Exception as _itype_err:
         print(f"[STARTUP] instrument_type warm-up failed (non-fatal): {_itype_err}")
+    # Launch background FMP classification pass for any symbols still "unknown"
+    # after the DB warm-up (symbols absent from screener_fundamentals_cache).
+    async def _itype_classify_startup():
+        await asyncio.sleep(30)   # let the master screener initialize first
+        try:
+            from data.options_instrument_type_service import (
+                get_stats as _ityp_stats,
+                classify_symbols_background as _ityp_classify,
+            )
+            from data.options_theme_supplement import get_theme_proxy_symbols_for_supplement as _ityp_theme_syms
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _ityp_univ
+            _ityp_all = set()
+            for _m in _ityp_univ.values():
+                for _s in (_m.get("proxy_symbols") or []):
+                    _ityp_all.add(_s.upper())
+            _ityp_all.update(s.upper() for s in _ityp_theme_syms())
+            _ityp_s0 = _ityp_stats()
+            if _ityp_s0.get("unknown", 0) > 0 and data_service and data_service.fmp:
+                _classified = await _ityp_classify(
+                    list(_ityp_all), fmp_provider=data_service.fmp, max_per_pass=40
+                )
+                _ityp_s1 = _ityp_stats()
+                print(
+                    f"[STARTUP] instrument_type FMP pass: classified {_classified} new symbols; "
+                    f"unknown remaining={_ityp_s1.get('unknown', 0)}"
+                )
+        except Exception as _ityp_e:
+            print(f"[STARTUP] instrument_type FMP pass error (non-fatal): {_ityp_e}")
+    asyncio.create_task(_itype_classify_startup())
     asyncio.create_task(_master_screener_loop())
     asyncio.create_task(_sectors_fast_backfill_loop())
     asyncio.create_task(_theme_options_supplement_loop())
@@ -12723,6 +12752,23 @@ async def _sectors_fast_backfill_loop():
 
             # Update no-options set from expiry cache (gated to regular session)
             _sbf_upd_no_opts(_sbf_local_expiry)
+
+            # ── Instrument-type reconciliation for this batch ──────────────────
+            # Re-run the DB warm-up for batch symbols that are still "unknown".
+            # This catches tickers newly added to themes whose screener profile
+            # may now be in screener_fundamentals_cache but weren't present at
+            # startup.  DB-only — never a Tradier or FMP call in this loop.
+            try:
+                from data.options_instrument_type_service import (
+                    get_unresolved_symbols as _sbf_unresolv,
+                    warm_up_from_db        as _sbf_warm_itype,
+                )
+                _sbf_unknown_in_batch = _sbf_unresolv(batch)
+                if _sbf_unknown_in_batch:
+                    _sbf_warm_itype(_sbf_unknown_in_batch)
+            except Exception:
+                pass
+            # ─────────────────────────────────────────────────────────────────
 
             # Update diagnostics
             _rows_with_prem = sum(

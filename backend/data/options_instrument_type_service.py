@@ -101,17 +101,30 @@ def get_instrument_type_bulk(symbols) -> dict[str, str]:
 
 
 def get_stats() -> dict:
-    """Diagnostic stats for admin endpoints."""
+    """Diagnostic stats for admin endpoints and tree builders."""
     stocks  = sum(1 for v in _MEM.values() if v == "stock")
     etfs    = sum(1 for v in _MEM.values() if v == "etf")
     unknown = sum(1 for v in _MEM.values() if v == "unknown")
+    unknown_syms = [k for k, v in _MEM.items() if v == "unknown"][:20]
     return {
-        "total":     len(_MEM),
-        "stocks":    stocks,
-        "etfs":      etfs,
-        "unknown":   unknown,
-        "saved_at":  _LAST_SAVE_AT or None,
+        "total":          len(_MEM),
+        "stocks":         stocks,
+        "etfs":           etfs,
+        "unknown":        unknown,
+        "unknown_sample": unknown_syms,
+        "saved_at":       _LAST_SAVE_AT or None,
+        "updated_at":     _LAST_SAVE_AT or None,
     }
+
+
+def get_unresolved_symbols(symbols) -> list[str]:
+    """
+    Return the subset of *symbols* whose instrument_type is still 'unknown'.
+    Never blocks — memory read only.
+    """
+    if not _LOADED:
+        _load_disk()
+    return [s.upper() for s in symbols if _MEM.get(s.upper(), "unknown") == "unknown"]
 
 
 # ── DB warm-up (sync, safe to call at startup) ───────────────────────────────
@@ -154,6 +167,14 @@ def warm_up_from_db(symbols: list[str] | None = None) -> int:
             elif is_etf is False:
                 _set(sym, "stock")
                 count += 1
+            elif is_etf is None:
+                # FMP returned null for isEtf — infer from other profile fields.
+                # ETFs never carry a fundamental sector/industry classification;
+                # any non-empty sector value is a strong stock indicator.
+                sector = (d.get("sector") or "").strip()
+                if sector:
+                    _set(sym, "stock")
+                    count += 1
 
         if count > 0:
             _save_disk()

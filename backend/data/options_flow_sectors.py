@@ -301,6 +301,8 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
     _etf_eff_pcrs:   list[float] = []
     _total_stock:    int = 0
     _total_etf:      int = 0
+    _total_unknown:  int = 0
+    _unknown_sample: list = []
     _valid_stock_pcr: int = 0
     _valid_etf_pcr:   int = 0
     # Track premium-contributing tickers by their expiration scope so rollup
@@ -372,6 +374,8 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         # Accumulate stock/ETF premiums and collect effective_pcr values for
         # the geometric breadth computation.  Only valid completed snapshots
         # (scan_status not pending/missing/no_options) contribute to breadth.
+        # Unresolved ("unknown") tickers are counted separately so breadth
+        # coverage denominators correctly expose classification gaps.
         _itype   = t.get("instrument_type", "unknown")
         _eff_pcr = t.get("effective_premium_pcr")
         _ss      = t.get("scan_status", "")
@@ -394,6 +398,16 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
             if _valid_snap:
                 _etf_eff_pcrs.append(_eff_pcr)
                 _valid_etf_pcr += 1
+        else:
+            # instrument_type == "unknown" — classification not yet resolved.
+            # These tickers are in the category but cannot be sorted into the
+            # stock or ETF breadth buckets.  They are not silently dropped:
+            # the count is surfaced in unresolved_instrument_type_tickers so
+            # breadth coverage denominators remain honest.
+            _total_unknown += 1
+            _sym_name = t.get("symbol")
+            if _sym_name and len(_unknown_sample) < 10:
+                _unknown_sample.append(_sym_name)
 
         # Interval trade-side accumulation — sum raw delta dollars from tickers
         # that have non-None interval_total_premium (chain-summarizer rows in the
@@ -566,6 +580,18 @@ def _rollup_ticker_nodes(ticker_nodes: list[dict]) -> dict:
         "valid_etf_pcr_tickers":    _valid_etf_pcr,
         "missing_etf_pcr_tickers":  max(0, _total_etf - _valid_etf_pcr),
         "etf_pcr_coverage_pct":     round(_valid_etf_pcr / max(_total_etf, 1) * 100, 1) if _total_etf else None,
+        # ── Unresolved classification ──────────────────────────────────────────
+        # Tickers whose instrument_type is still "unknown" are excluded from
+        # both stock and ETF breadth buckets.  They are counted and sampled
+        # here so coverage denominators remain honest.
+        #
+        # Coverage identity for a category (theme or sector):
+        #   total_tickers = total_stock_tickers + total_etf_tickers + unresolved
+        #   stock_pcr_coverage_pct is valid_stock / total_stock (among KNOWN stocks)
+        #   but unresolved_instrument_type_tickers must be 0 for breadth to be
+        #   fully comparable across categories.
+        "unresolved_instrument_type_tickers": _total_unknown,
+        "unresolved_instrument_type_sample":  _unknown_sample,
     }
 
 
@@ -1300,6 +1326,31 @@ def build_sector_tree(
             "next_supplement_scan_at":        next_scan_at,
         },
         "sectors": sector_nodes,
+        # ── Instrument-type classification diagnostics ─────────────────────────
+        # Exposes the health of the ETF vs stock classification cache so the
+        # frontend can distinguish "7/7 resolved stocks have P/C" from
+        # "1 category symbol is still unresolved."
+        #
+        # Fields:
+        #   classified_stocks       — total symbols resolved as stock in cache
+        #   classified_etfs         — total symbols resolved as etf in cache
+        #   unresolved_total        — symbols still classified as unknown
+        #   unresolved_sample       — up to 20 example unknown symbols
+        #   cache_updated_at        — unix timestamp of last LKG save
+        #   precedence_note         — how resolution works
+        "instrument_type_classification": (lambda _s: {
+            "classified_stocks":   _s.get("stocks",  0),
+            "classified_etfs":     _s.get("etfs",    0),
+            "unresolved_total":    _s.get("unknown", 0),
+            "unresolved_sample":   _s.get("unknown_sample", []),
+            "cache_updated_at":    _s.get("updated_at"),
+            "precedence_note": (
+                "1. screener_fundamentals_cache.isEtf (explicit True/False); "
+                "2. screener_fundamentals_cache.sector (non-empty → stock); "
+                "3. FMP /stable/profile background-only; "
+                "4. unknown only when genuinely unresolved"
+            ),
+        })(__import__('data.options_instrument_type_service', fromlist=['get_stats']).get_stats()),
         # ── Premium labeling metadata ──────────────────────────────────────────
         # Allows the frontend to label dollar values as "Estimated Premium"
         # rather than guessing whether they are contract counts.
