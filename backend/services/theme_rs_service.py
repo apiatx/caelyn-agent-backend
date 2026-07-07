@@ -524,10 +524,18 @@ def _validate_basket_hashes(
 
         if stored_hash is None:
             # Old-format row — no hash stored (pre-membership-hash LKG snapshot).
-            # Serve the data as-is (may still be correct) but flag clearly.
+            # We cannot verify whether the baked-in proxy_symbols are current, so
+            # always override membership fields from ENRICHED_THEME_RS_UNIVERSE so
+            # admin adds/removes are reflected immediately even from old LKG rows.
             legacy_count += 1
             patched_rows.append({
                 **row,
+                "proxy_symbols":          sorted(current_syms),
+                "theme_holdings":         sorted(current_syms),
+                "proxy_symbols_used":     sorted(current_syms),
+                "manual_added_symbols":   meta.get("manual_added_symbols", []),
+                "manual_removed_symbols": meta.get("manual_removed_symbols", []),
+                "performance_symbol_count": len(current_syms),
                 "basket_hash":  current_hash,
                 "curve_status": "stale_legacy_lkg",
             })
@@ -536,16 +544,25 @@ def _validate_basket_hashes(
             # Confirmed mismatch — basket changed since this row was computed.
             # Do NOT serve stale curve data; return empty so the frontend can
             # show a warming/pending state instead of a wrong-membership chart.
+            # IMPORTANT: override all membership fields from ENRICHED_THEME_RS_UNIVERSE
+            # so admin-added tickers appear immediately in proxy_symbols/theme_holdings
+            # without waiting for the background LKG rewrite to complete.
             stale_count += 1
             patched_rows.append({
                 **row,
-                "performance_curve":     [],
-                "basket_hash":           current_hash,
-                "curve_status":          "stale_membership",
-                "curve_total_symbols":   len(current_syms),
-                "curve_covered_symbols": 0,
-                "curve_missing_symbols": sorted(current_syms),
-                "curve_partial":         False,
+                "proxy_symbols":          sorted(current_syms),
+                "theme_holdings":         sorted(current_syms),
+                "proxy_symbols_used":     sorted(current_syms),
+                "manual_added_symbols":   meta.get("manual_added_symbols", []),
+                "manual_removed_symbols": meta.get("manual_removed_symbols", []),
+                "performance_symbol_count": len(current_syms),
+                "performance_curve":      [],
+                "basket_hash":            current_hash,
+                "curve_status":           "stale_membership",
+                "curve_total_symbols":    len(current_syms),
+                "curve_covered_symbols":  0,
+                "curve_missing_symbols":  sorted(current_syms),
+                "curve_partial":          False,
             })
 
         else:

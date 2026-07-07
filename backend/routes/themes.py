@@ -342,13 +342,28 @@ async def admin_upsert_membership(
         except Exception as _xse:
             print(f"[THEMES_ADMIN] watchlist cross-sync failed (non-fatal): {_xse}")
 
+    # ── Build authoritative basket from freshly-rebuilt enriched universe ─────
+    # _invalidate_caches() called refresh_enriched_universe() which did an
+    # in-place update of ENRICHED_THEME_RS_UNIVERSE.  Reading from it now
+    # guarantees the response reflects the committed Neon row.
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_resp
+    _resp_meta    = _eu_resp.get(body.theme_id, {})
+    _final_basket = sorted(_resp_meta.get("proxy_symbols", []))
+    _manual_added = sorted(_resp_meta.get("manual_added_symbols", []))
+    _manual_removed = sorted(_resp_meta.get("manual_removed_symbols", []))
+
     return {
-        "ok":            True,
-        "theme_id":      body.theme_id,
-        "symbol":        body.symbol,
-        "action":        body.action,
-        "note":          body.note,
-        "leader_cleared": leader_cleared,
+        "ok":                   True,
+        "persisted":            True,
+        "theme_id":             body.theme_id,
+        "symbol":               body.symbol,
+        "action":               body.action,
+        "note":                 body.note,
+        "leader_cleared":       leader_cleared,
+        "member_count":         len(_final_basket),
+        "theme_holdings":       _final_basket,
+        "manual_added_symbols": _manual_added,
+        "manual_removed_symbols": _manual_removed,
         "message": (
             f"Override saved. '{body.symbol}' {body.action}ed in '{body.theme_id}' only. "
             + ("Manual leader for this theme was also cleared. " if leader_cleared else "")

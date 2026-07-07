@@ -1,0 +1,385 @@
+BACKEND REPLIT — audit and fix dev Themes editor add-ticker persistence and cross-page propagation
+
+Current bug:
+
+When I use the DEV-ONLY editor on the Themes page to add a ticker to a theme:
+
+* the ticker may not appear immediately
+* sometimes adding a second ticker causes the first ticker to suddenly appear
+* the additions appear temporarily
+* after app restart, the newly added tickers disappear/revert
+* the ticker does not reliably remain saved as a permanent member of that theme
+
+This is extremely important.
+
+The existing architecture already has persistent theme membership overrides in Neon. Preserve that architecture.
+
+Known existing paths from prior work:
+
+* `theme_ticker_overrides`
+* key/model should support many-to-many `(theme_id, symbol)`
+* manual admin additions use `action='add'`
+* manual admin removals use `action='remove'`
+* existing DEV admin theme basket endpoints
+* public Themes universe merge layer
+* Options Flow Sectors reads the curated Themes universe
+* there may already be an existing propagation path into Watchlist ticker categorization
+
+DO NOT:
+
+* create another theme membership table
+* create a new JSON persistence file
+* replace `theme_ticker_overrides`
+* create a second theme universe
+* re-enable live Watchlist as the Themes universe source
+* make the frontend the source of truth
+* use an in-memory-only membership store
+
+Audit before editing.
+
+PART A — TRACE THE EXACT CURRENT WRITE PATH
+
+Start from the current DEV Themes page add-ticker request.
+
+Trace the full path:
+
+frontend request
+→ Express proxy route
+→ FastAPI admin endpoint
+→ validation/auth
+→ persistence function
+→ Neon INSERT/UPSERT/DELETE
+→ transaction commit
+→ cache invalidation
+→ admin basket read
+→ public Themes list/RS read
+
+Identify the exact endpoint currently used when adding a ticker.
+
+Expected likely path:
+`POST /api/themes/admin/theme-basket/{theme_id}`
+or the actual current equivalent.
+
+Report:
+
+* frontend URL
+* proxy URL
+* backend route
+* backend function
+* SQL/table used
+* transaction/commit behavior
+* response body returned
+
+Do not edit until this path is proven.
+
+PART B — AUDIT NEON PERSISTENCE
+
+Inspect `theme_ticker_overrides`.
+
+Confirm current schema and rows:
+
+* theme_id
+* symbol
+* action
+* source if present
+* created_at / updated_at if present
+* primary key / unique constraint
+
+Run a controlled test with one ticker and one active theme.
+
+Use a ticker that is NOT currently in the chosen theme.
+
+Example concept:
+TEST_SYMBOL → ai_networking
+
+Do not use a fake symbol if validation rejects it. Pick a real existing watchlist/theme-universe ticker that is not currently in that theme.
+
+Test sequence:
+
+1. GET admin theme basket before add.
+2. Query Neon `theme_ticker_overrides` before add.
+3. POST add ticker through the exact real admin endpoint.
+4. Capture HTTP status and response body.
+5. Immediately query Neon directly.
+6. GET admin theme basket.
+7. GET public Themes data.
+8. Restart app.
+9. Query Neon again.
+10. GET admin theme basket after restart.
+11. GET public Themes data after restart.
+
+The expected Neon row must exist after step 3 and still exist after restart.
+
+If the HTTP endpoint returns success but no Neon row exists:
+the write path is broken.
+
+If Neon row exists but disappears:
+find the code deleting/reseeding/cleaning override rows.
+
+If Neon row survives but public theme membership disappears:
+the merge/read path is broken.
+
+PART C — FIND ANY CODE THAT OVERWRITES OR DELETES MANUAL ADMIN OVERRIDES
+
+Search all writes to:
+`theme_ticker_overrides`
+
+Find every:
+
+* INSERT
+* UPSERT
+* DELETE
+* TRUNCATE
+* cleanup
+* seed
+* snapshot seed
+* migration
+* startup initialization
+* cache rebuild
+* theme removal cleanup
+
+Critical invariant:
+
+`source='manual_admin'` or the existing manual-admin equivalent MUST always win over:
+
+* snapshot seeds
+* base proxy_symbols
+* cached/LKG theme rows
+* automatic categorization
+* startup rebuilds
+
+A startup process must NEVER delete or replace valid manual admin membership rows for active theme_ids.
+
+The earlier frozen Themes-universe design used snapshot seeds plus manual admin overrides.
+
+Preserve this precedence:
+
+BASE / SNAPSHOT SEED
+→ apply manual remove overrides
+→ apply manual add overrides LAST
+
+Manual admin additions must win.
+
+PART D — VERIFY UPSERT / TRANSACTION BEHAVIOR
+
+Inspect the add operation.
+
+Required add semantics:
+
+For `(theme_id, symbol)`:
+
+* normalize theme_id
+* uppercase/normalize symbol
+* UPSERT one row
+* set action='add'
+* set source='manual_admin' if source exists
+* commit transaction before returning success
+
+Conceptually:
+
+INSERT INTO theme_ticker_overrides (...)
+VALUES (...)
+ON CONFLICT (theme_id, symbol)
+DO UPDATE SET
+action = 'add',
+source = 'manual_admin',
+updated_at = NOW();
+
+Use the existing DB helper/style. Do not invent raw SQL if an existing persistence function already exists.
+
+Important:
+If an existing row has:
+`action='remove'`
+
+adding the ticker again must flip that SAME `(theme_id, symbol)` row back to:
+`action='add'`
+
+It must not silently no-op because the primary key already exists.
+
+Likewise, removing then re-adding must work consistently.
+
+PART E — TRACE THE READ/MERGE PRECEDENCE
+
+Inspect the actual function that builds:
+
+* admin `theme_holdings`
+* public Themes universe `proxy_symbols` / `performance_symbols`
+* Options Flow theme basket universe
+
+Confirm manual admin adds are applied LAST.
+
+Required merge semantics per theme:
+
+1. Start with base/frozen theme members.
+2. Apply snapshot seed rows if that is still part of the existing architecture.
+3. Apply manual admin removals.
+4. Apply manual admin additions LAST.
+5. dedupe symbols
+6. persist/return final basket
+
+A manual admin `action='add'` must not be lost because:
+
+* the symbol was absent from base proxy_symbols
+* the LKG row was generated before the edit
+* a later snapshot seed rebuild overwrites the basket
+* cache data wins over Neon
+* theme RS output is reconstructed from stale LKG without applying overrides
+
+Do not make the LKG the authority for memberships.
+
+Neon manual overrides must be re-applied to any base/LKG theme payload before public output.
+
+PART F — CACHE INVALIDATION
+
+The “add ticker B and then ticker A suddenly appears” symptom strongly suggests stale cache or invalidation ordering.
+
+Audit all caches touched by a theme basket mutation.
+
+After a successful persisted add/remove, invalidate the existing caches for:
+
+* admin theme basket endpoint
+* theme merge layer
+* Themes public list
+* Themes relative strength/performance membership result where membership is embedded
+* Options Flow Sectors aggregate
+* Options theme supplement universe/pending queue if it caches the symbol universe
+* any Watchlist category/theme projection cache that already syncs from curated theme memberships
+
+Do not simply sleep or add frontend timeouts.
+
+Required order:
+
+1. validate request
+2. persist Neon row
+3. COMMIT
+4. invalidate dependent caches
+5. rebuild/refetch authoritative basket if needed
+6. return the authoritative persisted basket in the mutation response
+
+The POST response should ideally contain:
+
+* theme_id
+* symbol
+* action
+* persisted=true
+* final theme_holdings / basket symbols
+* member_count
+
+The frontend should not have to guess whether the mutation succeeded.
+
+PART G — CROSS-PAGE PROPAGATION
+
+The user expects a dev Themes-page membership edit to propagate to:
+
+1. Themes page theme universe / ticker universe
+2. Watchlist page ticker theme categorization
+3. Options Flow → Sectors theme aggregation and ticker universe
+
+Audit the EXISTING sync/propagation paths first.
+
+Do not invent replacements.
+
+For one controlled ticker add, verify:
+
+THEMES PAGE:
+
+* ticker appears in the theme basket
+* survives restart
+* contributes to theme membership/performance universe according to current rules
+
+WATCHLIST:
+
+* if the ticker exists on Watchlist, its displayed theme/category reflects the newly assigned theme through the existing category projection/override path
+* do not add the ticker to the Watchlist if it was not already a Watchlist ticker unless that is existing behavior
+* do not make Themes depend live on Watchlist
+
+OPTIONS FLOW:
+
+* ticker appears under the theme in `/api/options-flow/sectors`
+* if not already master-scanned, it enters the existing theme supplement scan universe
+* one ticker in multiple themes remains one options scan/cache entry
+* removing from one theme removes only that membership
+* it remains in another theme if still assigned there
+
+Important:
+Do not assume cross-page sync is correct because caches eventually converge. Prove it with one real add mutation.
+
+PART H — RESTART PERSISTENCE TEST
+
+This is mandatory.
+
+Use one real test membership.
+
+Sequence:
+
+1. Add ticker to active theme via real admin endpoint.
+2. Confirm Neon row.
+3. Confirm admin basket.
+4. Confirm public Themes output.
+5. Confirm Watchlist projection if ticker is on Watchlist.
+6. Confirm Options Flow Sectors grouping.
+7. Restart backend.
+8. Repeat steps 2–6.
+
+The exact same membership must remain after restart.
+
+Then remove the test membership using the real admin endpoint and verify cleanup.
+
+PART I — RAPID MULTI-ADD TEST
+
+The UI glitch suggests mutation/refetch ordering may also be involved.
+
+Backend validation:
+
+1. Add ticker A to a theme.
+2. Immediately add ticker B to same theme.
+3. Read authoritative admin basket.
+4. Confirm BOTH A and B exist.
+5. Query Neon.
+6. Confirm two persisted `(theme_id, symbol)` rows/action states.
+7. Restart.
+8. Confirm BOTH still exist.
+
+Also test:
+
+* add A
+* remove A
+* re-add A
+
+Final state must be `action='add'` and A must remain after restart.
+
+PART J — DO NOT MASK THE BUG
+
+Do not:
+
+* manually edit the LKG to make the test pass
+* manually edit base `proxy_symbols`
+* seed the test ticker into the source universe
+* add a frontend optimistic-only fix
+* add a delay after POST
+* create a second membership table
+* claim success only because the UI temporarily displays the ticker
+
+The proof is the Neon row and restart persistence.
+
+DELIVERABLE
+
+Report:
+
+1. Exact root cause.
+2. Exact frontend → proxy → backend → Neon write path.
+3. Whether POST previously returned success before durable persistence.
+4. Whether an existing `action='remove'` row blocked re-add.
+5. Whether startup/cache rebuild overwrote manual admin rows.
+6. Exact files changed.
+7. Exact SQL/persistence helper changed.
+8. Cache invalidation order.
+9. Controlled single-add before/after proof.
+10. Rapid A+B add proof.
+11. remove → re-add proof.
+12. Neon rows before and after restart.
+13. Themes page membership before and after restart.
+14. Watchlist projection result.
+15. Options Flow Sectors result.
+16. Confirmation no new membership store was created.
+17. Confirmation Watchlist page files were not changed unless the existing projection path itself was proven broken.

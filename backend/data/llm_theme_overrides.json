@@ -490,9 +490,9 @@
     "confidence": "fmp_industry"
   },
   "OKTA": {
-    "display_name": "Data Center Infrastructure",
-    "theme_id": "datacenter_infra",
-    "confidence": "fmp_industry"
+    "display_name": "Cybersecurity",
+    "theme_id": "cybersecurity",
+    "confidence": "manual"
   },
   "ON": {
     "display_name": "Semiconductors",
@@ -902,6 +902,16 @@
   "RDDT": {
     "display_name": "AI Networking",
     "theme_id": "ai_networking",
+    "confidence": "manual"
+  },
+  "PANW": {
+    "display_name": "Cybersecurity",
+    "theme_id": "cybersecurity",
+    "confidence": "manual"
+  },
+  "S": {
+    "display_name": "Cybersecurity",
+    "theme_id": "cybersecurity",
     "confidence": "manual"
   }
 }
