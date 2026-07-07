@@ -598,3 +598,152 @@ class FMPProvider:
         Returns empty list.
         """
         return []
+
+    # ── Security search ───────────────────────────────────────────────────────
+    #
+    # FMP stable/search-symbol and stable/search-name are the working search
+    # endpoints on the Starter plan.  Both return:
+    #   {symbol, name, currency, exchangeFullName, exchange}
+    # where `exchange` is the short code (AMEX, NYSE, LSE, PAR, etc.).
+    #
+    # Canonical ticker construction rules (matching existing Watchlist data):
+    #   US exchanges → bare symbol: "NVDA", "TRT"
+    #   Non-US exchanges → "EXCHANGE_CODE:BARE_SYMBOL": "LSE:IQE", "PAR:SOI"
+    #
+    # FMP uses dotted suffix format internally (e.g. IQE.L, SOI.PA).
+    # The bare symbol is extracted by splitting on the first dot.
+    # Manually-typed entries like "AIM:ENSI" or "EPA:SOI" continue to work
+    # alongside search-generated ones — exact canonical match on delete/add.
+
+    _US_EXCHANGE_CODES: frozenset = frozenset({
+        "NASDAQ", "NYSE", "AMEX", "OTC", "PINK", "OTCBB",
+        "BATS", "CBOE", "NYSEARCA", "NYSEAMERICAN", "NEO",
+        "OTCQB", "OTCQX", "PCX", "ETF", "INDEX", "CRYPTO",
+    })
+
+    def _canonical_ticker(self, fmp_symbol: str, exchange_code: str) -> str:
+        """
+        Derive the canonical Watchlist ticker from FMP's symbol and exchange code.
+
+        FMP uses dotted suffix format for non-US symbols (e.g. 'IQE.L', 'SOI.PA').
+        The bare symbol is extracted by splitting on the first dot.
+
+        US-exchange securities → bare symbol (e.g. 'NVDA', 'TRT').
+        Non-US → 'EXCHANGE_CODE:BARE_SYMBOL' (e.g. 'LSE:IQE', 'PAR:SOI').
+
+        `_rss_provider_symbol()` already handles this format: splits on ':' to
+        get the bare symbol for Yahoo/Google news queries.
+        """
+        raw_sym = (fmp_symbol or "").strip()
+        exch    = (exchange_code or "").strip()
+        if not raw_sym:
+            return ""
+        bare = raw_sym.split(".")[0].upper()
+        if not bare:
+            return ""
+        exch_up = exch.upper()
+        if exch_up in self._US_EXCHANGE_CODES or not exch:
+            return bare
+        return f"{exch}:{bare}"
+
+    async def search_securities(self, query: str, limit: int = 25) -> list:
+        """
+        Search for securities by ticker or company name.
+
+        Uses FMP stable/search-symbol (ticker prefix search) and
+        stable/search-name (company name search) in parallel.
+        Results are merged and deduplicated by canonical_ticker.
+
+        Ranking: exact ticker match → ticker prefix → name match.
+        5-minute result cache to support autocomplete debounce patterns.
+
+        Returns normalized list where each item has:
+          canonical_ticker, provider_symbol, company_name, exchange,
+          exchange_short_name, country, currency, security_type,
+          is_actively_trading, display_symbol
+        """
+        import asyncio as _aio
+        q = query.strip()
+        if not q:
+            return []
+
+        cache_key = f"fmp:security_search2:{q.lower()}:{limit}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        params_sym  = {"apikey": self.api_key, "query": q, "limit": limit}
+        params_name = {"apikey": self.api_key, "query": q, "limit": limit}
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                sym_resp, name_resp = await _aio.gather(
+                    client.get(f"{self.STABLE_URL}/search-symbol", params=params_sym),
+                    client.get(f"{self.STABLE_URL}/search-name",   params=params_name),
+                    return_exceptions=True,
+                )
+        except Exception as exc:
+            print(f"[FMP] search_securities gather failed: {exc}")
+            return []
+
+        raw_items: list = []
+        for resp in (sym_resp, name_resp):
+            if isinstance(resp, Exception):
+                continue
+            if getattr(resp, "status_code", None) not in (200, 201):
+                continue
+            try:
+                data = resp.json()
+                if isinstance(data, list):
+                    raw_items.extend(data)
+            except Exception:
+                pass
+
+        if not raw_items:
+            return []
+
+        q_upper = q.upper()
+        seen_canonical: set = set()
+        bucket_exact: list  = []
+        bucket_prefix: list = []
+        bucket_name: list   = []
+
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            fmp_sym   = (item.get("symbol") or "").strip()
+            name      = (item.get("name") or "").strip()
+            exch_code = (item.get("exchange") or "").strip()
+            full_exch = (item.get("exchangeFullName") or exch_code).strip()
+            currency  = (item.get("currency") or "").strip()
+
+            canonical = self._canonical_ticker(fmp_sym, exch_code)
+            if not canonical or canonical in seen_canonical:
+                continue
+            seen_canonical.add(canonical)
+
+            bare_sym = fmp_sym.split(".")[0].upper()
+
+            result = {
+                "canonical_ticker":    canonical,
+                "provider_symbol":     bare_sym,
+                "company_name":        name,
+                "exchange":            full_exch,
+                "exchange_short_name": exch_code,
+                "country":             item.get("country") or "",
+                "currency":            currency,
+                "security_type":       item.get("type") or "stock",
+                "is_actively_trading": not item.get("delistingDate"),
+                "display_symbol":      canonical,
+            }
+
+            if bare_sym == q_upper:
+                bucket_exact.append(result)
+            elif bare_sym.startswith(q_upper):
+                bucket_prefix.append(result)
+            else:
+                bucket_name.append(result)
+
+        results = bucket_exact + bucket_prefix + bucket_name
+        cache.set(cache_key, results, 300)
+        return results

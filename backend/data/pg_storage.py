@@ -1701,6 +1701,223 @@ def watchlist_delete(watchlist_id: str) -> bool:
         _put_conn(conn)
 
 
+# ── Atomic single-ticker membership mutations ────────────────────────────────
+# Uses pg_advisory_xact_lock to serialise concurrent add/remove on the same
+# watchlist_id, preventing the lost-update race inherent in JSONB blob storage.
+
+def _watchlist_lock_key(watchlist_id: str) -> int:
+    """Stable signed-int64 advisory lock key derived from watchlist_id."""
+    import hashlib
+    h = int(hashlib.sha256(watchlist_id.encode()).hexdigest()[:16], 16)
+    return h % (2 ** 63)
+
+
+_TICKER_ROW_KEYS: tuple = ("ticker", "Ticker", "TICKER", "symbol", "Symbol", "SYMBOL")
+
+
+def _sanitize_analysis(analysis: dict, ticker: str) -> dict:
+    """
+    Remove ticker from ALL known analysis membership arrays.
+    Exact canonical match only — AIM:TRT does not match TRT.
+    Handles: sections[*].tickers, top_buys, most_undervalued, best_catalysts,
+    hidden_gems, most_revolutionary, right_sector, avoid_list,
+    legacy categories dict.
+    """
+    if not analysis or not isinstance(analysis, dict):
+        return analysis or {}
+
+    def _keep(item: object) -> bool:
+        if not isinstance(item, dict):
+            return True
+        return not any(
+            str(item.get(k, "")).strip().upper() == ticker
+            for k in _TICKER_ROW_KEYS
+        )
+
+    def _filter(lst: object) -> list:
+        if not isinstance(lst, list):
+            return lst
+        return [item for item in lst if _keep(item)]
+
+    result = dict(analysis)
+
+    sections = result.get("sections")
+    if isinstance(sections, list):
+        cleaned = []
+        for sec in sections:
+            if isinstance(sec, dict):
+                s = dict(sec)
+                s["tickers"] = _filter(s.get("tickers", []))
+                cleaned.append(s)
+            else:
+                cleaned.append(sec)
+        result["sections"] = cleaned
+
+    for key in (
+        "top_buys", "most_undervalued", "best_catalysts",
+        "hidden_gems", "most_revolutionary", "right_sector", "avoid_list",
+    ):
+        if key in result:
+            result[key] = _filter(result[key])
+
+    cats = result.get("categories")
+    if isinstance(cats, dict):
+        result["categories"] = {k: _filter(v) for k, v in cats.items()}
+
+    return result
+
+
+def watchlist_add_ticker(
+    watchlist_id: str,
+    canonical_ticker: str,
+) -> dict:
+    """
+    Atomically add canonical_ticker to watchlist_id.
+    Uses advisory lock to prevent concurrent lost-update.
+    Returns:
+        {"added": True,  "duplicate": False, "ticker_count": N}
+        {"added": False, "duplicate": True,  "ticker_count": N}
+        {"added": False, "error": "<reason>"}
+    """
+    t = canonical_ticker.strip().upper()
+    if not t:
+        return {"added": False, "error": "empty_ticker"}
+
+    conn = _get_conn()
+    if conn is None:
+        return {"added": False, "error": "db_unavailable"}
+    try:
+        from psycopg2.extras import Json
+        lock_key = _watchlist_lock_key(watchlist_id)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+        cur.execute(
+            "SELECT tickers, csv_data FROM public.watchlist WHERE id = %s FOR UPDATE",
+            (watchlist_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            conn.rollback()
+            cur.close()
+            return {"added": False, "error": "not_found"}
+
+        tickers: list = list(row[0] or [])
+        csv_data: list = list(row[1] or [])
+
+        if t in tickers:
+            conn.rollback()
+            cur.close()
+            return {"added": False, "duplicate": True, "ticker_count": len(tickers)}
+
+        tickers.append(t)
+        csv_data.append({"Symbol": t})
+
+        cur.execute(
+            """
+            UPDATE public.watchlist
+               SET tickers   = %s,
+                   csv_data  = %s,
+                   updated_at = NOW()
+             WHERE id = %s
+            """,
+            (Json(tickers), Json(csv_data), watchlist_id),
+        )
+        conn.commit()
+        cur.close()
+        print(f"[PG_STORAGE] watchlist_add_ticker: wl={watchlist_id} ticker={t} new_count={len(tickers)}")
+        return {"added": True, "duplicate": False, "ticker_count": len(tickers)}
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_add_ticker error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"added": False, "error": str(e)}
+    finally:
+        _put_conn(conn)
+
+
+def watchlist_remove_ticker(watchlist_id: str, canonical_ticker: str) -> dict:
+    """
+    Atomically remove canonical_ticker from watchlist_id.
+    Sanitizes ALL persisted membership arrays so save_watchlist() cannot
+    resurrect the ticker from stale csv_data or analysis.
+    Exact canonical match only — AIM:TRT != TRT.
+    Uses advisory lock to prevent concurrent lost-update.
+    Returns:
+        {"removed": True,  "ticker_count": N}
+        {"removed": False, "ticker_count": N}   # already absent
+        {"removed": False, "error": "<reason>"}
+    """
+    t = canonical_ticker.strip().upper()
+    if not t:
+        return {"removed": False, "error": "empty_ticker"}
+
+    conn = _get_conn()
+    if conn is None:
+        return {"removed": False, "error": "db_unavailable"}
+    try:
+        from psycopg2.extras import Json
+        lock_key = _watchlist_lock_key(watchlist_id)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+        cur.execute(
+            "SELECT tickers, csv_data, analysis FROM public.watchlist WHERE id = %s FOR UPDATE",
+            (watchlist_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            conn.rollback()
+            cur.close()
+            return {"removed": False, "error": "not_found"}
+
+        tickers: list  = list(row[0] or [])
+        csv_data: list = list(row[1] or [])
+        analysis: dict = dict(row[2] or {})
+
+        was_present = t in tickers
+
+        tickers = [x for x in tickers if str(x).strip().upper() != t]
+
+        csv_data = [
+            r for r in csv_data
+            if not any(
+                str(r.get(k, "")).strip().upper() == t
+                for k in _TICKER_ROW_KEYS
+            )
+        ]
+
+        analysis = _sanitize_analysis(analysis, t)
+
+        cur.execute(
+            """
+            UPDATE public.watchlist
+               SET tickers    = %s,
+                   csv_data   = %s,
+                   analysis   = %s,
+                   updated_at  = NOW()
+             WHERE id = %s
+            """,
+            (Json(tickers), Json(csv_data), Json(analysis), watchlist_id),
+        )
+        conn.commit()
+        cur.close()
+        print(
+            f"[PG_STORAGE] watchlist_remove_ticker: wl={watchlist_id} "
+            f"ticker={t} was_present={was_present} new_count={len(tickers)}"
+        )
+        return {"removed": was_present, "ticker_count": len(tickers)}
+    except Exception as e:
+        print(f"[PG_STORAGE] watchlist_remove_ticker error: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"removed": False, "error": str(e)}
+    finally:
+        _put_conn(conn)
+
+
 def watchlist_list() -> list:
     """List all saved watchlists (metadata only, no full data)."""
     conn = _get_conn()

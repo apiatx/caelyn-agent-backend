@@ -3721,6 +3721,45 @@ async def defiance_2x_endpoint(request: Request, force_refresh: bool = False):
     )
 
 
+# ── Security search (static path — must stay above parameterized routes) ─────
+
+@router.get("/security-search")
+async def security_search_endpoint(request: Request, q: str = "", limit: int = 25):
+    """
+    Search for securities by ticker or company name using FMP.
+    Returns normalized results with canonical_ticker already constructed
+    (e.g. 'TRT' for US, 'AIM:TRT' for AIM-listed) so the caller does not
+    need to construct exchange-prefixed identities.
+
+    Results are ranked: exact ticker match → ticker prefix → name match.
+    All exchange variants sharing the same provider symbol are shown —
+    e.g. querying 'TRT' returns both Trio-Tech (AMEX) and Tribal Group (AIM).
+
+    Response shape per item:
+      canonical_ticker, provider_symbol, company_name, exchange,
+      exchange_short_name, country, currency, security_type,
+      is_actively_trading, display_symbol
+    """
+    q = q.strip()
+    if len(q) < 1:
+        return {"query": q, "results": [], "error": "query_too_short"}
+
+    try:
+        from config import FMP_API_KEY as _fmp_key
+        from data.fmp_provider import FMPProvider
+        provider = FMPProvider(_fmp_key)
+        results = await provider.search_securities(q, limit=min(limit, 50))
+    except Exception as exc:
+        print(f"[WATCHLIST-SEARCH] security_search failed: {exc}")
+        raise HTTPException(status_code=500, detail="Search unavailable")
+
+    return {
+        "query":   q,
+        "results": results,
+        "count":   len(results),
+    }
+
+
 # ── Parameterized endpoints (MUST be after static paths) ────────────────────
 
 @router.patch("/{watchlist_id}/rename")
@@ -3738,6 +3777,122 @@ async def rename_endpoint(watchlist_id: str, body: dict):
         return {"error": "Postgres unavailable"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class _AddTickerBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    canonical_ticker: str
+    company_name: Optional[str] = None
+    exchange_short_name: Optional[str] = None
+    country: Optional[str] = None
+
+
+@router.post("/{watchlist_id}/ticker")
+async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
+    """
+    Add an explicitly selected canonical security to a watchlist.
+    canonical_ticker must be the exact identity returned by GET /security-search
+    (e.g. 'NVDA' for NASDAQ, 'AIM:TRT' for AIM-listed Tribal Group).
+
+    Does NOT run Claude analysis, does NOT call FMP fundamentals.
+    The ticker appears immediately as a skeleton row; background enrichment
+    paths (weekly fundamentals, quote cache) fill in additional fields.
+
+    Idempotent: adding a ticker that already exists returns duplicate=true, 200.
+    """
+    t = body.canonical_ticker.strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="canonical_ticker is required")
+
+    try:
+        from data.pg_storage import watchlist_add_ticker, is_available
+        if not is_available():
+            raise HTTPException(status_code=503, detail="Database unavailable")
+        result = watchlist_add_ticker(watchlist_id, t)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if result.get("error") == "not_found":
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    if result.get("added"):
+        try:
+            from services.user_earnings_service import invalidate_user_earnings
+            invalidate_user_earnings("watchlist")
+        except Exception:
+            pass
+        _rv_registry.pop(watchlist_id, None)
+        _volmc_registry.pop(watchlist_id, None)
+        _news_lkg.pop(watchlist_id, None)
+
+    return {
+        "success":      True,
+        "watchlist_id": watchlist_id,
+        "ticker":       t,
+        "company_name": body.company_name or "",
+        "added":        result.get("added", False),
+        "duplicate":    result.get("duplicate", False),
+        "ticker_count": result.get("ticker_count", 0),
+    }
+
+
+@router.delete("/{watchlist_id}/ticker/{ticker:path}")
+async def remove_ticker_endpoint(watchlist_id: str, ticker: str):
+    """
+    Permanently remove a single canonical ticker from a watchlist.
+
+    Uses exact canonical identity match (strip + uppercase).
+      DELETE /{id}/ticker/NVDA       removes NVDA only
+      DELETE /{id}/ticker/AIM:TRT    removes AIM:TRT only (not bare TRT)
+      DELETE /{id}/ticker/KRX:000660 removes KRX:000660 only
+
+    Sanitizes tickers[], csv_data[], analysis.sections[*].tickers,
+    legacy category arrays, and avoid_list so save_watchlist() cannot
+    resurrect the removed ticker from stale embedded data.
+
+    Idempotent: removing a ticker already absent returns removed=false, 200.
+    404 returned only when the watchlist itself does not exist.
+    """
+    t = ticker.strip().upper()
+    if not t:
+        raise HTTPException(status_code=400, detail="ticker is required")
+
+    try:
+        from data.pg_storage import watchlist_remove_ticker, is_available
+        if not is_available():
+            raise HTTPException(status_code=503, detail="Database unavailable")
+        result = watchlist_remove_ticker(watchlist_id, t)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if result.get("error") == "not_found":
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+
+    if result.get("removed"):
+        try:
+            from services.user_earnings_service import invalidate_user_earnings
+            invalidate_user_earnings("watchlist")
+        except Exception:
+            pass
+        _rv_registry.pop(watchlist_id, None)
+        _volmc_registry.pop(watchlist_id, None)
+        _news_lkg.pop(watchlist_id, None)
+
+    return {
+        "success":      True,
+        "watchlist_id": watchlist_id,
+        "ticker":       t,
+        "removed":      result.get("removed", False),
+        "ticker_count": result.get("ticker_count", 0),
+    }
 
 
 @router.get("/{watchlist_id}")

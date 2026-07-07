@@ -1,0 +1,787 @@
+Audit and implement robust manual Watchlist ticker membership management:
+
+1. permanently remove one exact ticker/security from a saved Watchlist
+2. search/disambiguate securities for manual add
+3. add only an explicitly selected canonical security
+
+This is a critical data-integrity feature.
+
+Do not modify frontend code.
+
+Do not redesign the Watchlist page.
+
+Do not add an LLM.
+
+Do not use fuzzy AI ticker guessing.
+
+Do not add Yahoo or Google search.
+
+Do not create a second Watchlist store.
+
+The existing saved Watchlist persistence remains authoritative.
+
+CURRENT FRONTEND ADD PATH
+
+The current frontend sends:
+
+PATCH /api/watchlist/{watchlist_id}/tickers
+
+body:
+
+{
+"tickers": ["TRT"]
+}
+
+The existing UI simply parses raw input strings and submits them.
+
+There is currently no backend-backed security suggestion/disambiguation selection contract.
+
+The user has already encountered a real identity problem involving:
+
+TRT
+
+versus:
+
+AIM:TRT
+
+The system must stop assuming a bare typed string uniquely identifies the intended company.
+
+CORE INVARIANTS
+
+DELETE:
+
+After deleting canonical ticker X from Watchlist W:
+
+GET /api/watchlist/W
+
+must not contain X anywhere as a Watchlist member.
+
+A server restart must not restore X.
+
+A background analysis refresh must not restore X.
+
+A quote refresh must not restore X.
+
+An RSS sweep must not restore X.
+
+A rank snapshot must not restore X.
+
+X may return only after an explicit add mutation adds X back to W.
+
+ADD:
+
+The user must select an exact security identity from search results.
+
+The backend must persist the selected canonical Watchlist ticker identity.
+
+Do not infer the selected company from a ticker string when multiple securities/exchange variants are available.
+
+PART A — AUDIT THE CURRENT WATCHLIST PERSISTENCE MODEL
+
+Before editing, trace the exact current saved Watchlist structure.
+
+Read:
+
+backend/services/watchlist_service.py
+backend/services/watchlist_router.py
+backend/data/pg_storage.py
+
+and every function used by:
+
+load_watchlist(...)
+save_watchlist(...)
+watchlist_read(...)
+watchlist_write(...)
+
+For one live Primary Watchlist record report the structural locations where ticker membership may appear:
+
+top-level tickers
+csv_data
+analysis.sections[*].tickers
+legacy analysis categories
+avoid_list
+other persisted ticker arrays/maps
+
+Report:
+
+field path
+ticker representation
+whether save_watchlist/extract_tickers can derive membership from that path
+whether GET uses that path
+whether background Claude refresh uses that path
+
+Critical audit question:
+
+Can removing a ticker only from store["tickers"] allow save_watchlist() or another persistence function to reconstruct/re-add that ticker from csv_data or analysis?
+
+Prove the answer from actual code.
+
+Do not implement deletion until this is understood.
+
+PART B — AUDIT THE CURRENT PATCH /{watchlist_id}/tickers ADD ROUTE
+
+Trace the exact current route used by frontend:
+
+PATCH /api/watchlist/{watchlist_id}/tickers
+
+Report:
+
+exact route function
+input model/body
+ticker normalization
+duplicate handling
+database write function
+whether csv_data is changed
+whether analysis is changed
+whether sections are changed
+whether company identity is validated
+whether exchange identity is validated
+whether FMP/Tradier is called
+cache invalidations
+earnings invalidation
+quote behavior
+RSS behavior
+rank-registry behavior
+
+Using a disposable/test Watchlist if necessary, prove what happens today for:
+
+NVDA
+nvda
+TRT
+AIM:TRT
+invalid symbol ZZZZZZZZZ123
+
+Do not mutate the real Primary Watchlist for destructive audit tests.
+
+PART C — AUDIT EXISTING SECURITY SEARCH / SYMBOL RESOLUTION PATHS
+
+Search the backend for every current endpoint/helper involving:
+
+symbol search
+stock search
+company search
+company identity
+company profile
+exchange variants
+ticker autocomplete
+ticker lookup
+FMP search
+search-symbol
+search-name
+
+Report every candidate path and all existing consumers.
+
+The project FMP Starter plan has access to:
+
+Stock Symbol Search
+Company Name Search
+Exchange Variants
+Company Profile / reference data
+
+Prefer reusing an existing FMP search helper or existing FMP proxy architecture.
+
+Do not create a duplicate FMP client if a canonical one already exists.
+
+Do not use Tradier as the security directory authority merely because Tradier supplies quotes.
+
+Tradier may remain the live quote provider after membership is added.
+
+PART D — ADD ONE CANONICAL SECURITY SEARCH ENDPOINT
+
+If no suitable endpoint already exists, add a narrow backend search endpoint following current Watchlist/FMP route conventions.
+
+Preferred conceptual route:
+
+GET /api/watchlist/security-search?q={query}
+
+or reuse a current canonical search route if audit finds one.
+
+The endpoint should support:
+
+ticker input
+company-name input
+
+Examples:
+
+TRT
+Trio Tech
+Tribal Group
+NVDA
+Nvidia
+IQE
+
+Minimum query length:
+
+1 or 2 characters following current UX conventions.
+
+Use FMP Stock Symbol Search and/or Company Name Search through the existing FMP client/guard/budget architecture.
+
+Do not call both endpoints blindly if one existing combined search helper already resolves the query.
+
+Respect the current FMP budget/governor conventions.
+
+This is an explicit user autocomplete action, so on-demand search is acceptable.
+
+Do not perform this search on Watchlist page load.
+
+PART E — SEARCH RESPONSE IDENTITY CONTRACT
+
+Return normalized security suggestions.
+
+Preferred conceptual shape:
+
+{
+"query": "TRT",
+"results": [
+{
+"canonical_ticker": "TRT",
+"provider_symbol": "TRT",
+"company_name": "Trio-Tech International",
+"exchange": "NYSE American",
+"exchange_short_name": "AMEX",
+"country": "US",
+"currency": "USD",
+"security_type": "stock",
+"is_actively_trading": true,
+"display_symbol": "TRT"
+},
+{
+"canonical_ticker": "AIM:TRT",
+"provider_symbol": "TRT",
+"company_name": "Tribal Group PLC",
+"exchange": "AIM / London Stock Exchange",
+"exchange_short_name": "AIM",
+"country": "GB",
+"currency": "GBP",
+"security_type": "stock",
+"is_actively_trading": true,
+"display_symbol": "AIM:TRT"
+}
+]
+}
+
+Use actual available FMP field names internally, but normalize the frontend contract.
+
+The important fields are:
+
+canonical_ticker
+company_name
+exchange/exchange_short_name
+country
+security_type
+
+Do not require the frontend to construct:
+
+AIM:TRT
+
+from separate fields.
+
+Backend should return the canonical Watchlist identity it expects to persist.
+
+PART F — CANONICAL TICKER CONSTRUCTION
+
+Audit current project rules for prefixed foreign symbols.
+
+Do not invent a conflicting ticker identity format.
+
+The existing Watchlist uses canonical examples such as:
+
+AIM:ENSI
+EPA:SOI
+KRX:000660
+TSX:MAL
+
+Determine the exact existing source/rules that created those symbols.
+
+Reuse them.
+
+For a US security:
+
+canonical_ticker may remain:
+
+NVDA
+TRT
+
+For an exchange variant that requires disambiguation:
+
+canonical_ticker may be:
+
+AIM:TRT
+
+The backend search result must make these identities explicit.
+
+Do not globally prefix every US ticker with NASDAQ: or NYSE:.
+
+Do not return a canonical identity that the existing Watchlist quote/theme/news paths cannot understand.
+
+Validate against at least:
+
+TRT
+AIM:TRT
+NVDA
+AIM:IQE
+EPA:SOI
+KRX:000660
+
+PART G — SEARCH RESULT RANKING
+
+For ticker-like queries, prefer:
+
+1. exact canonical ticker match
+2. exact provider symbol match
+3. symbol-prefix match
+4. company-name match
+
+For company-name queries, prefer strongest company-name matches.
+
+Do not silently discard exchange variants with the same provider symbol.
+
+For query:
+
+TRT
+
+if both Trio-Tech International and Tribal Group PLC are returned by the reference data source, both must be visible in results.
+
+Do not auto-select the first result server-side.
+
+Deduplicate only truly identical security identities.
+
+PART H — ADD MUTATION MUST ACCEPT AN EXPLICIT CANONICAL SECURITY
+
+Audit whether the existing PATCH ticker route can safely remain.
+
+Preferred additive approach:
+
+Preserve PATCH /{watchlist_id}/tickers for compatibility.
+
+Add or extend a single-security mutation that accepts the selected canonical identity.
+
+Conceptually:
+
+POST /api/watchlist/{watchlist_id}/ticker
+
+{
+"canonical_ticker": "AIM:TRT",
+"company_name": "Tribal Group PLC",
+"exchange_short_name": "AIM",
+"country": "GB"
+}
+
+The exact shape may be simplified if backend re-resolves canonical_ticker against the chosen search result.
+
+Security requirement:
+
+Do not trust arbitrary frontend company_name/exchange metadata as authority.
+
+The canonical_ticker is the membership identity.
+
+Prefer revalidating or using a server-issued selected result identity if current architecture supports it.
+
+Do not require another FMP call merely to add if the search result cache can safely provide the reference record.
+
+PART I — ADD PERSISTENCE
+
+When adding selected ticker X to Watchlist W:
+
+1. load the authoritative saved Watchlist
+2. normalize exact canonical ticker
+3. reject/idempotently return duplicate if X already exists
+4. add X to the canonical top-level ticker membership
+5. ensure the Watchlist persistence representation remains internally consistent
+6. persist atomically through the existing Neon Watchlist store
+7. return the updated ticker count and added canonical ticker
+
+Do not run a full Claude analysis synchronously.
+
+Do not block add on FMP fundamentals.
+
+Do not fetch all Watchlist quotes.
+
+The ticker should appear immediately as a skeleton/pending Watchlist row using the existing skeleton behavior.
+
+Existing background/enrichment paths may fill additional fields later.
+
+PART J — PERMANENT SINGLE-TICKER DELETE ENDPOINT
+
+Add a narrow exact-membership endpoint following current route conventions.
+
+Preferred:
+
+DELETE /api/watchlist/{watchlist_id}/ticker/{ticker:path}
+
+The route must support:
+
+NVDA
+AIM:ENSI
+KRX:000660
+
+Use exact canonical ticker identity after:
+
+strip
+uppercase
+
+Do not strip the exchange prefix.
+
+Do not interpret:
+
+AIM:TRT
+
+as:
+
+TRT
+
+Delete the exact requested Watchlist member only.
+
+PART K — ATOMIC DELETE SANITIZATION
+
+This is critical.
+
+When deleting ticker X, sanitize every persisted Watchlist membership representation that could cause X to reappear.
+
+At minimum audit and conditionally remove X from:
+
+store["tickers"]
+
+store["csv_data"] ticker/symbol rows
+
+store["analysis"]["sections"][*]["tickers"]
+
+top-level/legacy analysis sections if present
+
+legacy:
+top_buys
+most_undervalued
+best_catalysts
+hidden_gems
+most_revolutionary
+right_sector
+
+avoid_list
+
+any other persisted Watchlist membership array found in PART A
+
+Use exact canonical ticker matching.
+
+Support row identity fields already used in the repo:
+
+ticker
+Ticker
+TICKER
+symbol
+Symbol
+SYMBOL
+
+Do not remove another security merely because the right-of-colon provider symbol matches.
+
+Deleting:
+
+AIM:TRT
+
+must NOT delete:
+
+TRT
+
+Deleting:
+
+TRT
+
+must NOT delete:
+
+AIM:TRT
+
+This must be covered by a controlled test.
+
+PART L — AVOID TICKER RESURRECTION THROUGH save_watchlist
+
+After sanitization, inspect the exact save path.
+
+The final persisted record must be written in a way that cannot reconstruct deleted X from stale csv_data/analysis.
+
+If save_watchlist() recomputes tickers by calling extract_tickers(csv_data, analysis):
+
+then all resurrection-capable structures must be sanitized before save.
+
+Do not manually set store["tickers"] and then pass stale analysis to a helper that re-extracts X.
+
+After delete:
+
+persist
+reload from Neon
+restart process if practical
+reload again
+
+X must remain absent.
+
+PART M — DELETE SIDE EFFECTS / INVALIDATIONS
+
+After a successful membership delete, invalidate or reconcile all WATCHLIST-SCOPED derived state that could visually retain the ticker.
+
+Audit and handle, using existing helpers where available:
+
+canonical Watchlist query cache implications
+Watchlist quote/rank registries
+_rv_registry
+_volmc_registry
+options-signals Watchlist scope
+Watchlist earnings cache
+RSS sweeper Watchlist ticker universe
+Watchlist news response cache/LKG scoping
+strategy-score Watchlist scope
+favorites / Close Watch
+frontend-independent Watchlist analysis cache
+
+Do not globally delete the ticker from:
+
+theme taxonomy
+theme universe
+Options Flow canonical sector membership
+global quote cache
+global company metadata
+another Watchlist
+
+Membership deletion is scoped to one Watchlist.
+
+RSS ARCHIVE:
+
+Do not automatically purge global/canonical article history unless the archive is truly Watchlist-owned and audit proves it is necessary.
+
+The important invariant is that a deleted ticker is no longer selected by the Watchlist's current ticker universe or returned as a member.
+
+RANK SNAPSHOTS:
+
+Do not let a deleted ticker keep affecting future Watchlist rank universes.
+
+The next background snapshot for W must use the updated membership registry.
+
+If the rank registry is populated from GET, invalidate/update it immediately on mutation rather than requiring a process restart.
+
+PART N — FAVORITES / CLOSE WATCH SEMANTICS
+
+Audit current favorites scope.
+
+The frontend currently has a separate favorites/Close Watch system.
+
+Determine whether favorites are:
+
+per user globally
+
+or:
+
+per Watchlist
+
+Do not blindly delete a global favorite if the ticker still belongs to another Watchlist for that user.
+
+Required user-visible invariant:
+
+A ticker removed from active Watchlist W must not continue appearing in W's Close Watch view as a ghost member.
+
+Use the narrowest correct behavior based on actual favorites architecture.
+
+Report the chosen behavior.
+
+PART O — DELETE RESPONSE CONTRACT
+
+Preferred response:
+
+{
+"success": true,
+"watchlist_id": "...",
+"ticker": "AIM:TRT",
+"removed": true,
+"ticker_count": 369
+}
+
+If the ticker is already absent:
+
+prefer idempotent semantics:
+
+{
+"success": true,
+"removed": false,
+...
+}
+
+Do not return 500 for an already-absent ticker.
+
+404 remains appropriate for a missing Watchlist.
+
+PART P — ADD RESPONSE CONTRACT
+
+Preferred:
+
+{
+"success": true,
+"watchlist_id": "...",
+"ticker": "AIM:TRT",
+"company_name": "Tribal Group PLC",
+"added": true,
+"ticker_count": 370
+}
+
+Duplicate:
+
+{
+"success": true,
+"added": false,
+"duplicate": true,
+...
+}
+
+Use actual project conventions where cleaner.
+
+PART Q — MUTATION CONCURRENCY / LOST UPDATE AUDIT
+
+Audit how Watchlist records are written to Neon.
+
+Two browser operations must not silently overwrite each other.
+
+Test conceptually:
+
+request A adds NVDA
+request B deletes TRT
+
+If both operate on stale copies of the same Watchlist record, can last-write-wins restore TRT or lose NVDA?
+
+Report the existing write concurrency semantics.
+
+Use existing DB transaction/row-lock/versioning conventions if available.
+
+If the current Watchlist JSONB/blob persistence is read-modify-write without protection, add the narrowest concurrency guard required for membership mutations.
+
+Do not redesign all Watchlist persistence.
+
+PART R — CONTROLLED IDENTITY TEST: TRT VS AIM:TRT
+
+Use a disposable/test Watchlist.
+
+Add:
+
+TRT
+
+Add:
+
+AIM:TRT
+
+Verify both coexist.
+
+Delete:
+
+AIM:TRT
+
+Verify:
+
+AIM:TRT absent
+TRT present
+
+Restart/reload.
+
+Verify again.
+
+Add AIM:TRT back.
+
+Delete TRT.
+
+Verify:
+
+TRT absent
+AIM:TRT present
+
+This test is mandatory.
+
+PART S — SEARCH VALIDATION
+
+Run security search for:
+
+TRT
+Trio Tech
+Tribal Group
+NVDA
+Nvidia
+IQE
+Soitec
+
+For each return the first 10 normalized results:
+
+canonical_ticker
+company_name
+exchange_short_name
+country
+
+For TRT explicitly report whether both relevant companies/security identities are discoverable.
+
+Do not claim disambiguation works if TRT search returns only an unlabeled bare symbol.
+
+PART T — PERFORMANCE / PROVIDER BUDGET
+
+Measure:
+
+security search cold duration
+security search warm duration if cached
+add duration
+delete duration
+post-add GET duration
+post-delete GET duration
+
+Autocomplete search should be debounced by frontend later.
+
+Backend may use a short search cache, e.g. 5–30 minutes, following current cache conventions.
+
+Do not prefetch the entire FMP security directory on every page load.
+
+Do not call FMP for delete.
+
+Do not call Tradier for delete.
+
+Do not call an LLM for add/delete/search.
+
+PART U — REGRESSION
+
+Confirm:
+
+1. Existing Watchlist GET remains healthy.
+2. Existing PATCH /{id}/tickers compatibility behavior is preserved or clearly documented.
+3. CSV upload remains unchanged.
+4. Watchlist refresh remains unchanged.
+5. REL VOL remains unchanged.
+6. VOL RANK remains functional.
+7. Vol/MC remains functional.
+8. NEWS ACTIVITY remains scoped to current Watchlist members.
+9. ALL NEWS remains functional.
+10. Stock modal News remains functional.
+11. Hyperscaler Deals remains functional.
+12. Watchlist Earnings uses updated membership.
+13. Options signals use updated membership.
+14. No global theme/category membership is deleted by Watchlist removal.
+15. No provider calls occur on delete.
+16. Server restart does not resurrect deleted ticker.
+
+FINAL RETURN
+
+Return:
+
+* full persistence/membership audit
+* exact current add-route behavior
+* exact ticker-resurrection risks found
+* current security-search paths found
+* final search endpoint
+* FMP search/reference path reused
+* normalized search response contract
+* canonical ticker construction rules
+* exact add endpoint/mutation
+* exact delete endpoint/mutation
+* every persisted Watchlist structure sanitized on delete
+* cache/registry invalidations
+* favorites/Close Watch behavior
+* concurrency audit and fix if needed
+* exact files changed
+* TRT vs AIM:TRT controlled test
+* seven-query search validation
+* add/delete persistence-across-restart validation
+* mutation timings
+* regression checklist
+
+Do not modify frontend code.
+Do not implement a delete that only edits the top-level ticker array.
+Do not auto-select ambiguous search results.
+Do not globally strip exchange prefixes.
+Do not remove a ticker from global theme taxonomy because it left one Watchlist.
