@@ -536,20 +536,25 @@ async def lifespan(app):
                             f"unresolved={_st.get('unresolved_instrument_type_tickers', '?')}"
                             f"/{_st.get('required_total', '?')}"
                         )
-                    # Pass 2: display-name enrichment (always run — fills missing names)
-                    _dname_new = await _dname_enrich(
-                        _ityp_all_list,
-                        fmp_provider=data_service.fmp,
-                        max_per_pass=60,
-                    )
-                    if _dname_new:
-                        _ds = _dname_stats(_ityp_all)
-                        print(
-                            f"[DNAME_LOOP] enriched {_dname_new} display names; "
-                            f"coverage={_ds.get('display_name_coverage_pct', '?')}% "
-                            f"({_ds.get('display_name_resolved', '?')}"
-                            f"/{_ds.get('display_name_total', '?')})"
+                    # Pass 2: display-name enrichment — ONLY when new symbols have
+                    # entered the required universe without a cached name.
+                    # Skipped entirely when display_name_missing == 0 (steady state).
+                    # Permanently-failed symbols are never retried by the service.
+                    _ds_pre = _dname_stats(_ityp_all_list)
+                    if _ds_pre.get("display_name_missing", 0) > 0:
+                        _dname_new = await _dname_enrich(
+                            _ityp_all_list,
+                            fmp_provider=data_service.fmp,
+                            max_per_pass=60,
                         )
+                        if _dname_new:
+                            _ds = _dname_stats(_ityp_all_list)
+                            print(
+                                f"[DNAME_LOOP] enriched {_dname_new} display names; "
+                                f"coverage={_ds.get('display_name_coverage_pct', '?')}% "
+                                f"({_ds.get('display_name_resolved', '?')}"
+                                f"/{_ds.get('display_name_total', '?')})"
+                            )
                 else:
                     if _ityp_unresolved_syms:
                         print(f"[ITYPE_LOOP] {len(_ityp_unresolved_syms)} unresolved but FMP unavailable — skipping")
