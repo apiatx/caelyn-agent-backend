@@ -498,7 +498,9 @@ async def lifespan(app):
                     _classified = await _ityp_classify(
                         _ityp_unresolved_syms,
                         fmp_provider=data_service.fmp,
-                        max_per_pass=40,
+                        # No max_per_pass cap — drain the full required universe
+                        # each pass (97 symbols × 0.35 s ≈ 34 s per drain pass).
+                        # Default is 300 in classify_symbols_background.
                     )
                     _st = _ityp_req_stats(_ityp_all)
                     print(

@@ -42,6 +42,8 @@ from pathlib import Path
 _LKG_PATH = Path(__file__).parent / "options_instrument_type_lkg.json"
 _MEM: dict[str, str] = {}        # symbol → "stock" | "etf" | "unknown"
 _MEM_SOURCE: dict[str, str] = {} # symbol → source string
+_MEM_FAILED: dict[str, float] = {}  # symbol → timestamp when marked classification_failed
+_MEM_QUEUED_AT: dict[str, float] = {}  # symbol → timestamp when first seen unresolved
 _LOADED = False
 _SAVE_NEEDED = False
 
@@ -52,19 +54,22 @@ _LAST_SAVE_AT: float = 0.0
 # ── Disk persistence ──────────────────────────────────────────────────────────
 
 def _load_disk() -> None:
-    global _MEM, _MEM_SOURCE, _LOADED, _LAST_SAVE_AT
+    global _MEM, _MEM_SOURCE, _MEM_FAILED, _LOADED, _LAST_SAVE_AT
     try:
         if _LKG_PATH.exists():
             with open(_LKG_PATH) as f:
                 d = json.load(f)
             if isinstance(d, dict):
                 sources = d.get("_sources", {})
+                failed  = d.get("_failed", {})
                 for k, v in d.items():
                     if k.startswith("_"):
                         continue
                     if v in ("stock", "etf", "unknown"):
                         _MEM[k.upper()] = v
                         _MEM_SOURCE[k.upper()] = sources.get(k.upper(), "lkg")
+                for k, ts in failed.items():
+                    _MEM_FAILED[k.upper()] = float(ts)
                 _LAST_SAVE_AT = d.get("_saved_at", 0.0)
     except Exception as e:
         print(f"[INSTRUMENT_TYPE] disk load failed: {e}")
@@ -79,6 +84,7 @@ def _save_disk() -> None:
         payload = dict(_MEM)
         payload["_saved_at"] = time.time()
         payload["_sources"]  = dict(_MEM_SOURCE)
+        payload["_failed"]   = dict(_MEM_FAILED)
         tmp = str(_LKG_PATH) + ".tmp"
         with open(tmp, "w") as f:
             json.dump(payload, f)
@@ -171,17 +177,21 @@ def get_required_universe_classification_stats(required_symbols) -> dict:
     -------
     dict with required_total, required_stock_tickers, required_etf_tickers,
     unresolved_instrument_type_tickers, unresolved_instrument_type_sample,
+    classification_failed_tickers, classification_failed_sample,
+    classification_queue_depth, oldest_unresolved_age,
     sector_inferred_tickers, classification_coverage_pct,
     classification_cache_updated_at.
     """
     if not _LOADED:
         _load_disk()
+    now = time.time()
     syms = [s.upper() for s in required_symbols]
     required_total  = len(syms)
     stock_count     = 0
     etf_count       = 0
     inferred_count  = 0
     unresolved_syms: list[str] = []
+    failed_syms:    list[str] = []
 
     for sym in syms:
         itype = _MEM.get(sym, "unknown")
@@ -192,11 +202,23 @@ def get_required_universe_classification_stats(required_symbols) -> dict:
                 inferred_count += 1
         elif itype == "etf":
             etf_count += 1
+        elif sym in _MEM_FAILED:
+            failed_syms.append(sym)
         else:
             unresolved_syms.append(sym)
 
     resolved = stock_count + etf_count
-    coverage_pct = round(resolved / max(required_total, 1) * 100, 1)
+    # coverage includes failed (explicit FMP non-answer) — they are accounted for
+    coverage_pct = round((resolved + len(failed_syms)) / max(required_total, 1) * 100, 1)
+
+    # Oldest unresolved age — use _MEM_QUEUED_AT for first-seen timestamps
+    oldest_age = None
+    if _MEM_QUEUED_AT:
+        relevant_ts = [
+            _MEM_QUEUED_AT[s] for s in unresolved_syms if s in _MEM_QUEUED_AT
+        ]
+        if relevant_ts:
+            oldest_age = int(now - min(relevant_ts))
 
     return {
         "required_total":                   required_total,
@@ -204,6 +226,10 @@ def get_required_universe_classification_stats(required_symbols) -> dict:
         "required_etf_tickers":             etf_count,
         "unresolved_instrument_type_tickers": len(unresolved_syms),
         "unresolved_instrument_type_sample":  sorted(unresolved_syms)[:20],
+        "classification_failed_tickers":    len(failed_syms),
+        "classification_failed_sample":     sorted(failed_syms)[:20],
+        "classification_queue_depth":       len(unresolved_syms),
+        "oldest_unresolved_age":            oldest_age,
         "sector_inferred_tickers":          inferred_count,
         "classification_coverage_pct":      coverage_pct,
         "classification_cache_updated_at":  _LAST_SAVE_AT or None,
@@ -212,12 +238,18 @@ def get_required_universe_classification_stats(required_symbols) -> dict:
 
 def get_unresolved_symbols(symbols) -> list[str]:
     """
-    Return the subset of *symbols* whose instrument_type is still 'unknown'.
+    Return the subset of *symbols* whose instrument_type is still 'unknown'
+    and that have NOT been marked classification_failed (those are excluded
+    from retries — FMP gave a definitive null answer).
     Never blocks — memory read only.
     """
     if not _LOADED:
         _load_disk()
-    return [s.upper() for s in symbols if _MEM.get(s.upper(), "unknown") == "unknown"]
+    return [
+        s.upper() for s in symbols
+        if _MEM.get(s.upper(), "unknown") == "unknown"
+        and s.upper() not in _MEM_FAILED
+    ]
 
 
 # ── DB warm-up (sync, safe to call at startup) ───────────────────────────────
@@ -293,7 +325,7 @@ async def classify_symbols_background(
     fmp_provider=None,
     *,
     rate_limit_sleep: float = 0.35,
-    max_per_pass: int = 20,
+    max_per_pass: int = 300,
 ) -> int:
     """
     Classify symbols not yet in _MEM (or classified as "unknown" or
@@ -306,39 +338,66 @@ async def classify_symbols_background(
     symbols          : list of candidate symbols to classify
     fmp_provider     : FMPProvider instance  (skips if None)
     rate_limit_sleep : seconds between FMP calls
-    max_per_pass     : max symbols to classify in one call to avoid runaway
+    max_per_pass     : max symbols per call (default 300 — effectively drain
+                       the full required universe in one background pass)
 
     Returns count of newly classified symbols.
     """
     if not _LOADED:
         _load_disk()
 
+    now = time.time()
+
+    # Record first-seen timestamp for every unresolved symbol (for oldest_unresolved_age).
+    for s in symbols:
+        sym = s.upper()
+        if _MEM.get(sym, "unknown") == "unknown" and sym not in _MEM_QUEUED_AT:
+            _MEM_QUEUED_AT[sym] = now
+
     # Prioritise symbols that are genuinely missing OR only sector_inferred
     # (sector_inference is temporary and should be upgraded to fmp_profile when possible).
+    # Exclude symbols already marked classification_failed — FMP gave a definitive null.
     missing = [
         s.upper() for s in symbols
-        if _MEM.get(s.upper()) not in ("stock", "etf")
-        or _MEM_SOURCE.get(s.upper()) == "sector_inference"
+        if (
+            _MEM.get(s.upper()) not in ("stock", "etf")
+            or _MEM_SOURCE.get(s.upper()) == "sector_inference"
+        )
+        and s.upper() not in _MEM_FAILED
     ][:max_per_pass]
 
     if not missing or fmp_provider is None:
         return 0
 
     count = 0
+    failed_count = 0
     for sym in missing:
         try:
             itype = await fmp_provider.get_etf_flag(sym)
             if itype in ("stock", "etf"):
                 _set(sym, itype, source="fmp_profile")
+                _MEM_QUEUED_AT.pop(sym, None)  # resolved — remove from queue tracker
                 count += 1
+            else:
+                # FMP returned a valid response but cannot classify this symbol.
+                # Mark classification_failed so we stop retrying it indefinitely.
+                # (HTTP errors → exception branch below, NOT here — those are transient)
+                _MEM_FAILED[sym] = now
+                _SAVE_NEEDED = True
+                failed_count += 1
             await asyncio.sleep(rate_limit_sleep)
         except Exception as e:
             print(f"[INSTRUMENT_TYPE] classify {sym}: {e}")
+            # Transient error — do NOT mark failed; will retry on next loop pass.
+            await asyncio.sleep(rate_limit_sleep)
             continue
 
-    if count > 0:
+    if count > 0 or failed_count > 0:
         _save_disk()
-        print(f"[INSTRUMENT_TYPE] classified {count} new symbols; total={len(_MEM)}")
+        print(
+            f"[INSTRUMENT_TYPE] classified {count} new symbols "
+            f"(+{failed_count} classification_failed); total_resolved={len(_MEM)}"
+        )
     return count
 
 

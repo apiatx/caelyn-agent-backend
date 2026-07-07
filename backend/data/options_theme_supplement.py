@@ -853,6 +853,41 @@ def load_sectors_universe_lkg_from_disk() -> None:
 # Dict value is the add_at timestamp for age diagnostics.
 _HIGH_PRIORITY_SYMBOLS: dict[str, float] = {}
 
+_PRIORITY_FILE = _pathlib.Path(__file__).resolve().parent / "options_priority_symbols.json"
+
+
+def _load_priority_disk() -> None:
+    """Load persisted high-priority symbols from disk at startup."""
+    global _HIGH_PRIORITY_SYMBOLS
+    try:
+        if _PRIORITY_FILE.exists():
+            with open(_PRIORITY_FILE) as f:
+                d = _json.load(f)
+            now = time.time()
+            cutoff = now - 3600  # ignore entries older than 1 hour
+            for sym, ts in (d.get("symbols") or {}).items():
+                if isinstance(ts, (int, float)) and ts > cutoff:
+                    if sym.upper() not in _HIGH_PRIORITY_SYMBOLS:
+                        _HIGH_PRIORITY_SYMBOLS[sym.upper()] = ts
+    except Exception:
+        pass
+
+
+def _save_priority_disk() -> None:
+    """Atomically persist the current high-priority set to disk."""
+    import os as _os
+    try:
+        payload = {"symbols": dict(_HIGH_PRIORITY_SYMBOLS), "saved_at": time.time()}
+        tmp = str(_PRIORITY_FILE) + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(payload, f)
+        _os.replace(tmp, _PRIORITY_FILE)
+    except Exception:
+        pass
+
+
+_load_priority_disk()
+
 
 def add_high_priority_symbols(symbols: list[str]) -> None:
     """
@@ -865,13 +900,16 @@ def add_high_priority_symbols(symbols: list[str]) -> None:
 
     Safe to call from any sync or async context (pure in-memory write).
     """
-    now = _time.time()
+    now = time.time()
+    added = []
     for sym in symbols:
         s = sym.upper()
         if s not in _HIGH_PRIORITY_SYMBOLS:
             _HIGH_PRIORITY_SYMBOLS[s] = now
-    if symbols:
-        print(f"[PRIORITY_QUEUE] Marked {len(symbols)} symbol(s) high-priority: {[s.upper() for s in symbols[:5]]}")
+            added.append(s)
+    if added:
+        print(f"[PRIORITY_QUEUE] Marked {len(added)} symbol(s) high-priority: {added[:5]}")
+        _save_priority_disk()
 
 
 def clear_scanned_high_priority(symbols: list[str]) -> None:
@@ -879,8 +917,12 @@ def clear_scanned_high_priority(symbols: list[str]) -> None:
     Remove symbols from the high-priority set after the backfill loop scans them.
     Call this after every successful scan batch so the priority dict stays current.
     """
+    cleared = False
     for sym in symbols:
-        _HIGH_PRIORITY_SYMBOLS.pop(sym.upper(), None)
+        if _HIGH_PRIORITY_SYMBOLS.pop(sym.upper(), None) is not None:
+            cleared = True
+    if cleared:
+        _save_priority_disk()
 
 
 def get_priority_queue_diag() -> dict:
@@ -890,7 +932,7 @@ def get_priority_queue_diag() -> dict:
     """
     pending = get_sectors_pending_symbols()
     pending_set = set(pending)
-    now = _time.time()
+    now = time.time()
     hi_pending = [s for s in sorted(_HIGH_PRIORITY_SYMBOLS) if s in pending_set]
     oldest_ts = min(
         (_HIGH_PRIORITY_SYMBOLS[s] for s in hi_pending), default=None

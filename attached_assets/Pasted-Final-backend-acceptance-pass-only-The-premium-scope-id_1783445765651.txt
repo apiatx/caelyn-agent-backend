@@ -1,0 +1,236 @@
+Final backend acceptance pass only.
+
+The premium_scope_id separation, scope-filtered breadth math, honest classification diagnostics, live HIMS scan, and theme-symbol priority infrastructure are directionally correct.
+
+Do not broadly refactor the system.
+
+Three specific acceptance questions remain before the frontend builds the ETF tab.
+
+==================================================
+
+1. PROVE NET FLOW LEAF TILES USE CANONICAL NET FLOW SNAPSHOTS
+   ==================================================
+
+Current implementation confirms breadth_pcr only aggregates:
+
+premium_scope_id =
+"net_flow_single_expiry_7_60dte_v1"
+
+That fixes aggregate scope contamination.
+
+Now audit the individual ticker node used by:
+
+* Net Flow → All Stocks
+* future Net Flow → ETFs
+
+Question:
+
+If a symbol has BOTH:
+
+* a master screener unusual-flow row
+* a supplement canonical Net Flow row
+
+which row supplies:
+
+* call_premium
+* put_premium
+* net_premium
+* raw_premium_pcr
+* effective_premium_pcr
+* premium_scope_id
+
+to the Net Flow ticker leaf?
+
+Trace:
+
+* get_combined_ticker_data()
+* merge precedence
+* _build_ticker_node()
+* build_sector_tree/build_theme_tree ticker leaves
+
+Select at least 5 symbols that exist in BOTH master and supplement sources.
+
+For each show:
+
+symbol
+master scope id
+master raw P/C
+supplement scope id
+supplement raw P/C
+Net Flow ticker-node scope id
+Net Flow ticker-node raw P/C
+
+REQUIRED:
+
+Every individual ticker leaf shown on Net Flow must use:
+
+premium_scope_id =
+"net_flow_single_expiry_7_60dte_v1"
+
+when a canonical Net Flow snapshot exists.
+
+Do not let get_combined_ticker_data() overwrite the canonical Net Flow premium fields with an unusual-flow master row.
+
+Preferred architecture:
+
+Keep Net Flow and Unusual Flow fields/source rows semantically separate.
+
+For example, either:
+
+* preserve separate net_flow_snapshot and unusual_flow_snapshot internally
+  OR
+* explicitly select canonical Net Flow source when building Net Flow ticker nodes
+
+Do not destroy the master screener row.
+
+Unusual Flow must continue using unusual-flow data.
+
+If a required symbol has no canonical Net Flow snapshot:
+
+* mark Net Flow pending/missing
+* do not substitute unusual-flow P/C into the Net Flow leaf
+
+Acceptance:
+The ticker P/C shown in Net Flow and the ticker P/C used by breadth aggregation must come from the same canonical Net Flow methodology.
+
+==================================================
+2. DRAIN REQUIRED-UNIVERSE INSTRUMENT CLASSIFICATION
+====================================================
+
+Current honest diagnostics report:
+
+required_total = 247
+required_stock_tickers = 129
+required_etf_tickers = 21
+unresolved_instrument_type_tickers = 97
+classification_coverage_pct = 60.7%
+
+This is not sufficient for frontend stock-vs-ETF filtering.
+
+Do not let 97 unresolved required symbols silently disappear from both:
+
+* ETFs
+* All Stocks
+
+Audit the current periodic classifier:
+
+* batch size
+* cadence
+* FMP provider pacing
+* failure/retry behavior
+* unresolved requeue behavior
+
+Use the EXISTING FMP provider/governor.
+
+Do not create a page-triggered FMP path.
+Do not synchronously classify in the Options Flow API response.
+Do not bypass provider pacing.
+
+But remove the arbitrary behavior where only 40 unresolved symbols are attempted every 30 minutes if that is the current bottleneck.
+
+Required behavior:
+
+The required-universe classification reconciler should continue draining unresolved required symbols in paced background batches until each symbol is:
+
+* stock
+* etf
+* explicitly classification_failed/unsupported
+
+A newly required symbol should enter this same classification queue immediately after universe reconciliation.
+
+Persist results to the existing classification LKG/cache.
+
+Expose:
+
+* required_total
+* required_stock_tickers
+* required_etf_tickers
+* unresolved_instrument_type_tickers
+* classification_failed_tickers
+* classification_coverage_pct
+* classification_queue_depth
+* oldest_unresolved_age
+* unresolved sample
+* failed sample
+
+Target:
+classification coverage >= 99% for the current required universe before frontend stock/ETF separation is considered trustworthy.
+
+For symbols remaining unresolved:
+Report the exact reason.
+
+Do not use symbol-name guessing.
+
+Preserve instrument_type_source and instrument_type_inferred provenance.
+
+==================================================
+3. RUN A REAL POST-CHANGE HIGH-PRIORITY MEMBERSHIP TEST
+=======================================================
+
+The HIMS controlled test proved the paced scanner works.
+
+It did not prove the newly added high-priority queue works because HIMS was already in the general pending queue before the priority mechanism was implemented.
+
+Run one actual controlled membership mutation AFTER the current priority code is live.
+
+Use a dev/admin test symbol with listed options that is not currently required by the selected theme.
+
+BEFORE:
+
+* symbol
+* theme membership absent
+* canonical Net Flow snapshot state
+* general pending position/state
+* high_priority_pending state
+
+Perform the existing theme membership write through the real endpoint/path.
+
+Then report actual observed state:
+
+1. membership persisted
+2. required universe sees symbol
+3. high_priority_pending contains symbol
+4. get_sectors_pending_symbols places it ahead of normal backlog
+5. next paced scanner batch contains symbol
+6. scan starts
+7. scan completes
+8. canonical premium_scope_id is net_flow_single_expiry_7_60dte_v1
+9. supplement memory/cache updated
+10. supplement LKG updated
+11. Options Flow ticker node populated
+12. high-priority entry cleared
+13. theme coverage updates
+
+Do not directly call Tradier to fake the scan.
+
+After validation, remove the temporary test membership if appropriate.
+
+Also report whether _HIGH_PRIORITY_SYMBOLS is memory-only.
+
+If memory-only:
+Explain behavior across a backend restart between membership write and first scan.
+
+If a newly required symbol loses priority after restart:
+Prefer deriving high priority from persisted membership mutation provenance/timestamp or another existing durable queue state.
+
+Do not create a large new queue subsystem unless necessary.
+
+==================================================
+FINAL ACCEPTANCE
+================
+
+Return evidence for these exact three items.
+
+Do not change frontend.
+
+Do not change the successful heatmap.
+
+Do not change Net Flow breadth math.
+
+Do not change the Tradier pacer.
+
+Frontend ETF-tab work can begin after:
+
+1. Net Flow ticker leaves are proven canonical-scope.
+2. Current required-universe instrument classification is >=99% or remaining failures are explicitly accounted for.
+3. One real post-change theme membership mutation is proven to receive high-priority first-snapshot treatment.

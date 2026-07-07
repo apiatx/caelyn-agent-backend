@@ -240,11 +240,25 @@ async def options_flow_sectors_rate_status(
         _covered  = _total - len(_missing_syms) - len(_deferred_syms)
         _full_pct = round(_covered / max(_total, 1) * 100, 1)
 
+        from data.options_theme_supplement import get_priority_queue_diag as _pq_diag
+        _pq = _pq_diag()
+
         return JSONResponse(content={
             "as_of":           _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
             "priority_mode":   is_sectors_active(),
             "queue_remaining": len(pending),
             "next_pending_10": pending[:10],
+            "priority_queue": {
+                "high_priority_pending":        _pq.get("high_priority_pending"),
+                "high_priority_symbols":        _pq.get("high_priority_pending_sample", []),
+                "high_priority_total_marked":   _pq.get("high_priority_total_marked"),
+                "last_batch_symbols":           _pq.get("last_batch_symbols", []),
+                "oldest_high_priority_age_s":   _pq.get("oldest_high_priority_age_s"),
+            },
+            "supplement": {
+                "pending_total": len(pending),
+                "next_pending":  pending[:10],
+            },
             "sectors_backfill": {
                 "pass_count":       bf_diag.get("pass_count"),
                 "last_pass_at":     bf_diag.get("last_pass_at"),

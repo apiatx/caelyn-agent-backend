@@ -753,6 +753,7 @@ def _build_ticker_node(
     cache_by_ticker: dict[str, dict],
     no_options_syms: set[str],
     instrument_type_by_sym: "dict[str, str] | None" = None,
+    supplement_by_ticker: "dict[str, dict] | None" = None,
 ) -> dict:
     """
     Build a per-ticker options-flow node with full 9-state classification.
@@ -775,9 +776,42 @@ def _build_ticker_node(
     if row is not None:
         source      = row.get("_source", "live")
         scan_result = row.get("scan_result")
-        call_p, put_p = _ticker_call_put(row)
-        net_p    = call_p - put_p
-        has_prem = (call_p + put_p) > 0
+
+        # ── Net Flow source selection ─────────────────────────────────────────
+        # When a symbol is in the master screener (unusual-flow scope) AND the
+        # supplement has a canonical Net Flow snapshot (sectors_chain_summarized),
+        # the Net Flow leaf MUST use the supplement's premium fields.  The master
+        # screener uses a different DTE window and contract filter (top_unusual_
+        # contracts: multi-expiry, $5k min, 7-45 DTE) vs. the canonical Net Flow
+        # methodology (single_expiry_7_60dte: all-session, one expiry per ticker).
+        # Mixing them in the same leaf produces misleading P/C values.
+        # `row` is preserved for state/scan_status/expiration_used derivation.
+        _nf_row = row  # premium fields source for Net Flow display
+        _suppress_nf_premiums = False  # True: no canonical NF snapshot yet
+        if supplement_by_ticker is not None:
+            # 1. Prefer the canonical NF row from the supplement dict (pre-merge, clean).
+            _supp_nf = supplement_by_ticker.get(sym)
+            if _supp_nf and _supp_nf.get("scan_result") == "sectors_chain_summarized":
+                _nf_row = _supp_nf
+            elif row.get("scan_result") == "sectors_chain_summarized":
+                # Merged row itself is canonical (supplement row won the merge and
+                # carried sectors_chain_summarized; _supp_nf may be absent or stale).
+                pass  # keep _nf_row = row
+            else:
+                # No canonical Net Flow snapshot from any source. This includes:
+                # • source=="live": master screener found the ticker (unusual-flow scan)
+                # • source=="supplement": supplement row won but has non-canonical result
+                #   (deferred_retry, etc.) and may carry bridged unusual-flow premiums.
+                # Net Flow MUST NOT show unusual-flow P/C from either path.
+                _suppress_nf_premiums = True
+
+        if _suppress_nf_premiums:
+            call_p = put_p = net_p = 0.0
+            has_prem = False
+        else:
+            call_p, put_p = _ticker_call_put(_nf_row)
+            net_p    = call_p - put_p
+            has_prem = (call_p + put_p) > 0
 
         # Bias for display — stale_lkg rows show their historical bias
         if state == "bullish_flow":
@@ -853,7 +887,10 @@ def _build_ticker_node(
         # ── Premium scope metadata (labeling only, no calculation change) ─────
         # Tells the frontend exactly what the dollar values represent so columns
         # can be labeled "Call Premium (est.)" not "Call Volume".
-        _scope, _exp_used, _dte_used, _prem_method = _expiry_scope(row)
+        if _suppress_nf_premiums:
+            _scope = _exp_used = _dte_used = _prem_method = None
+        else:
+            _scope, _exp_used, _dte_used, _prem_method = _expiry_scope(_nf_row)
 
         # ── premium_scope_id — canonical scope identifier ─────────────────────
         # Maps the raw expiration_scope string to a versioned canonical ID.
@@ -971,6 +1008,7 @@ def _build_ticker_node(
             # "none"                               — pending, no_options, or no data
             # Only "net_flow_single_expiry_7_60dte_v1" tickers contribute to breadth_pcr.
             "premium_scope_id":     _premium_scope_id,
+            "nf_snapshot_pending":  _suppress_nf_premiums or None,
             "expiration_used":      _exp_used,
             "dte_used":             _dte_used,
             # instrument_type_source: how this ticker's etf/stock classification was obtained
@@ -1115,6 +1153,7 @@ def _build_theme_node(
     cache_by_ticker: dict[str, dict],
     no_options_syms: set[str],
     instrument_type_by_sym: "dict[str, str] | None" = None,
+    supplement_by_ticker: "dict[str, dict] | None" = None,
 ) -> dict:
     """
     Build a theme-level aggregation node.
@@ -1126,7 +1165,7 @@ def _build_theme_node(
     """
     proxy_syms   = [s.upper() for s in (meta.get("proxy_symbols") or [])]
     ticker_nodes = [
-        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym)
+        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker)
         for sym in proxy_syms
     ]
     totals       = _rollup_ticker_nodes(ticker_nodes)
@@ -1148,6 +1187,7 @@ def _build_sector_node(
     no_options_syms: set[str],
     sector_names: dict[str, str],
     instrument_type_by_sym: "dict[str, str] | None" = None,
+    supplement_by_ticker: "dict[str, dict] | None" = None,
 ) -> dict:
     """
     Build a sector-level aggregation node using unique-ticker dedup.
@@ -1171,13 +1211,13 @@ def _build_sector_node(
     # This preserves unique-ticker dedup semantics while using the same
     # aggregation code path as the Themes view.
     sector_ticker_nodes = [
-        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym)
+        _build_ticker_node(sym, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker)
         for sym in sector_unique_syms
     ]
     totals = _rollup_ticker_nodes(sector_ticker_nodes)
 
     themes_built = [
-        _build_theme_node(tid, meta, cache_by_ticker, no_options_syms, instrument_type_by_sym)
+        _build_theme_node(tid, meta, cache_by_ticker, no_options_syms, instrument_type_by_sym, supplement_by_ticker)
         for tid, meta in theme_items
     ]
     themes_built.sort(
@@ -1202,6 +1242,7 @@ def build_sector_tree(
     combined_ticker_data: dict[str, dict],
     no_options_syms: set[str],
     theme_universe: dict,
+    supplement_by_ticker: "dict[str, dict] | None" = None,
 ) -> dict:
     """
     Build the full sector → theme → ticker tree.
@@ -1263,7 +1304,7 @@ def build_sector_tree(
         instrument_type_by_sym = {}
 
     sector_nodes = [
-        _build_sector_node(sid, theme_items, combined_ticker_data, no_options_syms, sector_names, instrument_type_by_sym)
+        _build_sector_node(sid, theme_items, combined_ticker_data, no_options_syms, sector_names, instrument_type_by_sym, supplement_by_ticker)
         for sid, theme_items in sectors.items()
     ]
 
@@ -1547,10 +1588,18 @@ def get_sector_flow(*, force_refresh: bool = False) -> dict:
         }
         no_options_syms = set()
 
+    # Supplement-only dict: used to prefer canonical Net Flow snapshots over
+    # master screener rows when both exist for the same symbol.
+    try:
+        from data.options_theme_supplement import get_supplement_data_by_ticker as _supp_data
+        supplement_by_ticker: dict = _supp_data()
+    except Exception:
+        supplement_by_ticker = {}
+
     # ── Pull theme universe (always live — updated in-place by admin edits) ───
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
 
-    result = build_sector_tree(combined_ticker_data, no_options_syms, ENRICHED_THEME_RS_UNIVERSE)
+    result = build_sector_tree(combined_ticker_data, no_options_syms, ENRICHED_THEME_RS_UNIVERSE, supplement_by_ticker=supplement_by_ticker)
 
     # ── Compute diagnostics block ─────────────────────────────────────────────
     # Derive per-source symbol sets for theme universe tickers only.
@@ -1911,6 +1960,7 @@ def build_theme_tree(
     combined_ticker_data: dict[str, dict],
     no_options_syms: set[str],
     theme_universe: dict,
+    supplement_by_ticker: "dict[str, dict] | None" = None,
 ) -> dict:
     """
     Build the flat Theme → Ticker tree (Themes view).
@@ -1945,7 +1995,7 @@ def build_theme_tree(
     for theme_id, meta in theme_universe.items():
         if not meta.get("proxy_symbols"):
             continue
-        node = _build_theme_node(theme_id, meta, combined_ticker_data, no_options_syms, instrument_type_by_sym)
+        node = _build_theme_node(theme_id, meta, combined_ticker_data, no_options_syms, instrument_type_by_sym, supplement_by_ticker)
         node["parent_sector"] = meta.get("parent_sector")
         theme_nodes.append(node)
 
@@ -2079,9 +2129,15 @@ def get_theme_flow(*, force_refresh: bool = False) -> dict:
         }
         no_options_syms = set()
 
+    try:
+        from data.options_theme_supplement import get_supplement_data_by_ticker as _supp_data_t
+        supplement_by_ticker_t: dict = _supp_data_t()
+    except Exception:
+        supplement_by_ticker_t = {}
+
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
 
-    result = build_theme_tree(combined_ticker_data, no_options_syms, ENRICHED_THEME_RS_UNIVERSE)
+    result = build_theme_tree(combined_ticker_data, no_options_syms, ENRICHED_THEME_RS_UNIVERSE, supplement_by_ticker=supplement_by_ticker_t)
     result["_from_themes_cache"] = False
     cache.set(_THEMES_CACHE_KEY, result, _THEMES_CACHE_TTL)
     return result
