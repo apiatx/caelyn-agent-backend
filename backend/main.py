@@ -512,6 +512,7 @@ async def lifespan(app):
                 from data.options_display_name_service import (
                     enrich_display_names_background as _dname_enrich,
                     get_display_name_stats          as _dname_stats,
+                    has_display_name_work_due       as _dname_work_due,
                 )
                 from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _ityp_univ
                 # Full required universe = ETF proxies + stock candidates
@@ -536,12 +537,11 @@ async def lifespan(app):
                             f"unresolved={_st.get('unresolved_instrument_type_tickers', '?')}"
                             f"/{_st.get('required_total', '?')}"
                         )
-                    # Pass 2: display-name enrichment — ONLY when new symbols have
-                    # entered the required universe without a cached name.
-                    # Skipped entirely when display_name_missing == 0 (steady state).
-                    # Permanently-failed symbols are never retried by the service.
-                    _ds_pre = _dname_stats(_ityp_all_list)
-                    if _ds_pre.get("display_name_missing", 0) > 0:
+                    # Pass 2: display-name enrichment — only when actionable work exists:
+                    # genuinely missing symbols, OR temp-failed symbols whose 24h retry
+                    # TTL has expired.  Symbols still inside TTL and permanently-failed
+                    # symbols are skipped.  Resolved symbols never trigger FMP calls.
+                    if _dname_work_due(_ityp_all_list):
                         _dname_new = await _dname_enrich(
                             _ityp_all_list,
                             fmp_provider=data_service.fmp,

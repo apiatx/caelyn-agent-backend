@@ -1,0 +1,63 @@
+One concrete bug remains in the display-name retry gate.
+
+Current verified state says:
+
+- display_name_missing = 0
+- main.py skips _dname_enrich(...) when display_name_missing == 0
+- BESI / SPX / MAXX are temporary failures at attempt 1
+- they are supposedly eligible to retry after 24h and become permanent after 3 attempts
+
+Those semantics conflict.
+
+If temporary failed symbols are excluded from display_name_missing, the outer main.py gate will skip enrichment forever and their attempt counters can never reach 2 or 3.
+
+Fix only this gate.
+
+Required behavior:
+
+- resolved names do not trigger FMP enrichment
+- permanently failed names do not trigger FMP enrichment
+- genuinely missing names trigger enrichment
+- temporary failed names whose retry TTL has expired trigger enrichment
+- temporary failed names still inside retry TTL do not trigger enrichment
+
+Create/reuse one service-level diagnostic/helper such as:
+
+display_name_retry_due_count
+
+or:
+
+has_display_name_work_due()
+
+The service itself should determine whether actionable work exists based on:
+- missing unresolved symbols
+- temporary failures whose retry_after/TTL has expired
+
+Then main.py gates _dname_enrich(...) on actionable work due, NOT only display_name_missing > 0.
+
+Do not reintroduce unconditional 30-minute FMP enrichment.
+
+Expected steady state:
+- 371 resolved names cause zero FMP calls
+- temporary failures inside 24h TTL cause zero FMP calls
+- after TTL expires, only due temporary failures are retried
+- successful retry clears attempts/failure state
+- third consecutive empty response marks permanent failure
+- permanent failures never retry
+
+Validate specifically:
+
+1. BESI/SPX/MAXX at attempt 1 and inside TTL:
+   has_display_name_work_due = false
+
+2. Simulate/expire one temporary failure TTL:
+   has_display_name_work_due = true
+
+3. Run enrichment:
+   only due missing/retry symbols are candidates
+
+4. Confirm attempt counter increments to 2 on another empty result
+
+5. Restore live state normally
+
+This is the only fix. Do not touch ETF classification, taxonomy, Net Flow, scanner, or other display-name architecture.

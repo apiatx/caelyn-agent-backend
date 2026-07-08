@@ -135,22 +135,81 @@ def get_display_name_bulk(symbols) -> dict[str, str]:
 def get_display_name_stats(required_symbols) -> dict:
     """
     Return coverage metrics for the given required universe.
+
+    Categories (mutually exclusive, exhaustive):
+      resolved    — name is known
+      perm_failed — permanently failed (sentinel), never retried
+      retry_due   — temp-failed with expired TTL → eligible for retry now
+      retry_wait  — temp-failed still inside TTL → will retry later
+      missing     — no name and no failure record at all
     """
     if not _LOADED:
         _load_disk()
     syms = [s.upper() for s in required_symbols]
-    total     = len(syms)
-    resolved  = sum(1 for s in syms if _DNAME.get(s))
-    failed    = sum(1 for s in syms if s in _DNAME_FAILED)
-    missing   = total - resolved - failed
+    now = time.time()
+    total       = len(syms)
+    resolved    = 0
+    perm_failed = 0
+    retry_due   = 0
+    retry_wait  = 0
+    missing     = 0
+    for s in syms:
+        if _DNAME.get(s):
+            resolved += 1
+        elif _is_perm_failed(s):
+            perm_failed += 1
+        elif s in _DNAME_FAILED:
+            if now - _DNAME_FAILED[s] > _FAILED_TTL_S:
+                retry_due += 1
+            else:
+                retry_wait += 1
+        else:
+            missing += 1
     return {
-        "display_name_total":    total,
-        "display_name_resolved": resolved,
-        "display_name_failed":   failed,
-        "display_name_missing":  missing,
+        "display_name_total":       total,
+        "display_name_resolved":    resolved,
+        "display_name_perm_failed": perm_failed,
+        "display_name_retry_due":   retry_due,
+        "display_name_retry_wait":  retry_wait,
+        "display_name_missing":     missing,
+        # legacy compat key — combined count that does NOT include retry_due
+        "display_name_failed":      perm_failed + retry_wait,
         "display_name_coverage_pct": round(resolved / max(total, 1) * 100, 1),
-        "display_name_updated_at": _LAST_SAVE_AT,
+        "display_name_updated_at":  _LAST_SAVE_AT,
     }
+
+
+def has_display_name_work_due(required_symbols) -> bool:
+    """
+    Return True if any symbol in *required_symbols* needs an FMP enrichment pass now.
+
+    Work is due when:
+      - A symbol has no name and no failure record (genuinely new/missing), OR
+      - A symbol has a temporary failure whose 24h retry TTL has expired.
+
+    Work is NOT due when:
+      - All unresolved symbols are either permanently failed or still inside TTL.
+
+    This is the correct gate for main.py; it is more precise than checking only
+    display_name_missing > 0 (which misses expired temp-failures) or any_failed > 0
+    (which would fire for symbols still inside the 24h cooldown).
+    """
+    if not _LOADED:
+        _load_disk()
+    now = time.time()
+    for s_raw in required_symbols:
+        s = s_raw.upper()
+        if _DNAME.get(s):
+            continue                       # resolved — skip
+        if _is_perm_failed(s):
+            continue                       # permanently failed — skip
+        if s in _DNAME_FAILED:
+            if now - _DNAME_FAILED[s] > _FAILED_TTL_S:
+                return True                # temp-failed AND TTL expired → work due
+            # else: still inside TTL — skip
+        else:
+            return True                    # no name and no failure record → work due
+    return False
 
 
 # ── DB warm-up (sync, safe to call at startup) ────────────────────────────────
