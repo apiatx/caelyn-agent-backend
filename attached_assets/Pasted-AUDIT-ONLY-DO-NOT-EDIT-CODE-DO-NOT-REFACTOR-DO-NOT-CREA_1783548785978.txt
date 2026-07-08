@@ -1,0 +1,402 @@
+AUDIT ONLY. DO NOT EDIT CODE. DO NOT REFACTOR. DO NOT CREATE NEW SERVICES, TABLES, ENDPOINTS, OR CALCULATIONS.
+
+I am preparing to build a canonical Confluence V2 engine, but before touching anything I need a complete repo-grounded audit of every existing signal/confluence system.
+
+The existing systems are working to varying degrees and MUST be preserved. The purpose of this audit is to identify exactly what already exists, how it works, where the logic lives, which signals are duplicated, and which existing canonical paths should be reused.
+
+Audit these systems:
+
+1. Daily Alpha Board
+2. Watchlist Golden Zone
+3. Watchlist High Conviction Trade Zone
+4. Watchlist High Conviction Investment Zone
+5. Existing Alerts / unusual activity alert engine
+6. Any shared scoring, ranking, signal aggregation, or confluence utilities used by the above
+7. Theme stage / ticker stage inputs consumed by any of the above
+8. Theme leadership / relative strength / emerging-theme inputs consumed by any of the above
+9. Options signal inputs consumed by any of the above
+10. Social signal inputs consumed by any of the above
+11. News/catalyst inputs consumed by any of the above
+12. Fundamental / analyst / estimate inputs consumed by any of the above
+
+IMPORTANT ARCHITECTURAL RULES:
+
+* Do not assume similarly named systems share logic. Trace the real call paths.
+* Do not propose replacing working paths with a new generalized service yet.
+* Preserve existing endpoint paths, loaders, caches, service functions, scheduled jobs, LKG files, and Neon tables.
+* Identify canonical existing sources before suggesting anything new.
+* Do not make code changes.
+* Do not normalize schemas.
+* Do not change scoring.
+* Do not fix bugs during the audit.
+* Do not create Confluence V2 yet.
+* I need facts from the current codebase, not a proposed architecture.
+
+PART A — TRACE EACH USER-FACING SYSTEM
+
+For each of these four primary scoring systems:
+
+* Daily Alpha Board
+* Golden Zone
+* High Conviction Trade Zone
+* High Conviction Investment Zone
+
+Give me:
+
+A. Frontend section/component name if discoverable from backend route usage
+B. Backend endpoint(s)
+C. Route file(s)
+D. Main service/function(s)
+E. Exact call chain from endpoint to final returned ticker ranking
+F. Cache/LKG/Neon source used
+G. Refresh cadence or trigger
+H. Whether calculation is request-time, scheduled, or precomputed
+I. Whether history/snapshots are required
+J. Final fields returned to the frontend
+
+Then list the EXACT INPUT SIGNALS used by each system.
+
+For every signal, show:
+
+* returned field name
+* internal variable name
+* source provider
+* source endpoint/service/cache
+* formula or transformation
+* threshold
+* weight, if weighted
+* gating logic
+* missing-data behavior
+* freshness requirement
+* whether it can contribute positively
+* whether it can contribute negatively
+* whether it is only a label/display field and does not affect ranking
+
+Do not summarize formulas loosely.
+
+If the score is:
+
+score += 2 if volx >= 2
+score += 1 if volx >= 1.5
+
+show that exact logic.
+
+If logic is spread across helpers, follow the helpers.
+
+PART B — DAILY ALPHA BOARD DEEP AUDIT
+
+This is the most important section.
+
+I need to know EXACTLY how the Daily Alpha Board currently finds and ranks its Top 10 ticker signals.
+
+Answer:
+
+1. What is the initial ticker universe?
+2. Which pages/systems contribute ticker candidates?
+3. Is it unioned, intersected, deduplicated, or filtered?
+4. In what order are filters applied?
+5. What signals contribute to the score?
+6. What are the exact weights/point values?
+7. Are there hard gates before scoring?
+8. Are there negative scores or penalties?
+9. How are missing signals treated?
+10. How are ties broken?
+11. Is theme/sector alignment included?
+12. Is ticker stage included?
+13. Is options signal included?
+14. Is net options flow included?
+15. Is options-flow acceleration/delta included?
+16. Is VolX included?
+17. Is volume/market-cap included?
+18. Is relative strength included?
+19. Is social consensus included?
+20. Is social acceleration/freshness included?
+21. Is news included?
+22. Are catalysts included?
+23. Are earnings included?
+24. Are fundamentals included?
+25. Are analyst ratings/targets/estimates included?
+26. Is macro/market regime included?
+27. Is VIX included?
+28. Are prediction-market signals included?
+29. Is portfolio/watchlist membership given a weight?
+30. Is price-entry quality, support proximity, pullback state, breakout state, or extension risk included?
+
+For every YES answer, identify the exact path and formula.
+
+For every NO answer, explicitly say NO.
+
+Then provide one worked example using a real ticker currently available in cached data if possible:
+
+Ticker X:
+candidate source → filters → raw inputs → score additions/subtractions → final score → final rank
+
+Do not make external API calls solely for this worked example. Use currently available cached/LKG/DB data if accessible.
+
+PART C — GOLDEN / HC ZONE DEEP COMPARISON
+
+Create a side-by-side matrix:
+
+Signal / Gate
+Golden Zone
+HC Trade Zone
+HC Investment Zone
+Daily Alpha
+
+Include every current input.
+
+I specifically need to see:
+
+* Stage
+* Revenue growth
+* EPS growth
+* Forward revenue expectations
+* Forward EPS expectations
+* Gross margin
+* FCF / FCF margin
+* Profitability
+* Analyst signal
+* Analyst target upside
+* VolX
+* Volume / market cap
+* Relative volume momentum
+* Options score
+* Premium put/call
+* Net flow
+* Theme alignment
+* Theme stage
+* Relative strength
+* Social signal
+* News/catalysts
+* Price structure
+* Support proximity
+* Extension risk
+
+Use:
+
+YES — weighted
+YES — gate
+YES — display only
+NO
+
+Do not infer based on names. Trace code.
+
+Then answer:
+
+1. Is Golden Zone literally an intersection/combination of HC Trade and HC Investment?
+2. Or does it independently recalculate its own score?
+3. Does HC Trade use the canonical Options Flow signal or a watchlist-specific approximation?
+4. Does HC Investment use all current fundamental columns or only a subset?
+5. Are analyst estimates/targets currently part of any zone calculation?
+6. Are there duplicated calculations between these systems?
+7. Can two systems return materially different values for the same underlying signal?
+
+PART D — ALERT ENGINE
+
+Audit the existing unusual-activity/alert architecture.
+
+Show:
+
+* endpoint/routes
+* monitoring service
+* scheduler/loop
+* ticker universe
+* signal inputs
+* baseline/history source
+* thresholds
+* cooldown
+* deduplication
+* persistence
+* frontend delivery path
+
+Then answer:
+
+1. Do alerts currently rank confluence or just trigger independent unusual events?
+2. Can multiple aligned signals combine into one alert?
+3. Does an alert know that a ticker is also in Daily Alpha?
+4. Does an alert know Golden/HC Zone membership?
+5. Does an alert consume theme state?
+6. Does an alert consume options signal?
+7. Does an alert consume portfolio/watchlist context?
+8. Is there currently any concept resembling:
+   TRADE_IDEA
+   ENTRY_WINDOW
+   ADD_SIGNAL
+   HOLD_DO_NOT_SELL
+   TRIM_SIGNAL
+   EXIT_WARNING
+   THEME_ROTATION
+   RISK_REGIME
+
+Again: audit only. Do not implement these.
+
+PART E — STAGE AND THEME INPUT PROVENANCE
+
+Trace the exact stage value currently shown/used on Watchlist and Themes.
+
+I have seen examples where the visual chart appears Stage 1-2 but the system reports Stage 3.
+
+For every stage calculation currently used by Daily Alpha or the Watchlist zones, show:
+
+* implementation file
+* function
+* required historical data
+* provider/cache source
+* lookback
+* moving averages used
+* slope calculations
+* price-relative-to-MA rules
+* breakout/base rules
+* thresholds
+* precedence/order of classification rules
+* fallback behavior
+* whether Watchlist and Themes use the same canonical stage result
+
+Do NOT fix stage analysis yet.
+
+Identify likely reasons for false Stage 3 classifications based strictly on the existing calculation.
+
+Then trace theme-state inputs:
+
+* Leading
+* Emerging
+* Neutral
+* Lagging
+
+Show the exact calculation and whether it uses:
+
+* 1D
+* 3D
+* 7D
+* 30D
+* longer timeframes
+* relative strength
+* RS acceleration
+* ETF proxy performance
+* average theme-member performance
+* breadth
+* anchor performance
+* options flow
+* social signal
+* news/catalysts
+
+Explicitly identify which of those are NOT currently used.
+
+PART F — CANONICAL SIGNAL INVENTORY
+
+Produce a canonical inventory table with one row per useful signal currently calculated anywhere in these audited systems.
+
+Columns:
+
+Signal Name
+Canonical Field
+Provider
+Canonical Backend Source
+Calculation Function
+Current Consumers
+History Available?
+Stored Where?
+Freshness
+Duplicate Implementations?
+Conflicting Formulas?
+Safe to Reuse in Confluence V2?
+
+Signals should include at minimum:
+
+market regime
+VIX state
+theme stage/state
+theme relative strength
+ticker stage
+ticker relative strength
+VolX
+volume / market cap
+volume momentum
+options signal
+premium put/call
+net flow
+net flow history/deltas if they already exist
+social consensus
+social freshness
+social acceleration
+news/catalyst score
+earnings proximity
+revenue growth
+EPS growth
+gross margin
+FCF margin
+free cash flow
+operating income
+EBIT
+P/E
+P/S
+EV/EBITDA
+analyst recommendation signal
+analyst target upside
+financial estimates/forecast growth
+portfolio membership
+watchlist membership
+favorite/Close Watch membership
+
+Add any additional current signals you discover.
+
+PART G — DUPLICATION AND ARCHITECTURAL DRIFT
+
+List every case where:
+
+* the same metric is calculated in multiple services
+* different formulas exist for the same named metric
+* frontend recalculates a backend metric
+* one page uses stale/LKG data while another uses canonical/current data
+* one system directly calls a provider while another reads the shared cache
+* one scoring engine has copied logic from another and since drifted
+* similarly named fields have different units/scales
+
+For each finding give:
+
+SEVERITY: CRITICAL / HIGH / MEDIUM / LOW
+
+Current paths
+
+Why it matters for Confluence V2
+
+Do NOT fix it yet.
+
+PART H — FINAL RECOMMENDATION
+
+Based only on the audited code, give me:
+
+1. The safest existing system to clone as the initial Confluence V2 experiment.
+2. Which existing functions/services should remain canonical and be reused unchanged.
+3. Which current signals are strong enough to use immediately.
+4. Which current signals must be fixed before Confluence V2 can trust them.
+5. Which major signal categories are genuinely missing.
+6. Whether Daily Alpha V1 should remain completely frozen during the experiment.
+7. The smallest architectural boundary for Confluence V2 that will avoid changing existing behavior.
+
+End with this exact format:
+
+CONFLUENCE AUDIT VERDICT
+
+BEST BASE TO CLONE:
+[system/path]
+
+FREEZE UNCHANGED:
+[list]
+
+SAFE INPUTS NOW:
+[list]
+
+FIX BEFORE V2:
+[list]
+
+GENUINELY MISSING:
+[list]
+
+TOP 5 ARCHITECTURAL DRIFT RISKS:
+[ranked list]
+
+RECOMMENDED NEXT IMPLEMENTATION:
+[ONE implementation only]
+
+Again: AUDIT ONLY. MAKE ZERO CODE CHANGES.
