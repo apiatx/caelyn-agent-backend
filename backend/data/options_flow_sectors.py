@@ -1694,6 +1694,125 @@ def get_sector_flow(*, force_refresh: bool = False) -> dict:
         ),
     }
 
+    # ── Net Premium daily history: inject 1D/7D/30D deltas + save snapshot ────
+    # Runs only on fresh compute (cache miss). Enriched result is then cached
+    # so subsequent cache hits return delta fields without any DB round-trip.
+    # Zero new Tradier calls — operates entirely on already-computed net_premium.
+    try:
+        from data.options_net_premium_history import (
+            upsert_daily_snapshots        as _nph_upsert,
+            get_historical_snapshots_bulk as _nph_hist,
+            compute_delta_fields          as _nph_deltas,
+            get_history_diagnostics       as _nph_diag,
+            _et_today                     as _nph_today,
+        )
+        from datetime import timedelta as _nph_td
+        _nph_today_val = _nph_today()
+        _nph_since     = _nph_today_val - _nph_td(days=35)
+
+        # Collect snapshot rows + entity keys (tickers deduped across themes)
+        _nph_snap_rows: list[dict] = []
+        _nph_entities: list[tuple] = []
+        _nph_seen_tickers: set[str] = set()
+
+        for _nph_s in result.get("sectors", []):
+            _nph_snp = _nph_s.get("net_premium")
+            if _nph_snp is not None:
+                _nph_k = ("sector", _nph_s["sector_id"])
+                _nph_entities.append(_nph_k)
+                _nph_snap_rows.append({
+                    "entity_type": "sector", "entity_id": _nph_s["sector_id"],
+                    "snapshot_date": _nph_today_val, "net_premium": _nph_snp,
+                    "call_premium": _nph_s.get("call_premium"),
+                    "put_premium": _nph_s.get("put_premium"),
+                    "premium_scope_id": "aggregate",
+                })
+            for _nph_t in _nph_s.get("themes", []):
+                _nph_tcls  = _nph_t.get("classification", "theme")
+                _nph_ttype = "sub_theme" if _nph_tcls == "sub_theme" else "theme"
+                _nph_tnp   = _nph_t.get("net_premium")
+                if _nph_tnp is not None:
+                    _nph_k = (_nph_ttype, _nph_t["theme_id"])
+                    _nph_entities.append(_nph_k)
+                    _nph_snap_rows.append({
+                        "entity_type": _nph_ttype, "entity_id": _nph_t["theme_id"],
+                        "snapshot_date": _nph_today_val, "net_premium": _nph_tnp,
+                        "call_premium": _nph_t.get("call_premium"),
+                        "put_premium": _nph_t.get("put_premium"),
+                        "premium_scope_id": "aggregate",
+                    })
+                for _nph_tk in _nph_t.get("tickers", []):
+                    _nph_sym = _nph_tk.get("symbol", "")
+                    if _nph_sym in _nph_seen_tickers:
+                        continue
+                    _nph_pscope  = _nph_tk.get("premium_scope_id", "none")
+                    _nph_pending = _nph_tk.get("nf_snapshot_pending")
+                    if _nph_pscope == "net_flow_single_expiry_7_60dte_v1" and not _nph_pending:
+                        _nph_itype = _nph_tk.get("instrument_type", "unknown")
+                        _nph_etype = "etf" if _nph_itype == "etf" else "stock"
+                        _nph_tnp2  = _nph_tk.get("net_premium")
+                        if _nph_tnp2 is not None:
+                            _nph_k = (_nph_etype, _nph_sym)
+                            _nph_entities.append(_nph_k)
+                            _nph_snap_rows.append({
+                                "entity_type": _nph_etype, "entity_id": _nph_sym,
+                                "snapshot_date": _nph_today_val, "net_premium": _nph_tnp2,
+                                "call_premium": _nph_tk.get("call_premium"),
+                                "put_premium": _nph_tk.get("put_premium"),
+                                "premium_scope_id": _nph_pscope,
+                            })
+                            _nph_seen_tickers.add(_nph_sym)
+
+        # Deduplicate entity keys preserving first-seen order
+        _nph_seen_keys: set = set()
+        _nph_entities_dedup: list[tuple] = []
+        for _nph_k in _nph_entities:
+            if _nph_k not in _nph_seen_keys:
+                _nph_seen_keys.add(_nph_k)
+                _nph_entities_dedup.append(_nph_k)
+
+        # Single bulk DB query for all historical snapshots
+        _nph_history = (
+            _nph_hist(_nph_entities_dedup, _nph_since)
+            if _nph_entities_dedup else {}
+        )
+
+        # Inject delta fields into every node in the tree
+        for _nph_s in result.get("sectors", []):
+            _nph_s.update(_nph_deltas(
+                _nph_s.get("net_premium"),
+                _nph_history.get(("sector", _nph_s["sector_id"]), []),
+                _nph_today_val,
+            ))
+            for _nph_t in _nph_s.get("themes", []):
+                _nph_tcls  = _nph_t.get("classification", "theme")
+                _nph_ttype = "sub_theme" if _nph_tcls == "sub_theme" else "theme"
+                _nph_t.update(_nph_deltas(
+                    _nph_t.get("net_premium"),
+                    _nph_history.get((_nph_ttype, _nph_t["theme_id"]), []),
+                    _nph_today_val,
+                ))
+                for _nph_tk in _nph_t.get("tickers", []):
+                    _nph_sym   = _nph_tk.get("symbol", "")
+                    _nph_itype = _nph_tk.get("instrument_type", "unknown")
+                    _nph_etype = "etf" if _nph_itype == "etf" else "stock"
+                    _nph_tk.update(_nph_deltas(
+                        _nph_tk.get("net_premium"),
+                        _nph_history.get((_nph_etype, _nph_sym), []),
+                        _nph_today_val,
+                    ))
+
+        # Extend diagnostics with snapshot-table stats
+        result["diagnostics"].update(_nph_diag())
+
+        # Persist today's snapshots (synchronous, bounded — fires once per 5-min cycle)
+        if _nph_snap_rows:
+            upserted = _nph_upsert(_nph_snap_rows)
+            result["diagnostics"]["net_premium_snapshot_upserted"] = upserted
+
+    except Exception as _nph_err:
+        print(f"[NET_PREMIUM_HISTORY] sector enrichment non-fatal: {_nph_err}")
+
     result["_from_sectors_cache"] = False
     cache.set(_SECTORS_CACHE_KEY, result, _SECTORS_CACHE_TTL)
     return result
@@ -2179,6 +2298,100 @@ def get_theme_flow(*, force_refresh: bool = False) -> dict:
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE
 
     result = build_theme_tree(combined_ticker_data, no_options_syms, ENRICHED_THEME_RS_UNIVERSE, supplement_by_ticker=supplement_by_ticker_t)
+
+    # ── Net Premium daily history: inject 1D/7D/30D deltas + save snapshot ────
+    # Same logic as get_sector_flow; theme view persists its own entity set.
+    # Ticker dedup ensures each symbol is upserted once even across multiple themes.
+    try:
+        from data.options_net_premium_history import (
+            upsert_daily_snapshots        as _nph_upsert_t,
+            get_historical_snapshots_bulk as _nph_hist_t,
+            compute_delta_fields          as _nph_deltas_t,
+            _et_today                     as _nph_today_t,
+        )
+        from datetime import timedelta as _nph_td_t
+        _nph_tval  = _nph_today_t()
+        _nph_since_t = _nph_tval - _nph_td_t(days=35)
+
+        _nph_snap_t: list[dict] = []
+        _nph_ents_t: list[tuple] = []
+        _nph_seen_t: set[str] = set()
+
+        for _nph_t in result.get("themes", []):
+            _nph_tcls  = _nph_t.get("classification", "theme")
+            _nph_ttype = "sub_theme" if _nph_tcls == "sub_theme" else "theme"
+            _nph_tnp   = _nph_t.get("net_premium")
+            if _nph_tnp is not None:
+                _nph_tk_key = (_nph_ttype, _nph_t["theme_id"])
+                _nph_ents_t.append(_nph_tk_key)
+                _nph_snap_t.append({
+                    "entity_type": _nph_ttype, "entity_id": _nph_t["theme_id"],
+                    "snapshot_date": _nph_tval, "net_premium": _nph_tnp,
+                    "call_premium": _nph_t.get("call_premium"),
+                    "put_premium": _nph_t.get("put_premium"),
+                    "premium_scope_id": "aggregate",
+                })
+            for _nph_tk in _nph_t.get("tickers", []):
+                _nph_sym = _nph_tk.get("symbol", "")
+                if _nph_sym in _nph_seen_t:
+                    continue
+                _nph_pscope  = _nph_tk.get("premium_scope_id", "none")
+                _nph_pending = _nph_tk.get("nf_snapshot_pending")
+                if _nph_pscope == "net_flow_single_expiry_7_60dte_v1" and not _nph_pending:
+                    _nph_itype = _nph_tk.get("instrument_type", "unknown")
+                    _nph_etype = "etf" if _nph_itype == "etf" else "stock"
+                    _nph_tnp2  = _nph_tk.get("net_premium")
+                    if _nph_tnp2 is not None:
+                        _nph_ek = (_nph_etype, _nph_sym)
+                        _nph_ents_t.append(_nph_ek)
+                        _nph_snap_t.append({
+                            "entity_type": _nph_etype, "entity_id": _nph_sym,
+                            "snapshot_date": _nph_tval, "net_premium": _nph_tnp2,
+                            "call_premium": _nph_tk.get("call_premium"),
+                            "put_premium": _nph_tk.get("put_premium"),
+                            "premium_scope_id": _nph_pscope,
+                        })
+                        _nph_seen_t.add(_nph_sym)
+
+        # Deduplicate entity keys
+        _nph_seen_ek: set = set()
+        _nph_ents_t_dedup: list[tuple] = []
+        for _nph_ek in _nph_ents_t:
+            if _nph_ek not in _nph_seen_ek:
+                _nph_seen_ek.add(_nph_ek)
+                _nph_ents_t_dedup.append(_nph_ek)
+
+        _nph_hist_data = (
+            _nph_hist_t(_nph_ents_t_dedup, _nph_since_t)
+            if _nph_ents_t_dedup else {}
+        )
+
+        # Inject delta fields
+        for _nph_t in result.get("themes", []):
+            _nph_tcls  = _nph_t.get("classification", "theme")
+            _nph_ttype = "sub_theme" if _nph_tcls == "sub_theme" else "theme"
+            _nph_t.update(_nph_deltas_t(
+                _nph_t.get("net_premium"),
+                _nph_hist_data.get((_nph_ttype, _nph_t["theme_id"]), []),
+                _nph_tval,
+            ))
+            for _nph_tk in _nph_t.get("tickers", []):
+                _nph_sym   = _nph_tk.get("symbol", "")
+                _nph_itype = _nph_tk.get("instrument_type", "unknown")
+                _nph_etype = "etf" if _nph_itype == "etf" else "stock"
+                _nph_tk.update(_nph_deltas_t(
+                    _nph_tk.get("net_premium"),
+                    _nph_hist_data.get((_nph_etype, _nph_sym), []),
+                    _nph_tval,
+                ))
+
+        # Persist snapshots (idempotent — same rows as sectors view, ON CONFLICT updates)
+        if _nph_snap_t:
+            _nph_upsert_t(_nph_snap_t)
+
+    except Exception as _nph_err_t:
+        print(f"[NET_PREMIUM_HISTORY] theme enrichment non-fatal: {_nph_err_t}")
+
     result["_from_themes_cache"] = False
     cache.set(_THEMES_CACHE_KEY, result, _THEMES_CACHE_TTL)
     return result

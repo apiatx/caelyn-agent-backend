@@ -1,0 +1,417 @@
+Add Net Premium change history to the existing Options Flow → Net Flow backend.
+
+Keep this targeted.
+
+Do not do a broad Options Flow audit.
+Do not redesign the scanner.
+Do not add another Tradier call.
+Do not create a second Net Flow calculation path.
+
+Use the EXISTING canonical Net Flow results that are already being calculated and cached.
+
+The user needs to see whether Net Premium is becoming:
+
+* more positive
+* less positive
+* more negative
+* less negative
+
+over:
+
+* 1D
+* 7D
+* 30D
+
+==================================================
+CORE REQUIREMENT
+================
+
+For every existing Net Flow entity exposed to the page:
+
+* stock ticker
+* ETF ticker
+* theme
+* sub-theme
+* sector
+
+add historical Net Premium deltas:
+
+net_premium_delta_1d
+net_premium_delta_7d
+net_premium_delta_30d
+
+Definition:
+
+delta = current canonical Net Premium - historical Net Premium
+
+Examples:
+
+Current: +$5M
+1D ago: +$2M
+
+1D delta = +$3M
+
+This means bullish Net Flow is becoming more positive.
+
+Current: +$5M
+1D ago: +$8M
+
+1D delta = -$3M
+
+This means bullish Net Flow is decreasing / losing positive momentum.
+
+Current: -$8M
+1D ago: -$3M
+
+1D delta = -$5M
+
+This means bearish Net Flow is becoming more negative.
+
+Current: -$3M
+1D ago: -$8M
+
+1D delta = +$5M
+
+This means bearish Net Flow is becoming less negative / improving.
+
+Do not derive direction from delta sign alone without considering current and historical Net Premium.
+
+==================================================
+NO NEW TRADIER CALLS
+====================
+
+Critical requirement:
+
+Do not call Tradier again for this feature.
+
+The current Options Flow system already calculates canonical Net Flow from the existing Tradier scanner/cache/LKG pipeline.
+
+Persist historical snapshots from those EXISTING calculated Net Flow values.
+
+Flow should be:
+
+existing canonical Net Flow calculation
+→ existing cache/LKG result
+→ persist daily Net Premium snapshot to Neon
+→ compare current Net Premium against prior persisted snapshots
+
+NOT:
+
+delta request
+→ call Tradier
+→ rescan options
+
+There must be zero incremental Tradier calls caused by:
+
+* saving snapshots
+* calculating deltas
+* fetching Net Flow page
+* switching tabs
+* reading historical deltas
+
+==================================================
+NEON DAILY SNAPSHOT CACHE
+=========================
+
+Use Neon for persistent daily Net Premium history.
+
+Inspect the existing Neon/schema/storage patterns and use the current project conventions.
+
+Create a focused table/migration only if an existing suitable daily snapshot table does not already exist.
+
+Conceptual schema:
+
+options_net_premium_daily
+
+Fields:
+
+entity_type
+entity_id
+snapshot_date
+net_premium
+call_premium
+put_premium
+premium_scope_id
+created_at
+updated_at
+
+Where:
+
+entity_type:
+
+* stock
+* etf
+* theme
+* sub_theme
+* sector
+
+entity_id:
+
+* normalized ticker symbol for stock/ETF
+* canonical theme/sub-theme/sector id for categories
+
+Unique constraint:
+
+(entity_type, entity_id, snapshot_date)
+
+Use ET market date for snapshot_date.
+
+Use an UPSERT.
+
+Never append duplicate rows for the same entity/date.
+
+Intraday rescans may update today's row.
+
+That is desirable:
+
+today's current canonical Net Flow
+→ overwrite/update today's daily snapshot
+
+Historical dates remain unchanged.
+
+==================================================
+CANONICAL NET FLOW ONLY
+=======================
+
+For stock and ETF ticker snapshots:
+
+Only persist canonical Net Flow rows with:
+
+premium_scope_id =
+"net_flow_single_expiry_7_60dte_v1"
+
+Do not persist Unusual Flow premium as Net Flow history.
+
+Do not backfill nf_snapshot_pending rows with unusual-flow data.
+
+If:
+
+nf_snapshot_pending = true
+
+or the canonical premium scope is missing:
+
+do not write a fake Net Premium snapshot.
+
+For sector/theme/sub-theme snapshots:
+
+Use the EXISTING aggregate Net Premium currently returned by the canonical Net Flow tree.
+
+Do not independently rebuild category Net Premium math for this feature.
+
+Snapshot the already-computed canonical aggregate.
+
+==================================================
+WHEN TO SAVE SNAPSHOTS
+======================
+
+Hook snapshot persistence into the existing successful Net Flow compute/cache lifecycle.
+
+After a fresh canonical Net Flow dataset/tree is computed or refreshed:
+
+bulk upsert today's snapshots to Neon.
+
+Do not write one DB request per ticker.
+
+Use bulk upsert/batch persistence following existing Neon storage patterns.
+
+The page request itself should not trigger hundreds of snapshot writes.
+
+Prefer:
+
+existing Net Flow refresh/computation completes
+→ collect all current entities
+→ one/batched Neon upsert
+
+If today's snapshot already exists:
+update it.
+
+==================================================
+1D / 7D / 30D COMPARISON
+========================
+
+Use persisted daily snapshots.
+
+For 1D:
+compare against the previous available market-day snapshot.
+
+Do not assume yesterday has a row because of weekends/holidays.
+
+For 7D:
+use the latest available snapshot on or before the target date approximately 7 calendar days before the current snapshot date.
+
+For 30D:
+use the latest available snapshot on or before the target date approximately 30 calendar days before the current snapshot date.
+
+Use existing market-calendar helpers if already available.
+
+Do not add an external calendar API call.
+
+If no historical snapshot exists for a timeframe:
+
+return null.
+
+Do not use zero.
+
+Do not fake history.
+
+==================================================
+RESPONSE FIELDS
+===============
+
+Add these fields to existing Net Flow entities:
+
+net_premium_delta_1d
+net_premium_delta_7d
+net_premium_delta_30d
+
+Also add the historical comparison value if easy and clean:
+
+net_premium_1d_ago
+net_premium_7d_ago
+net_premium_30d_ago
+
+Recommended:
+
+{
+"net_premium": 5000000,
+"net_premium_1d_ago": 2000000,
+"net_premium_delta_1d": 3000000,
+"net_premium_7d_ago": -1000000,
+"net_premium_delta_7d": 6000000,
+"net_premium_30d_ago": -4000000,
+"net_premium_delta_30d": 9000000
+}
+
+Use null where unavailable.
+
+Do not rename existing net_premium.
+
+Do not break current frontend response fields.
+
+==================================================
+OPTIONAL DIRECTION FIELD
+========================
+
+If clean, expose a simple derived direction field per timeframe:
+
+net_premium_trend_1d
+net_premium_trend_7d
+net_premium_trend_30d
+
+Allowed values:
+
+more_positive
+less_positive
+more_negative
+less_negative
+crossed_positive
+crossed_negative
+unchanged
+null
+
+Examples:
+
+* +2M → +5M = more_positive
+* +8M → +5M = less_positive
+* -3M → -8M = more_negative
+* -8M → -3M = less_negative
+* -2M → +3M = crossed_positive
+* +2M → -3M = crossed_negative
+
+Keep this as simple deterministic logic.
+
+No LLM.
+
+==================================================
+HISTORY STARTING NOW
+====================
+
+Do not manufacture 30 days of historical Net Premium from current options data.
+
+We did not previously persist canonical daily Net Premium snapshots.
+
+Start retaining daily history now.
+
+Therefore:
+
+* 1D delta becomes available after enough persisted history exists
+* 7D becomes available as history accumulates
+* 30D becomes available after sufficient history accumulates
+
+If there happens to be trustworthy existing historical daily Net Flow data already persisted in Neon/LKG, reuse it.
+
+Do not infer or fabricate history from unrelated Unusual Flow snapshots.
+
+==================================================
+RETENTION
+=========
+
+Keep at least 45 calendar days of daily snapshots.
+
+60–90 days is fine and preferred if trivial.
+
+Do not let the table grow forever without a retention policy.
+
+A simple periodic cleanup of rows older than 90 days is sufficient.
+
+Reuse an existing maintenance loop if appropriate.
+
+No aggressive cleanup on every page request.
+
+==================================================
+DIAGNOSTICS
+===========
+
+Add small diagnostics to the existing Net Flow diagnostics/rate-status area if there is already an appropriate place:
+
+net_premium_history_entities
+net_premium_history_rows
+net_premium_snapshot_date
+net_premium_delta_1d_available
+net_premium_delta_7d_available
+net_premium_delta_30d_available
+
+These are diagnostics only.
+
+Do not build another admin system.
+
+==================================================
+VALIDATION
+==========
+
+Validate with the existing canonical Net Flow dataset.
+
+1. Fresh Net Flow compute persists today's stock snapshots.
+2. Fresh Net Flow compute persists today's ETF snapshots.
+3. Theme/sub-theme/sector aggregates persist today's snapshots.
+4. Re-running refresh on the same ET date updates rows instead of duplicating them.
+5. Unique constraint prevents duplicate entity/date rows.
+6. No Tradier request count increase is caused by snapshot/delta logic.
+7. Net Flow endpoint causes no additional options-chain scan.
+8. nf_snapshot_pending rows do not persist fake Net Flow history.
+9. Unusual Flow premium is never written to Net Flow history.
+10. Historical lookup returns null when history does not exist.
+11. With controlled test snapshots:
+
+    * +2M → +5M = delta +3M / more_positive
+    * +8M → +5M = delta -3M / less_positive
+    * -3M → -8M = delta -5M / more_negative
+    * -8M → -3M = delta +5M / less_negative
+    * -2M → +3M = crossed_positive
+    * +2M → -3M = crossed_negative
+12. Current Options Flow response remains backward compatible.
+
+Do not touch:
+
+* Tradier scanner scope
+* premium_scope_id
+* P/C calculations
+* geometric breadth
+* ETF classification
+* display-name service
+* taxonomy
+* heatmap/frontend
+
+Implement the daily Neon snapshot cache and expose the 1D/7D/30D Net Premium deltas on the existing Net Flow response.
+
+No broad audit. Use the existing paths and build it.

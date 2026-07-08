@@ -723,6 +723,41 @@ def init_tables():
             ON public.watchlist_favorites (user_id)
         """)
 
+        # ── Options Flow daily Net Premium history ─────────────────────────────
+        # One row per entity per ET market day.  Intraday upserts update today's
+        # row; historical dates are never modified.  Retention: 90 calendar days.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.options_net_premium_daily (
+                id               BIGSERIAL PRIMARY KEY,
+                entity_type      TEXT        NOT NULL,
+                entity_id        TEXT        NOT NULL,
+                snapshot_date    DATE        NOT NULL,
+                net_premium      NUMERIC(18,2),
+                call_premium     NUMERIC(18,2),
+                put_premium      NUMERIC(18,2),
+                premium_scope_id TEXT,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (entity_type, entity_id, snapshot_date)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_onpd_entity_date
+            ON public.options_net_premium_daily (entity_type, entity_id, snapshot_date DESC)
+        """)
+        cur.execute("""
+            INSERT INTO public.data_retention_rules
+                (table_name, timestamp_column, retention_days, enabled, description)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (table_name) DO NOTHING
+        """, (
+            "public.options_net_premium_daily",
+            "created_at",
+            90,
+            True,
+            "Daily Net Premium snapshots for Options Flow 1D/7D/30D history — 90-day rolling window",
+        ))
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")
