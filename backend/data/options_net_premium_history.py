@@ -43,9 +43,9 @@ def upsert_daily_snapshots(rows: list[dict]) -> int:
       entity_type, entity_id, snapshot_date (date object),
       net_premium, call_premium, put_premium, premium_scope_id
 
-    Rows are written in a single transaction.
-    ON CONFLICT updates today's row — historical rows are never overwritten
-    because snapshot_date only equals today when this is called.
+    All rows are written in a SINGLE SQL statement via execute_values so the
+    entire batch is one Neon round-trip regardless of how many rows are passed.
+    ON CONFLICT updates today's row — historical rows are never overwritten.
 
     Returns count of rows attempted.
     """
@@ -54,33 +54,38 @@ def upsert_daily_snapshots(rows: list[dict]) -> int:
     conn = None
     try:
         from data.pg_storage import _get_conn, _put_conn
+        from psycopg2.extras import execute_values
         conn = _get_conn()
         cur = conn.cursor()
-        for r in rows:
-            cur.execute(
-                """
-                INSERT INTO public.options_net_premium_daily
-                    (entity_type, entity_id, snapshot_date,
-                     net_premium, call_premium, put_premium, premium_scope_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (entity_type, entity_id, snapshot_date)
-                DO UPDATE SET
-                    net_premium      = EXCLUDED.net_premium,
-                    call_premium     = EXCLUDED.call_premium,
-                    put_premium      = EXCLUDED.put_premium,
-                    premium_scope_id = EXCLUDED.premium_scope_id,
-                    updated_at       = NOW()
-                """,
-                (
-                    r["entity_type"],
-                    r["entity_id"],
-                    r["snapshot_date"],
-                    r.get("net_premium"),
-                    r.get("call_premium"),
-                    r.get("put_premium"),
-                    r.get("premium_scope_id"),
-                ),
+        values = [
+            (
+                r["entity_type"],
+                r["entity_id"],
+                r["snapshot_date"],
+                r.get("net_premium"),
+                r.get("call_premium"),
+                r.get("put_premium"),
+                r.get("premium_scope_id"),
             )
+            for r in rows
+        ]
+        execute_values(
+            cur,
+            """
+            INSERT INTO public.options_net_premium_daily
+                (entity_type, entity_id, snapshot_date,
+                 net_premium, call_premium, put_premium, premium_scope_id)
+            VALUES %s
+            ON CONFLICT (entity_type, entity_id, snapshot_date)
+            DO UPDATE SET
+                net_premium      = EXCLUDED.net_premium,
+                call_premium     = EXCLUDED.call_premium,
+                put_premium      = EXCLUDED.put_premium,
+                premium_scope_id = EXCLUDED.premium_scope_id,
+                updated_at       = NOW()
+            """,
+            values,
+        )
         conn.commit()
         cur.close()
         _put_conn(conn)

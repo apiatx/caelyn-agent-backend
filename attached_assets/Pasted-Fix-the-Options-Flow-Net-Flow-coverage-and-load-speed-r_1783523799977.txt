@@ -1,0 +1,341 @@
+Fix the Options Flow → Net Flow coverage and load-speed regression.
+
+This is a targeted performance/data-completeness fix.
+
+Do not perform another broad architecture audit.
+Do not redesign the page.
+Do not change Net Flow math.
+Do not change P/C semantics.
+Do not change the heatmap.
+
+The visible regressions are:
+
+1. Most ticker tiles on Net Flow now show no options data / pending.
+2. Sectors, Themes, ETFs, and All Stocks now take roughly 10 seconds to load.
+3. Before the recent instrument_type/display_name work, the page was almost instant.
+
+The required end state is:
+
+* EVERY required ticker on the Net Flow page has a canonical Net Flow result:
+
+  * real options data
+    OR
+  * explicit confirmed no_options
+* no large population sitting indefinitely in nf_snapshot_pending
+* page API serves persisted/cached data almost instantly
+* no DB/profile/classification enrichment work is performed in the request hot path
+
+==================================================
+
+1. REMOVE NEW HOT-PATH WORK FROM TREE BUILDING
+   ==================================================
+
+The recent changes added display-name and instrument metadata loading around:
+
+build_sector_tree
+build_theme_tree
+_build_sector_node
+_build_theme_node
+_build_ticker_node
+
+Audit only the current request timing.
+
+Specifically measure elapsed milliseconds for:
+
+* exact Options Flow backend endpoint used by frontend
+* get_instrument_type_bulk
+* get_company_profiles_bulk_cached
+* display-name LKG read
+* combined ticker data assembly
+* tree aggregation/build
+* JSON serialization
+
+The recent display-name implementation must NOT perform:
+
+get_company_profiles_bulk_cached(all_theme_syms)
+
+on every page request if that hits Neon or rebuilds profile maps.
+
+Likewise instrument classification must not require repeated DB reconciliation per page request.
+
+Required hot-path behavior:
+
+REQUEST
+→ read current preloaded in-memory instrument_type map
+→ read current preloaded in-memory display_name map
+→ read current persisted/in-memory Net Flow ticker snapshot
+→ build or return cached tree JSON
+→ respond
+
+No FMP.
+No Neon profile bulk read.
+No classification reconciliation.
+No name reconciliation.
+No options scanning.
+
+Warm instrument types and display names at startup/background and keep them in memory.
+
+The persisted LKG remains the restart fallback.
+
+If build_sector_tree/build_theme_tree currently bulk-read profile rows on every request:
+remove that request-time DB call.
+
+Expose service helpers such as conceptually:
+
+get_display_names_bulk_cached_memory(symbols)
+get_instrument_type_bulk_memory(symbols)
+
+Use existing naming/style.
+
+Do not create another metadata architecture.
+
+==================================================
+2. SERVE A PREBUILT / CACHED NET FLOW TREE
+==========================================
+
+The page should not synchronously rebuild hundreds of ticker nodes and aggregates every time the user changes a view.
+
+Use the existing sector/theme cache and invalidation architecture.
+
+The canonical Net Flow response should be built from persisted/in-memory snapshots and cached.
+
+Required:
+
+* build current tree once
+* cache serialized/tree-ready result in memory
+* Sectors and Themes read that current cached snapshot
+* cache invalidates only when:
+
+  * a canonical Net Flow ticker snapshot changes
+  * required universe changes
+  * taxonomy/membership changes
+  * explicit refresh/reconciliation completes
+
+Do not invalidate the tree because 30 seconds elapsed if no underlying data changed.
+
+Do not synchronously rebuild the entire tree for every GET.
+
+Add simple timing diagnostics:
+
+options_flow_tree_cache_hit
+options_flow_tree_build_ms
+options_flow_response_ms
+
+Acceptance:
+warm-cache response should be under 500ms.
+Target closer to <200ms if practical.
+
+Do not delay the response waiting for scans.
+
+==================================================
+3. COMPLETE CANONICAL NET FLOW COVERAGE FOR THE FULL REQUIRED UNIVERSE
+======================================================================
+
+The stricter frontend/backend scope isolation exposed incomplete canonical Net Flow snapshots.
+
+Canonical scope remains:
+
+net_flow_single_expiry_7_60dte_v1
+
+Do not weaken this rule.
+Do not fall back to unusual_flow P/C.
+
+Instead, ensure the Net Flow scanner actually covers every required ticker.
+
+Define current full required Net Flow universe as:
+
+all unique stock + ETF ticker leaves capable of appearing in:
+
+* Sectors
+* Themes
+* ETFs
+* All Stocks
+
+For every symbol, status must settle to exactly one of:
+
+1. canonical_snapshot
+2. confirmed_no_options
+
+Pending is transitional only.
+
+Run the existing canonical Net Flow supplement/chain summarizer against every required symbol lacking a current canonical snapshot.
+
+The required-universe reconciliation must continuously calculate:
+
+required_unique_tickers
+canonical_snapshot_tickers
+confirmed_no_options_tickers
+pending_tickers
+scan_queue_depth
+
+Invariant:
+
+canonical_snapshot_tickers
++
+confirmed_no_options_tickers
+============================
+
+required_unique_tickers
+
+after the queue is drained.
+
+Do not count:
+
+* unusual-flow master screener rows
+* stale scope rows
+* missing rows
+
+as canonical coverage.
+
+==================================================
+4. DRAIN THE CURRENT PENDING QUEUE NOW
+======================================
+
+Do not wait for slow scheduled cycles for validation.
+
+Use the EXISTING Tradier-paced canonical Net Flow scanner.
+
+Drain the current missing/pending required universe now, respecting the existing Tradier market-data pacer.
+
+Tradier remains the primary Options Flow source.
+
+Do not bypass the rate limiter.
+Do not create a second scanner.
+
+Scan pending symbols in background batches until each ticker has:
+
+premium_scope_id =
+net_flow_single_expiry_7_60dte_v1
+
+OR:
+
+confirmed_no_options = true
+
+Persist each result to the existing supplement LKG/cache immediately after scan.
+
+As each batch finishes:
+
+* update the in-memory snapshot
+* invalidate/rebuild the cached tree asynchronously
+* do not block page requests
+
+New page requests should continue serving the last complete LKG/cache while refresh is progressing.
+
+==================================================
+5. DO NOT MAKE PAGE LOAD WAIT FOR FRESHNESS
+===========================================
+
+This is critical.
+
+The frontend page must get usable persisted Net Flow data immediately.
+
+Correct model:
+
+page request
+→ serve current LKG/in-memory canonical snapshot immediately
+
+background
+→ refresh stale/missing ticker snapshots
+→ persist results
+→ swap updated cached tree
+
+Do not:
+
+page request
+→ discover pending ticker
+→ wait for Tradier
+→ scan
+→ rebuild
+→ respond
+
+The page is a dashboard, not an on-demand batch job.
+
+==================================================
+6. REFRESH SEMANTICS
+====================
+
+Preserve the existing Refresh button.
+
+Refresh should:
+
+* trigger/reprioritize background Net Flow reconciliation
+* return current cached data immediately
+* allow current frontend polling/refetch behavior to receive newer tree data as batches complete
+
+Do not make Refresh synchronously wait for 300+ tickers.
+
+==================================================
+7. EXACT VALIDATION
+===================
+
+Report only concrete results.
+
+Before fix:
+
+* endpoint response_ms
+* required_unique_tickers
+* canonical_snapshot_tickers
+* confirmed_no_options_tickers
+* pending_tickers
+
+After queue drain:
+
+* endpoint cold-cache response_ms
+* endpoint warm-cache response_ms
+* tree build_ms
+* cache hit response_ms
+* required_unique_tickers
+* canonical_snapshot_tickers
+* confirmed_no_options_tickers
+* pending_tickers
+* scan_queue_depth
+
+Acceptance:
+
+pending_tickers = 0 after current queue drain
+
+canonical_snapshot_tickers
++
+confirmed_no_options_tickers
+============================
+
+required_unique_tickers
+
+Every stock/ETF leaf has:
+
+* canonical Net Flow premium data
+  OR
+* explicit confirmed no-options state
+
+No unusual-flow premium leaks into Net Flow.
+
+Warm endpoint response <500ms.
+
+Also prove:
+
+* no FMP calls during Options Flow GET
+* no Neon profile bulk read during Options Flow GET
+* no Tradier calls during Options Flow GET
+* page request does not wait for reconciliation
+
+==================================================
+DO NOT
+======
+
+Do not touch ETF classification logic unless it is directly broken.
+
+Do not touch display-name results.
+
+Do not touch Crypto Equities taxonomy.
+
+Do not change P/C math.
+
+Do not reintroduce master screener data into Net Flow.
+
+Do not create another Options Flow API.
+
+Do not increase request-time work.
+
+Do not remove LKG behavior.
+
+Fix coverage, cache the finished tree, and make the endpoint fast.

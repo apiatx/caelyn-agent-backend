@@ -1005,7 +1005,14 @@ def get_sectors_pending_symbols() -> list[str]:
                 stale_lkg_syms.append(sym)         # stale_lkg — SECOND
             else:
                 missing_syms.append(sym)           # placeholder, no real data — FIRST
-        # live / supplement / watchlist_cache = current-session data → skip
+        elif row.get("_source") == "live":
+            # Master screener row: if it only has unusual-flow scope it has NO canonical
+            # net-flow snapshot (_suppress_nf_premiums=True → nf_snapshot_pending=True).
+            # These symbols need a chain-summarizer scan to get real call/put premium data.
+            _scope = row.get("expiration_scope", "")
+            if _scope == "top_unusual_contracts" or not _scope:
+                missing_syms.append(sym)           # needs canonical net-flow scan — FIRST
+        # supplement / watchlist_cache = current good data → skip
 
     # ── Priority queue: newly required symbols go to the very front ───────────
     # Symbols explicitly marked via add_high_priority_symbols() that are also

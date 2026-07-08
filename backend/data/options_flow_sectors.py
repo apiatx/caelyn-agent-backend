@@ -48,9 +48,9 @@ import time
 from typing import Optional
 
 _SECTORS_CACHE_KEY = "options_flow_sectors:v1"
-_SECTORS_CACHE_TTL = 60   # 1 min — short so supplement updates are visible quickly
+_SECTORS_CACHE_TTL = 300  # 5 min — supplement scanner calls invalidate_sectors_cache() on each batch
 _THEMES_CACHE_KEY  = "options_flow_themes:v1"
-_THEMES_CACHE_TTL  = 60   # same cadence as sectors
+_THEMES_CACHE_TTL  = 300  # same cadence as sectors
 
 
 def _load_all_watchlist_symbols() -> set[str]:
@@ -1309,24 +1309,14 @@ def build_sector_tree(
     except Exception:
         instrument_type_by_sym = {}
 
-    # Bulk-load display names.
-    # Primary: options_display_name_service LKG (memory-only, fast, background-enriched).
-    # Secondary: screener_fundamentals_cache via fmp_cache_service (DB, no API calls).
-    # LKG names take priority; cache fills remaining gaps.
+    # Bulk-load display names — memory-only LKG warmed at startup; no DB call here.
+    # warm_up_display_names_from_db() runs at startup; enrich_display_names_background()
+    # handles new symbols in the background. No live DB query needed at request time.
     try:
         from data.options_display_name_service import get_display_name_bulk as _get_dnames
         display_name_by_sym: dict[str, str] = _get_dnames(all_theme_syms)
     except Exception:
         display_name_by_sym = {}
-    try:
-        from services.fmp_cache_service import get_company_profiles_bulk_cached as _get_profiles
-        _profiles = _get_profiles(list(all_theme_syms))
-        for _s, _p in _profiles.items():
-            _n = (_p.get("name") or "").strip()
-            if _n and _s not in display_name_by_sym:
-                display_name_by_sym[_s] = _n
-    except Exception:
-        pass
 
     sector_nodes = [
         _build_sector_node(sid, theme_items, combined_ticker_data, no_options_syms, sector_names, instrument_type_by_sym, supplement_by_ticker, display_name_by_sym)
@@ -1578,10 +1568,17 @@ def get_sector_flow(*, force_refresh: bool = False) -> dict:
     """
     from data.cache import cache
 
+    _t0 = time.time()
+
     if not force_refresh:
         cached = cache.get(_SECTORS_CACHE_KEY)
         if cached:
-            return {**cached, "_from_sectors_cache": True}
+            return {
+                **cached,
+                "_from_sectors_cache": True,
+                "options_flow_tree_cache_hit": True,
+                "options_flow_response_ms": round((time.time() - _t0) * 1000, 1),
+            }
 
     # ── Pull combined ticker data (master + supplement) ───────────────────────
     try:
@@ -1814,6 +1811,9 @@ def get_sector_flow(*, force_refresh: bool = False) -> dict:
         print(f"[NET_PREMIUM_HISTORY] sector enrichment non-fatal: {_nph_err}")
 
     result["_from_sectors_cache"] = False
+    result["options_flow_tree_cache_hit"] = False
+    result["options_flow_tree_build_ms"] = round((time.time() - _t0) * 1000, 1)
+    result["options_flow_response_ms"] = result["options_flow_tree_build_ms"]
     cache.set(_SECTORS_CACHE_KEY, result, _SECTORS_CACHE_TTL)
     return result
 
@@ -2135,21 +2135,12 @@ def build_theme_tree(
     except Exception:
         instrument_type_by_sym = {}
 
-    # Bulk-load display names (same two-layer strategy as build_sector_tree).
+    # Bulk-load display names — memory-only LKG warmed at startup; no DB call here.
     try:
         from data.options_display_name_service import get_display_name_bulk as _get_dnames_t
         display_name_by_sym_t: dict[str, str] = _get_dnames_t(all_theme_syms)
     except Exception:
         display_name_by_sym_t = {}
-    try:
-        from services.fmp_cache_service import get_company_profiles_bulk_cached as _get_profiles_t
-        _profiles_t = _get_profiles_t(list(all_theme_syms))
-        for _s, _p in _profiles_t.items():
-            _n = (_p.get("name") or "").strip()
-            if _n and _s not in display_name_by_sym_t:
-                display_name_by_sym_t[_s] = _n
-    except Exception:
-        pass
 
     theme_nodes: list[dict] = []
     for theme_id, meta in theme_universe.items():
@@ -2265,10 +2256,17 @@ def get_theme_flow(*, force_refresh: bool = False) -> dict:
     """
     from data.cache import cache
 
+    _t0_th = time.time()
+
     if not force_refresh:
         cached = cache.get(_THEMES_CACHE_KEY)
         if cached:
-            return {**cached, "_from_themes_cache": True}
+            return {
+                **cached,
+                "_from_themes_cache": True,
+                "options_flow_tree_cache_hit": True,
+                "options_flow_response_ms": round((time.time() - _t0_th) * 1000, 1),
+            }
 
     try:
         from data.options_theme_supplement import (
@@ -2393,6 +2391,9 @@ def get_theme_flow(*, force_refresh: bool = False) -> dict:
         print(f"[NET_PREMIUM_HISTORY] theme enrichment non-fatal: {_nph_err_t}")
 
     result["_from_themes_cache"] = False
+    result["options_flow_tree_cache_hit"] = False
+    result["options_flow_tree_build_ms"] = round((time.time() - _t0_th) * 1000, 1)
+    result["options_flow_response_ms"] = result["options_flow_tree_build_ms"]
     cache.set(_THEMES_CACHE_KEY, result, _THEMES_CACHE_TTL)
     return result
 

@@ -12614,6 +12614,7 @@ async def _sectors_fast_backfill_loop():
     _sbf_session_completed = 0
     _sbf_local_expiry: dict = {}  # {sym: ([expirations], checked_at_float)}
     _sbf_sleep_s           = _SBF_BACKGROUND_SLEEP  # safe default for except block
+    _sbf_last_inval_at     = 0.0  # tracks last tree-cache invalidation (throttle)
 
     # Brief startup delay — let master screener warm up first
     await asyncio.sleep(30)
@@ -12820,6 +12821,20 @@ async def _sectors_fast_backfill_loop():
 
             if supplement_rows:
                 _sbf_update_supp(supplement_rows)
+                # Invalidate tree caches so the next request reflects new scan data.
+                # Throttled: at most once per 90 s to avoid cache-rebuild thrashing.
+                _sbf_now_inval = _ts_sbf.time()
+                if _sbf_now_inval - _sbf_last_inval_at >= 90:
+                    try:
+                        from data.options_flow_sectors import (
+                            invalidate_sectors_cache as _sbf_inval_s,
+                            invalidate_themes_cache  as _sbf_inval_t,
+                        )
+                        _sbf_inval_s()
+                        _sbf_inval_t()
+                        _sbf_last_inval_at = _sbf_now_inval
+                    except Exception:
+                        pass
 
             # ── Priority queue cleanup ─────────────────────────────────────────
             # After scanning a batch, remove those symbols from the high-priority
