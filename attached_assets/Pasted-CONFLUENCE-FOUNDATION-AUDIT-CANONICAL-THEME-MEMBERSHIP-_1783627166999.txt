@@ -1,0 +1,692 @@
+CONFLUENCE FOUNDATION AUDIT — CANONICAL THEME MEMBERSHIP + OPTIONS PREMIUM FLOW + CATALYST SIGNAL
+
+AUDIT ONLY.
+
+ZERO CODE CHANGES.
+
+Do not modify the existing Theme bridge.
+Do not modify Confluence scoring.
+Do not modify Entry Structure.
+Do not modify Stage Analysis.
+Do not modify Options Flow.
+Do not modify Daily Alpha V1.
+Do not modify Golden Zone.
+Do not modify HC Trade.
+Do not modify HC Investment.
+Do not modify Growth section logic.
+Do not build Actionability.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add provider calls.
+
+We need to resolve three canonical data paths before implementing Trade Alignment.
+
+The intended Trade Alignment Theme archetype is now explicitly defined as:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Premium Flow  25%
+Catalyst Alignment    25%
+
+Then:
+
+Social Bonus          +0 to +10
+
+Entry Structure is completely separate and must not contribute to Trade Alignment.
+
+A future second archetype, ELITE_ASSET_REBOUND, may use fundamental quality, prior leadership, and a sharp reset. Do not implement that in this task.
+
+==================================================
+PART 1 — TRACE THE ACTUAL SHARED THEME MEMBERSHIP ROUND TRIP
+============================================================
+
+The user has clarified the exact current UI behavior:
+
+1. A ticker is added to the Watchlist.
+2. It initially appears with an unassigned Theme.
+3. The user goes to the Themes page.
+4. The user adds that ticker to a Theme.
+5. The Watchlist page subsequently displays that same Theme for the ticker.
+
+From the user's direct UI inspection, essentially every US-listed Watchlist ticker except approximately one currently displays an assigned Theme.
+
+This strongly suggests the Watchlist and Themes page already share a canonical Theme membership engine or shared persisted membership state.
+
+Do NOT begin from the assumption that there are two independent Theme universes.
+
+Trace this exact round trip from frontend write to frontend read.
+
+---
+
+## A. THEMES PAGE WRITE PATH
+
+Start from the actual Themes page UI action used to add a ticker to a Theme.
+
+Trace:
+
+frontend component
+frontend mutation/function
+HTTP method
+endpoint
+backend route
+backend service
+persistence store/table/LKG
+manual override logic
+
+Answer:
+
+When the user adds ticker X to Theme Y on the Themes page, what exact record/state is written?
+
+Return:
+
+file
+function
+endpoint
+table/cache/LKG
+record key
+record fields
+
+---
+
+## B. THEMES PAGE MEMBERSHIP READ PATH
+
+Trace how the Themes page later knows ticker X belongs to Theme Y.
+
+Return:
+
+frontend read endpoint
+backend route
+backend service
+merged membership helper
+base membership source
+manual additions
+manual removals
+final returned membership field
+
+---
+
+## C. WATCHLIST THEME DISPLAY READ PATH
+
+Start from the actual Watchlist ticker row/card where Theme is displayed.
+
+Trace:
+
+frontend component
+exact rendered field/property
+endpoint response property
+backend endpoint
+backend service
+membership lookup
+persistence/cache source
+
+Answer:
+
+What exact field does the Watchlist display as Theme?
+
+What exact backend logic populates it?
+
+How does the Watchlist see the Theme assignment created from the Themes page?
+
+---
+
+## D. PROVE THE SHARED ENGINE
+
+For one real currently mapped ticker, trace the exact path:
+
+Themes page add/write
+→ persisted membership
+→ merged canonical membership
+→ Watchlist endpoint
+→ Watchlist UI Theme field
+
+Use an existing current membership.
+
+Do not create or modify a membership for validation.
+
+Then answer:
+
+Is there ONE canonical Theme membership system with multiple derived consumers?
+
+or:
+
+Are there genuinely TWO independent membership systems that synchronize?
+
+Do not infer from filenames.
+
+Prove from actual code and data flow.
+
+---
+
+## E. COMPARE WITH CURRENT CONFLUENCE THEME BRIDGE
+
+The recently added Confluence Theme bridge reads:
+
+backend/services/theme_merge_layer.py
+ENRICHED_THEME_RS_UNIVERSE
+
+and builds ticker membership from:
+
+candidate_symbols
+proxy_symbols
+
+Determine whether this is:
+
+1. the exact canonical membership representation used by the Watchlist UI
+
+or
+
+2. a downstream/derived Theme RS basket representation
+
+or
+
+3. another representation
+
+Explain exactly why the bridge maps only:
+
+196 / 377 Confluence symbols
+
+while the Watchlist UI visually shows Theme assignment for nearly every US-listed Watchlist ticker.
+
+Calculate from current data:
+
+total Watchlist symbols
+US-listed stock symbols
+
+Watchlist UI Theme populated count
+Watchlist UI Theme populated % overall
+US-listed Watchlist UI Theme populated count
+US-listed Watchlist UI Theme populated %
+
+Theme bridge mapped count
+Theme bridge mapped %
+
+Count:
+
+Watchlist UI Theme populated
+AND
+current Confluence Theme bridge unmapped
+
+Return every such ticker, up to 150:
+
+symbol
+Watchlist displayed Theme
+canonical membership source
+ENRICHED_THEME_RS_UNIVERSE memberships
+current bridge membership
+reason for mismatch
+
+Specifically show:
+
+ANET
+ALGM
+AOSL
+BE
+NVDA
+AMD
+MU
+MRVL
+CRDO
+ABCL
+WYFI
+SOFI
+SLAB
+DELL
+HOOD
+IBRX
+RBRK
+VRT
+NBIS
+AAOI
+
+Do not add Theme memberships.
+
+Do not expand Theme Universe.
+
+The goal is to identify the correct existing canonical Theme identity source for Confluence.
+
+==================================================
+PART 2 — TRACE CANONICAL OPTIONS PREMIUM FLOW FOR TRADE ALIGNMENT
+=================================================================
+
+Trade Alignment must use Options Premium Flow as 25% of the Theme Alignment archetype.
+
+Do not change Options Flow producer logic.
+
+Trace the current canonical ticker-level read paths for:
+
+Net Premium / Net Flow
+Call Premium
+Put Premium
+bullish/bearish pressure or equivalent
+Put/Call Ratio if available
+existing Options composite/score
+
+AND:
+
+1-day Net Premium delta
+7-day Net Premium delta
+30-day Net Premium delta
+
+The project previously implemented Net Premium history through:
+
+options_net_premium_history.py
+
+Trace actual current code.
+
+Do not assume field names.
+
+For every signal return:
+
+exact production field name
+unit
+scale
+source service
+storage/cache/LKG/Neon table
+producer
+producer cadence
+read-only helper
+whether helper can call a provider on cache miss
+current ticker coverage
+
+---
+
+## NET PREMIUM DIRECTION / RATE OF CHANGE
+
+Specifically answer:
+
+Are 1D/7D/30D Net Premium deltas currently populated in production?
+
+Are they stored in Neon?
+
+Are they absolute dollar changes?
+
+percentage changes?
+
+ratios?
+
+normalized scores?
+
+What does a positive value mean?
+
+What does a negative value mean?
+
+Does sign interpretation depend on current Net Premium sign?
+
+Can Confluence read all four values with zero Tradier/provider calls?
+
+Does the current Options Flow composite already consume these deltas?
+
+If yes:
+
+show exact formula.
+
+If no:
+
+show exact read-only path Trade Alignment could consume directly.
+
+Return current coverage:
+
+net premium symbols
+1D delta symbols
+7D delta symbols
+30D delta symbols
+all four available symbols
+
+Show real current values where available for:
+
+ANET
+ALGM
+AOSL
+BE
+NVDA
+MRVL
+WYFI
+HOOD
+IBRX
+RBRK
+VRT
+NBIS
+AAOI
+MU
+CRDO
+
+Fields:
+
+symbol
+net premium
+1D delta
+7D delta
+30D delta
+existing options score/composite
+source timestamp
+source path
+
+Do not make provider calls.
+
+==================================================
+PART 3 — TRACE CANONICAL CATALYST SIGNAL FOR TRADE ALIGNMENT
+============================================================
+
+Trade Alignment must use Catalyst Alignment as 25% of the Theme Alignment archetype.
+
+Before assigning that weight, identify what canonical structured Catalyst data already exists.
+
+Trace current reusable catalyst sources in the backend.
+
+Inspect existing:
+
+Calendar catalyst services
+Home Top Catalysts
+Daily Alpha catalyst collector
+earnings calendar
+IPO events
+FDA/biotech events if present
+company-specific structured catalysts
+macro events
+news-derived catalyst cache if present
+
+Do not add an LLM.
+
+Do not add a new catalyst provider path.
+
+For every existing structured catalyst source return:
+
+service/file
+field names
+event types
+ticker-specific or market-wide
+score if one exists
+urgency/severity if one exists
+date/time fields
+cache/LKG/Neon source
+refresh cadence
+read-only helper
+provider-call risk on read
+ticker coverage
+
+Answer:
+
+1. Does a canonical ticker-level catalyst_score already exist?
+
+2. If yes:
+   exact field
+   exact scale
+   exact formula/source
+
+3. If no:
+   which existing structured fields can deterministically produce Catalyst Alignment without new provider calls?
+
+4. Can Trade Alignment distinguish:
+
+   * important catalyst soon
+   * positive/relevant catalyst farther away
+   * no known catalyst
+   * stale catalyst
+   * broad macro event not specific to the ticker
+
+5. Does Daily Alpha currently calculate a catalyst signal we can reuse without copying provider logic?
+
+Trace the exact Daily Alpha catalyst collector and scoring path.
+
+Show real current catalyst data, where available, for:
+
+ANET
+ALGM
+AOSL
+BE
+NVDA
+MRVL
+WYFI
+HOOD
+IBRX
+RBRK
+VRT
+NBIS
+AAOI
+MU
+CRDO
+
+Return:
+
+symbol
+catalyst type
+catalyst title/identifier
+catalyst date
+days to catalyst
+current catalyst score if available
+source
+freshness
+
+Do not make provider calls.
+
+==================================================
+PART 4 — CONFIRM TRADE ALIGNMENT PRODUCT MODEL
+==============================================
+
+Do not implement.
+
+Confirm whether current canonical data is sufficient to build:
+
+THEME_ALIGNMENT archetype
+
+Base score:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Premium Flow  25%
+Catalyst Alignment    25%
+
+Use available-signal normalization only when a signal is genuinely unavailable.
+
+Do not replace a missing signal with fake neutral 0.5.
+
+Then:
+
+Social Bonus          +0 to +10
+
+Entry Structure is completely separate.
+
+Entry fields:
+
+entry_score
+entry_grade
+entry_family
+entry_state
+
+must not affect:
+
+base_trade_alignment_score
+
+or:
+
+trade_alignment_score
+
+The future Actionability layer will combine:
+
+Trade Alignment
++
+Entry Structure
+
+---
+
+## FUTURE ELITE ASSET REBOUND ARCHETYPE
+
+Do not implement.
+
+Audit only whether current backend already has enough deterministic/cached data to later identify:
+
+exceptional fundamental quality
+
+strong historical Stage/leadership
+
+sharp current pullback/reset
+
+fundamental thesis still strong
+
+potential rebound asymmetry
+
+Identify exact currently available fields/services for:
+
+fundamental quality
+revenue growth
+EPS growth
+gross margin
+FCF margin
+analyst rating/consensus if currently implemented
+forward estimates if currently implemented
+Stage history/current Stage
+drawdown/pullback
+Entry Structure
+
+State what is currently missing.
+
+==================================================
+PART 5 — CURRENT WATCHLIST SECTION / CONFLUENCE PRODUCT BOUNDARY
+================================================================
+
+AUDIT ONLY.
+
+Trace the existing deterministic Watchlist section logic for:
+
+Golden Zone
+HC Trade
+HC Investment
+Growth
+
+For each return:
+
+frontend file/function
+fields used
+filter/grouping formula
+whether backend scoring is involved
+whether LLM output is involved
+
+The intended architecture is:
+
+Golden Zone / HC Trade / HC Investment / Growth
+remain unchanged for now.
+
+Confluence/Alignment is a NEW BACKEND INTELLIGENCE LAYER running in shadow mode.
+
+It does NOT replace the existing sections in this task.
+
+No new page is being built in this task.
+
+The eventual UI integration decision will be made only after shadow validation.
+
+Confirm whether adding new additive backend fields can occur without changing these existing Watchlist sections.
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+CONFLUENCE FOUNDATION AUDIT
+
+THEME MEMBERSHIP ROUND TRIP:
+[exact write → persistence → merged membership → Watchlist read path]
+
+ONE SHARED THEME ENGINE:
+[YES / NO + exact architecture]
+
+WATCHLIST THEME FIELD:
+[field]
+
+WATCHLIST THEME COVERAGE:
+[count / percent]
+
+US-LISTED WATCHLIST THEME COVERAGE:
+[count / percent]
+
+US-LISTED UNASSIGNED:
+[list]
+
+CURRENT BRIDGE COVERAGE:
+[count / percent]
+
+UI-THEME / BRIDGE MISMATCH:
+[count]
+
+ROOT CAUSE OF THEME COVERAGE DIFFERENCE:
+[exact cause]
+
+CORRECT THEME IDENTITY SOURCE FOR CONFLUENCE:
+[path/helper]
+
+OPTIONS PREMIUM FLOW PATH:
+[exact producer/storage/read path]
+
+NET PREMIUM:
+[field + unit]
+
+1D DELTA:
+[field + unit]
+
+7D DELTA:
+[field + unit]
+
+30D DELTA:
+[field + unit]
+
+ALL-DELTA COVERAGE:
+[count / percent]
+
+OPTIONS ZERO-CALL REUSE:
+[YES / NO]
+
+CURRENT OPTIONS SCORE USES DELTAS:
+[YES / NO + formula]
+
+CATALYST PATH:
+[exact sources/read path]
+
+CANONICAL CATALYST SCORE:
+[field/formula or NONE]
+
+CATALYST COVERAGE:
+[count / percent]
+
+CATALYST ZERO-CALL REUSE:
+[YES / NO]
+
+THEME ALIGNMENT 25%:
+[data ready / gap]
+
+STAGE QUALITY 25%:
+[data ready / gap]
+
+OPTIONS PREMIUM FLOW 25%:
+[data ready / gap]
+
+CATALYST ALIGNMENT 25%:
+[data ready / gap]
+
+SOCIAL BONUS:
+[current zero-call path]
+
+ELITE ASSET REBOUND DATA:
+[available fields + gaps]
+
+GOLDEN ZONE:
+[preserved / issue]
+
+HC TRADE:
+[preserved / issue]
+
+HC INVESTMENT:
+[preserved / issue]
+
+GROWTH:
+[preserved / issue]
+
+CONFLUENCE PRODUCT ROLE:
+[exact architectural role]
+
+BIGGEST FOUNDATION GAP:
+[one gap]
+
+RECOMMENDED NEXT IMPLEMENTATION:
+[ONE implementation]
+
+ZERO CODE CHANGES.
