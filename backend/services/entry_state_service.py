@@ -189,6 +189,29 @@ def _save_lkg(symbol: str, result: dict) -> None:
         pass
 
 
+def _update_lkg_memory(symbol: str, result: dict) -> None:
+    """Update in-memory LKG only — no disk write (for batch use)."""
+    global _ENTRY_STATE_LKG
+    _ENTRY_STATE_LKG[symbol] = result
+
+
+def flush_entry_state_lkg() -> None:
+    """
+    Write the full in-memory entry state LKG to disk atomically.
+
+    Call once after a batch warmup pass instead of writing per-symbol.
+    Safe to call concurrently — uses the same tmp-rename pattern as _save_lkg.
+    """
+    _load_lkg()
+    try:
+        _LKG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _LKG_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_ENTRY_STATE_LKG, default=str))
+        tmp.replace(_LKG_PATH)
+    except Exception:
+        pass
+
+
 # ── Support level extraction ────────────────────────────────────────────────────
 
 def _build_support_levels(
@@ -380,26 +403,47 @@ def _classify_entry_state(
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def analyze_entry_state_from_bars(
-    symbol:       str,
-    daily_bars:   list[dict],
-    stage_result: dict,
+    symbol:           str,
+    daily_bars:       list[dict],
+    stage_result:     dict,
+    *,
+    precomputed_tech: Optional[dict] = None,
+    cached_quote:     Optional[dict] = None,
+    bars_provider:    str = "unknown",
+    persist:          bool = True,
 ) -> dict:
     """
     Compute entry state from already-fetched daily bars + stage_result.
 
     Parameters
     ----------
-    symbol       : ticker symbol (uppercase)
-    daily_bars   : list of daily OHLCV dicts with at least {"date", "close"}.
-                   Bars must span ≥ 20 days; sorted oldest → newest.
-    stage_result : output of analyze_symbol_stage() — provides stage number,
-                   extension_state, extension_pct_30w_ma, stage_signals.
+    symbol           : ticker symbol (uppercase)
+    daily_bars       : list of daily OHLCV dicts with at least {"date","close"}.
+                       Bars must span ≥ 20 days; sorted oldest → newest.
+                       These must be the exact bars already in memory from the
+                       stage refresh pass — no new provider calls are made here.
+    stage_result     : output of analyze_symbol_stage() — provides stage number,
+                       extension_state, extension_pct_30w_ma, stage_signals.
+    precomputed_tech : already-computed compute_technical_metrics() dict from the
+                       same stage pass.  Skips the re-computation entirely when
+                       provided (same bars → same result, and avoids duplicate CPU).
+    cached_quote     : read-only in-memory quote cache entry for current price
+                       (e.g. cache.get("tradier:quote:sym:{SYM}")).  Must be
+                       retrieved with a bare cache.get() — never via get_quote()
+                       which can fetch on miss.  When None, last bar close is used.
+    bars_provider    : "tradier" | "fmp" | "unknown" — propagated from _fetch_bars.
+    persist          : True  → write entry_state_lkg.json after this symbol.
+                       False → update in-memory only; caller must call
+                       flush_entry_state_lkg() after the batch completes.
 
     Returns
     -------
     Dict with keys: symbol, entry_family, entry_state, entry_score, entry_grade,
                     support_levels, evidence, stage_int, extension_state,
-                    extension_pct, computed_at.
+                    extension_pct, price, price_basis, price_as_of,
+                    bars_last_date, bars_provider, computed_at.
+
+    Provider call count delta: ZERO.
     """
     _load_lkg()
     t0 = time.time()
@@ -413,42 +457,73 @@ def analyze_entry_state_from_bars(
                         sigs.get("price_vs_30w_ma_pct") or 0.0)
     ma_slope    = float(sigs.get("ma_30w_slope_pct") or 0.0)
     weeks_above = int(sigs.get("weeks_above_30w_ma_of_8") or 0)
-    vol_ratio_w = sigs.get("volume_ratio")   # weekly vol ratio from stage
+    vol_ratio_w = sigs.get("volume_ratio")
 
-    # Derive stage_key from label
-    _label_to_key = {
-        "Stage 1: Base":            "1",
-        "Stage 1-2: Watch":         "12",
-        "Stage 2: Advance":         "2",
-        "Stage 2b: Breakout":       "2b",
-        "Stage 3: Top":             "3",
-        "Stage 3m: Late Momentum":  "3m",
-        "Stage 4: Decline":         "4",
+    # Map actual STAGE_LABELS strings → internal stage_key
+    # These must match stage_analysis.STAGE_LABELS exactly.
+    _label_to_key: dict[str, str] = {
+        "S1 Base":       "1",
+        "S1-2 Watch":    "12",
+        "S2-S3 Advance": "2",
+        "S2 Breakout":   "2b",
+        "S3-S4 Top":     "3",
+        "S3 Momentum":   "3m",
+        "S4 Decline":    "4",
     }
     stage_key = _label_to_key.get(stage_label, str(stage_int))
 
-    # ── Compute daily technical metrics ──────────────────────────────────────
-    try:
-        from services.stage_analysis import compute_technical_metrics
-        tech = compute_technical_metrics(daily_bars)
-    except Exception:
-        tech = {}
+    # ── Technical metrics — reuse precomputed when available ─────────────────
+    if precomputed_tech is not None:
+        tech = precomputed_tech
+    else:
+        try:
+            from services.stage_analysis import compute_technical_metrics
+            tech = compute_technical_metrics(daily_bars)
+        except Exception:
+            tech = {}
 
-    ext_risk    = tech.get("extension_risk", "neutral")
-    breakout_s  = tech.get("breakout_signal")
-    entry_zone  = tech.get("entry_zone", "neutral")
-    squeeze_s   = tech.get("squeeze_signal")
-    ma_stack    = tech.get("ma_stack")
-    ad_sig      = tech.get("accumulation_distribution_signal")
-    sma20       = tech.get("sma_20")
-    sma50       = tech.get("sma_50")
-    sma200      = tech.get("sma_200")
-    pct20       = tech.get("pct_vs_sma_20")
-    pct50       = tech.get("pct_vs_sma_50")
+    ext_risk   = tech.get("extension_risk", "neutral")
+    breakout_s = tech.get("breakout_signal")
+    entry_zone = tech.get("entry_zone", "neutral")
+    squeeze_s  = tech.get("squeeze_signal")
+    ma_stack   = tech.get("ma_stack")
+    ad_sig     = tech.get("accumulation_distribution_signal")
+    sma20      = tech.get("sma_20")
+    sma50      = tech.get("sma_50")
+    sma200     = tech.get("sma_200")
+    pct20      = tech.get("pct_vs_sma_20")
+    pct50      = tech.get("pct_vs_sma_50")
 
-    # Daily bars sorted for price lookup
+    # ── Price resolution: cached quote (read-only) → last bar close ───────────
+    # cached_quote is obtained via cache.get() — no fetch on miss.
+    # If caller holds no cached quote, last bar close is the canonical fallback.
     sorted_bars = sorted(daily_bars, key=lambda b: b["date"])
-    price = float(sorted_bars[-1]["close"]) if sorted_bars else None
+    bars_last_date: Optional[str] = (
+        str(sorted_bars[-1].get("date", ""))[:10] if sorted_bars else None
+    )
+
+    price: Optional[float] = None
+    price_basis: str = "LAST_DAILY_CLOSE"
+    price_as_of: Optional[str] = None
+
+    if cached_quote:
+        _q_last = cached_quote.get("last") or cached_quote.get("close")
+        if _q_last is not None:
+            try:
+                price = float(_q_last)
+                price_basis = "CANONICAL_CACHED_QUOTE"
+                price_as_of = str(
+                    cached_quote.get("trade_date")
+                    or cached_quote.get("last_volume_date")
+                    or _now_iso()
+                )
+            except (TypeError, ValueError):
+                price = None
+
+    if price is None and sorted_bars:
+        price = float(sorted_bars[-1]["close"])
+        price_basis = "LAST_DAILY_CLOSE"
+        price_as_of = bars_last_date
 
     # 30w MA in price units (back-calculate from ext_pct if available)
     ma30w_price: Optional[float] = None
@@ -460,28 +535,27 @@ def analyze_entry_state_from_bars(
 
     # ── Classify ──────────────────────────────────────────────────────────────
     entry_state, adj, evidence = _classify_entry_state(
-        stage_int    = stage_int,
-        stage_key    = stage_key,
+        stage_int       = stage_int,
+        stage_key       = stage_key,
         extension_state = ext_state,
         extension_pct   = ext_pct,
-        ext_risk     = ext_risk,
-        breakout_sig = breakout_s,
-        entry_zone_val = entry_zone,
-        squeeze_sig  = squeeze_s,
-        ma_stack     = ma_stack,
-        pct20        = pct20,
-        pct50        = pct50,
-        ad_sig       = ad_sig,
-        volume_ratio = (float(vol_ratio_w) if vol_ratio_w else None),
-        weeks_above  = weeks_above,
-        ma_slope     = ma_slope,
-        bars_count   = len(daily_bars),
+        ext_risk        = ext_risk,
+        breakout_sig    = breakout_s,
+        entry_zone_val  = entry_zone,
+        squeeze_sig     = squeeze_s,
+        ma_stack        = ma_stack,
+        pct20           = pct20,
+        pct50           = pct50,
+        ad_sig          = ad_sig,
+        volume_ratio    = (float(vol_ratio_w) if vol_ratio_w else None),
+        weeks_above     = weeks_above,
+        ma_slope        = ma_slope,
+        bars_count      = len(daily_bars),
     )
 
     entry_family = _STATE_TO_FAMILY.get(entry_state, FAMILY_BROKEN)
     base_score   = _BASE_SCORES.get(entry_state, 20)
-    raw_score    = max(0, min(100, base_score + adj))
-    entry_score  = raw_score
+    entry_score  = max(0, min(100, base_score + adj))
     entry_grade  = _grade(entry_score)
 
     # ── Support levels ────────────────────────────────────────────────────────
@@ -508,12 +582,19 @@ def analyze_entry_state_from_bars(
         "ma_stack":        ma_stack,
         "squeeze_signal":  squeeze_s,
         "ad_signal":       ad_sig,
-        "price":           round(price, 4) if price else None,
+        "price":           round(price, 4) if price is not None else None,
+        "price_basis":     price_basis,
+        "price_as_of":     price_as_of,
+        "bars_last_date":  bars_last_date,
+        "bars_provider":   bars_provider,
         "elapsed_ms":      round((time.time() - t0) * 1000, 1),
         "computed_at":     _now_iso(),
     }
 
-    _save_lkg(symbol, result)
+    if persist:
+        _save_lkg(symbol, result)
+    else:
+        _update_lkg_memory(symbol, result)
     return result
 
 

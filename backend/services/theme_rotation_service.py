@@ -115,32 +115,43 @@ def _load_options_bias_map() -> dict[str, str]:
 # ── Signal transformers ────────────────────────────────────────────────────────
 
 def _rs_signal(row: dict) -> float:
-    """Normalise rs_score (theme's 8w RS vs SPY) to 0–1."""
+    """Normalise rs_score (theme's 8w RS vs SPY percentile 0–100) to 0–1.
+
+    rs_score in themes_rs_lkg is a percentile rank in the range 0–100
+    (higher = stronger relative strength vs SPY universe).
+    Simple divide-by-100 maps it to 0–1 without clamping issues.
+
+    Old formula (rs+20)/40 was wrong: assumed pct-point range −20..+20,
+    causing any rs_score > 20 to clamp to 1.0 (always-max signal).
+    """
     rs = _safe_float(row.get("rs_score") or row.get("rs_vs_spy"))
-    # rs_score in themes_rs_lkg is in pct units (−30 to +30 typical range)
-    # Map: −20 → 0, 0 → 0.5, +20 → 1.0
-    return _clamp01((rs + 20.0) / 40.0)
+    return _clamp01(rs / 100.0)
 
 
 def _stage_signal(row: dict) -> float:
-    """Map stage label to 0–1 quality score."""
+    """Map stage label to 0–1 quality score.
+
+    Label strings must match stage_analysis.STAGE_LABELS exactly.
+    Old _map used wrong strings ("Stage 2: Advance" etc.); actual values
+    from STAGE_LABELS are "S2-S3 Advance", "S3 Momentum", etc.
+    """
     stage = row.get("stage") or row.get("stage_label") or ""
     _map = {
-        "Stage 2: Advance":        1.00,
-        "Stage 2b: Breakout":      0.95,
-        "Stage 1-2: Watch":        0.70,
-        "Stage 3m: Late Momentum": 0.55,
-        "Stage 1: Base":           0.45,
-        "Stage 3: Top":            0.30,
-        "Stage 4: Decline":        0.05,
+        "S2-S3 Advance": 1.00,
+        "S2 Breakout":   0.95,
+        "S1-2 Watch":    0.70,
+        "S3 Momentum":   0.55,
+        "S1 Base":       0.45,
+        "S3-S4 Top":     0.30,
+        "S4 Decline":    0.05,
     }
-    # Also handle integer stage field
-    stage_int = row.get("stage_int")
-    _int_map = {2: 0.90, 1: 0.45, 3: 0.30, 4: 0.05}
     if stage in _map:
         return _map[stage]
-    if stage_int in _int_map:
-        return _int_map[stage_int]
+    # Integer stage fallback — also handles when row["stage"] is an int
+    _int_map: dict[int, float] = {2: 0.90, 1: 0.45, 3: 0.30, 4: 0.05}
+    stage_int_val = row.get("stage_int") or (stage if isinstance(stage, int) else None)
+    if stage_int_val in _int_map:
+        return _int_map[stage_int_val]
     return 0.40   # default / unclassified
 
 

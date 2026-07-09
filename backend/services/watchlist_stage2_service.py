@@ -394,6 +394,36 @@ async def warmup_stage2(
                 from services.stage_analysis import compute_technical_metrics
                 tech = compute_technical_metrics(bars)
 
+                # ── Entry State — zero new provider calls ─────────────────────
+                # Read quote from cache read-only (cache.get only; never
+                # get_quote() which fetches on miss).  Falls back to last
+                # bar close inside analyze_entry_state_from_bars when None.
+                _entry_cached_q: dict | None = None
+                try:
+                    from data.cache import cache as _ec
+                    _entry_cached_q = _ec.get(f"tradier:quote:sym:{sym}")
+                except Exception:
+                    pass
+
+                _entry_result: dict | None = None
+                try:
+                    from services.entry_state_service import (
+                        analyze_entry_state_from_bars as _aes,
+                    )
+                    _entry_result = _aes(
+                        symbol=sym,
+                        daily_bars=bars,
+                        stage_result=result,
+                        precomputed_tech=tech,
+                        cached_quote=_entry_cached_q,
+                        bars_provider=hist_source,
+                        persist=False,  # memory-only; bulk flush after gather
+                    )
+                except Exception as _es_exc:
+                    print(
+                        f"[STAGE2_WL] entry_state error {sym} (non-fatal): {_es_exc}"
+                    )
+
                 # ── Provenance / diagnostics ──────────────────────────────────
                 has_ohlcv = any(b.get("high") is not None for b in bars)
                 bar_dates = sorted(
@@ -430,6 +460,14 @@ async def warmup_stage2(
                     "technical_metrics":       tech,
                     "technical_state":         tech.get("technical_state"),
                     "technical_timing_score":  tech.get("technical_timing_score"),
+                    # ── Entry State compact summary ────────────────────────────
+                    # Full result is persisted to entry_state_lkg.json via
+                    # flush_entry_state_lkg() called after asyncio.gather.
+                    "entry_family": _entry_result.get("entry_family") if _entry_result else None,
+                    "entry_state":  _entry_result.get("entry_state")  if _entry_result else None,
+                    "entry_score":  _entry_result.get("entry_score")  if _entry_result else None,
+                    "entry_grade":  _entry_result.get("entry_grade")  if _entry_result else None,
+                    "price_basis":  _entry_result.get("price_basis")  if _entry_result else None,
                     # ── Provenance ────────────────────────────────────────────
                     "history_source":     hist_source,
                     "bars_count":         bar_count,
@@ -453,6 +491,15 @@ async def warmup_stage2(
 
     tasks = [_process_one(sym) for sym in to_process]
     await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ── Entry State bulk flush — one disk write after all symbols ─────────────
+    # _process_one used persist=False (memory-only).  Write the full LKG once.
+    try:
+        from services.entry_state_service import flush_entry_state_lkg as _flush_es
+        _flush_es()
+        print(f"[STAGE2_WL] entry_state LKG flushed ({len(to_process)} symbols)")
+    except Exception as _fe:
+        print(f"[STAGE2_WL] entry_state LKG flush error (non-fatal): {_fe}")
 
     # ── Overwrite guard ───────────────────────────────────────────────────────
     new_valid_count = sum(

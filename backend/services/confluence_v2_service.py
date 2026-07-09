@@ -99,12 +99,21 @@ def _verdict(score: float) -> str:
 # ── Loaders ────────────────────────────────────────────────────────────────────
 
 def _load_stage2_lkg() -> dict[str, dict]:
-    """Load stage2 LKG keyed by symbol."""
+    """Load stage2 LKG keyed by symbol.
+
+    The on-disk format is:
+        {"updated_at": "...", "symbol_count": N, "results": {"SYM": {...}, ...}}
+
+    Must read from the "results" sub-dict, NOT from the top-level dict — otherwise
+    the key "results" itself would be treated as a fake ticker symbol.
+    """
     try:
         if _STAGE2_LKG.exists():
             raw = json.loads(_STAGE2_LKG.read_text())
             if isinstance(raw, dict):
-                return {k.upper(): v for k, v in raw.items() if isinstance(v, dict)}
+                entries = raw.get("results", {})
+                if isinstance(entries, dict):
+                    return {k.upper(): v for k, v in entries.items() if isinstance(v, dict)}
     except Exception:
         pass
     return {}
