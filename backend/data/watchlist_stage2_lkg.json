@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-07-09T16:41:12.175788+00:00",
+  "updated_at": "2026-07-09T17:20:07.958505+00:00",
   "symbol_count": 377,
   "results": {
     "AAOI": {
@@ -427,28 +427,28 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "AIM:ENSI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "AIM:IQE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "AIM:TRT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "AIR": {
       "score": 100.0,
@@ -805,7 +805,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "AMBA": {
       "score": 44.4,
@@ -1932,14 +1932,14 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "AMS:BESI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "ASYS": {
       "score": 80.0,
@@ -2086,14 +2086,14 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "ASX:EOS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "AUR": {
       "score": 80.0,
@@ -2240,7 +2240,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "AXTI": {
       "score": 74.1,
@@ -2807,7 +2807,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "CEG": {
       "score": 0.0,
@@ -3580,25 +3580,214 @@
       "computed_at": "2026-07-09T16:33:47.527048+00:00"
     },
     "CPSH": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "score": 61.5,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price -0.6% above 30-week MA (rising slope). Prior 26w: -10%. RS vs SPY: falling. Vol 0.5\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": -0.55,
+        "ma_30w_slope_pct": 6.46,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -18.93,
+        "volume_ratio": 0.47,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": -9.58,
+        "breakout_watch": true,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "low",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 6.032,
+        "sma_50": 6.1216,
+        "sma_200": 4.5851,
+        "pct_vs_sma_20": -18.6,
+        "pct_vs_sma_50": -19.79,
+        "pct_vs_sma_200": 7.09,
+        "ma_stack": "mixed",
+        "extension_risk": "healthy",
+        "high_52w": 11.59,
+        "low_52w": 2.42,
+        "pct_from_52w_high": -57.64,
+        "pct_from_52w_low": 102.89,
+        "range_position_52w": 27.2,
+        "high_20d": 8.59,
+        "high_50d": 11.59,
+        "breakout_signal": "failed_breakout",
+        "entry_zone": "neutral",
+        "avg_volume_20d": 1266057.0,
+        "accumulation_days_20d": 1,
+        "distribution_days_20d": 3,
+        "accumulation_distribution_score": -2,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 0.594,
+        "atr_14_pct": 12.1,
+        "range_20d_pct": 94.09,
+        "squeeze_signal": "coiling",
+        "roc_20d": -27.9,
+        "roc_50d": -5.58,
+        "momentum_trend": "negative",
+        "technical_state": "neutral",
+        "technical_timing_score": 50.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "neutral",
+      "technical_timing_score": 50.0,
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_score": 30,
+      "entry_grade": "AVOID",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "tradier",
+      "bars_count": 275,
+      "history_start_date": "2025-06-04",
+      "history_end_date": "2026-07-09",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "status": "ok",
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "CRDO": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +66.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 1.1\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 66.62,
+        "ma_30w_slope_pct": 8.68,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 25.22,
+        "volume_ratio": 1.09,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 82.26,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 259.3487,
+        "sma_50": 223.252,
+        "sma_200": 160.5941,
+        "pct_vs_sma_20": 6.1,
+        "pct_vs_sma_50": 23.25,
+        "pct_vs_sma_200": 71.34,
+        "ma_stack": "bull",
+        "extension_risk": "extended",
+        "high_52w": 302.52,
+        "low_52w": 87.81,
+        "pct_from_52w_high": -9.04,
+        "pct_from_52w_low": 213.36,
+        "range_position_52w": 87.3,
+        "high_20d": 302.52,
+        "high_50d": 302.52,
+        "breakout_signal": "no_setup",
+        "entry_zone": "extended",
+        "avg_volume_20d": 10068793.0,
+        "accumulation_days_20d": 2,
+        "distribution_days_20d": 1,
+        "accumulation_distribution_score": 1,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 30.0935,
+        "atr_14_pct": 10.94,
+        "range_20d_pct": 30.27,
+        "squeeze_signal": "volatile",
+        "roc_20d": 17.43,
+        "roc_50d": 52.44,
+        "momentum_trend": "positive",
+        "technical_state": "extended",
+        "technical_timing_score": 73.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "extended",
+      "technical_timing_score": 73.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "HIGH_BASE_FORMING",
+      "entry_score": 50,
+      "entry_grade": "C",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "history_source": "tradier",
+      "bars_count": 275,
+      "history_start_date": "2025-06-04",
+      "history_end_date": "2026-07-09",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "status": "ok",
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "CRCL": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "score": 3.8,
+      "label": "S4 Decline",
+      "reason": "Downtrend confirmed. Price -27.1% below a falling 30-week MA. RS vs SPY: falling. Avoid new longs.",
+      "signals": {
+        "price_vs_30w_ma_pct": -27.07,
+        "ma_30w_slope_pct": -1.43,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -44.33,
+        "volume_ratio": 0.76,
+        "weeks_above_30w_ma_of_8": 2,
+        "prior_26w_trend_pct": -18.8,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 72.9583,
+        "sma_50": 93.2489,
+        "sma_200": 95.6271,
+        "pct_vs_sma_20": -12.5,
+        "pct_vs_sma_50": -31.54,
+        "pct_vs_sma_200": -33.25,
+        "ma_stack": "bear",
+        "extension_risk": "broken",
+        "high_52w": 235.08,
+        "low_52w": 50.23,
+        "pct_from_52w_high": -72.85,
+        "pct_from_52w_low": 27.09,
+        "range_position_52w": 7.4,
+        "high_20d": 83.37,
+        "high_50d": 131.76,
+        "breakout_signal": "failed_breakout",
+        "entry_zone": "broken",
+        "avg_volume_20d": 13016082.0,
+        "accumulation_days_20d": 1,
+        "distribution_days_20d": 2,
+        "accumulation_distribution_score": -1,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 5.6674,
+        "atr_14_pct": 8.88,
+        "range_20d_pct": 40.16,
+        "squeeze_signal": "coiling",
+        "roc_20d": -21.29,
+        "roc_50d": -33.12,
+        "momentum_trend": "negative",
+        "technical_state": "broken",
+        "technical_timing_score": 0.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "broken",
+      "technical_timing_score": 0.0,
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "SUPPORT_LOST",
+      "entry_score": 14,
+      "entry_grade": "AVOID",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-05",
+      "history_end_date": "2026-07-09",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "status": "ok",
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "CRML": {
       "score": 33.8,
@@ -3955,7 +4144,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "DRS": {
       "score": 83.9,
@@ -4522,28 +4711,28 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "CSE:MAXX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "EPA:ALRIB": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "EPA:MRN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "EQIX": {
       "score": 75.9,
@@ -4830,42 +5019,42 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "EPA:XFAB": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "ETR:AIXA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "ETR:JEN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "ETR:LPK": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "ETR:P4O": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "FCEL": {
       "score": 80.0,
@@ -4942,7 +5131,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "FLNC": {
       "score": 14.4,
@@ -5231,14 +5420,14 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "ETR:TPE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "FRMI": {
       "score": 36.1,
@@ -5738,7 +5927,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "GNRC": {
       "score": 80.0,
@@ -6445,14 +6634,14 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "FRA:APR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "INTC": {
       "score": 80.0,
@@ -6949,7 +7138,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "IPX": {
       "score": 1.9,
@@ -8146,35 +8335,35 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "LON:0RPO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "LON:0ABT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "LON:CWR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "LON:QQ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "LPTH": {
       "score": 64.8,
@@ -10771,28 +10960,28 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "OSL:SMOP": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "OTC:ATEYY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "OTC:CGEH": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "OUST": {
       "score": 100.0,
@@ -12062,14 +12251,14 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "OTC:KRKNF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "RDW": {
       "score": 50.8,
@@ -12853,7 +13042,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "SES": {
       "score": 0.0,
@@ -14115,28 +14304,28 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "STO:GAPW.B": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "STO:HTRO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "STO:SILEX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "STX": {
       "score": 100.0,
@@ -14773,28 +14962,28 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "STO:SIVE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TPE:3661": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TPE:8271": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TRMB": {
       "score": 0.0,
@@ -15221,56 +15410,56 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TSX:MAL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TSX:HPS.A": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TSX:FLT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TSXV:AAG": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TSX:VNP": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TSXV:XBOT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TSX:MOLY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "TXN": {
       "score": 90.0,
@@ -16959,7 +17148,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "XTIA": {
       "score": 39.4,
@@ -17036,21 +17225,21 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "WSE:VGO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "XSAT:SMOL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "PLTR": {
       "score": 1.6,
@@ -19860,7 +20049,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "PRME": {
       "score": 67.2,
@@ -20077,7 +20266,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "QUBT": {
       "score": 20.1,
@@ -20644,7 +20833,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "SNOW": {
       "score": 98.1,
@@ -20721,7 +20910,7 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "SOFI": {
       "score": 26.9,
@@ -20868,21 +21057,21 @@
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "SHA:603986": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "SHA:688008": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-09T16:33:47.527048+00:00"
+      "computed_at": "2026-07-09T17:15:20.598816+00:00"
     },
     "STIM": {
       "score": 64.0,
