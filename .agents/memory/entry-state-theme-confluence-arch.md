@@ -9,8 +9,6 @@ The watchlist router (`services/watchlist_router.py`, prefix `/api/watchlist`) h
 
 **All new Phase 4/7 endpoints must live under `/api/alpha/` (or any non-watchlist prefix).**
 
-Existing watchlist-router routes include: `/{watchlist_id}`, `/{watchlist_id}/news`, `/{watchlist_id}/stock/{ticker}`, etc.
-
 ## themes_rs_lkg.json leaders shape
 
 `leaders` field is a **list of dicts** `{"symbol": "VRTX", "return_pct": 155.97, "timeframe": "5Y", "source": ...}` — NOT a list of strings.
@@ -36,3 +34,31 @@ LKG file at `backend/data/entry_state_lkg.json`. Populated only when `analyze_en
 
 Empirical max observed from `_backend_ranked` in `x_consensus_weekly.json`: ~14.0. Used as normaliser ceiling.
 Entry: `social_sig = clamp01(backend_score / 14.0)`. Has-top-conviction applies a 1.15x boost (capped at 1.0).
+
+## Stage2 LKG canonical field names (Fix 1)
+
+`_stage_signal_from_lkg` must read `"score"` (0–100 float) and `"label"` (string e.g. "S2-S3 Advance") from the Stage2 LKG dict. Fields `"stage_score"`, `"stage_label"`, `"stage"` do NOT exist — reading them always returns None → default 0.5. After fix: signal range 0.000–1.000, stdev=0.310.
+
+**Why:** Stage2 LKG is written by `watchlist_stage2_service._process_one` which serialises via `WatchlistStage2Result` Pydantic model. The canonical output fields are `score` and `label` at the top level of the dict.
+
+## Confluence V2 weight normalization (Fix 3)
+
+Base weights (4 signals, sum=1.0000): entry=0.353, theme=0.235, stage=0.235, options=0.177. Social is NOT a weighted signal — it is a conditional additive bonus (0–10 pts) applied AFTER the base score is computed. Outputs: `base_trade_confluence_score`, `social_bonus_score`, `trade_confluence_score`, `investment_confluence_score`, `confluence_score` (= trade, backward compat).
+
+## Social bonus eligibility gate (data-availability-aware)
+
+`_compute_social_bonus()` eligibility gate requires: entry_score >= 60 AND (theme_sig >= 0.55 OR stage_sig >= 0.65) AND (stage_sig >= 0.60 OR options_sig >= 0.65).
+
+**Why:** Theme rotation coverage is chronically 0% (all symbols default to theme_sig=0.5). Using `stage_sig >= 0.65` as a proxy for theme confirmation prevents the gate from being permanently blocked when theme data is absent. Without this proxy, eligible_count is always 0 regardless of entry quality.
+
+**How to apply:** If theme coverage remains 0%, the effective gate is `entry_score >= 60 AND stage_sig >= 0.65`. With full theme data, theme_sig >= 0.55 becomes the primary confirmation signal.
+
+## HIGH_BASE entry state (Fix 4)
+
+New CONTINUATION family state in `entry_state_service.py`. Detection requires: stage_int==2, ext_state not EXTREME_EXTENSION, breakout_state not in {failed, fresh_breakout, confirmed_breakout}, range_20d <= 20%, pct_from_20d_hi >= -8%. Base score=80 (max 90). Bonuses: coiling+5, range_contraction+3, near_high+3, accumulation+3, bull_ma+2, healthy_ext+2. Added to `_BASE_SCORES`, `_STATE_TO_FAMILY` (CONTINUATION), and checked before SIGNALS_BUILDING pre-check.
+
+**Why:** Distinguishes mature Stage 2 bases near recent highs (low-risk continuation entries) from earlier-stage signal setups. SLAB and AME archetypal examples (both score 89, A+). ANET correctly remains SIGNALS_BUILDING (fresh breakout gate fires).
+
+## force_warmup_stage2 admin endpoint
+
+`POST /api/admin/stage2/force-warmup?force_all=true` — loads all watchlist tickers, calls `warmup_stage2(tickers, force=True)` bypassing all freshness TTLs. Added `force: bool = False` param to `warmup_stage2()` in `watchlist_stage2_service.py`. Always trigger via HTTP admin endpoint, never subprocess (subprocess destroys disk LKG — see stage2-lkg-subprocess.md).

@@ -90,6 +90,7 @@ _BASE_SCORES: dict[str, int] = {
     "EARLY_ACCUMULATION":54,
     "SIGNALS_BUILDING":  66,
     # CONTINUATION
+    "HIGH_BASE":           80,   # Stage 2 consolidation near highs (capped 90)
     "PULLBACK_IN_UPTREND": 76,
     "BREAKOUT_RETEST":     81,
     "SUPPORT_HOLD":        70,
@@ -115,6 +116,7 @@ _STATE_TO_FAMILY: dict[str, str] = {
     "BREAKOUT_READY":    FAMILY_PRE_MOVE,
     "EARLY_ACCUMULATION":FAMILY_PRE_MOVE,
     "SIGNALS_BUILDING":  FAMILY_PRE_MOVE,
+    "HIGH_BASE":           FAMILY_CONTINUATION,
     "PULLBACK_IN_UPTREND": FAMILY_CONTINUATION,
     "BREAKOUT_RETEST":     FAMILY_CONTINUATION,
     "SUPPORT_HOLD":        FAMILY_CONTINUATION,
@@ -533,25 +535,94 @@ def analyze_entry_state_from_bars(
         except ZeroDivisionError:
             pass
 
+    # ── HIGH_BASE pre-check ────────────────────────────────────────────────────
+    # Detect Stage 2 consolidation near highs BEFORE the generic classifier.
+    # HIGH_BASE = price coiling/pausing within 8% of 20d high, controlled range,
+    # constructive internals — a continuation setup, not a chase.
+    #
+    # Hard gates (all must pass):
+    #   • Stage 2 (inc. Stage 2b) — NOT Stage 1, 3, or 4
+    #   • Not EXTREME_EXTENSION (too far stretched)
+    #   • Not broken or overheated ext_risk
+    #   • No failed/fresh/confirmed breakout (those have their own states)
+    #   • MA stack constructive (bull or mixed)
+    #   • Not distribution A/D signal
+    #   • Price within -8% of 20-day high
+    #   • 20-day range ≤ 20% (tight / controlled consolidation)
+    _hb_override: Optional[tuple[str, int, list[str]]] = None
+    _range_20d: float = float(tech.get("range_20d_pct") or 0.0)
+    if (
+        price is not None and
+        len(sorted_bars) >= 20 and
+        (stage_int == 2 or stage_key in ("2", "2b")) and
+        ext_state != "EXTREME_EXTENSION" and
+        ext_risk not in ("broken", "overheated") and
+        breakout_s not in ("failed_breakout", "fresh_breakout", "confirmed_breakout") and
+        ma_stack in ("bull", "mixed") and
+        ad_sig != "distribution" and
+        _range_20d <= 20.0
+    ):
+        _hi_20d = max(float(b["close"]) for b in sorted_bars[-20:])
+        _pct_from_hi = round((price / _hi_20d - 1) * 100.0, 2) if _hi_20d > 0 else None
+        if _pct_from_hi is not None and _pct_from_hi >= -8.0:
+            hb_ev: list[str] = ["high_base_stage2", "no_failed_breakout"]
+            hb_adj = 0
+            # Squeeze bonus — coiling price action in tight range
+            if squeeze_s in ("tight", "coiling"):
+                hb_adj += 5
+                hb_ev.append("coiling")
+            # Very tight range (< 8% 20-day range)
+            if _range_20d <= 8.0:
+                hb_adj += 3
+                hb_ev.append("range_contraction")
+            elif _range_20d <= 15.0:
+                hb_adj += 1
+            # Near the recent high (within 2%)
+            if _pct_from_hi >= -2.0:
+                hb_adj += 3
+                hb_ev.append("near_recent_high")
+            elif _pct_from_hi >= -5.0:
+                hb_adj += 1
+            # Accumulation distribution
+            if ad_sig == "accumulation":
+                hb_adj += 3
+                hb_ev.append("accumulation_present")
+            # Strong MA stack
+            if ma_stack == "bull":
+                hb_adj += 2
+                hb_ev.append("bull_ma_stack")
+            # Healthy (not yet extended) preferred
+            if ext_state == "HEALTHY":
+                hb_adj += 2
+            elif ext_state == "MODERATELY_EXTENDED":
+                hb_adj += 1
+                hb_ev.append("extension_risk_moderate")
+            # Cap: base=80, max=90
+            hb_adj = min(hb_adj, 10)
+            _hb_override = ("HIGH_BASE", hb_adj, hb_ev)
+
     # ── Classify ──────────────────────────────────────────────────────────────
-    entry_state, adj, evidence = _classify_entry_state(
-        stage_int       = stage_int,
-        stage_key       = stage_key,
-        extension_state = ext_state,
-        extension_pct   = ext_pct,
-        ext_risk        = ext_risk,
-        breakout_sig    = breakout_s,
-        entry_zone_val  = entry_zone,
-        squeeze_sig     = squeeze_s,
-        ma_stack        = ma_stack,
-        pct20           = pct20,
-        pct50           = pct50,
-        ad_sig          = ad_sig,
-        volume_ratio    = (float(vol_ratio_w) if vol_ratio_w else None),
-        weeks_above     = weeks_above,
-        ma_slope        = ma_slope,
-        bars_count      = len(daily_bars),
-    )
+    if _hb_override is not None:
+        entry_state, adj, evidence = _hb_override
+    else:
+        entry_state, adj, evidence = _classify_entry_state(
+            stage_int       = stage_int,
+            stage_key       = stage_key,
+            extension_state = ext_state,
+            extension_pct   = ext_pct,
+            ext_risk        = ext_risk,
+            breakout_sig    = breakout_s,
+            entry_zone_val  = entry_zone,
+            squeeze_sig     = squeeze_s,
+            ma_stack        = ma_stack,
+            pct20           = pct20,
+            pct50           = pct50,
+            ad_sig          = ad_sig,
+            volume_ratio    = (float(vol_ratio_w) if vol_ratio_w else None),
+            weeks_above     = weeks_above,
+            ma_slope        = ma_slope,
+            bars_count      = len(daily_bars),
+        )
 
     entry_family = _STATE_TO_FAMILY.get(entry_state, FAMILY_BROKEN)
     base_score   = _BASE_SCORES.get(entry_state, 20)

@@ -1,0 +1,712 @@
+IMPLEMENT ONLY FOUR SPECIFIC FIXES.
+
+Do not change unrelated scoring.
+Do not tune general Confluence weights.
+Do not modify Daily Alpha V1.
+Do not modify Options Flow.
+Do not add provider calls.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not change Grok cadence.
+
+The latest behavioral validation proved four specific remaining issues:
+
+1. Confluence V2 reads the wrong Stage LKG field names.
+2. Entry State needs the existing normal Stage warmup to populate the full LKG after integration.
+3. Social is still a normal 15% weighted Trade signal instead of the requested asymmetric bonus.
+4. HIGH_BASE is a genuinely missing deterministic Entry State.
+
+Fix exactly these four items, then return real rankings.
+
+==================================================
+FIX 1 — CONFLUENCE STAGE FIELD NAMES
+====================================
+
+File:
+
+backend/services/confluence_v2_service.py
+
+The Stage2 LKG stores per-symbol Stage fields as:
+
+score
+label
+
+Current `_stage_signal_from_lkg()` incorrectly reads:
+
+stage_score
+stage_label
+
+Fix it to consume the actual canonical fields:
+
+row.get("score")
+row.get("label")
+
+Do not change the Stage2 LKG schema.
+Do not change the Stage producer.
+
+For structured stage identity, inspect the row's existing fields/signals and use the strongest existing structured value where available.
+
+Do not invent a new stage calculation.
+
+Validate:
+
+* stage signal is not constant across 376 symbols
+* show min/max/median
+* show at least 10 symbols with:
+  symbol
+  stage score
+  stage label
+  normalized stage signal
+
+==================================================
+FIX 2 — POPULATE ENTRY STATE THROUGH NORMAL STAGE WARMUP
+========================================================
+
+Entry State is now integrated into the existing Stage bar pass, but the last Stage warmup occurred before integration.
+
+Run the EXISTING normal Stage warmup/refresh path after the code changes.
+
+Do not create another refresh function.
+Do not bypass the existing pacer.
+Do not make direct Tradier/FMP history calls outside the normal Stage pipeline.
+
+The Stage warmup already fetches the bars required for its normal work.
+
+Entry State must continue to reuse those same in-memory bars.
+
+Validate:
+
+stage2 LKG symbol count
+entry_state LKG symbol count
+Stage symbols missing Entry State
+Entry family distribution
+Entry state distribution
+
+Prove Entry State caused:
+
+0 additional Tradier history calls
+0 additional Tradier quote calls
+0 additional FMP history calls
+
+compared with the existing normal Stage warmup provider workload.
+
+==================================================
+FIX 3 — SOCIAL AS CONDITIONAL BONUS, NOT WEIGHTED SIGNAL
+========================================================
+
+File:
+
+backend/services/confluence_v2_service.py
+
+The current Trade Confluence formula includes:
+
+_W_SOCIAL = 0.15
+
+as a normal weighted signal.
+
+Remove Social from the BASE Trade Confluence weighted average.
+
+Social must become an asymmetric additive confluence bonus.
+
+CORE PRINCIPLE:
+
+Social confirms a strong setup.
+Social does not define a strong setup.
+
+No structured social coverage must not penalize a ticker.
+
+Quiet social must not penalize a ticker.
+
+Strong fresh social alignment may materially boost a setup that has already earned non-social confluence.
+
+---
+
+## BASE TRADE SCORE
+
+Calculate:
+
+base_trade_confluence_score
+
+without Social.
+
+Use the existing non-social Trade inputs already implemented.
+
+Do not add new signal categories in this task.
+
+Renormalize the remaining base weights so the base score remains 0–100.
+
+Return the base weight version in diagnostics/meta.
+
+---
+
+## SOCIAL BONUS ELIGIBILITY
+
+A ticker is eligible for positive Social Bonus only when the non-social setup is already aligned.
+
+Use:
+
+entry_score >= 60
+
+AND
+
+theme_rotation_score >= 55
+
+AND at least one of:
+
+technical/stage quality >= 60
+options_flow_composite >= 65
+catalyst score >= 65
+
+Use the exact existing canonical numeric fields available in Confluence V2.
+
+If a listed field is unavailable in the current service, do not fabricate it.
+
+Use the equivalent canonical field already present.
+
+---
+
+## NO SOCIAL COVERAGE
+
+If ticker is not in the canonical cached social dataset:
+
+social_bonus_score = 0
+
+No penalty.
+No denominator effect.
+No neutral 0.5 contribution.
+
+---
+
+## QUIET / WEAK SOCIAL
+
+If structured social exists but is weak or quiet:
+
+social_bonus_score = 0
+
+Do not penalize low mentions.
+
+Do not penalize lack of attention.
+
+Early unnoticed setups are desirable.
+
+---
+
+## POSITIVE BONUS
+
+Use existing cached structured social fields only.
+
+No new Grok call.
+
+Canonical cached inputs may include:
+
+social_consensus_score
+social_acceleration_score
+social_freshness_score
+
+or their exact existing field names in the structured social cache.
+
+Before implementing, trace and document the exact scales.
+
+Create deterministic bonus tiers with maximum +10 points.
+
+INTENT:
+
+VERY STRONG FRESH SOCIAL CONFLUENCE
+strong consensus
+strong acceleration
+fresh
+→ +8 to +10
+
+STRONG CONFIRMATION
+strong consensus OR strong acceleration
+with adequate freshness
+→ +5 to +7
+
+MODERATE CONFIRMATION
+moderate positive confirmation
+→ +2 to +4
+
+WEAK / ABSENT
+→ 0
+
+Use continuous or tiered deterministic logic.
+
+Document the exact formula.
+
+---
+
+## SOCIAL CANNOT RESCUE BAD ENTRY
+
+Social Bonus must never override:
+
+entry_grade == AVOID
+entry_family == BROKEN_OR_UNCLEAR
+actionability == BROKEN
+actionability == TOO_EXTENDED
+
+If the current actionability calculation runs after Trade scoring, enforce the equivalent pre-action gate using Entry State fields.
+
+Maximum positive Social Bonus remains 10.
+
+---
+
+## OUTPUT
+
+Return:
+
+base_trade_confluence_score
+social_bonus_score
+trade_confluence_score
+
+where:
+
+trade_confluence_score =
+clamp(base_trade_confluence_score + social_bonus_score, 0, 100)
+
+Also return:
+
+social_bonus_eligible
+social_bonus_reason
+social_risk_flag
+
+Strong explicit bearish structured consensus may set:
+
+social_risk_flag = true
+
+Do not add a large negative scored penalty in this task.
+
+---
+
+## DIAGNOSTICS
+
+Return:
+
+social_coverage_count
+social_bonus_eligible_count
+social_bonus_applied_count
+social_bonus_0_count
+social_bonus_2_4_count
+social_bonus_5_7_count
+social_bonus_8_10_count
+
+Validate zero new Grok calls.
+
+==================================================
+FIX 4 — ADD DETERMINISTIC HIGH_BASE ENTRY STATE
+===============================================
+
+File:
+
+backend/services/entry_state_service.py
+
+The real-bar validation proved HIGH_BASE is a missing structural state.
+
+Current examples include Stage 2 names such as SLAB:
+
+drawdown from recent high ≈ -0.8%
+20-day range ≈ 2.01%
+coiling
+Stage 2 advance
+moderately extended
+no failed breakout
+
+These structures are neither:
+
+PULLBACK_IN_UPTREND
+
+nor:
+
+SIGNALS_BUILDING
+
+HIGH_BASE is a continuation structure after a prior advance.
+
+Add:
+
+entry_family = CONTINUATION
+entry_state = HIGH_BASE
+
+Do not hardcode symbols.
+
+---
+
+## HIGH_BASE STRUCTURAL INTENT
+
+A HIGH_BASE should describe:
+
+established Stage 2 / Stage 2-3 advance
+prior trend already exists
+price remains near a recent multi-week high
+drawdown is shallow
+price consolidates for multiple sessions
+recent range is controlled or contracting
+structure remains above valid support
+no failed breakout
+no meaningful short-term structural breakdown
+not EXTREME_EXTENSION
+no obvious volume climax/distribution failure
+
+Use existing daily OHLCV bars and technical metrics.
+
+No provider calls.
+
+---
+
+## DETERMINISTIC INPUTS
+
+Use existing locally available metrics where possible:
+
+stage key / stage label
+recent 20D or 60D high
+drawdown_from_recent_high_pct
+recent range / range contraction
+squeeze/coiling state
+MA stack
+breakout signal
+extension_state
+ATR-normalized extension
+accumulation/distribution
+volume ratio / volume behavior
+
+Do not require every field if current producers do not calculate it.
+
+Do not add an LLM interpretation.
+
+---
+
+## INITIAL HIGH_BASE GATING
+
+Derive exact thresholds from current metric scales.
+
+The intended logic should resemble:
+
+Stage 2 / Stage 2-3 context
+
+AND
+
+shallow drawdown from recent high
+
+AND
+
+controlled or contracting recent range
+
+AND
+
+bullish or structurally constructive MA stack
+
+AND
+
+breakout_signal != failed_breakout
+
+AND
+
+extension_state != EXTREME_EXTENSION
+
+AND
+
+no clear distribution/climax failure
+
+HIGH_BASE must be checked BEFORE generic:
+
+SIGNALS_BUILDING
+
+or:
+
+stage2_no_clear_zone
+
+fallback logic.
+
+It must NOT override:
+
+failed_breakout
+support_lost
+downtrend
+extreme vertical/climax structure
+
+---
+
+## ENTRY SCORING
+
+HIGH_BASE should generally be a strong entry state but not automatically A_PLUS.
+
+Use current Entry State scoring philosophy.
+
+Suggested range:
+
+entry_score approximately 75–90
+
+based on:
+
+tightness
+distance from recent high
+support proximity
+accumulation
+volume quality
+extension risk
+
+Do not give every HIGH_BASE the same score.
+
+Return reason codes such as:
+
+high_base_stage2
+near_recent_high
+range_contraction
+coiling
+bull_ma_stack
+no_failed_breakout
+accumulation_present
+extension_risk_moderate
+
+==================================================
+REVALIDATION
+============
+
+After all four fixes:
+
+1. Run the existing normal Stage warmup.
+2. Build Theme Rotation.
+3. Build Confluence V2.
+
+Return:
+
+A. ENTRY POPULATION
+
+stage symbols
+entry symbols
+missing Entry rows
+entry family distribution
+entry state distribution
+HIGH_BASE count
+
+B. HIGH_BASE RESULTS
+
+Return all HIGH_BASE names, up to 25.
+
+For each:
+
+symbol
+entry_score
+entry_grade
+stage
+extension_state
+drawdown from recent high
+range/contraction metric
+support type
+support distance
+breakout signal
+accumulation/distribution
+reason codes
+
+Specifically show:
+
+SLAB
+ANET
+ADUR
+
+whether or not each becomes HIGH_BASE.
+
+Do not force them into the state.
+
+C. FOUR TEST CASES
+
+Return final:
+
+ALGM
+ANET
+AOSL
+BE
+
+with:
+
+entry state
+entry family
+entry score
+entry grade
+actionability
+support
+support distance
+drawdown from high
+extension
+reason codes
+
+D. SOCIAL BONUS RESULTS
+
+Show exact cached social coverage count.
+
+Return every ticker with social_bonus_score > 0.
+
+For each:
+
+symbol
+base_trade_confluence_score
+social consensus
+social acceleration
+social freshness
+social bonus eligibility
+social bonus score
+final trade confluence score
+entry score
+theme rotation score
+actionability
+
+Prove uncovered symbols receive:
+
+social_bonus_score = 0
+
+E. CONFLUENCE COVERAGE
+
+real symbols loaded
+stage signal coverage
+entry state coverage
+theme rotation coverage
+options coverage
+social coverage
+
+F. TOP 25 TRADE CONFLUENCE
+
+rank
+symbol
+base_trade_confluence_score
+social_bonus_score
+trade_confluence_score
+investment_confluence_score
+entry_score
+entry_state
+entry_family
+actionability
+theme
+theme_rotation_state
+theme_rotation_score
+stage score
+options score
+top positive contributors
+top conflicts/risks
+
+G. TOP 25 INVESTMENT CONFLUENCE
+
+same relevant fields
+
+H. TOP 25 ACTIONABILITY
+
+symbol
+actionability
+actionability score
+trade score
+investment score
+entry score
+entry state
+theme rotation
+gating reason
+
+I. HIGH CONFLUENCE / BAD ENTRY TEST
+
+Return the 20 highest base Trade Confluence tickers with:
+
+entry_grade == AVOID
+or
+actionability == WAIT_FOR_PULLBACK
+or
+actionability == TOO_EXTENDED
+or
+actionability == BROKEN
+
+For each:
+
+symbol
+base trade score
+social bonus
+final trade score
+entry score
+entry state
+actionability
+exact gate
+
+I want to test whether:
+
+strong asset/signal quality
+
+can remain visible as high Confluence while:
+
+bad entry
+
+blocks actionability.
+
+Do not tune Trade weights yet.
+
+J. DAILY ALPHA V1 VS V2
+
+Compare current Top 10.
+
+Show deterministic difference drivers.
+
+==================================================
+PROVIDER / COST PROOF
+=====================
+
+Prove:
+
+0 incremental Grok calls
+0 incremental LLM calls
+0 additional history requests caused by Entry State
+0 provider calls from GET /api/alpha/confluence
+0 provider calls from Theme Rotation
+0 Options Flow producer changes
+0 Daily Alpha weight changes
+existing Grok cadence unchanged
+
+==================================================
+FINAL RESPONSE
+==============
+
+End exactly:
+
+FOUR-FIX VERDICT
+
+STAGE SIGNAL FIX:
+[PASS / FAIL]
+
+ENTRY FULL POPULATION:
+[PASS / FAIL + count]
+
+HIGH_BASE:
+[PASS / FAIL + count]
+
+SOCIAL BONUS:
+[PASS / FAIL + distribution]
+
+ALGM:
+[classification]
+
+ANET:
+[classification]
+
+AOSL:
+[classification]
+
+BE:
+[classification]
+
+TRADE CONFLUENCE FUNCTIONAL:
+[YES / NO]
+
+INVESTMENT CONFLUENCE FUNCTIONAL:
+[YES / NO]
+
+ACTIONABILITY FUNCTIONAL:
+[YES / NO]
+
+HIGH-CONFLUENCE BAD-ENTRY VISIBILITY:
+[assessment]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING MODEL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+[ONE feature]
+
+Do not make any changes beyond these four fixes.

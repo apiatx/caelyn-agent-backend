@@ -17161,13 +17161,17 @@ async def alert_dismiss(
 async def admin_stage2_force_warmup(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
+    force_all: bool = Query(False),
 ):
     """
-    Force-recompute Weinstein stage for all watchlist tickers that currently
-    have null/failed stage results, bypassing the normal freshness gate.
+    Force-recompute Weinstein stage for watchlist tickers.
 
-    Entries with valid stage labels that are still within their TTL are skipped.
-    Entries with label=None or score=None are recomputed unconditionally.
+    force_all=false (default): recompute only null/failed entries (recovery mode).
+        Entries with valid labels within their TTL are skipped.
+
+    force_all=true: recompute ALL watchlist tickers regardless of TTL freshness.
+        Pacer (rate-limiter sleep + concurrency cap) is preserved.
+        Use after code changes that affect entry_state or stage scoring.
 
     Fires as a background task and returns immediately.
     Poll GET /api/admin/stage2/status to watch progress.
@@ -17176,16 +17180,46 @@ async def admin_stage2_force_warmup(
     Does NOT touch the realtime/options pacer or options-chain allocation.
     """
     import asyncio as _asyncio
-    from services.watchlist_stage2_service import force_warmup_stage2_nulls as _force
+    from services.watchlist_stage2_service import (
+        force_warmup_stage2_nulls as _force_nulls,
+        warmup_stage2 as _warmup,
+        warmup_stage2_all_watchlists as _warmup_all,
+    )
 
+    if force_all:
+        # Full forced re-computation of all watchlist tickers
+        from data.pg_storage import watchlist_list, watchlist_read
+        _tickers: list[str] = []
+        try:
+            wl_metas = watchlist_list()
+            for _meta in wl_metas:
+                _wl_id = _meta.get("id")
+                if _wl_id:
+                    _store = watchlist_read(_wl_id)
+                    if _store:
+                        _tickers.extend(_store.get("tickers") or [])
+        except Exception as _err:
+            print(f"[ADMIN] stage2 force-all watchlist read error: {_err}")
+        total = len(set(_tickers))
+        print(f"[ADMIN] stage2 force-all triggered: {total} unique tickers, ALL freshness bypassed")
+        _asyncio.create_task(_warmup(_tickers, force=True))
+        return {
+            "status": "started",
+            "mode": "force_all",
+            "message": f"Force-all warmup running for {total} unique watchlist tickers. All TTL bypassed.",
+            "poll": "GET /api/admin/stage2/status",
+        }
+
+    # Default: null-only recovery mode
     null_count = sum(
         1 for v in __import__("services.watchlist_stage2_service", fromlist=["_STAGE2_LKG"])._STAGE2_LKG.values()
         if v.get("label") is None
     )
     print(f"[ADMIN] stage2 force-warmup triggered: {null_count} null entries will be recomputed")
-    _asyncio.create_task(_force())
+    _asyncio.create_task(_force_nulls())
     return {
         "status": "started",
+        "mode": "null_only",
         "message": f"Force warmup running in background for {null_count} null entries.",
         "poll": "GET /api/admin/stage2/status",
     }

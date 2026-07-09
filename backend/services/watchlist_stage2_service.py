@@ -271,6 +271,7 @@ async def warmup_stage2(
     tickers: list[str],
     *,
     force_nulls: bool = False,
+    force: bool = False,
 ) -> dict:
     """
     Fetch daily bars + compute Weinstein stage for every ticker in *tickers*.
@@ -279,8 +280,13 @@ async def warmup_stage2(
                         label is None or score is None (recovery mode).
                         Entries with valid labels are still skipped if fresh.
 
+    force=True        — bypasses ALL freshness checks for every symbol.
+                        Pacer (0.3s sleep, _CONCURRENCY semaphore) is preserved.
+                        Use for forced full-universe re-computation only.
+
     Skips symbols whose cached result is within its status-appropriate TTL
-    (ok/no_bars → 20h; fetch_failed/legacy → 2h) unless force_nulls overrides.
+    (ok/no_bars → 20h; fetch_failed/legacy → 2h) unless force_nulls or force
+    overrides.
 
     Runs _CONCURRENCY concurrent Tradier calls with a small sleep between batches.
 
@@ -300,6 +306,8 @@ async def warmup_stage2(
     deduped = list(dict.fromkeys(s.strip().upper() for s in tickers if s.strip()))
 
     def _should_skip(sym: str) -> bool:
+        if force:
+            return False
         if force_nulls and _is_null_entry(sym):
             return False
         return _is_fresh(sym)
