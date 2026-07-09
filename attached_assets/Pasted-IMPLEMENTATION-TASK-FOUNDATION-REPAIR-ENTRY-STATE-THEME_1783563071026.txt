@@ -1,0 +1,1117 @@
+IMPLEMENTATION TASK — FOUNDATION REPAIR + ENTRY STATE + THEME ROTATION + CONFLUENCE V2
+
+Work directly in the existing backend Replit project.
+
+This is NOT a redesign.
+
+Do not rebuild existing services.
+Do not replace existing paths.
+Do not introduce a generalized “universal signal service.”
+Do not change the existing Daily Alpha Board behavior, scoring weights, endpoint, candidate universe, collector functions, caches, LKG producers, or background loops.
+Do not change the existing Options Flow page engine or Options Flow producer logic.
+Do not add any LLM/API calls.
+Do not add any Grok calls.
+Do not call FMP, Tradier, Grok, Claude, Gemini, OpenAI, or any provider solely for Confluence V2.
+Everything new in this task must reuse already-computed data, existing cached price history paths, existing LKG files, and existing Neon history.
+
+The goal is:
+
+1. Repair three proven signal-foundation issues.
+2. Build a deterministic Entry State Engine that distinguishes pre-move setups, constructive continuation setups, and too-late/exhausted setups.
+3. Build Theme Rotation V2 from existing computed theme data.
+4. Clone the proven Daily Alpha architecture into a completely separate Confluence V2 experiment.
+5. Keep Daily Alpha V1 completely frozen.
+
+==================================================
+PHASE 0 — TINY WATCHLIST ZONE PATH TRACE
+========================================
+
+Before editing, perform a very small trace only.
+
+Do NOT conduct another broad audit.
+
+Find the actual API payload fields consumed by the frontend Watchlist Golden Zone, High Conviction Trade Zone, and High Conviction Investment Zone if backend route references or shared types make them discoverable.
+
+The known product behavior is:
+
+* Golden Zone is deterministic grouping/filtering of existing Watchlist technical/fundamental rows.
+* High Conviction Trade Zone is deterministic grouping/filtering of existing technical/activity/options fields.
+* High Conviction Investment Zone is deterministic grouping/filtering of existing fundamental/growth/stage fields.
+* These are NOT the LLM-generated watchlist strategy-report sections in watchlist_analysis.py.
+* Do not connect these zones to run_analysis_pipeline().
+* Do not use Claude or any LLM to classify zone membership.
+
+Record the exact existing relevant backend fields and paths before editing.
+
+Likely row fields already observed in the previous audit include:
+
+stage
+stage_label
+setup_type
+action
+conviction
+technical_score
+rs_score
+vol_ratio
+vol_mc_pct
+rv_rank
+volmc_rank
+rv_percentile
+volmc_percentile
+theme
+sector
+fundamental fields
+nf_* options fields
+
+This Phase 0 trace is only a preservation guardrail.
+
+Continue immediately to Phase 1.
+
+==================================================
+PHASE 1 — FIX RS SIGNAL PROVENANCE COLLISION
+============================================
+
+The prior audit proved that `rs_score` currently has incompatible meanings:
+
+A. stage_analysis / watchlist_stage2_lkg.json:
+8-week ticker price relative performance vs SPY.
+Typical scale can be negative or relatively small positive values.
+
+B. social screener / x_consensus_weekly.json:
+social ranking/score on a 0–100 style scale.
+
+C. Neon/watchlist rows can expose `rs_score` without sufficient provenance.
+
+Daily Alpha's Watchlist collector currently risks consuming row.get("rs_score") as a social signal regardless of which producer supplied it.
+
+Fix this surgically.
+
+REQUIREMENTS:
+
+1. Introduce explicit canonical internal names at consumption boundaries:
+
+price_rs_8w_spy
+social_rank_score
+
+2. Preserve existing legacy `rs_score` payload fields where current frontend or existing services require them.
+
+Do NOT globally rename `rs_score`.
+
+Do NOT rewrite existing LKG schemas unless absolutely necessary.
+
+3. In all NEW Confluence V2 code, NEVER consume an ambiguous `rs_score`.
+
+4. Repair the Daily Alpha Watchlist collector only to the minimum extent required to stop interpreting price-relative-strength as social signal.
+
+IMPORTANT:
+Daily Alpha V1 scoring weights and formula must remain unchanged.
+
+The repair is provenance correction, not score redesign.
+
+5. Prefer the canonical social source already stored in x_consensus_weekly.json for social score.
+
+If the ticker does not have canonical structured social data, treat the social signal as missing.
+
+Do NOT substitute price RS.
+
+6. Add diagnostics that identify:
+
+symbols with ambiguous legacy rs_score
+symbols resolved to price_rs_8w_spy
+symbols resolved to social_rank_score
+symbols missing canonical social data
+
+Do not expose noisy diagnostics in the normal UI payload unless an existing diagnostics pattern exists.
+
+==================================================
+PHASE 2 — HARDEN TECHNICAL SCORE FRESHNESS
+==========================================
+
+The audit found that Daily Alpha can consume `technical_score` from the Neon Watchlist store even when it was written during an old strategy-report analysis.
+
+The existing fresh TA path uses ta_signal_engine.py, but Daily Alpha's request-time board must remain a cache-only aggregation path and must not create provider calls.
+
+REQUIREMENTS:
+
+1. Trace the exact timestamp attached to the stored technical calculation.
+
+Do not assume the parent Watchlist row's updated_at accurately represents technical calculation freshness.
+
+Use the most precise existing technical-result timestamp available.
+
+2. Before Daily Alpha consumes stored `technical_score`:
+
+if technical result age is within the accepted freshness window:
+consume technical_score normally
+
+if technical result is stale:
+omit technical_score from the TA signal calculation
+
+Do NOT invent a replacement technical score.
+
+Do NOT make a provider call.
+
+Do NOT automatically substitute a lower-quality TA approximation.
+
+The existing available-weight normalization already handles missing inputs.
+
+3. Initial maximum technical age may be 24 hours ONLY if there is no existing more appropriate canonical freshness constant/service already used by ta_signal_engine or the Watchlist technical system.
+
+Prefer reusing an existing freshness policy.
+
+4. Stage may remain available as its own existing input/modifier only where the existing pipeline already uses it.
+
+Do not manufacture a full TA score from stage.
+
+5. Add diagnostic counters:
+
+technical_fresh_used
+technical_stale_omitted
+technical_missing_timestamp
+technical_missing
+
+6. Preserve Daily Alpha's endpoint and output shape.
+
+==================================================
+PHASE 3 — STAGE ANALYSIS V2 REPAIR
+==================================
+
+The current stage_analysis.py has a known likely false-positive path:
+
+price above rising 30-week MA
++
+price_vs_ma > 20%
++
+prior 26-week trend positive
+→ Stage 3m
+
+For high-beta growth stocks, strong Stage 2 breakouts can become >20% above the 30-week MA quickly and be incorrectly labeled Stage 3.
+
+The core conceptual correction is:
+
+STAGE and EXTENSION are different dimensions.
+
+A ticker can be:
+
+Stage 2 + Extended
+Stage 2 + At Support
+Stage 2 + Breakout Ready
+
+Do not use extension alone to force Stage 3.
+
+REQUIREMENTS:
+
+1. Preserve the existing analyze_symbol_stage() public contract and existing LKG producer architecture.
+
+2. Preserve existing legacy stage values/labels as much as possible for frontend compatibility.
+
+3. Refactor the Stage 3m classification so that absolute `price_vs_ma > 20%` is NOT by itself sufficient to advance a strong rising Stage 2 stock into Stage 3m.
+
+4. Before changing the rule, inspect currently available metrics in stage_analysis.py and existing cached daily/weekly bars.
+
+Reuse existing data.
+
+Do not create a new provider path.
+
+5. Qualification for Stage 3 / Stage 3m should require evidence of maturation/deterioration beyond simple extension.
+
+Use the strongest existing repo-grounded combination available from:
+
+duration/weeks since breakout or sustained advance
+30-week MA slope behavior
+slope deceleration/flattening
+recent higher-high/higher-low structure
+distance from prior base/breakout
+volatility-normalized extension if ATR or equivalent can be calculated locally from already-fetched bars
+volume behavior
+loss of momentum after sustained prior uptrend
+
+Do not force every listed metric if the data path does not support it cleanly.
+
+6. Add a separate deterministic extension state to the stage result.
+
+At minimum:
+
+extension_state:
+NOT_EXTENDED
+MODERATELY_EXTENDED
+EXTENDED
+EXTREME_EXTENSION
+
+and numeric fields if safely derivable:
+
+extension_pct_30w_ma
+extension_atr
+
+7. Stage must answer:
+
+What structural Weinstein stage is the ticker in?
+
+Extension must answer:
+
+How stretched is price relative to that structure?
+
+8. Preserve LKG degraded-run protection and retry behavior.
+
+9. Add a comparison diagnostic that can show:
+
+old_stage
+new_stage
+extension_state
+reason
+
+for currently cached ticker symbols.
+
+Do not automatically rewrite historical records.
+
+==================================================
+PHASE 4 — BUILD DETERMINISTIC ENTRY STATE ENGINE
+================================================
+
+Create a new backend service dedicated to entry timing.
+
+Suggested path:
+
+backend/services/entry_state_service.py
+
+Use existing cached/fetched historical-price architecture already used by stage_analysis.py or another canonical technical service.
+
+Do not create a new provider client.
+
+Do not create direct frontend provider calls.
+
+Do not use an LLM.
+
+PRIMARY QUESTION:
+
+Is this asset:
+
+A. Before the main expansion?
+B. In a constructive continuation/reset?
+C. Already too late / exhausted?
+D. Structurally broken or unclear?
+
+The user's strategy prioritizes finding strong assets BEFORE the obvious move.
+
+A stock that has already moved can still be actionable if:
+
+* it is a strong fundamental/theme leader,
+* or a material catalyst changed the story,
+* and it is now in a controlled dip/retest/reset after the initial move.
+
+The engine must distinguish these cases.
+
+---
+
+## ENTRY FAMILY 1 — PRE_MOVE
+
+Possible states:
+
+BASE_FORMING
+COILED
+EARLY_ACCUMULATION
+SIGNALS_BUILDING
+BREAKOUT_READY
+
+Target characteristics:
+
+defined base or consolidation
+contracting range/volatility
+price near structural resistance or breakout level
+price not materially extended
+volume contraction during base where available
+volume beginning to wake up
+relative strength stable/improving where canonical price RS is available
+Stage 1, Stage 1-2, or early Stage 2 context where appropriate
+
+---
+
+## ENTRY FAMILY 2 — CONTINUATION
+
+Possible states:
+
+PULLBACK_IN_UPTREND
+BREAKOUT_RETEST
+SUPPORT_HOLD
+CONSTRUCTIVE_DIP
+REACCELERATION
+
+Target characteristics:
+
+existing Stage 2/uptrend
+prior expansion already occurred
+controlled retracement
+price near defined support, prior breakout level, or canonical moving-average support
+weakness on contracting volume where available
+reversal/reacceleration confirmation where available
+not structurally broken
+
+---
+
+## ENTRY FAMILY 3 — CHASE_EXHAUSTION
+
+Possible states:
+
+EXTENDED
+VERTICAL
+VOLUME_CLIMAX
+CROWDED_MOVE
+FAILED_BREAKOUT
+
+Target characteristics:
+
+large short-window price expansion
+far from nearest support
+ATR-normalized extreme extension if derivable
+climactic volume
+failed breakout/reversal
+no defined low-risk entry
+
+---
+
+## ENTRY FAMILY 4 — BROKEN_OR_UNCLEAR
+
+Possible states:
+
+SUPPORT_LOST
+DOWNTREND
+NO_CLEAR_ENTRY
+INSUFFICIENT_DATA
+
+---
+
+## REQUIRED STRUCTURED OUTPUT
+
+Return a stable object resembling:
+
+symbol
+entry_family
+entry_state
+entry_score
+entry_grade
+support_level
+support_type
+support_distance_pct
+resistance_level
+resistance_distance_pct
+breakout_level
+breakout_distance_pct
+extension_state
+extension_pct
+extension_atr
+volume_contraction
+volume_reacceleration
+reversal_confirmation
+structure_confidence
+reason_codes
+updated_at
+
+Entry score:
+0–100
+
+Entry grade:
+A_PLUS
+A
+B
+C
+AVOID
+
+IMPORTANT:
+
+`entry_score` means QUALITY OF ENTRY RIGHT NOW.
+
+It does NOT mean quality of company.
+
+It does NOT mean bullishness.
+
+It does NOT mean future upside.
+
+A fantastic stock can have:
+
+asset_quality = 95
+entry_score = 18
+entry_grade = AVOID
+
+That is valid and desirable.
+
+---
+
+## SUPPORT IDENTIFICATION
+
+Use existing historical bars to evaluate candidate support levels.
+
+Potential support types:
+
+21 EMA if already available/canonical
+20-day SMA
+50-day SMA
+200-day SMA
+30-week SMA
+prior breakout level
+recent swing low
+consolidation floor
+prior resistance turned support
+
+Do not require every support type.
+
+Use the strongest existing local-data path.
+
+For each candidate support level calculate:
+
+level
+distance_pct
+touch_count if safely derivable
+recent_hold behavior if safely derivable
+
+Choose a primary support_level and support_type deterministically.
+
+---
+
+## BREAKOUT / BASE STRUCTURE
+
+Detect, where supported by existing price history:
+
+20-day / multi-week highs
+consolidation range
+range contraction
+breakout level
+price distance from breakout
+recent breakout
+breakout retest
+failed breakout
+
+Reuse existing breakout helpers if stage_analysis.py or ta_signal_engine.py already calculates equivalent values.
+
+Do not duplicate formulas unless necessary.
+
+---
+
+## CACHE / STORAGE
+
+Follow the existing stage-analysis LKG/cache pattern where practical.
+
+Suggested LKG:
+
+backend/data/entry_state_lkg.json
+
+No new scheduled provider loop is required initially if the service can be integrated into an existing technical/stage refresh path without additional API calls.
+
+Strong preference:
+
+When stage_analysis already has the historical bars for a symbol, calculate Entry State from the same bar payload during the same pass.
+
+Do NOT independently fetch the same ticker history again.
+
+If clean integration requires an internal pure function:
+
+analyze_entry_state_from_bars(symbol, bars, stage_result, ...)
+
+use that.
+
+The producer may persist Entry State alongside its own LKG.
+
+Readers must be zero-provider-call.
+
+Add diagnostics.
+
+==================================================
+PHASE 5 — CANONICAL SOCIAL SIGNAL CONTRACT
+==========================================
+
+NO NEW GROK CALLS.
+
+The existing scheduled social/Grok process already produces structured cached social data.
+
+Use the cached social pipeline only.
+
+Canonical scored source:
+
+x_consensus_weekly.json
+or the exact structured cache produced by the existing scheduled social screener if there is a newer canonical path already in the repo.
+
+Define separate canonical fields:
+
+social_consensus_score
+social_acceleration_score
+social_freshness_score
+
+Do not overload rs_score.
+
+Existing acceleration logic is already calculated in social_screener_service.py.
+
+Reuse it unchanged unless a direct bug is discovered.
+
+Do not ask Grok to calculate acceleration again.
+
+Do not add an additional daily scan.
+
+Do not add a per-ticker Grok call.
+
+Do not modify the existing Grok schedule.
+
+Confluence V2 should read the cached fields.
+
+Daily Alpha V1 should only receive the minimum provenance repair described in Phase 1.
+
+==================================================
+PHASE 6 — THEME ROTATION V2
+===========================
+
+The current theme state classification is based on 1D performance relative to the median theme despite the theme system already calculating more information.
+
+Do NOT replace the existing Themes page state field or change the existing frontend yet.
+
+Build a separate deterministic rotation-state calculation using existing cached fields.
+
+Suggested location:
+
+backend/services/theme_rotation_service.py
+
+NO LLM.
+
+NO NEW GROK CALL.
+
+NO NEW PROVIDER CALL.
+
+Inputs must come from existing computed theme data wherever currently available:
+
+1D theme performance / relative performance
+7D
+30D
+RS score
+RS acceleration
+breadth
+existing options flow
+existing options flow delta where canonical theme/ticker aggregation already supports it
+cached social acceleration
+
+Do not add anchor data yet.
+Do not add news/catalyst data yet.
+Do not overbuild Phase 1.
+
+Create rotation states:
+
+DORMANT
+EARLY_REVERSAL
+EMERGING
+ACCELERATING
+LEADING
+EXTENDED
+DETERIORATING
+LAGGING
+
+Also return:
+
+rotation_score 0–100
+rotation_direction RISING / FLAT / FALLING
+rotation_velocity
+breadth_state
+flow_state
+social_state
+reason_codes
+updated_at
+
+CORE INTENT:
+
+EARLY_REVERSAL:
+Previously weak/neutral theme begins showing improving short-term RS, positive acceleration, improving breadth and/or capital/social confirmation before long-window leadership is obvious.
+
+EMERGING:
+Positive multi-input improvement with growing participation.
+
+ACCELERATING:
+Already improving and rate of improvement is increasing.
+
+LEADING:
+Strong absolute/relative performance with broad confirmation.
+
+EXTENDED:
+Leading but short-term move is stretched; capital may still be present but entry risk is elevated.
+
+DETERIORATING:
+Previously leading/accelerating theme loses RS acceleration, breadth, flow, or participation.
+
+LAGGING:
+Weak relative state without credible reversal evidence.
+
+Avoid a simplistic weighted formula that allows one extreme metric to dominate everything.
+
+Use explicit state-transition logic and a normalized supporting score.
+
+Persist to a separate LKG if needed:
+
+backend/data/theme_rotation_lkg.json
+
+Reuse the same theme universe and canonical theme membership source already used by Themes.
+
+Do not reintroduce an ETF-only discovery restriction into any stock discovery page.
+
+==================================================
+PHASE 7 — BUILD CONFLUENCE V2 AS A SHADOW SYSTEM
+================================================
+
+Create:
+
+backend/services/confluence_v2_service.py
+
+New endpoint:
+
+GET /api/home/confluence-v2
+
+Optional diagnostics:
+
+GET /api/home/confluence-v2/diagnostics
+
+Daily Alpha V1 remains completely unchanged except the two proven provenance/freshness bug repairs from Phases 1–2.
+
+Do NOT modify:
+
+GET /api/home/daily-alpha-board
+its score weights
+its Top 10 logic
+its collector architecture
+its response shape
+
+Confluence V2 should clone the proven architectural pattern of daily_alpha_board_service.py:
+
+cache-only collectors
+merge by ticker
+deduplicate
+normalize available signals
+score
+rank
+TTL cache
+safe/LKG fallback
+
+However, do not directly modify or reuse the existing eight collector functions if the audit explicitly recommended freezing them.
+
+Create V2-specific adapters that READ the same canonical sources.
+
+Do not write to any producer cache.
+
+---
+
+## CONFLUENCE V2 OUTPUT CONCEPT
+
+For stocks return separate scores:
+
+trade_confluence_score
+investment_confluence_score
+entry_score
+actionability_score
+
+Do NOT create one universal score.
+
+Also return:
+
+symbol
+name
+theme
+sector
+ticker_stage
+extension_state
+theme_rotation_state
+theme_rotation_score
+entry_family
+entry_state
+entry_grade
+
+signal object with explicit canonical field names
+
+evidence
+risks
+missing_signals
+source_pages
+updated_at
+
+---
+
+## TRADE CONFLUENCE
+
+Trade Confluence is timing-heavy.
+
+Initial signal categories:
+
+theme_rotation
+technical_quality
+entry_quality
+volume_activity
+options_flow_composite
+options_flow_change
+social_acceleration
+catalyst
+news
+market_regime
+
+Use deterministic inputs only.
+
+No LLM output may contribute to the numeric score.
+
+Use existing canonical data:
+
+theme_rotation_service
+fresh technical score only
+entry_state_service
+vol_ratio / vol_mc_pct
+options_master_lkg_v1 composite_score
+options_net_premium_daily 1D/7D/30D deltas
+social_acceleration_score from cached scheduled social data
+earnings_snap
+news_signal_scorer
+regime_engine
+
+IMPORTANT:
+
+Options Flow itself must not change.
+
+Confluence V2 is a read-only consumer of canonical options outputs.
+
+For options flow change, start with existing:
+
+delta_1d
+delta_7d
+delta_30d
+
+Do NOT invent GEX.
+Do NOT add gamma.
+Do NOT add another options scan.
+
+Create a deterministic `options_flow_change_state`.
+
+Suggested states:
+
+ACCELERATING_BULLISH
+DECELERATING_BULLISH
+FLIPPING_BULLISH
+NEUTRAL
+FLIPPING_BEARISH
+DECELERATING_BEARISH
+ACCELERATING_BEARISH
+
+The state should distinguish absolute net flow direction from direction of change.
+
+Be careful with scale differences across large-cap and small-cap tickers.
+
+Prefer normalization relative to the ticker's own flow history where existing history supports it.
+
+---
+
+## INVESTMENT CONFLUENCE
+
+Initial Investment Confluence should use ONLY strong canonical inputs available now:
+
+theme_rotation
+fundamental_quality
+growth
+technical_entry
+options_confirmation
+social_consensus
+catalyst
+analyst inputs ONLY if the new canonical Watchlist analyst fields already exist in the backend at implementation time
+
+Do not add Moat in this task.
+
+Do not add Financial Acceleration in this task.
+
+Those are the next Investment V2 enrichers after this architecture is proven.
+
+Do not use the LLM watchlist strategy-report narrative as a numeric fundamental score.
+
+If fundamental provenance cannot yet be trusted because of EDGAR/FMP/CSV conflicts:
+
+use only fields with known canonical provenance
+mark missing/unsafe fields unavailable
+do not fabricate a blended fundamental score
+
+---
+
+## ENTRY SCORE
+
+Read directly from entry_state_service.
+
+Do not recompute support/entry logic inside Confluence.
+
+---
+
+## ACTIONABILITY
+
+Actionability must answer:
+
+Is this actionable RIGHT NOW?
+
+Create deterministic actionability states:
+
+READY
+EARLY_WATCH
+WATCH
+WAIT_FOR_PULLBACK
+TOO_EXTENDED
+BROKEN
+INSUFFICIENT_CONFLUENCE
+
+Example:
+
+Investment Confluence = 94
+Trade Confluence = 88
+Entry Score = 21
+
+ACTIONABILITY = WAIT_FOR_PULLBACK
+
+Another:
+
+Investment Confluence = 72
+Trade Confluence = 91
+Entry Score = 94
+
+ACTIONABILITY = READY
+
+Another:
+
+Investment Confluence = 91
+Trade Confluence = 53
+Entry Score = 82
+
+ACTIONABILITY = EARLY_WATCH or WATCH depending on signal confirmation
+
+Create explicit gates so a huge asset-quality score cannot override an AVOID entry.
+
+---
+
+## CANDIDATE UNIVERSE
+
+Start with the same broad multi-source candidate philosophy as Daily Alpha V1.
+
+Read candidate symbols from existing cached systems:
+
+Watchlist
+Portfolio
+Social
+Themes
+Strategy Screener
+Catalysts
+Options
+Hyperliquid where relevant
+
+For STOCK Confluence, do not allow crypto/perp-specific fields to contaminate stock scoring.
+
+Keep stock and crypto scoring separate if crypto is returned at all.
+
+No new universe provider.
+
+---
+
+## WEIGHTING
+
+Do not blindly copy Daily Alpha weights.
+
+Implement clearly defined constants for:
+
+TRADE_WEIGHTS_V2
+INVESTMENT_WEIGHTS_V2
+
+Use available-weight normalization.
+
+Initial trade philosophy:
+
+Theme/rotation and entry timing are highest-priority.
+Technical structure/activity next.
+Options and volume confirmation matter heavily.
+Social acceleration and catalysts contribute.
+Fundamentals are a low-weight tie-breaker for trades.
+
+Initial investment philosophy:
+
+Theme/rotation
+fundamental/growth quality
+forward/analyst expectations if canonical
+entry quality
+options confirmation
+social consensus
+catalysts
+
+Do not let short-term social acceleration dominate Investment Confluence.
+
+Document all weights.
+
+Return the weight version in diagnostics/meta.
+
+---
+
+## V1 FREEZE / SHADOW MODE
+
+Confluence V2 is an experiment.
+
+Do not replace Daily Alpha.
+
+Do not change Home page default behavior.
+
+Persist compact Confluence V2 result snapshots for outcome testing.
+
+Create a minimal Neon table ONLY if no existing generic signal-result history table safely supports this.
+
+Before adding a table, audit existing compact signal snapshot/history tables.
+
+The historical record should contain:
+
+symbol
+as_of timestamp
+trade_confluence_score
+investment_confluence_score
+entry_score
+actionability
+theme_rotation_state
+entry_state
+ticker_stage
+current_price from the canonical quote/cache available at snapshot time
+score_version
+
+Do not store giant source payloads.
+
+Do not store LLM text.
+
+This history is valuable model-performance data and should NOT use a 7-day transient-cache retention policy.
+
+Do not delete prior signal history automatically.
+
+==================================================
+PHASE 8 — VALIDATION
+====================
+
+After implementation, validate all phases.
+
+1. RS collision
+
+Prove:
+price_rs_8w_spy and social_rank_score are separate.
+Daily Alpha never consumes price RS as social.
+Legacy payloads remain compatible.
+
+2. Technical freshness
+
+Find at least:
+one fresh technical record
+one stale or artificially identified stale record if available
+
+Prove stale technical_score is omitted and no provider call is made.
+
+3. Stage repair
+
+Run old vs new stage classification over currently cached symbols.
+
+Report:
+count unchanged
+count Stage 3/3m → Stage 2/2-3
+count other changes
+
+Show at least 10 changed examples if available:
+
+symbol
+old stage
+new stage
+extension state
+reason
+
+Do not claim the new classification is “correct” based only on code.
+Report what changed.
+
+4. Entry State
+
+Show at least:
+3 PRE_MOVE examples
+3 CONTINUATION examples
+3 CHASE_EXHAUSTION examples
+3 BROKEN_OR_UNCLEAR examples
+
+For each show the actual structured inputs/reason codes.
+
+5. Theme Rotation
+
+Show at least:
+EARLY_REVERSAL
+EMERGING/ACCELERATING
+LEADING
+DETERIORATING/LAGGING
+
+using current cached theme data if available.
+
+6. Confluence V2
+
+Return current top 10 by:
+
+trade_confluence_score
+investment_confluence_score
+actionability_score
+
+For each show:
+
+symbol
+trade score
+investment score
+entry score
+actionability
+theme rotation
+entry state
+top supporting signals
+top risk/conflicting signals
+
+7. Provider usage
+
+Explicitly prove:
+
+zero new Grok calls
+zero new LLM calls
+zero provider calls from GET /api/home/confluence-v2 itself
+zero changes to Options Flow scan frequency
+zero new Options Flow scan paths
+zero changes to Daily Alpha weights
+
+==================================================
+FINAL RESPONSE FORMAT
+=====================
+
+Return:
+
+IMPLEMENTATION SUMMARY
+
+FILES CHANGED:
+[list]
+
+PHASE 0 — ZONE PRESERVATION TRACE:
+[exact deterministic paths/fields found]
+
+PHASE 1 — RS COLLISION:
+[what changed]
+
+PHASE 2 — TECHNICAL FRESHNESS:
+[what changed]
+
+PHASE 3 — STAGE V2:
+[what changed + old/new comparison]
+
+PHASE 4 — ENTRY STATE:
+[architecture + current examples]
+
+PHASE 5 — SOCIAL CONTRACT:
+[canonical fields + proof of no new Grok calls]
+
+PHASE 6 — THEME ROTATION:
+[state logic + examples]
+
+PHASE 7 — CONFLUENCE V2:
+[architecture + weights + top current results]
+
+V1 FREEZE PROOF:
+[proof Daily Alpha contract/weights remain intact]
+
+PROVIDER CALL IMPACT:
+[new calls by provider; expected answer should be zero for all new request-time V2 work]
+
+KNOWN LIMITATIONS:
+[list honestly]
+
+NEXT RECOMMENDED IMPLEMENTATION:
+[ONE feature only]
+
+Do not ask me questions.
+
+Audit the exact existing paths first where required, preserve them, and implement the task in the stated phase order.
