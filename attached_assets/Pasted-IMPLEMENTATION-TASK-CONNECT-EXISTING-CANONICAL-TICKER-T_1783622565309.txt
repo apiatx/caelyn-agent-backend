@@ -1,0 +1,868 @@
+IMPLEMENTATION TASK — CONNECT EXISTING CANONICAL TICKER THEME MEMBERSHIP TO THE EXISTING THEME ROTATION ENGINE
+
+Work only in the existing backend Replit project.
+
+Entry Structure V2 has now passed its targeted causal validation sufficiently to proceed.
+
+Do not modify Entry Structure in this task.
+Do not modify Stage Analysis.
+Do not change Confluence weights.
+Do not modify Daily Alpha V1.
+Do not modify Options Flow.
+Do not build Actionability yet.
+Do not add Moat.
+Do not add Financial Acceleration.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add provider calls.
+Do not create new theme categorization logic.
+Do not add new Theme memberships.
+
+This is a targeted READ-ONLY integration of existing Theme membership and existing Theme Rotation into Confluence V2.
+
+==================================================
+WHY THIS TASK EXISTS
+====================
+
+The latest Confluence V2 validation proved:
+
+Confluence stock universe:
+377 symbols
+
+Theme Rotation coverage:
+0 / 377
+
+Current behavior for all stocks:
+
+theme_sig = 0.500
+theme rotation unavailable
+
+This has two consequences:
+
+1. Theme Rotation contributes no real differentiation to Trade/Investment Confluence.
+2. The existing Social Bonus eligibility gate cannot activate correctly because real theme-rotation alignment is unavailable.
+
+Theme Rotation itself is already functional at the THEME level.
+
+Recent validated Theme Rotation output showed differentiated states and scores across 51 themes, including:
+
+LEADING
+CONFIRMING
+STALLING
+BOTTOMING
+LAGGING
+UNCLASSIFIED
+
+with non-constant:
+
+rs_signal
+stage_signal
+rotation_score
+
+Do not rebuild Theme Rotation.
+
+The missing piece is:
+
+TICKER
+↓
+EXISTING CANONICAL THEME MEMBERSHIP
+↓
+EXISTING THEME ROTATION RESULT
+↓
+CONFLUENCE
+
+==================================================
+PART 0 — TRACE EXISTING CANONICAL THEME MEMBERSHIP
+==================================================
+
+Before editing, trace every existing ticker→theme membership path.
+
+The project already contains established Theme infrastructure, including:
+
+Theme Universe
+Themes page membership
+manual Theme membership edits
+admin membership routes
+manual add/remove persistence
+Theme merge logic
+Theme membership LKG/persistence
+Watchlist theme/category fields
+Theme RS calculations
+Theme Rotation snapshot
+
+Do NOT infer canonical membership from filenames.
+
+Trace the real current Themes page membership read path.
+
+Answer internally:
+
+1. What exact service/source answers:
+   "Which tickers belong to theme X?"
+
+2. What exact path applies manually added Theme members?
+
+3. What exact path applies manually removed/excluded members?
+
+4. Is there a merge layer combining:
+   base Theme Universe
+   dynamic/ETF-derived membership
+   manual additions
+   manual removals?
+
+5. What does the current Themes page consume after all overrides are applied?
+
+6. What canonical theme key format is used by Theme Rotation?
+
+Examples of possible normalization issues to inspect:
+
+spaces vs underscores
+hyphens
+ampersands
+display names vs internal keys
+case
+singular/plural
+legacy aliases
+
+7. What ticker→theme data does Confluence V2 currently attempt to load?
+
+8. Why does current Confluence theme coverage equal exactly 0/377?
+
+Prove the root cause before editing.
+
+==================================================
+CRITICAL ARCHITECTURAL RULES
+============================
+
+Do NOT create:
+
+a new ticker→theme table
+a new keyword classifier
+a new industry→theme mapper
+a new ETF holdings membership system
+a new LLM categorizer
+a new hardcoded theme map
+a new Confluence-specific Theme Universe
+
+Do NOT use Watchlist category as a substitute for canonical Theme membership unless the existing Themes architecture explicitly treats them as the same thing.
+
+Do NOT restrict stock discovery to Theme Universe membership.
+
+This integration is for SIGNAL ENRICHMENT.
+
+An unmapped ticker may still remain a Confluence candidate.
+
+Manual user Theme edits must remain authoritative exactly as they are in the current Themes system.
+
+Reuse the existing merged/canonical Theme membership result.
+
+==================================================
+PART 1 — READ-ONLY TICKER → THEMES LOOKUP
+=========================================
+
+Reuse an existing canonical helper if one already exists.
+
+If no ticker-oriented read helper exists, add the smallest read-only adapter over the EXISTING merged membership result.
+
+The adapter must answer:
+
+ticker → [canonical_theme_keys]
+
+Example shape only:
+
+{
+"MU": [
+"memory_storage",
+"semiconductors"
+],
+"ANET": [
+"ai_networking",
+"datacenter_infra"
+]
+}
+
+Do not invent these example memberships.
+
+Use the actual canonical memberships from the current system.
+
+Requirements:
+
+normalize ticker symbols consistently
+
+preserve multiple legitimate Theme memberships
+
+apply existing manual additions
+
+apply existing manual removals/exclusions
+
+reuse existing merge logic
+
+zero provider calls
+
+zero LLM calls
+
+no writes
+
+Return diagnostics:
+
+ticker_theme_lookup_symbols
+ticker_theme_lookup_memberships
+mapped_ticker_count
+unmapped_ticker_count
+multi_theme_ticker_count
+average_themes_per_mapped_ticker
+manual_add_membership_count if derivable
+manual_remove/exclusion_count if derivable
+
+==================================================
+PART 2 — CONNECT MEMBERSHIPS TO EXISTING THEME ROTATION
+=======================================================
+
+Theme Rotation already computes theme-level results.
+
+Do not recalculate Theme Rotation per ticker.
+
+For each Confluence stock:
+
+1. Resolve its canonical Theme memberships.
+2. Match each canonical Theme key to an EXISTING Theme Rotation result.
+3. Preserve all matched Theme Rotation memberships.
+
+Return:
+
+theme_rotation_memberships[]
+
+Each row should include:
+
+theme_key
+rotation_score
+rotation_state
+rotation_direction
+rotation_velocity if currently available
+
+If a canonical membership does not have a Theme Rotation result:
+
+preserve that membership in diagnostics
+
+but mark:
+
+rotation_available = false
+
+Do not fabricate a neutral rotation result.
+
+==================================================
+PART 3 — PRIMARY ROTATION THEME SELECTION
+=========================================
+
+A ticker can legitimately belong to multiple Themes.
+
+Do not blindly average all Theme Rotation scores.
+
+The intended philosophy is:
+
+A ticker should receive the strongest legitimate capital-rotation tailwind currently applicable to one of its real Theme memberships.
+
+A weak secondary Theme should not automatically dilute a strong relevant Theme.
+
+For Confluence V2 select:
+
+primary_rotation_theme
+
+from the ticker's legitimate canonical memberships using:
+
+highest available rotation_score
+
+Also return:
+
+primary_theme_rotation_score
+primary_theme_rotation_state
+primary_theme_rotation_direction
+
+Preserve the complete:
+
+theme_rotation_memberships[]
+
+for transparency.
+
+Do not select a Theme outside the ticker's canonical memberships.
+
+Do not select the globally strongest Theme.
+
+==================================================
+PART 4 — CONFLUENCE THEME SIGNAL
+================================
+
+Update Confluence V2 Theme signal consumption.
+
+Current broken behavior:
+
+all tickers:
+theme_sig = 0.500
+reason = NOT_IN_THEME
+
+New behavior:
+
+If ticker has one or more matched Theme Rotation memberships:
+
+theme_signal_available = true
+
+theme_sig =
+normalized primary_theme_rotation_score
+
+Use the Theme Rotation score's actual current scale.
+
+Trace the scale before normalizing.
+
+If already 0–1:
+
+use it directly.
+
+If 0–100:
+
+divide by 100.
+
+Do not guess.
+
+If ticker has no canonical Theme membership:
+
+theme_signal_available = false
+
+If ticker has Theme memberships but none have a current Theme Rotation result:
+
+theme_signal_available = false
+
+IMPORTANT:
+
+Do NOT return fake neutral 0.500 as a PRESENT Theme signal.
+
+Theme must be missing/unavailable.
+
+Confluence's available-signal normalization should omit the Theme weight from the denominator when Theme signal is unavailable.
+
+Do not reward missing Theme data.
+
+Do not penalize missing Theme data.
+
+Return explicit reasons:
+
+MAPPED_ROTATION_AVAILABLE
+NO_CANONICAL_THEME_MEMBERSHIP
+THEME_MEMBERSHIP_NO_ROTATION_RESULT
+
+==================================================
+PART 5 — SOCIAL BONUS ELIGIBILITY
+=================================
+
+Do not redesign Social Bonus.
+
+Do not change bonus tiers.
+
+Do not change maximum bonus.
+
+Do not add a Grok call.
+
+The existing Social Bonus architecture is:
+
+social is not part of the base Trade weighted score
+
+no social coverage = bonus 0
+
+quiet social = bonus 0
+
+positive cached social confirmation may boost a setup
+
+maximum bonus = 10
+
+Social may not rescue a structurally poor entry
+
+The current validation showed:
+
+social coverage = 37
+social eligible = 0
+social applied = 0
+
+The reported primary cause was lack of real Theme Rotation coverage.
+
+Update the Social Bonus eligibility path to consume:
+
+primary_theme_rotation_score
+
+from this canonical bridge.
+
+Do not alter any other eligibility condition in this task.
+
+==================================================
+PART 6 — CONFLUENCE OUTPUT FIELDS
+=================================
+
+For each ticker return:
+
+canonical_theme_memberships
+
+theme_signal_available
+
+primary_rotation_theme
+primary_theme_rotation_score
+primary_theme_rotation_state
+primary_theme_rotation_direction
+
+theme_rotation_memberships
+
+theme_signal_reason
+
+Preserve existing response fields for compatibility.
+
+Do not remove legacy fields.
+
+Do not change current endpoint paths.
+
+==================================================
+PART 7 — COVERAGE VALIDATION
+============================
+
+After implementation, build Confluence V2 using normal existing cache/LKG paths.
+
+No provider calls.
+
+Return:
+
+Confluence symbols
+canonical mapped symbols
+canonical unmapped symbols
+mapped %
+multi-theme symbols
+average themes per mapped ticker
+
+Theme Rotation covered symbols
+Theme Rotation coverage %
+
+Theme signal available
+Theme signal unavailable
+
+For unavailable Theme signals split by:
+
+NO_CANONICAL_THEME_MEMBERSHIP
+THEME_MEMBERSHIP_NO_ROTATION_RESULT
+
+Show at least 30 real ticker mappings.
+
+For each:
+
+symbol
+canonical Theme memberships
+matched rotation memberships
+primary rotation Theme
+primary rotation state
+primary rotation score
+
+Specifically report:
+
+ANET
+ALGM
+AOSL
+BE
+NVDA
+AMD
+MU
+MRVL
+CRDO
+ABCL
+WYFI
+SOFI
+SLAB
+DELL
+
+If a ticker is not in Confluence's current universe:
+
+state NOT_IN_CONFLUENCE_UNIVERSE.
+
+If it has no canonical Theme membership:
+
+state NO_CANONICAL_THEME_MEMBERSHIP.
+
+Do not invent membership.
+
+==================================================
+PART 8 — THEME SIGNAL DISTRIBUTION
+==================================
+
+Across the Confluence universe report:
+
+theme_sig available count
+theme_sig unavailable count
+
+theme_sig min
+theme_sig max
+theme_sig median
+unique theme_sig count
+
+Primary rotation state distribution using the ACTUAL current Theme Rotation state names.
+
+Do not silently rename states.
+
+If current states are:
+
+LEADING
+CONFIRMING
+STALLING
+BOTTOMING
+LAGGING
+UNCLASSIFIED
+
+report those exact values.
+
+Show the Top 20 Theme signals:
+
+symbol
+primary rotation Theme
+rotation state
+rotation score
+theme_sig
+all canonical Theme memberships
+
+Show Bottom 20 available Theme signals.
+
+==================================================
+PART 9 — SOCIAL BONUS ACTIVATION
+================================
+
+Return:
+
+social coverage count
+social bonus eligible count
+social bonus applied count
+
+Bonus distribution:
+
+0
+2–4
+5–7
+8–10
+
+Return EVERY ticker with:
+
+social_bonus_score > 0
+
+For each:
+
+symbol
+
+base_trade_confluence_score
+
+canonical Theme memberships
+primary rotation Theme
+primary rotation state
+primary rotation score
+
+entry score
+entry state
+
+stage quality
+options score
+
+social consensus
+social acceleration
+social freshness
+
+social bonus eligible
+social bonus reason
+social bonus score
+
+final trade confluence score
+confluence verdict
+
+Prove with real examples where available:
+
+1. No social coverage:
+   bonus = 0
+
+2. Theme mapped but no social:
+   bonus = 0
+
+3. Strong social but insufficient non-social alignment:
+   bonus = 0
+
+4. Strong social + sufficient non-social alignment:
+   positive bonus
+
+If current data contains no positive-bonus example, say so honestly.
+
+Do not fabricate one.
+
+==================================================
+PART 10 — REAL CONFLUENCE RANKINGS
+==================================
+
+Return Top 25 Trade Confluence after Theme integration.
+
+Fields:
+
+rank
+symbol
+
+base_trade_confluence_score
+social_bonus_score
+trade_confluence_score
+
+investment_confluence_score
+
+entry_score
+entry_state
+entry_family
+
+confluence_verdict
+
+stage score
+
+canonical Theme memberships
+primary rotation Theme
+primary rotation state
+primary rotation score
+theme signal contribution
+
+options score
+
+top positive contributors
+top conflicts/risks
+
+Return Top 25 Investment Confluence.
+
+Return Top 25 Entry Score separately.
+
+Do not change weights based on the ranking output.
+
+==================================================
+PART 11 — NON-ENTRY ALIGNMENT ANALYTICAL TEST
+=============================================
+
+Do NOT change production scoring.
+
+For analysis only, calculate:
+
+non_entry_trade_alignment_test
+
+using current available Trade signals EXCEPT Entry State.
+
+This analytical score must not be persisted.
+
+Use existing available-signal normalization.
+
+Then filter for:
+
+entry_grade == AVOID
+
+or
+entry_score < 40
+
+Return Top 25 by:
+
+non_entry_trade_alignment_test
+
+Fields:
+
+symbol
+non_entry_trade_alignment_test
+
+production base_trade_confluence_score
+production final trade_confluence_score
+
+entry_score
+entry_state
+entry_family
+
+stage score
+
+primary Theme
+Theme Rotation state
+Theme Rotation score
+
+options score
+social bonus
+
+confluence verdict
+
+exact reason current Entry is poor
+
+The question is:
+
+Does the ticker have strong aligned trading signals despite a poor current entry?
+
+Specifically show where available:
+
+ALGM
+AOSL
+BE
+MRVL
+WYFI
+ADUR
+HOOD
+
+Do not force them into the result if their analytical score is low.
+
+==================================================
+PART 12 — DAILY ALPHA V1 VS CONFLUENCE V2
+=========================================
+
+Compare current Daily Alpha V1 Top 10 to Confluence V2 Top 10.
+
+Show:
+
+symbol
+V1 rank
+V1 score
+
+V2 rank
+V2 trade score
+
+entry score
+entry state
+
+primary Theme
+Theme Rotation state
+Theme Rotation score
+
+social bonus
+
+overlap
+
+For V1-only names:
+
+show deterministic reason V2 demoted/excluded them.
+
+For V2-only names:
+
+show deterministic reason V2 promoted them.
+
+Count primary difference drivers:
+
+Entry State
+Stage Quality
+Theme Rotation
+Social Bonus
+Options
+Universe Coverage
+Other
+
+==================================================
+PART 13 — PROVIDER / COST PROOF
+===============================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 provider calls from ticker→Theme adapter
+
+0 provider calls from Theme Rotation lookup
+
+0 provider calls from GET /api/alpha/confluence
+
+0 new Theme provider path
+
+0 Options Flow producer changes
+
+0 Daily Alpha weight changes
+
+Grok cadence unchanged
+
+This task must remain cache/LKG/Neon-read only for Confluence execution.
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+THEME BRIDGE IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT CAUSE OF 0% COVERAGE:
+[exact proven mismatch]
+
+CANONICAL THEME MEMBERSHIP PATH:
+[exact service/source]
+
+MANUAL OVERRIDE PATH:
+[exact source and merge behavior]
+
+TICKER → THEME ADAPTER:
+[implementation]
+
+MULTI-THEME SELECTION:
+[implementation]
+
+CONFLUENCE THEME SIGNAL:
+[implementation]
+
+SOCIAL BONUS ACTIVATION:
+[results]
+
+COVERAGE:
+[results]
+
+RANKINGS:
+[summary]
+
+NON-ENTRY ALIGNMENT TEST:
+[summary]
+
+V1 VS V2:
+[summary]
+
+PROVIDER / COST PROOF:
+[results]
+
+End exactly:
+
+THEME BRIDGE VERDICT
+
+ROOT CAUSE OF 0% COVERAGE:
+[exact cause]
+
+CANONICAL THEME SOURCE:
+[path/service]
+
+MANUAL OVERRIDES PRESERVED:
+[YES / NO + how]
+
+TICKER THEME COVERAGE:
+[count / percent]
+
+THEME ROTATION COVERAGE:
+[count / percent]
+
+MULTI-THEME SUPPORT:
+[PASS / FAIL]
+
+SOCIAL BONUS ACTIVATED:
+[count + distribution]
+
+TRADE CONFLUENCE QUALITY:
+[assessment]
+
+INVESTMENT CONFLUENCE QUALITY:
+[assessment]
+
+HIGH-CONFLUENCE BAD-ENTRY FINDING:
+[assessment]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING MODEL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+[ONE feature]
+
+Do not modify Entry Structure.
+Do not change Confluence weights.
+Do not implement Actionability.
+Do not add Theme memberships.
+Do not make unrelated changes.

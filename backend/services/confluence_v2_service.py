@@ -153,7 +153,19 @@ def _load_stage2_lkg() -> dict[str, dict]:
 
 
 def _load_themes_rs_index() -> dict[str, dict]:
-    """Build a ticker → theme_row lookup from themes_rs_lkg leaders field."""
+    """
+    DEPRECATED / DEAD CODE PATH — kept only for backward-compat callers, if
+    any exist. This was the ROOT CAUSE of 0/377 Theme coverage: `leaders` in
+    themes_rs_lkg.json is a list of dicts ({"symbol": ..., "return_pct": ...})
+    not a list of strings, so `sym.upper()` raised AttributeError on the very
+    first row, was swallowed by the broad except below, and the function
+    returned an empty dict for every ticker on every call.
+
+    Theme signal computation no longer calls this function — see
+    `services.theme_bridge` (canonical membership) +
+    `services.theme_rotation_service.build_theme_rotation_snapshot()`
+    (existing Theme Rotation engine) instead.
+    """
     result: dict[str, dict] = {}
     try:
         if _THEMES_RS_LKG.exists():
@@ -162,9 +174,16 @@ def _load_themes_rs_index() -> dict[str, dict]:
             if not isinstance(rows, list):
                 return result
             for row in rows:
-                leaders      = row.get("leaders") or []
+                raw_leaders  = row.get("leaders") or []
+                leaders      = [
+                    (e.get("symbol") if isinstance(e, dict) else e)
+                    for e in raw_leaders
+                    if e and (isinstance(e, str) or (isinstance(e, dict) and e.get("symbol")))
+                ]
                 proxy_syms   = row.get("proxy_symbols") or []
                 for sym in leaders + proxy_syms:
+                    if not sym:
+                        continue
                     key = sym.upper()
                     if key not in result:
                         result[key] = row
@@ -207,30 +226,43 @@ def _entry_signal(entry_result: Optional[dict]) -> tuple[float, str]:
     return _clamp01(score / 100.0), entry_result.get("entry_state", "UNKNOWN")
 
 
-def _theme_signal(sym: str, themes_idx: dict[str, dict]) -> tuple[float, str]:
-    """Return (0–1 theme rotation signal, phase)."""
-    row = themes_idx.get(sym)
-    if row is None:
-        return 0.5, "NOT_IN_THEME"
-    rot_score = row.get("_rotation_score")
-    if rot_score is not None:
-        return _clamp01(float(rot_score)), row.get("_rotation_phase", "UNCLASSIFIED")
+def _theme_signal_v2(
+    sym: str,
+    ticker_theme_idx: dict[str, list[str]],
+    rotation_idx: dict[str, dict],
+) -> dict:
+    """
+    Theme signal via the canonical Theme Bridge (services.theme_bridge):
+    ticker → canonical Theme membership (theme_merge_layer.ENRICHED_THEME_RS_UNIVERSE,
+    manual overrides included) → EXISTING Theme Rotation result
+    (theme_rotation_service.build_theme_rotation_snapshot()).
 
-    # Fallback: derive from raw RS + stage
-    rs = _safe_float(row.get("rs_score") or row.get("rs_vs_spy"))
-    rs_sig = _clamp01((rs + 20.0) / 40.0)
+    Returns the full bridge dict (canonical_theme_memberships,
+    theme_rotation_memberships, primary_rotation_theme,
+    primary_theme_rotation_score/state/direction, theme_signal_available,
+    theme_signal_reason).
 
-    stage_label = row.get("stage") or row.get("stage_label") or ""
-    _sl_map = {
-        "Stage 2: Advance": 1.0, "Stage 2b: Breakout": 0.95,
-        "Stage 1-2: Watch": 0.70, "Stage 1: Base": 0.45,
-        "Stage 3m: Late Momentum": 0.55, "Stage 3: Top": 0.30, "Stage 4: Decline": 0.05,
-    }
-    stage_sig = _sl_map.get(stage_label, 0.40)
+    IMPORTANT: never returns a fabricated neutral 0.5 as a PRESENT signal.
+    theme_signal_available=False means the caller must omit the Theme weight
+    from the denominator, not substitute a fallback score.
+    """
+    from services.theme_bridge import get_ticker_rotation_bridge
+    return get_ticker_rotation_bridge(sym, ticker_theme_idx, rotation_idx)
 
-    combined = 0.6 * rs_sig + 0.4 * stage_sig
-    phase = "LEADING" if combined >= 0.72 else ("CONFIRMING" if combined >= 0.58 else "LAGGING")
-    return combined, phase
+
+def _theme_sig_0_1(bridge: dict) -> float:
+    """
+    Normalize primary_theme_rotation_score to a 0-1 signal for use ONLY when
+    theme_signal_available is True. rotation_score from theme_rotation_service
+    is already produced as a weighted sum of 0-1 sub-signals (see
+    theme_rotation_service._classify_phase / build_theme_rotation_snapshot),
+    so its native scale is already 0-1 — verified by inspecting
+    theme_rotation_service.py directly, not guessed. No /100 division needed.
+    """
+    score = bridge.get("primary_theme_rotation_score")
+    if score is None:
+        return 0.5
+    return _clamp01(float(score))
 
 
 def _stage_signal_from_lkg(stage2_row: Optional[dict]) -> tuple[float, str]:
@@ -281,6 +313,7 @@ def _compute_social_bonus(
     entry_score_raw: int,
     entry_grade:     str,
     entry_family:    str,
+    theme_sig_available: bool,
     t_sig:           float,
     s_sig:           float,
     o_sig:           float,
@@ -331,9 +364,11 @@ def _compute_social_bonus(
         return 0.0, False, "bad_entry_blocked", False
 
     # ── Eligibility gate ───────────────────────────────────────────────────────
-    # Theme signal defaults to 0.5 when not in theme index (0% coverage case).
-    # Use stage_sig >= 0.65 as a data-availability-aware proxy when theme is missing.
-    theme_or_stage_ok = t_sig >= 0.55 or s_sig >= 0.65
+    # Theme signal now comes from the real canonical Theme Bridge (primary
+    # rotation theme's rotation_score). When no canonical membership /
+    # rotation result exists (theme_sig_available=False), we do NOT reward the
+    # missing data with a neutral pass — fall back to the stage_sig proxy only.
+    theme_or_stage_ok = (theme_sig_available and t_sig >= 0.55) or s_sig >= 0.65
     eligible = (
         entry_score_raw >= 60 and
         theme_or_stage_ok and
@@ -397,24 +432,39 @@ def _compute_confluence(
     themes_idx:   dict[str, dict],
     options_map:  dict[str, dict],
     social_map:   dict[str, dict],
+    ticker_theme_idx: Optional[dict[str, list[str]]] = None,
+    rotation_idx:     Optional[dict[str, dict]] = None,
 ) -> dict:
     t0 = time.time()
 
     # ── Individual signal normalizations ──────────────────────────────────────
     e_sig, e_state  = _entry_signal(entry_result)
-    t_sig, t_phase  = _theme_signal(sym, themes_idx)
+    theme_bridge    = _theme_signal_v2(sym, ticker_theme_idx or {}, rotation_idx or {})
+    theme_available = bool(theme_bridge.get("theme_signal_available"))
+    t_sig           = _theme_sig_0_1(theme_bridge) if theme_available else 0.0
+    t_phase         = theme_bridge.get("primary_theme_rotation_state") or "UNAVAILABLE"
     s_sig, s_label  = _stage_signal_from_lkg(stage2_row)
     o_sig, o_bias   = _options_signal(sym, options_map)
 
     social_entry = social_map.get(sym)
 
-    # ── Base Trade score (4 signals, renormalized weights, no social) ─────────
-    base_raw = (
-        _W_ENTRY   * e_sig +
-        _W_THEME   * t_sig +
-        _W_STAGE   * s_sig +
-        _W_OPTIONS * o_sig
-    ) * 100.0
+    # ── Base Trade score (4 signals; Theme weight OMITTED from the numerator
+    #    AND denominator — not defaulted to 0.5 — when no canonical Theme
+    #    membership / rotation result exists for this ticker) ────────────────
+    if theme_available:
+        base_raw = (
+            _W_ENTRY   * e_sig +
+            _W_THEME   * t_sig +
+            _W_STAGE   * s_sig +
+            _W_OPTIONS * o_sig
+        ) * 100.0
+    else:
+        _denom = _W_ENTRY + _W_STAGE + _W_OPTIONS
+        base_raw = (
+            (_W_ENTRY   / _denom) * e_sig +
+            (_W_STAGE   / _denom) * s_sig +
+            (_W_OPTIONS / _denom) * o_sig
+        ) * 100.0
     base_score = round(base_raw, 1)
 
     # ── Social bonus (conditional, 0–10 pts) ──────────────────────────────────
@@ -426,6 +476,7 @@ def _compute_confluence(
         entry_score_raw = int(entry_score_raw),
         entry_grade     = entry_grade_raw,
         entry_family    = entry_family,
+        theme_sig_available = theme_available,
         t_sig           = t_sig,
         s_sig           = s_sig,
         o_sig           = o_sig,
@@ -441,7 +492,7 @@ def _compute_confluence(
     # ── Availability flags ────────────────────────────────────────────────────
     avail = [
         entry_result is not None,
-        sym in themes_idx,
+        theme_available,
         stage2_row is not None,
         sym in options_map,
         social_entry is not None,
@@ -490,8 +541,15 @@ def _compute_confluence(
                 "signal":       round(t_sig, 4),
                 "phase":        t_phase,
                 "weight":       _W_THEME,
-                "contribution": round(t_sig * _W_THEME * 100, 2),
+                "contribution": round(t_sig * _W_THEME * 100, 2) if theme_available else 0.0,
                 "available":    avail[1],
+                "canonical_theme_memberships": theme_bridge.get("canonical_theme_memberships") or [],
+                "theme_rotation_memberships":  theme_bridge.get("theme_rotation_memberships") or [],
+                "primary_rotation_theme":          theme_bridge.get("primary_rotation_theme"),
+                "primary_theme_rotation_score":    theme_bridge.get("primary_theme_rotation_score"),
+                "primary_theme_rotation_state":     theme_bridge.get("primary_theme_rotation_state"),
+                "primary_theme_rotation_direction": theme_bridge.get("primary_theme_rotation_direction"),
+                "theme_signal_reason":         theme_bridge.get("theme_signal_reason"),
             },
             "stage_quality": {
                 "signal":       round(s_sig, 4),
@@ -536,9 +594,15 @@ def build_confluence_snapshot(
 
     # Load all caches once
     stage2_lkg  = _load_stage2_lkg()
-    themes_idx  = _load_themes_rs_index()
+    themes_idx  = {}  # legacy/dead field, kept only for the deprecated fallback fn
     options_map = _load_options_map()
     social_map  = _load_social_map()
+
+    # Theme Bridge: canonical ticker→Theme membership + EXISTING Theme
+    # Rotation result, built ONCE per snapshot (not per ticker).
+    from services.theme_bridge import build_ticker_theme_index, get_theme_rotation_index
+    ticker_theme_idx = build_ticker_theme_index()
+    rotation_idx     = get_theme_rotation_index()
 
     # Load entry state LKG if available
     entry_lkg: dict[str, dict] = {}
@@ -568,6 +632,8 @@ def build_confluence_snapshot(
             themes_idx   = themes_idx,
             options_map  = options_map,
             social_map   = social_map,
+            ticker_theme_idx = ticker_theme_idx,
+            rotation_idx     = rotation_idx,
         )
         results.append(r)
 
@@ -640,9 +706,29 @@ def build_confluence_snapshot(
             "options_flow":   options_covered,
             "social":         social_covered,
         },
+        "theme_bridge_diagnostics": _theme_bridge_diagnostics(ticker_theme_idx, rotation_idx, universe),
         "elapsed_ms":  round((time.time() - t0) * 1000, 1),
         "results":     results,
     }
+
+
+def _theme_bridge_diagnostics(
+    ticker_theme_idx: dict[str, list[str]],
+    rotation_idx:     dict[str, dict],
+    universe:         list[str],
+) -> dict:
+    """Snapshot-level Theme Bridge stats for Part 6-8 validation of the spec."""
+    try:
+        from services.theme_bridge import get_ticker_theme_diagnostics
+        base = get_ticker_theme_diagnostics(ticker_theme_idx)
+        mapped_in_universe = sum(1 for s in universe if ticker_theme_idx.get(s))
+        base["universe_size"] = len(universe)
+        base["universe_mapped_count"] = mapped_in_universe
+        base["universe_coverage_pct"] = round(100.0 * mapped_in_universe / len(universe), 2) if universe else 0.0
+        base["rotation_snapshot_theme_count"] = len(rotation_idx)
+        return base
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def get_confluence_for_symbol(symbol: str) -> dict:
