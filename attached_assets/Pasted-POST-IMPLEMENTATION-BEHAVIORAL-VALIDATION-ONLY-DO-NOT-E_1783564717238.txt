@@ -1,0 +1,428 @@
+POST-IMPLEMENTATION BEHAVIORAL VALIDATION ONLY.
+
+DO NOT EDIT CODE YET.
+
+The previous implementation added the Foundation Repairs, Stage V2 changes, Entry State Engine, Theme Rotation V2, and Confluence V2.
+
+The endpoints returning HTTP 200 is NOT sufficient validation.
+
+I need the behavioral validation that was required in the original task and was not included in the completion response.
+
+Do not add features.
+Do not refactor.
+Do not make provider calls solely for this validation.
+Do not call any LLM.
+Do not change Daily Alpha.
+Do not change Confluence V2.
+
+Use existing cached bars, existing LKG files, existing Neon data, and existing services.
+
+==================================================
+PART 1 — EXACT FILE CHANGE SUMMARY
+==================================
+
+List every file changed in the previous implementation.
+
+For each file show:
+
+file path
+phase it belongs to
+functions/classes added
+functions/classes modified
+
+Do not paste full files.
+
+==================================================
+PART 2 — WATCHLIST ZONE PRESERVATION TRACE
+==========================================
+
+The previous task required a tiny trace of the deterministic Watchlist zones.
+
+Show the exact result now.
+
+For:
+
+Golden Zone
+High Conviction Trade Zone
+High Conviction Investment Zone
+
+Give:
+
+frontend-visible concept if backend can identify it
+backend fields feeding the rows
+backend endpoint/payload source
+whether any LLM participates in zone membership calculation
+
+The expected answer is deterministic row filtering/grouping and NO LLM involvement.
+
+Do not confuse these with the LLM strategy-report sections from watchlist_analysis.py.
+
+==================================================
+PART 3 — RS COLLISION PROOF
+===========================
+
+Show the exact code paths now used for:
+
+price_rs_8w_spy
+social_rank_score
+
+Then show current diagnostic counts:
+
+ambiguous legacy rs_score
+resolved price RS
+resolved social rank
+missing canonical social data
+
+Find at least 5 real current tickers if available and show:
+
+symbol
+legacy rs_score value if present
+price_rs_8w_spy
+social_rank_score
+which field Daily Alpha consumes as social
+
+Prove Daily Alpha does not use price_rs_8w_spy as social signal.
+
+==================================================
+PART 4 — TECHNICAL FRESHNESS PROOF
+==================================
+
+Show:
+
+freshness source timestamp field
+freshness threshold used
+exact stale-handling behavior
+
+Return current diagnostic counts:
+
+technical_fresh_used
+technical_stale_omitted
+technical_missing_timestamp
+technical_missing
+
+Show at least:
+
+3 fresh examples
+3 stale examples if available
+
+For each:
+
+symbol
+technical_score
+technical timestamp
+age
+used or omitted
+
+If no naturally stale examples exist, identify the stale branch through a deterministic local test without persisting modified production data.
+
+Prove no provider call is triggered when a stored technical score is stale.
+
+==================================================
+PART 5 — STAGE V2 OLD VS NEW COMPARISON
+=======================================
+
+Run the OLD classification logic and NEW classification logic side-by-side in memory against the same currently cached historical inputs.
+
+Do not rewrite LKG history.
+
+Return:
+
+total symbols compared
+unchanged count
+Stage 3/3m → Stage 2 or Stage 2-3 count
+Stage 2 → Stage 3/3m count
+other changed count
+insufficient-data count
+
+Show at least 10 changed examples if available.
+
+For each:
+
+symbol
+old_stage
+new_stage
+price_vs_30w_ma
+30w_ma_slope
+prior_26w
+extension_state
+extension_pct_30w_ma
+extension_atr if available
+new reason codes / classification reason
+
+I want to specifically see whether fast, strong Stage 2 breakouts are no longer automatically classified Stage 3m solely because they are >20% above the 30-week MA.
+
+Do not claim the new result is visually correct.
+Show deterministic differences only.
+
+==================================================
+PART 6 — POPULATE AND VALIDATE ENTRY STATE
+==========================================
+
+The previous completion report said:
+
+`/api/alpha/entry-state` is healthy but Entry State LKG is empty.
+
+That is not sufficient.
+
+Trace why the LKG is empty.
+
+Answer:
+
+1. What producer is supposed to populate Entry State?
+2. When is that producer invoked?
+3. Does the existing stage refresh currently call analyze_entry_state_from_bars()?
+4. If yes, why is the LKG empty?
+5. If no, is Entry State currently dead code / endpoint-only architecture?
+
+Do not edit yet.
+
+Then use EXISTING cached historical bars or an existing canonical stage-analysis bar path to run Entry State in memory for currently available tickers.
+
+Do not make new provider calls solely for validation.
+
+Return current examples grouped as:
+
+PRE_MOVE
+CONTINUATION
+CHASE_EXHAUSTION
+BROKEN_OR_UNCLEAR
+
+I need at least 3 examples from each family if current data supports them.
+
+For every example show:
+
+symbol
+entry_family
+entry_state
+entry_score
+entry_grade
+ticker_stage
+extension_state
+support_level
+support_type
+support_distance_pct
+resistance_level
+resistance_distance_pct
+breakout_level
+breakout_distance_pct
+extension_pct
+extension_atr
+volume_contraction
+volume_reacceleration
+reversal_confirmation
+structure_confidence
+reason_codes
+
+CRITICAL SANITY CHECKS:
+
+A. Identify the 15 highest 7D-return stocks available in the current candidate/cache universe.
+
+Show their Entry State classification.
+
+Flag any materially extended ticker classified PRE_MOVE.
+
+B. Identify the 15 lowest-entry-score high-quality/trade-score stocks.
+
+Show that strong ticker quality does not automatically create a good entry.
+
+C. Find current PRE_MOVE candidates and show their 1D/7D return if already cached.
+
+We are explicitly testing whether the system finds signal buildup before obvious price expansion.
+
+==================================================
+PART 7 — THEME ROTATION BEHAVIOR
+================================
+
+Return all current themes with:
+
+theme
+rotation_state
+rotation_score
+rotation_direction
+rotation_velocity
+1D
+7D
+30D
+RS score
+RS acceleration
+breadth
+flow_state
+social_state
+reason_codes
+
+Then group them by:
+
+DORMANT
+EARLY_REVERSAL
+EMERGING
+ACCELERATING
+LEADING
+EXTENDED
+DETERIORATING
+LAGGING
+
+Show at least 3 examples per populated state where possible.
+
+For the Top 10 rotation scores, explain deterministically which inputs caused the state.
+
+For the Bottom 10, do the same.
+
+CRITICAL SANITY CHECK:
+
+Prove the new rotation state is not merely another alias for 1D performance.
+
+Find examples, if available, where:
+
+positive 1D but weak/deteriorating rotation state
+negative or flat 1D but EARLY_REVERSAL/EMERGING due to improving acceleration/breadth/flow/social inputs
+
+==================================================
+PART 8 — CONFLUENCE V2 CURRENT RESULTS
+======================================
+
+Return the current Top 25 stocks by Trade Confluence.
+
+Fields:
+
+symbol
+trade_confluence_score
+investment_confluence_score
+entry_score
+entry_grade
+actionability
+entry_family
+entry_state
+ticker_stage
+extension_state
+theme
+theme_rotation_state
+theme_rotation_score
+technical_quality
+volume_activity
+options_flow_composite
+options_flow_change_state
+social_acceleration_score
+catalyst
+news
+market_regime
+top 3 positive contributors
+top 3 weak/conflicting inputs
+missing_signals
+
+Then return:
+
+TOP 10 INVESTMENT CONFLUENCE
+
+same relevant fields
+
+Then:
+
+TOP 10 ACTIONABILITY
+
+same relevant fields
+
+==================================================
+PART 9 — DAILY ALPHA V1 VS V2
+=============================
+
+Compare current Daily Alpha V1 Top 10 against current Confluence V2 Trade Top 10.
+
+Show:
+
+symbol
+V1 rank
+V1 score
+V2 rank
+V2 trade score
+entry score
+actionability
+theme rotation
+overlap
+
+For V1-only names:
+Why did V2 demote/exclude them?
+
+For V2-only names:
+Why did V2 promote them?
+
+Count how often the primary rank difference came from:
+
+Entry State
+Theme Rotation
+Options Flow Change
+Social Acceleration
+Technical freshness omission
+RS provenance repair
+other
+
+Do not use LLM interpretation.
+Use score contributions and gates.
+
+==================================================
+PART 10 — PROVIDER / V1 FREEZE PROOF
+====================================
+
+Prove:
+
+1. GET /api/alpha/confluence executes zero provider calls.
+2. Entry State scoring itself does not independently fetch duplicate historical bars when integrated with stage processing.
+3. Theme Rotation executes zero provider calls.
+4. No new Grok calls were added.
+5. Existing Grok scheduler/cadence is unchanged.
+6. No new Claude/Gemini/OpenAI/DeepSeek calls were added.
+7. Options Flow scan frequency is unchanged.
+8. No Options Flow producer logic was modified.
+9. Daily Alpha stock weight constants are byte-for-byte/logically unchanged:
+   theme 0.20
+   ta 0.18
+   rel_volume 0.15
+   catalyst 0.12
+   options 0.10
+   social 0.10
+   news 0.08
+   fundamentals 0.05
+   relevance/macro 0.02
+10. Daily Alpha endpoint and response contract remain unchanged.
+
+==================================================
+FINAL VERDICT
+=============
+
+End exactly:
+
+BEHAVIORAL VALIDATION VERDICT
+
+FOUNDATION REPAIRS:
+[PASS / FAIL / PARTIAL + reason]
+
+STAGE V2:
+[PASS / FAIL / PARTIAL + reason]
+
+ENTRY STATE ENGINE:
+[PASS / FAIL / PARTIAL + reason]
+
+ENTRY STATE PRODUCER/LKG:
+[PASS / FAIL / PARTIAL + reason]
+
+THEME ROTATION V2:
+[PASS / FAIL / PARTIAL + reason]
+
+CONFLUENCE V2:
+[PASS / FAIL / PARTIAL + reason]
+
+DAILY ALPHA V1 FREEZE:
+[PASS / FAIL]
+
+ZERO-INCREMENTAL-AI-COST:
+[PASS / FAIL]
+
+BIGGEST BEHAVIORAL ISSUE FOUND:
+[one issue]
+
+RECOMMENDED NEXT ACTION:
+[ONE action]
+
+IMPORTANT:
+Do not fix any issue discovered during this validation.
+Report it first.
+Zero code changes.
