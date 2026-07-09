@@ -1,0 +1,612 @@
+ENTRY STRUCTURE V2 — REQUIRED HISTORICAL REPLAY + STRUCTURAL DIAGNOSTICS
+
+VALIDATION ONLY.
+
+ZERO CODE CHANGES.
+
+Do not refactor.
+Do not tune thresholds.
+Do not change Entry Structure V2.
+Do not work on Theme Bridge.
+Do not change Confluence.
+Do not call an LLM.
+Do not add provider architecture.
+
+The prior completion response was insufficient.
+
+It declared Entry Structure V2 complete but omitted the detailed structural diagnostics required by the implementation prompt.
+
+More importantly:
+
+* SLAB still returned HIGH_BASE_READY / PRESSING_CEILING despite the user identifying that the meaningful prior base had already broken out.
+* ALGM was validated only using current July 9 bars after the stock had already moved +12%, instead of replaying the signal as of the July 8 close when the original FAILED_BREAKOUT classification was made.
+
+I need deterministic AS-OF-DATE replay and full structural diagnostics.
+
+==================================================
+PART 1 — PROVE HISTORICAL REPLAY IS POSSIBLE
+============================================
+
+Trace the exact existing Stage history loader used by the normal Stage warmup.
+
+The normal Stage path fetches a multi-hundred-bar daily history series.
+
+Confirm whether the returned daily history currently includes historical bars through:
+
+2026-07-08
+
+for:
+
+ALGM
+SLAB
+DELL
+
+Do not claim historical sequences are “no longer fetchable” merely because a later trading day exists.
+
+A daily history array can be replayed as of an earlier date by truncating all bars after the requested cutoff date.
+
+For validation, define an in-memory helper or local validation operation conceptually equivalent to:
+
+bars_as_of = [
+bar
+for bar in bars
+if bar_date(bar) <= cutoff_date
+]
+
+Do not persist this helper if none is needed.
+Do not change production code.
+
+Then run the EXISTING production Entry Structure V2 functions on the truncated bar array.
+
+No lookahead data may be supplied to the structural functions.
+
+For an as-of July 8 replay:
+
+NO JULY 9 BAR
+NO JULY 9 CLOSE
+NO JULY 9 VOLUME
+NO JULY 9 QUOTE
+
+The optional current cached quote must NOT be used in historical replay.
+
+Use:
+
+price_basis = AS_OF_DAILY_CLOSE
+
+for validation replay.
+
+==================================================
+PART 2 — ALGM AS-OF JULY 8 REPLAY
+=================================
+
+Replay ALGM Entry Structure V2 using bars ending at:
+
+2026-07-08
+
+This is the critical test.
+
+Return:
+
+cutoff_date
+bar_count_used
+last_bar_date
+last_close
+
+stage
+stage_label
+extension_state
+extension_pct
+
+entry_family
+entry_state
+entry_score
+entry_grade
+
+FULL SWING LOW OUTPUT:
+
+all recent swing lows used by detect_trendline()
+
+For each:
+
+date
+price
+bar_index
+prominence/significance if available
+
+FULL ASCENDING TRENDLINE OUTPUT:
+
+ascending_trendline_detected
+anchor_1_date
+anchor_1_price
+anchor_2_date
+anchor_2_price
+trendline_slope_per_bar
+trendline_touch_count
+projected_trendline_support_as_of_2026_07_08
+ALGM_close_vs_trendline_pct
+distance_to_trendline_pct
+trendline_hold_state
+
+FULL BASE OUTPUT:
+
+base_detected
+base_start_date
+base_end_date
+base_high
+base_low
+base_duration_bars
+base_range_pct
+base_breakout_status
+resistance_touch_count
+support_touch_count
+
+FULL BREAKOUT OUTPUT:
+
+breakout_pivot
+breakout_date
+breakout_confirmed
+breakout_confirmation_pct
+days_since_breakout
+close_vs_breakout_pivot_pct
+closes_below_pivot_count
+failed_breakout_reason_codes
+
+FULL SUPPORT OUTPUT:
+
+all support candidates:
+
+support_type
+level
+distance_pct
+structural_relevance_score
+touch_count
+hold_state
+
+primary support
+primary support distance
+primary_support_reason
+
+FINAL reason_codes
+
+Then answer only from the deterministic July 8 inputs:
+
+Did ALGM have a valid ascending trendline?
+
+Was price TESTING / HELD_RECENTLY / UNDERCUT_RECLAIM / BROKEN relative to that trendline?
+
+Was there a real previously confirmed breakout pivot?
+
+Had ALGM persistently lost that pivot?
+
+Did the strict V2 failed-breakout requirements pass?
+
+What exact Entry State did V2 return AS OF JULY 8?
+
+CRITICAL:
+
+Do not use the July 9 +12% move to judge whether the July 8 classification was correct.
+
+The test is whether the structural engine represented the information available on July 8.
+
+==================================================
+PART 3 — SLAB AS-OF ORIGINAL CLASSIFICATION REPLAY
+==================================================
+
+Replay SLAB using bars ending at the date of the original HIGH_BASE classification used in the prior validation.
+
+If the exact classification timestamp/date is available in entry_state_lkg metadata or logs, use it.
+
+Otherwise use:
+
+2026-07-08
+
+and state that this is the closest reproducible daily-close snapshot.
+
+Return the same full diagnostics:
+
+stage
+extension
+
+entry family/state/score/grade
+
+all swing highs
+all swing lows
+
+base start/end
+base high
+base low
+base duration
+base range
+
+resistance clusters:
+cluster level
+cluster members/dates
+touch count
+tolerance
+
+selected resistance_cluster_level
+
+base_breakout_status
+distance_to_base_high_pct
+
+breakout pivot
+breakout date
+breakout confirmed
+close vs breakout pivot
+
+trendline output
+
+all supports
+primary support
+
+reason_codes
+
+Then answer:
+
+What exact historical window did `detect_base()` select as the SLAB base?
+
+Was that the meaningful multi-week consolidation preceding the major breakout?
+
+Or did the detector create a NEW micro-base from recent post-breakout candles near the current high?
+
+How many bars were in the selected base?
+
+How many resistance touches existed?
+
+On what dates?
+
+Had price already previously closed above the older meaningful consolidation ceiling?
+
+Was the selected base formed:
+
+BEFORE the prior major breakout
+
+or
+
+AFTER the prior major breakout?
+
+This is critical.
+
+A post-breakout micro-consolidation must not be automatically interpreted as the original pre-breakout HIGH_BASE_READY setup.
+
+==================================================
+PART 4 — DELL CURRENT DAILY STRUCTURE
+=====================================
+
+Run current production Entry Structure V2 on DELL using daily bars.
+
+If DELL is not in the Stage/watchlist universe, use the existing normal Stage history function for THIS validation symbol only through the existing paced provider path.
+
+Do not add DELL permanently to a universe.
+Do not create a new provider path.
+
+Return full diagnostics:
+
+stage
+extension
+
+entry family
+entry state
+entry score
+entry grade
+
+base start/end
+base duration
+base high
+base low
+base range
+upper_range_position
+range_contraction
+higher_lows_count
+resistance_touch_count
+support_touch_count
+
+all resistance cluster members and dates
+
+distance_to_base_high_pct
+base_breakout_status
+
+trendline output
+
+breakout pivot/status
+
+supports
+primary support
+
+reason_codes
+
+Then answer:
+
+Does Entry Structure V2 detect the daily DELL consolidation as a high-base structure?
+
+If YES:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+or
+HIGH_BASE_READY?
+
+Why?
+
+If NO:
+
+Which exact gate fails?
+
+Do not visually inspect TradingView.
+Use daily OHLCV geometry only.
+
+==================================================
+PART 5 — ALL HIGH-BASE RESULTS
+==============================
+
+Return EVERY current ticker classified:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+HIGH_BASE_READY
+
+The previous report indicated approximately 40 HIGH_BASE_FORMING names.
+
+I need the complete list, not a sample.
+
+For each:
+
+symbol
+entry_state
+entry_score
+stage
+
+base_start_date
+base_end_date
+base_duration_bars
+base_high
+base_low
+base_range_pct
+
+distance_to_base_high_pct
+upper_range_position
+range_contraction
+higher_lows_count
+resistance_touch_count
+
+base_breakout_status
+
+breakout_pivot
+breakout_confirmed
+days_since_breakout
+
+reason_codes
+
+Then calculate:
+
+total high-base count
+FORMING count
+COILING count
+READY count
+
+Count:
+
+high bases with base_duration_bars < 5
+high bases with resistance_touch_count < 2
+high bases with base_breakout_status == BREAKOUT_CONFIRMED
+high bases where the selected base started AFTER a prior confirmed major breakout within the previous 60 trading days
+
+Flag every ticker in those groups.
+
+Do not fix them.
+
+==================================================
+PART 6 — BASE RECURSION / POST-BREAKOUT MICRO-BASE TEST
+=======================================================
+
+Audit `detect_base()` specifically for base recursion.
+
+Definition:
+
+A stock makes a meaningful breakout from Base A.
+
+After breakout, 3–10 recent candles cluster near new highs.
+
+The detector selects those recent candles as Base B and immediately classifies:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+or
+HIGH_BASE_READY.
+
+This can incorrectly convert an already-triggered/extended stock into a fresh pre-breakout entry.
+
+For every current high-base result, inspect the 60 trading days before its selected base_start_date.
+
+Determine whether a prior meaningful base/resistance pivot existed and a breakout above it was confirmed.
+
+Return:
+
+symbol
+selected_base_start
+selected_base_high
+selected_base_duration
+
+prior_breakout_detected
+prior_breakout_pivot
+prior_breakout_date
+advance_from_prior_breakout_to_selected_base_pct
+
+Classify:
+
+PRIMARY_BASE
+POST_BREAKOUT_HIGH_CONSOLIDATION
+MICRO_BASE_AFTER_BREAKOUT
+NO_PRIOR_BREAKOUT_FOUND
+
+Important:
+
+POST_BREAKOUT_HIGH_CONSOLIDATION is not inherently bearish.
+
+But it is NOT automatically the same thing as a pre-breakout HIGH_BASE_READY.
+
+A new high-base setup after a prior breakout should require sufficient duration and genuine re-compression.
+
+Report the exact current behavior.
+
+==================================================
+PART 7 — FAILED BREAKOUT CONFLICT REVIEW
+========================================
+
+Return ALL current FAILED_BREAKOUT results.
+
+For each:
+
+symbol
+
+breakout_pivot
+breakout_date
+breakout_confirmed
+close_vs_breakout_pivot_pct
+closes_below_pivot_count
+
+failed-breakout volume condition
+failed_breakout_reason_codes
+
+ascending_trendline_detected
+trendline_hold_state
+distance_to_trendline_pct
+
+higher_lows_count
+
+base support state
+
+final entry state
+
+Flag:
+
+NO_CONFIRMED_PRIOR_BREAKOUT
+VALID_TRENDLINE_INTACT
+HIGHER_LOW_STRUCTURE_INTACT
+BASE_SUPPORT_INTACT
+MA_ONLY_FAILURE
+
+Report counts for each conflict category.
+
+Expected requirement:
+
+A ticker must not remain FAILED_BREAKOUT if the strict pivot failure logic did not actually pass.
+
+==================================================
+PART 8 — EXACT CLASSIFICATION PRECEDENCE PROOF
+==============================================
+
+Show the exact current production precedence from entry_state_service.py.
+
+Use actual code logic, not the intended prompt.
+
+Show in order:
+
+condition
+state returned
+whether later structural checks can override it
+
+Specifically prove:
+
+Does EXTREME_EXTENSION prevent trendline support evaluation?
+
+Does strict FAILED_BREAKOUT return before trendline support evaluation?
+
+Can TRENDLINE_SUPPORT_TEST override a legacy failed_breakout flag?
+
+Can HIGH_BASE run after BREAKOUT_CONFIRMED?
+
+Can a recent micro-base classify HIGH_BASE after an older major breakout?
+
+Do not edit.
+
+==================================================
+PART 9 — COST / PROVIDER PROOF
+==============================
+
+Report any provider calls used solely for this validation.
+
+Separate:
+
+normal cached/LKG reads
+existing warmup calls already completed
+new validation-only history calls
+
+If ALGM/SLAB/DELL history required provider calls, report exact count.
+
+Do not hide validation calls as “zero incremental architecture calls.”
+
+Also prove:
+
+no new Grok calls
+no LLM calls
+no production scheduler changes
+no Entry State provider path
+no intraday calls
+
+==================================================
+FINAL VERDICT
+=============
+
+End exactly:
+
+HISTORICAL STRUCTURE REPLAY VERDICT
+
+ALGM JULY 8:
+[state + structural conclusion]
+
+ALGM VALID TRENDLINE DETECTED:
+[YES / NO]
+
+ALGM STRICT FAILED BREAKOUT:
+[YES / NO]
+
+SLAB REPLAY:
+[state]
+
+SLAB SELECTED BASE WINDOW:
+[start → end]
+
+SLAB BASE TYPE:
+[PRIMARY_BASE / POST_BREAKOUT_HIGH_CONSOLIDATION / MICRO_BASE_AFTER_BREAKOUT / NO_PRIOR_BREAKOUT_FOUND]
+
+SLAB FALSE HIGH-BASE RISK:
+[HIGH / MEDIUM / LOW]
+
+DELL:
+[state + score]
+
+DELL HIGH-BASE DETECTION:
+[PASS / FAIL]
+
+TOTAL HIGH BASES:
+[count]
+
+HIGH BASES WITH <5 BAR DURATION:
+[count]
+
+HIGH BASES WITH <2 RESISTANCE TOUCHES:
+[count]
+
+HIGH BASES ALREADY BREAKOUT_CONFIRMED:
+[count]
+
+POST-BREAKOUT MICRO-BASE COUNT:
+[count]
+
+TOTAL FAILED BREAKOUTS:
+[count]
+
+FAILED BREAKOUT STRUCTURAL CONFLICTS:
+[count]
+
+BASE RECURSION RISK:
+[assessment]
+
+BIGGEST STRUCTURAL BUG:
+[one bug]
+
+RECOMMENDED NEXT FIX:
+[ONE fix]
+
+ZERO CODE CHANGES.
