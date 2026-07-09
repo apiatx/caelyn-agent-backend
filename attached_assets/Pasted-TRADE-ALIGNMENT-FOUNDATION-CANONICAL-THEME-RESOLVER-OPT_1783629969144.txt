@@ -1,0 +1,884 @@
+TRADE ALIGNMENT FOUNDATION — CANONICAL THEME RESOLVER + OPTIONS ALIGNMENT + CATALYST COMPONENT AUDIT
+
+Work only in the existing backend Replit project.
+
+This task has three tightly scoped parts:
+
+1. Correct the Confluence Theme bridge to consume the exact canonical Theme identity resolution already used by the Watchlist UI.
+2. Build a zero-provider-call Options Alignment component from existing canonical Options Flow data, with Net Premium direction fields incorporated only when mathematically available.
+3. Audit the existing catalyst_engine.py components for suitability as the 25% Trade Alignment Catalyst signal.
+
+Do NOT implement final Trade Alignment 25/25/25/25 yet.
+Do NOT build Actionability.
+Do NOT modify Entry Structure V2.
+Do NOT modify Stage Analysis.
+Do NOT modify Daily Alpha V1.
+Do NOT modify Options Flow producer logic.
+Do NOT modify Golden Zone.
+Do NOT modify HC Trade.
+Do NOT modify HC Investment.
+Do NOT modify Growth.
+Do NOT expand Theme Universe.
+Do NOT add Theme memberships.
+Do NOT add AI/LLM calls.
+Do NOT add Grok calls.
+Do NOT add provider calls.
+Do NOT change frontend code.
+
+==================================================
+PART 1 — USE ONE CANONICAL THEME RESOLVER
+=========================================
+
+The prior audit proved:
+
+Watchlist Theme populated:
+371 / 373 = 99.46%
+
+US-listed Watchlist Theme populated:
+314 / 315 = 99.68%
+
+Current Confluence Theme bridge coverage:
+192 / 373 = 51.47%
+
+UI-populated but bridge-unmapped:
+179 symbols
+
+The exact reason is now known.
+
+The Watchlist UI's final Theme identity is resolved through an existing layered path involving:
+
+theme_ticker_mapper.map_ticker_to_primary_theme
+
+map_industry_to_theme
+
+ENRICHED_THEME_RS_UNIVERSE membership
+
+category/manual overrides
+
+The current Confluence theme_bridge.py consumes only:
+
+ENRICHED_THEME_RS_UNIVERSE
+
+candidate_symbols + proxy_symbols
+
+Therefore it consumes only one downstream membership representation and misses 179 tickers that the Watchlist already resolves confidently.
+
+---
+
+## ARCHITECTURAL RULE
+
+Do NOT copy/paste or independently reimplement the Watchlist's four-tier Theme resolution algorithm inside theme_bridge.py.
+
+There must be ONE reusable canonical resolver for:
+
+"What primary Theme is this ticker currently assigned to?"
+
+The Confluence Theme bridge should consume the exact same resolver/result as the Watchlist skeleton.
+
+---
+
+## TRACE BEFORE EDITING
+
+Find the exact current code in watchlist_router.py that resolves final Theme identity.
+
+Identify:
+
+all inputs
+application order
+override precedence
+normalization
+display-name format
+canonical internal Theme ID conversion
+
+Determine whether an existing helper already encapsulates the final resolution.
+
+If YES:
+
+reuse it.
+
+If NO:
+
+extract the smallest pure/read-only helper from the existing Watchlist path.
+
+The helper should conceptually answer:
+
+resolve_primary_theme_for_ticker(
+ticker,
+available_existing_context
+)
+
+Do not change resolution behavior.
+
+Do not change precedence.
+
+Do not change output for the Watchlist.
+
+The Watchlist and theme_bridge.py must consume the same canonical resolution logic.
+
+---
+
+## MANUAL OVERRIDES
+
+Preserve current behavior exactly.
+
+The existing final Watchlist Theme resolution must remain authoritative.
+
+Themes-page membership edits that currently update the Watchlist must continue to do so.
+
+category/manual overrides that currently win must continue to win.
+
+Do not merge or redesign override stores.
+
+This task is canonical read-path consolidation only.
+
+---
+
+## THEME ROTATION LOOKUP
+
+After resolving the ticker's canonical primary Theme identity:
+
+normalize that identity to the existing Theme Rotation canonical theme key.
+
+Reuse existing aliases/normalization if present.
+
+Do not create broad fuzzy matching.
+
+Do not assign a different Theme.
+
+Then consume the EXISTING Theme Rotation result for that Theme.
+
+Return:
+
+canonical_primary_theme
+canonical_primary_theme_source
+theme_rotation_key
+theme_signal_available
+primary_theme_rotation_score
+primary_theme_rotation_state
+primary_theme_rotation_direction
+theme_signal_reason
+
+Preserve current multi-theme Theme-bridge diagnostics for transparency where useful.
+
+However:
+
+Trade Alignment's primary Theme signal must use the same primary Theme identity that the Watchlist displays.
+
+Do not automatically substitute the highest-scoring secondary Theme for the primary 25% Theme Alignment signal.
+
+The user's assigned/canonical primary Theme identity is authoritative.
+
+Secondary memberships may remain diagnostic only in this task.
+
+---
+
+## VALIDATION
+
+After the change report:
+
+total Watchlist symbols
+Watchlist Theme populated
+US-listed symbols
+US-listed Theme populated
+
+Confluence Theme signal available
+Confluence Theme signal unavailable
+
+Theme coverage before
+Theme coverage after
+
+Expected:
+
+Confluence Theme identity coverage should closely track existing Watchlist Theme resolution coverage, subject only to cases where the resolved UI Theme has no matching Theme Rotation result.
+
+Show every remaining Theme signal unavailable ticker.
+
+For each:
+
+symbol
+Watchlist UI Theme
+Theme source
+Theme Rotation key attempted
+reason unavailable
+
+Specifically validate:
+
+AOSL
+WYFI
+SLAB
+ANET
+ALGM
+BE
+AMD
+MU
+MRVL
+CRDO
+ABCL
+SOFI
+DELL
+HOOD
+IBRX
+RBRK
+VRT
+NBIS
+AAOI
+
+Prove:
+
+Watchlist and Confluence primary Theme identity match for all applicable validated symbols.
+
+==================================================
+PART 2 — BUILD OPTIONS ALIGNMENT COMPONENT
+==========================================
+
+Create a pure deterministic zero-provider-call service/helper for:
+
+options_alignment_score
+
+0–100
+
+Question answered:
+
+"HOW STRONGLY DOES CURRENT OPTIONS PREMIUM FLOW CONFIRM A SWING-TRADE OPPORTUNITY, AND IS THAT PRESSURE STRENGTHENING OR WEAKENING?"
+
+Do not modify the Options Flow producer.
+
+Do not modify options_flow_engine.py producer logic.
+
+Consume existing canonical read-only data only.
+
+---
+
+## CURRENT SAME-DAY SIGNAL
+
+The audit proved:
+
+options_flow_engine.py::composite_score
+
+already exists and is currently populated independently from Net Premium delta history.
+
+Trace the exact current scale and semantics.
+
+Use the existing canonical composite as the same-day/options-current-state foundation.
+
+Do not duplicate its formula.
+
+Normalize to 0–100 only if required.
+
+Return:
+
+options_current_composite
+options_current_composite_normalized
+
+---
+
+## NET PREMIUM
+
+Consume the existing canonical Neon:
+
+public.options_net_premium_daily
+
+Exact production fields include:
+
+net_premium
+call_premium
+put_premium
+
+and computed:
+
+net_premium_delta_1d
+net_premium_delta_7d
+net_premium_delta_30d
+
+through the existing canonical history logic.
+
+Use the actual production field names/helpers.
+
+Do not duplicate delta calculation.
+
+Do not query providers.
+
+---
+
+## DELTA AVAILABILITY
+
+The current table has only one stock snapshot date as of the prior audit.
+
+Therefore:
+
+1D/7D/30D delta may currently be mathematically unavailable.
+
+When unavailable:
+
+do not use fake 0
+do not use neutral 0.5
+do not estimate prior values
+do not derive an intraday substitute
+
+Return:
+
+net_premium_1d_available
+net_premium_7d_available
+net_premium_30d_available
+
+Missing deltas are omitted from the direction component.
+
+---
+
+## OPTIONS PRESSURE STATE
+
+Derive a transparent deterministic pressure state from available canonical values.
+
+Allowed conceptual states:
+
+BULLISH_ACCELERATING
+BULLISH_STEADY
+BULLISH_FADING
+BEARISH_ACCELERATING
+BEARISH_STEADY
+BEARISH_EASING
+MIXED
+INSUFFICIENT_HISTORY
+
+The logic must respect both:
+
+current Net Premium sign
+
+and:
+
+available delta direction
+
+Examples:
+
+positive Net Premium
++
+positive available deltas
+→ bullish pressure strengthening
+
+positive Net Premium
++
+negative available deltas
+→ bullish pressure fading
+
+negative Net Premium
++
+negative available deltas
+→ bearish pressure strengthening
+
+negative Net Premium
++
+positive available deltas
+→ bearish pressure easing
+
+Do not assume all 1D/7D/30D deltas must be available.
+
+Weight available horizons transparently.
+
+Suggested direction horizon weighting only if available:
+
+1D = 20%
+7D = 35%
+30D = 45%
+
+This is a suggested internal direction mix, not the final Trade Alignment weighting.
+
+If only 1D exists:
+
+use available-signal normalization.
+
+If 1D + 7D exist:
+
+renormalize those available horizon weights.
+
+If no delta exists:
+
+pressure_state may be based on current premium direction but must explicitly say:
+
+INSUFFICIENT_HISTORY
+
+for acceleration/deceleration.
+
+---
+
+## OPTIONS ALIGNMENT SCORE
+
+Options Alignment remains ONE 0–100 signal.
+
+Do not expose four separate Trade Alignment weights.
+
+Use:
+
+current options composite
+
+plus
+
+Net Premium direction/rate-of-change confirmation when available.
+
+Because delta history is currently immature, do not allow unavailable delta history to destroy an otherwise valid current options signal.
+
+Suggested architecture:
+
+options_current_score
+options_direction_score when available
+
+options_alignment_score =
+available-signal weighted blend
+
+Initial internal weighting:
+
+current options composite = 70%
+premium direction/rate of change = 30%
+
+When direction history is unavailable:
+
+options_alignment_score =
+normalized current options composite
+
+Do not replace missing direction with a fake score.
+
+Return:
+
+options_alignment_score
+options_pressure_state
+options_current_score
+options_direction_score
+options_direction_available
+
+net_premium
+call_premium
+put_premium
+
+net_premium_delta_1d
+net_premium_delta_7d
+net_premium_delta_30d
+
+delta availability flags
+
+options_alignment_reason_codes
+
+---
+
+## OPTIONS COVERAGE VALIDATION
+
+Report:
+
+Confluence/Watchlist symbols
+current options composite coverage
+Net Premium coverage
+1D delta coverage
+7D delta coverage
+30D delta coverage
+Options Alignment available coverage
+
+Pressure-state distribution
+
+Options Alignment score:
+
+min
+max
+median
+p75
+p90
+
+Show real outputs where available for:
+
+ANET
+ALGM
+AOSL
+BE
+NVDA
+MRVL
+WYFI
+HOOD
+IBRX
+RBRK
+VRT
+NBIS
+AAOI
+MU
+CRDO
+
+Do not make provider calls.
+
+==================================================
+PART 3 — CATALYST ENGINE COMPONENT AUDIT
+========================================
+
+AUDIT ONLY.
+
+ZERO CATALYST CODE CHANGES.
+
+The current backend contains:
+
+backend/core/catalyst_engine.py::calculate_catalyst_score(data_bundle)
+
+The prior audit reported seven components:
+
+earnings proximity
+fundamental acceleration
+volume expansion
+social acceleration
+news density
+insider signal
+regulatory
+
+The intended Trade Alignment base formula is:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment     25%
+Catalyst Alignment    25%
+
+Social Bonus is separate.
+
+Therefore the Catalyst component must not materially double-count:
+
+Stage/technical
+Options
+Social Bonus
+future Investment/Fundamental Alignment
+
+---
+
+## TRACE EXACT CURRENT CATALYST FORMULA
+
+For each catalyst_engine component report:
+
+component name
+function
+input fields
+score scale
+present logic
+weight in calculate_catalyst_score
+exact intended semantic meaning
+
+Then classify each component as:
+
+TRUE_EVENT_CATALYST
+
+CONFIRMATION_SIGNAL
+
+FUNDAMENTAL_SIGNAL
+
+SOCIAL_SIGNAL
+
+OTHER
+
+Explain each classification.
+
+---
+
+## DOUBLE-COUNTING AUDIT
+
+Specifically assess:
+
+earnings proximity
+fundamental acceleration
+volume expansion
+social acceleration
+news density
+insider signal
+regulatory
+
+Against future Trade Alignment:
+
+Theme 25%
+Stage 25%
+Options 25%
+Catalyst 25%
+
+* Social Bonus
+
+Identify which current catalyst components would double-count:
+
+Stage
+Options
+Social
+Investment/Fundamentals
+
+Do not change code.
+
+---
+
+## TRUE CATALYST SOURCES
+
+Trace all existing structured/cached sources that represent identifiable events/developments capable of moving price over a days-to-months swing horizon.
+
+Inspect:
+
+earnings events
+FDA/regulatory
+IPO-related events
+company-specific news catalysts
+contracts/deals if structured
+product/company events if structured
+investor events/conferences if structured
+splits
+other ticker-specific calendar events
+
+For each source report:
+
+service
+event types
+ticker-specific?
+fields
+date
+importance/urgency
+score if existing
+cache/LKG/Neon
+freshness
+provider-call risk on read
+
+Do not call providers.
+
+---
+
+## CATALYST ALIGNMENT RECOMMENDATION
+
+Recommend ONE deterministic zero-provider-call Catalyst Alignment architecture suitable for the 25% Trade Alignment bucket.
+
+It must answer:
+
+"IS THERE A REAL IDENTIFIABLE CATALYST OR DEVELOPMENT THAT COULD DRIVE THIS STOCK OVER THE USER'S DAYS-TO-MONTHS SWING HORIZON?"
+
+Do not include generic volume expansion merely because price is moving.
+
+Do not include Social acceleration because Social Bonus is separate.
+
+Do not include broad fundamental quality because Investment Alignment will own it.
+
+News may contribute only when existing structured/cached data indicates a meaningful company-specific development, not generic article count alone.
+
+Return:
+
+recommended catalyst inputs
+available current source for each
+missing data
+suggested deterministic score philosophy
+
+Do not implement.
+
+==================================================
+PART 4 — GOLDEN ZONE / HC SECTION AUDIT CORRECTION
+==================================================
+
+AUDIT ONLY.
+
+The prior audit claimed:
+
+Golden Zone
+HC Trade
+HC Investment
+Growth
+
+are Claude-3 LLM-synthesized via:
+
+watchlist_analysis.py::_synthesize_all_sources
+
+This conflicts with established product behavior and prior architecture tracing.
+
+The actual Watchlist UI sections referred to by the user are deterministic frontend grouping/filtering sections based on existing technical/fundamental/options fields.
+
+Do not assume watchlist_analysis.py is the UI path.
+
+Trace from the ACTUAL rendered Watchlist page components for:
+
+Golden Zone
+HC Trade
+HC Investment
+Growth
+
+For each show:
+
+frontend component/file
+exact group/filter function
+input row fields
+deterministic formula/conditions
+
+Then trace the origin of those row fields.
+
+Answer:
+
+Is the actual rendered Watchlist section grouping LLM-generated?
+
+YES or NO.
+
+Separately identify what:
+
+watchlist_analysis.py::_synthesize_all_sources
+
+actually produces and where that LLM output is rendered.
+
+Do not modify anything.
+
+==================================================
+PART 5 — PRODUCT BOUNDARY CONFIRMATION
+======================================
+
+Confirm this intended architecture:
+
+EXISTING WATCHLIST SECTIONS:
+
+Golden Zone
+HC Trade
+HC Investment
+Growth
+
+remain unchanged.
+
+NEW BACKEND ALIGNMENT LAYER:
+
+Trade Alignment
+Investment Alignment
+Entry Structure
+future Actionability
+
+runs in shadow mode first.
+
+No new page in this task.
+
+No Watchlist section replacement in this task.
+
+Future frontend integration will be decided after real score validation.
+
+Trade Alignment Theme archetype is locked as:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment     25%
+Catalyst Alignment    25%
+
+Then:
+
+Social Bonus          +0 to +10
+
+Entry Structure is completely separate.
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+TRADE ALIGNMENT FOUNDATION IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+CANONICAL THEME RESOLVER:
+[path/helper]
+
+WATCHLIST / CONFLUENCE THEME IDENTITY:
+[proof]
+
+THEME COVERAGE BEFORE:
+[count / percent]
+
+THEME COVERAGE AFTER:
+[count / percent]
+
+REMAINING THEME UNAVAILABLE:
+[list + reasons]
+
+OPTIONS ALIGNMENT:
+[formula]
+
+OPTIONS CURRENT COMPOSITE:
+[source/scale]
+
+NET PREMIUM:
+[source/units]
+
+PREMIUM DELTA AVAILABILITY:
+[counts]
+
+OPTIONS PRESSURE STATES:
+[distribution]
+
+OPTIONS ALIGNMENT COVERAGE:
+[count / percent]
+
+CATALYST COMPONENT AUDIT:
+[summary]
+
+CATALYST DOUBLE COUNTING:
+[findings]
+
+RECOMMENDED CATALYST ALIGNMENT:
+[architecture only]
+
+GOLDEN ZONE:
+[actual deterministic path]
+
+HC TRADE:
+[actual deterministic path]
+
+HC INVESTMENT:
+[actual deterministic path]
+
+GROWTH:
+[actual deterministic path]
+
+LLM WATCHLIST ANALYSIS:
+[actual separate role/path]
+
+PRODUCT BOUNDARY:
+[confirmed architecture]
+
+COST / PROVIDER PROOF:
+[results]
+
+End exactly:
+
+TRADE ALIGNMENT FOUNDATION VERDICT
+
+ONE CANONICAL THEME RESOLVER:
+[PASS / FAIL]
+
+WATCHLIST / CONFLUENCE THEME MATCH:
+[PASS / FAIL]
+
+THEME SIGNAL COVERAGE:
+[count / percent]
+
+OPTIONS ALIGNMENT FUNCTIONAL:
+[YES / NO]
+
+OPTIONS DELTA HISTORY READY:
+[YES / NO + coverage]
+
+CATALYST 25% READY:
+[YES / NO]
+
+CATALYST BIGGEST ISSUE:
+[one issue]
+
+GOLDEN ZONE DETERMINISTIC:
+[YES / NO]
+
+HC TRADE DETERMINISTIC:
+[YES / NO]
+
+HC INVESTMENT DETERMINISTIC:
+[YES / NO]
+
+GROWTH DETERMINISTIC:
+[YES / NO]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING TRADE ALIGNMENT GAP:
+[one gap]
+
+NEXT IMPLEMENTATION:
+[ONE feature]
+
+Do not implement final Trade Alignment 25/25/25/25 yet.
+Do not build Actionability.
+Do not expand Theme Universe.
+Do not modify existing Watchlist sections.
+Do not make unrelated changes.

@@ -202,3 +202,115 @@ def get_ticker_rotation_bridge(
         "theme_signal_available":      True,
         "theme_signal_reason":         "MAPPED_ROTATION_AVAILABLE",
     }
+
+
+# ── Part 1 (Trade Alignment Foundation): canonical PRIMARY Theme identity ──
+#
+# get_ticker_rotation_bridge() above answers "what are ALL of this ticker's
+# Theme memberships, from ENRICHED_THEME_RS_UNIVERSE only, and which scores
+# highest?" — useful multi-theme diagnostics, but it only sees one of the
+# four sources the Watchlist UI consults, so it undercounts (51.47% of the
+# live watchlist vs. the Watchlist UI's 99.46%).
+#
+# get_primary_theme_alignment() instead answers the Trade-Alignment-relevant
+# question: "what SINGLE primary Theme does the Watchlist UI already show
+# for this ticker, and does Theme Rotation have a result for it?" It
+# delegates identity resolution entirely to services.theme_resolver — the
+# exact same function the Watchlist skeleton path now calls — so the two
+# surfaces can never diverge. This does not replace get_ticker_rotation_bridge;
+# secondary/multi-theme membership remains diagnostic-only via that function.
+
+
+def _normalize_theme_rotation_key(theme_id: Optional[str]) -> Optional[str]:
+    """
+    Normalize a resolved theme_id to the exact key format used by
+    Theme Rotation's snapshot (services.theme_rotation_service /
+    themes_rs_lkg.json), which always slugifies "X / Y" display names to
+    "x_y" (no literal slash character).
+
+    Some explicit entries in theme_ticker_mapper._FOREIGN_ALIAS_MAP were
+    authored with the slash preserved (e.g. "photonics_/_lasers",
+    "power_/_cooling", "substrates_/_packaging") — a literal formatting
+    inconsistency in that static table, not a fuzzy-matching decision. This
+    collapses "_/_" -> "_" so those ids match the Theme Rotation key exactly.
+    No other normalization/aliasing is applied.
+    """
+    if not theme_id:
+        return theme_id
+    return theme_id.replace("_/_", "_")
+
+
+def get_primary_theme_alignment(
+    symbol: str,
+    industry: Optional[str] = None,
+    resolver_ctx: Optional[dict] = None,
+    rotation_idx: Optional[dict[str, dict]] = None,
+) -> dict:
+    """
+    Resolve the canonical PRIMARY Theme identity for `symbol` using the same
+    resolver the Watchlist UI uses (services.theme_resolver), then look up
+    the EXISTING Theme Rotation result for that theme_id. Never substitutes
+    a different (e.g. highest-scoring secondary) theme — the user's/UI's
+    resolved primary Theme is authoritative for the 25% Theme Alignment
+    signal.
+
+    Returns:
+      canonical_primary_theme         — display name (matches Watchlist UI)
+      canonical_primary_theme_source  — canonical_map | industry_fallback |
+                                         themes_page_membership | manual_override
+                                         | no_mapping
+      theme_rotation_key              — theme_id used to look up rotation
+      theme_signal_available          — bool
+      primary_theme_rotation_score/state/direction
+      theme_signal_reason             — NO_CANONICAL_THEME_MEMBERSHIP |
+                                         THEME_MEMBERSHIP_NO_ROTATION_RESULT |
+                                         MAPPED_ROTATION_AVAILABLE
+    """
+    from services.theme_resolver import (
+        build_theme_resolution_context,
+        resolve_primary_theme_for_ticker,
+    )
+
+    ctx = resolver_ctx if resolver_ctx is not None else build_theme_resolution_context()
+    r_idx = rotation_idx if rotation_idx is not None else get_theme_rotation_index()
+
+    resolution = resolve_primary_theme_for_ticker(symbol, industry=industry, ctx=ctx)
+    theme_name = resolution["theme_name"]
+    theme_id = _normalize_theme_rotation_key(resolution["theme_id"])
+    theme_source = resolution["source"]
+
+    base = {
+        "canonical_primary_theme":        theme_name,
+        "canonical_primary_theme_source": theme_source,
+        "theme_rotation_key":             theme_id,
+    }
+
+    if not theme_name:
+        return {
+            **base,
+            "theme_signal_available":           False,
+            "primary_theme_rotation_score":     None,
+            "primary_theme_rotation_state":      None,
+            "primary_theme_rotation_direction": None,
+            "theme_signal_reason":              "NO_CANONICAL_THEME_MEMBERSHIP",
+        }
+
+    row = r_idx.get(theme_id) if theme_id else None
+    if row is None:
+        return {
+            **base,
+            "theme_signal_available":           False,
+            "primary_theme_rotation_score":     None,
+            "primary_theme_rotation_state":      None,
+            "primary_theme_rotation_direction": None,
+            "theme_signal_reason":              "THEME_MEMBERSHIP_NO_ROTATION_RESULT",
+        }
+
+    return {
+        **base,
+        "theme_signal_available":           True,
+        "primary_theme_rotation_score":     row.get("rotation_score"),
+        "primary_theme_rotation_state":     row.get("rotation_phase"),
+        "primary_theme_rotation_direction": row.get("signals", {}).get("momentum_signal"),
+        "theme_signal_reason":              "MAPPED_ROTATION_AVAILABLE",
+    }

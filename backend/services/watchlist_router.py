@@ -1171,97 +1171,28 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
     # table always renders saved symbols, even for large watchlists that are
     # still being analysed in the background.
     if not sections:
-        # ── Pre-load theme mapper once for the entire skeleton pass ───────────
-        _skl_theme_fn = None
-        _skl_theme_id_fn = None
-        _skl_ind_fn = None
-        try:
-            from services.theme_ticker_mapper import (
-                map_ticker_to_primary_theme as _skl_theme_fn,
-                map_ticker_to_theme_id      as _skl_theme_id_fn,
-                map_industry_to_theme       as _skl_ind_fn,
-            )
-        except ImportError:
-            pass
-
-        # Load manual category overrides once — they always win over all static maps
-        _skl_cat_overrides: dict[str, str] = {}
-        try:
-            from services.category_overrides import get_overrides as _skl_get_overrides
-            _skl_cat_overrides = _skl_get_overrides("default")
-        except Exception:
-            pass
-
-        # Pre-load Themes-page universe symbols for fast O(1) lookup
-        _skl_themes_page_map: dict[str, str] = {}  # symbol → display_name
-        _skl_themes_page_id_map: dict[str, str] = {}  # symbol → theme_id
-        try:
-            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _skl_etrs
-            for _stid, _stmeta in _skl_etrs.items():
-                _sdn = _stmeta.get("display_name", "")
-                for _ssym in _stmeta.get("proxy_symbols", []):
-                    if _ssym not in _skl_themes_page_map:
-                        _skl_themes_page_map[_ssym]    = _sdn
-                        _skl_themes_page_id_map[_ssym] = _stid
-        except Exception:
-            pass
+        # ── Canonical Theme resolver — SAME resolver Confluence's theme_bridge
+        # consumes (services.theme_resolver). Pre-build the shared lookup
+        # context once for the entire skeleton pass; per-ticker resolution
+        # itself is delegated to resolve_primary_theme_for_ticker() so the
+        # Watchlist and Confluence never diverge in resolution logic.
+        from services.theme_resolver import (
+            build_theme_resolution_context as _skl_build_ctx,
+            resolve_primary_theme_for_ticker as _skl_resolve_theme,
+        )
+        _skl_theme_ctx = _skl_build_ctx()
 
         skeleton: list[dict] = []
         for sym in tickers:
             _s = sym.strip().upper()
 
-            # ── Canonical theme lookup (symbol → theme) ───────────────────────
-            _canon_theme: str | None = None
-            _canon_theme_id: str | None = None
-            _theme_src: str | None = None
+            _csv_r = csv_map.get(_s) or {}
+            _ind   = (_csv_r.get("Industry") or _csv_r.get("industry") or "").strip()
 
-            if _skl_theme_fn:
-                _canon_theme    = _skl_theme_fn(_s)
-                _canon_theme_id = _skl_theme_id_fn(_s) if _skl_theme_id_fn else None
-                if _canon_theme:
-                    _theme_src = "canonical_map"
-
-            # ── Industry fallback for unmapped symbols ────────────────────────
-            if not _canon_theme and _skl_ind_fn:
-                _csv_r = csv_map.get(_s) or {}
-                _ind   = (_csv_r.get("Industry") or _csv_r.get("industry") or "").strip()
-                if _ind:
-                    _ind_result = _skl_ind_fn(_ind)
-                    if _ind_result:
-                        _canon_theme, _canon_theme_id = _ind_result
-                        _theme_src = "industry_fallback"
-
-            if not _canon_theme and _skl_theme_fn:
-                _theme_src = "no_mapping"
-
-            # ── Themes-page membership (ENRICHED_THEME_RS_UNIVERSE) ──────────
-            # Wins over canonical_map / industry_fallback — admin-curated assignment
-            if _s in _skl_themes_page_map:
-                _tp_name = _skl_themes_page_map[_s]
-                _tp_id   = _skl_themes_page_id_map.get(_s)
-                # Only override if the themes-page source is different (don't
-                # downgrade a specific canonical mapping to a generic sector)
-                if _tp_name and _tp_name != _canon_theme:
-                    _canon_theme    = _tp_name
-                    _canon_theme_id = _tp_id
-                    _theme_src      = "themes_page_membership"
-
-            # ── Manual category override always wins — highest priority ───────
-            _manual_cat = _skl_cat_overrides.get(_s)
-            if _manual_cat:
-                _canon_theme = _manual_cat
-                _theme_src   = "manual_override"
-                # Derive theme_id from display name via THEME_RS_UNIVERSE lookup
-                if not _canon_theme_id or _theme_src == "manual_override":
-                    try:
-                        from services.theme_rs_universe import THEME_RS_UNIVERSE as _skl_trs
-                        _canon_theme_id = next(
-                            (tid for tid, m in _skl_trs.items()
-                             if m.get("display_name", "").lower() == _manual_cat.lower()),
-                            _canon_theme_id,
-                        )
-                    except Exception:
-                        pass
+            _theme_res = _skl_resolve_theme(_s, industry=_ind, ctx=_skl_theme_ctx)
+            _canon_theme    = _theme_res["theme_name"]
+            _canon_theme_id = _theme_res["theme_id"]
+            _theme_src      = _theme_res["source"]
 
             row = _build_ticker_row(_s, {
                 "symbol":               _s,
