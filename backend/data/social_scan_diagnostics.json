@@ -1,25 +1,5 @@
 [
   {
-    "scan_ts": "2026-06-14T14:03:48.414662+00:00",
-    "accounts_count": 16,
-    "batch_count": 2,
-    "batches_returned": 0,
-    "sections_ok": [],
-    "sections_missing": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "lkg_sections_used": [],
-    "ticker_count": 0,
-    "mention_records": 0,
-    "consensus_picks": 0,
-    "top_tickers": 0,
-    "cache_write_status": "aborted_empty_phase1",
-    "error": "Phase-1 returned no data from any batch \u2014 existing cache kept"
-  },
-  {
     "scan_ts": "2026-06-14T18:42:12.351407+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -598,6 +578,26 @@
     "lkg_sections_used": [],
     "ticker_count": 47,
     "mention_records": 15,
+    "consensus_picks": 10,
+    "top_tickers": 10,
+    "cache_write_status": "written_clean",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-07-09T15:02:34.689709+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 50,
+    "mention_records": 14,
     "consensus_picks": 10,
     "top_tickers": 10,
     "cache_write_status": "written_clean",

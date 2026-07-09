@@ -1,0 +1,271 @@
+The previous task appears to have completed, but you never returned the final A–J validation report to me.
+
+DO NOT EDIT CODE.
+
+DO NOT RERUN THE IMPLEMENTATION.
+
+DO NOT CHANGE ANY THRESHOLDS, WEIGHTS, SERVICES, ROUTES, OR LOGIC.
+
+DO NOT ADD FEATURES.
+
+The previous work already completed the four fixes and the full warmup/validation. I need the final results that were gathered.
+
+Using the current code, current LKG files, current Neon/cache state, and the validation outputs already available, return the complete final report requested in the previous prompt.
+
+At minimum, include:
+
+A. ENTRY POPULATION
+
+stage symbols
+entry symbols
+missing Entry rows
+entry family distribution
+entry state distribution
+HIGH_BASE count
+
+B. HIGH_BASE RESULTS
+
+Return all HIGH_BASE names, up to 25.
+
+For each:
+
+symbol
+entry_score
+entry_grade
+stage
+extension_state
+drawdown from recent high
+range/contraction metric
+support type
+support distance
+breakout signal
+accumulation/distribution
+reason codes
+
+Specifically show:
+
+SLAB
+ANET
+ADUR
+
+whether or not each is HIGH_BASE.
+
+C. FOUR TEST CASES
+
+Return final results for:
+
+ALGM
+ANET
+AOSL
+BE
+
+Show:
+
+entry state
+entry family
+entry score
+entry grade
+actionability
+support
+support distance
+drawdown from high
+extension
+reason codes
+
+D. SOCIAL BONUS RESULTS
+
+Show:
+
+exact cached social coverage count
+social bonus eligibility count
+social bonus applied count
+social bonus distribution:
+0
+2–4
+5–7
+8–10
+
+Return every ticker with social_bonus_score > 0.
+
+For each:
+
+symbol
+base_trade_confluence_score
+social consensus
+social acceleration
+social freshness
+social bonus eligibility
+social bonus score
+final trade confluence score
+entry score
+theme rotation score
+actionability
+
+Prove uncovered symbols receive:
+
+social_bonus_score = 0
+
+E. CONFLUENCE COVERAGE
+
+real symbols loaded
+stage signal coverage
+entry state coverage
+theme rotation coverage
+options coverage
+social coverage
+
+F. TOP 25 TRADE CONFLUENCE
+
+rank
+symbol
+base_trade_confluence_score
+social_bonus_score
+trade_confluence_score
+investment_confluence_score
+entry_score
+entry_state
+entry_family
+actionability
+theme
+theme_rotation_state
+theme_rotation_score
+stage score
+options score
+top positive contributors
+top conflicts/risks
+
+G. TOP 25 INVESTMENT CONFLUENCE
+
+Return the Top 25 with the same relevant fields.
+
+H. TOP 25 ACTIONABILITY
+
+symbol
+actionability
+actionability score
+trade score
+investment score
+entry score
+entry state
+theme rotation
+gating reason
+
+I. HIGH CONFLUENCE / BAD ENTRY TEST
+
+Return the 20 highest base Trade Confluence tickers with:
+
+entry_grade == AVOID
+
+or
+
+actionability == WAIT_FOR_PULLBACK
+
+or
+
+actionability == TOO_EXTENDED
+
+or
+
+actionability == BROKEN
+
+For each:
+
+symbol
+base trade score
+social bonus
+final trade score
+entry score
+entry state
+actionability
+exact gate
+
+I specifically need to see whether strong asset/signal quality remains visible while a poor current entry blocks actionability.
+
+J. DAILY ALPHA V1 VS V2
+
+Compare the current Daily Alpha V1 Top 10 with Confluence V2 Trade Top 10.
+
+Show:
+
+symbol
+V1 rank
+V1 score
+V2 rank
+V2 trade score
+entry score
+actionability
+theme rotation
+overlap
+
+For V1-only names:
+show the deterministic reason V2 demoted/excluded them.
+
+For V2-only names:
+show the deterministic reason V2 promoted them.
+
+Also include the provider/cost proof:
+
+0 incremental Grok calls
+0 incremental LLM calls
+0 additional history requests caused by Entry State
+0 provider calls from GET /api/alpha/confluence
+0 provider calls from Theme Rotation
+0 Options Flow producer changes
+0 Daily Alpha weight changes
+existing Grok cadence unchanged
+
+End exactly:
+
+FOUR-FIX VERDICT
+
+STAGE SIGNAL FIX:
+[PASS / FAIL]
+
+ENTRY FULL POPULATION:
+[PASS / FAIL + count]
+
+HIGH_BASE:
+[PASS / FAIL + count]
+
+SOCIAL BONUS:
+[PASS / FAIL + distribution]
+
+ALGM:
+[classification]
+
+ANET:
+[classification]
+
+AOSL:
+[classification]
+
+BE:
+[classification]
+
+TRADE CONFLUENCE FUNCTIONAL:
+[YES / NO]
+
+INVESTMENT CONFLUENCE FUNCTIONAL:
+[YES / NO]
+
+ACTIONABILITY FUNCTIONAL:
+[YES / NO]
+
+HIGH-CONFLUENCE BAD-ENTRY VISIBILITY:
+[assessment]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING MODEL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+[ONE feature]
+
+ZERO CODE CHANGES.
+
+I need the report only.
