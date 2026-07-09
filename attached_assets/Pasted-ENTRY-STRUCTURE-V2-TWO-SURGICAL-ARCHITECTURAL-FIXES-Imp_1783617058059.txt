@@ -1,0 +1,559 @@
+ENTRY STRUCTURE V2 — TWO SURGICAL ARCHITECTURAL FIXES
+
+Implement exactly two Entry Structure V2 fixes.
+
+Do not redesign the base detector.
+Do not redesign swing-point logic.
+Do not redesign trendline detection.
+Do not change HIGH_BASE thresholds.
+Do not change Confluence weights.
+Do not work on Theme Bridge.
+Do not add Actionability.
+Do not modify Daily Alpha.
+Do not modify Options Flow.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add intraday calls.
+Do not add provider architecture.
+
+The historical replay proved Entry Structure V2 materially fixed the original ALGM FAILED_BREAKOUT problem and that SLAB's current HIGH_BASE_READY classification is supported by a 53-bar base with six resistance touches and no confirmed close above its approximately $219.11 ceiling.
+
+Two remaining architectural defects were proven.
+
+==================================================
+FIX 1 — STRUCTURE ANALYSIS MUST NOT BE DISABLED BY EXTENSION
+============================================================
+
+Current behavior:
+
+DELL:
+extension_pct ≈ +103.9% vs 30-week MA
+extension_state = EXTREME_EXTENSION
+
+The current Entry State V2 gate prevents structural V2 classification when extension_state == EXTREME_EXTENSION.
+
+As a result:
+
+structure_v2 = unavailable/not consumed by the V2 classification branch
+DELL falls into legacy CHASE_EXHAUSTION / AVOID
+Entry score = 8
+
+This is conceptually wrong.
+
+STRUCTURAL GEOMETRY and EXTENSION RISK are separate dimensions.
+
+A ticker may simultaneously be:
+
+HIGH_BASE_READY
++
+EXTREME_EXTENSION
+
+or:
+
+TRENDLINE_SUPPORT_TEST
++
+EXTENDED
+
+or:
+
+BREAKOUT_RETEST
++
+MODERATELY_EXTENDED
+
+Entry Structure must answer:
+
+WHAT STRUCTURE EXISTS?
+
+Extension must answer:
+
+HOW STRETCHED IS THE TICKER RELATIVE TO LONGER-TERM TREND?
+
+Extension may modify score, grade, risk, and later Actionability.
+
+Extension must NOT prevent the structural engine from detecting the chart geometry.
+
+---
+
+## REQUIRED CHANGE
+
+Inspect the current V2 classification gate in:
+
+backend/services/entry_state_service.py
+
+The current gate includes an exclusion equivalent to:
+
+extension_state != EXTREME_EXTENSION
+
+Remove EXTREME_EXTENSION as a condition that prevents V2 structural analysis/classification.
+
+`compute_structure()` should remain available for any symbol with sufficient daily bars.
+
+The V2 classifier should evaluate:
+
+base structure
+breakout structure
+trendline structure
+structural support
+
+regardless of extension state.
+
+---
+
+## EXTENSION REMAINS A RISK INPUT
+
+Do NOT ignore extension.
+
+Use the existing:
+
+extension_state
+extension_pct
+extension_atr where available
+
+as a scoring/risk modifier AFTER structural classification.
+
+Examples of intended behavior:
+
+HIGH_BASE_READY + HEALTHY
+→ very strong Entry score
+
+HIGH_BASE_READY + MODERATELY_EXTENDED
+→ strong Entry score with moderate extension risk
+
+HIGH_BASE_READY + EXTENDED
+→ reduced Entry score / risk reason
+
+HIGH_BASE_READY + EXTREME_EXTENSION
+→ materially reduced Entry score and potentially lower grade, but structure remains HIGH_BASE_READY if the daily geometry actually qualifies
+
+BREAKOUT_CONFIRMED + EXTREME_EXTENSION
+→ likely WAIT_FOR_RETEST / chase-risk interpretation
+
+NO_BASE + VERTICAL + EXTREME_EXTENSION
+→ CHASE_EXHAUSTION / EXTREME_EXTENSION remains appropriate
+
+The engine must distinguish:
+
+EXTREME_EXTENSION WITH NO CONSOLIDATION
+
+from:
+
+EXTREME_EXTENSION RELATIVE TO 30W MA BUT CURRENTLY IN A MATURE DAILY HIGH BASE
+
+The latter is the DELL-type structural question.
+
+Do not hardcode DELL.
+
+---
+
+## OUTPUT
+
+Preserve:
+
+entry_family
+entry_state
+entry_score
+entry_grade
+
+Also ensure diagnostic evidence clearly exposes:
+
+structure_state
+extension_state
+extension_risk_modifier
+extension_reason_codes
+
+If equivalent fields already exist, reuse them.
+
+==================================================
+FIX 2 — V2 STRUCTURE MUST NOT FALL THROUGH TO LEGACY FAILURE HEURISTICS
+=======================================================================
+
+Historical replay found a real bug in CIFR.
+
+CIFR V2 structure:
+
+base_breakout_status = BREAKOUT_IN_PROGRESS
+breakout_confirmed = true / prior structural breakout exists
+failed_breakout_confirmed = false
+failed-breakout reason = pivot_holding
+trendline_hold_state = HELD_RECENTLY
+base support intact
+
+But final Entry State:
+
+FAILED_BREAKOUT
+
+Reason:
+
+`BREAKOUT_IN_PROGRESS` is not handled by the explicit V2 override branches.
+
+The classifier falls through to the legacy classifier.
+
+The legacy classifier applies:
+
+breakout_sig=failed_breakout_fallback_no_structure
+
+and overrides the richer V2 structural result.
+
+This must not happen.
+
+---
+
+## ARCHITECTURAL RULE
+
+Legacy classification may be used when:
+
+structure_v2 failed to calculate
+structure_v2 is unavailable
+daily bars are insufficient
+V2 returns no usable structural bundle
+
+Legacy classification must NOT override a successfully computed V2 structural bundle merely because a V2 enum/status lacks an explicit branch.
+
+If:
+
+structure_v2 is valid
+
+AND
+
+strict V2 failed_breakout_confirmed == false
+
+then the legacy naive failed-breakout heuristic must NEVER return FAILED_BREAKOUT.
+
+---
+
+## HANDLE BREAKOUT_IN_PROGRESS
+
+Add an explicit deterministic V2 classification path for:
+
+base_breakout_status == BREAKOUT_IN_PROGRESS
+
+Use the current structural fields.
+
+Possible justified outputs:
+
+BREAKOUT_CONFIRMED
+BREAKOUT_PULLBACK
+WAIT_FOR_RETEST
+SIGNALS_BUILDING
+
+depending on:
+
+current position vs pivot
+breakout confirmation
+distance from pivot
+extension
+trendline/base support
+recent close behavior
+
+Do not create a new state solely for CIFR unless structurally necessary.
+
+---
+
+## V2 SAFE FALLBACK
+
+After explicit V2 branches, if a valid V2 structure bundle exists but no specialized state matches:
+
+return a V2-safe neutral structural state such as:
+
+NO_CLEAR_ENTRY
+
+or an existing equivalent
+
+with V2 evidence/reason codes.
+
+Do NOT call the legacy classifier in that case.
+
+Legacy classifier remains only for:
+
+no usable V2 structure
+
+This creates a clean architectural boundary:
+
+V2 STRUCTURE AVAILABLE
+→ V2 is authoritative
+
+V2 STRUCTURE UNAVAILABLE
+→ legacy fallback
+
+==================================================
+VALIDATION — DO NOT USE STANDALONE MULTI-SYMBOL SUBPROCESS HISTORY FETCH
+========================================================================
+
+The previous historical replay made 78 real Tradier history calls across 76 unique symbols because it ran in a standalone Python process outside the live server cache context.
+
+Do not repeat that validation pattern.
+
+Use the LIVE SERVER PROCESS and existing normal service paths.
+
+Do not create a standalone validation subprocess that calls `_fetch_bars()` across the universe.
+
+Do not make a fresh 60–76 ticker history batch solely for validation.
+
+Use:
+
+existing Entry State LKG
+existing Stage LKG
+the live normal Stage warmup if genuinely required
+existing server cache/pacer context
+
+For targeted historical replay, limit validation to these four symbols:
+
+DELL
+ALGM
+CIFR
+SLAB
+
+Use the existing paced history path.
+
+Maximum validation-only history requests:
+
+4 symbols
+
+Report exact validation-only provider calls honestly.
+
+==================================================
+TARGETED TEST 1 — DELL
+======================
+
+Run Entry Structure V2 against DELL daily bars.
+
+Return:
+
+stage
+extension_state
+extension_pct
+
+structure_v2 available?
+base_detected
+base_start_date
+base_end_date
+base_duration_bars
+base_high
+base_low
+base_range_pct
+distance_to_base_high_pct
+base_breakout_status
+higher_lows_count
+resistance_touch_count
+range_contraction
+
+entry_family
+entry_state
+entry_score
+entry_grade
+
+extension_risk_modifier
+extension_reason_codes
+
+reason_codes
+
+Critical question:
+
+Does DELL's EXTREME_EXTENSION still prevent detection of a daily high-base structure?
+
+Expected:
+
+NO.
+
+Do not force DELL to classify HIGH_BASE.
+
+The base geometry must qualify independently.
+
+If it qualifies HIGH_BASE_FORMING / COILING / READY, report the state and show how EXTREME_EXTENSION modifies its score.
+
+If it does not qualify, show the exact structural gate that fails.
+
+==================================================
+TARGETED TEST 2 — CIFR
+======================
+
+Return:
+
+base_breakout_status
+breakout_pivot
+breakout_confirmed
+failed_breakout_confirmed
+failed-breakout reason codes
+trendline hold state
+base support state
+
+entry state
+entry family
+entry score
+entry grade
+
+Prove:
+
+A valid V2 bundle with:
+
+failed_breakout_confirmed == false
+
+cannot return legacy FAILED_BREAKOUT.
+
+Expected final state:
+
+not FAILED_BREAKOUT
+
+unless strict V2 pivot-failure logic independently confirms failure.
+
+==================================================
+TARGETED TEST 3 — ALGM HISTORICAL JULY 8
+========================================
+
+Replay ALGM as of:
+
+2026-07-08
+
+using bars truncated before July 9.
+
+No live quote.
+
+Confirm that the two architectural fixes do not regress the previously proven result.
+
+Return:
+
+entry state
+entry score
+strict failed breakout confirmed
+base status
+trendline status
+reason codes
+
+Expected:
+
+not FAILED_BREAKOUT unless strict V2 failure logic passes.
+
+==================================================
+TARGETED TEST 4 — SLAB
+======================
+
+Run current/as-of July 8 structure.
+
+Confirm that removing the EXTREME_EXTENSION gate and changing V2 fallback behavior does not regress the valid SLAB base.
+
+Return:
+
+base window
+base duration
+resistance touches
+base high
+base breakout status
+entry state
+entry score
+
+==================================================
+UNIVERSE REGRESSION CHECK
+=========================
+
+Using existing current Entry State LKG/current normal service state, report before vs after state counts.
+
+Specifically report:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+HIGH_BASE_READY
+FAILED_BREAKOUT
+BREAKOUT_CONFIRMED
+BREAKOUT_RETEST
+BREAKOUT_PULLBACK
+TRENDLINE_SUPPORT_TEST
+REVERSAL_WATCH
+NO_CLEAR_ENTRY
+CHASE_EXHAUSTION
+EXTREME_EXTENSION
+
+Then report:
+
+valid V2 structures that fell to legacy classifier before
+valid V2 structures that fall to legacy classifier after
+
+Expected after:
+
+0
+
+Return all changed symbols caused by Fix 1 or Fix 2:
+
+symbol
+old entry_state
+new entry_state
+extension_state
+base_breakout_status
+failed_breakout_confirmed
+reason for change
+
+Do not tune other thresholds based on these results.
+
+==================================================
+COST / PROVIDER PROOF
+=====================
+
+Prove:
+
+0 new Grok calls
+0 new LLM calls
+0 new provider paths
+0 intraday calls
+0 Entry State scheduler changes
+0 Options Flow changes
+0 Daily Alpha weight changes
+
+Report exact targeted validation history calls.
+
+Expected maximum:
+
+4 symbols
+
+==================================================
+FINAL RESPONSE
+==============
+
+End exactly:
+
+TWO-FIX ENTRY VERDICT
+
+STRUCTURE / EXTENSION SEPARATION:
+[PASS / FAIL]
+
+V2 / LEGACY BOUNDARY:
+[PASS / FAIL]
+
+DELL:
+[final structure + extension + score]
+
+CIFR:
+[final state]
+
+ALGM JULY 8:
+[final state]
+
+SLAB:
+[final state]
+
+VALID V2 → LEGACY FALLTHROUGH COUNT:
+[count]
+
+FAILED_BREAKOUT COUNT BEFORE:
+[count]
+
+FAILED_BREAKOUT COUNT AFTER:
+[count]
+
+EXTREME_EXTENSION STRUCTURES NOW ANALYZED:
+[count]
+
+VALIDATION-ONLY HISTORY CALLS:
+[count]
+
+INCREMENTAL PRODUCTION API CALLS:
+[0 expected]
+
+BIGGEST REMAINING ENTRY WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+[ONE feature]
+
+Do not work on Theme Bridge.
+Do not change Confluence weights.
+Do not add Actionability.
+Do not make unrelated changes.

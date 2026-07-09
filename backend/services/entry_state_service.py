@@ -566,13 +566,21 @@ def analyze_entry_state_from_bars(
     #
     # Zero new provider calls: operates only on the daily bars + technical
     # metrics already computed during this Stage refresh pass.
+    # NOTE: extension_state is deliberately NOT part of this gate. Structural
+    # geometry (base/trendline/breakout) and extension risk are separate
+    # dimensions — a symbol can simultaneously be HIGH_BASE_READY and
+    # EXTREME_EXTENSION. Extension is applied as a score/state risk modifier
+    # AFTER structural classification below, never as a pre-filter that hides
+    # the structure from the classifier.
     _v2_override: Optional[tuple[str, int, list[str]]] = None
     _v2_structure: Optional[dict] = None
+    _structure_state_raw: Optional[str] = None
+    _extension_risk_modifier = 0
+    _extension_reason_codes: list[str] = []
     _is_v2_scope = (
         price is not None and
         len(sorted_bars) >= 20 and
         (stage_int in (2, 3) or stage_key in ("2", "2b", "3m")) and
-        ext_state != "EXTREME_EXTENSION" and
         ext_risk not in ("broken", "overheated")
     )
     if _is_v2_scope:
@@ -619,13 +627,46 @@ def analyze_entry_state_from_bars(
                         _breakout.get("failed_breakout_reason_codes", [])
                     )
                     _v2_override = ("FAILED_BREAKOUT", 0, ev)
+                _structure_state_raw = _v2_override[0]
+
+            # ── 3. BREAKOUT_IN_PROGRESS — confirmed prior breakout, price still
+            #       working through/around the pivot (neither a clean post-base
+            #       confirmation nor a confirmed failure). Must be handled
+            #       explicitly so a valid V2 bundle never falls through to the
+            #       legacy naive failed-breakout heuristic (the CIFR bug).
+            elif _base.get("base_breakout_status") == "BREAKOUT_IN_PROGRESS":
+                hold = _trendline.get("trendline_hold_state")
+                dist_hi = _base.get("distance_to_base_high_pct")
+                days_since = _breakout.get("days_since_breakout")
+                ev = [
+                    "v2_breakout_in_progress",
+                    f"breakout_confirmed={_breakout.get('breakout_confirmed')}",
+                    f"failed_breakout_confirmed={_breakout.get('failed_breakout_confirmed')}",
+                ]
+                if _surviving_structure() and hold in ("HELD_RECENTLY", "TESTING", "UNDERCUT_RECLAIM"):
+                    ev.append(f"trendline_{str(hold).lower()}")
+                    _v2_override = ("BREAKOUT_PULLBACK", 0, ev)
+                elif (
+                    _breakout.get("breakout_confirmed") and
+                    dist_hi is not None and dist_hi >= 0 and
+                    days_since is not None and days_since <= 5
+                ):
+                    _v2_override = ("BREAKOUT_CONFIRMED", 0, ev + ["fresh_confirmed_breakout"])
+                elif ext_pct is not None and ext_pct > 15:
+                    _v2_override = ("WAIT_FOR_RETEST", 0, ev + ["extended_no_retest_yet"])
+                else:
+                    _v2_override = ("SIGNALS_BUILDING", 0, ev + ["breakout_developing_no_clear_confirmation"])
+                _structure_state_raw = _v2_override[0]
 
             # ── 4. POST-BREAKOUT STRUCTURE — confirmed break above real ceiling
             elif _base.get("base_breakout_status") == "BREAKOUT_CONFIRMED":
                 days_since = _breakout.get("days_since_breakout")
                 dist_hi = _base.get("distance_to_base_high_pct")
                 ev = ["v2_breakout_confirmed_post_base", f"base_high={_base.get('base_high')}"]
-                if days_since is not None and days_since <= 5:
+                if ext_state == "EXTREME_EXTENSION" and not (dist_hi is not None and abs(dist_hi) <= 4.0):
+                    _structure_state_raw = "BREAKOUT_CONFIRMED"
+                    _v2_override = ("WAIT_FOR_RETEST", -5, ev + ["extreme_extension_chase_risk"])
+                elif days_since is not None and days_since <= 5:
                     _v2_override = ("BREAKOUT_CONFIRMED", 5, ev + ["fresh_confirmed_breakout"])
                 elif dist_hi is not None and abs(dist_hi) <= 4.0:
                     _v2_override = ("BREAKOUT_RETEST", 3, ev + ["retesting_pivot_zone"])
@@ -633,6 +674,8 @@ def analyze_entry_state_from_bars(
                     _v2_override = ("WAIT_FOR_RETEST", 0, ev + ["extended_no_retest_yet"])
                 else:
                     _v2_override = ("BREAKOUT_CONFIRMED", 0, ev)
+                if _structure_state_raw is None:
+                    _structure_state_raw = _v2_override[0]
 
             # ── 6. PRE-BREAKOUT HIGH BASE — real base, still under the ceiling
             elif (
@@ -664,6 +707,7 @@ def analyze_entry_state_from_bars(
                     )
                 else:
                     _v2_override = ("HIGH_BASE_FORMING", 0, ev + ["base_still_developing"])
+                _structure_state_raw = _v2_override[0]
 
             # ── 5. STRUCTURAL SUPPORT — sharp pullback still holding trendline
             elif (
@@ -679,12 +723,52 @@ def analyze_entry_state_from_bars(
                         f"trendline_hold_state={_trendline['trendline_hold_state']}",
                     ],
                 )
+                _structure_state_raw = _v2_override[0]
+
+            # ── FIX 2 — V2/LEGACY BOUNDARY ─────────────────────────────────────
+            # A valid V2 structural bundle was computed but none of the explicit
+            # branches above matched. Per the architectural rule, legacy naive
+            # heuristics must NEVER override a successfully computed V2 bundle
+            # just because a status/enum combination lacks an explicit branch.
+            # Return a V2-safe neutral state instead of calling the legacy
+            # classifier (which is reserved for "no usable V2 structure").
+            if _v2_override is None:
+                if ext_state == "EXTREME_EXTENSION" and not _base.get("base_detected"):
+                    _v2_override = (
+                        "EXTREME_EXTENSION", 0,
+                        ["v2_safe_fallback_no_base_extreme_extension"],
+                    )
+                else:
+                    _v2_override = (
+                        "NO_CLEAR_ENTRY", 0,
+                        ["v2_safe_fallback_no_structural_match"],
+                    )
+                _structure_state_raw = _v2_override[0]
+
+            # ── FIX 1 — EXTENSION AS A RISK MODIFIER, APPLIED AFTER STRUCTURE ──
+            # Extension answers "how stretched is this vs the 30w MA", not
+            # "what structure exists". It never suppresses the structural
+            # classification above; it only adjusts score/state risk here.
+            _EXTENSION_MODIFIER = {
+                "HEALTHY": 0,
+                "MODERATELY_EXTENDED": -3,
+                "EXTENDED": -8,
+                "EXTREME_EXTENSION": -18,
+            }
+            _extension_risk_modifier = _EXTENSION_MODIFIER.get(ext_state, 0)
+            if _extension_risk_modifier != 0:
+                _extension_reason_codes.append(
+                    f"extension_state={ext_state}_score_adjusted_{_extension_risk_modifier}"
+                )
+            _state_name, _adj, _ev = _v2_override
+            _v2_override = (_state_name, _adj + _extension_risk_modifier, _ev + _extension_reason_codes)
         except Exception as _v2_exc:
             print(
                 f"[ENTRY_STRUCTURE_V2] compute error for a symbol (non-fatal, "
                 f"falls back to legacy classifier): {_v2_exc}"
             )
             _v2_structure = None
+            _v2_override = None
 
     # ── Classify ──────────────────────────────────────────────────────────────
     if _v2_override is not None:
@@ -743,6 +827,9 @@ def analyze_entry_state_from_bars(
         "price_as_of":     price_as_of,
         "bars_last_date":  bars_last_date,
         "bars_provider":   bars_provider,
+        "structure_state": _structure_state_raw,
+        "extension_risk_modifier": _extension_risk_modifier,
+        "extension_reason_codes":  _extension_reason_codes,
         "elapsed_ms":      round((time.time() - t0) * 1000, 1),
         "computed_at":     _now_iso(),
     }
