@@ -90,7 +90,14 @@ _BASE_SCORES: dict[str, int] = {
     "EARLY_ACCUMULATION":54,
     "SIGNALS_BUILDING":  66,
     # CONTINUATION
-    "HIGH_BASE":           80,   # Stage 2 consolidation near highs (capped 90)
+    "HIGH_BASE":           80,   # legacy — no longer assigned by V2, kept for old LKG reads
+    "HIGH_BASE_FORMING":   68,   # Entry Structure V2 — early-stage base, still developing
+    "HIGH_BASE_COILING":   79,   # Entry Structure V2 — contracting range beneath ceiling
+    "HIGH_BASE_READY":     88,   # Entry Structure V2 — mature, tight, pressing the ceiling
+    "BREAKOUT_CONFIRMED":  83,   # Entry Structure V2 — confirmed move above real base ceiling
+    "WAIT_FOR_RETEST":     58,   # Entry Structure V2 — extended post-breakout, no retest yet
+    "TRENDLINE_SUPPORT_TEST": 69,  # Entry Structure V2 — pullback testing valid rising trendline
+    "BREAKOUT_PULLBACK":   65,   # Entry Structure V2 — pullback toward former breakout pivot, pivot holding
     "PULLBACK_IN_UPTREND": 76,
     "BREAKOUT_RETEST":     81,
     "SUPPORT_HOLD":        70,
@@ -108,6 +115,7 @@ _BASE_SCORES: dict[str, int] = {
     "SUPPORT_LOST":       14,
     "NO_CLEAR_ENTRY":     30,
     "INSUFFICIENT_DATA":  20,
+    "REVERSAL_WATCH":     22,   # Entry Structure V2 — pivot lost, structure ambiguous, watch not entry
 }
 
 _STATE_TO_FAMILY: dict[str, str] = {
@@ -116,7 +124,14 @@ _STATE_TO_FAMILY: dict[str, str] = {
     "BREAKOUT_READY":    FAMILY_PRE_MOVE,
     "EARLY_ACCUMULATION":FAMILY_PRE_MOVE,
     "SIGNALS_BUILDING":  FAMILY_PRE_MOVE,
-    "HIGH_BASE":           FAMILY_CONTINUATION,
+    "HIGH_BASE":              FAMILY_CONTINUATION,
+    "HIGH_BASE_FORMING":      FAMILY_CONTINUATION,
+    "HIGH_BASE_COILING":      FAMILY_CONTINUATION,
+    "HIGH_BASE_READY":        FAMILY_CONTINUATION,
+    "BREAKOUT_CONFIRMED":     FAMILY_CONTINUATION,
+    "WAIT_FOR_RETEST":        FAMILY_CONTINUATION,
+    "TRENDLINE_SUPPORT_TEST": FAMILY_CONTINUATION,
+    "BREAKOUT_PULLBACK":      FAMILY_CONTINUATION,
     "PULLBACK_IN_UPTREND": FAMILY_CONTINUATION,
     "BREAKOUT_RETEST":     FAMILY_CONTINUATION,
     "SUPPORT_HOLD":        FAMILY_CONTINUATION,
@@ -132,6 +147,7 @@ _STATE_TO_FAMILY: dict[str, str] = {
     "SUPPORT_LOST":        FAMILY_BROKEN,
     "NO_CLEAR_ENTRY":      FAMILY_BROKEN,
     "INSUFFICIENT_DATA":   FAMILY_BROKEN,
+    "REVERSAL_WATCH":      FAMILY_BROKEN,
 }
 
 
@@ -309,7 +325,11 @@ def _classify_entry_state(
         return "EXTENDED", 0, evidence
 
     if breakout_sig == "failed_breakout":
-        evidence.append("breakout_sig=failed_breakout")
+        # Fallback only — reached when Entry Structure V2 could not compute a
+        # structural bundle (e.g. exception) for a Stage 2/2b/3m symbol, or
+        # for stages outside V2's scope. See analyze_entry_state_from_bars()
+        # for the structure-aware override that normally intercepts this.
+        evidence.append("breakout_sig=failed_breakout_fallback_no_structure")
         return "FAILED_BREAKOUT", 0, evidence
 
     # ── Stage 3 (non-3m topping / flat MA) ───────────────────────────────────
@@ -535,75 +555,140 @@ def analyze_entry_state_from_bars(
         except ZeroDivisionError:
             pass
 
-    # ── HIGH_BASE pre-check ────────────────────────────────────────────────────
-    # Detect Stage 2 consolidation near highs BEFORE the generic classifier.
-    # HIGH_BASE = price coiling/pausing within 8% of 20d high, controlled range,
-    # constructive internals — a continuation setup, not a chase.
+    # ── Entry Structure V2 — real chart-geometry override ─────────────────────
+    # Runs BEFORE the generic classifier for Stage 2 / 2b (and Stage 3m, gated
+    # off by the EXTREME_EXTENSION check below) symbols. Replaces the old
+    # naive "within 8% of rolling 20d-high" HIGH_BASE pre-check (which could
+    # not tell a pre-breakout base from a stock already trading well above a
+    # breakout it already cleared — the SLAB bug) and the bare
+    # SMA20/SMA50/rolling-high FAILED_BREAKOUT signal (which had no concept
+    # of a rising trendline or higher-low structure — the ALGM bug).
     #
-    # Hard gates (all must pass):
-    #   • Stage 2 (inc. Stage 2b) — NOT Stage 1, 3, or 4
-    #   • Not EXTREME_EXTENSION (too far stretched)
-    #   • Not broken or overheated ext_risk
-    #   • No failed/fresh/confirmed breakout (those have their own states)
-    #   • MA stack constructive (bull or mixed)
-    #   • Not distribution A/D signal
-    #   • Price within -8% of 20-day high
-    #   • 20-day range ≤ 20% (tight / controlled consolidation)
-    _hb_override: Optional[tuple[str, int, list[str]]] = None
-    _range_20d: float = float(tech.get("range_20d_pct") or 0.0)
-    if (
+    # Zero new provider calls: operates only on the daily bars + technical
+    # metrics already computed during this Stage refresh pass.
+    _v2_override: Optional[tuple[str, int, list[str]]] = None
+    _v2_structure: Optional[dict] = None
+    _is_v2_scope = (
         price is not None and
         len(sorted_bars) >= 20 and
-        (stage_int == 2 or stage_key in ("2", "2b")) and
+        (stage_int in (2, 3) or stage_key in ("2", "2b", "3m")) and
         ext_state != "EXTREME_EXTENSION" and
-        ext_risk not in ("broken", "overheated") and
-        breakout_s not in ("failed_breakout", "fresh_breakout", "confirmed_breakout") and
-        ma_stack in ("bull", "mixed") and
-        ad_sig != "distribution" and
-        _range_20d <= 20.0
-    ):
-        _hi_20d = max(float(b["close"]) for b in sorted_bars[-20:])
-        _pct_from_hi = round((price / _hi_20d - 1) * 100.0, 2) if _hi_20d > 0 else None
-        if _pct_from_hi is not None and _pct_from_hi >= -8.0:
-            hb_ev: list[str] = ["high_base_stage2", "no_failed_breakout"]
-            hb_adj = 0
-            # Squeeze bonus — coiling price action in tight range
-            if squeeze_s in ("tight", "coiling"):
-                hb_adj += 5
-                hb_ev.append("coiling")
-            # Very tight range (< 8% 20-day range)
-            if _range_20d <= 8.0:
-                hb_adj += 3
-                hb_ev.append("range_contraction")
-            elif _range_20d <= 15.0:
-                hb_adj += 1
-            # Near the recent high (within 2%)
-            if _pct_from_hi >= -2.0:
-                hb_adj += 3
-                hb_ev.append("near_recent_high")
-            elif _pct_from_hi >= -5.0:
-                hb_adj += 1
-            # Accumulation distribution
-            if ad_sig == "accumulation":
-                hb_adj += 3
-                hb_ev.append("accumulation_present")
-            # Strong MA stack
-            if ma_stack == "bull":
-                hb_adj += 2
-                hb_ev.append("bull_ma_stack")
-            # Healthy (not yet extended) preferred
-            if ext_state == "HEALTHY":
-                hb_adj += 2
-            elif ext_state == "MODERATELY_EXTENDED":
-                hb_adj += 1
-                hb_ev.append("extension_risk_moderate")
-            # Cap: base=80, max=90
-            hb_adj = min(hb_adj, 10)
-            _hb_override = ("HIGH_BASE", hb_adj, hb_ev)
+        ext_risk not in ("broken", "overheated")
+    )
+    if _is_v2_scope:
+        try:
+            from services.entry_structure_v2 import compute_structure as _v2_compute
+            _v2_structure = _v2_compute(
+                bars=sorted_bars, tech=tech, price=price, stage_int=stage_int,
+                sma20=sma20, sma50=sma50, sma200=sma200, ma30w=ma30w_price,
+            )
+            _base = _v2_structure["base"]
+            _trendline = _v2_structure["trendline"]
+            _breakout = _v2_structure["breakout"]
+
+            def _surviving_structure() -> bool:
+                if _trendline.get("trendline_hold_state") in (
+                    "ABOVE", "TESTING", "HELD_RECENTLY", "UNDERCUT_RECLAIM"
+                ):
+                    return True
+                if _base.get("higher_lows_count", 0) >= 1 and _base.get(
+                    "base_breakout_status"
+                ) != "BELOW_RANGE":
+                    return True
+                return False
+
+            # ── 2. STRUCTURALLY_BROKEN — confirmed failed breakout ────────────
+            if _breakout.get("failed_breakout_confirmed"):
+                if _surviving_structure():
+                    ev = ["v2_failed_breakout_but_structure_survives"]
+                    hold = _trendline.get("trendline_hold_state")
+                    if _trendline.get("ascending_trendline_detected") and hold in ("TESTING", "UNDERCUT_RECLAIM"):
+                        ev.append(f"trendline_{hold.lower()}")
+                        _v2_override = ("TRENDLINE_SUPPORT_TEST", 0, ev)
+                    elif _trendline.get("ascending_trendline_detected") and hold == "HELD_RECENTLY":
+                        ev.append("trendline_held_recently")
+                        _v2_override = ("BREAKOUT_PULLBACK", 0, ev)
+                    elif _base.get("higher_lows_count", 0) >= 2:
+                        ev.append(f"higher_lows_count={_base['higher_lows_count']}")
+                        _v2_override = ("CONSTRUCTIVE_DIP", 0, ev)
+                    else:
+                        ev.append("weak_surviving_structure")
+                        _v2_override = ("REVERSAL_WATCH", 0, ev)
+                else:
+                    ev = ["v2_failed_breakout_confirmed"] + list(
+                        _breakout.get("failed_breakout_reason_codes", [])
+                    )
+                    _v2_override = ("FAILED_BREAKOUT", 0, ev)
+
+            # ── 4. POST-BREAKOUT STRUCTURE — confirmed break above real ceiling
+            elif _base.get("base_breakout_status") == "BREAKOUT_CONFIRMED":
+                days_since = _breakout.get("days_since_breakout")
+                dist_hi = _base.get("distance_to_base_high_pct")
+                ev = ["v2_breakout_confirmed_post_base", f"base_high={_base.get('base_high')}"]
+                if days_since is not None and days_since <= 5:
+                    _v2_override = ("BREAKOUT_CONFIRMED", 5, ev + ["fresh_confirmed_breakout"])
+                elif dist_hi is not None and abs(dist_hi) <= 4.0:
+                    _v2_override = ("BREAKOUT_RETEST", 3, ev + ["retesting_pivot_zone"])
+                elif ext_pct is not None and ext_pct > 15:
+                    _v2_override = ("WAIT_FOR_RETEST", 0, ev + ["extended_no_retest_yet"])
+                else:
+                    _v2_override = ("BREAKOUT_CONFIRMED", 0, ev)
+
+            # ── 6. PRE-BREAKOUT HIGH BASE — real base, still under the ceiling
+            elif (
+                _base.get("base_detected") and
+                _base.get("base_breakout_status") in ("IN_RANGE", "PRESSING_CEILING") and
+                ad_sig != "distribution" and
+                ma_stack in ("bull", "mixed")
+            ):
+                ev = [
+                    "v2_high_base",
+                    f"base_range_pct={_base.get('base_range_pct')}",
+                    f"upper_range_position={_base.get('upper_range_position')}",
+                ]
+                duration = _base.get("base_duration_bars") or 0
+                contraction = _base.get("range_contraction")
+                pressing = _base.get("base_breakout_status") == "PRESSING_CEILING"
+                tight = (_base.get("base_range_pct") or 99) <= 15.0
+                if pressing and tight and duration >= 20:
+                    _v2_override = (
+                        "HIGH_BASE_READY",
+                        5 if contraction else 0,
+                        ev + ["pressing_ceiling", "tight_mature_base"],
+                    )
+                elif contraction and duration >= 15:
+                    _v2_override = (
+                        "HIGH_BASE_COILING",
+                        3 if squeeze_s in ("tight", "coiling") else 0,
+                        ev + ["range_contracting"],
+                    )
+                else:
+                    _v2_override = ("HIGH_BASE_FORMING", 0, ev + ["base_still_developing"])
+
+            # ── 5. STRUCTURAL SUPPORT — sharp pullback still holding trendline
+            elif (
+                _trendline.get("ascending_trendline_detected") and
+                _trendline.get("trendline_hold_state") in ("TESTING", "UNDERCUT_RECLAIM") and
+                ext_risk == "pullback_buy_zone"
+            ):
+                _v2_override = (
+                    "TRENDLINE_SUPPORT_TEST",
+                    0,
+                    [
+                        "v2_trendline_support_test",
+                        f"trendline_hold_state={_trendline['trendline_hold_state']}",
+                    ],
+                )
+        except Exception as _v2_exc:
+            print(
+                f"[ENTRY_STRUCTURE_V2] compute error for a symbol (non-fatal, "
+                f"falls back to legacy classifier): {_v2_exc}"
+            )
+            _v2_structure = None
 
     # ── Classify ──────────────────────────────────────────────────────────────
-    if _hb_override is not None:
-        entry_state, adj, evidence = _hb_override
+    if _v2_override is not None:
+        entry_state, adj, evidence = _v2_override
     else:
         entry_state, adj, evidence = _classify_entry_state(
             stage_int       = stage_int,
@@ -629,7 +714,7 @@ def analyze_entry_state_from_bars(
     entry_score  = max(0, min(100, base_score + adj))
     entry_grade  = _grade(entry_score)
 
-    # ── Support levels ────────────────────────────────────────────────────────
+    # ── Support levels (legacy, backward-compat) ──────────────────────────────
     support_levels: list[dict] = []
     if price is not None:
         support_levels = _build_support_levels(
@@ -661,6 +746,51 @@ def analyze_entry_state_from_bars(
         "elapsed_ms":      round((time.time() - t0) * 1000, 1),
         "computed_at":     _now_iso(),
     }
+
+    # ── Entry Structure V2 diagnostics (present whenever computed) ───────────
+    if _v2_structure is not None:
+        _b, _t, _bo = _v2_structure["base"], _v2_structure["trendline"], _v2_structure["breakout"]
+        result["structure_v2"] = {
+            "base_detected":               _b.get("base_detected"),
+            "base_start_date":             _b.get("base_start_date"),
+            "base_end_date":               _b.get("base_end_date"),
+            "base_high":                   _b.get("base_high"),
+            "base_low":                    _b.get("base_low"),
+            "base_duration_bars":          _b.get("base_duration_bars"),
+            "base_range_pct":              _b.get("base_range_pct"),
+            "distance_to_base_high_pct":   _b.get("distance_to_base_high_pct"),
+            "base_breakout_status":        _b.get("base_breakout_status"),
+            "upper_range_position":        _b.get("upper_range_position"),
+            "range_contraction":           _b.get("range_contraction"),
+            "higher_lows_count":           _b.get("higher_lows_count"),
+            "resistance_touch_count":      _b.get("resistance_touch_count"),
+            "support_touch_count":         _b.get("support_touch_count"),
+            "ascending_trendline_detected":_t.get("ascending_trendline_detected"),
+            "trendline_slope_per_bar":     _t.get("trendline_slope_per_bar"),
+            "anchor_1_date":               _t.get("anchor_1_date"),
+            "anchor_1_price":              _t.get("anchor_1_price"),
+            "anchor_2_date":               _t.get("anchor_2_date"),
+            "anchor_2_price":              _t.get("anchor_2_price"),
+            "trendline_touch_count":       _t.get("trendline_touch_count"),
+            "projected_trendline_support": _t.get("projected_trendline_support"),
+            "distance_to_trendline_pct":   _t.get("distance_to_trendline_pct"),
+            "trendline_hold_state":        _t.get("trendline_hold_state"),
+            "breakout_pivot":              _bo.get("breakout_pivot"),
+            "breakout_date":               _bo.get("breakout_date"),
+            "breakout_confirmed":          _bo.get("breakout_confirmed"),
+            "breakout_confirmation_pct":   _bo.get("breakout_confirmation_pct"),
+            "days_since_breakout":         _bo.get("days_since_breakout"),
+            "close_vs_breakout_pivot_pct": _bo.get("close_vs_breakout_pivot_pct"),
+            "closes_below_pivot_count":    _bo.get("closes_below_pivot_count"),
+            "failed_breakout_confirmed":   _bo.get("failed_breakout_confirmed"),
+            "failed_breakout_reason_codes":_bo.get("failed_breakout_reason_codes"),
+            "support_candidates":          _v2_structure.get("support_candidates"),
+            "primary_support":             _v2_structure.get("primary_support"),
+        }
+        if _v2_structure.get("primary_support"):
+            result["primary_support_level"]   = _v2_structure["primary_support"].get("level")
+            result["primary_support_distance_pct"] = _v2_structure["primary_support"].get("distance_pct")
+            result["primary_support_reason"]  = _v2_structure["primary_support"].get("primary_support_reason")
 
     if persist:
         _save_lkg(symbol, result)

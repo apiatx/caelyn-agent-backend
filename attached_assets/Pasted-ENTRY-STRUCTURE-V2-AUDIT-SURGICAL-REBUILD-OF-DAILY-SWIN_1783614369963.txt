@@ -1,0 +1,1365 @@
+ENTRY STRUCTURE V2 — AUDIT + SURGICAL REBUILD OF DAILY SWING-STRUCTURE CLASSIFICATION
+
+Work only in the existing backend Replit project.
+
+This is a targeted technical-structure task.
+
+Do not work on the Theme bridge yet.
+Do not change Confluence weights.
+Do not modify Daily Alpha V1.
+Do not modify Options Flow.
+Do not add Actionability yet.
+Do not add Moat or Financial Acceleration.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add new provider calls.
+Do not add a new historical-bar scheduler.
+Do not add intraday history requests.
+
+The user is primarily a SWING TRADER with holding periods measured in DAYS TO MONTHS.
+
+DAILY OHLCV BARS are the canonical timeframe for Entry Structure V2.
+
+The existing Stage refresh already loads daily OHLCV bars. Entry Structure must reuse the exact same in-memory bars during the existing Stage symbol pass.
+
+ZERO ADDITIONAL HISTORICAL-BAR REQUESTS.
+
+==================================================
+WHY THIS TASK EXISTS
+====================
+
+The current Entry State engine has proven structural classification defects.
+
+The user manually reviewed real charts and identified two concrete failures:
+
+1. SLAB was classified HIGH_BASE / A+ after it had already materially broken above its prior base/range.
+
+It was no longer a pre-breakout high base and there was no obvious low-risk high-base entry remaining.
+
+2. ALGM was classified FAILED_BREAKOUT / AVOID while its rising structural trend support remained intact.
+
+The pullback tested an ascending trendline formed by prior meaningful swing lows. The daily structure remained intact at the time of classification.
+
+A third reference structure is DELL, representing the intended BUYABLE HIGH BASE:
+
+* major prior advance
+* consolidation near the highs
+* defined horizontal resistance/ceiling
+* repeated pressure beneath resistance
+* higher lows
+* controlled or contracting range
+* price coiling toward the ceiling
+* breakout above the range has NOT yet been materially confirmed
+
+These are structural test cases.
+
+Do not hardcode SLAB, ALGM, or DELL.
+
+The goal is to correct the deterministic chart geometry.
+
+The problem is NOT insufficient intraday granularity.
+
+The DELL and ALGM structures are clearly visible on DAILY charts.
+
+The current engine lacks structural geometry.
+
+==================================================
+PART 0 — TRACE CURRENT STRUCTURAL LOGIC BEFORE EDITING
+======================================================
+
+Before writing code, trace the exact existing logic for:
+
+HIGH_BASE
+breakout_signal
+fresh_breakout
+near_trigger
+failed_breakout
+PULLBACK_IN_UPTREND
+BREAKOUT_RETEST
+SIGNALS_BUILDING
+BASE_FORMING
+COILED
+support candidate generation
+primary support selection
+recent high calculation
+range/contraction calculation
+squeeze/coiling calculation
+swing high detection if any
+swing low detection if any
+
+For every item show internally:
+
+file
+function
+daily-bar lookback
+formula
+thresholds
+classification precedence
+
+Answer these questions from the code before editing:
+
+1. How can a ticker that has already closed materially above its prior range ceiling still qualify HIGH_BASE?
+2. What exact condition generated `failed_breakout` for ALGM?
+3. Does `failed_breakout` currently require a real identified breakout pivot/base ceiling?
+4. Does it require price to have actually confirmed a breakout above that pivot first?
+5. Does it require persistent loss of that pivot?
+6. Does it require two closes below the pivot?
+7. Does it require distribution/elevated volume?
+8. Does it check rising swing-low trend support?
+9. Does the engine calculate diagonal trendline support at all?
+10. Does it distinguish:
+
+    * below SMA20
+    * below SMA50
+    * failed breakout pivot
+    * broken higher-low structure
+    * broken rising trendline
+11. Does HIGH_BASE currently require a real resistance ceiling still containing price?
+12. Does HIGH_BASE distinguish PRE-BREAKOUT from POST-BREAKOUT?
+
+Do not edit until the exact causes are understood.
+
+==================================================
+PART 1 — TRUE BASE / RANGE / CEILING DETECTION
+==============================================
+
+Build or reuse a deterministic structural helper operating only on the existing daily OHLCV bars.
+
+Do not use an LLM.
+
+The helper must identify a recent consolidation/base and return:
+
+base_detected
+base_start_index
+base_start_date
+base_end_index
+base_end_date
+base_high
+base_low
+base_mid
+base_range_pct
+base_duration_bars
+upper_range_position
+range_contraction
+higher_lows_count
+resistance_touch_count
+support_touch_count
+base_breakout_status
+
+Allowed base_breakout_status values:
+
+BELOW_RANGE
+IN_RANGE
+PRESSING_CEILING
+BREAKOUT_IN_PROGRESS
+BREAKOUT_CONFIRMED
+BREAKOUT_FAILED
+
+---
+
+## BASE CEILING
+
+Do not define base_high as simply:
+
+latest 20-day high
+
+or:
+
+maximum close/high in a rolling window
+
+without confirming structural resistance.
+
+Derive the ceiling from clustered recent swing highs / repeated resistance.
+
+Use local swing highs and cluster nearby highs using a tolerance based on:
+
+ATR
+or
+percentage distance
+
+Prefer ATR normalization where the current daily-bar metrics already support it.
+
+The engine should accept imperfect real-world resistance.
+
+Repeated highs do not need to be exactly equal.
+
+Return:
+
+resistance_cluster_level
+resistance_cluster_tolerance
+resistance_touch_count
+last_resistance_touch_date
+
+---
+
+## BASE FLOOR
+
+Derive base_low / structural floor from:
+
+clustered swing lows
+recent support shelf
+or controlled consolidation lows
+
+Do not simply use the lowest price in the entire lookback.
+
+Return:
+
+support_cluster_level
+support_touch_count
+last_support_touch_date
+
+---
+
+## BASE DURATION
+
+A high base must represent a multi-session structure.
+
+Do not classify a 2–3 bar pause after a vertical move as a mature high base.
+
+Derive duration from the identified consolidation window.
+
+Return:
+
+base_duration_bars
+
+==================================================
+PART 2 — CORRECT HIGH-BASE CLASSIFICATION
+=========================================
+
+Replace the overly broad HIGH_BASE logic with deterministic pre-breakout high-base structure.
+
+Add or use these Entry States:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+HIGH_BASE_READY
+
+All belong to:
+
+entry_family = CONTINUATION
+
+Do not retain generic HIGH_BASE as the only state if the code can cleanly support the three structural phases.
+
+---
+
+## HIGH BASE CORE REQUIREMENTS
+
+A high base should generally require:
+
+established Stage 2 / Stage 2-3 advancing context
+
+AND
+
+a meaningful prior advance already exists
+
+AND
+
+a real recent base/consolidation is detected
+
+AND
+
+the base occurs in the upper portion of the prior advance / recent range
+
+AND
+
+price remains relatively near the recent highs
+
+AND
+
+drawdown from base high is shallow or moderate
+
+AND
+
+a defined resistance ceiling remains structurally relevant
+
+AND
+
+price is:
+
+IN_RANGE
+or
+PRESSING_CEILING
+
+AND
+
+recent range is controlled or contracting
+
+AND
+
+higher-low behavior and/or rising range floor is present where derivable
+
+AND
+
+no confirmed failed breakout
+
+AND
+
+no broken structural support
+
+AND
+
+extension_state != EXTREME_EXTENSION
+
+AND
+
+no clear volume climax/distribution failure
+
+---
+
+## HIGH_BASE_FORMING
+
+Use when:
+
+base exists
+price remains high in the larger advance
+range is still broad/moderate
+ceiling exists
+structure is constructive
+but compression is not mature yet
+
+---
+
+## HIGH_BASE_COILING
+
+Use when:
+
+base is established
+price remains near highs
+range is contracting or controlled
+higher lows are present where derivable
+resistance ceiling remains intact
+price is compressing beneath resistance
+
+---
+
+## HIGH_BASE_READY
+
+Use when:
+
+HIGH_BASE_COILING conditions are met
+
+AND
+
+price is near the base ceiling
+
+AND
+
+distance_to_base_high_pct is small
+
+AND
+
+range is tight/controlled
+
+AND
+
+resistance has been tested multiple times or is otherwise clearly defined
+
+AND
+
+price has NOT materially confirmed a breakout above the base
+
+This is the intended DELL-type setup.
+
+---
+
+## POST-BREAKOUT EXCLUSION
+
+CRITICAL RULE:
+
+If price has materially escaped the base ceiling and the breakout is confirmed:
+
+HIGH_BASE_FORMING = FALSE
+HIGH_BASE_COILING = FALSE
+HIGH_BASE_READY = FALSE
+
+A ticker that already confirmed a breakout must become an appropriate post-breakout state.
+
+Use or add deterministic states such as:
+
+BREAKOUT_CONFIRMED
+WAIT_FOR_RETEST
+BREAKOUT_RETEST
+
+depending on current structure.
+
+Do not leave it classified HIGH_BASE.
+
+A SLAB-type structure that formed a base and then already broke materially above the ceiling must fail the HIGH_BASE classification.
+
+---
+
+## RETURN FIELDS
+
+Return:
+
+base_detected
+base_high
+base_low
+base_duration_bars
+base_range_pct
+distance_to_base_high_pct
+base_breakout_status
+upper_range_position
+range_contraction
+higher_lows_count
+resistance_touch_count
+support_touch_count
+
+==================================================
+PART 3 — SWING-HIGH / SWING-LOW DETECTION
+=========================================
+
+Using the existing daily bars, add or reuse deterministic local swing-point detection.
+
+Do not use an LLM.
+
+---
+
+## SWING LOWS
+
+Identify meaningful local minima using an appropriate left/right daily-bar window.
+
+Avoid treating every one-day wick as a meaningful swing low.
+
+Return recent swing lows:
+
+date
+price
+bar_index
+prominence / local significance if derivable
+
+---
+
+## SWING HIGHS
+
+Identify meaningful local maxima using the same structural philosophy.
+
+Return recent swing highs:
+
+date
+price
+bar_index
+prominence / significance if derivable
+
+Use these swing points for:
+
+base ceilings
+base floors
+higher-low structure
+breakout pivots
+rising trendline support
+
+==================================================
+PART 4 — RISING TRENDLINE / DIAGONAL SUPPORT
+============================================
+
+The current engine must understand rising structural support derived from swing lows.
+
+Using recent valid daily swing lows:
+
+evaluate candidate ascending support lines.
+
+A valid ascending trendline should generally require:
+
+at least 2 meaningful swing-low anchors
+
+positive slope
+
+anchors separated by a minimum number of daily bars
+
+later bars do not repeatedly violate the projected line beyond tolerance
+
+prefer additional near-touches / holds where available
+
+---
+
+## TRENDLINE OUTPUT
+
+Return:
+
+ascending_trendline_detected
+trendline_slope_per_bar
+
+anchor_1_date
+anchor_1_price
+
+anchor_2_date
+anchor_2_price
+
+trendline_touch_count
+projected_trendline_support
+distance_to_trendline_pct
+trendline_hold_state
+
+Allowed trendline_hold_state values:
+
+ABOVE
+TESTING
+HELD_RECENTLY
+UNDERCUT_RECLAIM
+BROKEN
+
+---
+
+## TRENDLINE TOLERANCE
+
+Use ATR or percentage tolerance.
+
+Do not classify a trendline broken from a tiny high-beta undercut or wick.
+
+Use daily closes for decisive structural break logic where appropriate.
+
+An intraday low below the line followed by a close back above may qualify:
+
+UNDERCUT_RECLAIM
+
+rather than:
+
+BROKEN
+
+---
+
+## ALGM-TYPE STRUCTURE
+
+A Stage 2/uptrend stock that:
+
+pulls back sharply
+
+but remains near/testing a valid rising trendline derived from prior swing lows
+
+and preserves higher-low / structural support
+
+must NOT classify FAILED_BREAKOUT solely because:
+
+price falls below SMA20
+
+price falls below SMA50
+
+price drops from a recent 20-day high
+
+or a simplistic rolling-high breakout flag is lost
+
+The structure must be classified according to the surviving chart geometry.
+
+Possible states may include:
+
+TRENDLINE_SUPPORT_TEST
+CONSTRUCTIVE_DIP
+BREAKOUT_PULLBACK
+REVERSAL_WATCH
+
+Do not add every state blindly.
+
+Use only states justified by the deterministic structure.
+
+==================================================
+PART 5 — STRICT BREAKOUT PIVOT + FAILED BREAKOUT LOGIC
+======================================================
+
+The current `failed_breakout` logic is too broad.
+
+Redefine breakout/failure around a real structural pivot.
+
+---
+
+## BREAKOUT PIVOT
+
+A breakout pivot should come from:
+
+base ceiling
+clustered resistance highs
+or another clearly identified repeated resistance level
+
+Return:
+
+breakout_pivot
+breakout_date
+breakout_confirmation_pct
+days_since_breakout
+
+---
+
+## BREAKOUT CONFIRMATION
+
+Price must actually break above the pivot by a confirmation buffer.
+
+Use a deterministic buffer based on:
+
+percentage
+and/or
+ATR
+
+Do not call one close one cent above resistance a confirmed breakout.
+
+Return:
+
+breakout_confirmed
+
+---
+
+## FAILED BREAKOUT REQUIREMENT
+
+FAILED_BREAKOUT first requires:
+
+1. a real breakout pivot existed
+2. price previously confirmed a breakout above that pivot
+
+Then failure requires meaningful pivot loss.
+
+Use a deterministic condition such as:
+
+close below breakout pivot by:
+
+max(
+percentage_buffer,
+ATR_based_buffer
+)
+
+AND one of:
+
+A. two consecutive daily closes meaningfully below the pivot
+
+OR
+
+B. one decisive daily close below the pivot
+
+* elevated/distribution volume
+* no immediate reclaim in the available next-bar sequence
+
+---
+
+## FAILED BREAKOUT MUST NOT TRIGGER SOLELY FROM
+
+below SMA20
+
+below SMA50
+
+drop from 20D high
+
+rolling-high condition lost
+
+daily extension
+
+weekly extension
+
+---
+
+## SURVIVING STRUCTURE OVERRIDE
+
+Before returning FAILED_BREAKOUT, inspect:
+
+ascending trendline state
+higher-low structure
+base support
+prior breakout pivot
+recent swing-low shelf
+
+If a more relevant structural support remains intact, classify the pullback according to that surviving structure.
+
+Return:
+
+close_vs_breakout_pivot_pct
+closes_below_pivot_count
+failed_breakout_reason_codes
+
+==================================================
+PART 6 — STRUCTURAL SUPPORT HIERARCHY
+=====================================
+
+Expand support candidates to include:
+
+base floor
+base midpoint where relevant
+prior breakout pivot / former resistance
+recent swing-low shelf
+ascending trendline projected support
+SMA20
+SMA50
+30-week MA
+SMA200
+
+All derived from the existing daily-bar payload and existing technical metrics.
+
+No provider calls.
+
+---
+
+## SUPPORT OUTPUT
+
+For every support candidate return:
+
+support_type
+level
+distance_pct
+structural_relevance_score
+touch_count
+hold_state
+
+---
+
+## PRIMARY SUPPORT SELECTION
+
+Do not simply select:
+
+nearest level below current price
+
+The selected primary support should represent the most relevant active structure for the current trend.
+
+For Stage 2 / advancing stocks, prefer valid current swing structure such as:
+
+ascending trendline
+base floor
+prior breakout pivot
+recent swing-low shelf
+short-term MA support
+
+before distant long-term moving averages, when structurally justified.
+
+A 200-day SMA 30% below current price may be valid long-term support but is usually not useful as the current Entry Structure support level if a valid rising trendline or recent base exists.
+
+Return:
+
+primary_support_reason
+
+==================================================
+PART 7 — DAILY TIMEFRAME IS CANONICAL
+=====================================
+
+IMPORTANT PRODUCT CLARIFICATION:
+
+The user is primarily a swing trader with holding periods measured in days to months.
+
+DAILY OHLCV BARS are the canonical timeframe for Entry Structure V2.
+
+The following structures must be detectable from daily bars alone:
+
+multi-week base formation
+horizontal resistance / base ceiling
+higher-low compression
+high-base coiling
+rising swing-low trend support
+breakout pivot
+breakout confirmation
+breakout pullback / retest
+structural support loss
+failed breakout
+constructive dip in an established uptrend
+
+The user has confirmed that representative DELL high-base and ALGM ascending-support structures are clearly visible on 1D charts.
+
+Do NOT make intraday bars a dependency of Entry Structure V2.
+
+Do NOT add 1h, 15m, 30m, or other intraday provider calls.
+
+Do NOT delay daily structural classification because intraday data is unavailable.
+
+Entry Structure V2 must work from the existing daily OHLCV bars already loaded by the Stage refresh pass.
+
+---
+
+## CURRENT-DAY PRICE POSITIONING
+
+Daily bars define the structural geometry.
+
+The existing zero-provider-call canonical cached quote may be used, where already available, for current positioning relative to daily structure:
+
+distance to trendline support
+distance to base ceiling
+distance to breakout pivot
+distance to selected primary support
+
+Use only the existing read-only quote-cache path.
+
+Before calling any helper, prove it cannot fetch on cache miss.
+
+If the read helper can call Tradier/FMP on miss:
+
+DO NOT USE IT.
+
+If cached current price exists:
+
+price_basis = "CANONICAL_CACHED_QUOTE"
+
+If no cached quote exists:
+
+use the latest daily-bar close
+
+price_basis = "LAST_DAILY_CLOSE"
+
+Return:
+
+price_basis
+price_as_of
+bars_last_date
+bars_provider
+
+---
+
+## OPTIONAL INTRADAY CACHE AUDIT
+
+Separately audit the repo for EXISTING ALREADY-FETCHED/CACHED stock intraday bars:
+
+1h
+60m
+30m
+15m
+
+Search:
+
+technical services
+alert services
+chart services
+screener caches
+timesales/candle caches
+Tradier history caches
+
+For every existing stock intraday path report:
+
+provider
+interval
+ticker universe
+cache/LKG
+refresh cadence
+whether a pure read-only accessor exists
+whether the accessor can trigger a provider call on cache miss
+
+This is informational only.
+
+Do NOT integrate intraday data into Entry Structure V2.
+
+Do NOT add intraday requests.
+
+The only future use under consideration is optional trigger confirmation for a SMALL PRESELECTED candidate subset after daily Entry Structure already classified the setup.
+
+Canonical architecture:
+
+DAILY BARS
+→ structural setup classification
+
+OPTIONAL EXISTING CACHED INTRADAY DATA
+→ future trigger confirmation only
+
+Daily classification must remain fully functional without intraday data.
+
+==================================================
+PART 8 — CLASSIFICATION PRECEDENCE
+==================================
+
+Review and explicitly define Entry State precedence.
+
+The intended structural precedence is:
+
+1. INSUFFICIENT_DATA
+
+2. STRUCTURALLY_BROKEN
+
+   * confirmed failed breakout
+   * broken major structural support
+   * confirmed downtrend
+
+3. EXTREME_CHASE / CLIMAX
+
+   * extreme vertical move
+   * volume climax
+   * extreme extension with no base
+
+4. POST_BREAKOUT STRUCTURE
+
+   * BREAKOUT_CONFIRMED
+   * WAIT_FOR_RETEST
+   * BREAKOUT_RETEST
+
+5. STRUCTURAL SUPPORT / CONTINUATION
+
+   * TRENDLINE_SUPPORT_TEST
+   * CONSTRUCTIVE_DIP
+   * PULLBACK_IN_UPTREND
+   * SUPPORT_HOLD
+   * REACCELERATION
+
+6. PRE-BREAKOUT HIGH BASE
+
+   * HIGH_BASE_READY
+   * HIGH_BASE_COILING
+   * HIGH_BASE_FORMING
+
+7. EARLY / PRE-MOVE
+
+   * COILED
+   * BASE_FORMING
+   * EARLY_ACCUMULATION
+   * SIGNALS_BUILDING
+   * BREAKOUT_READY
+
+8. NO_CLEAR_ENTRY
+
+Do not allow a generic fresh_breakout signal to override:
+
+confirmed post-breakout extension
+
+or:
+
+already-cleared base ceiling
+
+Do not allow a generic failed_breakout signal to override:
+
+valid ascending structural support
+
+unless true breakout-pivot failure is confirmed.
+
+Document the exact final precedence used.
+
+==================================================
+PART 9 — REUSE THE EXISTING STAGE BAR PASS
+==========================================
+
+Entry Structure V2 must remain integrated in the existing Stage refresh symbol pass.
+
+The existing architecture already has:
+
+daily_bars
+stage_result
+technical_metrics
+
+in memory during `_process_one`.
+
+Reuse those exact objects.
+
+Do not fetch bars again.
+
+Do not add a new Stage or Entry scheduler.
+
+Do not bypass the existing Tradier/FMP pacer.
+
+Do not create a direct provider path from:
+
+entry_state_service.py
+
+The intended flow remains:
+
+EXISTING PACED HISTORY REQUEST
+↓
+daily_bars
+├── Stage Analysis
+├── Technical Metrics
+└── Entry Structure V2
+
+Use the existing Entry State LKG persistence architecture:
+
+per-symbol in-memory update
+persist=False during batch
+single atomic flush after batch
+
+A single Entry calculation failure must not fail the Stage refresh.
+
+==================================================
+PART 10 — GOLD-STANDARD DAILY STRUCTURAL TESTS
+==============================================
+
+After implementation, run the existing normal Stage warmup/refresh path.
+
+Do not create a special provider test path.
+
+Then inspect these structural test cases.
+
+---
+
+## TEST A — SLAB TYPE
+
+A stock that:
+
+formed a base
+
+then materially broke above its range ceiling
+
+and is now trading above the prior base
+
+must NOT classify:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+HIGH_BASE_READY
+
+Expected structural output should be:
+
+BREAKOUT_CONFIRMED
+WAIT_FOR_RETEST
+BREAKOUT_RETEST
+
+or another justified post-breakout state.
+
+depending on distance/extension.
+
+---
+
+## TEST B — DELL TYPE
+
+A stock that:
+
+already had a strong prior advance
+
+is consolidating near highs
+
+has a defined horizontal ceiling
+
+shows higher lows and/or a rising range floor
+
+has controlled or contracting range
+
+is pressing beneath resistance
+
+and has not confirmed a breakout above the ceiling
+
+should qualify:
+
+HIGH_BASE_COILING
+or
+HIGH_BASE_READY
+
+if the actual daily bars satisfy the deterministic gates.
+
+Do not force DELL into the state.
+
+The geometry must prove it.
+
+---
+
+## TEST C — ALGM TYPE
+
+A Stage 2/uptrend stock that:
+
+pulls back sharply
+
+but holds a valid rising trendline / higher-low structure
+
+and has not decisively lost the true breakout pivot/base support
+
+must NOT classify FAILED_BREAKOUT solely because:
+
+SMA20 is lost
+SMA50 is lost
+a rolling-high breakout condition is lost
+price pulled back sharply
+
+It should classify according to surviving structure.
+
+Possible justified output:
+
+TRENDLINE_SUPPORT_TEST
+CONSTRUCTIVE_DIP
+BREAKOUT_PULLBACK
+REVERSAL_WATCH
+
+depending on actual daily-bar geometry.
+
+==================================================
+PART 11 — RECLASSIFY CURRENT UNIVERSE
+=====================================
+
+After the normal warmup completes, return:
+
+Stage symbols
+Entry symbols
+Entry missing count
+
+Entry family distribution
+
+Entry state distribution
+
+Then show full structural diagnostics for:
+
+SLAB
+DELL if present in current universe
+ALGM
+ANET
+AOSL
+BE
+ADUR
+HOOD
+
+For each return:
+
+symbol
+
+stage
+stage_label
+extension_state
+extension_pct
+
+entry_family
+entry_state
+entry_score
+entry_grade
+
+price_basis
+price_as_of
+bars_provider
+bars_last_date
+
+base_detected
+base_start_date
+base_end_date
+base_high
+base_low
+base_duration_bars
+base_range_pct
+distance_to_base_high_pct
+base_breakout_status
+upper_range_position
+range_contraction
+higher_lows_count
+resistance_touch_count
+support_touch_count
+
+ascending_trendline_detected
+trendline_slope_per_bar
+anchor_1_date
+anchor_1_price
+anchor_2_date
+anchor_2_price
+trendline_touch_count
+projected_trendline_support
+distance_to_trendline_pct
+trendline_hold_state
+
+breakout_pivot
+breakout_date
+breakout_confirmation_pct
+days_since_breakout
+close_vs_breakout_pivot_pct
+closes_below_pivot_count
+failed_breakout_reason_codes
+
+all support candidates:
+support_type
+level
+distance_pct
+structural_relevance_score
+touch_count
+hold_state
+
+primary support
+primary support distance
+primary_support_reason
+
+reason_codes
+
+==================================================
+PART 12 — FALSE-POSITIVE / FALSE-NEGATIVE REVIEW
+================================================
+
+Return all:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+HIGH_BASE_READY
+
+names, up to 50.
+
+For each:
+
+symbol
+high-base subtype
+base ceiling
+distance to ceiling
+base duration
+base range
+higher lows count
+resistance touches
+breakout status
+entry score
+
+Flag any high-base ticker where:
+
+base_breakout_status == BREAKOUT_CONFIRMED
+
+Expected count:
+
+ZERO
+
+---
+
+## FAILED BREAKOUT REVIEW
+
+Return all FAILED_BREAKOUT names, up to 50.
+
+For each:
+
+symbol
+breakout pivot
+breakout date
+close vs pivot
+closes below pivot
+volume confirmation
+trendline state
+higher-low state
+failed-breakout reason
+
+Flag any FAILED_BREAKOUT where:
+
+no confirmed prior breakout pivot exists
+
+or
+
+valid rising structural support remains intact
+
+or
+
+higher-low structure remains intact and the only failure evidence is MA/rolling-high loss
+
+Report:
+
+failed_breakout_structural_conflict_count
+
+Do not automatically fix additional edge cases during the report.
+
+==================================================
+PART 13 — COST / PROVIDER VALIDATION
+====================================
+
+Prove:
+
+0 new Grok calls
+
+0 new LLM calls
+
+0 additional historical-bar requests caused by Entry Structure V2
+
+0 new intraday history calls
+
+0 provider calls from Entry State readers
+
+0 provider calls from Confluence caused by this task
+
+0 Options Flow changes
+
+0 Daily Alpha weight changes
+
+existing Stage pacer preserved
+
+existing Stage refresh architecture preserved
+
+Entry Structure V2 remains local computation over already-loaded daily bars.
+
+==================================================
+FINAL RESPONSE FORMAT
+=====================
+
+Return:
+
+ENTRY STRUCTURE V2 IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+CURRENT LOGIC ROOT CAUSES:
+[SLAB and ALGM exact causes]
+
+TRUE BASE DETECTION:
+[implementation]
+
+HIGH-BASE STATES:
+[implementation]
+
+SWING POINTS:
+[implementation]
+
+RISING TRENDLINE SUPPORT:
+[implementation]
+
+BREAKOUT / FAILED BREAKOUT:
+[implementation]
+
+SUPPORT HIERARCHY:
+[implementation]
+
+CLASSIFICATION PRECEDENCE:
+[exact precedence]
+
+DAILY TIMEFRAME:
+[proof daily bars are canonical]
+
+OPTIONAL INTRADAY CACHE AUDIT:
+[existing cache paths only; no integration]
+
+UNIVERSE DISTRIBUTION:
+[counts]
+
+STRUCTURAL TEST CASES:
+[SLAB / DELL / ALGM / ANET / AOSL / BE / ADUR / HOOD]
+
+HIGH-BASE FALSE-POSITIVE REVIEW:
+[results]
+
+FAILED-BREAKOUT STRUCTURAL-CONFLICT REVIEW:
+[results]
+
+PROVIDER / COST PROOF:
+[results]
+
+End exactly:
+
+ENTRY STRUCTURE V2 VERDICT
+
+ROOT CAUSE — SLAB FALSE HIGH_BASE:
+[exact cause]
+
+ROOT CAUSE — ALGM FALSE FAILED_BREAKOUT:
+[exact cause]
+
+TRUE BASE DETECTION:
+[PASS / FAIL]
+
+PRE-BREAKOUT HIGH_BASE:
+[PASS / FAIL]
+
+POST-BREAKOUT EXCLUSION:
+[PASS / FAIL]
+
+RISING TRENDLINE SUPPORT:
+[PASS / FAIL]
+
+FAILED BREAKOUT STRICTNESS:
+[PASS / FAIL]
+
+SLAB:
+[final classification]
+
+DELL:
+[final classification or not in universe]
+
+ALGM:
+[final classification]
+
+ANET:
+[final classification]
+
+AOSL:
+[final classification]
+
+BE:
+[final classification]
+
+HIGH_BASE FALSE-POSITIVE COUNT:
+[count]
+
+FAILED_BREAKOUT STRUCTURAL-CONFLICT COUNT:
+[count]
+
+INTRADAY CACHE REUSE AVAILABLE:
+[YES / NO + paths]
+
+INCREMENTAL API CALLS:
+[0 expected]
+
+BIGGEST REMAINING STRUCTURAL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+[ONE feature]
+
+Do not work on Theme bridge in this task.
+Do not change Confluence weights.
+Do not add Actionability.
+Do not add provider calls.
+Do not make unrelated changes.
