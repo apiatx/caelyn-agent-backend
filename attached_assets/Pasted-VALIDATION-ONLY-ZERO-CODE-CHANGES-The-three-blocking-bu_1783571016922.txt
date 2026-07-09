@@ -1,0 +1,348 @@
+VALIDATION ONLY. ZERO CODE CHANGES.
+
+The three blocking bugs and Entry State producer integration are now fixed.
+
+Do not edit code.
+Do not tune thresholds.
+Do not adjust weights.
+Do not add features.
+Do not call any LLM.
+Do not add provider calls.
+
+I need the real current behavioral output now.
+
+PART 1 — ENTRY STATE LKG POPULATION
+
+Confirm whether the existing Stage 2 warmup/refresh has run AFTER the Entry State integration.
+
+Return:
+
+stage2 LKG symbol count
+entry_state LKG symbol count
+symbols present in Stage LKG but missing Entry State
+Entry State family distribution
+Entry State state distribution
+
+If the normal Stage warmup has not run since integration, invoke the existing normal Stage warmup path exactly as it already operates.
+
+Do not create a new refresh path.
+Do not bypass the existing provider pacer.
+Do not add provider calls beyond what the existing Stage warmup normally makes.
+
+Report the normal existing provider-call count and confirm Entry State added zero extra calls.
+
+PART 2 — FOUR CRITICAL REAL-BAR TEST CASES
+
+Return the full current Entry State diagnostics for:
+
+ALGM
+ANET
+AOSL
+BE
+
+For each show:
+
+symbol
+bars_provider
+bars_last_date
+bars_last_close
+price_basis
+price_as_of
+current_price used
+
+stage
+stage_label
+extension_state
+extension_pct
+
+entry_family
+entry_state
+entry_score
+entry_grade
+
+recent_high
+drawdown_from_recent_high_pct
+return_5d
+return_10d
+return_20d
+
+ATR
+extension_atr
+
+range/contraction metrics
+volume_contraction
+volume_reacceleration
+reversal_confirmation
+
+ALL support candidates:
+support type
+level
+distance_pct
+touch count if available
+hold evidence if available
+
+primary support:
+type
+level
+distance_pct
+primary_support_reason
+
+resistance level
+breakout level
+breakout_distance_pct
+
+reason_codes
+
+Then answer deterministically for each:
+
+VERTICAL / CHASE?
+CONSTRUCTIVE DIP?
+HIGH BASE?
+BROKEN?
+NO CLEAR ENTRY?
+
+Do not use an LLM or external chart interpretation.
+
+PART 3 — HIGH BASE CHECK
+
+Search all populated Entry State results for strong Stage 2 / Stage 2-3 tickers that:
+
+* remain near recent highs
+* have shallow drawdown
+* have controlled or contracting recent range
+* are not EXTREME_EXTENSION
+* have not broken support
+
+Return the Top 20 closest structural matches to a HIGH_BASE setup.
+
+Show:
+
+symbol
+current Entry State
+stage
+drawdown from recent high
+range contraction
+extension state
+support distance
+entry score
+
+Answer:
+
+Does the current engine already classify these structures appropriately?
+
+Or is HIGH_BASE still genuinely missing as a deterministic Entry State?
+
+Do not add HIGH_BASE yet.
+
+PART 4 — SUPPORT SELECTION CHECK
+
+For the Top 20 Stage 2 tickers by entry score, show:
+
+symbol
+all support candidates
+selected primary support
+primary support distance
+primary_support_reason
+
+Count:
+
+primary support = short-term MA/base/breakout/swing structure
+primary support = 30-week MA
+primary support = SMA200
+
+Flag any ticker where SMA200 or another distant long-term support was selected while a valid materially closer support candidate exists.
+
+Do not fix it yet.
+
+PART 5 — CONFLUENCE REAL OUTPUT
+
+Confirm:
+
+real symbols loaded by Confluence V2
+fake RESULTS present? expected NO
+
+Return:
+
+TOP 20 TRADE CONFLUENCE
+
+For each:
+
+rank
+symbol
+base_trade_confluence_score
+social_bonus_score
+final trade_confluence_score
+investment_confluence_score
+entry_score
+entry_state
+entry_family
+actionability
+theme
+theme_rotation_state
+theme_rotation_score
+top positive contributors
+top conflicts/risks
+
+PART 6 — SOCIAL BONUS IMPLEMENTATION PROOF
+
+The requested Social Bonus model was:
+
+* Social is NOT a normal weighted Trade signal.
+* No social data = zero bonus and zero penalty.
+* Weak/quiet social = zero bonus.
+* Positive structured social can boost an already aligned setup.
+* Social cannot rescue a poor setup.
+* Social cannot override AVOID / BROKEN / TOO_EXTENDED.
+* Maximum bonus = 10 points.
+* Zero new Grok calls.
+
+Show the exact current implementation.
+
+Return:
+
+Is Social still present in TRADE_WEIGHTS_V2?
+base Trade score formula
+social bonus eligibility gate
+social bonus tiers/formula
+maximum social bonus
+social override blocking rules
+
+Current diagnostics:
+
+social_coverage_count
+social_bonus_eligible_count
+social_bonus_applied_count
+social_bonus_0_count
+social_bonus_2_4_count
+social_bonus_5_7_count
+social_bonus_8_10_count
+
+Show every current candidate with social_bonus_score > 0:
+
+symbol
+base_trade_score
+social_consensus_score
+social_acceleration_score
+social_freshness_score
+social_bonus_score
+final_trade_score
+entry_score
+theme_rotation_score
+technical_quality
+options_flow_composite
+catalyst score
+actionability
+
+If the Social Bonus model was NOT implemented, explicitly say NOT IMPLEMENTED.
+
+Do not fix it in this validation.
+
+PART 7 — THEME ROTATION CURRENT OUTPUT
+
+Return current state distribution.
+
+Then Top 15 themes by rotation score:
+
+theme
+rotation_state
+rotation_score
+rotation_direction
+rs_score
+rs_signal
+stage
+stage_signal
+1D
+7D
+30D
+RS acceleration
+breadth
+flow_state
+social_state
+
+Show the min/max/median for:
+
+rs_signal
+stage_signal
+
+Confirm neither is constant.
+
+PART 8 — TOO-LATE VS STRONG-PULLBACK TEST
+
+Return the 20 highest Trade Confluence names currently classified:
+
+CHASE_EXHAUSTION
+WAIT_FOR_PULLBACK
+TOO_EXTENDED
+AVOID
+
+For each:
+
+symbol
+trade score
+entry score
+entry state
+stage
+extension state
+drawdown from recent high
+primary support
+support distance
+actionability
+exact gate blocking READY
+
+Flag any candidate whose real-bar structure appears to be:
+
+constructive dip
+breakout retest
+high-base consolidation
+
+but is blocked primarily because of extension relative to the 30-week MA.
+
+Do not fix anything.
+
+END EXACTLY:
+
+REAL OUTPUT VERDICT
+
+ENTRY LKG POPULATED:
+[YES / NO + count]
+
+ALGM:
+[classification]
+
+ANET:
+[classification]
+
+AOSL:
+[classification]
+
+BE:
+[classification]
+
+HIGH_BASE STATE NEEDED:
+[YES / NO + evidence]
+
+SUPPORT SELECTION QUALITY:
+[assessment]
+
+SOCIAL BONUS IMPLEMENTED:
+[YES / NO]
+
+SOCIAL BONUS QUALITY:
+[assessment or NOT APPLICABLE]
+
+THEME ROTATION FUNCTIONAL:
+[YES / NO + distribution]
+
+CONFLUENCE REAL SYMBOLS:
+[count]
+
+TOO-LATE FALSE REJECTION RISK:
+[assessment]
+
+BIGGEST ISSUE FOUND:
+[one issue]
+
+NEXT FIX:
+[ONE fix only]
+
+Zero code changes.
