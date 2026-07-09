@@ -75,6 +75,29 @@ _VERDICTS = [
     (25, "AVOID"),
 ]
 
+# ── THEME_ALIGNMENT Trade Alignment archetype (SHADOW, additive only) ─────────
+# Base weights: Theme / Stage / Options / Catalyst — 25 / 25 / 25 / 25.
+# Available-signal renormalization: when a signal is unavailable, its weight
+# is excluded from BOTH numerator and denominator (never defaulted to 0/50).
+_TA_W_THEME    = 25.0
+_TA_W_STAGE    = 25.0
+_TA_W_OPTIONS  = 25.0
+_TA_W_CATALYST = 25.0
+
+_TA_GRADES = [
+    (85, "VERY_HIGH"),
+    (70, "HIGH"),
+    (55, "MODERATE"),
+    (35, "LOW"),
+]
+
+
+def _ta_grade(score: float) -> str:
+    for threshold, label in _TA_GRADES:
+        if score >= threshold:
+            return label
+    return "VERY_LOW"
+
 # ── Stage label → integer map (for hard cap logic) ─────────────────────────────
 _LABEL_TO_STAGE_INT: dict[str, int] = {
     "S1 Base":       1,
@@ -414,6 +437,238 @@ def _compute_social_bonus(
     return round(bonus, 1), True, reason, risk_flag
 
 
+# ── THEME_ALIGNMENT social bonus (re-gated to base_trade_alignment_score) ─────
+
+def _compute_social_bonus_ta(
+    base_ta_score: Optional[float],
+    entry_grade:   str,
+    entry_family:  str,
+    social_entry:  Optional[dict],
+) -> tuple[float, bool, str, bool]:
+    """
+    Social Bonus for the THEME_ALIGNMENT archetype — identical tiers/backend
+    to `_compute_social_bonus`, but eligibility is re-gated to the NEW
+    base_trade_alignment_score (25/25/25/25 Theme/Stage/Options/Catalyst)
+    instead of the legacy Entry-weighted base score.
+
+    Per spec:
+      - Entry Score must NOT be a prerequisite for Social Bonus eligibility.
+      - Social must not create Trade Alignment eligibility (min-evidence gate
+        is computed BEFORE this function is even called).
+      - A sufficiently strong non-social Trade Alignment is still required
+        (base_ta_score >= 60), so Social only ever CONFIRMS an already
+        aligned setup — it never manufactures one.
+      - The AVOID / CHASE_EXHAUSTION / BROKEN_OR_UNCLEAR blocking gate is
+        preserved as a safety filter (blocking, not a prerequisite).
+    """
+    if social_entry is None:
+        return 0.0, False, "no_social_coverage", False
+    if base_ta_score is None:
+        return 0.0, False, "trade_alignment_unavailable", False
+
+    backend_score = _safe_float(social_entry.get("backend_score"), 0.0)
+    has_top       = bool(social_entry.get("has_top_conviction"))
+    breadth       = _safe_float(social_entry.get("breadth_score"), 1.0)
+
+    if (entry_grade == "AVOID" or
+            entry_family in ("CHASE_EXHAUSTION", "BROKEN_OR_UNCLEAR")):
+        return 0.0, False, "bad_entry_blocked", False
+
+    eligible = base_ta_score >= 60.0
+    if not eligible:
+        return 0.0, False, "trade_alignment_not_aligned", False
+
+    risk_flag = False
+
+    if backend_score < 3.0:
+        return 0.0, True, "weak_social", risk_flag
+
+    if backend_score >= 12.0 and has_top and breadth >= 1.3:
+        bonus = 10.0
+        reason = "VERY_STRONG_FRESH"
+    elif backend_score >= 9.0 and has_top:
+        bonus = min(10.0, 8.0 + (backend_score - 9.0) * 0.667)
+        reason = "VERY_STRONG"
+    elif backend_score >= 6.0 and has_top:
+        bonus = min(7.0, 5.0 + (backend_score - 6.0) * 0.667)
+        reason = "STRONG_WITH_CONVICTION"
+    elif backend_score >= 5.0:
+        bonus = 5.0
+        reason = "STRONG"
+    elif backend_score >= 4.0:
+        bonus = 4.0
+        reason = "MODERATE_HIGH"
+    elif backend_score >= 3.0:
+        bonus = 2.0 + (backend_score - 3.0)
+        reason = "MODERATE"
+    else:
+        bonus = 0.0
+        reason = "WEAK"
+
+    return round(bonus, 1), True, reason, risk_flag
+
+
+def _compute_theme_alignment(
+    sym:              str,
+    theme_align:      dict,
+    s_sig:            float,
+    s_available:      bool,
+    options_result:   dict,
+    catalyst_result:  dict,
+    entry_grade_raw:  str,
+    entry_family:     str,
+    social_entry:     Optional[dict],
+) -> dict:
+    """
+    THEME_ALIGNMENT Trade Alignment archetype (SHADOW / additive fields only).
+
+    25/25/25/25 Theme/Stage/Options/Catalyst weights with available-signal
+    renormalization. Minimum-evidence gate: Theme MUST be present AND at
+    least one of Stage/Options/Catalyst MUST be present (>= 2 of 4 signals,
+    Theme always one of them). Zero provider calls (all inputs are already
+    cache-derived by the caller).
+    """
+    theme_available = bool(theme_align.get("theme_signal_available"))
+    theme_score_0_100: Optional[float] = None
+    if theme_available:
+        raw = theme_align.get("primary_theme_rotation_score")
+        if raw is not None:
+            theme_score_0_100 = _clamp01(float(raw)) * 100.0
+
+    stage_score_0_100 = round(s_sig * 100.0, 1) if s_available else None
+
+    options_available = bool(options_result.get("options_signal_available"))
+    options_score_0_100 = options_result.get("options_alignment_score") if options_available else None
+
+    catalyst_available = bool(catalyst_result.get("catalyst_alignment_available"))
+    catalyst_score_0_100 = catalyst_result.get("catalyst_alignment_score") if catalyst_available else None
+
+    # ── Minimum evidence gate ────────────────────────────────────────────────
+    non_theme_present = sum([
+        s_available and stage_score_0_100 is not None,
+        options_available and options_score_0_100 is not None,
+        catalyst_available and catalyst_score_0_100 is not None,
+    ])
+    signal_count = (1 if (theme_available and theme_score_0_100 is not None) else 0) + non_theme_present
+
+    if not (theme_available and theme_score_0_100 is not None):
+        reason = "THEME_SIGNAL_UNAVAILABLE"
+        return _theme_alignment_unavailable(sym, theme_align, stage_score_0_100, s_available,
+                                             options_result, catalyst_result, reason)
+    if non_theme_present < 1:
+        reason = "INSUFFICIENT_ALIGNMENT_EVIDENCE"
+        return _theme_alignment_unavailable(sym, theme_align, stage_score_0_100, s_available,
+                                             options_result, catalyst_result, reason)
+
+    # ── Available-signal weighted base (25/25/25/25, renormalized) ──────────
+    num = _TA_W_THEME * theme_score_0_100
+    den = _TA_W_THEME
+    if stage_score_0_100 is not None:
+        num += _TA_W_STAGE * stage_score_0_100
+        den += _TA_W_STAGE
+    if options_score_0_100 is not None:
+        num += _TA_W_OPTIONS * options_score_0_100
+        den += _TA_W_OPTIONS
+    if catalyst_score_0_100 is not None:
+        num += _TA_W_CATALYST * catalyst_score_0_100
+        den += _TA_W_CATALYST
+
+    base_ta_score = round(num / den, 1) if den > 0 else None
+
+    # ── Social bonus (re-gated to base_trade_alignment_score) ───────────────
+    social_bonus, soc_eligible, soc_reason, soc_risk = _compute_social_bonus_ta(
+        base_ta_score = base_ta_score,
+        entry_grade   = entry_grade_raw,
+        entry_family  = entry_family,
+        social_entry  = social_entry,
+    )
+
+    trade_alignment_score = round(_clamp(base_ta_score + social_bonus, 0.0, 100.0), 1)
+
+    reason_codes = ["MINIMUM_EVIDENCE_MET"]
+    if not s_available:
+        reason_codes.append("STAGE_UNAVAILABLE")
+    if not options_available or options_score_0_100 is None:
+        reason_codes.append("OPTIONS_UNAVAILABLE")
+    if not catalyst_available:
+        reason_codes.append("CATALYST_UNAVAILABLE")
+
+    return {
+        "trade_alignment_available":     True,
+        "trade_alignment_archetype":     "THEME_ALIGNMENT",
+        "base_trade_alignment_score":    base_ta_score,
+        "social_bonus_score":            social_bonus,
+        "social_bonus_eligible":         soc_eligible,
+        "social_bonus_reason":           soc_reason,
+        "social_risk_flag":              soc_risk,
+        "trade_alignment_score":         trade_alignment_score,
+        "trade_alignment_grade":         _ta_grade(trade_alignment_score),
+        "trade_alignment_signal_count":  signal_count,
+        "trade_alignment_reason_codes":  reason_codes,
+        "theme_alignment_score":         round(theme_score_0_100, 1),
+        "theme_alignment_available":     True,
+        "stage_alignment_score":         stage_score_0_100,
+        "stage_alignment_available":     s_available,
+        "options_alignment_score":       options_score_0_100,
+        "options_alignment_available":   options_available and options_score_0_100 is not None,
+        "options_pressure_state":        options_result.get("options_pressure_state"),
+        "options_direction_available":   bool(options_result.get("options_direction_available")),
+        "catalyst_alignment_score":      catalyst_score_0_100,
+        "catalyst_alignment_available":  catalyst_available,
+        "primary_catalyst":              catalyst_result.get("primary_catalyst"),
+        "catalyst_events":               catalyst_result.get("catalyst_events") or [],
+    }
+
+
+def _theme_alignment_unavailable(
+    sym: str,
+    theme_align: dict,
+    stage_score_0_100: Optional[float],
+    s_available: bool,
+    options_result: dict,
+    catalyst_result: dict,
+    reason: str,
+) -> dict:
+    options_available = bool(options_result.get("options_signal_available"))
+    options_score_0_100 = options_result.get("options_alignment_score") if options_available else None
+    catalyst_available = bool(catalyst_result.get("catalyst_alignment_available"))
+    catalyst_score_0_100 = catalyst_result.get("catalyst_alignment_score") if catalyst_available else None
+    theme_available = bool(theme_align.get("theme_signal_available"))
+    theme_score = theme_align.get("primary_theme_rotation_score")
+    theme_score_0_100 = round(_clamp01(float(theme_score)) * 100.0, 1) if (theme_available and theme_score is not None) else None
+
+    return {
+        "trade_alignment_available":     False,
+        "trade_alignment_archetype":     None,
+        "base_trade_alignment_score":    None,
+        "social_bonus_score":            None,
+        "social_bonus_eligible":         False,
+        "social_bonus_reason":           "trade_alignment_unavailable",
+        "social_risk_flag":              False,
+        "trade_alignment_score":         None,
+        "trade_alignment_grade":         None,
+        "trade_alignment_signal_count":  sum([
+            theme_available and theme_score_0_100 is not None,
+            s_available and stage_score_0_100 is not None,
+            options_available and options_score_0_100 is not None,
+            catalyst_available and catalyst_score_0_100 is not None,
+        ]),
+        "trade_alignment_reason_codes":  [reason],
+        "theme_alignment_score":         theme_score_0_100,
+        "theme_alignment_available":     theme_available and theme_score_0_100 is not None,
+        "stage_alignment_score":         stage_score_0_100,
+        "stage_alignment_available":     s_available,
+        "options_alignment_score":       options_score_0_100,
+        "options_alignment_available":   options_available and options_score_0_100 is not None,
+        "options_pressure_state":        options_result.get("options_pressure_state"),
+        "options_direction_available":   bool(options_result.get("options_direction_available")),
+        "catalyst_alignment_score":      catalyst_score_0_100,
+        "catalyst_alignment_available":  catalyst_available,
+        "primary_catalyst":              catalyst_result.get("primary_catalyst"),
+        "catalyst_events":               catalyst_result.get("catalyst_events") or [],
+    }
+
+
 # ── Confidence factor ─────────────────────────────────────────────────────────
 
 def _confidence(signals_available: list[bool]) -> float:
@@ -434,6 +689,9 @@ def _compute_confluence(
     social_map:   dict[str, dict],
     ticker_theme_idx: Optional[dict[str, list[str]]] = None,
     rotation_idx:     Optional[dict[str, dict]] = None,
+    theme_align_map:  Optional[dict[str, dict]] = None,
+    options_align_map: Optional[dict[str, dict]] = None,
+    catalyst_align_map: Optional[dict[str, dict]] = None,
 ) -> dict:
     t0 = time.time()
 
@@ -489,6 +747,27 @@ def _compute_confluence(
     # ── Investment score = pure base (no social, no timing bonus) ────────────
     invest_score = base_score
 
+    # ── THEME_ALIGNMENT archetype (SHADOW, additive-only) ─────────────────────
+    theme_align = (theme_align_map or {}).get(sym) or {"theme_signal_available": False}
+    options_result = (options_align_map or {}).get(sym) or {"options_signal_available": False}
+    catalyst_result = (catalyst_align_map or {}).get(sym) or {
+        "catalyst_alignment_available": False,
+        "catalyst_alignment_score": None,
+        "primary_catalyst": None,
+        "catalyst_events": [],
+    }
+    theme_alignment_fields = _compute_theme_alignment(
+        sym             = sym,
+        theme_align     = theme_align,
+        s_sig           = s_sig,
+        s_available     = stage2_row is not None,
+        options_result  = options_result,
+        catalyst_result = catalyst_result,
+        entry_grade_raw = entry_grade_raw,
+        entry_family    = entry_family,
+        social_entry    = social_entry,
+    )
+
     # ── Availability flags ────────────────────────────────────────────────────
     avail = [
         entry_result is not None,
@@ -517,10 +796,16 @@ def _compute_confluence(
         "confluence_grade":             _grade(trade_score),
         "confluence_verdict":           _verdict(trade_score),
         "confidence":                   conf,
-        # ── Social bonus metadata ────────────────────────────────────────────
-        "social_bonus_eligible":        soc_eligible,
-        "social_bonus_reason":          soc_reason,
-        "social_risk_flag":             soc_risk,
+        # ── THEME_ALIGNMENT archetype (SHADOW, additive-only fields) ─────────
+        "legacy_trade_confluence_score": trade_score,
+        **theme_alignment_fields,
+        # ── Legacy social bonus metadata (pre-THEME_ALIGNMENT; preserved
+        #    under distinct keys since Part 3/4 of the THEME_ALIGNMENT spec
+        #    redefine "social_bonus_score/eligible/reason" as the NEW
+        #    archetype's own fields at the top level below) ─────────────────
+        "legacy_social_bonus_eligible": soc_eligible,
+        "legacy_social_bonus_reason":   soc_reason,
+        "legacy_social_risk_flag":      soc_risk,
         "social_fields": {
             "covered":            social_entry is not None,
             "backend_score":      round(soc_backend, 3),
@@ -621,6 +906,42 @@ def build_confluence_snapshot(
             "results": [],
         }
 
+    # ── THEME_ALIGNMENT archetype inputs — built ONCE per snapshot ──────────
+    # Theme Alignment: canonical primary-theme resolver (services.theme_resolver
+    # via services.theme_bridge.get_primary_theme_alignment), same resolver the
+    # Watchlist UI uses. NOT the legacy get_ticker_rotation_bridge.
+    theme_align_map: dict[str, dict] = {}
+    try:
+        from services.theme_bridge import get_primary_theme_alignment
+        resolver_ctx = None
+        try:
+            from services.theme_resolver import build_theme_resolution_context
+            resolver_ctx = build_theme_resolution_context()
+        except Exception:
+            resolver_ctx = None
+        for sym in universe:
+            theme_align_map[sym] = get_primary_theme_alignment(
+                sym, resolver_ctx=resolver_ctx, rotation_idx=rotation_idx,
+            )
+    except Exception:
+        theme_align_map = {}
+
+    # Options Alignment — reuse services.options_alignment (zero provider calls).
+    options_align_map: dict[str, dict] = {}
+    try:
+        from services.options_alignment import get_options_alignment_bulk
+        options_align_map = get_options_alignment_bulk(universe)
+    except Exception:
+        options_align_map = {}
+
+    # Catalyst Alignment — clean, zero-provider-call (services.catalyst_alignment).
+    catalyst_align_map: dict[str, dict] = {}
+    try:
+        from services.catalyst_alignment import get_catalyst_alignment_bulk
+        catalyst_align_map = get_catalyst_alignment_bulk(universe)
+    except Exception:
+        catalyst_align_map = {}
+
     results: list[dict] = []
     social_bonus_counts = {"0": 0, "2_4": 0, "5_7": 0, "8_10": 0, "eligible": 0, "applied": 0}
 
@@ -634,12 +955,18 @@ def build_confluence_snapshot(
             social_map   = social_map,
             ticker_theme_idx = ticker_theme_idx,
             rotation_idx     = rotation_idx,
+            theme_align_map    = theme_align_map,
+            options_align_map  = options_align_map,
+            catalyst_align_map = catalyst_align_map,
         )
         results.append(r)
 
-        # Tally social bonus distribution
-        bonus = r.get("social_bonus_score", 0)
-        if r.get("social_bonus_eligible"):
+        # Tally social bonus distribution (LEGACY bonus, unchanged behavior).
+        # legacy bonus = trade_confluence_score - base_trade_confluence_score
+        # (the top-level "social_bonus_score" key now holds the NEW
+        # THEME_ALIGNMENT archetype's bonus — see legacy_social_bonus_* keys).
+        bonus = round(r["trade_confluence_score"] - r["base_trade_confluence_score"], 1)
+        if r.get("legacy_social_bonus_eligible"):
             social_bonus_counts["eligible"] += 1
         if bonus > 0:
             social_bonus_counts["applied"] += 1
@@ -678,6 +1005,73 @@ def build_confluence_snapshot(
     options_covered = sum(1 for r in results if r["signal_breakdown"]["options_flow"]["available"])
     social_covered  = sum(1 for r in results if r["signal_breakdown"]["social_screener"]["available"])
 
+    # ── THEME_ALIGNMENT (Trade Alignment) archetype rank + diagnostics ──────
+    ta_available_results = [r for r in results if r.get("trade_alignment_available")]
+    ta_sorted = sorted(ta_available_results, key=lambda r: r["trade_alignment_score"], reverse=True)
+    for i, r in enumerate(ta_sorted):
+        r["trade_alignment_rank"] = i + 1
+    for r in results:
+        r.setdefault("trade_alignment_rank", None)
+
+    ta_theme_covered    = sum(1 for r in results if r.get("theme_alignment_available"))
+    ta_stage_covered    = sum(1 for r in results if r.get("stage_alignment_available"))
+    ta_options_covered  = sum(1 for r in results if r.get("options_alignment_available"))
+    ta_catalyst_covered = sum(1 for r in results if r.get("catalyst_alignment_available"))
+
+    ta_signal_count_dist: dict[str, int] = {"0": 0, "1": 0, "2": 0, "3": 0, "4": 0}
+    for r in results:
+        cnt = r.get("trade_alignment_signal_count", 0) or 0
+        ta_signal_count_dist[str(min(cnt, 4))] = ta_signal_count_dist.get(str(min(cnt, 4)), 0) + 1
+
+    ta_grade_dist: dict[str, int] = {}
+    ta_social_bonus_applied = 0
+    ta_social_bonus_eligible = 0
+    ta_scores_sorted: list[float] = []
+    for r in results:
+        if r.get("trade_alignment_available"):
+            g = r.get("trade_alignment_grade")
+            ta_grade_dist[g] = ta_grade_dist.get(g, 0) + 1
+            sb = r.get("social_bonus_score") or 0
+            if sb > 0:
+                ta_social_bonus_applied += 1
+            if r.get("social_bonus_eligible"):
+                ta_social_bonus_eligible += 1
+            ta_scores_sorted.append(r["trade_alignment_score"])
+    ta_scores_sorted.sort()
+
+    def _pct(sorted_vals: list[float], p: float) -> Optional[float]:
+        if not sorted_vals:
+            return None
+        idx = min(int(len(sorted_vals) * p), len(sorted_vals) - 1)
+        return sorted_vals[idx]
+
+    trade_alignment_diagnostics = {
+        "archetype":               "THEME_ALIGNMENT",
+        "weights":                 {"theme": _TA_W_THEME, "stage": _TA_W_STAGE,
+                                     "options": _TA_W_OPTIONS, "catalyst": _TA_W_CATALYST},
+        "available_count":         len(ta_available_results),
+        "unavailable_count":       len(results) - len(ta_available_results),
+        "coverage": {
+            "theme":    ta_theme_covered,
+            "stage":    ta_stage_covered,
+            "options":  ta_options_covered,
+            "catalyst": ta_catalyst_covered,
+        },
+        "signal_count_distribution": ta_signal_count_dist,
+        "grade_distribution":        ta_grade_dist,
+        "social_bonus": {
+            "eligible_count": ta_social_bonus_eligible,
+            "applied_count":  ta_social_bonus_applied,
+        },
+        "score_percentiles": {
+            "p10": _pct(ta_scores_sorted, 0.10),
+            "p25": _pct(ta_scores_sorted, 0.25),
+            "p50": _pct(ta_scores_sorted, 0.50),
+            "p75": _pct(ta_scores_sorted, 0.75),
+            "p90": _pct(ta_scores_sorted, 0.90),
+        },
+    }
+
     return {
         "ok":               True,
         "generated_at":     _now_iso(),
@@ -707,6 +1101,7 @@ def build_confluence_snapshot(
             "social":         social_covered,
         },
         "theme_bridge_diagnostics": _theme_bridge_diagnostics(ticker_theme_idx, rotation_idx, universe),
+        "trade_alignment_diagnostics": trade_alignment_diagnostics,
         "elapsed_ms":  round((time.time() - t0) * 1000, 1),
         "results":     results,
     }

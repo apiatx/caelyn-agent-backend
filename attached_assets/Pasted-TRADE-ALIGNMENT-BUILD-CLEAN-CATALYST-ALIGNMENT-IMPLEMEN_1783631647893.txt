@@ -1,0 +1,1179 @@
+TRADE ALIGNMENT — BUILD CLEAN CATALYST ALIGNMENT + IMPLEMENT THEME ALIGNMENT ARCHETYPE IN SHADOW MODE
+
+Work only in the existing backend Replit project.
+
+The canonical Theme resolver is now shared by Watchlist and Confluence.
+
+Theme signal coverage is now approximately 97.6%.
+
+Options Alignment is now implemented as a zero-provider-call component:
+
+current Options Flow composite as the current-state signal
+
+plus
+
+Net Premium direction/rate-of-change when canonical 1D/7D/30D history is mathematically available.
+
+Do NOT wait for Net Premium delta history to accumulate before proceeding.
+
+The Options Alignment implementation already handles unavailable delta history correctly by using the current Options composite alone and exposing direction availability explicitly.
+
+This task has exactly two implementation goals:
+
+1. Build a clean deterministic Catalyst Alignment component for swing-trade opportunity detection.
+2. Implement the THEME_ALIGNMENT Trade Alignment archetype in shadow mode using the locked 25/25/25/25 formula.
+
+Do not build Actionability yet.
+Do not build Investment Alignment yet.
+Do not build ELITE_ASSET_REBOUND yet.
+Do not modify Entry Structure V2.
+Do not modify Stage Analysis.
+Do not modify Options Flow producer logic.
+Do not modify Net Premium history producer logic.
+Do not modify Theme membership.
+Do not expand Theme Universe.
+Do not modify Daily Alpha V1.
+Do not modify Golden Zone.
+Do not modify HC Trade.
+Do not modify HC Investment.
+Do not modify Growth sections.
+Do not change frontend code.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add provider calls.
+Do not add new schedulers.
+
+==================================================
+PRODUCT DEFINITION
+==================
+
+Trade Alignment answers:
+
+"IS A STRONG SWING-TRADE OPPORTUNITY DEVELOPING IN THIS STOCK?"
+
+Holding horizon:
+
+days to months
+
+The first Trade Alignment archetype is:
+
+THEME_ALIGNMENT
+
+Base weights:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment     25%
+Catalyst Alignment    25%
+
+Then:
+
+Social Bonus          +0 to +10
+
+Entry Structure is COMPLETELY SEPARATE.
+
+Entry fields must not contribute to:
+
+base_trade_alignment_score
+
+or:
+
+trade_alignment_score
+
+The future Actionability layer will combine:
+
+Trade Alignment
++
+Entry Structure
+
+Do not implement Actionability in this task.
+
+==================================================
+PART 0 — PRESERVE CURRENT OUTPUTS
+=================================
+
+Trace existing Confluence V2 fields:
+
+base_trade_confluence_score
+social_bonus_score
+trade_confluence_score
+investment_confluence_score
+confluence_grade
+confluence_verdict
+
+Do not remove them.
+
+Do not silently change frontend-consumed field semantics.
+
+The new Trade Alignment fields must be additive/shadow fields.
+
+Return:
+
+legacy_trade_confluence_score
+
+using the current existing Trade Confluence value.
+
+Do not delete the old formula.
+
+==================================================
+PART 1 — BUILD CLEAN CATALYST ALIGNMENT
+=======================================
+
+Create a deterministic zero-provider-call service/helper for:
+
+catalyst_alignment_score
+
+0–100
+
+Question answered:
+
+"IS THERE A REAL IDENTIFIABLE EVENT OR COMPANY-SPECIFIC DEVELOPMENT THAT COULD DRIVE THIS STOCK OVER A DAYS-TO-MONTHS SWING HORIZON?"
+
+This is NOT a generic confirmation score.
+
+---
+
+## DO NOT REUSE calculate_catalyst_score() AS-IS
+
+The existing:
+
+backend/core/catalyst_engine.py::calculate_catalyst_score(data_bundle)
+
+includes:
+
+earnings_proximity
+fundamental_acceleration
+volume_expansion
+social_acceleration
+news_density
+insider_signal
+regulatory
+
+Do not consume its final composite directly for Trade Alignment.
+
+The prior audit found double-counting risk.
+
+Exclude from Trade Catalyst Alignment:
+
+volume_expansion
+
+because price/technical participation is not an identifiable catalyst
+
+social_acceleration
+
+because Social Bonus is separate
+
+fundamental_acceleration
+
+because Investment Alignment / future ELITE_ASSET_REBOUND should own fundamental quality
+
+Do not count generic article density as a strong catalyst merely because many articles exist.
+
+---
+
+## TRUE CATALYST TYPES
+
+Trace and reuse EXISTING structured/cached data only.
+
+Candidate catalyst types include where current backend data actually supports them:
+
+EARNINGS
+
+FDA_REGULATORY
+
+MAJOR_CONTRACT_DEAL
+
+PRODUCT_COMPANY_EVENT
+
+IPO_LINKED_EVENT
+
+INVESTOR_EVENT_CONFERENCE
+
+SPLIT
+
+COMPANY_SPECIFIC_NEWS_DEVELOPMENT
+
+OTHER_STRUCTURED_TICKER_EVENT
+
+Do not fabricate unsupported event types.
+
+Do not call providers.
+
+---
+
+## CATALYST EVENT MODEL
+
+For every discovered catalyst return a normalized internal event shape:
+
+ticker
+
+catalyst_type
+
+catalyst_id
+
+title_or_identifier
+
+event_date
+
+days_to_event
+
+direction
+
+importance
+
+freshness
+
+source
+
+source_timestamp
+
+Direction:
+
+POSITIVE
+NEGATIVE
+MIXED
+UNKNOWN
+
+Importance:
+
+0–100
+
+Freshness:
+
+0–100
+
+If an event has already occurred but a company-specific development remains recent/relevant, represent:
+
+days_since_event
+
+where appropriate.
+
+Do not use article count alone as event identity.
+
+---
+
+## CATALYST SOURCES
+
+Audit and reuse existing safe read paths from:
+
+Calendar catalyst services
+
+Home Top Catalysts cache/LKG
+
+Daily Alpha catalyst collector/cache inputs
+
+earnings calendar/cache
+
+IPO event cache
+
+FDA/regulatory cache if present
+
+structured company event data
+
+cached company-specific news data
+
+existing regulatory/insider inputs only when they represent a material identifiable development
+
+Before using any helper:
+
+prove the read path cannot call a provider on cache miss.
+
+If it can fetch externally:
+
+do not use it.
+
+---
+
+## CATALYST SCORING PHILOSOPHY
+
+Catalyst Alignment should consider:
+
+event importance
+
+event direction
+
+event proximity / recency
+
+ticker specificity
+
+freshness
+
+A high score should require a meaningful identifiable catalyst.
+
+Examples conceptually:
+
+major positive ticker-specific event soon
+→ high Catalyst Alignment
+
+important earnings event inside relevant swing horizon
+→ meaningful positive event-presence score
+
+recent major positive company development still being digested
+→ meaningful score
+
+generic macro event with no ticker-specific relationship
+→ unavailable or low relevance
+
+generic news density
+→ not enough
+
+no identifiable catalyst
+→ signal unavailable
+
+Do not return fake neutral 50 when no catalyst exists.
+
+Return:
+
+catalyst_signal_available
+
+catalyst_alignment_score
+
+primary_catalyst
+
+catalyst_events[]
+
+catalyst_alignment_reason_codes
+
+---
+
+## MULTIPLE CATALYSTS
+
+Do not blindly average catalysts.
+
+Select:
+
+primary_catalyst
+
+by strongest deterministic combination of:
+
+importance
+relevance
+proximity/recency
+freshness
+
+Preserve all valid events in:
+
+catalyst_events[]
+
+A weak secondary event should not dilute a major catalyst.
+
+==================================================
+PART 2 — CATALYST COVERAGE VALIDATION
+=====================================
+
+Across the current Confluence/Watchlist universe report:
+
+total symbols
+
+catalyst_signal_available count
+catalyst_signal_unavailable count
+coverage %
+
+Catalyst type distribution
+
+Catalyst Alignment score:
+
+min
+max
+median
+p75
+p90
+p95
+
+Return Top 50 Catalyst Alignment scores.
+
+For each:
+
+symbol
+catalyst score
+primary catalyst type
+title/identifier
+event date
+days to/from event
+direction
+importance
+freshness
+source
+reason codes
+
+Specifically report where available:
+
+ANET
+ALGM
+AOSL
+BE
+AMD
+MU
+MRVL
+CRDO
+ABCL
+WYFI
+SOFI
+SLAB
+DELL
+HOOD
+IBRX
+RBRK
+VRT
+NBIS
+AAOI
+
+If unavailable:
+
+show exact reason.
+
+==================================================
+PART 3 — IMPLEMENT THEME_ALIGNMENT ARCHETYPE
+============================================
+
+Create:
+
+trade_alignment_archetype
+
+For this task, allowed value when valid:
+
+THEME_ALIGNMENT
+
+Future values such as ELITE_ASSET_REBOUND are out of scope.
+
+---
+
+## BASE SIGNALS
+
+Use exactly:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment     25%
+Catalyst Alignment    25%
+
+No Entry.
+
+No Fundamentals.
+
+No Social inside the base weighted score.
+
+---
+
+## THEME SIGNAL
+
+Use the canonical shared Theme resolver now consumed by the Watchlist and Confluence.
+
+Use:
+
+primary Theme Rotation score
+
+for the ticker's canonical primary Theme.
+
+Use the actual 0–100 normalized score.
+
+If no Theme Rotation result:
+
+Theme unavailable.
+
+Do not use fake neutral 50.
+
+---
+
+## STAGE SIGNAL
+
+Use the canonical existing Stage quality score.
+
+Trace the exact current field and scale.
+
+Do not use ambiguous social RS fields.
+
+Do not use a field named rs_score without proving provenance.
+
+Normalize to 0–100 only if necessary.
+
+---
+
+## OPTIONS SIGNAL
+
+Use:
+
+options_alignment_score
+
+from the new existing:
+
+backend/services/options_alignment.py
+
+Do not duplicate Options Alignment logic.
+
+When Premium delta history is unavailable:
+
+consume the current-composite-only Options Alignment result exactly as returned.
+
+As Net Premium history accumulates:
+
+the same Options Alignment field should naturally incorporate direction/rate-of-change.
+
+No Trade Alignment code change should be required later merely because deltas become available.
+
+---
+
+## CATALYST SIGNAL
+
+Use:
+
+catalyst_alignment_score
+
+from Part 1.
+
+Unavailable Catalyst is missing.
+
+Do not use fake neutral 50.
+
+---
+
+## MINIMUM ALIGNMENT EVIDENCE
+
+A score called Alignment must require more than one signal.
+
+THEME_ALIGNMENT requires:
+
+Theme Alignment available
+
+AND
+
+at least ONE of:
+
+Stage Quality available
+
+Options Alignment available
+
+Catalyst Alignment available
+
+Therefore:
+
+minimum 2 of 4 base signals present
+
+AND Theme must be one of the present signals.
+
+Social Bonus does NOT count toward minimum evidence.
+
+If the minimum evidence requirement fails:
+
+trade_alignment_available = false
+
+trade_alignment_archetype = null
+
+base_trade_alignment_score = null
+
+trade_alignment_score = null
+
+Return explicit reason:
+
+INSUFFICIENT_ALIGNMENT_EVIDENCE
+
+or:
+
+THEME_SIGNAL_UNAVAILABLE
+
+---
+
+## AVAILABLE-SIGNAL NORMALIZATION
+
+Base weights are:
+
+Theme 25
+Stage 25
+Options 25
+Catalyst 25
+
+When a non-required signal is unavailable:
+
+exclude its weight from numerator and denominator.
+
+Examples:
+
+Theme + Stage present:
+
+base =
+(Theme×25 + Stage×25) / 50
+
+Theme + Stage + Options:
+
+base =
+(Theme×25 + Stage×25 + Options×25) / 75
+
+All four:
+
+normal 25/25/25/25 score
+
+Do not fill missing signals with:
+
+0
+50
+0.5
+
+---
+
+## SOCIAL BONUS
+
+Preserve the existing Social Bonus as a conditional additive bonus.
+
+Maximum:
+
+10
+
+No social coverage:
+
+0
+
+Quiet social:
+
+0
+
+Social must not create Trade Alignment eligibility.
+
+Social must not count toward minimum base evidence.
+
+Update Social Bonus eligibility to use the new:
+
+base_trade_alignment_score
+
+rather than the legacy Entry-weighted Trade Confluence score.
+
+The intent is:
+
+Social confirms an already aligned trade opportunity.
+
+Social does not require a perfect current Entry.
+
+Entry Score must NOT be a prerequisite for Social Bonus.
+
+Require sufficient non-social Trade Alignment before Social can add bonus.
+
+Preserve current bonus tiers if possible.
+
+Document exact final eligibility.
+
+Return:
+
+social_bonus_score
+
+social_bonus_eligible
+
+social_bonus_reason
+
+---
+
+## TRADE ALIGNMENT SCORE
+
+Return:
+
+base_trade_alignment_score
+
+social_bonus_score
+
+trade_alignment_score
+
+where:
+
+trade_alignment_score =
+clamp(
+base_trade_alignment_score + social_bonus_score,
+0,
+100
+)
+
+Return:
+
+trade_alignment_grade
+
+Do NOT return BUY/WATCH/AVOID based on Trade Alignment.
+
+Trade Alignment measures opportunity alignment.
+
+Actionability will later combine Trade Alignment with Entry Structure.
+
+==================================================
+PART 4 — OUTPUT FIELDS
+======================
+
+For every Confluence row add:
+
+legacy_trade_confluence_score
+
+trade_alignment_available
+
+trade_alignment_archetype
+
+base_trade_alignment_score
+
+social_bonus_score
+
+trade_alignment_score
+
+trade_alignment_grade
+
+theme_alignment_score
+theme_alignment_available
+
+stage_alignment_score
+stage_alignment_available
+
+options_alignment_score
+options_alignment_available
+options_pressure_state
+options_direction_available
+
+catalyst_alignment_score
+catalyst_alignment_available
+
+primary_catalyst
+catalyst_events
+
+trade_alignment_signal_count
+
+trade_alignment_reason_codes
+
+Preserve existing:
+
+Entry Structure fields
+
+Theme Rotation fields
+
+Stage fields
+
+Options raw/evidence fields
+
+Investment Confluence fields
+
+legacy Confluence fields
+
+Do not remove current fields.
+
+==================================================
+PART 5 — DIAGNOSTICS
+====================
+
+Return:
+
+Confluence symbols
+
+Trade Alignment available count
+Trade Alignment unavailable count
+
+Signal availability:
+
+Theme
+Stage
+Options
+Catalyst
+
+Signal-count distribution:
+
+0 signals
+1 signal
+2 signals
+3 signals
+4 signals
+
+Trade Alignment score:
+
+min
+max
+median
+p75
+p90
+p95
+
+Trade Alignment grade distribution
+
+Social Bonus:
+
+coverage
+eligible
+applied
+
+Distribution:
+
+0
+2–4
+5–7
+8–10
+
+==================================================
+PART 6 — TOP TRADE ALIGNMENT RESULTS
+====================================
+
+Return Top 50 Trade Alignment.
+
+Fields:
+
+rank
+symbol
+
+trade_alignment_score
+base_trade_alignment_score
+social_bonus_score
+trade_alignment_grade
+
+Theme score
+Theme
+Theme Rotation state
+
+Stage score
+Stage
+
+Options score
+Options pressure state
+Net Premium
+1D delta
+7D delta
+30D delta
+
+Catalyst score
+primary catalyst
+
+Entry score
+Entry state
+Entry grade
+
+top positive alignment contributors
+missing alignment signals
+alignment reason codes
+
+Entry is DISPLAY ONLY.
+
+Entry must not affect rank.
+
+==================================================
+PART 7 — HIGH ALIGNMENT / BAD ENTRY TEST
+========================================
+
+Return Top 30:
+
+trade_alignment_score descending
+
+where:
+
+entry_score < 40
+
+or:
+
+entry_grade == AVOID
+
+For each:
+
+symbol
+
+trade_alignment_score
+
+Theme score
+Stage score
+Options score
+Catalyst score
+Social Bonus
+
+entry_score
+entry_state
+entry_grade
+
+exact Entry conflict
+
+This is the critical architectural proof.
+
+The question is:
+
+Can a ticker remain highly visible because its trade signals align even when the current Entry is poor?
+
+Specifically report:
+
+ALGM
+AOSL
+BE
+MRVL
+WYFI
+HOOD
+
+whether or not each qualifies.
+
+Do not force them.
+
+==================================================
+PART 8 — EARLY OPPORTUNITY TEST
+===============================
+
+Return Top 30 Trade Alignment names whose Entry state is one of the current canonical forming/pre-breakout states.
+
+Trace actual current Entry states before choosing the set.
+
+Likely examples include:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+SIGNALS_BUILDING
+BASE_FORMING
+COILED
+
+Use actual production states.
+
+For each:
+
+symbol
+trade alignment
+Theme
+Stage
+Options
+Catalyst
+Social Bonus
+Entry state
+Entry score
+
+The goal is to surface stocks becoming interesting before the obvious move.
+
+Do not create an Actionability label yet.
+
+==================================================
+PART 9 — LEGACY CONFLUENCE VS TRADE ALIGNMENT
+=============================================
+
+Compare:
+
+legacy_trade_confluence_score
+
+vs:
+
+trade_alignment_score
+
+Across rows where Trade Alignment is available report:
+
+correlation if easy to calculate locally
+
+mean absolute rank change
+
+Top 25 overlap
+
+Return Top 25 positive rank movers under Trade Alignment.
+
+For each:
+
+symbol
+legacy rank
+legacy score
+Trade Alignment rank
+Trade Alignment score
+Entry score
+Entry state
+reason promoted
+
+Return Top 25 negative rank movers.
+
+Answer:
+
+How often was Entry the main suppressor in the legacy score?
+
+Do high-alignment/bad-entry names remain visible now?
+
+==================================================
+PART 10 — DAILY ALPHA V1 VS TRADE ALIGNMENT
+===========================================
+
+Compare current Daily Alpha V1 Top 10 with Trade Alignment Top 10.
+
+Show:
+
+symbol
+V1 rank
+V1 score
+
+Trade Alignment rank
+Trade Alignment score
+
+Theme
+Theme Rotation
+
+Stage
+
+Options Alignment
+
+Catalyst Alignment
+
+Social Bonus
+
+Entry score
+Entry state
+
+For V1-only:
+
+show deterministic reason Trade Alignment demoted/excluded it.
+
+For Trade-Alignment-only:
+
+show deterministic reason promoted.
+
+==================================================
+PART 11 — PRODUCT BOUNDARY
+==========================
+
+Do not modify frontend.
+
+Do not create a new page.
+
+Do not replace Watchlist sections.
+
+Trade Alignment remains a shadow backend intelligence output.
+
+Existing Watchlist:
+
+Golden Zone
+HC Trade
+HC Investment
+Growth
+
+remain untouched.
+
+Do not modify the separate LLM Watchlist analysis pipeline.
+
+==================================================
+PART 12 — COST / PROVIDER PROOF
+===============================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 provider calls from Catalyst Alignment
+
+0 provider calls from Trade Alignment
+
+0 provider calls from GET /api/alpha/confluence
+
+0 new provider paths
+
+0 new schedulers
+
+0 Options Flow producer changes
+
+0 Net Premium history producer changes
+
+0 Daily Alpha weight changes
+
+Grok cadence unchanged
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+THEME ALIGNMENT TRADE MODEL IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+CATALYST ALIGNMENT:
+[formula/sources]
+
+CATALYST COVERAGE:
+[count / percent]
+
+TRADE ALIGNMENT FORMULA:
+[exact 25/25/25/25 available-signal logic]
+
+MINIMUM EVIDENCE:
+[logic]
+
+SOCIAL BONUS:
+[eligibility/formula]
+
+TRADE ALIGNMENT COVERAGE:
+[count / percent]
+
+SIGNAL AVAILABILITY:
+[Theme / Stage / Options / Catalyst]
+
+TOP TRADE ALIGNMENT:
+[summary]
+
+HIGH ALIGNMENT / BAD ENTRY:
+[summary]
+
+EARLY OPPORTUNITIES:
+[summary]
+
+LEGACY VS TRADE ALIGNMENT:
+[summary]
+
+V1 VS TRADE ALIGNMENT:
+[summary]
+
+PRODUCT BOUNDARY:
+[confirmation]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+THEME ALIGNMENT TRADE MODEL VERDICT
+
+CATALYST ALIGNMENT FUNCTIONAL:
+[YES / NO]
+
+THEME ALIGNMENT FUNCTIONAL:
+[YES / NO]
+
+TRADE ALIGNMENT AVAILABLE:
+[count / percent]
+
+THEME SIGNAL AVAILABLE:
+[count / percent]
+
+STAGE SIGNAL AVAILABLE:
+[count / percent]
+
+OPTIONS SIGNAL AVAILABLE:
+[count / percent]
+
+CATALYST SIGNAL AVAILABLE:
+[count / percent]
+
+SOCIAL BONUS APPLIED:
+[count + distribution]
+
+HIGH-ALIGNMENT BAD-ENTRY VISIBILITY:
+[assessment]
+
+EARLY OPPORTUNITY VISIBILITY:
+[assessment]
+
+ALGM:
+[Trade Alignment + Entry]
+
+AOSL:
+[Trade Alignment + Entry]
+
+BE:
+[Trade Alignment + Entry]
+
+MRVL:
+[Trade Alignment + Entry]
+
+WYFI:
+[Trade Alignment + Entry]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING TRADE MODEL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+[ONE feature]
+
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not build ELITE_ASSET_REBOUND.
+Do not modify Entry Structure.
+Do not modify existing Watchlist sections.
+Do not make unrelated changes.
