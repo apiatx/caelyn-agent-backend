@@ -197,12 +197,26 @@ def _classify_stage(
     if price_above and ma_flat and prior_up:
         return 3, False, False
 
-    # ── S3 Momentum ("3m"): very extended above a rising MA, prior uptrend ───
-    # Must come BEFORE the general S2-S3 Advance check so highly-extended
-    # symbols are not miscalled S2-S3 Advance.
-    # Threshold: > 20% above MA AND already had a prior uptrend = late-stage.
+    # ── S3 Momentum ("3m"): extended above a rising MA WITH maturation evidence ─
+    # Phase 3 fix: extension alone is NOT sufficient.  A stock that just broke
+    # out from a Stage 1/2 base and ran 25% above the 30w MA in a few weeks is
+    # a strong Stage 2, not Stage 3m.  Require evidence of maturation.
+    #
+    # Criteria for Stage 3m (ALL must be true):
+    #   1. price_vs_ma > 20%   (extended)
+    #   2. ma_rising            (still rising, not topping)
+    #   3. prior_up             (came from an uptrend — not a fresh base breakout)
+    #   PLUS at least ONE maturation indicator:
+    #   A. price_vs_ma > 35%   (extreme extension, unambiguously late stage)
+    #   B. weeks_above_ma >= 5  (sustained advance ≥ 5/8 recent weeks)
+    #        AND ma_slope < 1.0  (MA slope decelerating — rate of rise slowing)
     if price_above and ma_rising and price_vs_ma > 20.0 and prior_up:
-        return "3m", False, False
+        _extreme_ext   = price_vs_ma > 35.0
+        _sustained_adv = weeks_above_ma >= 5
+        _slope_decel   = ma_slope < 1.0   # still rising but not steeply
+        if _extreme_ext or (_sustained_adv and _slope_decel):
+            return "3m", False, False
+        # Maturation evidence absent → treat as extended Stage 2 (fall through)
 
     # ── S2 Breakout ("2b"): confirmed breakout from a downtrend base ─────────
     # Price has crossed above the 30w MA coming from a prior downtrend context.
@@ -542,6 +556,36 @@ def analyze_symbol_stage(
         prior_trend_pct, weeks_above_ma, volume_ratio,
     )
 
+    # ── Phase 3: Extension state fields ────────────────────────────────────────
+    # Classify how far above the 30w MA the price currently sits.
+    # Used by entry_state_service to detect chase / exhaustion risk.
+    if price_vs_ma > 35.0:
+        extension_state = "EXTREME_EXTENSION"
+    elif price_vs_ma > 20.0:
+        extension_state = "EXTENDED"
+    elif price_vs_ma > 10.0:
+        extension_state = "MODERATELY_EXTENDED"
+    elif price_vs_ma >= 0:
+        extension_state = "HEALTHY"
+    else:
+        extension_state = "BELOW_MA"
+
+    # Weekly-return volatility proxy → extension in vol units.
+    # Requires ≥13 weekly closes to be meaningful.
+    extension_atr_multiples: Optional[float] = None
+    if N >= 13:
+        weekly_rets = [
+            (closes[i] / closes[i - 1] - 1) * 100
+            for i in range(max(1, N - 13), N)
+        ]
+        if len(weekly_rets) >= 4:
+            try:
+                vol_pct = statistics.stdev(weekly_rets)
+                if vol_pct > 0:
+                    extension_atr_multiples = round(price_vs_ma / vol_pct, 2)
+            except Exception:
+                pass
+
     return {
         "stage":            STAGE_INT[stage_key],
         "stage_label":      STAGE_LABELS[stage_key],
@@ -561,6 +605,10 @@ def analyze_symbol_stage(
             "breadth_above_30w_ma_pct":  breadth_above_30w,
             "breadth_rising_30w_ma_pct": breadth_rising_30w,
         },
+        # Phase 3 extension fields — consumed by entry_state_service
+        "extension_state":          extension_state,
+        "extension_pct_30w_ma":     price_vs_ma,
+        "extension_atr_multiples":  extension_atr_multiples,
         "stage_updated_at": now_ts,
         "stage_source":     source,
     }

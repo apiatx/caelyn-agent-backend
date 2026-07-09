@@ -123,6 +123,28 @@ _LB_DIAG: dict = {
     "crypto_short_candidates":            [],
 }
 
+# ── Phase 1 — RS provenance diagnostics ───────────────────────────────────────
+# Tracks whether the watchlist collector is consuming social rank vs price RS.
+_RS_PROV_DIAG: dict = {
+    "symbols_resolved_social_rank":     0,  # found in _backend_ranked → social_rank_score used
+    "symbols_missing_canonical_social": 0,  # NOT in _backend_ranked → social_sig = None
+    "symbols_legacy_rs_dropped":        0,  # had row.rs_score but it was dropped (correct)
+}
+
+# ── Phase 2 — Technical freshness diagnostics ─────────────────────────────────
+_TECH_FRESH_DIAG: dict = {
+    "technical_fresh_used":        0,
+    "technical_stale_omitted":     0,
+    "technical_missing_timestamp": 0,
+    "technical_missing":           0,
+}
+
+# Max age for consuming a stored technical_score from Neon watchlist store.
+# Matches the existing watchlist_stage2_service _FRESH_HOURS = 20h TTL.
+# We use 24h here (slightly more lenient) so that an overnight analysis run
+# is still considered fresh for the following trading session.
+_TECH_MAX_AGE_S: float = 86400.0  # 24h
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -151,6 +173,31 @@ def _load_json_safe(path: Path | str) -> Any | None:
             return json.load(fh)
     except Exception:
         return None
+
+
+def _load_social_backend_ranked() -> dict[str, dict]:
+    """
+    Load x_consensus_weekly.json _backend_ranked array keyed by uppercase ticker.
+
+    Each entry contains: ticker, backend_score, freshness_score,
+    recency_days_min, has_top_conviction, thesis_fragments, catalyst_list.
+
+    Returns {} on any error.  Zero provider calls.
+    Canonical social source for Phase 1 RS provenance fix and Phase 7 V2.
+    """
+    try:
+        raw = _load_json_safe(_X_CONSENSUS_PATH)
+        if not raw:
+            return {}
+        ranked = raw.get("_backend_ranked") or raw.get("top_tickers") or []
+        result: dict[str, dict] = {}
+        for r in ranked:
+            ticker = (r.get("ticker") or "").upper().strip()
+            if ticker:
+                result[ticker] = r
+        return result
+    except Exception:
+        return {}
 
 
 def _staleness_factor(age_seconds: float | None) -> float:
@@ -571,6 +618,17 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
         candidates: list[dict] = []
         seen: set[str] = set()
 
+        # ── Phase 1: load canonical social lookup once per collector call ─────
+        # Keys: uppercase ticker → {backend_score, freshness_score, ...}
+        # This is the ONLY authoritative social source for this collector.
+        social_lookup: dict[str, dict] = _load_social_backend_ranked()
+        # Normalize backend_score across the ranked list for 0-1 scaling
+        _soc_max = max(
+            (float(v.get("backend_score") or 0) for v in social_lookup.values()),
+            default=1.0,
+        )
+        _soc_max = max(_soc_max, 1.0)
+
         for meta in all_lists[:5]:      # cap at 5 watchlists to stay fast
             wl_id = meta.get("id")
             if not wl_id:
@@ -612,11 +670,31 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
                     # ── TA signal (prefer technical_score over sentiment text) ─
                     tech_score = row.get("technical_score")   # 0-100
                     ta_sig: float | None = None
+
+                    # Phase 2: Freshness gate — technical_score freshness is
+                    # proxied by the parent watchlist store's updated_at age.
+                    # If age > 24h, omit the numeric score; fall through to the
+                    # action-label heuristic so the available-weight normalizer
+                    # handles the missing signal cleanly.
                     if tech_score is not None:
-                        try:
-                            ta_sig = _clamp01(float(tech_score) / 100.0)
-                        except Exception:
-                            pass
+                        if age_s is None:
+                            _TECH_FRESH_DIAG["technical_missing_timestamp"] += 1
+                            # Keep the score but note missing ts
+                            try:
+                                ta_sig = _clamp01(float(tech_score) / 100.0)
+                            except Exception:
+                                pass
+                        elif age_s > _TECH_MAX_AGE_S:
+                            _TECH_FRESH_DIAG["technical_stale_omitted"] += 1
+                            tech_score = None  # omit stale score; use heuristic below
+                        else:
+                            _TECH_FRESH_DIAG["technical_fresh_used"] += 1
+                            try:
+                                ta_sig = _clamp01(float(tech_score) / 100.0)
+                            except Exception:
+                                pass
+                    else:
+                        _TECH_FRESH_DIAG["technical_missing"] += 1
                     if ta_sig is None:
                         # Fallback: parse action label
                         if "strong buy" in action_str or "bullish" in action_str:
@@ -667,14 +745,27 @@ def collect_watchlist_cache_candidates() -> tuple[list[dict], str]:
                         except Exception:
                             pass
 
-                    # ── RS / social signal from rs_score ─────────────────────
-                    rs_score = row.get("rs_score")
+                    # ── Social signal — Phase 1: canonical provenance fix ─────
+                    # NEVER use row.rs_score as social — it may be price RS (8w
+                    # vs SPY, scale ~-20 to +20) or social rank (0-100) depending
+                    # on which producer last wrote it.  Use ONLY _backend_ranked
+                    # from x_consensus_weekly.json (social_lookup built above).
+                    rs_score = row.get("rs_score")  # kept for display/evidence only
                     social_sig: float | None = None
-                    if rs_score is not None:
-                        try:
-                            social_sig = _clamp01(float(rs_score) / 100.0)
-                        except Exception:
-                            pass
+                    _soc_entry = social_lookup.get(sym)
+                    if _soc_entry is not None:
+                        _bs = float(_soc_entry.get("backend_score") or 0)
+                        social_sig = _clamp01(_bs / _soc_max)
+                        if _soc_entry.get("has_top_conviction"):
+                            social_sig = min(1.0, social_sig * 1.15)
+                        _RS_PROV_DIAG["symbols_resolved_social_rank"] += 1
+                        if rs_score is not None:
+                            _RS_PROV_DIAG["symbols_legacy_rs_dropped"] += 1
+                    else:
+                        social_sig = None   # missing — normalizer handles it
+                        _RS_PROV_DIAG["symbols_missing_canonical_social"] += 1
+                        if rs_score is not None:
+                            _RS_PROV_DIAG["symbols_legacy_rs_dropped"] += 1
 
                     # ── Theme signal ──────────────────────────────────────────
                     theme_id  = row.get("canonical_theme_id") or row.get("theme_source")
@@ -2395,4 +2486,8 @@ def build_diagnostics() -> dict:
         },
         "top_20_pre_ranked":   top20,
         "skipped_sources":     unsafe_skipped,
+        # Phase 1 — RS provenance diagnostics
+        "rs_provenance": dict(_RS_PROV_DIAG),
+        # Phase 2 — technical freshness diagnostics
+        "technical_freshness": dict(_TECH_FRESH_DIAG),
     }

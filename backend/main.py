@@ -15259,6 +15259,169 @@ async def daily_alpha_board(
         )
 
 
+# ── Phase 4: Entry State Engine endpoints ─────────────────────────────
+# Pure cache-read, zero provider calls.
+
+@app.get("/api/alpha/entry-state/{symbol}")
+@limiter.limit("60/minute")
+async def get_entry_state_for_symbol(
+    request: Request,
+    symbol:  str,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Return the cached entry state for a single watchlist symbol.
+    Reads from entry_state_lkg.json — no external calls.
+    NOTE: /api/watchlist/* is reserved by the watchlist router (/{watchlist_id}
+    catch-all), so Phase 4/7 endpoints live under /api/alpha/.
+    """
+    try:
+        from services.entry_state_service import get_entry_state_lkg
+        sym = symbol.upper().strip()
+        result = get_entry_state_lkg(sym)
+        if result is None:
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "symbol": sym, "error": "not_in_lkg"},
+            )
+        return JSONResponse(content={"ok": True, **result})
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
+@app.get("/api/alpha/entry-state")
+@limiter.limit("30/minute")
+async def get_all_entry_states(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Return all cached entry states from entry_state_lkg.json.
+    Zero external calls.
+    """
+    try:
+        from services.entry_state_service import get_all_entry_state_lkg
+        lkg = get_all_entry_state_lkg()
+        ranked = sorted(lkg.values(), key=lambda r: r.get("entry_score", 0), reverse=True)
+        return JSONResponse(content={
+            "ok":           True,
+            "symbol_count": len(ranked),
+            "results":      ranked,
+        })
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
+# ── Phase 6: Theme Rotation V2 endpoints ──────────────────────────────
+# Pure cache-read from themes_rs_lkg.json + social/options caches.
+
+@app.get("/api/themes/rotation")
+@limiter.limit("30/minute")
+async def get_theme_rotation(
+    request:  Request,
+    phase:    str = "all",
+    limit:    int = 30,
+    api_key:  str = Header(None, alias="X-API-Key"),
+):
+    """
+    Return theme rotation snapshot sorted by rotation_score.
+    Optional ?phase= filter: LEADING | CONFIRMING | STALLING | LAGGING | BOTTOMING | all
+    Zero external API calls.
+    """
+    try:
+        from services.theme_rotation_service import build_theme_rotation_snapshot
+        snap = build_theme_rotation_snapshot()
+        themes = snap.get("themes") or []
+        phase_filter = phase.upper().strip()
+        if phase_filter and phase_filter != "ALL":
+            themes = [t for t in themes if t.get("rotation_phase") == phase_filter]
+        limit = max(1, min(int(limit), 100))
+        snap["themes"] = themes[:limit]
+        snap["filtered_count"] = len(themes[:limit])
+        if phase_filter != "ALL":
+            snap["phase_filter"] = phase_filter
+        return JSONResponse(content=snap)
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
+@app.get("/api/themes/rotation/leading")
+@limiter.limit("30/minute")
+async def get_leading_themes(
+    request: Request,
+    limit:   int = 10,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Return top-N LEADING + CONFIRMING themes ranked by rotation_score. Zero external calls."""
+    try:
+        from services.theme_rotation_service import get_leading_themes
+        limit = max(1, min(int(limit), 30))
+        themes = get_leading_themes(limit)
+        return JSONResponse(content={"ok": True, "count": len(themes), "themes": themes})
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
+# ── Phase 7: Confluence V2 endpoints ──────────────────────────────────
+# Multi-signal aggregator — all cache-read, zero provider calls.
+
+@app.get("/api/alpha/confluence")
+@limiter.limit("20/minute")
+async def get_confluence_snapshot(
+    request:  Request,
+    limit:    int = 50,
+    verdict:  str = "all",
+    api_key:  str = Header(None, alias="X-API-Key"),
+):
+    """
+    Confluence V2: multi-signal ranking for all watchlist symbols.
+    Query params:
+      limit   — number of results (default 50)
+      verdict — filter by confluence_verdict: STRONG_BUY | BUY | WATCH | NEUTRAL | AVOID | all
+    Zero external API calls.
+    NOTE: Lives under /api/alpha/ (not /api/watchlist/) to avoid the watchlist
+    router's /{watchlist_id} catch-all route.
+    """
+    try:
+        from services.confluence_v2_service import build_confluence_snapshot
+        snap = build_confluence_snapshot()
+        results = snap.get("results") or []
+        verdict_filter = verdict.upper().strip()
+        if verdict_filter and verdict_filter != "ALL":
+            results = [r for r in results if r.get("confluence_verdict") == verdict_filter]
+        limit = max(1, min(int(limit), 200))
+        snap["results"] = results[:limit]
+        snap["filtered_count"] = len(results[:limit])
+        if verdict_filter != "ALL":
+            snap["verdict_filter"] = verdict_filter
+        return JSONResponse(content=snap)
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
+@app.get("/api/alpha/confluence/{symbol}")
+@limiter.limit("60/minute")
+async def get_confluence_for_symbol(
+    request: Request,
+    symbol:  str,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Return Confluence V2 result for a single symbol. Zero external calls."""
+    try:
+        from services.confluence_v2_service import get_confluence_for_symbol
+        sym = symbol.upper().strip()
+        result = get_confluence_for_symbol(sym)
+        return JSONResponse(content={"ok": True, **result})
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+
 # ── GET /api/home/risk-intelligence ──────────────────────────────────
 # Composer/aggregator: reuses existing cached services only.
 # - market_snapshot  → macro:dashboard:v3  (same source as Home page)
