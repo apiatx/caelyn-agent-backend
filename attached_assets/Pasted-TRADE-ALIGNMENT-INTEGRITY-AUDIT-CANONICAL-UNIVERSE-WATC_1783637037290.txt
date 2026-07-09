@@ -1,0 +1,1060 @@
+TRADE ALIGNMENT INTEGRITY AUDIT — CANONICAL UNIVERSE + WATCHLIST "ALL STOCKS" OPTIONS SIGNAL READ PATH
+
+The THEME_ALIGNMENT Trade Alignment architecture is now implemented in shadow mode:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment     25%
+Catalyst Alignment    25%
+
+Social Bonus          +0 to +10
+
+Entry Structure is separate.
+
+Do not change this formula.
+
+This task exists because the latest validation exposed two major contradictions:
+
+1. Several symbols previously proven to exist in Stage/Entry/Confluence were incorrectly reported as "not in tracked universe."
+2. Options Alignment coverage was reported as only 15/378, even though the Options Flow page and Watchlist already expose ticker-level options data across a much broader Watchlist universe.
+
+There is a strong product-level hypothesis that must be explicitly tested:
+
+The current Options Alignment implementation may be reading the Options Flow SCREENER / market-wide top-signal candidate set instead of the Sectors tab → ALL STOCKS watchlist-ticker options dataset.
+
+The Options Flow SCREENER toggle is NOT the intended Trade Alignment source.
+
+The Screener searches for roughly the strongest options signals across the broader market and is not limited to Watchlist tickers.
+
+The intended Options Alignment current-state signal should come from the same existing ticker-level options dataset used by:
+
+Options Flow page
+→ Sectors tab
+→ All Stocks
+
+which represents the user's Watchlist tickers,
+
+and/or the same canonical options fields already displayed on Watchlist screener ticker rows.
+
+Audit first.
+
+Implement only a proven read-path/integration correction.
+
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not build ELITE_ASSET_REBOUND.
+Do not modify Entry Structure V2.
+Do not modify Stage Analysis.
+Do not modify Theme resolution.
+Do not change Catalyst Alignment unless a direct integration bug is proven.
+Do not modify Options Flow producer logic.
+Do not modify the Options Flow Screener.
+Do not modify the Sectors tab.
+Do not modify the All Stocks toggle.
+Do not modify Net Premium history producer logic.
+Do not add an Options Alignment cache/LKG.
+Do not add cache-warming jobs.
+Do not add provider calls.
+Do not add schedulers.
+Do not add LLM/Grok calls.
+Do not modify frontend code.
+Do not modify Daily Alpha V1.
+
+==================================================
+PROBLEM 1 — TRADE ALIGNMENT UNIVERSE CONTRADICTION
+==================================================
+
+The latest Trade Alignment report claimed:
+
+Trade Alignment universe:
+378 symbols
+
+Stage signal availability:
+378 / 378
+
+However it also claimed:
+
+ALGM = NOT IN TRACKED UNIVERSE
+BE = NOT IN TRACKED UNIVERSE
+MRVL = NOT IN TRACKED UNIVERSE
+WYFI = NOT IN TRACKED UNIVERSE
+
+This conflicts with earlier proven Stage2 / Entry / Confluence results.
+
+Prior deterministic validations already produced Entry State rows for:
+
+ALGM
+BE
+MRVL
+WYFI
+
+Examples:
+
+ALGM:
+historical Entry Structure V2 replay returned HIGH_BASE_FORMING
+
+BE:
+FAILED_BREAKOUT / Entry 10 in prior validation
+
+MRVL:
+EXTREME_EXTENSION / Entry 8 in prior validation
+
+WYFI:
+CROWDED_MOVE / Entry 12 in prior validation
+
+Do not accept "not tracked" without tracing exact source membership.
+
+==================================================
+PART 1 — TRACE EVERY UNIVERSE
+=============================
+
+Return the exact current symbol sets for:
+
+A. saved Watchlist ticker universe
+
+B. Stage2 LKG / canonical current Stage universe
+
+C. Entry State LKG
+
+D. current Confluence V2 source universe
+
+E. current Trade Alignment row universe
+
+F. GET /api/alpha/confluence internal full snapshot BEFORE endpoint limit/pagination
+
+G. GET /api/alpha/confluence returned rows for:
+limit=50
+limit=200
+maximum allowed limit
+
+For every universe return:
+
+source/path
+symbol count
+normalization behavior
+foreign-prefix handling
+
+Then calculate set differences:
+
+Watchlist - Stage
+Stage - Watchlist
+Stage - Entry
+Entry - Stage
+Stage - Confluence
+Confluence - Stage
+Confluence - Trade Alignment
+Trade Alignment - Confluence
+
+Return every symbol in each non-empty difference set, up to 200.
+
+==================================================
+PART 2 — TARGET SYMBOL MEMBERSHIP TRACE
+=======================================
+
+For each:
+
+ALGM
+BE
+MRVL
+WYFI
+AOSL
+ANET
+SLAB
+DELL
+WULF
+AAOI
+MU
+NBIS
+
+Return:
+
+in saved Watchlist?
+in Stage2 LKG?
+in Entry LKG?
+in Confluence internal snapshot?
+Trade Alignment row created?
+Trade Alignment available?
+returned by endpoint limit=50?
+returned by endpoint limit=200?
+present in full internal snapshot before limit?
+
+Stage row key
+Entry row key
+Confluence row symbol
+
+If missing at any layer:
+
+show the exact code condition/filter that removes it.
+
+Do not use "not tracked" as a generic explanation.
+
+==================================================
+PART 3 — ENDPOINT LIMIT / VALIDATION SCRIPT AUDIT
+=================================================
+
+The implementation log explicitly encountered:
+
+"Max limit is 200 per query param."
+
+Audit the exact validation scripts/commands used for:
+
+HIGH ALIGNMENT / BAD ENTRY
+
+LEGACY VS TRADE ALIGNMENT
+
+V1 VS TRADE ALIGNMENT
+
+Determine whether any analysis interpreted:
+
+not returned in an endpoint-limited or rank-sorted response
+
+as:
+
+not in the tracked universe
+
+Show:
+
+endpoint
+query parameters
+sort field
+limit
+internal snapshot count
+returned row count
+
+Answer:
+
+Did endpoint limit, rank truncation, or sort order cause ALGM/BE/MRVL/WYFI to be incorrectly reported as not tracked?
+
+YES or NO.
+
+If YES:
+
+correct validation logic only.
+
+Do not change production scoring because of a report-script bug.
+
+==================================================
+PROBLEM 2 — OPTIONS ALIGNMENT IS LIKELY READING THE WRONG OPTIONS FLOW SURFACE
+==============================================================================
+
+Latest reported Options Alignment coverage:
+
+15 / 378 = 4.0%
+
+This is inconsistent with actual product behavior.
+
+The Options Flow page contains multiple distinct views/surfaces.
+
+At minimum:
+
+A. OPTIONS FLOW SCREENER
+
+This is a broader-market discovery surface.
+
+It scans for roughly the strongest options signals across the market.
+
+It is NOT limited to Watchlist tickers.
+
+It may expose only approximately 14–30 active candidates per scan/cycle.
+
+This is NOT the intended Trade Alignment source.
+
+B. SECTORS TAB → ALL STOCKS
+
+This represents ticker-level Options Flow data for the user's Watchlist stocks.
+
+This is the intended product-level options signal context for Trade Alignment.
+
+C. WATCHLIST SCREENER TICKER ROWS
+
+The Watchlist already displays multiple options-related fields/signals across ticker rows.
+
+These may consume the same underlying canonical Watchlist options snapshot or another broad read adapter.
+
+The exact shared backend source must be traced.
+
+Do not assume options_theme_supplement.get_combined_ticker_data() is canonical merely because it exposes a composite field.
+
+==================================================
+PART 4 — TRACE OPTIONS FLOW FRONTEND SURFACES SEPARATELY
+========================================================
+
+Start from the actual Options Flow frontend page.
+
+Trace these views separately.
+
+---
+
+## A. OPTIONS FLOW SCREENER TOGGLE
+
+Return:
+
+frontend component
+frontend request
+endpoint
+backend route
+backend service
+source cache/LKG/DB
+
+Answer:
+
+What ticker universe does it scan?
+
+Is it broader than Watchlist?
+
+How many rows/candidates does it normally expose?
+
+Does it represent:
+current top signals
+active scan cycle
+market-wide candidates
+or canonical all-Watchlist snapshots?
+
+Return current count.
+
+---
+
+## B. SECTORS TAB → ALL STOCKS
+
+Start from the actual:
+
+Options Flow
+→ Sectors tab
+→ All Stocks
+
+UI path.
+
+Return:
+
+frontend component
+exact request
+endpoint
+backend route
+backend service
+LKG/cache/Neon source
+
+Answer:
+
+What exact ticker universe powers All Stocks?
+
+Is it the saved Watchlist ticker set?
+
+Does it include portfolio tickers?
+
+What row fields are returned?
+
+Specifically identify:
+
+ticker/symbol
+scan_status
+options composite/signal
+net premium
+call premium
+put premium
+bullish/bearish signal
+flow score
+any final composite field
+timestamp/freshness
+
+Return current counts:
+
+required unique tickers
+canonical rows
+confirmed no-options
+pending
+missing
+
+Compare to the prior known validation:
+
+required_unique_tickers = 249
+canonical_snapshot_tickers = 238
+confirmed_no_options_tickers = 11
+pending_tickers = 0
+
+State whether the current architecture still follows the same coverage model.
+
+---
+
+## C. WATCHLIST OPTIONS FIELDS
+
+Start from the actual Watchlist ticker row / fundamental-technical-options data fields.
+
+Trace every options-related column or row field currently rendered.
+
+Return:
+
+frontend field
+response property
+backend endpoint
+backend source/service
+
+Identify whether these Watchlist fields come from:
+
+the same All Stocks canonical Options Flow snapshot
+
+the Screener candidate set
+
+options_theme_supplement
+
+another cache/LKG
+
+For each relevant field show current approximate ticker coverage.
+
+==================================================
+PART 5 — TRACE OPTIONS ALIGNMENT CURRENT READ PATH
+==================================================
+
+Trace:
+
+backend/services/options_alignment.py
+
+Specifically:
+
+get_options_alignment_for_ticker()
+
+Return every helper/source it reads.
+
+The prior report says it reads:
+
+options_theme_supplement.get_combined_ticker_data()
+
+and:
+
+options_net_premium_history.get_historical_snapshots_bulk()
+
+Determine exactly what:
+
+get_combined_ticker_data()
+
+represents.
+
+Is it:
+
+Options Flow Screener current candidate set?
+
+current active scan-cycle subset?
+
+Sectors → All Stocks canonical snapshot?
+
+theme supplement subset?
+
+merged LKG?
+
+another representation?
+
+Return:
+
+underlying files/caches
+current ticker counts
+refresh cadence
+producer
+
+Then explain exactly why Options Alignment coverage was approximately 15 symbols at snapshot time.
+
+Explicitly answer:
+
+Was Options Alignment accidentally consuming data corresponding to the market-wide Options Flow Screener / current top-signal scan rather than the Sectors → All Stocks Watchlist dataset?
+
+YES or NO.
+
+==================================================
+PART 6 — IDENTIFY THE CANONICAL ALL-STOCKS OPTIONS SIGNAL
+=========================================================
+
+Trade Alignment asks:
+
+"HOW STRONGLY DOES OPTIONS PREMIUM FLOW CONFIRM THIS WATCHLIST TICKER AS A SWING-TRADE OPPORTUNITY?"
+
+The current-state Options Alignment signal must reuse the ticker-level canonical options result already produced for:
+
+Options Flow
+→ Sectors
+→ All Stocks
+
+and/or the exact same canonical source used by Watchlist options row fields.
+
+Trace the broad canonical source.
+
+Return:
+
+exact service/helper
+exact LKG/cache/table
+ticker-key format
+coverage semantics
+freshness behavior
+
+Identify the best persisted deterministic current-state Options signal already available per ticker.
+
+Potential fields may include:
+
+final_composite_score
+composite_score
+flow_score
+heat_score
+bullish/bearish composite
+net-flow signal
+another canonical field
+
+Do not assume field names.
+
+Return:
+
+exact field
+scale
+semantic meaning
+coverage
+
+If the All Stocks row does not persist the exact options_flow_engine.composite_score:
+
+show the existing deterministic fields it does persist.
+
+Do not redesign Options Flow.
+
+==================================================
+PART 7 — COMPARE ALL OPTIONS REPRESENTATIONS
+============================================
+
+For every ticker in the current Confluence universe build a read-only comparison:
+
+symbol
+
+in Options Flow Screener/current candidate set?
+Screener score if available
+
+in Sectors → All Stocks canonical dataset?
+All Stocks scan_status
+All Stocks current options signal/composite
+
+Watchlist options fields available?
+Watchlist options signal fields
+
+options_theme_supplement row available?
+
+current options_alignment_available?
+current options_alignment_score
+
+Net Premium history available?
+
+Return summary counts:
+
+Confluence symbols
+
+Screener/current candidate rows
+
+Sectors All Stocks rows
+
+confirmed no-options
+
+All Stocks pending
+
+All Stocks missing
+
+Watchlist options-signal rows
+
+theme supplement rows
+
+Options Alignment available
+
+Count:
+
+All Stocks canonical signal available
+AND
+Options Alignment unavailable
+
+Return every such symbol, up to 250.
+
+Specifically show:
+
+ALGM
+AOSL
+BE
+MRVL
+WYFI
+HOOD
+ANET
+AMD
+MU
+CRDO
+WULF
+AAOI
+NBIS
+VRT
+IBRX
+RBRK
+SLAB
+DELL
+
+==================================================
+PART 8 — SURGICAL OPTIONS ALIGNMENT READ-PATH FIX
+=================================================
+
+ONLY IF the audit proves Options Alignment is consuming the Screener/current-cycle/narrow representation instead of Sectors → All Stocks canonical Watchlist Options Flow data:
+
+modify options_alignment.py to consume the exact existing broad All Stocks/canonical Watchlist options read path.
+
+Requirements:
+
+zero provider calls
+
+read-only
+
+no Options Flow producer changes
+
+no Options Flow Screener changes
+
+no Sectors/All Stocks endpoint changes
+
+no Watchlist options changes
+
+no Net Premium history changes
+
+no new cache/LKG
+
+no cache warmer
+
+no scheduler
+
+Preserve the existing Options Alignment architecture:
+
+current-state Options score = 70%
+
+premium direction/rate of change = 30% when mathematically available
+
+When Net Premium delta history is unavailable:
+
+options_alignment_score =
+canonical current-state All Stocks options score
+
+Do not fill missing delta history with fake 0 or 50.
+
+---
+
+## CONFIRMED NO OPTIONS
+
+If canonical All Stocks data reports:
+
+scan_status = no_options
+
+return:
+
+options_alignment_available = false
+
+options_alignment_reason = CONFIRMED_NO_OPTIONS
+
+Do not assign neutral 50.
+
+---
+
+## GENUINELY MISSING
+
+If the ticker has no canonical All Stocks row and is not confirmed no-options:
+
+return unavailable.
+
+Do not fall back to the market-wide Screener.
+
+The market-wide Screener must never determine Watchlist Trade Alignment merely because the ticker appears among top market signals.
+
+==================================================
+PART 9 — REVALIDATE OPTIONS COVERAGE
+====================================
+
+After any proven read-path correction report:
+
+Confluence symbols
+
+Options Alignment available
+
+Options Alignment unavailable
+
+confirmed no-options
+
+genuinely missing
+
+coverage %
+
+Compare:
+
+before:
+approximately 15 / 378
+
+after:
+[count / percent]
+
+Return pressure-state distribution.
+
+Return current-state score distribution:
+
+min
+max
+median
+p75
+p90
+
+Return Top 50 Options Alignment.
+
+Fields:
+
+symbol
+options_alignment_score
+
+canonical All Stocks current score
+options pressure state
+
+net premium
+1D delta
+7D delta
+30D delta
+
+delta availability
+
+All Stocks scan_status
+source timestamp
+
+options_alignment_reason_codes
+
+No provider calls.
+
+==================================================
+PART 10 — REVALIDATE COMPLETE TRADE ALIGNMENT UNIVERSE
+======================================================
+
+Using:
+
+the complete internal Trade Alignment row universe
+
+and:
+
+the corrected canonical All Stocks Options Alignment source
+
+return:
+
+Trade Alignment universe
+
+Trade Alignment available
+
+Theme available
+
+Stage available
+
+Options available
+
+Catalyst available
+
+Signal-count distribution:
+
+0
+1
+2
+3
+4
+
+Do not change Trade Alignment weights:
+
+Theme    25%
+Stage    25%
+Options  25%
+Catalyst 25%
+
+Social Bonus +0–10
+
+Entry remains separate.
+
+==================================================
+PART 11 — TOP TRADE ALIGNMENT
+=============================
+
+Return Top 50 Trade Alignment.
+
+Fields:
+
+rank
+symbol
+
+trade_alignment_score
+base_trade_alignment_score
+social_bonus_score
+
+Theme score
+Theme
+Theme Rotation
+
+Stage score
+Stage
+
+Options score
+options pressure state
+
+Catalyst score
+primary catalyst
+
+Entry score
+Entry state
+Entry grade
+
+top alignment contributors
+missing alignment signals
+
+Entry is display only.
+
+It must not affect ranking.
+
+==================================================
+PART 12 — HIGH ALIGNMENT / BAD ENTRY REVALIDATION
+=================================================
+
+Return Top 30:
+
+trade_alignment_score descending
+
+where:
+
+entry_score < 40
+
+or:
+
+entry_grade == AVOID
+
+For each:
+
+symbol
+
+Trade Alignment score
+rank
+
+Theme score
+Stage score
+Options score
+Catalyst score
+Social Bonus
+
+Entry score
+Entry state
+Entry grade
+
+exact Entry conflict
+
+Specifically show:
+
+ALGM
+AOSL
+BE
+MRVL
+WYFI
+HOOD
+
+whether or not each qualifies.
+
+If absent:
+
+show the exact universe layer/filter causing absence.
+
+Do not force qualification.
+
+The core proof question is:
+
+Can a ticker remain highly visible because Theme/Stage/Options/Catalyst align even when the current Entry is poor?
+
+==================================================
+PART 13 — EARLY OPPORTUNITY REVALIDATION
+========================================
+
+Return Top 30 Trade Alignment rows whose Entry State is a canonical forming/pre-breakout state.
+
+Use actual production enums.
+
+Likely examples may include:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+SIGNALS_BUILDING
+BASE_FORMING
+COILED
+
+Use actual current states.
+
+Show:
+
+symbol
+Trade Alignment
+
+Theme
+Stage
+Options
+Catalyst
+Social Bonus
+
+Entry State
+Entry Score
+
+No Actionability labels.
+
+==================================================
+PART 14 — COST / PROVIDER PROOF
+===============================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 provider calls from Options Alignment
+
+0 provider calls from Trade Alignment
+
+0 provider calls from GET /api/alpha/confluence
+
+0 new Options provider path
+
+0 new Options scan
+
+0 Options Flow Screener changes
+
+0 Sectors → All Stocks changes
+
+0 Watchlist options changes
+
+0 new cache-warming path
+
+0 new scheduler
+
+0 Options Flow producer changes
+
+0 Net Premium history producer changes
+
+0 Daily Alpha changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+TRADE ALIGNMENT INTEGRITY REPORT
+
+FILES CHANGED:
+[list or NONE]
+
+UNIVERSE ROOT CAUSE:
+[exact finding]
+
+ENDPOINT LIMIT VALIDATION BUG:
+[YES / NO + details]
+
+ALGM TRACKED:
+[YES / NO + layers]
+
+BE TRACKED:
+[YES / NO + layers]
+
+MRVL TRACKED:
+[YES / NO + layers]
+
+WYFI TRACKED:
+[YES / NO + layers]
+
+OPTIONS FLOW SCREENER PATH:
+[path/service/source]
+
+SECTORS ALL STOCKS PATH:
+[path/service/source]
+
+WATCHLIST OPTIONS PATH:
+[path/service/source]
+
+OPTIONS COVERAGE ROOT CAUSE:
+[exact finding]
+
+OPTIONS ALIGNMENT OLD SOURCE:
+[path + exact representation]
+
+CANONICAL ALL-STOCKS OPTIONS SOURCE:
+[path/service/LKG]
+
+OPTIONS ALIGNMENT CORRECTED SOURCE:
+[path]
+
+OPTIONS COVERAGE BEFORE:
+[count / percent]
+
+OPTIONS COVERAGE AFTER:
+[count / percent]
+
+CONFIRMED NO OPTIONS:
+[count]
+
+GENUINELY MISSING OPTIONS:
+[count]
+
+TRADE ALIGNMENT COVERAGE:
+[count / percent]
+
+HIGH ALIGNMENT / BAD ENTRY:
+[results]
+
+EARLY OPPORTUNITY:
+[results]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+TRADE ALIGNMENT INTEGRITY VERDICT
+
+UNIVERSE COMPLETE:
+[PASS / FAIL]
+
+ENDPOINT LIMIT BUG:
+[YES / NO]
+
+SCREENER / ALL-STOCKS SOURCE CONFUSION:
+[YES / NO]
+
+CANONICAL OPTIONS SOURCE:
+[PASS / FAIL]
+
+OPTIONS ALIGNMENT COVERAGE:
+[count / percent]
+
+TRADE ALIGNMENT FUNCTIONAL:
+[YES / NO]
+
+HIGH-ALIGNMENT BAD-ENTRY VISIBILITY:
+[assessment]
+
+ALGM:
+[Trade Alignment + Entry]
+
+AOSL:
+[Trade Alignment + Entry]
+
+BE:
+[Trade Alignment + Entry]
+
+MRVL:
+[Trade Alignment + Entry]
+
+WYFI:
+[Trade Alignment + Entry]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING MODEL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+[ONE feature]
+
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not build ELITE_ASSET_REBOUND.
+Do not change Trade Alignment weights.
+Do not modify Entry Structure.
+Do not add cache warming.
+Do not make unrelated changes.

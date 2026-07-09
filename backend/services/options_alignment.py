@@ -193,8 +193,74 @@ def get_options_alignment_for_ticker(
             "options_alignment_reason_codes": reasons,
         }
 
-    raw_composite = row.get("final_composite_score", row.get("composite_score"))
+    # ── CONFIRMED NO OPTIONS ────────────────────────────────────────────────
+    # The canonical Sectors -> All Stocks classification (_ticker_state in
+    # data/options_flow_sectors.py) tags a symbol as having no tradeable
+    # chain via scan_result/ticker_state == "confirmed_no_options". This must
+    # never be scored as neutral 50 — it is a hard "no signal" state.
+    _scan_result = (row.get("scan_result") or row.get("ticker_state") or "")
+    if _scan_result == "confirmed_no_options":
+        reasons.append("CONFIRMED_NO_OPTIONS")
+        return {
+            "ticker": sym,
+            "options_signal_available": False,
+            "options_current_composite": None,
+            "options_current_composite_normalized": None,
+            "options_alignment_score": None,
+            "options_pressure_state": "INSUFFICIENT_HISTORY",
+            "options_current_score": None,
+            "options_direction_score": None,
+            "options_direction_available": False,
+            "net_premium": None,
+            "call_premium": None,
+            "put_premium": None,
+            "net_premium_delta_1d": None,
+            "net_premium_delta_7d": None,
+            "net_premium_delta_30d": None,
+            "net_premium_1d_available": False,
+            "net_premium_7d_available": False,
+            "net_premium_30d_available": False,
+            "source": row.get("_source"),
+            "options_alignment_reason_codes": reasons,
+        }
+
+    # ── Current-state composite ──────────────────────────────────────────────
+    # Preferred: the canonical 0-100 composite produced by the master-screener
+    # / TradierFlowEngine enrichment path (options_flow_engine / options_enricher
+    # composite_score, heat_score). Rows scanned by the Sectors -> All Stocks
+    # chain summarizer (sectors_chain_summarizer.py, scan_result=
+    # "sectors_chain_summarized" — the canonical Watchlist-ticker All Stocks
+    # path, which covers the large majority of the tracked universe) never
+    # populate composite_score/heat_score, only raw premium/bias fields. For
+    # those rows we deterministically derive a 0-100 current-state score from
+    # the same canonical net_premium + effective_premium_pcr fields already
+    # displayed on the Sectors -> All Stocks / Watchlist ticker rows — no new
+    # scan, no provider call, no re-derivation of the Options Flow composite
+    # formula itself.
+    raw_composite = row.get("final_composite_score", row.get("composite_score", row.get("heat_score")))
     current_norm = _normalize_current_composite(raw_composite)
+    current_is_derived = False
+    if current_norm is None:
+        _row_net_premium = row.get("net_premium")
+        _row_call, _row_put = row.get("call_premium"), row.get("put_premium")
+        _has_real_scan = _row_net_premium is not None or (
+            (_row_call or 0) + (_row_put or 0) > 0
+        )
+        if _has_real_scan:
+            import math as _math
+            _pcr = row.get("effective_premium_pcr") or row.get("raw_premium_pcr")
+            _np = float(_row_net_premium) if _row_net_premium is not None else 0.0
+            _magnitude = min(1.0, _math.log10(1 + abs(_np)) / 6.0)
+            if _np > 0:
+                current_norm = round(50.0 + 50.0 * _magnitude, 2)
+            elif _np < 0:
+                current_norm = round(50.0 - 50.0 * _magnitude, 2)
+            else:
+                current_norm = 50.0
+            current_is_derived = True
+            reasons.append("CURRENT_SCORE_DERIVED_FROM_ALL_STOCKS_NET_PREMIUM")
+        # else: genuinely no scan result yet (generic_pending / deferred_retry /
+        # optionable_pending_chain) — leave current_norm as None, unavailable.
     source = row.get("_source")
 
     # ── Net Premium (current + delta history) ──────────────────────────────
@@ -262,6 +328,7 @@ def get_options_alignment_for_ticker(
         "options_signal_available": current_norm is not None,
         "options_current_composite": raw_composite,
         "options_current_composite_normalized": current_norm,
+        "options_current_score_derived": current_is_derived,
         "options_alignment_score": alignment_score,
         "options_pressure_state": pressure_state,
         "options_current_score": current_norm,
