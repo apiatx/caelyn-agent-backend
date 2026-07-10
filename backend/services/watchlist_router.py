@@ -3929,6 +3929,127 @@ async def get_by_id_endpoint(watchlist_id: str):
     return store
 
 
+def _build_theme_performance_groups(store: dict) -> dict:
+    """
+    Group the CURRENT watchlist rows (exactly as returned by GET /{watchlist_id})
+    by their existing canonical_theme_name / theme field — the SAME field
+    rendered in the upper Watchlist Screener THEME column.
+
+    This performs NO independent ticker classification: it purely reads
+    canonical_theme_name / theme / canonical_theme_id already present on each
+    row (set upstream by services.theme_resolver.resolve_primary_theme_for_ticker,
+    or preserved as-is from saved analysis sections). No LLM/AI calls, no
+    provider calls, no new resolver.
+
+    Theme 1D performance = equal-weight average of change_pct_1d across
+    tickers in that theme with an available value. Tickers with no usable
+    change_pct_1d are excluded from the average but still included in the
+    card. Theme cards are sorted by 1D performance descending, with themes
+    having no valid data sorted last. Tickers within a card are sorted by
+    1D change descending (missing values last).
+    """
+    UNASSIGNED_LABEL = "Unassigned"
+    UNASSIGNED_ID    = "unassigned"
+
+    all_rows: list[dict] = []
+    seen_symbols: set[str] = set()
+    for section in (store.get("analysis") or {}).get("sections", []):
+        for row in section.get("tickers", []):
+            sym = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+            if not sym or sym in seen_symbols:
+                continue
+            seen_symbols.add(sym)
+            all_rows.append(row)
+
+    groups: dict[str, dict] = {}
+    missing_1d: list[str] = []
+
+    for row in all_rows:
+        sym   = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+        theme_name = row.get("canonical_theme_name") or row.get("theme")
+        theme_id   = row.get("canonical_theme_id")
+
+        if not theme_name:
+            theme_name, theme_id = UNASSIGNED_LABEL, UNASSIGNED_ID
+
+        chg = row.get("change_pct_1d")
+        try:
+            chg = float(chg) if chg is not None else None
+        except Exception:
+            chg = None
+        if chg is None:
+            missing_1d.append(sym)
+
+        g = groups.setdefault(theme_name, {
+            "theme_name": theme_name,
+            "theme_id":   theme_id or theme_name.lower().replace(" ", "_"),
+            "tickers":    [],
+        })
+        g["tickers"].append({
+            "symbol":         sym,
+            "name":           row.get("name"),
+            "price":          row.get("price"),
+            "change_pct_1d":  chg,
+        })
+
+    theme_cards: list[dict] = []
+    for theme_name, g in groups.items():
+        valid_changes = [t["change_pct_1d"] for t in g["tickers"] if t["change_pct_1d"] is not None]
+        theme_1d = (sum(valid_changes) / len(valid_changes)) if valid_changes else None
+
+        g["tickers"].sort(
+            key=lambda t: (t["change_pct_1d"] is None, -(t["change_pct_1d"] or 0.0))
+        )
+        theme_cards.append({
+            "theme_name":     theme_name,
+            "theme_id":       g["theme_id"],
+            "theme_1d_pct":   theme_1d,
+            "ticker_count":   len(g["tickers"]),
+            "tickers":        g["tickers"],
+        })
+
+    theme_cards.sort(
+        key=lambda c: (c["theme_1d_pct"] is None, -(c["theme_1d_pct"] or 0.0))
+    )
+
+    return {
+        "watchlist_id":            store.get("id"),
+        "current_watchlist_rows":  len(all_rows),
+        "grouped_tickers":         sum(c["ticker_count"] for c in theme_cards),
+        "unassigned_count":        groups.get(UNASSIGNED_LABEL, {}).get("tickers", []) and len(groups[UNASSIGNED_LABEL]["tickers"]) or 0,
+        "missing_1d_change":       missing_1d,
+        "theme_cards":             theme_cards,
+    }
+
+
+@router.get("/{watchlist_id}/performance/theme")
+async def get_watchlist_theme_performance(watchlist_id: str):
+    """
+    Watchlist → Performance Groupings → Theme.
+
+    Groups the CURRENT saved watchlist rows by the exact same canonical Theme
+    field shown in the upper Watchlist Screener THEME column
+    (canonical_theme_name / theme, set by theme_resolver.resolve_primary_theme_for_ticker
+    upstream). Does not call an AI classifier, does not create a second
+    ticker→theme source, and does not use Themes-page ETF/proxy constituents —
+    only tickers actually on this saved watchlist are grouped.
+
+    Theme 1D performance = equal-weight average of each theme's tickers'
+    change_pct_1d (the same field shown in the Screener's CHG % column).
+    Read-only, zero incremental provider/LLM calls — reuses the same
+    already-enriched rows served by GET /{watchlist_id}.
+    """
+    store = load_watchlist(watchlist_id)
+    if store is None:
+        return {"empty": True}
+    try:
+        store = await _enrich_store_with_quotes(store)
+    except Exception as _enrich_err:
+        print(f"[WATCHLIST_THEME_PERF] Quote enrichment failed (returning raw): {_enrich_err}")
+
+    return _build_theme_performance_groups(store)
+
+
 @router.post("/{watchlist_id}/analyze")
 async def analyze_by_id_endpoint(watchlist_id: str):
     """Run multi-source parallel analysis pipeline for a specific watchlist."""

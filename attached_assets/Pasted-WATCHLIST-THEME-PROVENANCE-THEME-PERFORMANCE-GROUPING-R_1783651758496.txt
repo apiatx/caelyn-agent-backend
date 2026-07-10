@@ -1,0 +1,690 @@
+WATCHLIST THEME PROVENANCE + THEME PERFORMANCE GROUPING REPAIR
+
+Work in the existing Replit project.
+
+This task has two tightly related goals:
+
+1. Verify that the recently completed Watchlist → Themes membership sync used the exact Theme identity shown in the UPPER WATCHLIST SCREENER Theme column.
+2. Repair the LOWER Watchlist Performance Groupings → Theme section so it groups current Watchlist tickers by that exact same canonical Screener Theme field.
+
+Do not modify Options Alignment.
+Do not modify Trade Alignment.
+Do not modify Entry Structure.
+Do not modify Stage Analysis.
+Do not modify Theme Rotation scoring.
+Do not modify Theme RS scoring.
+Do not modify Options Flow.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add provider calls.
+Do not create a new Theme mapping.
+Do not create a new backend Theme classifier.
+Do not create a second ticker→Theme source.
+
+==================================================
+PRODUCT DISTINCTION
+===================
+
+The Watchlist page contains TWO separate Theme-related UI surfaces.
+
+A. UPPER WATCHLIST SCREENER
+
+The upper ticker table has columns including:
+
+TICKER
+COMPANY
+THEME
+PRICE
+CHG %
+VOLUME
+VOLX
+
+The THEME value shown here is the canonical ticker Theme assignment the user means.
+
+Examples visible in the current UI include:
+
+AAOI → AI Networking
+ABCL → Biotech
+ADEA → Data Center Infrastructure
+ADUR → Clean Energy
+AEHR → Memory & Storage
+AEVA → Robotics & Automation
+AIR → Defense
+AKAM → Cybersecurity
+
+The recently implemented Watchlist → Themes membership sync is intended to synchronize this exact Theme identity into actual Themes-page membership.
+
+B. LOWER PERFORMANCE GROUPINGS → THEME
+
+At the bottom of the Watchlist page there is:
+
+PERFORMANCE GROUPINGS
+
+FUNDAMENTAL
+THEME
+MARKET CAP
+
+The lower THEME view is a DISPLAY/GROUPING surface.
+
+It must not own an independent ticker classification system.
+
+Its intended behavior is:
+
+take the current Watchlist rows
+↓
+read the exact canonical Theme already shown in the upper Screener
+↓
+group tickers by Theme
+↓
+show one glasscard per Theme
+↓
+sort Theme cards by highest Theme 1D performance to lowest
+↓
+inside each card sort tickers by highest ticker 1D performance to lowest
+
+No AI categorization is needed.
+
+==================================================
+PART 1 — VERIFY UPPER SCREENER THEME PROVENANCE
+===============================================
+
+AUDIT FIRST.
+
+Trace from the actual rendered upper Watchlist Screener THEME cell.
+
+Return internally:
+
+frontend file/component
+
+exact row property rendered in the Theme column
+
+endpoint supplying the Watchlist rows
+
+backend route
+
+backend service/function populating the Theme field
+
+resolver/helper used
+
+Trace the exact current path.
+
+Then answer:
+
+Does the upper Screener Theme field use or behaviorally match:
+
+services/theme_resolver.py::resolve_primary_theme_for_ticker(...)
+
+?
+
+Next verify the recently completed 314/314 Watchlist → Themes membership sync.
+
+Prove whether it synchronized the same Theme identity shown in the upper Screener.
+
+Specifically compare current values for:
+
+AOSL
+WYFI
+SLAB
+ANET
+ALGM
+BE
+AMD
+MU
+MRVL
+CRDO
+ABCL
+SOFI
+DELL
+HOOD
+IBRX
+RBRK
+VRT
+NBIS
+AAOI
+
+For each:
+
+symbol
+upper Screener Theme
+canonical resolver Theme
+Themes-page merged membership Theme
+
+Expected:
+
+all three identities match.
+
+If they do not:
+
+STOP before implementing Part 2 and report the mismatch.
+
+Do not build around conflicting Theme identities.
+
+==================================================
+PART 2 — TRACE THE EXISTING LOWER THEME PERFORMANCE GROUPING
+============================================================
+
+Trace from the actual rendered:
+
+Watchlist
+→ Performance Groupings
+→ Theme
+
+section.
+
+Return internally:
+
+frontend file/component
+
+current grouping function
+
+current input data
+
+current ticker→group field
+
+current Theme card title source
+
+current card performance value source/formula
+
+current ticker sort behavior
+
+whether AI/LLM output is involved
+
+whether a stale saved categorization is involved
+
+whether the lower grouping currently consumes the same Watchlist rows as the upper Screener
+
+Do not assume:
+
+watchlist_analysis.py
+
+or any prior AI synthesis path is involved.
+
+Trace the actual rendered JSX/component.
+
+==================================================
+PART 3 — CANONICAL LOWER THEME GROUPING SOURCE
+==============================================
+
+The LOWER Theme performance grouping must consume the exact same current Watchlist row Theme field shown by the UPPER Screener.
+
+Do not independently call:
+
+map_ticker_to_primary_theme
+
+map_industry_to_theme
+
+Theme merge-layer membership
+
+an AI classifier
+
+an LLM report
+
+unless the upper Screener itself already returns the final resolved Theme field from those sources.
+
+The grouping source is:
+
+CURRENT WATCHLIST ROW
+→ EXACT UPPER SCREENER THEME PROPERTY
+
+One Theme identity.
+
+One grouping source.
+
+==================================================
+PART 4 — GROUP CURRENT WATCHLIST TICKERS BY THEME
+=================================================
+
+Use the current Watchlist rows already available to the Watchlist page if possible.
+
+Do not add a new provider request.
+
+Do not fetch new quotes.
+
+Do not create a second Watchlist endpoint unless proven necessary.
+
+For each current saved Watchlist row:
+
+read:
+
+symbol/ticker
+
+canonical Theme field
+
+current 1D percentage change field
+
+company/name if currently displayed in the card
+
+price if currently displayed
+
+Any ticker with a real assigned Theme belongs in exactly that Theme glasscard.
+
+Do not use Themes-page constituent membership as the grouping source.
+
+The lower Watchlist grouping represents:
+
+CURRENT WATCHLIST TICKERS GROUPED BY THEIR ASSIGNED THEME
+
+It does not represent all Theme-page ETFs/proxies/constituents.
+
+Therefore:
+
+Theme page may contain ETFs/proxies or non-Watchlist constituents.
+
+Do not show those in the Watchlist grouping unless they are themselves on the current saved Watchlist.
+
+==================================================
+PART 5 — UNASSIGNED TICKERS
+===========================
+
+If a current Watchlist ticker has no assigned Theme:
+
+do not invent a Theme.
+
+Do not call AI.
+
+Do not use an industry fallback different from the upper Screener.
+
+The lower grouping must match the upper Screener.
+
+If the upper Screener Theme value is unassigned/null:
+
+either:
+
+place the ticker in a single UNASSIGNED glasscard
+
+OR
+
+preserve the section's existing unassigned behavior if one already exists.
+
+Prefer one UNASSIGNED glasscard for transparency unless existing UI behavior clearly dictates otherwise.
+
+Report the exact behavior used.
+
+==================================================
+PART 6 — THEME 1D PERFORMANCE FORMULA
+=====================================
+
+For this Watchlist performance grouping, Theme 1D performance should measure broad current Watchlist Theme performance.
+
+Use:
+
+EQUAL-WEIGHT AVERAGE OF AVAILABLE CURRENT TICKER 1D % CHANGES
+
+Formula conceptually:
+
+theme_1d_pct =
+average(
+ticker_1d_pct
+for current Watchlist tickers in Theme
+where ticker_1d_pct is available
+)
+
+Do not market-cap weight.
+
+Do not use Theme Rotation score.
+
+Do not use Theme RS score.
+
+Do not use the Themes page's Theme performance calculation unless it happens to use this exact same current-Watchlist equal-weight definition.
+
+This lower Watchlist section answers:
+
+"How are the Watchlist tickers assigned to this Theme performing today as a group?"
+
+It does not answer:
+
+"How is the broader Theme Rotation basket performing?"
+
+---
+
+## MISSING 1D VALUES
+
+If a ticker has no usable current 1D % change:
+
+omit that ticker from the Theme performance average denominator.
+
+Still show the ticker in its Theme card if the current UI can represent missing change.
+
+Do not substitute 0%.
+
+Return diagnostics for missing 1D change rows.
+
+If no ticker in a Theme has usable 1D change:
+
+Theme 1D performance = unavailable
+
+Sort unavailable Theme cards after all Themes with valid performance.
+
+==================================================
+PART 7 — THEME CARD SORTING
+===========================
+
+Sort Theme glasscards:
+
+1. valid Theme 1D performance
+2. highest positive → lowest / most negative
+3. unavailable performance last
+
+Examples conceptually:
+
+AI Networking       +4.8%
+Semiconductors      +3.1%
+Biotech             +1.2%
+Fintech             -0.4%
+Clean Energy        -2.8%
+Unassigned          unavailable
+
+Do not alphabetically sort when performance is available.
+
+The sorting must recompute from current row data.
+
+==================================================
+PART 8 — TICKER SORTING INSIDE EACH THEME CARD
+==============================================
+
+Inside each Theme glasscard, sort Watchlist tickers by:
+
+current ticker 1D % change descending
+
+Highest-performing ticker first.
+
+Lowest-performing ticker last.
+
+Rows with unavailable 1D change sort last.
+
+Use the same exact current 1D % change property already displayed in the upper Screener CHG % column.
+
+Do not calculate a separate ticker return.
+
+==================================================
+PART 9 — GLASSCARD UI
+=====================
+
+Preserve the existing Watchlist design language.
+
+Use the existing lower Performance Groupings glasscard style/components where possible.
+
+Do not redesign the page.
+
+Do not change the upper Screener.
+
+Do not change Fundamental grouping.
+
+Do not change Market Cap grouping.
+
+Only repair the Theme grouping behavior.
+
+Each Theme glasscard should clearly show:
+
+Theme name
+
+Theme 1D performance %
+
+current Watchlist tickers assigned to that Theme
+
+For each ticker preserve existing row/card fields and styling where already implemented.
+
+Do not add unnecessary new fields.
+
+Positive/negative formatting should reuse existing Watchlist conventions.
+
+==================================================
+PART 10 — DYNAMIC WATCHLIST BEHAVIOR
+====================================
+
+No static ticker list.
+
+No hardcoded Theme member list.
+
+The Watchlist changes frequently.
+
+The lower Theme grouping must derive from:
+
+CURRENT WATCHLIST ROWS
+
+If a ticker is added to the Watchlist:
+
+it should appear in the appropriate Theme card once the canonical upper Screener Theme assignment is available.
+
+If a ticker is removed from the Watchlist:
+
+it should disappear from the lower Theme grouping.
+
+If a ticker is reassigned to a different Theme through the existing Themes-page membership flow:
+
+the upper Screener Theme changes
+
+and the lower grouping must move the ticker to the new Theme card automatically.
+
+No separate grouping membership write should be required.
+
+==================================================
+PART 11 — VALIDATION
+====================
+
+Using the current live Watchlist:
+
+return:
+
+current Watchlist row count
+
+upper Screener Theme assigned count
+
+lower Theme grouping ticker count
+
+unassigned count
+
+duplicate ticker count across Theme cards
+
+missing assigned ticker count
+
+Expected:
+
+every current Watchlist ticker appears exactly once in the lower Theme grouping.
+
+Equation:
+
+grouped assigned tickers
++
+unassigned grouped tickers
+==========================
+
+current Watchlist rows
+
+And:
+
+duplicate tickers = 0
+
+missing tickers = 0
+
+subject only to any existing explicit UI filtering such as Hide Foreign.
+
+IMPORTANT:
+
+The grouping should use the underlying current Watchlist dataset, not accidentally inherit the current Hide Foreign display toggle unless the existing Performance Groupings product intentionally follows that toggle.
+
+Audit and state current intended behavior.
+
+---
+
+## SPOT CHECK
+
+Show current grouping results for:
+
+AAOI
+ABCL
+AOSL
+ADEA
+ADUR
+AEHR
+AEVA
+AIR
+AKAM
+WYFI
+SLAB
+ANET
+ALGM
+BE
+AMD
+MU
+MRVL
+CRDO
+
+For each:
+
+upper Screener Theme
+lower Theme glasscard
+ticker 1D change
+position/rank inside the card
+
+Then show the Top 10 Theme glasscards by Theme 1D performance:
+
+rank
+Theme
+Theme 1D %
+ticker count
+top 3 ticker performers
+
+Then Bottom 10 Theme glasscards.
+
+==================================================
+PART 12 — COST / REGRESSION PROOF
+=================================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 provider calls added
+
+0 new quote calls
+
+0 new Theme resolver
+
+0 new ticker classification path
+
+0 Theme Rotation changes
+
+0 Theme RS changes
+
+0 Options Flow changes
+
+0 Trade Alignment changes
+
+0 Entry Structure changes
+
+0 upper Watchlist Screener changes
+
+0 Fundamental grouping changes
+
+0 Market Cap grouping changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+WATCHLIST THEME GROUPING REPORT
+
+FILES CHANGED:
+[list or NONE]
+
+UPPER SCREENER THEME FIELD:
+[field]
+
+UPPER SCREENER THEME PATH:
+[frontend → endpoint → backend → resolver]
+
+SYNC USES UPPER SCREENER THEME IDENTITY:
+[YES / NO]
+
+LOWER THEME GROUPING OLD PATH:
+[path/source]
+
+OLD GROUPING PROBLEM:
+[exact issue]
+
+LOWER THEME GROUPING NEW SOURCE:
+[exact current Watchlist row field]
+
+THEME 1D FORMULA:
+[exact formula]
+
+THEME CARD SORT:
+[logic]
+
+TICKER SORT:
+[logic]
+
+CURRENT WATCHLIST ROWS:
+[count]
+
+GROUPED TICKERS:
+[count]
+
+UNASSIGNED:
+[count/list]
+
+DUPLICATES:
+[count]
+
+MISSING:
+[count]
+
+TOP THEMES:
+[summary]
+
+BOTTOM THEMES:
+[summary]
+
+DYNAMIC ADD/REMOVE/REASSIGN:
+[proof]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+WATCHLIST THEME GROUPING VERDICT
+
+UPPER SCREENER THEME IS CANONICAL:
+[YES / NO]
+
+LATEST 314/314 THEMES SYNC USED CORRECT IDENTITY:
+[YES / NO]
+
+LOWER THEME GROUPING USES SAME THEME FIELD:
+[YES / NO]
+
+AI/LLM GROUPING REMOVED:
+[YES / NO / NOT PRESENT]
+
+THEME 1D PERFORMANCE FUNCTIONAL:
+[YES / NO]
+
+THEME CARDS SORTED BY 1D:
+[PASS / FAIL]
+
+TICKERS SORTED BY 1D:
+[PASS / FAIL]
+
+ALL WATCHLIST TICKERS GROUPED EXACTLY ONCE:
+[count / percent]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+NEXT IMPLEMENTATION:
+OPTIONS ALIGNMENT V2
+
+Do not modify Options Alignment.
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not build LOW_BASE states.
+Do not make unrelated changes.
