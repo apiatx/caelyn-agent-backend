@@ -1,0 +1,852 @@
+WATCHLIST ALIGNMENT SURFACING BACKEND AUDIT — DEFINE THE SAFE READ CONTRACT FOR TRADE / INVESTMENT / ACTIONABILITY / ENTRY SHADOW UI
+
+AUDIT ONLY.
+
+ZERO CODE CHANGES.
+
+Work only in the existing backend Replit project.
+
+The deterministic backend model stack is now complete for the current phase:
+
+TRADE ALIGNMENT
+
+Current archetypes:
+
+THEME_ALIGNMENT
+
+ELITE_ASSET_REBOUND
+
+Both are evaluated independently.
+
+The highest available archetype score is selected as:
+
+trade_alignment_archetype
+
+trade_alignment_score
+
+ELITE_ASSET_REBOUND V1 has been validated over the full 379-symbol universe:
+
+THEME_ALIGNMENT available:
+350
+
+ELITE_ASSET_REBOUND available:
+21
+
+ELITE_ASSET_REBOUND selected:
+7
+
+False-positive invariant violations:
+0
+
+INVESTMENT ALIGNMENT V1
+
+Separate deterministic long-duration asset model.
+
+ACTIONABILITY V1
+
+Current setup/action state layer.
+
+ENTRY STRUCTURE V2
+
+Current structural/entry context.
+
+The next product phase is:
+
+WATCHLIST UI / ALIGNMENT SHADOW COMPARISON
+
+The user wants to surface the new deterministic models alongside the existing Watchlist sections:
+
+Golden Zone
+
+HC Trade Zone
+
+HC Investment Zone
+
+Growth Momentum
+
+Do not replace those old sections yet.
+
+Do not modify any scoring model.
+
+Do not modify any endpoint.
+
+Do not modify frontend code.
+
+This task has ONE goal:
+
+AUDIT THE CURRENT BACKEND READ CONTRACTS AND DEFINE THE SMALLEST SAFE API CONTRACT FOR A NEW WATCHLIST ALIGNMENT SHADOW UI.
+
+==================================================
+PRODUCT UI INTENT
+=================
+
+The new Watchlist Alignment surface should answer, per ticker:
+
+WHAT SHOULD I DO NOW?
+→ Actionability
+
+IS A SWING OPPORTUNITY DEVELOPING?
+→ Trade Alignment
+
+WHY?
+→ selected Trade archetype
+
+IS THIS AN EXCEPTIONAL LONG-DURATION ASSET?
+→ Investment Alignment
+
+IS THE CURRENT STRUCTURE ATTRACTIVE?
+→ Entry Structure
+
+Conceptual display:
+
+MU
+
+ACTION:
+WAIT_FOR_RETEST
+
+TRADE:
+81.9
+THEME_ALIGNMENT
+
+INVESTMENT:
+93.9
+ELITE
+
+ENTRY:
+WAIT_FOR_RETEST
+48 / C
+
+THEME:
+Memory & Storage
+
+OPTIONS:
+BULLISH_ACCELERATING
+
+Another:
+
+LITE
+
+ACTION:
+REVERSAL_WATCH
+
+TRADE:
+77.0
+ELITE_ASSET_REBOUND
+
+INVESTMENT:
+87.9
+ELITE
+
+ENTRY:
+REVERSAL_WATCH
+
+Another:
+
+PLTR
+
+ACTION:
+AVOID
+
+TRADE:
+50.1
+ELITE_ASSET_REBOUND
+
+INVESTMENT:
+84.6
+ELITE
+
+ENTRY:
+SUPPORT_LOST
+
+CONFLICT:
+STRUCTURE_BROKEN
+
+The new UI is a decision surface.
+
+It must not recompute scoring.
+
+==================================================
+PART 0 — TRACE CURRENT CONFLUENCE READ ENDPOINTS
+================================================
+
+Trace:
+
+GET /api/alpha/confluence
+
+GET /api/alpha/confluence/{symbol}
+
+build_confluence_snapshot()
+
+result slicing/limits
+
+full-universe internal build
+
+per-symbol lookup behavior
+
+cache/LKG behavior
+
+response time
+
+current endpoint query params
+
+Return exact endpoint contracts.
+
+Specifically identify:
+
+Does `/api/alpha/confluence` still return only a ranked/top-N slice?
+
+What is the default limit?
+
+Maximum limit?
+
+Does it internally compute all 379 but slice `results[]`?
+
+Can the frontend safely retrieve all current Watchlist symbols from this endpoint?
+
+Do not assume top-200 is sufficient.
+
+==================================================
+PART 1 — INVENTORY EXACT CURRENT OUTPUT FIELDS
+==============================================
+
+Return the exact current production result keys for:
+
+symbol
+
+trade_alignment_available
+
+trade_alignment_score
+
+trade_alignment_archetype
+
+trade_alignment_archetype_scores
+
+trade_alignment_selected_reason
+
+trade_alignment_reason_codes
+
+theme_alignment_trade_score
+
+elite_asset_rebound_score
+
+elite_asset_rebound_available
+
+elite_asset_rebound_strengths
+
+elite_asset_rebound_conflicts
+
+investment_alignment_available
+
+investment_alignment_score
+
+investment_alignment_state
+
+investment_alignment_strengths
+
+investment_alignment_risks
+
+investment_alignment_reason_codes
+
+actionability_available
+
+actionability_state
+
+actionability_score
+
+actionability_strengths
+
+actionability_conflicts
+
+actionability_reason_codes
+
+entry_state
+
+entry_score
+
+entry_grade
+
+entry_family
+
+base_archetype
+
+extension_state
+
+options_alignment_score
+
+options_pressure_state
+
+primary Theme ID/name
+
+Stage score/label
+
+Catalyst score
+
+Social Bonus
+
+Do not use prompt-era field names.
+
+Return the exact live keys from current response objects.
+
+==================================================
+PART 2 — ACTIONABILITY LIVE LOGIC TRACE
+=======================================
+
+Audit:
+
+backend/services/actionability_service.py
+
+There is a reporting inconsistency that must be reconciled.
+
+The original Actionability design/validation described state gates such as:
+
+READY:
+Trade Alignment >= threshold
++
+Entry score/state
+
+EARLY_WATCH:
+Trade Alignment >= threshold
++
+forming Entry state
+
+However the recent ELITE_ASSET_REBOUND validation report stated:
+
+"Actionability state decision is driven by Entry Structure/entry_family gates; ta_score only feeds the 0–100 diagnostic actionability_score and never the state machine itself."
+
+Do not change code.
+
+Trace the ACTUAL CURRENT LIVE implementation.
+
+Return exact state precedence and conditions for:
+
+READY
+
+EARLY_WATCH
+
+WATCH
+
+WAIT_FOR_BREAKOUT
+
+WAIT_FOR_RETEST
+
+REVERSAL_WATCH
+
+TOO_EXTENDED
+
+AVOID
+
+For every state show whether these fields affect classification:
+
+trade_alignment_score
+
+trade_alignment_available
+
+entry_score
+
+entry_state
+
+entry_grade
+
+entry_family
+
+options_pressure_state
+
+theme score
+
+other supporting fields
+
+Answer explicitly:
+
+DOES TRADE ALIGNMENT SCORE AFFECT ACTIONABILITY STATE TODAY?
+
+YES or NO.
+
+If YES:
+
+show exact gates.
+
+If NO:
+
+explain how the current implementation diverged from the original Actionability V1 design/report.
+
+Do not fix it in this audit.
+
+==================================================
+PART 3 — TRACE EXISTING WATCHLIST LEGACY SURFACES
+=================================================
+
+Trace backend routes/services feeding:
+
+Golden Zone
+
+HC Trade Zone
+
+HC Investment Zone
+
+Growth Momentum
+
+Do not infer from old audits.
+
+Return:
+
+frontend-facing endpoint
+
+backend route
+
+service/function
+
+source data
+
+whether deterministic
+
+whether LLM-backed
+
+whether cached
+
+whether per-ticker or grouped
+
+Refresh cadence
+
+Specifically prove whether any of the four old sections already consume:
+
+Trade Alignment
+
+Investment Alignment V1
+
+Actionability
+
+Entry Structure V2
+
+Do not modify them.
+
+==================================================
+PART 4 — WATCHLIST UNIVERSE JOIN
+================================
+
+The new Alignment UI belongs on the current Watchlist page.
+
+Trace the current canonical live Watchlist loader and ticker count.
+
+Return:
+
+current Watchlist ID
+
+current ticker count
+
+ticker symbol field
+
+canonical Theme field
+
+favorites/Close Watch field if relevant
+
+Prove how to join Watchlist tickers to Confluence results.
+
+Handle:
+
+foreign-prefixed symbols
+
+symbols with no Trade Alignment
+
+symbols with no Investment Alignment
+
+symbols with no Entry
+
+symbols outside Stage2 universe
+
+Do not silently drop a Watchlist ticker because model data is unavailable.
+
+The UI should be capable of showing:
+
+INSUFFICIENT DATA
+
+per model.
+
+==================================================
+PART 5 — DETERMINE WHETHER EXISTING CONFLUENCE ENDPOINT IS SAFE
+===============================================================
+
+Evaluate whether the existing:
+
+GET /api/alpha/confluence
+
+is suitable for the Watchlist Alignment UI.
+
+Criteria:
+
+returns every current Watchlist ticker
+
+no top-N slicing loss
+
+reasonable response size
+
+reasonable latency
+
+does not trigger new provider calls
+
+stable schema
+
+supports frontend polling/refetch expectations
+
+If suitable:
+
+recommend reuse.
+
+If unsuitable because of slicing or payload size:
+
+propose the smallest backend read endpoint.
+
+Do not implement.
+
+Preferred conceptual shape if needed:
+
+GET /api/watchlist/{watchlist_id}/alignment
+
+This endpoint should:
+
+load current Watchlist tickers
+
+read/build existing Confluence snapshot
+
+join every Watchlist ticker
+
+return one compact alignment row per Watchlist ticker
+
+not recalculate models separately
+
+not create a new scoring service
+
+not create a new cache
+
+not add provider calls
+
+Return exact recommendation.
+
+==================================================
+PART 6 — COMPACT ALIGNMENT ROW CONTRACT
+=======================================
+
+Propose the smallest useful row payload.
+
+Conceptually:
+
+{
+"symbol": "MU",
+
+"actionability": {
+"available": true,
+"state": "WAIT_FOR_RETEST",
+"score": 68.2,
+"strengths": [...],
+"conflicts": [...]
+},
+
+"trade_alignment": {
+"available": true,
+"score": 81.9,
+"archetype": "THEME_ALIGNMENT",
+"archetype_scores": {
+"THEME_ALIGNMENT": 81.9,
+"ELITE_ASSET_REBOUND": 72.0
+},
+"selected_reason": "HIGHEST_AVAILABLE_ARCHETYPE_SCORE"
+},
+
+"investment_alignment": {
+"available": true,
+"score": 93.9,
+"state": "ELITE",
+"strengths": [...],
+"risks": [...]
+},
+
+"entry": {
+"state": "WAIT_FOR_RETEST",
+"score": 48,
+"grade": "C",
+"family": "CONTINUATION",
+"base_archetype": "...",
+"extension_state": "..."
+},
+
+"theme": {
+"id": "...",
+"name": "..."
+},
+
+"options": {
+"alignment_score": ...,
+"pressure_state": "..."
+}
+}
+
+Do not include every diagnostic field from Confluence.
+
+The frontend can use per-symbol detail later for drill-down.
+
+Recommend which fields belong in:
+
+list payload
+
+detail payload
+
+==================================================
+PART 7 — SORT / FILTER SUPPORT
+==============================
+
+The future frontend should be able to sort/filter locally or via backend.
+
+Potential sort/filter concepts:
+
+Actionability state
+
+Actionability score
+
+Trade Alignment score
+
+selected archetype
+
+Investment Alignment score
+
+Investment state
+
+Entry state
+
+Theme
+
+Options pressure state
+
+Do not implement.
+
+Audit expected Watchlist row count/payload size.
+
+Recommend:
+
+frontend local sort/filter
+
+or:
+
+backend query params
+
+Use the simplest architecture for ~current Watchlist scale.
+
+==================================================
+PART 8 — SHADOW COMPARISON DATA
+===============================
+
+The new Alignment surface must support comparison against the old Watchlist sections before anything is replaced.
+
+Audit whether a ticker-level deterministic join can be built for:
+
+Golden Zone membership
+
+HC Trade membership
+
+HC Investment membership
+
+Growth Momentum membership
+
+For each Watchlist ticker, can backend cheaply expose boolean/label fields such as:
+
+legacy_golden_zone
+
+legacy_hc_trade
+
+legacy_hc_investment
+
+legacy_growth_momentum
+
+or exact current equivalents?
+
+Do not implement.
+
+If the old sections are group/list payloads, explain the cheapest deterministic membership join.
+
+Do not invoke LLM analysis.
+
+Use existing cached outputs only.
+
+==================================================
+PART 9 — COST / PERFORMANCE
+===========================
+
+Measure or inspect:
+
+full Confluence snapshot build latency
+
+existing cache/LKG behavior
+
+per-symbol lookup latency
+
+Watchlist count
+
+estimated compact payload size
+
+provider-call behavior
+
+Return whether a Watchlist Alignment endpoint can be:
+
+pure existing-cache/model reads
+
+with:
+
+0 incremental FMP calls
+
+0 Tradier calls
+
+0 Grok calls
+
+0 LLM calls
+
+If build_confluence_snapshot still costs ~70–80 seconds on a cold/read path:
+
+identify whether the frontend endpoint should read an existing LKG/snapshot instead of synchronously rebuilding the entire model universe.
+
+Do not add a cache in this audit.
+
+Recommend the correct serving path based on existing architecture.
+
+==================================================
+PART 10 — RECOMMEND EXACT BACKEND TASK
+======================================
+
+Based on the audit, recommend ONE of:
+
+A. Frontend uses existing `/api/alpha/confluence` directly.
+
+B. Add a compact `/api/watchlist/{watchlist_id}/alignment` read endpoint that joins existing model output to all current Watchlist tickers.
+
+C. Another existing endpoint already solves this.
+
+Return exact reason.
+
+The recommendation must preserve:
+
+current scoring services
+
+current Confluence producer
+
+current caches/LKGs
+
+current Watchlist loader
+
+Do not create a parallel alignment producer.
+
+==================================================
+PART 11 — COST / REGRESSION PROOF
+=================================
+
+This audit must make:
+
+0 code changes
+
+0 database writes
+
+0 provider calls
+
+0 model changes
+
+0 frontend changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+WATCHLIST ALIGNMENT SURFACING BACKEND AUDIT
+
+FILES CHANGED:
+[NONE]
+
+CURRENT CONFLUENCE ENDPOINT:
+[contract]
+
+FULL-UNIVERSE / SLICE BEHAVIOR:
+[exact behavior]
+
+LIVE ALIGNMENT FIELDS:
+[field inventory]
+
+ACTIONABILITY LIVE STATE LOGIC:
+[exact precedence/gates]
+
+TRADE ALIGNMENT AFFECTS ACTIONABILITY STATE:
+[YES / NO + proof]
+
+LEGACY GOLDEN ZONE:
+[path/source]
+
+LEGACY HC TRADE:
+[path/source]
+
+LEGACY HC INVESTMENT:
+[path/source]
+
+LEGACY GROWTH MOMENTUM:
+[path/source]
+
+CURRENT WATCHLIST:
+[id/count/source]
+
+WATCHLIST→CONFLUENCE JOIN:
+[behavior]
+
+EXISTING ENDPOINT SUITABLE:
+[YES / NO]
+
+RECOMMENDED READ CONTRACT:
+[endpoint/payload]
+
+COMPACT ROW FIELDS:
+[list]
+
+DETAIL-ONLY FIELDS:
+[list]
+
+SORT/FILTER:
+[recommendation]
+
+LEGACY SHADOW JOIN:
+[feasibility]
+
+PERFORMANCE / COST:
+[results]
+
+RECOMMENDATION:
+[A / B / C]
+
+NEXT BACKEND TASK:
+[exact implementation task]
+
+End exactly:
+
+WATCHLIST ALIGNMENT SURFACING VERDICT
+
+ALL CURRENT WATCHLIST TICKERS CAN BE REPRESENTED:
+[YES / NO]
+
+TOP-N SLICE RISK:
+[YES / NO]
+
+NEW SCORING SERVICE REQUIRED:
+[NO expected]
+
+NEW CACHE REQUIRED:
+[NO expected]
+
+COMPACT WATCHLIST ALIGNMENT ENDPOINT REQUIRED:
+[YES / NO]
+
+ACTIONABILITY LOGIC RECONCILED:
+[YES / NO]
+
+LEGACY SHADOW COMPARISON FEASIBLE:
+[YES / NO]
+
+INCREMENTAL PROVIDER CALLS:
+[0]
+
+NEXT IMPLEMENTATION:
+[exact backend or frontend task]
+
+ZERO CODE CHANGES.
