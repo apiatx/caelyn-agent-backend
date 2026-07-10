@@ -22,11 +22,11 @@
     },
     {
       "name": "Memory & Storage",
-      "score": 84.6,
+      "score": 84.1,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (84/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +478.1%, QQQ +",
-        "X consensus: 2 tickers mentioned"
+        "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
         "MRAM",
@@ -78,6 +78,26 @@
   ],
   "emerging_themes": [
     {
+      "name": "AI Networking",
+      "score": 68.3,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
+        "X consensus: 3 tickers mentioned"
+      ],
+      "related_etfs": [
+        "ANET",
+        "AVGO",
+        "CIEN",
+        "MRVL"
+      ],
+      "related_tickers": [
+        "EXTR",
+        "CSCO",
+        "VISN"
+      ]
+    },
+    {
       "name": "Substrates / Packaging",
       "score": 68.2,
       "source": "theme_rs_service",
@@ -94,26 +114,6 @@
         "ASMVF",
         "KLIC",
         "UMICF"
-      ]
-    },
-    {
-      "name": "AI Networking",
-      "score": 67.8,
-      "source": "theme_rs_service",
-      "evidence": [
-        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
-        "X consensus: 1 ticker mentioned"
-      ],
-      "related_etfs": [
-        "ANET",
-        "AVGO",
-        "CIEN",
-        "MRVL"
-      ],
-      "related_tickers": [
-        "EXTR",
-        "CSCO",
-        "VISN"
       ]
     },
     {
@@ -136,11 +136,10 @@
     },
     {
       "name": "Semiconductors",
-      "score": 65.0,
+      "score": 64.7,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
-        "X consensus: 1 ticker mentioned"
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "AMD",
@@ -155,11 +154,10 @@
     },
     {
       "name": "Technology",
-      "score": 64.5,
+      "score": 64.2,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
-        "X consensus: 1 ticker mentioned"
+        "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
       "related_etfs": [
         "XLK",
@@ -283,7 +281,7 @@
   ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-07-10T14:42:42.358019+00:00",
+  "last_updated": "2026-07-10T14:53:33.665330+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -294,5 +292,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1783694562.3580763
+  "_saved_at": 1783695213.669072
 }
