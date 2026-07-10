@@ -214,8 +214,137 @@ def _is_us_ticker(sym: str) -> bool:
     return bool(sym) and ":" not in sym
 
 
+_LAST_WATCHLIST_MEMBERSHIP_DIAGNOSTICS: dict = {
+    "watchlist_count": 0,
+    "assigned_count": 0,
+    "unassigned_symbols": [],
+    "theme_counts": {},
+}
+
+
+def _load_current_watchlist_theme_membership() -> dict[str, list[str]]:
+    """
+    Dynamic Watchlist-derived Theme membership layer.
+
+    Source: CURRENT SAVED WATCHLIST STATE (Postgres `watchlist` row, live read
+    — no snapshot, no static list). For every symbol currently saved in the
+    Watchlist, resolve its assigned Theme using the ONE canonical resolver
+    (services.theme_resolver.resolve_primary_theme_for_ticker), then include
+    it in that Theme's membership.
+
+    Returns: {theme_id: sorted_us_ticker_list}
+    Returns {} if Postgres is unavailable or the watchlist is empty.
+
+    No LLM/provider calls. No independent theme classification — resolution
+    is fully delegated to the canonical resolver (theme_ticker_mapper's
+    canonical map + CSV-industry fallback). Tickers with no resolution are
+    left unassigned (recorded in diagnostics only, never guessed).
+    """
+    global _LAST_WATCHLIST_MEMBERSHIP_DIAGNOSTICS
+
+    try:
+        from data.pg_storage import is_available, watchlist_read
+    except ImportError:
+        log.warning("[THEME_MERGE] pg_storage not importable — static universe only")
+        return {}
+
+    if not is_available():
+        log.warning("[THEME_MERGE] Postgres unavailable — static universe only")
+        return {}
+
+    try:
+        store = watchlist_read(_DEV_WATCHLIST_ID)
+        if not store:
+            # _DEV_WATCHLIST_ID can go stale if the saved Watchlist row was
+            # re-created under a new id (e.g. re-uploaded from scratch).
+            # Fall back to the most recently saved watchlist — the exact same
+            # "current saved Watchlist" resolution watchlist_service.load_watchlist()
+            # uses when no explicit id is given.
+            from data.pg_storage import watchlist_list as _pg_wl_list
+            entries = _pg_wl_list()
+            if entries:
+                store = watchlist_read(entries[0]["id"])
+    except Exception as exc:
+        log.warning(f"[THEME_MERGE] Error reading current watchlist: {exc}")
+        return {}
+
+    if not store or not store.get("tickers"):
+        log.warning(f"[THEME_MERGE] Watchlist {_DEV_WATCHLIST_ID!r} empty/not found")
+        return {}
+
+    tickers: list[str] = [
+        (t or "").strip().upper() for t in store.get("tickers", []) if t
+    ]
+    tickers = [t for t in tickers if t and _is_us_ticker(t)]
+
+    csv_data = store.get("csv_data") or []
+    csv_map: dict[str, dict] = {}
+    for row in csv_data:
+        sym = (row.get("Symbol") or row.get("symbol") or row.get("Ticker") or "").strip().upper()
+        if sym:
+            csv_map[sym] = row
+
+    try:
+        from services.theme_resolver import (
+            build_theme_resolution_context,
+            resolve_primary_theme_for_ticker,
+        )
+    except ImportError as exc:
+        log.warning(f"[THEME_MERGE] theme_resolver not importable: {exc}")
+        return {}
+
+    # NOTE: at this point in _build() the Themes-page membership map inside
+    # the resolver's ctx reflects the PRE-watchlist-merge base universe (this
+    # function's own output hasn't been merged in yet), so resolution here is
+    # driven by the canonical_map / industry_fallback tiers — exactly the
+    # same "what Theme is this ticker assigned to" answer the Watchlist UI
+    # itself shows. This is intentional: it is the single source of truth,
+    # not a second/independent classifier.
+    ctx = build_theme_resolution_context()
+
+    theme_to_tickers: dict[str, set[str]] = {}
+    unassigned: list[str] = []
+
+    for sym in tickers:
+        industry = (csv_map.get(sym, {}).get("Industry")
+                    or csv_map.get(sym, {}).get("industry") or "").strip()
+        res = resolve_primary_theme_for_ticker(sym, industry=industry, ctx=ctx)
+        tid = res.get("theme_id")
+        if tid:
+            theme_to_tickers.setdefault(tid, set()).add(sym)
+        else:
+            unassigned.append(sym)
+
+    result = {tid: sorted(syms) for tid, syms in theme_to_tickers.items() if syms}
+
+    _LAST_WATCHLIST_MEMBERSHIP_DIAGNOSTICS = {
+        "watchlist_count": len(tickers),
+        "assigned_count": sum(len(v) for v in result.values()),
+        "unassigned_symbols": sorted(unassigned),
+        "theme_counts": {tid: len(v) for tid, v in result.items()},
+    }
+
+    log.info(
+        f"[THEME_MERGE] Live watchlist membership resolved: "
+        f"{len(tickers)} watchlist symbols, "
+        f"{_LAST_WATCHLIST_MEMBERSHIP_DIAGNOSTICS['assigned_count']} assigned "
+        f"across {len(result)} themes, {len(unassigned)} unassigned"
+    )
+
+    return result
+
+
+def get_last_watchlist_membership_diagnostics() -> dict:
+    """Read-only diagnostics snapshot from the most recent membership sync."""
+    return dict(_LAST_WATCHLIST_MEMBERSHIP_DIAGNOSTICS)
+
+
 def _load_watchlist_theme_tickers() -> dict[str, list[str]]:
     """
+    LEGACY / UNUSED (kept for reference only — superseded by
+    _load_current_watchlist_theme_membership, which uses the canonical
+    resolver instead of a hardcoded analysis-section-title map).
+
     Build the authoritative ticker → theme assignment from Postgres.
 
     Returns:  {theme_id: sorted_us_ticker_list}
@@ -459,11 +588,16 @@ def _build() -> tuple[dict, dict[str, list[str]]]:
                                               (materialized 2026-06-22; no longer live-fetched)
     Falls back gracefully on any failure.
 
-    NOTE: Live Watchlist reads (_load_watchlist_theme_tickers) are intentionally disabled.
-    The Themes page is universal/curated; normal Watchlist CSV uploads, AI categorization,
-    and user edits must NOT automatically alter the Themes universe.
-    To add a ticker to a theme, use the admin theme editor (/api/themes/admin/memberships),
-    which writes to theme_ticker_overrides (source='manual_admin').
+    Live Watchlist reads use _load_current_watchlist_theme_membership(), which
+    resolves each CURRENT saved Watchlist ticker's Theme via the canonical
+    resolver (services.theme_resolver.resolve_primary_theme_for_ticker) and
+    adds it to that Theme's membership. This runs on every refresh, so the
+    Themes-page universe always reflects the current saved Watchlist state
+    with no code changes needed when the Watchlist changes.
+
+    Manual admin overrides (source='manual_admin') are applied AFTER the
+    watchlist merge (see _build_enriched_universe Step 3) and always win —
+    an explicit manual removal cannot be resurrected by the Watchlist sync.
     """
     try:
         from services.theme_rs_universe import THEME_RS_UNIVERSE
@@ -471,15 +605,11 @@ def _build() -> tuple[dict, dict[str, list[str]]]:
         log.error(f"[THEME_MERGE] Cannot import THEME_RS_UNIVERSE: {exc}")
         return {}, {}
 
-    # Intentionally NOT calling _load_watchlist_theme_tickers() here.
-    # The Themes page is decoupled from live Watchlist storage.
-    # Historical watchlist seeds are persisted as source='watchlist_snapshot_seed'
-    # in theme_ticker_overrides and loaded below via _load_theme_ticker_overrides().
-    watchlist_tickers: dict[str, list[str]] = {}
+    watchlist_tickers: dict[str, list[str]] = _load_current_watchlist_theme_membership()
     manual_overrides  = _load_theme_ticker_overrides()
 
-    if not manual_overrides:
-        log.info("[THEME_MERGE] No override data — stamping representative symbols only")
+    if not manual_overrides and not watchlist_tickers:
+        log.info("[THEME_MERGE] No override/watchlist data — stamping representative symbols only")
         merged, net_new = _build_enriched_universe(THEME_RS_UNIVERSE, {}, {})
         return merged, net_new
 

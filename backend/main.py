@@ -435,6 +435,17 @@ async def lifespan(app):
     except Exception as _mab_err:
         print(f"[MANUAL_ANCHOR] startup ensure error: {_mab_err}")
 
+    # Re-sync the Themes merged universe's live-Watchlist membership layer now
+    # that Postgres is confirmed available (module-import-time _build() runs
+    # before the DB pool is guaranteed ready, so the very first pass can miss
+    # the current saved Watchlist). Cheap, non-blocking, read-only refresh.
+    try:
+        from services.theme_merge_layer import refresh_enriched_universe as _theme_merge_refresh
+        _theme_merge_refresh()
+        print("[THEME_MERGE] Startup re-sync of live Watchlist membership complete")
+    except Exception as _theme_merge_err:
+        print(f"[THEME_MERGE] Startup re-sync error (non-fatal): {_theme_merge_err}")
+
     import threading
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())

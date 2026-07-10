@@ -1,0 +1,553 @@
+WATCHLIST → THEMES MEMBERSHIP SYNC — RESTORE COMPLETE DYNAMIC WATCHLIST MEMBERSHIP IN EXISTING THEME UNIVERSE
+
+Work only in the existing backend Replit project.
+
+This is a targeted upstream membership synchronization repair.
+
+Do not modify Trade Alignment scoring.
+Do not modify Options Alignment.
+Do not modify Options Flow.
+Do not modify Sectors → All Stocks.
+Do not modify Theme Rotation scoring.
+Do not modify Theme RS scoring.
+Do not modify Themes page frontend.
+Do not modify Watchlist frontend.
+Do not modify Entry Structure.
+Do not modify Stage Analysis.
+Do not modify Catalyst Alignment.
+Do not modify Daily Alpha.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add provider calls.
+Do not add a new Theme system.
+Do not add a new membership table.
+Do not create static one-off memberships for the current Watchlist.
+
+==================================================
+PRODUCT INTENT
+==============
+
+The intended existing product behavior is:
+
+Every current saved Watchlist ticker with an assigned Theme should appear as a member of that assigned Theme on the Themes page.
+
+The Themes page already also contains its existing ETFs/proxies/other intended constituents.
+
+Those must remain.
+
+The user has proven the shared behavior manually:
+
+1. Add ticker to Watchlist.
+2. Ticker initially may be unassigned.
+3. Add ticker to a Theme on the Themes page.
+4. Themes page shows the ticker in that Theme.
+5. Watchlist subsequently shows the same Theme.
+
+The recently implemented canonical Theme resolver now reproduces Watchlist Theme identity with approximately 99% coverage.
+
+However, the actual merged Themes-page membership universe remains much less complete.
+
+Prior audit showed:
+
+Watchlist Theme populated:
+371 / 373
+
+Current old Theme membership bridge:
+approximately 192 / 373
+
+This means many Watchlist tickers have an assigned Theme visible on the Watchlist but are not actual members of that Theme in the merged Themes-page universe.
+
+Examples previously proven included:
+
+AOSL → Semiconductors
+WYFI → Data Center Infrastructure
+SLAB → Semiconductors
+
+The assigned Theme is already known.
+
+The missing behavior is dynamic Watchlist-derived membership synchronization into the EXISTING Theme universe.
+
+==================================================
+PART 0 — AUDIT THE INTENDED WATCHLIST MEMBERSHIP LAYER
+======================================================
+
+Before editing, trace:
+
+backend/services/theme_merge_layer.py
+
+ENRICHED_THEME_RS_UNIVERSE
+
+refresh_enriched_universe()
+
+theme_ticker_mapper
+
+the canonical resolver:
+
+backend/services/theme_resolver.py::resolve_primary_theme_for_ticker(...)
+
+the current saved Watchlist source
+
+Neon theme_ticker_overrides
+
+manual add/remove precedence
+
+Identify whether an existing Watchlist-derived membership layer already exists but is:
+
+partial
+stale
+seed-based
+incorrectly filtered
+initialized in the wrong order
+or using a different source.
+
+The task is to restore intended behavior, not invent a new architecture.
+
+Answer internally:
+
+1. Where are current saved Watchlist symbols loaded?
+2. Does theme_merge_layer currently attempt to add Watchlist tickers?
+3. If yes, why are assigned tickers such as AOSL/WYFI/SLAB absent?
+4. Is it using a static seed map instead of the live saved Watchlist?
+5. Is the canonical resolver unavailable at merge time?
+6. Is there initialization-order drift?
+7. Is a subset/filter dropping valid tickers?
+
+Prove the exact root cause before editing.
+
+==================================================
+PART 1 — DYNAMIC CURRENT WATCHLIST MEMBERSHIP
+=============================================
+
+The existing merged Theme universe must include a Watchlist-derived membership layer.
+
+Conceptually:
+
+current saved Watchlist symbols
+↓
+resolve_primary_theme_for_ticker(...)
+↓
+assigned Theme
+↓
+include ticker in that Theme's merged membership
+
+Use the EXISTING canonical Theme resolver.
+
+Do not duplicate Theme resolution.
+
+Do not independently call:
+
+map_ticker_to_primary_theme
+map_industry_to_theme
+
+from a new synchronization implementation if the canonical resolver already encapsulates the final behavior.
+
+There must remain one answer to:
+
+"What Theme is this Watchlist ticker assigned to?"
+
+Use that answer.
+
+==================================================
+DYNAMIC REQUIREMENT
+===================
+
+Do not use a hardcoded ticker count.
+
+Do not build a static list from today's Watchlist.
+
+The Watchlist changes frequently.
+
+The synchronization source must be:
+
+CURRENT SAVED WATCHLIST STATE
+
+Every refresh/rebuild of the merged Theme universe must derive Watchlist membership from the current saved Watchlist source.
+
+If the Watchlist contains X symbols today and Y tomorrow, the Watchlist-derived Theme membership layer must naturally reflect the current saved state.
+
+No code changes should be required when Watchlist symbols change.
+
+==================================================
+PART 2 — MERGE LAYER SEMANTICS
+==============================
+
+Preserve all existing Theme constituent sources.
+
+Conceptually the merged Theme membership may include:
+
+existing base Theme Universe members
+existing ETFs/proxies
+existing curated constituents
+current Watchlist-derived members
+manual Theme additions
+manual Theme removals/exclusions
+
+Use the exact existing source architecture.
+
+Do not remove ETFs.
+
+Do not remove proxies.
+
+Do not replace candidate_symbols/proxy_symbols wholesale.
+
+Do not turn the Themes page into Watchlist-only membership.
+
+The required fix is:
+
+ADD THE COMPLETE CURRENT WATCHLIST-DERIVED MEMBERSHIP LAYER TO THE EXISTING MERGE.
+
+==================================================
+PART 3 — OVERRIDE PRECEDENCE
+============================
+
+Preserve current manual behavior.
+
+If the user manually assigns/reassigns a ticker through:
+
+POST /api/themes/admin/memberships
+
+and:
+
+theme_ticker_overrides
+
+that manual Theme membership must remain authoritative.
+
+If an existing manual removal/exclusion exists:
+
+preserve its current semantics.
+
+Do not allow automatic Watchlist synchronization to resurrect a ticker into a Theme from which the user explicitly removed it if the existing architecture treats removal as authoritative.
+
+The exact current remove-then-add or add/remove precedence must remain unchanged.
+
+Document the final merge order.
+
+==================================================
+PART 4 — UNASSIGNED WATCHLIST TICKERS
+=====================================
+
+If the canonical resolver returns no Theme:
+
+do not invent one.
+
+Do not use an LLM.
+
+Do not create a keyword classifier.
+
+Do not add a fuzzy fallback.
+
+Leave the ticker unassigned.
+
+Return it in diagnostics.
+
+The current audit previously found approximately:
+
+ACOG
+and possibly prefixed/OTC exceptions such as OTC:NLST
+
+depending on the current saved Watchlist snapshot.
+
+Use current data.
+
+Do not hardcode these names.
+
+==================================================
+PART 5 — THEMES PAGE MEMBERSHIP VALIDATION
+==========================================
+
+After implementation, use the current saved Watchlist dynamically.
+
+Return:
+
+current saved Watchlist symbol count
+
+Watchlist symbols with canonical assigned Theme
+
+Watchlist symbols unassigned
+
+Watchlist-assigned symbols present in matching merged Theme membership
+
+Watchlist-assigned symbols missing from matching merged Theme membership
+
+Expected:
+
+missing from matching merged Theme membership = 0
+
+subject only to explicit manual removal/exclusion semantics.
+
+If manual exclusions cause intentional absence:
+
+report separately.
+
+Return every unresolved mismatch.
+
+For each:
+
+symbol
+canonical primary Theme
+Theme source
+expected canonical Theme key
+actual merged Theme memberships
+manual add?
+manual removal/exclusion?
+reason mismatch
+
+Specifically validate current rows for:
+
+AOSL
+WYFI
+SLAB
+ANET
+ALGM
+BE
+AMD
+MU
+MRVL
+CRDO
+ABCL
+SOFI
+DELL
+HOOD
+IBRX
+RBRK
+VRT
+NBIS
+AAOI
+
+Do not force membership.
+
+Use current saved Watchlist state.
+
+==================================================
+PART 6 — THEMES PAGE DOWNSTREAM PROOF
+=====================================
+
+Without changing frontend code, prove the existing Themes page read path now sees the synchronized Watchlist-derived members.
+
+For the validated tickers show:
+
+symbol
+canonical Theme
+present in merged Theme universe
+present in Themes page membership payload
+
+Specifically prove:
+
+AOSL appears under Semiconductors if its current canonical resolver still assigns Semiconductors.
+
+WYFI appears under Data Center Infrastructure if currently assigned there.
+
+SLAB appears under Semiconductors if currently assigned there.
+
+Use current data.
+
+==================================================
+PART 7 — OPTIONS FLOW DOWNSTREAM OBSERVATION
+============================================
+
+Do NOT modify Options Flow.
+
+Do NOT force new provider scans for validation.
+
+After the Theme membership synchronization is corrected, inspect the existing:
+
+Options Flow
+→ Sectors
+→ All Stocks
+
+required-universe builder.
+
+Report whether it consumes the corrected merged Theme membership automatically.
+
+Return:
+
+All Stocks required universe count before
+
+All Stocks required universe count after
+
+newly included ticker count
+
+newly included symbols
+
+Do not use a fixed expected count.
+
+The count is dynamic and must reflect the current saved Watchlist / current Theme membership state.
+
+For newly included symbols report existing scan state only:
+
+canonical row available
+pending/backfill
+confirmed no-options
+unsupported
+missing
+
+Do not trigger provider calls.
+
+The purpose is to prove the existing downstream architecture naturally sees the corrected upstream membership.
+
+==================================================
+PART 8 — THEME ROTATION SAFETY
+==============================
+
+Audit whether adding complete Watchlist-derived membership to the merged Themes universe changes Theme RS / Theme Rotation constituent calculations.
+
+The user intended all assigned Watchlist tickers to appear on the Themes page.
+
+However, do not silently introduce a materially different Theme Rotation scoring universe unless this is already the intended behavior of ENRICHED_THEME_RS_UNIVERSE.
+
+Report:
+
+Does Theme RS currently calculate from candidate_symbols/proxy_symbols?
+
+Will the restored Watchlist-derived membership naturally participate in Theme RS?
+
+Was that already the intended architecture?
+
+Are any safeguards/limits applied?
+
+Do not change Theme RS logic in this task.
+
+Do not compensate for the synchronization fix by inventing a second Theme Rotation basket.
+
+Report the impact honestly.
+
+==================================================
+PART 9 — COST / PROVIDER PROOF
+==============================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 new provider calls
+
+0 new Options scans
+
+0 Options Flow producer changes
+
+0 Options Flow Screener changes
+
+0 Sectors / All Stocks code changes
+
+0 Theme RS scoring changes
+
+0 Theme Rotation scoring changes
+
+0 new scheduler
+
+0 new membership table
+
+0 static current-Watchlist list added
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+WATCHLIST → THEMES MEMBERSHIP SYNC REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT CAUSE:
+[exact missing/partial sync cause]
+
+CURRENT WATCHLIST SOURCE:
+[path/service]
+
+CANONICAL THEME RESOLVER:
+[path/helper]
+
+WATCHLIST-DERIVED MEMBERSHIP LAYER:
+[implementation]
+
+MERGE ORDER:
+[exact order]
+
+MANUAL OVERRIDES:
+[preserved behavior]
+
+CURRENT WATCHLIST COUNT:
+[count]
+
+ASSIGNED THEME COUNT:
+[count]
+
+UNASSIGNED:
+[list]
+
+ASSIGNED + PRESENT IN MATCHING THEME:
+[count / percent]
+
+ASSIGNED + MISSING FROM MATCHING THEME:
+[count]
+
+MISMATCHES:
+[list + reasons]
+
+THEMES PAGE PROOF:
+[results]
+
+ALL STOCKS REQUIRED UNIVERSE BEFORE:
+[count]
+
+ALL STOCKS REQUIRED UNIVERSE AFTER:
+[count]
+
+NEW DOWNSTREAM SYMBOLS:
+[list/count]
+
+THEME RS / ROTATION IMPACT:
+[exact finding]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+WATCHLIST / THEMES SYNC VERDICT
+
+DYNAMIC WATCHLIST SOURCE:
+[PASS / FAIL]
+
+ONE CANONICAL THEME RESOLVER:
+[PASS / FAIL]
+
+ALL ASSIGNED WATCHLIST TICKERS IN THEMES:
+[count / percent]
+
+UNASSIGNED WATCHLIST TICKERS:
+[count + list]
+
+MANUAL ADDITIONS PRESERVED:
+[YES / NO]
+
+MANUAL REMOVALS PRESERVED:
+[YES / NO]
+
+THEMES PAGE MEMBERSHIP COMPLETE:
+[PASS / FAIL]
+
+OPTIONS ALL-STOCKS DOWNSTREAM UPDATED:
+[YES / NO + count impact]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING GAP:
+[one gap]
+
+NEXT IMPLEMENTATION:
+OPTIONS ALIGNMENT V2 — normalized premium pressure using existing % Net Premium, Net Premium / Market Cap, premium balance/PCR/bias + 1D/7D/30D rate of change
+
+Do not modify Options Alignment.
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not build LOW_BASE states.
+Do not make unrelated changes.
