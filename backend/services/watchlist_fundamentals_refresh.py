@@ -394,6 +394,8 @@ class FmpFundamentalsRefresher:
         refreshed: list[str] = []
         skipped:   list[str] = []
         failed:    list[str] = []
+        empty_payload_preserved: list[str] = []
+        empty_payload_no_prior:  list[str] = []
 
         for sym in eligible:
             snap = snapshots.get(sym.upper())
@@ -411,15 +413,27 @@ class FmpFundamentalsRefresher:
 
             try:
                 result = await self.normalize_symbol(sym)
-                ok = upsert_snapshot(
+                outcome = upsert_snapshot(
                     symbol=sym,
                     watchlist_id=watchlist_id,
                     fields=result["fields"],
                     missing_fields=result["missing_fields"],
                     fmp_call_count=result["fmp_call_count"],
                 )
-                if ok:
+                if outcome == "success":
                     refreshed.append(sym)
+                elif outcome == "empty_payload_preserved_lkg":
+                    log.warning(
+                        "[FMP_FUND] %s: EMPTY_FUNDAMENTALS_PAYLOAD — prior usable "
+                        "snapshot preserved, retry scheduled sooner", sym,
+                    )
+                    empty_payload_preserved.append(sym)
+                elif outcome == "empty_payload_no_prior":
+                    log.warning(
+                        "[FMP_FUND] %s: EMPTY_FUNDAMENTALS_PAYLOAD — no usable prior "
+                        "snapshot, remains retryable (no fake fresh row written)", sym,
+                    )
+                    empty_payload_no_prior.append(sym)
                 else:
                     failed.append(sym)
             except Exception as exc:
@@ -434,9 +448,13 @@ class FmpFundamentalsRefresher:
             "refreshed_symbols": len(refreshed),
             "skipped_fresh_symbols": len(skipped),
             "failed_symbols": len(failed),
+            "empty_payload_preserved_lkg_symbols": len(empty_payload_preserved),
+            "empty_payload_no_prior_symbols": len(empty_payload_no_prior),
             "refreshed": refreshed,
             "skipped": skipped,
             "failed": failed,
+            "empty_payload_preserved_lkg": empty_payload_preserved,
+            "empty_payload_no_prior": empty_payload_no_prior,
         }
 
 

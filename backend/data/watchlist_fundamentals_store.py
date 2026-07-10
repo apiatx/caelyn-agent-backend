@@ -24,6 +24,53 @@ log = logging.getLogger(__name__)
 _TABLE = "public.watchlist_fundamentals_cache"
 _WEEK_S = 7 * 24 * 3600
 
+# ── Usable-snapshot evidence rule ────────────────────────────────────────────
+# A snapshot is "usable" when it contains at least one real, populated
+# fundamentals evidence field (not merely an empty dict). Metadata-only
+# payloads (e.g. {} with everything in missing_fields) must never be treated
+# as a successful refresh. This is intentionally permissive — a legitimate
+# company/provider result may have partial data; we only require ONE piece
+# of real evidence, not a complete row.
+_EVIDENCE_FIELDS = {
+    "Revenue Growth (YoY)",
+    "Revenue Growth (Q)",
+    "EPS Growth",
+    "Gross Margin",
+    "FCF Margin",
+    "Free Cash Flow",
+    "Market Cap",
+    "Revenue",
+    "Operating Income",
+    "EBIT",
+    "PE Ratio",
+    "PS Ratio",
+    "EV/EBITDA",
+    "Rev Growth Next Quarter",
+    "EPS Growth This Quarter",
+}
+
+# Failed/empty refresh attempts retry much sooner than the normal 7-day
+# freshness window — they must not be treated as "fresh" for a week.
+_EMPTY_PAYLOAD_RETRY_DAYS = 1
+
+
+def is_usable_fundamentals_snapshot(fields: dict[str, Any] | None) -> bool:
+    """
+    Canonical usability rule for a normalized fundamentals payload.
+
+    Returns True only when `fields` is a dict containing at least one
+    populated (non-None, non-empty-string) canonical evidence field.
+    An empty dict, None, or a dict with only unrelated/metadata keys is
+    NOT usable.
+    """
+    if not isinstance(fields, dict) or not fields:
+        return False
+    for key in _EVIDENCE_FIELDS:
+        v = fields.get(key)
+        if v is not None and v != "":
+            return True
+    return False
+
 
 def ensure_table() -> bool:
     """Create the table if it doesn't exist. Safe to call repeatedly."""
@@ -63,50 +110,112 @@ def upsert_snapshot(
     missing_fields: list[str],
     fmp_call_count: int,
     next_refresh_days: int = 7,
-) -> bool:
-    """Insert or replace a fundamentals snapshot for one symbol."""
+) -> str:
+    """
+    Insert or replace a fundamentals snapshot for one symbol.
+
+    Result contract (string outcome, used by refresh_symbols diagnostics):
+      "success"                — usable payload persisted; refreshed_at bumped,
+                                  next_refresh_at = now + next_refresh_days (7d).
+      "empty_payload_preserved_lkg" — provider returned an unusable/empty
+                                  payload AND a usable prior snapshot exists.
+                                  Existing fields/missing_fields/refreshed_at
+                                  are left untouched (LKG protection); only
+                                  next_refresh_at is pulled forward to a short
+                                  retry window so the symbol is retried soon,
+                                  never treated as fresh for 7 days.
+      "empty_payload_no_prior"  — provider returned an unusable/empty payload
+                                  and there is no usable prior snapshot. No
+                                  row is written/kept as "fresh"; any existing
+                                  unusable row is removed so the symbol
+                                  reverts to no-snapshot due-immediately
+                                  status (list_due_symbols already surfaces
+                                  no-row symbols without needing a placeholder).
+      "error"                   — DB error; caller should treat as failed.
+    """
+    usable = is_usable_fundamentals_snapshot(fields)
     try:
         from data.pg_storage import _get_conn, _put_conn
         from psycopg2.extras import Json
+        from datetime import timedelta
         conn = _get_conn()
         if conn is None:
-            return False
+            return "error"
         try:
             now = datetime.now(timezone.utc)
-            from datetime import timedelta
-            nxt = now + timedelta(days=next_refresh_days)
             cur = conn.cursor()
+
+            if usable:
+                nxt = now + timedelta(days=next_refresh_days)
+                cur.execute(
+                    f"""
+                    INSERT INTO {_TABLE}
+                        (symbol, watchlist_id, refreshed_at, next_refresh_at, fields, missing_fields, fmp_call_count)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (symbol) DO UPDATE SET
+                        watchlist_id    = EXCLUDED.watchlist_id,
+                        refreshed_at    = EXCLUDED.refreshed_at,
+                        next_refresh_at = EXCLUDED.next_refresh_at,
+                        fields          = EXCLUDED.fields,
+                        missing_fields  = EXCLUDED.missing_fields,
+                        fmp_call_count  = EXCLUDED.fmp_call_count
+                    """,
+                    (
+                        symbol.upper(),
+                        watchlist_id,
+                        now,
+                        nxt,
+                        Json(fields),
+                        Json(missing_fields),
+                        fmp_call_count,
+                    ),
+                )
+                conn.commit()
+                cur.close()
+                return "success"
+
+            # ── Unusable/empty payload path ─────────────────────────────────
             cur.execute(
-                f"""
-                INSERT INTO {_TABLE}
-                    (symbol, watchlist_id, refreshed_at, next_refresh_at, fields, missing_fields, fmp_call_count)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (symbol) DO UPDATE SET
-                    watchlist_id    = EXCLUDED.watchlist_id,
-                    refreshed_at    = EXCLUDED.refreshed_at,
-                    next_refresh_at = EXCLUDED.next_refresh_at,
-                    fields          = EXCLUDED.fields,
-                    missing_fields  = EXCLUDED.missing_fields,
-                    fmp_call_count  = EXCLUDED.fmp_call_count
-                """,
-                (
-                    symbol.upper(),
-                    watchlist_id,
-                    now,
-                    nxt,
-                    Json(fields),
-                    Json(missing_fields),
-                    fmp_call_count,
-                ),
+                f"SELECT fields FROM {_TABLE} WHERE symbol = %s",
+                (symbol.upper(),),
             )
-            conn.commit()
+            row = cur.fetchone()
+            existing_fields = row[0] if row else None
+            existing_usable = is_usable_fundamentals_snapshot(existing_fields)
+
+            if existing_usable:
+                # LKG protection: never overwrite good data with an empty
+                # payload. Only pull the retry window forward.
+                retry_at = now + timedelta(days=_EMPTY_PAYLOAD_RETRY_DAYS)
+                cur.execute(
+                    f"""
+                    UPDATE {_TABLE}
+                    SET next_refresh_at = LEAST(next_refresh_at, %s)
+                    WHERE symbol = %s
+                    """,
+                    (retry_at, symbol.upper()),
+                )
+                conn.commit()
+                cur.close()
+                return "empty_payload_preserved_lkg"
+
+            if row is not None:
+                # Existing row is itself unusable (e.g. a previously
+                # poisoned empty-fields row) — remove it rather than
+                # refreshing its timestamp, so it reverts to genuine
+                # no-snapshot/due-immediately status.
+                cur.execute(
+                    f"DELETE FROM {_TABLE} WHERE symbol = %s",
+                    (symbol.upper(),),
+                )
+                conn.commit()
             cur.close()
-            return True
+            return "empty_payload_no_prior"
         finally:
             _put_conn(conn)
     except Exception as exc:
         log.warning("[FUND_STORE] upsert_snapshot(%s) error: %s", symbol, exc)
-        return False
+        return "error"
 
 
 def get_snapshot(symbol: str) -> dict | None:

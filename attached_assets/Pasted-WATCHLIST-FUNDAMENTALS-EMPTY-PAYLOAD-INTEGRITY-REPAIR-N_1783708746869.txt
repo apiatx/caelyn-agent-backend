@@ -1,0 +1,779 @@
+WATCHLIST FUNDAMENTALS EMPTY-PAYLOAD INTEGRITY REPAIR — NEVER PERSIST A ZERO-FIELD REFRESH AS SUCCESS
+
+Work only in the existing backend Replit project.
+
+The Watchlist fundamentals coverage pipeline was just repaired so:
+
+* single-ticker additions register for fundamentals refresh
+* current live Watchlist membership drives due selection
+* watchlist_id drift can no longer silently zero the queue
+* no-snapshot current eligible symbols enter the queue
+* current live eligible Watchlist fundamentals coverage was backfilled through the canonical FmpFundamentalsRefresher path
+
+A final read-only reconciliation found ONE remaining upstream defect.
+
+Current live eligible Watchlist universe:
+
+317 FMP-eligible tickers
+
+Snapshot row existence:
+
+317/317 non-null rows
+
+Usable populated fundamentals:
+
+312/317
+
+Five current FMP-eligible tickers have freshly written snapshot rows whose:
+
+fields == {}
+
+The five are:
+
+ADTN
+AMAT
+AREC
+ARQQ
+BAND
+
+These rows have recent refreshed_at timestamps from the canonical fundamentals backfill.
+
+Investment Alignment therefore reports Financial Acceleration unavailable for these rows.
+
+The defect is:
+
+THE REFRESHER CURRENTLY PERSISTS AN EMPTY NORMALIZED FUNDAMENTALS PAYLOAD AS A SUCCESSFUL SNAPSHOT.
+
+This creates a fresh-looking zero-field cache row.
+
+Do not modify Investment Alignment.
+
+Do not weaken Financial Acceleration's mandatory evidence rule.
+
+Do not special-case ADTN/AMAT/AREC/ARQQ/BAND.
+
+Do not add another fundamentals cache.
+
+Do not add a scheduler.
+
+Do not change weekly cadence.
+
+Do not change the FMP budget governor.
+
+Do not change FMP endpoint families unless the audit proves an actual response-contract bug in the existing implementation.
+
+Do not modify frontend code.
+
+This task has ONE goal:
+
+MAKE THE CANONICAL WATCHLIST FUNDAMENTALS REFRESH PATH DISTINGUISH A REAL USABLE SNAPSHOT FROM AN EMPTY/UNUSABLE PROVIDER RESULT, PRESERVE LAST-KNOWN-GOOD DATA, AND RETRY FAILURES WITHOUT MARKING THEM FRESH FOR 7 DAYS.
+
+==================================================
+PART 0 — TRACE THE EXACT REFRESH RESULT CONTRACT
+================================================
+
+Before editing, trace:
+
+backend/services/watchlist_fundamentals_refresh.py
+
+FmpFundamentalsRefresher
+
+refresh_symbols()
+
+per-symbol refresh function/helper
+
+all 7 FMP endpoint calls currently used
+
+budget-guard behavior
+
+HTTP/error handling
+
+provider response parsing
+
+normalization
+
+field assembly
+
+watchlist_fundamentals_store.upsert_snapshot()
+
+schedule_refresh()
+
+next_refresh_at semantics
+
+success/failure counters
+
+existing retry behavior if any
+
+Return internally:
+
+provider call
+→ response
+→ parsed payload
+→ normalized field dict
+→ success decision
+→ persistence
+→ next refresh scheduling
+
+Identify the exact line/condition that currently allows:
+
+fields == {}
+
+to be passed to upsert_snapshot as success.
+
+==================================================
+PART 1 — AUDIT THE FIVE EMPTY-PAYLOAD SYMBOLS
+=============================================
+
+Before modifying success semantics, inspect existing logs/cache diagnostics and, where necessary, perform the narrowest canonical provider validation through the EXISTING FmpFundamentalsRefresher/provider methods.
+
+Symbols:
+
+ADTN
+AMAT
+AREC
+ARQQ
+BAND
+
+For each of the 7 existing endpoint families return:
+
+endpoint purpose
+
+request symbol used
+
+HTTP/result status if observable
+
+provider response:
+non-empty
+empty list/object
+error
+budget deferred
+parse failure
+
+normalized fields contributed
+
+Do not use a new debug provider implementation.
+
+Do not call different FMP endpoints merely to get a desired result.
+
+Use the exact production provider methods.
+
+Respect existing budget governance.
+
+The goal is to classify the root cause for each symbol.
+
+Possible buckets:
+
+ALL_ENDPOINTS_EMPTY
+
+PARTIAL_ENDPOINT_DATA_BUT_NORMALIZER_DROPPED_IT
+
+SYMBOL_NORMALIZATION_ERROR
+
+PROVIDER_ACCESS_ERROR
+
+PROVIDER_HTTP_ERROR_SWALLOWED
+
+BUDGET_DEFERRED_MISREAD_AS_EMPTY
+
+RESPONSE_SCHEMA_MISMATCH
+
+NO_USABLE_FIELDS_AFTER_VALID_RESPONSES
+
+OTHER — prove exactly
+
+Return exact evidence.
+
+==================================================
+PART 2 — DEFINE USABLE SNAPSHOT SEMANTICS
+=========================================
+
+Create one deterministic canonical validation helper or function.
+
+Conceptually:
+
+is_usable_fundamentals_snapshot(fields)
+
+Do not scatter `if fields` checks across multiple callers.
+
+The helper must validate more than dictionary existence.
+
+At minimum:
+
+fields must be a dict
+
+fields must contain at least one meaningful populated canonical fundamentals field
+
+Do not count metadata-only fields as usable.
+
+Audit the canonical stored fields and define a compact set of fundamental evidence fields.
+
+Potential evidence fields include the exact existing canonical keys:
+
+Revenue Growth (YoY)
+
+Revenue Growth (Q)
+
+EPS Growth
+
+Gross Margin
+
+FCF Margin
+
+Free Cash Flow
+
+Market Cap
+
+Revenue
+
+Operating Income
+
+EBIT
+
+P/E
+
+P/S
+
+EV/EBITDA
+
+Rev Growth Next Quarter
+
+EPS Growth This Quarter
+
+Use exact current store keys.
+
+Do not require every field.
+
+A legitimate company/provider result may have partial data.
+
+The rule should answer:
+
+"Does this snapshot contain any real fundamentals evidence?"
+
+not:
+
+"Is the row fully complete?"
+
+Return the exact implemented usability rule.
+
+==================================================
+PART 3 — EMPTY/UNUSABLE PAYLOAD MUST NOT BE SUCCESS
+===================================================
+
+In the canonical refresher:
+
+after normalization
+
+before successful persistence
+
+validate the field payload using the canonical usability helper.
+
+If unusable:
+
+do not treat the symbol as a successful refresh
+
+do not increment success count
+
+do not persist an empty snapshot as a new successful snapshot
+
+do not schedule the normal 7-day freshness window
+
+classify the result as an explicit refresh failure/empty-payload outcome
+
+Use an exact reason such as:
+
+EMPTY_FUNDAMENTALS_PAYLOAD
+
+or the closest existing diagnostics convention.
+
+Return it in refresher diagnostics if the current result shape supports failure reasons.
+
+Do not fabricate fields.
+
+==================================================
+PART 4 — PRESERVE LAST-KNOWN-GOOD SNAPSHOT
+==========================================
+
+Critical invariant:
+
+A temporary empty provider response must never overwrite a usable prior snapshot.
+
+For a ticker with an existing usable snapshot:
+
+refresh attempt
+→ empty/unusable payload
+
+Expected:
+
+existing fields remain unchanged
+
+existing last-known-good data remains readable through get_snapshot()
+
+failed attempt does not erase the LKG
+
+retry is scheduled according to failure semantics
+
+Do not replace existing fields with `{}`.
+
+Audit whether current upsert_snapshot overwrites fields entirely.
+
+Implement the smallest safe guard at the correct layer.
+
+Prefer preventing the invalid upsert rather than teaching every reader to ignore empty rows.
+
+==================================================
+PART 5 — NO-PRIOR-SNAPSHOT EMPTY RESPONSE
+=========================================
+
+For a ticker with no usable prior snapshot:
+
+refresh attempt
+→ empty/unusable payload
+
+Expected:
+
+Investment Alignment remains unavailable
+
+Fundamental Screener remains without usable data
+
+ticker remains retryable
+
+ticker is NOT considered fresh for 7 days
+
+Do not insert a fake neutral snapshot.
+
+Determine whether to:
+
+A. keep no snapshot row
+
+or
+
+B. preserve a scheduling/diagnostic placeholder row without treating it as a usable snapshot
+
+Use the smallest design consistent with the existing queue architecture after the recent current-universe due-selection repair.
+
+Important:
+
+list_due_symbols() now directly includes current eligible symbols with no row.
+
+Therefore a placeholder row is no longer required merely to make a ticker visible to the queue.
+
+Prefer no fake snapshot row unless existing diagnostics require one.
+
+==================================================
+PART 6 — FAILURE RETRY SEMANTICS
+================================
+
+Audit existing temporary-failure retry behavior.
+
+The normal successful refresh cadence is 7 days.
+
+An EMPTY_FUNDAMENTALS_PAYLOAD must not wait 7 days.
+
+Use an existing failure retry interval if one exists.
+
+If no explicit retry interval exists, add the narrowest derived retry scheduling behavior using existing store/scheduler architecture.
+
+Conceptually:
+
+success
+→ next_refresh_at +7 days
+
+empty/unusable provider result
+→ retry significantly sooner
+
+Do not retry continuously.
+
+Do not add an hourly scheduler.
+
+Do not bypass the weekly loop's existing time window unless current architecture already has another safe retry path.
+
+If the weekly loop is the only consumer of next_refresh_at, explain the practical retry cadence honestly.
+
+Do not claim a 2-hour retry if no runner wakes up for a week.
+
+==================================================
+PART 7 — CACHE ROW CLEANUP FOR THE FIVE CURRENT POISONED ROWS
+=============================================================
+
+After the generic fix is implemented:
+
+inspect current rows for:
+
+ADTN
+AMAT
+AREC
+ARQQ
+BAND
+
+All currently have:
+
+fields == {}
+
+Do not leave them marked as valid fresh snapshots.
+
+Use the normal canonical store/helper path to clear or invalidate these unusable rows.
+
+Do not manually edit Neon with an ad hoc SQL command as the only repair unless no canonical helper exists.
+
+Preferred behavior:
+
+delete/invalidate the empty snapshot row
+
+or mark it due immediately using existing store semantics
+
+so the current-universe due selector sees the symbol again.
+
+Then run the canonical refresher for these five through the existing provider/budget path.
+
+Report exact outcomes individually.
+
+If FMP still returns no usable fields:
+
+leave them unavailable and retryable
+
+do not recreate empty fresh rows.
+
+==================================================
+PART 8 — POSITIVE CONTROL / LKG PROTECTION
+==========================================
+
+Choose at least three normal populated controls such as:
+
+AMD
+
+MU
+
+CRDO
+
+or exact safe current tickers.
+
+Verify:
+
+usable payloads still persist normally
+
+success count increments
+
+normal 7-day next_refresh_at is used
+
+fields remain populated
+
+No regression.
+
+Then prove LKG protection.
+
+Using a test/mocked normalization outcome or existing safe service-level test:
+
+existing usable snapshot
++
+simulated empty normalized payload
+→ existing fields preserved
+
+Do not make unnecessary provider calls solely to force an empty response for a good ticker.
+
+==================================================
+PART 9 — DUE QUEUE SEMANTICS AFTER FIX
+======================================
+
+Run current-universe due selection read-only after cleanup/validation.
+
+Prove:
+
+current eligible ticker with no usable snapshot
+→ due
+
+current eligible ticker with empty/invalid snapshot
+→ due, or row removed so it is no-row due
+
+current ticker with usable stale snapshot
+→ due
+
+current ticker with usable fresh snapshot
+→ not due
+
+old/deleted ticker outside current Watchlist
+→ not selected
+
+Watchlist-ID drift remains irrelevant.
+
+Return counts.
+
+==================================================
+PART 10 — FUNDAMENTALS COVERAGE RECHECK
+=======================================
+
+Report current live eligible Watchlist coverage using TWO distinct metrics:
+
+ROW EXISTENCE COVERAGE
+
+and:
+
+USABLE FUNDAMENTALS COVERAGE
+
+Example:
+
+rows:
+317/317
+
+usable:
+312/317
+
+After repair/backfill report actual values.
+
+Do not call an empty dict "covered."
+
+For every unusable eligible ticker return:
+
+symbol
+
+row exists
+
+fields count
+
+last attempted refresh if known
+
+failure reason
+
+due/retry status
+
+==================================================
+PART 11 — INVESTMENT ALIGNMENT RECHECK
+======================================
+
+Do not modify Investment Alignment.
+
+After the generic repair and canonical retry of the five symbols:
+
+run Investment Alignment over the complete current Stage2/Confluence universe.
+
+Use the exact current denominator.
+
+Return:
+
+universe count
+
+Investment Alignment available
+
+unavailable
+
+NO_FUNDAMENTALS_SNAPSHOT count
+
+MINIMUM_EVIDENCE_FAILED count
+
+For:
+
+ADTN
+AMAT
+AREC
+ARQQ
+BAND
+
+return:
+
+fundamentals usability
+
+Investment Alignment available
+
+score
+
+state
+
+exact unavailable reason if still unavailable
+
+Do not tune scoring.
+
+==================================================
+PART 12 — ERROR DIAGNOSTICS
+===========================
+
+Improve only the canonical fundamentals refresher's existing diagnostics as narrowly necessary so future audits can distinguish:
+
+SUCCESS
+
+EMPTY_FUNDAMENTALS_PAYLOAD
+
+PROVIDER_ERROR
+
+BUDGET_DEFERRED
+
+NORMALIZATION_ERROR
+
+or the closest existing result categories.
+
+Do not build a large observability system.
+
+The purpose is to prevent another report from seeing a recent `refreshed_at` and assuming success when the stored fields are empty.
+
+If current store schema cannot persist failure status without migration:
+
+keep diagnostics in the existing refresher result/log output.
+
+Do not add a database column solely for this task unless proven unavoidable.
+
+==================================================
+PART 13 — COST / REGRESSION PROOF
+=================================
+
+Prove:
+
+0 new database tables
+
+0 schema migrations unless absolutely required and justified
+
+0 new caches
+
+0 new scheduler
+
+0 Investment Alignment changes
+
+0 Trade Alignment changes
+
+0 Actionability changes
+
+0 Theme changes
+
+0 Options changes
+
+0 fundamental field formula changes
+
+0 FMP endpoint-family changes unless exact response-contract bug required it
+
+weekly cadence preserved
+
+MAX_PER_RUN preserved
+
+budget governor preserved
+
+Any provider calls used for the 5-symbol diagnosis/retry must run only through the existing canonical provider/refresher path.
+
+Return exact FMP call count.
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+WATCHLIST FUNDAMENTALS EMPTY-PAYLOAD INTEGRITY REPAIR REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT CAUSE:
+[exact reason empty fields were persisted]
+
+FIVE-SYMBOL ENDPOINT DIAGNOSTIC:
+[ADTN/AMAT/AREC/ARQQ/BAND results]
+
+USABLE SNAPSHOT RULE:
+[exact logic]
+
+SUCCESS DECISION BEFORE:
+[behavior]
+
+SUCCESS DECISION AFTER:
+[behavior]
+
+LKG PROTECTION:
+[implementation/proof]
+
+NO-PRIOR-SNAPSHOT EMPTY RESULT:
+[behavior]
+
+FAILURE RETRY:
+[exact practical semantics]
+
+POISONED ROW CLEANUP:
+[results]
+
+FIVE-SYMBOL CANONICAL RETRY:
+[results]
+
+POSITIVE CONTROLS:
+[results]
+
+DUE QUEUE:
+[results]
+
+ROW EXISTENCE COVERAGE:
+[count/percent]
+
+USABLE FUNDAMENTALS COVERAGE:
+[count/percent]
+
+INVESTMENT ALIGNMENT COVERAGE:
+[count/percent]
+
+INVESTMENT UNAVAILABLE REASONS:
+[distribution]
+
+ADTN:
+[result]
+
+AMAT:
+[result]
+
+AREC:
+[result]
+
+ARQQ:
+[result]
+
+BAND:
+[result]
+
+FMP CALLS USED:
+[count]
+
+COST / REGRESSION:
+[results]
+
+End exactly:
+
+WATCHLIST FUNDAMENTALS EMPTY-PAYLOAD VERDICT
+
+EMPTY PAYLOAD CAN BE MARKED SUCCESS:
+[NO expected]
+
+EMPTY PAYLOAD CAN OVERWRITE LKG:
+[NO expected]
+
+EMPTY PAYLOAD RECEIVES NORMAL 7-DAY FRESHNESS:
+[NO expected]
+
+NO-PRIOR-SNAPSHOT EMPTY RESULT REMAINS RETRYABLE:
+[YES / NO]
+
+USABLE COVERAGE:
+[before → after]
+
+ADTN FUNDAMENTALS:
+[result]
+
+AMAT FUNDAMENTALS:
+[result]
+
+AREC FUNDAMENTALS:
+[result]
+
+ARQQ FUNDAMENTALS:
+[result]
+
+BAND FUNDAMENTALS:
+[result]
+
+INVESTMENT ALIGNMENT FOUNDATION CLEAN:
+[YES / NO]
+
+INCREMENTAL FMP CALLS:
+[count]
+
+NEXT IMPLEMENTATION:
+ELITE_ASSET_REBOUND ARCHETYPE
+
+Do not modify Investment Alignment.
+
+Do not weaken Financial Acceleration.
+
+Do not create a new fundamentals cache.
+
+Do not make unrelated changes.
