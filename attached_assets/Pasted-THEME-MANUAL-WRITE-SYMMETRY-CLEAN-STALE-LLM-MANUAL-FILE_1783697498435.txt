@@ -1,0 +1,626 @@
+THEME MANUAL WRITE SYMMETRY — CLEAN STALE LLM/MANUAL FILE OVERRIDES ON REMOVE + FIX RESOLVER PROVENANCE LABELING
+
+Work only in the existing backend Replit project.
+
+A targeted audit found a real inconsistency in the existing Theme manual assignment/remove path.
+
+Do not modify frontend code.
+Do not implement multi-theme membership.
+Do not modify Theme RS scoring.
+Do not modify Theme Rotation scoring.
+Do not modify Trade Alignment.
+Do not modify Actionability.
+Do not modify Options Alignment.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add provider calls.
+Do not create a new Theme store.
+Do not redesign Theme resolution.
+
+This task has TWO narrow goals:
+
+1. Make the existing manual Theme ADD/REMOVE path symmetrical across every store it currently mutates.
+2. Correct Theme provenance reporting so LLM/manual-file overrides are not mislabeled as canonical_map.
+
+==================================================
+PROVEN BUG
+==========
+
+Current ACOG audit:
+
+resolve_primary_theme_for_ticker("ACOG") returns:
+
+{
+"theme_name": "Biotech",
+"theme_id": "biotech",
+"source": "canonical_map"
+}
+
+get_theme_provenance("ACOG") reports:
+
+{
+"final_theme": "Biotech",
+"final_theme_id": "biotech",
+"source": "llm_classified",
+"llm_override": {
+"display_name": "Biotech",
+"theme_id": "biotech",
+"confidence": "manual"
+},
+"neon_override": null,
+"themes_page_theme": null
+}
+
+Raw stores:
+
+watchlist_category_overrides:
+no ACOG row
+
+theme_ticker_overrides:
+ACOG action='remove'
+
+data/llm_theme_overrides.json:
+still contains:
+
+"ACOG": {
+"display_name": "Biotech",
+"theme_id": "biotech",
+"confidence": "manual"
+}
+
+This row was created during the earlier manual assignment test.
+
+The current remove path cleans:
+
+watchlist_category_overrides
+
+but does not reverse the write into:
+
+data/llm_theme_overrides.json
+
+Therefore stale manual/LLM file overrides survive removal and continue resolving through:
+
+theme_ticker_mapper.map_ticker_to_primary_theme()
+
+==================================================
+PART 0 — TRACE EXACT FOUR-STORE WRITE/RESOLUTION PATH
+=====================================================
+
+Before editing, trace:
+
+_perform_membership_write()
+
+register_llm_classified_tickers()
+
+data/llm_theme_overrides.json read/write helper
+
+theme_ticker_overrides
+
+watchlist_category_overrides
+
+delete_category_override()
+
+theme_ticker_mapper._build_index()
+
+map_ticker_to_primary_theme()
+
+resolve_primary_theme_for_ticker()
+
+get_theme_provenance()
+
+Document the exact add path and remove path.
+
+Return internally:
+
+ADD stores touched
+
+REMOVE stores touched
+
+resolver precedence
+
+mapper precedence
+
+provenance reporting path
+
+Do not assume the JSON row is exclusively AI-generated.
+
+The audit already proved rows may carry:
+
+confidence = "manual"
+
+and may be written by the manual Theme assignment cross-sync path.
+
+==================================================
+PART 1 — ADD A SAFE FILE-OVERRIDE DELETE HELPER
+===============================================
+
+Add one authoritative helper alongside the existing llm_theme_overrides.json write helpers.
+
+Conceptually:
+
+remove_llm_theme_override(
+ticker,
+only_if_theme_id=None
+)
+
+or the exact naming appropriate to the existing module.
+
+Requirements:
+
+normalize ticker using existing conventions
+
+read the existing file safely
+
+only delete the ticker row when present
+
+support a guarded delete using the expected Theme ID
+
+write atomically using the existing file-write convention
+
+do not delete a row that has already been reassigned to another Theme
+
+return deterministic result/diagnostics
+
+The guard is critical.
+
+Example:
+
+old remove request:
+AI Networking
+
+but row now says:
+Photonics / Lasers
+
+Do not delete the newer row.
+
+==================================================
+PART 2 — MAKE REMOVE SYMMETRICAL
+================================
+
+In the authoritative existing:
+
+_perform_membership_write()
+
+remove branch:
+
+preserve all current behavior.
+
+In addition to the existing:
+
+theme_ticker_overrides remove semantics
+
+category override cleanup
+
+also remove the corresponding stale manual/LLM file override when:
+
+the current file row matches the Theme being removed
+
+Use the guarded helper.
+
+Do not blindly delete by ticker.
+
+The intended symmetry is:
+
+ADD:
+writes/cross-syncs the stores already used by current architecture
+
+REMOVE:
+reverses those same current manual cross-sync effects where they still point to the removed Theme
+
+Do not remove genuine unrelated mapper/static mappings.
+
+Do not edit static Theme maps.
+
+Do not delete an LLM/file override belonging to a different current Theme.
+
+==================================================
+PART 3 — REASSIGNMENT ORDER SAFETY
+==================================
+
+The existing:
+
+POST /api/themes/admin/assign-primary-theme
+
+performs primary reassignment by:
+
+remove old manual Theme
+
+then add new Theme
+
+Validate this order against the new guarded file cleanup.
+
+Example:
+
+ticker:
+AAOI
+
+old Theme:
+AI Networking
+
+new Theme:
+Photonics / Lasers
+
+Expected:
+
+remove old:
+deletes old manual/category/file override only if still pointing to AI Networking
+
+add new:
+writes Photonices / Lasers through the existing authoritative path
+
+Final resolver:
+Photonics / Lasers
+
+The old remove must never erase the newly added Theme.
+
+Preserve exact current reassignment semantics.
+
+==================================================
+PART 4 — FIX SOURCE/PROVENANCE MISLABELING
+==========================================
+
+Current architectural problem:
+
+theme_ticker_mapper._build_index()
+
+checks:
+
+Source -1: LLM-classified overrides
+
+before static/canonical Theme mapping.
+
+However:
+
+resolve_primary_theme_for_ticker()
+
+calls:
+
+map_ticker_to_primary_theme()
+
+and labels any mapper hit:
+
+source = "canonical_map"
+
+This is factually wrong when the mapper hit originated from:
+
+data/llm_theme_overrides.json
+
+Do not change precedence.
+
+Do not change Theme result.
+
+Correct the provenance/source labeling.
+
+Prefer the smallest existing-architecture change.
+
+Possible approaches:
+
+A. expose source metadata from the mapper lookup
+
+or
+
+B. provide a companion provenance-aware mapper helper
+
+Do not duplicate the Theme map.
+
+Do not read the JSON independently in multiple new services.
+
+Final resolver source must distinguish at minimum:
+
+manual_override
+
+themes_page_membership
+
+llm_classified or existing exact file-override source name
+
+canonical_map
+
+industry_fallback
+
+no_mapping
+
+Use existing source naming where already established.
+
+get_theme_provenance() and resolve_primary_theme_for_ticker() must agree on the effective source tier.
+
+==================================================
+PART 5 — CLEAN THE ACOG TEST ARTIFACT
+=====================================
+
+After implementing the safe removal symmetry:
+
+remove the residual ACOG test artifact through the NORMAL authoritative remove/cleanup helper where possible.
+
+Do not manually edit the JSON as the only validation.
+
+The goal is to prove the code repair cleans the artifact.
+
+Then inspect:
+
+watchlist_category_overrides
+
+theme_ticker_overrides
+
+data/llm_theme_overrides.json
+
+resolve_primary_theme_for_ticker("ACOG")
+
+get_theme_provenance("ACOG")
+
+Return the final live baseline honestly.
+
+IMPORTANT:
+
+The audit revealed ACOG may have a genuine lower-tier mapping after the file row is removed.
+
+Do not assume the final result must be no_mapping.
+
+After cleanup, allow the resolver to fall through naturally.
+
+Report the actual resulting Theme/source.
+
+==================================================
+PART 6 — ROUND-TRIP VALIDATION
+==============================
+
+Run two fully reversible tests.
+
+---
+
+## TEST A — UNASSIGNED / LOWER-TIER → MANUAL ASSIGN → REMOVE
+
+Choose a safe ticker whose original baseline is known.
+
+Capture original:
+
+resolver result
+
+provenance
+
+category override
+
+theme_ticker_override
+
+file override
+
+Assign Theme A using the current authoritative manual endpoint/helper.
+
+Verify:
+
+manual assignment wins
+
+resolver source reflects the correct top precedence
+
+all intended current stores update
+
+Remove Theme A.
+
+Verify:
+
+category override cleaned if still matching Theme A
+
+file override cleaned if still matching Theme A
+
+manual Theme basket removal preserved
+
+resolver falls through to the original lower-tier source/result
+
+provenance agrees with resolver source
+
+Restore exact baseline if needed.
+
+---
+
+## TEST B — ASSIGNED → REASSIGNED
+
+Capture original state.
+
+Theme A
+→ Theme B
+
+Verify:
+
+old Theme file/manual residue removed
+
+new Theme file/manual state written
+
+resolver = Theme B
+
+provenance source correct
+
+old merged Theme basket no longer contains ticker under current manual semantics
+
+new Theme basket contains ticker
+
+Then restore Theme A.
+
+After restore verify:
+
+no Theme B residue exists in:
+
+category override
+
+file override
+
+manual membership state
+
+==================================================
+PART 7 — COMPLETE STORE CONSISTENCY DIAGNOSTIC
+==============================================
+
+For the current Watchlist universe, inspect tickers with manual/file Theme state.
+
+Return counts:
+
+theme_ticker_overrides active add rows
+
+theme_ticker_overrides remove rows
+
+watchlist_category_overrides rows
+
+llm_theme_overrides.json rows
+
+llm_theme_overrides rows with confidence="manual"
+
+For every ticker where:
+
+theme_ticker_overrides says remove Theme X
+
+but:
+
+llm_theme_overrides.json still assigns Theme X
+
+report as:
+
+STALE_FILE_OVERRIDE_AFTER_REMOVE
+
+For every ticker where:
+
+watchlist_category_overrides Theme != file override Theme
+
+report current resolver winner and precedence.
+
+Do not mass-clean unrelated rows automatically.
+
+Only clean ACOG test artifact and test data in this task.
+
+Report other discovered inconsistencies for follow-up.
+
+==================================================
+PART 8 — REGRESSION PROOF
+=========================
+
+Prove:
+
+Theme resolution result unchanged for unaffected tickers
+
+manual add still works
+
+manual remove now fully reverses matching manual cross-sync state
+
+primary reassignment still works
+
+Watchlist Theme sync still works
+
+Themes-page membership refresh still works
+
+Watchlist Theme performance grouping still works
+
+Options downstream enriched membership still works
+
+0 Theme RS scoring changes
+
+0 Theme Rotation scoring changes
+
+0 Trade Alignment changes
+
+0 Actionability changes
+
+0 Options Alignment changes
+
+0 provider calls
+
+0 Grok calls
+
+0 LLM calls
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+THEME MANUAL WRITE SYMMETRY REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT CAUSE:
+[exact stale llm_theme_overrides write/remove asymmetry]
+
+ADD STORES:
+[list]
+
+REMOVE STORES BEFORE:
+[list]
+
+REMOVE STORES AFTER:
+[list]
+
+FILE OVERRIDE DELETE HELPER:
+[path/helper]
+
+GUARDED DELETE SEMANTICS:
+[exact logic]
+
+RESOLVER SOURCE MISLABEL:
+[exact issue]
+
+PROVENANCE FIX:
+[implementation]
+
+ACOG BEFORE:
+[result + provenance]
+
+ACOG AFTER:
+[result + provenance]
+
+ROUND-TRIP TEST A:
+[results]
+
+ROUND-TRIP TEST B:
+[results]
+
+STORE CONSISTENCY AUDIT:
+[results]
+
+REGRESSION:
+[results]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+THEME MANUAL WRITE SYMMETRY VERDICT
+
+ADD/REMOVE STORE SYMMETRY:
+[PASS / FAIL]
+
+STALE MATCHING FILE OVERRIDE CLEANED ON REMOVE:
+[YES / NO]
+
+GUARDED DELETE PROTECTS NEWER REASSIGNMENT:
+[YES / NO]
+
+RESOLVER/PROVENANCE SOURCE CONSISTENT:
+[YES / NO]
+
+ACOG TEST ARTIFACT REMOVED:
+[YES / NO]
+
+MANUAL ASSIGN:
+[PASS / FAIL]
+
+MANUAL REMOVE:
+[PASS / FAIL]
+
+PRIMARY REASSIGN:
+[PASS / FAIL]
+
+UNRELATED THEME RESOLUTION REGRESSION:
+[count, 0 expected]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+NEXT IMPLEMENTATION:
+WATCHLIST SCREENER DEV THEME DROPDOWN
+
+Do not implement multi-theme membership.
+
+Do not modify Trade Alignment.
+
+Do not modify Actionability.
+
+Do not make unrelated changes.

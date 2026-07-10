@@ -101,15 +101,22 @@ def resolve_primary_theme_for_ticker(
             map_ticker_to_primary_theme as _theme_fn,
             map_ticker_to_theme_id as _theme_id_fn,
             map_industry_to_theme as _ind_fn,
+            map_ticker_to_primary_theme_source as _theme_src_fn,
         )
     except ImportError:
-        _theme_fn = _theme_id_fn = _ind_fn = None  # type: ignore
+        _theme_fn = _theme_id_fn = _ind_fn = _theme_src_fn = None  # type: ignore
 
     if _theme_fn:
         canon_theme = _theme_fn(s)
         canon_theme_id = _theme_id_fn(s) if _theme_id_fn else None
         if canon_theme:
-            theme_src = "canonical_map"
+            # Distinguish a genuine static canonical-map hit from a manual/LLM
+            # file override (data/llm_theme_overrides.json) that happens to be
+            # served through the same mapper lookup — same theme result, but
+            # provenance must reflect the actual origin (matches
+            # get_theme_provenance()'s "llm_classified" labeling).
+            _mapper_src = _theme_src_fn(s) if _theme_src_fn else None
+            theme_src = "llm_classified" if _mapper_src == "llm_file_override" else "canonical_map"
 
     if not canon_theme and _ind_fn and industry:
         ind = (industry or "").strip()

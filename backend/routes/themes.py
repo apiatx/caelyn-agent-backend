@@ -366,6 +366,16 @@ def _perform_membership_write(
         except Exception as _xde:
             print(f"[THEMES_ADMIN] watchlist cross-sync (remove cleanup) failed (non-fatal): {_xde}")
 
+        # Clean up the corresponding data/llm_theme_overrides.json row when it
+        # still points at this theme_id. Guarded: if the ticker was already
+        # reassigned to a different theme_id after this row was written, that
+        # newer row is left untouched (guard lives in remove_llm_theme_override).
+        try:
+            from services.theme_ticker_mapper import remove_llm_theme_override as _delete_llm
+            _delete_llm(symbol, only_if_theme_id=theme_id)
+        except Exception as _xle:
+            print(f"[THEMES_ADMIN] watchlist cross-sync (llm file cleanup) failed (non-fatal): {_xle}")
+
     # ── Build authoritative basket from freshly-rebuilt enriched universe ─────
     # _invalidate_caches() called refresh_enriched_universe() which did an
     # in-place update of ENRICHED_THEME_RS_UNIVERSE.  Reading from it now
@@ -507,7 +517,7 @@ async def admin_assign_primary_theme(
         prior_theme_id
         and prior_theme_id != body.theme_id
         and prior_theme_id in _uni
-        and prior_source in ("manual_override", "themes_page_membership")
+        and prior_source in ("manual_override", "themes_page_membership", "llm_classified")
     ):
         try:
             _perform_membership_write(

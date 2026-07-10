@@ -119,6 +119,7 @@ _TICKER_TO_THEMES:        dict[str, list[str]] = {}   # "ANET" → ["AI Networki
 _TICKER_TO_THEME_ID:      dict[str, str]       = {}   # "SMH"  → "semiconductors"
 _TICKER_TO_CLASSIFICATION:dict[str, str]       = {}   # "SMH"  → "sub_theme"
 _TICKER_TO_PARENT_SECTOR: dict[str, str]       = {}   # "SMH"  → "technology"
+_TICKER_TO_PRIMARY_SOURCE: dict[str, str]      = {}   # "ACOG" → "llm_file_override" (origin of the FIRST/primary theme entry only)
 
 _ETF_TO_THEME_ID:  dict[str, str] = {}   # "SMH"  → "semiconductors"
 _ETF_TO_LABEL:     dict[str, str] = {}   # "SMH"  → "Semiconductors"
@@ -184,6 +185,7 @@ def register_llm_classified_tickers(classifications: list[dict]) -> int:
 
         _TICKER_TO_THEME_ID[sym]       = theme_id
         _TICKER_TO_CLASSIFICATION[sym] = "sub_theme"
+        _TICKER_TO_PRIMARY_SOURCE[sym] = "llm_file_override"
 
         # ── Update disk overrides (survives restarts) ─────────────────────────
         overrides[sym] = {
@@ -197,6 +199,78 @@ def register_llm_classified_tickers(classifications: list[dict]) -> int:
     _save_llm_overrides(overrides)
     print(f"[THEME_MAPPER] {registered} LLM overrides saved to {_LLM_OVERRIDES_PATH}")
     return registered
+
+
+def remove_llm_theme_override(ticker: str, only_if_theme_id: Optional[str] = None) -> dict:
+    """
+    Guarded delete of a single ticker's row from data/llm_theme_overrides.json
+    (the file backing "Source -1" in _build_index / register_llm_classified_tickers).
+
+    If only_if_theme_id is given, the row is only removed when its stored
+    theme_id still matches — this protects a newer reassignment: if the ticker
+    was reassigned to a different theme after the caller captured the "old"
+    theme_id, the row now belongs to the new theme and must NOT be deleted here.
+
+    Also reverses the in-memory index effect for this ticker/theme so the
+    change is visible without a full process restart (only removes the display
+    name this override contributed to _TICKER_TO_THEMES; does not touch other
+    themes indexed for the same ticker from unrelated sources).
+
+    Never raises. Returns:
+        {"deleted": bool, "reason": str, "ticker": str, "prior_row": dict|None}
+    """
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return {"deleted": False, "reason": "empty_ticker", "ticker": ticker, "prior_row": None}
+
+    overrides = _load_llm_overrides()
+    row = overrides.get(sym)
+    if row is None:
+        return {"deleted": False, "reason": "no_row", "ticker": sym, "prior_row": None}
+
+    if only_if_theme_id is not None and row.get("theme_id") != only_if_theme_id:
+        return {
+            "deleted": False,
+            "reason": "theme_id_mismatch_newer_reassignment",
+            "ticker": sym,
+            "prior_row": row,
+        }
+
+    del overrides[sym]
+    _save_llm_overrides(overrides)
+
+    # Reverse the in-memory effect (best-effort; index may not be built yet).
+    try:
+        display = row.get("display_name")
+        if sym in _TICKER_TO_THEMES and display in _TICKER_TO_THEMES[sym]:
+            _TICKER_TO_THEMES[sym].remove(display)
+            if not _TICKER_TO_THEMES[sym]:
+                del _TICKER_TO_THEMES[sym]
+        if _TICKER_TO_PRIMARY_SOURCE.get(sym) == "llm_file_override":
+            del _TICKER_TO_PRIMARY_SOURCE[sym]
+        if _TICKER_TO_THEME_ID.get(sym) == row.get("theme_id"):
+            del _TICKER_TO_THEME_ID[sym]
+        if _TICKER_TO_CLASSIFICATION.get(sym) == "sub_theme" and sym not in _TICKER_TO_THEMES:
+            del _TICKER_TO_CLASSIFICATION[sym]
+    except Exception as _e:
+        print(f"[THEME_MAPPER] remove_llm_theme_override in-memory reversal error (non-fatal): {_e}")
+
+    print(f"[THEME_MAPPER] LLM override removed: {sym} (was {row.get('display_name')})")
+    return {"deleted": True, "reason": "removed", "ticker": sym, "prior_row": row}
+
+
+def map_ticker_to_primary_theme_source(ticker: str) -> Optional[str]:
+    """
+    Return the origin of ticker's PRIMARY (first) theme entry, one of:
+    "llm_file_override", "foreign_alias_map", "canonical_map", or None if
+    the ticker has no mapper entry at all.
+
+    Used by theme_resolver.resolve_primary_theme_for_ticker() so provenance
+    correctly distinguishes a manual/LLM file override from a genuine static
+    canonical-map hit, without changing which theme is returned.
+    """
+    _build_index()
+    return _TICKER_TO_PRIMARY_SOURCE.get((ticker or "").upper())
 
 
 def _build_index() -> None:
@@ -218,6 +292,7 @@ def _build_index() -> None:
             _TICKER_TO_THEMES[s].append(display)
         _TICKER_TO_THEME_ID[s]       = theme_id
         _TICKER_TO_CLASSIFICATION[s] = "sub_theme"
+        _TICKER_TO_PRIMARY_SOURCE.setdefault(s, "llm_file_override")
 
     # ── Source 0: Foreign/OTC alias map (highest priority — explicit overrides) ─
     for raw_sym, (display, theme_id) in _FOREIGN_ALIAS_MAP.items():
@@ -227,6 +302,7 @@ def _build_index() -> None:
             _TICKER_TO_THEMES[s].append(display)
         _TICKER_TO_THEME_ID[s]       = theme_id
         _TICKER_TO_CLASSIFICATION[s] = "sub_theme"
+        _TICKER_TO_PRIMARY_SOURCE.setdefault(s, "foreign_alias_map")
 
     # ── Source 1: THEME_RS_UNIVERSE (canonical 60-entry universe — PRIMARY) ─────
     try:
@@ -274,6 +350,7 @@ def _build_index() -> None:
                     _TICKER_TO_CLASSIFICATION[sym] = cls_val
                 if sym not in _TICKER_TO_PARENT_SECTOR and parent:
                     _TICKER_TO_PARENT_SECTOR[sym] = parent
+                _TICKER_TO_PRIMARY_SOURCE.setdefault(sym, "canonical_map")
 
             # Map candidate symbols → theme
             for sym in cands:
@@ -287,6 +364,7 @@ def _build_index() -> None:
                     _TICKER_TO_CLASSIFICATION[sym] = cls_val
                 if sym not in _TICKER_TO_PARENT_SECTOR and parent:
                     _TICKER_TO_PARENT_SECTOR[sym] = parent
+                _TICKER_TO_PRIMARY_SOURCE.setdefault(sym, "canonical_map")
 
     except Exception as e:
         print(f"[THEME_MAPPER] THEME_RS_UNIVERSE unavailable: {e}")
@@ -313,6 +391,7 @@ def _build_index() -> None:
                 # Only set metadata fields if not already set by Source 1
                 _TICKER_TO_THEME_ID.setdefault(s, theme_name.lower().replace(" ", "_"))
                 _TICKER_TO_CLASSIFICATION.setdefault(s, "sub_theme")
+                _TICKER_TO_PRIMARY_SOURCE.setdefault(s, "canonical_map")
     except Exception as e:
         print(f"[THEME_MAPPER] home_service.THEME_MAP unavailable: {e}")
 
@@ -339,6 +418,7 @@ def _build_index() -> None:
                 _TICKER_TO_CLASSIFICATION.setdefault(etf, "theme")
                 if parent:
                     _TICKER_TO_PARENT_SECTOR.setdefault(etf, parent)
+                _TICKER_TO_PRIMARY_SOURCE.setdefault(etf, "canonical_map")
 
             # Representative tickers → theme (fallback only)
             for rep in reps:
@@ -349,6 +429,7 @@ def _build_index() -> None:
                 _TICKER_TO_CLASSIFICATION.setdefault(rep, "theme")
                 if parent:
                     _TICKER_TO_PARENT_SECTOR.setdefault(rep, parent)
+                _TICKER_TO_PRIMARY_SOURCE.setdefault(rep, "canonical_map")
 
             # THEME_META for label (only if not already set by Source 1)
             if label not in _THEME_META:
