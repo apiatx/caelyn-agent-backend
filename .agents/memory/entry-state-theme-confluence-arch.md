@@ -62,3 +62,8 @@ New CONTINUATION family state in `entry_state_service.py`. Detection requires: s
 ## force_warmup_stage2 admin endpoint
 
 `POST /api/admin/stage2/force-warmup?force_all=true` — loads all watchlist tickers, calls `warmup_stage2(tickers, force=True)` bypassing all freshness TTLs. Added `force: bool = False` param to `warmup_stage2()` in `watchlist_stage2_service.py`. Always trigger via HTTP admin endpoint, never subprocess (subprocess destroys disk LKG — see stage2-lkg-subprocess.md).
+
+## Actionability V1 layer
+- New `actionability_service.py` combines Trade Alignment (THEME_ALIGNMENT) + Entry Structure V2 into 8 canonical states (READY/EARLY_WATCH/WATCH/WAIT_FOR_BREAKOUT/WAIT_FOR_RETEST/REVERSAL_WATCH/TOO_EXTENDED/AVOID); pure function of already-computed fields, no recomputation.
+- Gotcha: `structure_v2.failed_breakout_confirmed` is a lingering diagnostic flag from an earlier phase of the same base and can stay True even after entry_state moves to a fresh state (e.g. TRENDLINE_SUPPORT_TEST) — do NOT use it as a standalone hard-AVOID trigger; only escalate when entry_state itself is FAILED_BREAKOUT.
+- Additive fields `actionability_*` merged into confluence_v2_service results dict + `actionability_diagnostics` block in build_confluence_snapshot, no schema removal.

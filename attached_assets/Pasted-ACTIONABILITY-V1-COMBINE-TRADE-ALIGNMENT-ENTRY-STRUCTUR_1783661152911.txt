@@ -1,0 +1,1728 @@
+ACTIONABILITY V1 — COMBINE TRADE ALIGNMENT + ENTRY STRUCTURE INTO A DETERMINISTIC "WHAT SHOULD I DO NOW?" LAYER
+
+Work only in the existing backend Replit project.
+
+The current architecture is now:
+
+# TRADE ALIGNMENT
+
+"Is a strong long-biased swing-trade opportunity developing?"
+
+Locked THEME_ALIGNMENT archetype:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment V2  25%
+Catalyst Alignment    25%
+
+Social Bonus          +0 to +10
+
+# ENTRY STRUCTURE
+
+"Is the current chart/price structure an attractive place to initiate or add?"
+
+Entry Structure V2 is separate and now includes:
+
+HIGH_BASE_FORMING
+HIGH_BASE_COILING
+HIGH_BASE_READY
+
+LOW_BASE_FORMING
+LOW_BASE_COILING
+LOW_BASE_READY
+
+BREAKOUT_CONFIRMED
+BREAKOUT_RETEST
+BREAKOUT_PULLBACK
+WAIT_FOR_RETEST
+TRENDLINE_SUPPORT_TEST
+CONSTRUCTIVE_DIP
+REVERSAL_WATCH
+FAILED_BREAKOUT
+SUPPORT_LOST
+DOWNTREND
+EXTREME_EXTENSION
+VERTICAL
+
+and other current canonical production states.
+
+Entry results are now version-aware using:
+
+ENTRY_ANALYSIS_VERSION = 2
+
+Do not modify Trade Alignment.
+
+Do not modify Trade Alignment weights.
+
+Do not modify Options Alignment.
+
+Do not modify Theme Alignment.
+
+Do not modify Stage Analysis.
+
+Do not modify Catalyst Alignment.
+
+Do not modify Social Bonus.
+
+Do not modify Entry Structure thresholds.
+
+Do not modify LOW_BASE thresholds.
+
+Do not build Investment Alignment.
+
+Do not build ELITE_ASSET_REBOUND.
+
+Do not modify Options Flow.
+
+Do not add AI/LLM calls.
+
+Do not add Grok calls.
+
+Do not add provider calls.
+
+Do not add a scheduler.
+
+Do not add a new cache.
+
+Do not modify frontend code.
+
+This task has ONE goal:
+
+BUILD ACTIONABILITY V1 AS A DETERMINISTIC DECISION LAYER OVER THE EXISTING TRADE ALIGNMENT + ENTRY STRUCTURE OUTPUTS.
+
+==================================================
+PRODUCT DEFINITION
+==================
+
+Actionability answers:
+
+"WHAT SHOULD I DO WITH THIS STOCK RIGHT NOW UNDER MY SWING-TRADING STRATEGY?"
+
+Trade Alignment answers:
+
+"Is the opportunity aligned?"
+
+Entry Structure answers:
+
+"Is the current price/chart structure actionable?"
+
+Actionability combines those existing outputs.
+
+Actionability must NOT become another independent alpha score.
+
+Do not recalculate Theme.
+
+Do not recalculate Stage.
+
+Do not recalculate Options.
+
+Do not recalculate Catalyst.
+
+Do not recalculate Entry geometry.
+
+Do not add fundamentals.
+
+Do not add analyst data.
+
+Do not add new price indicators.
+
+Do not add portfolio sizing in V1.
+
+Do not issue personalized buy/sell orders.
+
+This is a deterministic setup-state classification layer.
+
+==================================================
+PART 0 — AUDIT CURRENT CONFLUENCE / ENTRY JOIN PATH
+===================================================
+
+Before editing, trace:
+
+backend/services/confluence_v2_service.py
+
+current Trade Alignment result fields
+
+current Entry result fields
+
+how Entry is already attached to Confluence output
+
+current per-symbol and bulk endpoints
+
+any existing "verdict" fields such as:
+
+BUY
+WATCH
+NEUTRAL
+
+or equivalent
+
+Trace whether an existing deterministic action/verdict layer already exists.
+
+Do not blindly create a parallel answer if an existing field already serves a different purpose.
+
+Return internally:
+
+Trade Alignment score field
+
+Trade Alignment availability field
+
+Trade Alignment archetype field
+
+Trade Alignment reason codes
+
+base Trade Alignment score
+
+Social Bonus field
+
+Theme score/state fields
+
+Stage score/state fields
+
+Options Alignment V2 score/state fields
+
+Catalyst score fields
+
+Entry score
+
+Entry grade
+
+Entry state
+
+Entry family if present
+
+extension state
+
+base_archetype
+
+current verdict field(s)
+
+exact smallest integration point
+
+==================================================
+PART 1 — ACTIONABILITY OUTPUT
+=============================
+
+Create additive/shadow-mode fields.
+
+Do not replace existing scores or verdicts.
+
+Add:
+
+actionability_available
+
+actionability_state
+
+actionability_score
+
+actionability_reason_codes
+
+actionability_conflicts
+
+actionability_strengths
+
+actionability_entry_family
+
+actionability_version
+
+Use one canonical Actionability version constant.
+
+Example conceptually:
+
+ACTIONABILITY_VERSION = 1
+
+Do not scatter magic version numbers.
+
+==================================================
+PART 2 — CANONICAL ACTIONABILITY STATES
+=======================================
+
+Actionability V1 states are:
+
+READY
+
+EARLY_WATCH
+
+WATCH
+
+WAIT_FOR_BREAKOUT
+
+WAIT_FOR_RETEST
+
+REVERSAL_WATCH
+
+TOO_EXTENDED
+
+AVOID
+
+Use these exact state names unless an existing production enum creates a strict naming conflict.
+
+Do not add more states in V1 without proving the existing eight cannot represent the live population.
+
+Do not add:
+
+BUY
+
+SELL
+
+HOLD
+
+TRIM
+
+EXIT
+
+to Actionability V1.
+
+Those words can conflict with position ownership and future Portfolio Context.
+
+Actionability V1 is setup actionability, not portfolio-position advice.
+
+==================================================
+PART 3 — ACTIONABILITY SCORE
+============================
+
+Create one diagnostic:
+
+actionability_score
+
+0–100
+
+This is NOT a new alpha model.
+
+It exists only to rank stocks within the same general setup-state context.
+
+Use the existing:
+
+trade_alignment_score
+
+entry_score
+
+Conceptually:
+
+actionability_score =
+opportunity strength
++
+entry quality
+
+Audit live distributions first.
+
+Use a deterministic blend that gives Trade Alignment and Entry both material influence.
+
+Recommended starting architecture:
+
+60% Trade Alignment
+40% Entry Score
+
+because:
+
+Trade Alignment determines whether the stock/opportunity matters.
+
+Entry determines whether the current location is attractive.
+
+However:
+
+STATE CLASSIFICATION PRECEDENCE OVERRIDES THE NUMERIC SCORE.
+
+Example:
+
+Trade Alignment 95
+Entry 8
+EXTREME_EXTENSION
+
+may have a blended score above 60.
+
+It must still classify:
+
+TOO_EXTENDED
+
+or:
+
+WAIT_FOR_RETEST
+
+not READY.
+
+Do not classify solely by actionability_score threshold.
+
+The score is a rank diagnostic.
+
+The state is the decision layer.
+
+Document the exact final formula.
+
+If Trade Alignment is unavailable:
+
+actionability_score unavailable unless a current existing safe behavior clearly supports otherwise.
+
+Do not fabricate Trade Alignment as 50.
+
+If Entry is unavailable:
+
+Actionability unavailable.
+
+==================================================
+PART 4 — HARD ENTRY CONFLICT PRECEDENCE
+=======================================
+
+Entry structural conflicts must override strong Trade Alignment.
+
+Audit actual current Entry enums and use exact canonical names.
+
+Conceptually:
+
+SUPPORT_LOST
+→ AVOID
+
+strict confirmed FAILED_BREAKOUT
+→ AVOID
+
+DOWNTREND
+→ AVOID
+
+Entry grade AVOID due to structural breakdown
+→ AVOID
+
+Do not automatically classify all Entry grade AVOID rows identically without inspecting the reason.
+
+Extension/chase conflicts are different from structural breakage.
+
+For:
+
+EXTREME_EXTENSION
+
+VERTICAL
+
+CROWDED_MOVE if currently canonical
+
+use:
+
+TOO_EXTENDED
+
+or:
+
+WAIT_FOR_RETEST
+
+depending on opportunity strength and current Entry semantics.
+
+Key distinction:
+
+# AVOID
+
+structure broken / invalid / materially deteriorating
+
+# TOO_EXTENDED
+
+opportunity may be excellent, but chase risk is unacceptable now
+
+# WAIT_FOR_RETEST
+
+opportunity remains aligned, but current move needs a constructive reset
+
+Return exact precedence order.
+
+==================================================
+PART 5 — READY
+==============
+
+READY means:
+
+A strong Trade Alignment opportunity
+
+AND
+
+a currently actionable Entry structure
+
+AND
+
+no hard structural conflict
+
+AND
+
+no severe extension/chase conflict
+
+Potential qualifying canonical Entry states may include:
+
+HIGH_BASE_READY
+
+BREAKOUT_RETEST
+
+BREAKOUT_PULLBACK
+
+CONSTRUCTIVE_DIP
+
+TRENDLINE_SUPPORT_TEST
+
+LOW_BASE_READY
+
+and other exact current production states proven by audit to represent actionable structure.
+
+Do not automatically make every state above READY.
+
+Use Entry score/grade and Trade Alignment thresholds as confirmation.
+
+Recommended conceptual gates:
+
+Trade Alignment >= 70
+
+Entry Score >= 65
+
+actionable Entry state/family
+
+no AVOID conflict
+
+no severe extension conflict
+
+Inspect live score distributions before locking exact thresholds.
+
+Do not optimize thresholds to produce a desired number of READY rows.
+
+Return deterministic reasons such as:
+
+STRONG_TRADE_ALIGNMENT
+
+ACTIONABLE_ENTRY_STRUCTURE
+
+HIGH_BASE_READY
+
+BREAKOUT_RETEST
+
+CONSTRUCTIVE_DIP
+
+LOW_BASE_READY
+
+==================================================
+PART 6 — EARLY_WATCH
+====================
+
+EARLY_WATCH is strategically important.
+
+Intent:
+
+A strong or improving opportunity is developing before the move is obvious, but current structure is not fully actionable yet.
+
+Potential contexts:
+
+HIGH_BASE_FORMING
+
+early HIGH_BASE_COILING
+
+BASE_FORMING
+
+strong pre-move family states
+
+CONSTRUCTIVE_DIP before trigger
+
+other canonical forming states
+
+Trade Alignment should be meaningfully positive.
+
+Options pressure may be improving/accelerating.
+
+Theme may be strong.
+
+The stock should not be severely extended.
+
+Recommended conceptual gate:
+
+Trade Alignment >= 65
+
+Entry in a forming/pre-move state
+
+Entry Score roughly >= 45
+
+no structural break
+
+no severe extension
+
+Do not require Options Alignment.
+
+A stock may be EARLY_WATCH based on Theme + Stage + Catalyst.
+
+Return reasons such as:
+
+OPPORTUNITY_FORMING
+
+PRE_MOVE_STRUCTURE
+
+TRADE_ALIGNMENT_BUILDING
+
+PREMIUM_PRESSURE_ACCELERATING
+
+THEME_ALIGNMENT_STRONG
+
+Use only real existing signals.
+
+==================================================
+PART 7 — WATCH
+==============
+
+WATCH is the safe neutral/developing state.
+
+Use when:
+
+Trade Alignment is valid but not strong enough for a higher-conviction state
+
+or:
+
+Entry is structurally neutral/unclear
+
+or:
+
+minimum evidence exists but opportunity/entry interaction is not mature
+
+or:
+
+Trade Alignment has insufficient evidence but the row remains tracked
+
+Do not use WATCH as a dumping ground for broken structures.
+
+Broken structures belong in AVOID.
+
+Severe chase structures belong in TOO_EXTENDED / WAIT_FOR_RETEST.
+
+WATCH should mean:
+
+"Interesting or tracked, but no clear action now."
+
+==================================================
+PART 8 — WAIT_FOR_BREAKOUT
+==========================
+
+Intent:
+
+Opportunity alignment is meaningful.
+
+A base/coiling structure exists.
+
+Price has not yet cleared a defined ceiling/pivot/reclaim trigger.
+
+Potential canonical contexts:
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY where the actual trigger has not fired and current Entry semantics indicate waiting
+
+COILED
+
+BASE_FORMING with mature resistance
+
+other exact pre-breakout states
+
+LOW_BASE_COILING
+
+possibly LOW_BASE_READY if the model indicates an untriggered reclaim rather than immediate actionability
+
+Do not create an artificial breakout calculation.
+
+Reuse Entry Structure outputs:
+
+breakout pivot
+
+base ceiling
+
+reclaim pivot
+
+Entry reason codes
+
+Entry state
+
+Use:
+
+WAIT_FOR_BREAKOUT
+
+when the best action is:
+
+"Do not chase inside the structure; wait for the trigger."
+
+==================================================
+PART 9 — WAIT_FOR_RETEST
+========================
+
+Intent:
+
+The stock/opportunity remains strongly aligned.
+
+Price has already expanded or broken out.
+
+The current location is not attractive enough to initiate/add.
+
+The setup needs:
+
+retest
+
+pullback
+
+reset
+
+or consolidation
+
+Potential contexts:
+
+WAIT_FOR_RETEST Entry state
+
+BREAKOUT_CONFIRMED with weak current Entry score / extension conflict
+
+EXTENDED when Trade Alignment remains strong
+
+post-breakout location above support but poor risk/reward
+
+Recommended conceptual requirement:
+
+Trade Alignment meaningfully positive
+
+structure not broken
+
+current Entry conflict is primarily location/chase risk
+
+Do not use WAIT_FOR_RETEST for SUPPORT_LOST.
+
+==================================================
+PART 10 — REVERSAL_WATCH
+========================
+
+Intent:
+
+A deep-reset / turnaround structure is developing.
+
+Downside is becoming defined.
+
+Momentum is not yet sufficiently proven for READY.
+
+Primary contexts:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING where confirmation remains immature
+
+REVERSAL_WATCH Entry state
+
+BEARISH_EASING Options pressure may be a confirming reason
+
+BULLISH_ACCELERATING Options pressure may be a stronger confirming reason
+
+Trade Alignment does not need to be as high as READY because Stage may naturally be weak during an early turnaround.
+
+However:
+
+Do not surface every LOW_BASE_FORMING ticker as REVERSAL_WATCH regardless of opportunity context.
+
+Require meaningful evidence from Trade Alignment and/or specific improving signals.
+
+Recommended conceptual logic:
+
+LOW_BASE archetype/state
+
+AND
+
+no structural-break conflict
+
+AND
+
+at least moderate Trade Alignment
+
+or:
+
+strong Options pressure improvement
+
+or:
+
+strong Theme/Catalyst confirmation
+
+Use available real signals only.
+
+Reason codes may include:
+
+LOW_BASE_FLOOR_DEFINED
+
+DOWNSIDE_DEFINED
+
+MOMENTUM_UNPROVEN
+
+BEARISH_PRESSURE_EASING
+
+PREMIUM_PRESSURE_ACCELERATING
+
+TURNAROUND_STRUCTURE_FORMING
+
+==================================================
+PART 11 — TOO_EXTENDED
+======================
+
+Intent:
+
+Do not chase.
+
+The underlying opportunity may remain excellent.
+
+Primary contexts:
+
+EXTREME_EXTENSION
+
+VERTICAL
+
+CROWDED_MOVE if canonical
+
+severe extension modifier / Entry score collapse caused by chase risk
+
+TOO_EXTENDED should be especially visible when:
+
+Trade Alignment >= 70
+
+because:
+
+"Great stock/opportunity, terrible current entry"
+
+is one of the main use cases of Actionability.
+
+Do not mathematically hide these names.
+
+Do not downgrade their Trade Alignment.
+
+Return conflicts such as:
+
+EXTREME_EXTENSION
+
+VERTICAL_MOVE
+
+CHASE_RISK
+
+ENTRY_SCORE_CONFLICT
+
+==================================================
+PART 12 — AVOID
+===============
+
+Intent:
+
+Current structure is broken or materially hostile for a new long-biased swing entry.
+
+Primary contexts:
+
+SUPPORT_LOST
+
+strict FAILED_BREAKOUT
+
+DOWNTREND
+
+confirmed structural failure
+
+weak/broken floor
+
+other actual current Entry states proven by audit to represent deterioration
+
+AVOID does not mean:
+
+bad company
+
+bad long-term investment
+
+never buy
+
+It means:
+
+"Do not initiate/add here under the current long-biased swing setup model."
+
+Reason codes must preserve the exact structural conflict.
+
+==================================================
+PART 13 — FLOW_LEADING_PRICE
+============================
+
+Add an Actionability reason code:
+
+FLOW_LEADING_PRICE
+
+This is NOT an Actionability state.
+
+This is a high-value interaction reason.
+
+Intent:
+
+Bullish options pressure is strong and strengthening
+
+while:
+
+price/Entry structure remains pre-move, constructive, or reset
+
+and:
+
+price is not severely extended / vertical / crowded
+
+Use current existing fields:
+
+Options Alignment V2
+
+premium_pressure_score
+
+options_pressure_state
+
+Entry state
+
+Entry family
+
+Entry score
+
+extension state
+
+Do not calculate new price momentum.
+
+Do not use raw Net Premium alone.
+
+Potential conceptual gate:
+
+Options Alignment >= 75
+
+premium_pressure_score >= 70
+
+options_pressure_state == BULLISH_ACCELERATING
+
+Entry is in a canonical pre-move / constructive state
+
+no severe extension conflict
+
+Inspect distributions before locking exact thresholds.
+
+Potential qualifying Entry states may include:
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY
+
+BREAKOUT_RETEST
+
+BREAKOUT_PULLBACK
+
+CONSTRUCTIVE_DIP
+
+TRENDLINE_SUPPORT_TEST
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+Do not allow:
+
+EXTREME_EXTENSION
+
+VERTICAL
+
+CROWDED_MOVE
+
+to receive FLOW_LEADING_PRICE.
+
+The reason means:
+
+"Options premium pressure appears to be strengthening before price has become a chase."
+
+==================================================
+PART 14 — OTHER INTERACTION REASON CODES
+========================================
+
+Create deterministic interaction reasons only when proven by existing signals.
+
+Potential useful reasons:
+
+STRONG_ALIGNMENT_GOOD_ENTRY
+
+STRONG_ALIGNMENT_BAD_ENTRY
+
+TRADE_ALIGNMENT_BUILDING
+
+PREMIUM_PRESSURE_ACCELERATING
+
+PREMIUM_PRESSURE_FADING
+
+BEARISH_PRESSURE_EASING
+
+THEME_ALIGNMENT_STRONG
+
+CATALYST_PRESENT
+
+HIGH_BASE_CONTINUATION
+
+LOW_BASE_ASYMMETRY
+
+MOMENTUM_UNPROVEN
+
+WAITING_FOR_TRIGGER
+
+RETEST_REQUIRED
+
+CHASE_RISK
+
+STRUCTURE_BROKEN
+
+Do not generate prose with an LLM.
+
+Do not create dozens of redundant reasons.
+
+Return the exact final reason-code vocabulary.
+
+==================================================
+PART 15 — CONFLICT / STRENGTH FIELDS
+====================================
+
+Populate:
+
+actionability_strengths
+
+actionability_conflicts
+
+These should be deterministic arrays of concise canonical codes.
+
+Examples:
+
+strengths:
+STRONG_TRADE_ALIGNMENT
+BULLISH_PREMIUM_ACCELERATION
+HIGH_BASE_READY
+
+conflicts:
+EXTREME_EXTENSION
+ENTRY_SCORE_LOW
+RETEST_REQUIRED
+
+Another:
+
+strengths:
+LOW_BASE_FLOOR_DEFINED
+BEARISH_PRESSURE_EASING
+
+conflicts:
+MOMENTUM_UNPROVEN
+TRADE_ALIGNMENT_MODERATE
+
+Do not duplicate the entire underlying reason-code payload.
+
+Only surface the most decision-relevant interactions.
+
+==================================================
+PART 16 — MINIMUM EVIDENCE / AVAILABILITY
+=========================================
+
+Actionability requires:
+
+Entry available
+
+and:
+
+Trade Alignment row tracked
+
+If Trade Alignment is unavailable because Theme mandatory requirements fail in the THEME_ALIGNMENT archetype:
+
+do not invent a score.
+
+Actionability may remain:
+
+WATCH
+
+with:
+
+actionability_available = false
+
+and reason:
+
+TRADE_ALIGNMENT_UNAVAILABLE
+
+OR:
+
+use the closest safe existing output convention.
+
+Audit current downstream expectations before choosing.
+
+Do not classify READY when Trade Alignment is unavailable.
+
+Do not classify EARLY_WATCH solely from Entry.
+
+Do not classify FLOW_LEADING_PRICE if Options Alignment is unavailable.
+
+==================================================
+PART 17 — FULL-UNIVERSE SHADOW VALIDATION
+=========================================
+
+Run Actionability across the complete current internal Confluence/Entry universe.
+
+Do not use the top-200 endpoint slice.
+
+Return:
+
+universe count
+
+Actionability available
+
+unavailable
+
+State distribution:
+
+READY
+
+EARLY_WATCH
+
+WATCH
+
+WAIT_FOR_BREAKOUT
+
+WAIT_FOR_RETEST
+
+REVERSAL_WATCH
+
+TOO_EXTENDED
+
+AVOID
+
+Do not omit zero-count states.
+
+Return:
+
+actionability_score distribution
+
+min
+p10
+p25
+median
+mean
+p75
+p90
+p95
+max
+
+==================================================
+PART 18 — READY VALIDATION
+==========================
+
+Return every READY row, up to Top 50 by actionability_score.
+
+Show:
+
+symbol
+
+Actionability state
+
+Actionability score
+
+Trade Alignment
+
+Trade Alignment rank
+
+Theme score
+
+Theme
+
+Stage score
+
+Stage
+
+Options Alignment V2
+
+Premium Pressure
+
+Options Pressure State
+
+Catalyst score
+
+primary catalyst
+
+Social Bonus
+
+Entry state
+
+Entry score
+
+Entry grade
+
+base_archetype
+
+extension state
+
+strengths
+
+conflicts
+
+reason codes
+
+For each READY row provide a one-line deterministic explanation using only existing fields.
+
+Example style:
+
+"Trade Alignment 84; bullish premium accelerating; HIGH_BASE_READY 90/A+; no extension conflict."
+
+Do not use AI qualitative stock analysis.
+
+==================================================
+PART 19 — EARLY_WATCH VALIDATION
+================================
+
+Return Top 50 EARLY_WATCH by actionability_score.
+
+Show the same fields.
+
+Specifically identify:
+
+EARLY_WATCH + BULLISH_ACCELERATING Options
+
+EARLY_WATCH + HIGH_BASE_FORMING
+
+EARLY_WATCH + HIGH_BASE_COILING
+
+EARLY_WATCH where Theme score >= 75
+
+The goal is to inspect:
+
+"becoming hot before the move is obvious."
+
+==================================================
+PART 20 — FLOW_LEADING_PRICE VALIDATION
+=======================================
+
+Return every current row carrying:
+
+FLOW_LEADING_PRICE
+
+up to 50.
+
+Show:
+
+symbol
+
+Actionability
+
+Actionability score
+
+Trade Alignment
+
+Options Alignment V2
+
+Premium Pressure
+
+Options Pressure State
+
+1D delta
+
+7D delta
+
+30D delta
+
+Entry state
+
+Entry score
+
+extension state
+
+current 1D price change if already available in the existing Confluence payload
+
+reason codes
+
+Do not add a new quote call for current price change.
+
+Prove:
+
+0 FLOW_LEADING_PRICE rows are:
+
+EXTREME_EXTENSION
+
+VERTICAL
+
+CROWDED_MOVE
+
+or other severe chase states.
+
+Return false-positive count.
+
+==================================================
+PART 21 — HIGH ALIGNMENT / BAD ENTRY
+====================================
+
+Return every current row where:
+
+Trade Alignment >= 70
+
+AND
+
+Entry Score < 40
+
+or:
+
+Entry Grade == AVOID
+
+Show:
+
+symbol
+
+Trade Alignment
+
+Actionability state
+
+Actionability score
+
+Options Alignment
+
+Catalyst
+
+Entry state
+
+Entry score
+
+Entry grade
+
+extension state
+
+conflicts
+
+Expected:
+
+These should predominantly classify:
+
+TOO_EXTENDED
+
+WAIT_FOR_RETEST
+
+or:
+
+AVOID
+
+They must not classify READY.
+
+Return READY false-positive count.
+
+Expected:
+
+0
+
+Specifically show:
+
+ALGM
+
+AOSL
+
+BE
+
+MRVL
+
+WYFI
+
+HOOD
+
+AMD
+
+MU
+
+whether or not each qualifies.
+
+==================================================
+PART 22 — LOW BASE ACTIONABILITY
+================================
+
+Return every current:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+joined to Actionability.
+
+Show:
+
+symbol
+
+Actionability state
+
+Actionability score
+
+Trade Alignment
+
+Theme
+
+Stage
+
+Options Alignment V2
+
+Pressure State
+
+Catalyst
+
+Entry state
+
+Entry score
+
+reason codes
+
+Expected conceptual behavior:
+
+LOW_BASE_FORMING
+
+usually WATCH or REVERSAL_WATCH
+
+LOW_BASE_COILING
+
+often REVERSAL_WATCH / EARLY_WATCH / WAIT_FOR_BREAKOUT depending on opportunity alignment
+
+LOW_BASE_READY
+
+may reach READY when Trade Alignment is strong enough
+
+Do not tune Low Base Entry thresholds.
+
+==================================================
+PART 23 — NAMED TICKER VALIDATION
+=================================
+
+Return exact current Actionability results for:
+
+ALGM
+
+AOSL
+
+BE
+
+MRVL
+
+WYFI
+
+HOOD
+
+AMD
+
+MU
+
+CRDO
+
+IBRX
+
+AAOI
+
+SLAB
+
+DELL
+
+CIFR
+
+ARQQ
+
+AXTI
+
+BTDR
+
+LWLG
+
+MARA
+
+TPL
+
+VOYG
+
+For each:
+
+Actionability state
+
+Actionability score
+
+Trade Alignment
+
+Theme score
+
+Stage score
+
+Options Alignment V2
+
+Options Pressure State
+
+Catalyst
+
+Social Bonus
+
+Entry state
+
+Entry score
+
+Entry grade
+
+base_archetype
+
+extension state
+
+strengths
+
+conflicts
+
+reason codes
+
+Do not force expected states.
+
+==================================================
+PART 24 — STATE PRECEDENCE TESTS
+================================
+
+Prove the following invariants across the complete universe:
+
+READY with SUPPORT_LOST = 0
+
+READY with confirmed FAILED_BREAKOUT = 0
+
+READY with DOWNTREND = 0
+
+READY with EXTREME_EXTENSION = 0
+
+READY with VERTICAL = 0
+
+FLOW_LEADING_PRICE with EXTREME_EXTENSION = 0
+
+FLOW_LEADING_PRICE with VERTICAL = 0
+
+AVOID caused solely by strong Trade Alignment = 0
+
+TOO_EXTENDED with weak/broken support-only conflict = 0 unless another extension conflict also exists
+
+Return exact counts.
+
+==================================================
+PART 25 — EXISTING VERDICT COMPARISON
+=====================================
+
+The current Confluence output may already expose:
+
+BUY
+
+WATCH
+
+NEUTRAL
+
+or another existing verdict field.
+
+Do not remove it.
+
+Compare the existing verdict against Actionability V1.
+
+Return cross-tab counts such as:
+
+existing BUY → READY
+
+existing BUY → EARLY_WATCH
+
+existing BUY → WAIT_FOR_RETEST
+
+existing BUY → TOO_EXTENDED
+
+existing BUY → AVOID
+
+existing WATCH → READY
+
+etc.
+
+Show the Top 30 most meaningful disagreements.
+
+The purpose is to understand whether the old verdict was collapsing:
+
+opportunity quality
+
+and:
+
+entry quality
+
+into one label.
+
+Do not modify the old verdict.
+
+==================================================
+PART 26 — COST / PROVIDER PROOF
+===============================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 new provider calls
+
+0 new quote calls
+
+0 new history calls
+
+0 new scheduler
+
+0 new cache
+
+0 Theme changes
+
+0 Stage changes
+
+0 Options changes
+
+0 Catalyst changes
+
+0 Entry changes
+
+0 Trade Alignment weight changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+ACTIONABILITY V1 IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+INTEGRATION POINT:
+[path/function]
+
+ACTIONABILITY VERSION:
+[value]
+
+ACTIONABILITY SCORE:
+[formula]
+
+STATE PRECEDENCE:
+[exact order]
+
+READY:
+[exact logic]
+
+EARLY_WATCH:
+[exact logic]
+
+WATCH:
+[exact logic]
+
+WAIT_FOR_BREAKOUT:
+[exact logic]
+
+WAIT_FOR_RETEST:
+[exact logic]
+
+REVERSAL_WATCH:
+[exact logic]
+
+TOO_EXTENDED:
+[exact logic]
+
+AVOID:
+[exact logic]
+
+FLOW_LEADING_PRICE:
+[exact logic]
+
+REASON CODE VOCABULARY:
+[list]
+
+FULL UNIVERSE:
+[count]
+
+ACTIONABILITY AVAILABLE:
+[count / percent]
+
+STATE DISTRIBUTION:
+[results]
+
+ACTIONABILITY SCORE DISTRIBUTION:
+[results]
+
+READY:
+[summary]
+
+EARLY_WATCH:
+[summary]
+
+FLOW_LEADING_PRICE:
+[summary]
+
+HIGH ALIGNMENT / BAD ENTRY:
+[summary]
+
+LOW BASE ACTIONABILITY:
+[summary]
+
+NAMED TICKERS:
+[summary]
+
+PRECEDENCE INVARIANTS:
+[results]
+
+OLD VERDICT COMPARISON:
+[summary]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+ACTIONABILITY V1 VERDICT
+
+ACTIONABILITY FUNCTIONAL:
+[YES / NO]
+
+TRADE ALIGNMENT REMAINS SEPARATE:
+[YES / NO]
+
+ENTRY REMAINS SEPARATE:
+[YES / NO]
+
+READY COUNT:
+[count]
+
+EARLY_WATCH COUNT:
+[count]
+
+WATCH COUNT:
+[count]
+
+WAIT_FOR_BREAKOUT COUNT:
+[count]
+
+WAIT_FOR_RETEST COUNT:
+[count]
+
+REVERSAL_WATCH COUNT:
+[count]
+
+TOO_EXTENDED COUNT:
+[count]
+
+AVOID COUNT:
+[count]
+
+FLOW_LEADING_PRICE COUNT:
+[count]
+
+READY HARD-CONFLICT FALSE POSITIVES:
+[count, 0 expected]
+
+FLOW_LEADING_PRICE CHASE FALSE POSITIVES:
+[count, 0 expected]
+
+HIGH-ALIGNMENT BAD-ENTRY VISIBILITY:
+[assessment]
+
+EARLY-OPPORTUNITY VISIBILITY:
+[assessment]
+
+LOW-BASE ACTIONABILITY:
+[assessment]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING ACTIONABILITY WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+REAL INVESTMENT ALIGNMENT
+
+Do not build Investment Alignment.
+
+Do not build ELITE_ASSET_REBOUND.
+
+Do not modify Trade Alignment.
+
+Do not modify Entry Structure.
+
+Do not modify Options Alignment.
+
+Do not make unrelated changes.

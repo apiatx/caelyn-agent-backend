@@ -47,6 +47,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from services.actionability_service import (
+    ALL_STATES as _ACTIONABILITY_ALL_STATES,
+    ACTIONABILITY_VERSION as _ACTIONABILITY_VERSION,
+    compute_actionability as _compute_actionability,
+)
+
 # ── Data paths ─────────────────────────────────────────────────────────────────
 _BASE          = Path(__file__).parent.parent
 _STAGE2_LKG    = _BASE / "data" / "watchlist_stage2_lkg.json"
@@ -768,6 +774,15 @@ def _compute_confluence(
         social_entry    = social_entry,
     )
 
+    # ── ACTIONABILITY V1 (SHADOW, additive-only) — deterministic decision
+    #    layer combining the EXISTING Trade Alignment + Entry Structure V2
+    #    outputs above. Zero recomputation, zero provider calls. ─────────────
+    actionability_fields = _compute_actionability(
+        entry_result   = entry_result,
+        ta_fields      = theme_alignment_fields,
+        options_result = options_result,
+    )
+
     # ── Availability flags ────────────────────────────────────────────────────
     avail = [
         entry_result is not None,
@@ -799,6 +814,8 @@ def _compute_confluence(
         # ── THEME_ALIGNMENT archetype (SHADOW, additive-only fields) ─────────
         "legacy_trade_confluence_score": trade_score,
         **theme_alignment_fields,
+        # ── ACTIONABILITY V1 (SHADOW, additive-only fields) ───────────────────
+        **actionability_fields,
         # ── Legacy social bonus metadata (pre-THEME_ALIGNMENT; preserved
         #    under distinct keys since Part 3/4 of the THEME_ALIGNMENT spec
         #    redefine "social_bonus_score/eligible/reason" as the NEW
@@ -1072,6 +1089,39 @@ def build_confluence_snapshot(
         },
     }
 
+    # ── ACTIONABILITY V1 diagnostics (SHADOW, additive-only) ─────────────────
+    act_state_dist: dict[str, int] = {s: 0 for s in _ACTIONABILITY_ALL_STATES}
+    act_available_count = 0
+    act_scores_sorted: list[float] = []
+    flow_leading_count = 0
+    for r in results:
+        st = r.get("actionability_state")
+        if st in act_state_dist:
+            act_state_dist[st] += 1
+        if r.get("actionability_available"):
+            act_available_count += 1
+        sc = r.get("actionability_score")
+        if sc is not None:
+            act_scores_sorted.append(sc)
+        if "FLOW_LEADING_PRICE" in (r.get("actionability_reason_codes") or []):
+            flow_leading_count += 1
+    act_scores_sorted.sort()
+
+    actionability_diagnostics = {
+        "version":            _ACTIONABILITY_VERSION,
+        "available_count":    act_available_count,
+        "unavailable_count":  len(results) - act_available_count,
+        "state_distribution": act_state_dist,
+        "flow_leading_price_count": flow_leading_count,
+        "score_percentiles": {
+            "p10": _pct(act_scores_sorted, 0.10),
+            "p25": _pct(act_scores_sorted, 0.25),
+            "p50": _pct(act_scores_sorted, 0.50),
+            "p75": _pct(act_scores_sorted, 0.75),
+            "p90": _pct(act_scores_sorted, 0.90),
+        },
+    }
+
     return {
         "ok":               True,
         "generated_at":     _now_iso(),
@@ -1102,6 +1152,7 @@ def build_confluence_snapshot(
         },
         "theme_bridge_diagnostics": _theme_bridge_diagnostics(ticker_theme_idx, rotation_idx, universe),
         "trade_alignment_diagnostics": trade_alignment_diagnostics,
+        "actionability_diagnostics": actionability_diagnostics,
         "elapsed_ms":  round((time.time() - t0) * 1000, 1),
         "results":     results,
     }
