@@ -1,0 +1,70 @@
+Working correctly — 374/374 grouped, 3 unassigned (ACOG, ABSI unmapped + one), sorted properly. Let me finalize validation numbers and deliver the full report.
+
+
+4 actions
+Confirmed: LASR and AMKR correctly resolve via canonical_map, and ABSI/ACOG genuinely have no_mapping at the resolver level — meaning the "Unassigned" bucket in the new grouping is accurate and consistent with the same resolver, not a bug in the grouping logic.
+
+Work is complete. Here is the final report.
+
+WATCHLIST THEME GROUPING REPORT
+Part 1 — Upper Screener THEME provenance (verified this session): All 19 spec-audited tickers (AOSL, WYFI, SLAB, ANET, ALGM, BE, AMD, MU, MRVL, CRDO, ABCL, SOFI, DELL, HOOD, IBRX, RBRK, VRT, NBIS, AAOI) resolve identically across resolve_primary_theme_for_ticker, get_theme_provenance, and ENRICHED_THEME_RS_UNIVERSE membership — 0 mismatches.
+
+Part 2 — Root cause of lower grouping divergence risk: The background analyze_theme_group AI-classify path (Claude-based) builds analysis.sections using a narrower resolver (map_ticker_to_primary_theme) that skips the themes_page_membership precedence step used by the canonical resolver. Today your live watchlist has 0 saved sections (still on the skeleton path), so every row currently in production is already sourced straight from the canonical resolver — no divergence is live right now, but the risk remains latent for whenever a full AI analysis run populates sections.
+
+Part 3 — Fix delivered: Added a new read-only endpoint, GET /api/watchlist/{watchlist_id}/performance/theme, that groups the exact same rows served by the existing watchlist GET (same canonical_theme_name/theme field, same change_pct_1d) — zero new classification, zero AI/LLM calls, zero new provider calls. It computes equal-weight 1D average per theme, sorts theme cards by 1D % descending (no-data themes last), sorts tickers within each card by 1D % descending (missing values last), and reports an explicit "Unassigned" bucket plus a missing_1d_change diagnostic list.
+
+Live validation (374-ticker watchlist):
+
+374/374 rows grouped (100% coverage, no drops, no duplicates)
+27 theme cards produced
+Top performer: Photonics / Lasers (+10.64%, 4 tickers)
+Bottom performer: Defense (−1.41%, 22 tickers)
+3 tickers in "Unassigned": ACOG, ABSI (confirmed no_mapping at the canonical resolver itself — correctly unassigned, not a grouping bug), and one foreign OTC symbol
+60 tickers (mostly foreign-exchange-prefixed symbols like AIM:, LON:, TSX:, TPE:) lack a live 1D change quote and are excluded from their theme's average but still listed in the card
+Scope respected: No changes to Options Alignment, Trade Alignment, Entry Structure, Stage Analysis, Theme Rotation, Theme RS, Options Flow, Fundamental grouping, Market Cap grouping, or any AI/provider call path. The AI-driven analyze_theme_group classify function was left untouched (out of scope, still used elsewhere).
+
+Caveat: This repo contains no frontend code — the "Performance Groupings → Theme" UI section could not be inspected or wired directly. The fix is delivered as the correct backend data contract (grouped, sorted, non-AI, single-source-of-theme-truth) for that UI to consume; connecting the frontend component to this new endpoint is a step outside this repo.
+
+VERDICT
+PASS — Theme identity between the upper Screener and the new Performance Grouping is unified (same canonical field, same resolver, no second classifier). Grouping logic is deterministic, AI-free, and validated end-to-end against the live 374-ticker watchlist with 100% row coverage and correct sort/aggregation behavior.
+
+
+Checkpoint made
+33 minutes ago
+
+Worked for 6 minutes
+
+Pasted-WATCHLIST-PERFORMANCE-GROUPINGS-THEME-WIRE-EXISTING-BAC_1783652946241.txt
+20 minutes ago
+
+1 message & 1 action
+
+Checkpoint made
+20 minutes ago
+
+Published your app
+20 minutes ago
+
+Pasted-OPTIONS-ALIGNMENT-V2-NORMALIZED-PREMIUM-PRESSURE-NET-PR_1783653286887.txt
+15 minutes ago
+
+32 actions
+Now implementing the V2 formula in options_alignment.py.
+
+
+13 actions
+Good — field name options_alignment_score consumed by confluence_v2_service.py is unchanged, so downstream Trade Alignment wiring stays intact. Let me restart and validate against real tickers.
+
+
+21 actions
+There's an existing HTTP endpoint I can use in-process. Let me hit it live for the named tickers.
+
+
+3 actions
+The pipeline is working correctly end-to-end. options_alignment_score is now computed from normalized premium pressure + rate-of-change instead of raw dollar Net Premium, and it's flowing correctly through confluence_v2_service.py into trade_alignment_reason_codes and the Trade Alignment 25% input, exactly matching the spec's Part 6/12 wiring, with zero changes to producers, frontend, or scheduling.
+
+Given this is a very large 1119-line spec, let me finalize by cleaning up dead code and confirming no regressions in the module, then deliver the report.
+
+
+3 actions
+This is fine, it's legitimate code (pre-existing, unrelated to my edits) reused for state derivation. No dead code. The implementation is complete and validated.
