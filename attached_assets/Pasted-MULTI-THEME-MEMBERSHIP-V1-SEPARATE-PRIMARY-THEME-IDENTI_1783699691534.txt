@@ -1,0 +1,872 @@
+MULTI-THEME MEMBERSHIP V1 — SEPARATE PRIMARY THEME IDENTITY FROM ADDITIONAL THEME BASKET MEMBERSHIPS
+
+Work only in the existing backend Replit project.
+
+The multi-theme architecture audit is complete.
+
+The audit proved:
+
+1. `watchlist_category_overrides` is structurally one-to-one per `(user_id, ticker)` and already functions as the canonical highest-precedence manual primary Theme identity.
+
+2. `theme_ticker_overrides` is structurally many-to-many using primary key `(theme_id, symbol)` and already supports simultaneous active add rows for the same ticker across multiple Themes.
+
+3. `ENRICHED_THEME_RS_UNIVERSE` already supports the same symbol in multiple Theme baskets.
+
+4. The Themes-page backend read path naturally exposes a ticker under multiple Theme baskets.
+
+5. Theme RS and Theme Rotation calculate each Theme independently. A ticker in Theme A and Theme B contributes once to each Theme, with within-Theme dedup already present.
+
+6. Options Flow Sectors can expose a ticker under multiple Theme/Sector groupings.
+
+7. All Stocks is globally deduped by ticker and therefore still maintains one canonical ticker row/scan regardless of Theme membership count.
+
+8. The lower Watchlist Theme performance grouping intentionally consumes the one canonical primary Theme and groups each Watchlist ticker exactly once.
+
+9. Current Trade Alignment Theme selection is strictly primary-only through:
+   `theme_bridge.get_primary_theme_alignment()`
+   → `resolve_primary_theme_for_ticker()`
+
+10. Actionability consumes Trade Alignment and uses hard thresholds. Therefore Trade Alignment Theme-selection semantics must NOT change silently in this task.
+
+The proven architectural defect is:
+
+`POST /api/themes/admin/memberships`
+
+currently treats every Theme basket ADD as both:
+
+* a membership write
+* and a primary Theme/classification write
+
+because `_perform_membership_write()` cross-syncs ADD into:
+
+* `theme_ticker_overrides`
+* `watchlist_category_overrides`
+* `data/llm_theme_overrides.json`
+
+This coupling prevents safe Additional Theme membership.
+
+This task has ONE goal:
+
+FORMALLY SEPARATE ONE CANONICAL PRIMARY THEME FROM ZERO OR MORE ADDITIONAL THEME BASKET MEMBERSHIPS USING THE EXISTING STORES.
+
+Do not add a new database table.
+
+Do not modify Theme RS scoring.
+
+Do not modify Theme Rotation scoring.
+
+Do not modify Options Flow producer logic.
+
+Do not modify All Stocks scan logic.
+
+Do not modify Trade Alignment.
+
+Do not modify Actionability.
+
+Do not modify Entry Structure.
+
+Do not modify Options Alignment.
+
+Do not modify Catalyst Alignment.
+
+Do not modify frontend code.
+
+Do not add AI/LLM calls.
+
+Do not add Grok calls.
+
+Do not add provider calls.
+
+==================================================
+LOCKED PRODUCT SEMANTICS
+========================
+
+PRIMARY THEME
+
+Exactly one canonical Theme identity.
+
+Used by:
+
+* Watchlist Screener Theme column
+* canonical primary Theme resolver
+* lower Watchlist Theme performance grouping
+* current Trade Alignment Theme selection
+
+Written through:
+
+POST /api/themes/admin/assign-primary-theme
+
+Primary Theme assignment/reassignment retains the existing authoritative semantics.
+
+---
+
+## ADDITIONAL THEME MEMBERSHIPS
+
+A ticker may belong to zero or more additional peer Themes.
+
+Example:
+
+AAOI
+
+Primary Theme:
+AI Networking
+
+Additional Theme:
+Photonics / Lasers
+
+The ticker should then:
+
+* retain `AI Networking` as the canonical Watchlist primary Theme
+* appear under AI Networking on the Themes page
+* also appear under Photonics / Lasers on the Themes page
+* contribute to both Theme baskets' existing Theme RS / Rotation calculations
+* appear in relevant Options Flow Theme/Sector groupings for both memberships
+* remain one canonical ticker in All Stocks
+
+Additional Theme membership must NOT:
+
+* overwrite `watchlist_category_overrides`
+* overwrite the canonical primary Theme
+* write a manual primary classification into `llm_theme_overrides.json`
+* change Trade Alignment Theme selection in this task
+* cause the lower Watchlist Theme performance grouping to count the ticker twice
+
+==================================================
+PART 0 — RECONFIRM THE CURRENT WRITE COUPLING
+=============================================
+
+Before editing, trace:
+
+`backend/routes/themes.py`
+
+`_perform_membership_write()`
+
+`POST /api/themes/admin/memberships`
+
+`POST /api/themes/admin/assign-primary-theme`
+
+`register_llm_classified_tickers()`
+
+`remove_llm_theme_override()`
+
+`category_overrides.upsert_override()`
+
+`category_overrides.delete_override()`
+
+`upsert_theme_ticker_override()`
+
+`refresh_enriched_universe()`
+
+Document the current exact ADD/REMOVE effects for both endpoints.
+
+Do not broadly redesign `_perform_membership_write()` before understanding every current caller.
+
+Identify whether any other caller relies on `/admin/memberships` cross-syncing into primary classification.
+
+==================================================
+PART 1 — PRESERVE PRIMARY THEME WRITE SEMANTICS
+===============================================
+
+`POST /api/themes/admin/assign-primary-theme`
+
+must remain the ONE authoritative manual primary Theme assignment endpoint.
+
+It must continue to perform the current primary-identity behavior required for:
+
+* `watchlist_category_overrides`
+* canonical resolver
+* Watchlist Theme field
+
+Preserve safe reassignment semantics:
+
+Theme A
+→ Theme B
+
+Final canonical primary Theme:
+Theme B
+
+Preserve guarded old-theme cleanup.
+
+Preserve the corrected add/remove store symmetry from the previous task.
+
+Do not weaken browser/admin auth.
+
+Do not change its frontend contract.
+
+==================================================
+PART 2 — CREATE A MEMBERSHIP-ONLY INTERNAL WRITE PATH
+=====================================================
+
+Create the smallest clean internal helper for basket membership only.
+
+Conceptually:
+
+`_perform_theme_membership_only_write(...)`
+
+or an equivalent architecture-appropriate name.
+
+Membership-only ADD must write:
+
+`theme_ticker_overrides`
+→ action='add'
+
+Then run the existing:
+
+`refresh_enriched_universe()`
+
+Membership-only ADD must NOT write:
+
+`watchlist_category_overrides`
+
+`data/llm_theme_overrides.json`
+
+or any other primary identity/classification store.
+
+Membership-only REMOVE must write/preserve the existing Theme membership removal semantics in:
+
+`theme_ticker_overrides`
+→ action='remove'
+
+Then refresh the existing enriched universe.
+
+Membership-only REMOVE must NOT delete or alter the ticker's canonical primary Theme unless the removed basket is being handled through the separate primary assignment flow.
+
+Do not duplicate Theme merge logic.
+
+Do not manually mutate `ENRICHED_THEME_RS_UNIVERSE`.
+
+Use the existing refresh.
+
+==================================================
+PART 3 — ADDITIONAL THEME MEMBERSHIP API CONTRACT
+=================================================
+
+Provide a thin authenticated admin endpoint for Additional Theme memberships.
+
+Preferred conceptual contract:
+
+POST `/api/themes/admin/additional-memberships`
+
+Request:
+
+{
+"ticker": "...",
+"theme_id": "...",
+"action": "add" | "remove",
+"note": optional,
+"created_by": optional
+}
+
+Use exact existing request conventions where appropriate.
+
+The endpoint must:
+
+* require the same admin authentication as existing Theme admin writes
+* normalize ticker using existing conventions
+* validate Theme ID against the canonical current Theme universe
+* use exact canonical Theme IDs
+* call the membership-only helper
+* refresh the existing enriched universe
+* return the current primary Theme separately from current Theme memberships
+
+Do not use `X-API-Key` as a browser requirement.
+
+Existing Bearer JWT admin sessions remain supported.
+
+Do not expose anonymous writes.
+
+==================================================
+PART 4 — RETURN PRIMARY VS MEMBERSHIPS EXPLICITLY
+=================================================
+
+After an Additional Theme membership mutation, return diagnostics such as:
+
+`ticker`
+
+`primary_theme`
+{
+`theme_id`,
+`theme_name`,
+`source`
+}
+
+`theme_memberships`
+[
+{
+`theme_id`,
+`theme_name`,
+`membership_source`,
+`is_primary`
+}
+]
+
+Use actual existing data paths.
+
+Do not create a new stored `is_primary` field if it is derivable from the canonical resolver.
+
+`is_primary` may be calculated read-only as:
+
+membership theme_id == canonical resolver theme_id
+
+Do not persist redundant state.
+
+==================================================
+PART 5 — READ CONTRACT FOR CURRENT TICKER THEME MEMBERSHIPS
+===========================================================
+
+The future frontend needs to display:
+
+Primary Theme
+
+Additional Themes
+
+Audit whether an existing endpoint already returns every active Theme membership for one ticker.
+
+If yes:
+
+reuse it and document the exact endpoint/fields.
+
+If no:
+
+add the smallest authenticated or safe read endpoint/helper using existing membership data.
+
+Conceptually:
+
+GET `/api/themes/admin/ticker-memberships/{ticker}`
+
+or the exact current route style.
+
+Return:
+
+ticker
+
+primary Theme
+
+all active Theme memberships
+
+additional Theme memberships
+
+available Theme Universe choices if already part of an existing contract, otherwise do not duplicate the full list unnecessarily
+
+For each membership include:
+
+theme_id
+
+theme_name
+
+is_primary
+
+source/action metadata where useful
+
+No provider calls.
+
+==================================================
+PART 6 — DO NOT USE LLM OVERRIDE FILE FOR ADDITIONAL THEMES
+===========================================================
+
+The audit proved:
+
+`data/llm_theme_overrides.json`
+
+is one-theme-per-ticker and currently mixes:
+
+* legacy AI classification
+* manual classification fallback
+* mapper bootstrap
+
+It is the wrong shape for Additional Theme memberships.
+
+Additional Theme ADD/REMOVE must not call:
+
+`register_llm_classified_tickers()`
+
+or:
+
+`remove_llm_theme_override()`
+
+The file remains in the existing primary/classification architecture for now.
+
+Do not migrate or delete it in this task.
+
+Do not refactor all legacy classification.
+
+Simply prevent Additional Theme membership from touching it.
+
+==================================================
+PART 7 — PRIMARY THEME MUST REMAIN STABLE
+=========================================
+
+Validate:
+
+Ticker primary Theme = A
+
+Add Additional Theme B
+
+Expected:
+
+canonical resolver = A
+
+Watchlist Theme field = A
+
+lower Watchlist Theme performance grouping = A only
+
+Trade Alignment selected Theme = A
+
+Theme memberships = A + B where A already exists through the enriched/watchlist path and B exists through the manual membership layer
+
+Then:
+
+Remove Additional Theme B
+
+Expected:
+
+canonical resolver still = A
+
+Watchlist Theme still = A
+
+Trade Alignment selected Theme still = A
+
+B disappears from additional membership
+
+Do not change Trade Alignment.
+
+==================================================
+PART 8 — MULTIPLE ADDITIONAL THEMES
+===================================
+
+Validate:
+
+Primary Theme = A
+
+Additional Theme B
+
+Additional Theme C
+
+Expected:
+
+canonical primary = A
+
+active memberships include A/B/C according to current merged membership semantics
+
+ticker appears in Theme baskets A/B/C
+
+Theme B remove:
+A and C remain
+
+Theme C remove:
+A remains
+
+No removal should reset or erase primary Theme A.
+
+No global one-theme dedupe.
+
+==================================================
+PART 9 — THEMES PAGE / ENRICHED UNIVERSE VALIDATION
+===================================================
+
+Using one safe reversible test ticker:
+
+capture baseline primary Theme and memberships.
+
+Add one Additional Theme.
+
+Refresh using the normal existing merge path.
+
+Prove:
+
+primary Theme unchanged
+
+original primary Theme basket still contains ticker
+
+additional Theme basket now contains ticker
+
+Themes-page backend payload sees ticker in both Theme baskets
+
+Then remove the Additional Theme.
+
+Prove exact restoration.
+
+Do not leave test artifacts.
+
+==================================================
+PART 10 — THEME RS / ROTATION BASKET VALIDATION
+===============================================
+
+Do not modify scoring.
+
+Read-only prove the Additional Theme ticker is present in both relevant Theme constituent inputs after membership ADD.
+
+Confirm:
+
+within Theme A:
+ticker appears once
+
+within Theme B:
+ticker appears once
+
+No within-Theme duplicate.
+
+Do not wait for or trigger an expensive Theme RS provider refresh solely for validation.
+
+Validate basket input membership.
+
+State that the existing Theme RS/Rotation logic will naturally consume both memberships on its normal path.
+
+==================================================
+PART 11 — OPTIONS FLOW SECTORS / ALL STOCKS VALIDATION
+======================================================
+
+Do not trigger a new options scan solely for validation.
+
+After adding an Additional Theme in a reversible test:
+
+inspect existing required-universe/grouping builders.
+
+Prove:
+
+ticker is visible as a member of the primary Theme grouping
+
+ticker is visible as a member of the additional Theme grouping
+
+if the Themes map to different Options Sectors, the ticker is eligible in both relevant sector views under current logic
+
+All Stocks required-universe set/map contains the ticker once
+
+canonical combined ticker data contains at most one ticker row
+
+Return duplicate scan/row risk assessment.
+
+Expected:
+
+Theme/Sector visibility = multi-membership
+
+All Stocks scan/row = one ticker
+
+==================================================
+PART 12 — WATCHLIST PERFORMANCE GROUPING SAFETY
+===============================================
+
+Read-only validate:
+
+GET `/api/watchlist/{watchlist_id}/performance/theme`
+
+for the multi-theme test ticker.
+
+The ticker must remain grouped exactly once under its canonical primary Theme.
+
+It must NOT appear in the additional Theme card in this Watchlist-specific performance grouping.
+
+The existing 374/374 or current dynamic exactly-once invariant must remain.
+
+Use current counts dynamically.
+
+==================================================
+PART 13 — TRADE ALIGNMENT FREEZE
+================================
+
+Do not modify:
+
+`theme_bridge.get_primary_theme_alignment()`
+
+or:
+
+`confluence_v2_service.py`
+
+Validate the test ticker before/after Additional Theme assignment.
+
+Return:
+
+canonical primary Theme before
+
+canonical primary Theme after
+
+Trade Alignment selected Theme before
+
+Trade Alignment selected Theme after
+
+Theme Alignment score before
+
+Theme Alignment score after
+
+Expected:
+
+same primary selected Theme.
+
+Natural Theme score movement caused by independently changing live Theme Rotation data is outside the assignment mutation itself; use the closest same-snapshot/read-only validation possible.
+
+The purpose is to prove the Additional Theme write itself does not switch Theme Alignment to another membership.
+
+==================================================
+PART 14 — ACTIONABILITY FREEZE
+==============================
+
+Do not modify Actionability.
+
+Confirm:
+
+no Actionability code changes
+
+no new Actionability input
+
+Actionability continues consuming the existing Trade Alignment + Entry outputs.
+
+For the reversible test ticker return:
+
+Actionability state before
+
+Actionability state after additional membership mutation
+
+Any change must be explained by changed upstream live data, not a new Theme-selection semantic.
+
+Do not force an expected state.
+
+==================================================
+PART 15 — EXISTING 13 MULTI-MEMBERSHIP TICKERS
+==============================================
+
+The audit found 13 current tickers with two simultaneous active `theme_ticker_overrides` add rows.
+
+Re-audit these after the write-path separation.
+
+For each return:
+
+ticker
+
+canonical primary Theme
+
+primary Theme source
+
+active membership rows
+
+which memberships equal primary
+
+which are additional
+
+whether conflicting category/file cross-sync state exists
+
+Do not mass-clean them.
+
+The goal is to see how current historical multi-membership rows map into the newly formalized primary/additional model.
+
+Flag ambiguous rows.
+
+==================================================
+PART 16 — EXISTING 24 CATEGORY/FILE MISMATCHES
+==============================================
+
+The prior symmetry audit found 24 tickers where:
+
+`watchlist_category_overrides Theme != llm_theme_overrides.json Theme`
+
+and the resolver correctly used the manual category override.
+
+Do not mass-clean them.
+
+Verify that the new Additional Theme membership path does not write either store and therefore does not increase this mismatch count.
+
+Return:
+
+mismatch count before
+
+mismatch count after reversible tests
+
+Expected:
+
+unchanged.
+
+==================================================
+PART 17 — AUTH / SECURITY
+=========================
+
+Reuse existing:
+
+`require_admin_user_or_api_key()`
+
+or exact current admin guard.
+
+Browser writes use existing Bearer JWT.
+
+Do not expose API key to frontend.
+
+Validate:
+
+unauthenticated write blocked
+
+authenticated non-admin blocked where testable under existing auth model
+
+authenticated admin write accepted
+
+script API-key path preserved if currently intentional
+
+Do not weaken existing access control.
+
+==================================================
+PART 18 — COST / REGRESSION PROOF
+=================================
+
+Prove:
+
+0 new database tables
+
+0 new caches
+
+0 new schedulers
+
+0 provider calls
+
+0 FMP calls
+
+0 Tradier calls
+
+0 Grok calls
+
+0 LLM calls
+
+0 Theme RS scoring changes
+
+0 Theme Rotation scoring changes
+
+0 Options producer changes
+
+0 All Stocks scan changes
+
+0 Trade Alignment changes
+
+0 Actionability changes
+
+0 Watchlist performance grouping changes
+
+0 primary Theme endpoint regressions
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+MULTI-THEME MEMBERSHIP V1 IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+CURRENT WRITE COUPLING:
+[exact finding]
+
+PRIMARY THEME STORE:
+[path/table]
+
+ADDITIONAL MEMBERSHIP STORE:
+[path/table]
+
+PRIMARY ASSIGN PATH:
+[endpoint/helper/stores touched]
+
+ADDITIONAL MEMBERSHIP PATH:
+[endpoint/helper/stores touched]
+
+MEMBERSHIP API:
+[endpoint + request]
+
+MEMBERSHIP READ CONTRACT:
+[endpoint/helper + response]
+
+LLM OVERRIDE FILE:
+[role / explicitly untouched by additional memberships]
+
+PRIMARY STABILITY TEST:
+[results]
+
+MULTIPLE ADDITIONAL THEMES TEST:
+[results]
+
+THEMES PAGE MULTI-MEMBERSHIP:
+[results]
+
+THEME RS / ROTATION INPUT:
+[results]
+
+OPTIONS SECTORS:
+[results]
+
+ALL STOCKS DEDUPE:
+[results]
+
+WATCHLIST PERFORMANCE GROUPING:
+[results]
+
+TRADE ALIGNMENT FREEZE:
+[results]
+
+ACTIONABILITY FREEZE:
+[results]
+
+EXISTING 13 MULTI-MEMBERSHIP TICKERS:
+[results]
+
+CATEGORY/FILE MISMATCH COUNT:
+[before / after]
+
+AUTH:
+[results]
+
+COST / REGRESSION:
+[results]
+
+End exactly:
+
+MULTI-THEME MEMBERSHIP V1 VERDICT
+
+PRIMARY THEME REMAINS ONE-TO-ONE:
+[YES / NO]
+
+ADDITIONAL THEMES MANY-TO-MANY:
+[YES / NO]
+
+NEW DATABASE TABLE:
+[NO expected]
+
+PRIMARY ASSIGNMENT PATH PRESERVED:
+[PASS / FAIL]
+
+ADDITIONAL MEMBERSHIP DOES NOT ALTER PRIMARY:
+[PASS / FAIL]
+
+ADDITIONAL MEMBERSHIP TOUCHES LLM OVERRIDE FILE:
+[NO expected]
+
+THEMES PAGE MULTI-MEMBERSHIP:
+[PASS / FAIL]
+
+THEME RS / ROTATION MULTI-MEMBERSHIP INPUT:
+[PASS / FAIL]
+
+OPTIONS SECTORS MULTI-MEMBERSHIP:
+[PASS / FAIL]
+
+ALL STOCKS DUPLICATE ROW/SCAN RISK:
+[assessment]
+
+WATCHLIST PERFORMANCE EXACTLY-ONCE:
+[PASS / FAIL]
+
+TRADE ALIGNMENT STILL USES PRIMARY ONLY:
+[YES / NO]
+
+ACTIONABILITY SEMANTICS UNCHANGED:
+[YES / NO]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+NEXT IMPLEMENTATION:
+REAL INVESTMENT ALIGNMENT
+
+Do not change Trade Alignment Theme selection.
+
+Do not modify Actionability.
+
+Do not modify Entry Structure.
+
+Do not modify Options Alignment.
+
+Do not make unrelated changes.

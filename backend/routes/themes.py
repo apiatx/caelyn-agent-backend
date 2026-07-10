@@ -406,6 +406,265 @@ def _perform_membership_write(
     }
 
 
+def _perform_theme_membership_only_write(
+    theme_id: str,
+    symbol: str,
+    action: str,
+    note: Optional[str] = None,
+    created_by: Optional[str] = "admin",
+) -> dict:
+    """
+    Membership-ONLY write helper for Additional Theme memberships (multi-theme v1).
+
+    Unlike `_perform_membership_write()` (which is reserved for PRIMARY theme
+    identity via /admin/assign-primary-theme and the legacy /admin/memberships
+    endpoint), this helper deliberately does NOT touch:
+      - watchlist_category_overrides (primary theme identity store)
+      - data/llm_theme_overrides.json (legacy classification/mapper bootstrap)
+
+    It only writes:
+      1. theme_ticker_overrides (Neon) — action='add'|'remove'
+      2. auto-clears the theme's manual leader if the removed symbol was it
+      3. refresh_enriched_universe() + RS/sectors cache invalidation (existing
+         refresh path — no new merge logic, no manual ENRICHED_THEME_RS_UNIVERSE
+         mutation)
+      4. Options Flow high-priority backfill hint (action='add' only) — this is
+         a scan-eligibility hint, not a classification/identity write.
+
+    This is what makes it safe for a ticker to gain an ADDITIONAL theme basket
+    membership without altering its canonical primary theme, resolver output,
+    Watchlist Theme column, Watchlist performance grouping, or Trade Alignment
+    theme selection (all of which read primary identity stores only).
+    """
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+    if theme_id not in _uni:
+        raise HTTPException(
+            status_code=404,
+            detail=f"theme_id '{theme_id}' not found in universe.",
+        )
+
+    try:
+        from data.pg_storage import upsert_theme_ticker_override
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage unavailable: {exc}")
+
+    ok = upsert_theme_ticker_override(
+        theme_id=theme_id,
+        symbol=symbol,
+        action=action,
+        source="manual_admin_additional",
+        note=note,
+        created_by=created_by,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to write override to Neon")
+
+    leader_cleared = False
+    if action == "remove":
+        try:
+            from data.pg_storage import get_theme_leaders_map, delete_theme_leader
+            lmap = get_theme_leaders_map()
+            current_leader = lmap.get(theme_id, {}).get("leader_symbol")
+            if current_leader == symbol:
+                delete_theme_leader(theme_id)
+                leader_cleared = True
+        except Exception as _le:
+            print(f"[THEMES_ADMIN] additional-membership leader auto-clear check error: {_le}")
+
+    _invalidate_caches()
+
+    if action == "add":
+        try:
+            from data.options_theme_supplement import add_high_priority_symbols as _add_hi
+            _add_hi([symbol])
+        except Exception as _hpe:
+            print(f"[THEMES_ADMIN] additional-membership high-priority hook failed (non-fatal): {_hpe}")
+
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_resp
+    _resp_meta    = _eu_resp.get(theme_id, {})
+    _final_basket = sorted(_resp_meta.get("proxy_symbols", []))
+    _manual_added = sorted(_resp_meta.get("manual_added_symbols", []))
+    _manual_removed = sorted(_resp_meta.get("manual_removed_symbols", []))
+
+    return {
+        "ok":                   True,
+        "persisted":            True,
+        "theme_id":             theme_id,
+        "symbol":               symbol,
+        "action":               action,
+        "note":                 note,
+        "leader_cleared":       leader_cleared,
+        "member_count":         len(_final_basket),
+        "theme_holdings":       _final_basket,
+        "manual_added_symbols": _manual_added,
+        "manual_removed_symbols": _manual_removed,
+        "message": (
+            f"Additional theme membership saved. '{symbol}' {action}ed in '{theme_id}' basket only. "
+            "Canonical primary theme untouched. "
+            + ("Manual leader for this theme was also cleared. " if leader_cleared else "")
+            + "Universe rebuilt and RS cache cleared."
+        ),
+    }
+
+
+def _get_ticker_theme_memberships(ticker: str) -> dict:
+    """
+    Shared read helper: returns the canonical primary theme plus every active
+    theme_ticker_overrides membership row for a ticker, with is_primary computed
+    read-only (membership theme_id == canonical resolver theme_id). No new
+    stored field — is_primary is always derived, never persisted.
+    """
+    from data.pg_storage import get_theme_ticker_overrides
+    from services.theme_resolver import resolve_primary_theme_for_ticker
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+
+    ticker = ticker.strip().upper()
+    resolution = resolve_primary_theme_for_ticker(ticker)
+    primary_theme_id = resolution.get("theme_id")
+
+    all_rows = get_theme_ticker_overrides()
+    active_by_theme: dict[str, dict] = {}
+    for row in all_rows:
+        if row.get("symbol") != ticker:
+            continue
+        tid = row.get("theme_id")
+        # Rows are chronological per theme_ticker_overrides ordering; last
+        # action for a given theme_id wins (mirrors upsert-on-PK semantics).
+        active_by_theme[tid] = row
+
+    memberships = []
+    for tid, row in sorted(active_by_theme.items()):
+        if row.get("action") != "add":
+            continue
+        meta = _uni.get(tid, {})
+        memberships.append({
+            "theme_id":           tid,
+            "theme_name":         meta.get("display_name", tid),
+            "membership_source":  row.get("source"),
+            "is_primary":         (tid == primary_theme_id),
+        })
+
+    additional = [m for m in memberships if not m["is_primary"]]
+
+    return {
+        "ticker": ticker,
+        "primary_theme": {
+            "theme_id":   primary_theme_id,
+            "theme_name": resolution.get("theme_name"),
+            "source":     resolution.get("source"),
+        },
+        "theme_memberships": memberships,
+        "additional_theme_memberships": additional,
+    }
+
+
+class AdditionalMembershipEdit(BaseModel):
+    ticker:   str
+    theme_id: str
+    action:   str          # "add" | "remove"
+    note:     Optional[str] = None
+    created_by: Optional[str] = "admin"
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not _SYM_RE.match(v):
+            raise ValueError(f"Invalid ticker format: '{v}'")
+        return v
+
+    @field_validator("theme_id")
+    @classmethod
+    def validate_theme_id(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("theme_id must not be empty")
+        return v
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in _VALID_ACTIONS:
+            raise ValueError(f"action must be one of {_VALID_ACTIONS}")
+        return v
+
+
+@router.post("/admin/additional-memberships")
+async def admin_additional_membership(
+    request: Request,
+    body: AdditionalMembershipEdit,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """
+    [Admin] Add or remove an ADDITIONAL theme basket membership for a ticker,
+    without touching the ticker's canonical PRIMARY theme.
+
+    Use POST /admin/assign-primary-theme to change the primary theme instead.
+
+    action='add':    ticker joins theme_id's basket as an additional membership.
+    action='remove': ticker leaves theme_id's basket (only that basket).
+
+    Does NOT write watchlist_category_overrides or data/llm_theme_overrides.json.
+    Trade Alignment theme selection is unaffected (it reads primary identity only).
+    """
+    err = _check_admin(request, x_api_key)
+    if err:
+        return err
+
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+    if body.theme_id not in _uni:
+        raise HTTPException(
+            status_code=404,
+            detail=f"theme_id '{body.theme_id}' not found in universe. "
+                   f"Valid ids: {sorted(_uni.keys())}",
+        )
+
+    write_result = _perform_theme_membership_only_write(
+        theme_id=body.theme_id,
+        symbol=body.ticker,
+        action=body.action,
+        note=body.note,
+        created_by=body.created_by,
+    )
+
+    memberships_view = _get_ticker_theme_memberships(body.ticker)
+
+    return {
+        "ok": write_result["ok"],
+        "ticker": body.ticker,
+        "theme_id": body.theme_id,
+        "action": body.action,
+        "member_count": write_result.get("member_count"),
+        "primary_theme": memberships_view["primary_theme"],
+        "theme_memberships": memberships_view["theme_memberships"],
+        "message": write_result["message"],
+    }
+
+
+@router.get("/admin/ticker-memberships/{ticker}")
+async def admin_get_ticker_memberships(
+    request: Request,
+    ticker: str,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """
+    [Admin] Read the canonical primary theme plus every active theme basket
+    membership for one ticker (for a future frontend Primary/Additional
+    Themes display). Read-only; is_primary is always derived from the
+    canonical resolver, never a persisted field.
+    """
+    err = _check_admin(request, x_api_key)
+    if err:
+        return err
+
+    ticker = ticker.strip().upper()
+    if not _SYM_RE.match(ticker):
+        raise HTTPException(status_code=400, detail=f"Invalid ticker format: '{ticker}'")
+
+    return _get_ticker_theme_memberships(ticker)
+
+
 @router.post("/admin/memberships")
 async def admin_upsert_membership(
     request: Request,
