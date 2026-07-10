@@ -42,8 +42,8 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
     "FRA:KLA":    ("Semiconductor Equipment",       "semicap_equipment"),    # KLA Corp Frankfurt listing — process control
 
     # Semi Materials
-    "AIM:IQE":    ("Semi Materials",                "semi_materials"),       # IQE plc — compound semiconductor epiwafer foundry
-    "EPA:SOI":    ("Semi Materials",                "semi_materials"),       # Soitec — SOI & compound semiconductor wafers
+    "AIM:IQE":    ("Semi Materials",                "semiconductors"),       # IQE plc — compound semiconductor epiwafer foundry
+    "EPA:SOI":    ("Semi Materials",                "semiconductors"),       # Soitec — SOI & compound semiconductor wafers
 
     # Semiconductors
     "EPA:XFAB":   ("Semiconductors",                "semiconductors"),       # X-FAB — analog/mixed-signal specialty foundry
@@ -64,7 +64,7 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
     "AIR":        ("Defense",                       "defense"),              # AAR Corp — aviation MRO for USAF/USN (~50% revenue from US government defense)
 
     # Nuclear / Grid
-    "ASPI":       ("Nuclear / Grid",                "nuclear_/_grid"),       # ASP Isotopes — laser isotope enrichment for enriched uranium / nuclear fuel
+    "ASPI":       ("Nuclear / Grid",                "uranium_nuclear"),       # ASP Isotopes — laser isotope enrichment for enriched uranium / nuclear fuel
 
     # Cybersecurity
     "LAES":       ("Cybersecurity",                 "cybersecurity"),        # SEALSQ Corp — post-quantum secure RISC-V microchips for IoT/automotive (WISeKey spinoff)
@@ -75,14 +75,14 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
     "AIM:TRT":    ("Semiconductor Equipment",       "semicap_equipment"),    # Trio-Tech International (AIM listing) — same company, overrides wrong "Auto Parts" CSV industry
 
     # Power / Cooling
-    "SEI":        ("Power / Cooling",               "power_/_cooling"),      # Solaris Energy Infrastructure — mobile power generation for AI data centers & industrial
-    "AIM:VLX":    ("Power / Cooling",               "power_/_cooling"),      # Volex (AIM) — power/data cables & interconnects for data centers & industrial
+    "SEI":        ("Power / Cooling",               "power_cooling"),      # Solaris Energy Infrastructure — mobile power generation for AI data centers & industrial
+    "AIM:VLX":    ("Power / Cooling",               "power_cooling"),      # Volex (AIM) — power/data cables & interconnects for data centers & industrial
 
     # Quantum Computing
     "INFQ":       ("Quantum Computing",             "quantum"),              # Infleqtion (formerly ColdQuanta) — quantum computing & sensing, Sqynet quantum network
 
     # Semi Materials
-    "TSX:VNP":    ("Semi Materials",                "semi_materials"),       # 5N Plus Inc — specialty compound semiconductor materials (GaAs, Ge, Bi) for space solar & defense
+    "TSX:VNP":    ("Semi Materials",                "semiconductors"),       # 5N Plus Inc — specialty compound semiconductor materials (GaAs, Ge, Bi) for space solar & defense
 
     # Crypto Equities / Blockchain
     "CIFR":       ("Crypto Equities / Blockchain",  "crypto_equities"),      # Cipher Mining — Bitcoin mining
@@ -419,8 +419,8 @@ INDUSTRY_TO_THEME: dict[str, tuple[str, str]] = {
     "Pollution & Treatment Controls":                       ("Clean Energy",               "clean_energy"),
 
     # ── Power / Cooling ─────────────────────────────────────────────────────
-    "Electrical Equipment & Parts":                         ("Power / Cooling",            "power_/_cooling"),
-    "Utilities - Regulated Electric":                       ("Nuclear / Grid",             "nuclear_/_grid"),
+    "Electrical Equipment & Parts":                         ("Power / Cooling",            "power_cooling"),
+    "Utilities - Regulated Electric":                       ("Nuclear / Grid",             "uranium_nuclear"),
 
     # ── Lithium & Battery Tech ──────────────────────────────────────────────
     # (covered by explicit _FOREIGN_ALIAS_MAP entries for specific tickers)
@@ -433,7 +433,7 @@ INDUSTRY_TO_THEME: dict[str, tuple[str, str]] = {
     "Other Precious Metals & Mining":                       ("Rare Earth Metals",          "rare_earth"),
 
     # ── Semi Materials ────────────────────────────────────────────────────────
-    "Specialty Chemicals":                                  ("Semi Materials",             "semi_materials"),
+    "Specialty Chemicals":                                  ("Semi Materials",             "semiconductors"),
 
     # ── Industrials ─────────────────────────────────────────────────────────
     "Specialty Industrial Machinery":                       ("Industrials",                "industrials"),

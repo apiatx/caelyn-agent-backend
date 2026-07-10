@@ -1,0 +1,123 @@
+THEME SYNC FINAL CLEANUP — FIX 3 PROVEN CANONICAL THEME-ID MISMATCHES
+
+Work only in the existing backend Replit project.
+
+The dynamic Watchlist → Themes membership synchronization is implemented and validated.
+
+Current result:
+
+314 US-listed Watchlist tickers have canonical assigned Themes.
+
+311 / 314 are present in the matching merged Theme membership.
+
+The remaining 3 mismatches are already proven canonical Theme-ID defects in the existing industry fallback mapping:
+
+LWLG
+resolver theme_id = semi_materials
+
+NKLR
+resolver theme_id = nuclear___grid
+
+SEI
+resolver theme_id = power_/_cooling
+
+Each resolver output fails because the emitted theme_id does not match an existing canonical THEME_RS_UNIVERSE Theme key.
+
+This is a narrow cleanup only.
+
+Do not modify the Watchlist → Themes sync architecture.
+Do not modify Theme merge order.
+Do not modify Theme Rotation scoring.
+Do not modify Theme RS scoring.
+Do not modify Options Flow.
+Do not modify Options Alignment.
+Do not modify Trade Alignment.
+Do not add fuzzy matching.
+Do not add a new alias layer.
+Do not add new Themes.
+Do not add AI/LLM calls.
+Do not add provider calls.
+
+Trace the exact existing canonical Theme keys for:
+
+Semi Materials
+Nuclear / Grid
+Power / Cooling
+
+Then correct ONLY the authoritative bad theme_id values in the existing industry fallback mapping that produce:
+
+semi_materials
+nuclear___grid
+power_/_cooling
+
+Use the real existing canonical Theme IDs.
+
+Do not change the displayed Theme names.
+
+Do not change unrelated mappings.
+
+After the fix, refresh the existing enriched Theme universe using the normal current Watchlist source.
+
+Validate:
+
+LWLG
+NKLR
+SEI
+
+For each return:
+
+symbol
+industry
+resolved Theme display name
+resolved canonical theme_id
+matching THEME_RS_UNIVERSE key
+present in merged Theme membership
+
+Then return:
+
+assigned Watchlist Theme count
+
+assigned + present in matching Theme
+
+assigned + missing from matching Theme
+
+Expected:
+
+314 assigned
+314 present
+0 missing
+
+Use current data rather than hardcoding acceptance counts if the Watchlist changes before validation.
+
+Final response:
+
+THEME SYNC CLEANUP VERDICT
+
+LWLG:
+[result]
+
+NKLR:
+[result]
+
+SEI:
+[result]
+
+ASSIGNED WATCHLIST TICKERS:
+[count]
+
+MATCHING THEME MEMBERSHIP:
+[count]
+
+MISMATCHES:
+[count]
+
+ONE CANONICAL RESOLVER:
+[PASS / FAIL]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+NEXT IMPLEMENTATION:
+OPTIONS ALIGNMENT V2
+
+Do not make unrelated changes.
