@@ -1,0 +1,1709 @@
+REAL INVESTMENT ALIGNMENT V1 — BUILD A DETERMINISTIC LONG-HORIZON ASSET QUALITY / ACCELERATION MODEL
+
+Work only in the existing backend Replit project.
+
+The deterministic Confluence architecture is now:
+
+# TRADE ALIGNMENT
+
+"Is a strong long-biased swing-trade opportunity developing?"
+
+Current THEME_ALIGNMENT archetype:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment V2  25%
+Catalyst Alignment    25%
+
+Social Bonus          +0 to +10
+
+# ENTRY STRUCTURE
+
+"Is the current chart/price structure an attractive place to initiate or add?"
+
+# ACTIONABILITY V1
+
+"What should I do with this swing setup right now?"
+
+Actionability combines existing Trade Alignment + Entry Structure.
+
+# MULTI-THEME V1
+
+one canonical primary Theme
++
+zero or more additional Theme basket memberships
+
+Current Trade Alignment Theme selection remains PRIMARY THEME ONLY.
+
+Do not modify any of the above.
+
+This task has ONE goal:
+
+BUILD REAL INVESTMENT ALIGNMENT V1 AS A SEPARATE DETERMINISTIC LONG-HORIZON ASSET MODEL.
+
+==================================================
+PRODUCT DEFINITION
+==================
+
+Investment Alignment answers:
+
+"IS THIS AN EXCEPTIONAL ASSET WITH THE FINANCIAL TRAJECTORY, FORWARD EXPECTATIONS, COMPETITIVE POSITION, AND STRUCTURAL TAILWINDS TO DESERVE LONG-DURATION OWNERSHIP?"
+
+It does NOT answer:
+
+"Is this a good swing trade today?"
+
+It does NOT answer:
+
+"Is the current Entry attractive?"
+
+It does NOT answer:
+
+"What should I do with my current position?"
+
+It does NOT replace Trade Alignment.
+
+It does NOT consume Actionability.
+
+It does NOT modify Actionability.
+
+The current `investment_confluence_score`, if present, is preliminary/legacy and must not be assumed to be the real Investment Alignment model.
+
+Build additively in shadow mode.
+
+Do not remove or overwrite existing fields.
+
+==================================================
+LOCKED V1 COMPONENT ARCHITECTURE
+================================
+
+Target outer weighting:
+
+FINANCIAL ACCELERATION          30%
+
+FORWARD EXPECTATIONS            25%
+
+MOAT / MARKET ROLE              20%
+
+ANALYST EXPECTATIONS            10%
+
+THEME / STRUCTURAL TAILWIND     10%
+
+LONG-TERM LEADERSHIP             5%
+
+These are conceptual locked outer weights for V1.
+
+Audit real field availability before implementing internal subcomponent weights.
+
+Do not change these outer component weights silently.
+
+If a component is unavailable:
+
+omit it
+
+do not assign fake neutral 50
+
+renormalize over available eligible components
+
+However:
+
+FINANCIAL ACCELERATION IS MANDATORY.
+
+Investment Alignment requires:
+
+Financial Acceleration available
+
+AND
+
+at least two additional real components among:
+
+Forward Expectations
+
+Moat / Market Role
+
+Analyst Expectations
+
+Theme / Structural Tailwind
+
+Long-Term Leadership
+
+If minimum evidence fails:
+
+investment_alignment_available = false
+
+Do not fabricate a score.
+
+==================================================
+PART 0 — AUDIT EVERY EXISTING INVESTMENT-QUALITY DATA PATH
+==========================================================
+
+Before editing, trace the complete existing backend data architecture for:
+
+Watchlist fundamentals
+
+Watchlist Fundamental Screener
+
+weekly FMP fundamental refresh
+
+watchlist_fundamentals_store
+
+fundamentals cache/LKG/Neon
+
+financial statement history
+
+financial growth history
+
+analyst ratings/signal
+
+analyst price targets
+
+forward estimates
+
+revenue estimates
+
+EPS estimates
+
+EBITDA/EBIT estimates if present
+
+company profile / description
+
+industry / sector
+
+Theme membership
+
+Theme Rotation / RS
+
+supply-chain / bottleneck role
+
+Chain Reaction outputs
+
+moat-related data or caches
+
+Stage Analysis
+
+long-term price leadership fields
+
+existing `investment_confluence_score`
+
+HC Investment / contrarian-value paths
+
+`watchlist_analysis.py`
+
+Do not assume the old HC Investment section is deterministic Investment Alignment.
+
+Prior audit found the Watchlist LLM synthesis pipeline is architecturally separate.
+
+Trace actual current code.
+
+For every candidate data source return internally:
+
+field
+
+source file/service
+
+storage/cache/LKG/Neon
+
+refresh cadence
+
+ticker coverage
+
+whether a read can trigger a provider call
+
+whether pure cache-only access exists
+
+whether the field is historical, current, or forward-looking
+
+Do not implement until the current zero-call/cached data footprint is understood.
+
+==================================================
+PART 1 — PRESERVE PROVIDER / CACHE GOVERNANCE
+=============================================
+
+Investment Alignment V1 should be a DERIVED MODEL over existing cached data.
+
+The hot read path must make:
+
+0 FMP calls
+
+0 Tradier calls
+
+0 Grok calls
+
+0 LLM calls
+
+0 other provider calls
+
+Do not add fetch-on-miss.
+
+Do not add a scheduler in this task.
+
+Do not add an Investment Alignment data warmer.
+
+Reuse existing:
+
+Neon
+
+LKG
+
+weekly fundamental refresh
+
+existing analyst cache
+
+existing forward-estimate cache
+
+existing Theme/Stage outputs
+
+where proven.
+
+If an intended component does not have an existing cached data source:
+
+mark that component unavailable.
+
+Do not secretly add a provider call to complete the model.
+
+==================================================
+PART 2 — FINANCIAL ACCELERATION — 30%
+=====================================
+
+Create:
+
+financial_acceleration_score
+
+financial_acceleration_available
+
+financial_acceleration_components
+
+financial_acceleration_reason_codes
+
+This is the mandatory Investment Alignment component.
+
+Question answered:
+
+"IS THE UNDERLYING BUSINESS FINANCIALLY IMPROVING, AND IS THE RATE OF IMPROVEMENT ACCELERATING OR DETERIORATING?"
+
+Audit existing historical fundamentals first.
+
+Prefer multi-period trends over one current snapshot.
+
+Potential inputs, only where already cached:
+
+Revenue growth
+
+Revenue growth acceleration
+
+EPS growth
+
+EPS growth acceleration
+
+Gross margin trajectory
+
+FCF margin trajectory
+
+Free cash flow trajectory
+
+Operating income trajectory
+
+EBIT trajectory
+
+Operating margin trajectory
+
+Do not use every field merely because it exists.
+
+Avoid double-counting highly collinear fields.
+
+For example:
+
+Operating income
+
+EBIT
+
+Operating margin
+
+may reflect overlapping business improvement.
+
+Choose a deterministic compact component set after inspecting real distributions.
+
+---
+
+## ACCELERATION SEMANTICS
+
+The model must distinguish:
+
+40% growth decelerating sharply
+
+from:
+
+25% growth accelerating rapidly
+
+Do not score only absolute current growth.
+
+Use existing quarterly and/or annual historical data where available.
+
+Potential conceptual calculations:
+
+current growth level
+
+recent growth slope
+
+change in growth rate
+
+margin expansion / contraction
+
+cash-generation inflection
+
+Do not invent historical observations.
+
+Do not estimate missing quarters.
+
+---
+
+## QUALITY OF GROWTH
+
+Strong revenue growth with collapsing margins or deteriorating FCF should not receive the same score as strong revenue growth with expanding operating leverage.
+
+Use real cached fields only.
+
+Return transparent subcomponents.
+
+Potential reason codes:
+
+REVENUE_GROWTH_STRONG
+
+REVENUE_GROWTH_ACCELERATING
+
+REVENUE_GROWTH_DECELERATING
+
+EPS_GROWTH_ACCELERATING
+
+GROSS_MARGIN_EXPANDING
+
+GROSS_MARGIN_COMPRESSING
+
+FCF_MARGIN_EXPANDING
+
+FCF_INFLECTING_POSITIVE
+
+OPERATING_LEVERAGE_IMPROVING
+
+CASH_GENERATION_DETERIORATING
+
+Use exact implemented names.
+
+==================================================
+PART 3 — FORWARD EXPECTATIONS — 25%
+===================================
+
+Create:
+
+forward_expectations_score
+
+forward_expectations_available
+
+forward_expectations_components
+
+forward_expectations_reason_codes
+
+Question answered:
+
+"IS THE BUSINESS EXPECTED TO GROW OR IMPROVE FROM HERE, AND ARE FORWARD EXPECTATIONS STRENGTHENING?"
+
+Audit exact existing cached estimate fields.
+
+Potential existing fields may include:
+
+forward revenue estimates
+
+revenue estimate growth
+
+forward EPS estimates
+
+EPS estimate growth
+
+EBITDA estimates
+
+EBIT estimates
+
+estimate revisions
+
+current-year vs next-year estimates
+
+quarterly forward estimates
+
+Do not assume all FMP endpoint fields are cached merely because the provider plan supports them.
+
+Use actual current data.
+
+Potential concepts:
+
+next-period revenue growth
+
+next-year revenue growth
+
+forward EPS growth
+
+forward margin/earnings inflection
+
+estimate acceleration
+
+positive revisions
+
+negative revisions
+
+Do not use price targets here.
+
+Price targets belong in Analyst Expectations.
+
+---
+
+## FORWARD VS HISTORICAL SEPARATION
+
+Financial Acceleration owns:
+
+what the company HAS been doing
+
+Forward Expectations owns:
+
+what consensus/current estimates expect NEXT
+
+Do not score the same historical growth field in both.
+
+Return exact final formula.
+
+==================================================
+PART 4 — MOAT / MARKET ROLE — 20%
+=================================
+
+Create:
+
+moat_market_role_score
+
+moat_market_role_available
+
+moat_market_role_components
+
+moat_market_role_reason_codes
+
+Question answered:
+
+"DOES THIS COMPANY OCCUPY A STRATEGICALLY IMPORTANT, DEFENSIBLE, OR HARD-TO-REPLACE POSITION IN ITS MARKET / SUPPLY CHAIN?"
+
+AUDIT FIRST.
+
+Trace existing cached deterministic sources for:
+
+supply-chain role
+
+bottleneck role
+
+Chain Reaction outputs
+
+core / supply chain / other role
+
+Theme role
+
+company business description
+
+industry positioning
+
+market niche
+
+existing moat research
+
+existing LLM-generated moat data
+
+existing cached strategic-role classifications
+
+Do not fabricate a moat score from:
+
+gross margin alone
+
+market cap
+
+stock performance
+
+analyst rating
+
+Theme Rotation score
+
+---
+
+## IMPORTANT
+
+If there is no existing sufficiently grounded deterministic/cached moat or strategic-market-role source:
+
+DO NOT INVENT ONE.
+
+Set:
+
+moat_market_role_available = false
+
+for V1.
+
+The outer Investment Alignment model will renormalize.
+
+Report the gap honestly.
+
+Do not add an LLM call in this task.
+
+Do not build a new moat research scheduler.
+
+---
+
+## IF A REAL EXISTING SOURCE EXISTS
+
+Use the narrowest defensible fields.
+
+Potential concepts:
+
+bottleneck / scarce supplier
+
+critical infrastructure role
+
+picks-and-shovels position
+
+switching-cost / embedded platform role
+
+unique enabling technology
+
+supply-chain criticality
+
+category leadership
+
+Do not create qualitative prose.
+
+Use deterministic categories/reason codes already present.
+
+==================================================
+PART 5 — ANALYST EXPECTATIONS — 10%
+===================================
+
+Create:
+
+analyst_expectations_score
+
+analyst_expectations_available
+
+analyst_expectations_components
+
+analyst_expectations_reason_codes
+
+The Watchlist Fundamental Screener recently added analyst-related fields into its existing weekly FMP refresh architecture.
+
+Trace the exact current cached fields and formulas.
+
+Potential fields may include:
+
+analyst consensus / recommendation
+
+strong buy / buy / neutral / hold / sell signal
+
+price target consensus
+
+price target upside/downside
+
+ratings snapshot
+
+stock grades / grade summary
+
+Do not assume exact names.
+
+Reuse current canonical cache values.
+
+---
+
+## SEMANTICS
+
+Analyst Expectations is confirmation only.
+
+It carries 10%.
+
+Strong analyst consensus should not rescue weak business acceleration.
+
+Weak analyst sentiment should not automatically destroy an exceptional accelerating business.
+
+Potential inputs:
+
+consensus recommendation
+
+target upside/downside
+
+grade direction / upgrades vs downgrades if cached
+
+Use available-component normalization.
+
+Do not use organization-by-organization analyst rows.
+
+The user explicitly wants aggregate consensus, not JPMorgan/etc. detail.
+
+==================================================
+PART 6 — THEME / STRUCTURAL TAILWIND — 10%
+==========================================
+
+Create:
+
+investment_theme_tailwind_score
+
+investment_theme_tailwind_available
+
+investment_theme_tailwind_reason_codes
+
+Investment Alignment V1 uses the ticker's CANONICAL PRIMARY THEME ONLY.
+
+Do not evaluate Additional Themes in this task.
+
+Do not modify Theme selection semantics.
+
+Do not use best-aligned Theme.
+
+Do not average memberships.
+
+Use:
+
+resolve_primary_theme_for_ticker(...)
+
+and existing Theme data.
+
+---
+
+## LONG-HORIZON SEMANTICS
+
+Do not simply copy today's Trade Alignment Theme score if it primarily represents short-term rotation.
+
+Audit available Theme fields.
+
+The question is:
+
+"IS THE COMPANY EXPOSED TO A STRUCTURALLY IMPORTANT THEME THAT IS DEMONSTRATING DURABLE LEADERSHIP / CAPITAL ATTENTION?"
+
+Potential existing evidence:
+
+Theme RS
+
+Theme Rotation state
+
+multi-window Theme relative strength
+
+leading / emerging / neutral / lagging status
+
+longer-duration Theme leadership fields
+
+Use existing fields only.
+
+Prefer longer-duration or multi-window Theme evidence where available.
+
+Do not add macro research.
+
+==================================================
+PART 7 — LONG-TERM LEADERSHIP — 5%
+==================================
+
+Create:
+
+long_term_leadership_score
+
+long_term_leadership_available
+
+long_term_leadership_reason_codes
+
+Use existing Stage / daily-history derived outputs.
+
+Question answered:
+
+"HAS THE MARKET ALREADY DEMONSTRATED LONGER-TERM LEADERSHIP / INSTITUTIONAL PRICE CONFIRMATION?"
+
+Potential evidence:
+
+Stage 2 / Stage 2B
+
+long-term moving-average structure already computed by Stage
+
+relative strength fields already available
+
+distance/position versus major long-term trend structure
+
+proven prior leadership
+
+Do not calculate new indicators.
+
+Do not fetch bars.
+
+Do not use Entry Score.
+
+Entry is current location.
+
+Long-Term Leadership is broader confirmation.
+
+---
+
+## IMPORTANT
+
+A weak Stage must not automatically make Investment Alignment unavailable.
+
+A great emerging company may precede price confirmation.
+
+This component only carries 5%.
+
+==================================================
+PART 8 — INVESTMENT ALIGNMENT FORMULA
+=====================================
+
+Create:
+
+investment_alignment_available
+
+investment_alignment_score
+
+investment_alignment_version
+
+investment_alignment_components
+
+investment_alignment_reason_codes
+
+investment_alignment_strengths
+
+investment_alignment_risks
+
+Use one canonical version constant.
+
+Example:
+
+INVESTMENT_ALIGNMENT_VERSION = 1
+
+Outer weights:
+
+Financial Acceleration       30
+
+Forward Expectations         25
+
+Moat / Market Role           20
+
+Analyst Expectations         10
+
+Theme / Structural Tailwind  10
+
+Long-Term Leadership           5
+
+Available-component normalization applies.
+
+However minimum evidence is mandatory:
+
+financial_acceleration_available == true
+
+AND
+
+at least 2 additional components available
+
+If not:
+
+investment_alignment_available = false
+
+Do not assign 50.
+
+---
+
+## SCORE SEMANTICS
+
+0–19:
+structurally weak / deteriorating investment profile
+
+20–39:
+below-average investment alignment
+
+40–59:
+mixed / developing
+
+60–69:
+good
+
+70–79:
+strong
+
+80–89:
+exceptional
+
+90–100:
+rare / elite current investment alignment
+
+These are interpretation bands.
+
+Do not tune formulas merely to fill each bucket.
+
+==================================================
+PART 9 — INVESTMENT PROFILE STATES
+==================================
+
+Add a separate descriptive state:
+
+investment_alignment_state
+
+Allowed V1 states:
+
+ELITE
+
+STRONG
+
+GOOD
+
+DEVELOPING
+
+MIXED
+
+WEAK
+
+DETERIORATING
+
+INSUFFICIENT_DATA
+
+These states derive from the Investment Alignment score/availability.
+
+Do not add:
+
+BUY
+
+SELL
+
+HOLD
+
+TRIM
+
+These require portfolio/current-position context.
+
+Do not add Actionability states.
+
+==================================================
+PART 10 — TRANSPARENT COMPONENT OUTPUT
+======================================
+
+Expose every outer component:
+
+financial_acceleration_score
+
+forward_expectations_score
+
+moat_market_role_score
+
+analyst_expectations_score
+
+investment_theme_tailwind_score
+
+long_term_leadership_score
+
+For every component include:
+
+available
+
+score
+
+reason codes
+
+key diagnostics used
+
+Do not dump full underlying financial statements into each Investment Alignment result.
+
+Keep diagnostics compact.
+
+Potential top-level fields:
+
+investment_alignment_score
+
+investment_alignment_state
+
+investment_alignment_available
+
+investment_alignment_version
+
+investment_alignment_strengths
+
+investment_alignment_risks
+
+investment_alignment_reason_codes
+
+investment_alignment_components
+
+==================================================
+PART 11 — DO NOT REUSE LEGACY INVESTMENT SCORE BLINDLY
+======================================================
+
+Audit the existing:
+
+investment_confluence_score
+
+and any old investment verdict fields.
+
+Return:
+
+formula
+
+inputs
+
+callers
+
+whether deterministic
+
+whether it overlaps the new model
+
+Do not delete it.
+
+Do not overwrite it.
+
+Preserve as:
+
+legacy_investment_confluence_score
+
+or existing exact field if already surfaced.
+
+Wire Investment Alignment V1 additively.
+
+Do not silently change existing frontend behavior.
+
+==================================================
+PART 12 — DO NOT TOUCH HC INVESTMENT
+====================================
+
+Prior architecture audits found HC Investment / contrarian-value belongs to:
+
+watchlist_analysis.py::run_analysis_pipeline()
+
+the separate LLM synthesis path.
+
+Do not modify it.
+
+Do not make Investment Alignment depend on it.
+
+Do not route HC Investment to the new model in this task.
+
+Later UI comparison will decide whether the deterministic model replaces/augments that section.
+
+==================================================
+PART 13 — FULL-UNIVERSE COVERAGE VALIDATION
+===========================================
+
+Run against the COMPLETE current internal Confluence/Watchlist universe.
+
+Do not use a top-200 endpoint slice.
+
+Return exact denominator/source.
+
+For every component report:
+
+available count
+
+coverage %
+
+unavailable reason distribution
+
+Return Investment Alignment:
+
+available
+
+unavailable
+
+minimum-evidence failure counts
+
+Score distribution:
+
+min
+
+p10
+
+p25
+
+median
+
+mean
+
+p75
+
+p90
+
+p95
+
+max
+
+Score bands:
+
+0–19
+
+20–39
+
+40–59
+
+60–69
+
+70–79
+
+80–89
+
+90–100
+
+State distribution:
+
+ELITE
+
+STRONG
+
+GOOD
+
+DEVELOPING
+
+MIXED
+
+WEAK
+
+DETERIORATING
+
+INSUFFICIENT_DATA
+
+Do not omit zero counts.
+
+==================================================
+PART 14 — FINANCIAL ACCELERATION VALIDATION
+===========================================
+
+Return Top 50 by financial_acceleration_score.
+
+Show:
+
+symbol
+
+score
+
+revenue growth
+
+revenue acceleration
+
+EPS growth
+
+EPS acceleration
+
+gross margin trajectory
+
+FCF margin trajectory
+
+operating leverage diagnostic
+
+reason codes
+
+Use exact available fields.
+
+Also return Bottom 30.
+
+Identify:
+
+high-growth but sharply decelerating names
+
+lower-current-growth but rapidly accelerating names
+
+strong revenue / deteriorating cash-generation conflicts
+
+Do not force examples.
+
+==================================================
+PART 15 — FORWARD EXPECTATIONS VALIDATION
+=========================================
+
+Return Top 50 by forward_expectations_score.
+
+Show:
+
+symbol
+
+score
+
+forward revenue growth
+
+forward EPS growth
+
+estimate acceleration
+
+revision signal if available
+
+reason codes
+
+Also return Bottom 30.
+
+Identify:
+
+historical strength but weakening forward expectations
+
+historical weakness but strong forward inflection
+
+==================================================
+PART 16 — ANALYST EXPECTATIONS VALIDATION
+=========================================
+
+Return current analyst component results for all rows where available.
+
+Show aggregate distribution of:
+
+strong buy / buy / neutral / hold / sell
+
+or exact current production consensus labels.
+
+Return Top 30 analyst component scores and Bottom 30.
+
+Show:
+
+symbol
+
+analyst score
+
+consensus
+
+target upside/downside if cached
+
+grade/revision signal if cached
+
+reason codes
+
+Do not expose organization-level analyst rows.
+
+==================================================
+PART 17 — MOAT / MARKET ROLE AUDIT RESULT
+=========================================
+
+If the Moat component is available:
+
+return complete source proof
+
+coverage
+
+score distribution
+
+Top 50
+
+reason-code distribution
+
+If unavailable:
+
+return:
+
+MOAT / MARKET ROLE V1 UNAVAILABLE
+
+exact missing deterministic/cached source
+
+what existing data came closest
+
+why it was insufficient
+
+Do not fake the component.
+
+Recommend the narrowest future research/cache architecture, but do not implement it.
+
+==================================================
+PART 18 — TOP INVESTMENT ALIGNMENT
+==================================
+
+Return Top 50 Investment Alignment rows.
+
+For each show:
+
+rank
+
+symbol
+
+investment_alignment_score
+
+investment_alignment_state
+
+Financial Acceleration
+
+Forward Expectations
+
+Moat / Market Role
+
+Analyst Expectations
+
+Theme Tailwind
+
+Long-Term Leadership
+
+primary Theme
+
+Stage
+
+top strengths
+
+top risks
+
+Investment Alignment reason codes
+
+Trade Alignment score
+
+Actionability state
+
+Entry state
+
+IMPORTANT:
+
+Trade Alignment
+
+Actionability
+
+Entry
+
+are DISPLAY CONTEXT ONLY.
+
+They must not affect Investment Alignment rank.
+
+The point is to see combinations such as:
+
+Elite investment asset
++
+poor swing entry
+
+or:
+
+Strong investment alignment
++
+READY Actionability
+
+==================================================
+PART 19 — HIGH INVESTMENT / BAD ENTRY
+=====================================
+
+Return every current ticker, up to 50, where:
+
+investment_alignment_score >= 75
+
+AND
+
+Entry Score < 40
+
+or:
+
+Actionability == TOO_EXTENDED
+
+or:
+
+Actionability == WAIT_FOR_RETEST
+
+or:
+
+Actionability == AVOID
+
+Show:
+
+symbol
+
+Investment Alignment
+
+Investment state
+
+Trade Alignment
+
+Actionability
+
+Entry state
+
+Entry score
+
+exact current setup conflict
+
+The purpose is:
+
+"Exceptional asset, bad place to buy/add right now."
+
+Do not alter scores.
+
+==================================================
+PART 20 — STRONG TRADE / WEAK INVESTMENT
+========================================
+
+Return every current ticker, up to 50, where:
+
+Trade Alignment >= 70
+
+AND
+
+Investment Alignment < 50
+
+Show:
+
+symbol
+
+Trade Alignment
+
+Actionability
+
+Investment Alignment
+
+Financial Acceleration
+
+Forward Expectations
+
+top investment risks
+
+This is:
+
+"Potentially excellent trade, not necessarily an exceptional long-duration asset."
+
+==================================================
+PART 21 — STRONG INVESTMENT / WEAK TRADE
+========================================
+
+Return every current ticker, up to 50, where:
+
+Investment Alignment >= 75
+
+AND
+
+Trade Alignment < 60
+
+or Trade Alignment unavailable
+
+Show:
+
+symbol
+
+Investment Alignment
+
+Trade Alignment
+
+Actionability
+
+Theme
+
+Stage
+
+Entry
+
+This is:
+
+"Exceptional asset, but no strong swing opportunity currently developing."
+
+==================================================
+PART 22 — NAMED TICKER VALIDATION
+=================================
+
+Return exact current Investment Alignment results for:
+
+AMD
+
+MU
+
+MRVL
+
+CRDO
+
+ANET
+
+VRT
+
+DELL
+
+NVDA if tracked
+
+AAOI
+
+AOSL
+
+ALGM
+
+BE
+
+IBRX
+
+RBRK
+
+HOOD
+
+SOFI
+
+ABCL
+
+AEVA
+
+SLAB
+
+CIFR
+
+For each:
+
+Investment Alignment available
+
+Investment Alignment score
+
+Investment state
+
+Financial Acceleration
+
+Forward Expectations
+
+Moat / Market Role
+
+Analyst Expectations
+
+Theme Tailwind
+
+Long-Term Leadership
+
+primary Theme
+
+Trade Alignment
+
+Actionability
+
+Entry state
+
+strengths
+
+risks
+
+reason codes
+
+Do not force expected scores.
+
+==================================================
+PART 23 — CORRELATION / INDEPENDENCE TEST
+=========================================
+
+Across comparable available rows return correlations:
+
+Investment Alignment vs Trade Alignment
+
+Investment Alignment vs Actionability score
+
+Investment Alignment vs Entry Score
+
+Financial Acceleration vs Investment Alignment
+
+Forward Expectations vs Investment Alignment
+
+Analyst Expectations vs Investment Alignment
+
+Theme Tailwind vs Investment Alignment
+
+Long-Term Leadership vs Investment Alignment
+
+The model should be related to good companies/opportunities but not collapse into Trade Alignment or Entry.
+
+Do not tune to force low correlation.
+
+Report honestly.
+
+==================================================
+PART 24 — LEGACY INVESTMENT SCORE COMPARISON
+============================================
+
+Where a legacy `investment_confluence_score` exists:
+
+return:
+
+coverage
+
+legacy vs V1 correlation
+
+mean absolute score change
+
+mean absolute rank change if meaningful
+
+Top 30 V1 positive rank movers
+
+Top 30 V1 negative rank movers
+
+For each show:
+
+symbol
+
+legacy score/rank
+
+V1 score/rank
+
+component breakdown
+
+deterministic reason for movement
+
+Do not modify legacy output.
+
+==================================================
+PART 25 — COST / REGRESSION PROOF
+=================================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 new provider calls on Investment Alignment read
+
+0 FMP calls on read
+
+0 Tradier calls on read
+
+0 new scheduler
+
+0 new cache warmer
+
+0 Trade Alignment changes
+
+0 Actionability changes
+
+0 Entry changes
+
+0 Options changes
+
+0 Theme primary-selection changes
+
+0 multi-theme semantics changes
+
+0 HC Investment changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+REAL INVESTMENT ALIGNMENT V1 IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+INTEGRATION POINT:
+[path/function]
+
+INVESTMENT ALIGNMENT VERSION:
+[value]
+
+EXISTING DATA SOURCES:
+[summary]
+
+FINANCIAL ACCELERATION:
+[formula/components/weights]
+
+FORWARD EXPECTATIONS:
+[formula/components/weights]
+
+MOAT / MARKET ROLE:
+[formula or proven unavailable]
+
+ANALYST EXPECTATIONS:
+[formula/components/weights]
+
+THEME / STRUCTURAL TAILWIND:
+[formula]
+
+LONG-TERM LEADERSHIP:
+[formula]
+
+INVESTMENT ALIGNMENT FORMULA:
+[exact available-component normalization]
+
+MINIMUM EVIDENCE:
+[logic]
+
+LEGACY INVESTMENT SCORE:
+[relationship]
+
+FULL UNIVERSE:
+[count]
+
+INVESTMENT ALIGNMENT COVERAGE:
+[count / percent]
+
+COMPONENT COVERAGE:
+[results]
+
+SCORE DISTRIBUTION:
+[results]
+
+STATE DISTRIBUTION:
+[results]
+
+TOP INVESTMENT ALIGNMENT:
+[summary]
+
+HIGH INVESTMENT / BAD ENTRY:
+[summary]
+
+STRONG TRADE / WEAK INVESTMENT:
+[summary]
+
+STRONG INVESTMENT / WEAK TRADE:
+[summary]
+
+NAMED TICKERS:
+[summary]
+
+CORRELATION / INDEPENDENCE:
+[results]
+
+LEGACY COMPARISON:
+[summary]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+REAL INVESTMENT ALIGNMENT V1 VERDICT
+
+INVESTMENT ALIGNMENT FUNCTIONAL:
+[YES / NO]
+
+FINANCIAL ACCELERATION FUNCTIONAL:
+[YES / NO]
+
+FORWARD EXPECTATIONS FUNCTIONAL:
+[YES / NO]
+
+MOAT / MARKET ROLE:
+[FUNCTIONAL / PROVEN UNAVAILABLE]
+
+ANALYST EXPECTATIONS FUNCTIONAL:
+[YES / NO]
+
+THEME TAILWIND FUNCTIONAL:
+[YES / NO]
+
+LONG-TERM LEADERSHIP FUNCTIONAL:
+[YES / NO]
+
+INVESTMENT ALIGNMENT COVERAGE:
+[count / percent]
+
+LEGACY INVESTMENT SCORE PRESERVED:
+[YES / NO]
+
+TRADE ALIGNMENT UNCHANGED:
+[YES / NO]
+
+ACTIONABILITY UNCHANGED:
+[YES / NO]
+
+HIGH-INVESTMENT BAD-ENTRY VISIBILITY:
+[assessment]
+
+STRONG-TRADE WEAK-INVESTMENT VISIBILITY:
+[assessment]
+
+STRONG-INVESTMENT WEAK-TRADE VISIBILITY:
+[assessment]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING INVESTMENT MODEL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+ELITE_ASSET_REBOUND ARCHETYPE
+
+Do not build ELITE_ASSET_REBOUND.
+
+Do not modify Trade Alignment.
+
+Do not modify Actionability.
+
+Do not modify Entry Structure.
+
+Do not modify Options Alignment.
+
+Do not modify multi-theme semantics.
+
+Do not make unrelated changes.

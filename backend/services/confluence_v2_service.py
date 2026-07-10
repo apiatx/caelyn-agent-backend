@@ -698,6 +698,7 @@ def _compute_confluence(
     theme_align_map:  Optional[dict[str, dict]] = None,
     options_align_map: Optional[dict[str, dict]] = None,
     catalyst_align_map: Optional[dict[str, dict]] = None,
+    fundamentals_map: Optional[dict[str, dict]] = None,
 ) -> dict:
     t0 = time.time()
 
@@ -752,6 +753,33 @@ def _compute_confluence(
 
     # ── Investment score = pure base (no social, no timing bonus) ────────────
     invest_score = base_score
+
+    # ── REAL INVESTMENT ALIGNMENT V1 (SHADOW, additive-only) — separate
+    #    deterministic long-horizon asset quality/acceleration model.
+    #    Zero provider calls; zero effect on Trade Alignment / Actionability /
+    #    Entry Structure / Options Alignment / legacy investment_confluence_score.
+    try:
+        from services.investment_alignment_v1 import compute_investment_alignment
+        _fund_snap = (fundamentals_map or {}).get(sym) or {}
+        investment_alignment_fields = compute_investment_alignment(
+            symbol               = sym,
+            fundamentals_fields  = _fund_snap.get("fields"),
+            fundamentals_missing = _fund_snap.get("missing_fields"),
+            stage2_row           = stage2_row,
+        )
+    except Exception:
+        investment_alignment_fields = {
+            "investment_alignment_available": False,
+            "investment_alignment_score": None,
+            "investment_alignment_state": "INSUFFICIENT_DATA",
+            "investment_alignment_version": 1,
+            "investment_alignment_components": {},
+            "investment_alignment_reason_codes": ["INVESTMENT_ALIGNMENT_V1_ERROR"],
+            "investment_alignment_strengths": [],
+            "investment_alignment_risks": [],
+            "minimum_evidence_met": False,
+            "additional_components_available": 0,
+        }
 
     # ── THEME_ALIGNMENT archetype (SHADOW, additive-only) ─────────────────────
     theme_align = (theme_align_map or {}).get(sym) or {"theme_signal_available": False}
@@ -813,9 +841,14 @@ def _compute_confluence(
         "confidence":                   conf,
         # ── THEME_ALIGNMENT archetype (SHADOW, additive-only fields) ─────────
         "legacy_trade_confluence_score": trade_score,
+        # ── REAL INVESTMENT ALIGNMENT V1 preserves legacy score under a new
+        #    name (additive-only; legacy field above is untouched) ───────────
+        "legacy_investment_confluence_score": invest_score,
         **theme_alignment_fields,
         # ── ACTIONABILITY V1 (SHADOW, additive-only fields) ───────────────────
         **actionability_fields,
+        # ── REAL INVESTMENT ALIGNMENT V1 (SHADOW, additive-only fields) ───────
+        **investment_alignment_fields,
         # ── Legacy social bonus metadata (pre-THEME_ALIGNMENT; preserved
         #    under distinct keys since Part 3/4 of the THEME_ALIGNMENT spec
         #    redefine "social_bonus_score/eligible/reason" as the NEW
@@ -959,6 +992,15 @@ def build_confluence_snapshot(
     except Exception:
         catalyst_align_map = {}
 
+    # Fundamentals cache (Neon, weekly-refreshed, zero calls on read) — used
+    # exclusively by REAL INVESTMENT ALIGNMENT V1 (SHADOW, additive-only).
+    fundamentals_map: dict[str, dict] = {}
+    try:
+        from data.watchlist_fundamentals_store import get_snapshots_bulk
+        fundamentals_map = get_snapshots_bulk(universe)
+    except Exception:
+        fundamentals_map = {}
+
     results: list[dict] = []
     social_bonus_counts = {"0": 0, "2_4": 0, "5_7": 0, "8_10": 0, "eligible": 0, "applied": 0}
 
@@ -975,6 +1017,7 @@ def build_confluence_snapshot(
             theme_align_map    = theme_align_map,
             options_align_map  = options_align_map,
             catalyst_align_map = catalyst_align_map,
+            fundamentals_map   = fundamentals_map,
         )
         results.append(r)
 
