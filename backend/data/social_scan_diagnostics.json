@@ -1,25 +1,5 @@
 [
   {
-    "scan_ts": "2026-06-15T21:29:57.290027+00:00",
-    "accounts_count": 16,
-    "batch_count": 2,
-    "batches_returned": 2,
-    "sections_ok": [
-      "_backend_ranked",
-      "_mention_data",
-      "consensus_picks",
-      "top_tickers"
-    ],
-    "sections_missing": [],
-    "lkg_sections_used": [],
-    "ticker_count": 45,
-    "mention_records": 14,
-    "consensus_picks": 10,
-    "top_tickers": 10,
-    "cache_write_status": "written_clean",
-    "error": null
-  },
-  {
     "scan_ts": "2026-06-16T15:00:56.213909+00:00",
     "accounts_count": 16,
     "batch_count": 2,
@@ -585,6 +565,26 @@
   },
   {
     "scan_ts": "2026-07-10T14:43:53.748908+00:00",
+    "accounts_count": 16,
+    "batch_count": 2,
+    "batches_returned": 2,
+    "sections_ok": [
+      "_backend_ranked",
+      "_mention_data",
+      "consensus_picks",
+      "top_tickers"
+    ],
+    "sections_missing": [],
+    "lkg_sections_used": [],
+    "ticker_count": 50,
+    "mention_records": 15,
+    "consensus_picks": 10,
+    "top_tickers": 10,
+    "cache_write_status": "written_clean",
+    "error": null
+  },
+  {
+    "scan_ts": "2026-07-10T15:01:37.045541+00:00",
     "accounts_count": 16,
     "batch_count": 2,
     "batches_returned": 2,

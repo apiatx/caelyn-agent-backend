@@ -9,6 +9,7 @@ GET  /api/themes/merge-debug                 (dev/admin diagnostic)
 Admin (dev-only, X-API-Key OR admin JWT required):
 GET    /api/themes/admin/memberships                        list all ticker overrides
 POST   /api/themes/admin/memberships                        add/remove a single ticker
+POST   /api/themes/admin/assign-primary-theme                assign/reassign ONE primary theme (thin wrapper)
 POST   /api/themes/admin/memberships/bulk                   bulk add/remove
 DELETE /api/themes/admin/memberships/{theme_id}/{symbol}    clear a ticker override
 GET    /api/themes/admin/theme-basket/{theme_id}            basket breakdown + leader
@@ -271,6 +272,130 @@ async def admin_list_memberships(
     }
 
 
+def _perform_membership_write(
+    theme_id: str,
+    symbol: str,
+    action: str,
+    note: Optional[str] = None,
+    created_by: Optional[str] = "admin",
+) -> dict:
+    """
+    THE single authoritative write helper for manual theme-ticker membership.
+
+    Both POST /admin/memberships and POST /admin/assign-primary-theme call this
+    exact function — there is no separate database write path. Performs:
+      1. upsert_theme_ticker_override (Neon theme_ticker_overrides table)
+      2. auto-clear manual leader if the removed symbol was the leader
+      3. refresh_enriched_universe() + RS/sectors cache invalidation
+      4. Options Flow high-priority backfill hint (action='add' only)
+      5. Cross-sync into Watchlist category_overrides + theme_ticker_mapper
+         (action='add' only) — this is what makes the write "primary" for
+         resolve_primary_theme_for_ticker (cat_overrides always wins).
+
+    Raises HTTPException on validation/storage failure. Returns the same
+    response shape previously returned inline by admin_upsert_membership.
+    """
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
+    if theme_id not in _uni:
+        raise HTTPException(
+            status_code=404,
+            detail=f"theme_id '{theme_id}' not found in universe.",
+        )
+
+    try:
+        from data.pg_storage import upsert_theme_ticker_override
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage unavailable: {exc}")
+
+    ok = upsert_theme_ticker_override(
+        theme_id=theme_id,
+        symbol=symbol,
+        action=action,
+        source="manual_admin",
+        note=note,
+        created_by=created_by,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to write override to Neon")
+
+    leader_cleared = False
+    if action == "remove":
+        try:
+            from data.pg_storage import get_theme_leaders_map, delete_theme_leader
+            lmap = get_theme_leaders_map()
+            current_leader = lmap.get(theme_id, {}).get("leader_symbol")
+            if current_leader == symbol:
+                delete_theme_leader(theme_id)
+                leader_cleared = True
+        except Exception as _le:
+            print(f"[THEMES_ADMIN] leader auto-clear check error: {_le}")
+
+    _invalidate_caches()
+
+    # ── Options Flow: mark newly-added symbol as high-priority for backfill ───
+    # Fires before the cross-sync so the scanner can start while sync completes.
+    if action == "add":
+        try:
+            from data.options_theme_supplement import add_high_priority_symbols as _add_hi
+            _add_hi([symbol])
+        except Exception as _hpe:
+            print(f"[THEMES_ADMIN] high-priority hook failed (non-fatal): {_hpe}")
+
+    # ── Cross-sync to Watchlist (category_overrides + theme_ticker_mapper) ────
+    if action == "add":
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_now
+            _display = _eu_now.get(theme_id, {}).get("display_name") or theme_id
+            from services.category_overrides import upsert_override as _upsert_cat
+            _upsert_cat("default", symbol, _display, "themes_page_manual",
+                        f"themes_page:{theme_id}")
+            from services.theme_ticker_mapper import register_llm_classified_tickers as _xsync
+            _xsync([{"ticker": symbol, "theme": _display, "confidence": "manual"}])
+        except Exception as _xse:
+            print(f"[THEMES_ADMIN] watchlist cross-sync failed (non-fatal): {_xse}")
+    elif action == "remove":
+        # Clean up the single-row category_overrides "primary theme" record so a
+        # removed membership does not leave a stale manual_override pointing at
+        # this theme_id (resolver precedence always prefers manual_override, so
+        # a stale row here would keep resolving to the removed theme).
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_now2
+            _display2 = _eu_now2.get(theme_id, {}).get("display_name") or theme_id
+            from services.category_overrides import delete_override as _delete_cat
+            _delete_cat("default", symbol, only_if_category=_display2)
+        except Exception as _xde:
+            print(f"[THEMES_ADMIN] watchlist cross-sync (remove cleanup) failed (non-fatal): {_xde}")
+
+    # ── Build authoritative basket from freshly-rebuilt enriched universe ─────
+    # _invalidate_caches() called refresh_enriched_universe() which did an
+    # in-place update of ENRICHED_THEME_RS_UNIVERSE.  Reading from it now
+    # guarantees the response reflects the committed Neon row.
+    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_resp
+    _resp_meta    = _eu_resp.get(theme_id, {})
+    _final_basket = sorted(_resp_meta.get("proxy_symbols", []))
+    _manual_added = sorted(_resp_meta.get("manual_added_symbols", []))
+    _manual_removed = sorted(_resp_meta.get("manual_removed_symbols", []))
+
+    return {
+        "ok":                   True,
+        "persisted":            True,
+        "theme_id":             theme_id,
+        "symbol":               symbol,
+        "action":               action,
+        "note":                 note,
+        "leader_cleared":       leader_cleared,
+        "member_count":         len(_final_basket),
+        "theme_holdings":       _final_basket,
+        "manual_added_symbols": _manual_added,
+        "manual_removed_symbols": _manual_removed,
+        "message": (
+            f"Override saved. '{symbol}' {action}ed in '{theme_id}' only. "
+            + ("Manual leader for this theme was also cleared. " if leader_cleared else "")
+            + "Universe rebuilt and RS cache cleared."
+        ),
+    }
+
+
 @router.post("/admin/memberships")
 async def admin_upsert_membership(
     request: Request,
@@ -292,91 +417,137 @@ async def admin_upsert_membership(
     if err:
         return err
 
+    return _perform_membership_write(
+        theme_id=body.theme_id,
+        symbol=body.symbol,
+        action=body.action,
+        note=body.note,
+        created_by=body.created_by,
+    )
+
+
+class PrimaryThemeAssignment(BaseModel):
+    ticker:   str
+    theme_id: str
+    note:     Optional[str] = None
+    created_by: Optional[str] = "admin"
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not _SYM_RE.match(v):
+            raise ValueError(f"Invalid ticker format: '{v}'")
+        return v
+
+    @field_validator("theme_id")
+    @classmethod
+    def validate_theme_id(cls, v: str) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("theme_id must not be empty")
+        return v
+
+
+@router.post("/admin/assign-primary-theme")
+async def admin_assign_primary_theme(
+    request: Request,
+    body: PrimaryThemeAssignment,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """
+    [Admin] Assign/reassign the ONE canonical primary Theme for a Watchlist ticker.
+
+    Thin wrapper over the same authoritative write path as POST /admin/memberships —
+    it does not implement a separate database write path. It exists only to give the
+    Watchlist Screener "Theme" dropdown a clean single-call contract (ticker + theme_id)
+    instead of requiring the caller to reason about the underlying many-to-many
+    theme_ticker_overrides table or manual reassignment sequencing.
+
+    Behavior:
+      1. Validates ticker format and that theme_id exists in the canonical universe.
+      2. Resolves the ticker's CURRENT primary theme via
+         theme_resolver.resolve_primary_theme_for_ticker() (same resolver Watchlist/
+         Themes-page/Confluence already use).
+      3. If the ticker currently has a different manually-assigned primary theme,
+         first calls _perform_membership_write(old_theme_id, ticker, "remove") so the
+         old theme's basket does not retain a stale membership row (no ambiguous
+         competing primary assignments).
+      4. Calls _perform_membership_write(new theme_id, ticker, "add") — this is the
+         same call POST /admin/memberships makes, including the category_overrides
+         cross-sync that resolve_primary_theme_for_ticker's top-precedence
+         manual_override always wins on.
+      5. Returns the resolved final primary theme for confirmation.
+
+    Only removes the OLD assignment if it was itself a manual override (i.e. the
+    resolver's source was "manual_override" or "themes_page_membership"); if the
+    ticker had no prior manual assignment (industry_fallback/canonical_map/no_mapping),
+    no remove call is made — there is nothing stale to clean up.
+    """
+    err = _check_admin(request, x_api_key)
+    if err:
+        return err
+
     from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _uni
     if body.theme_id not in _uni:
         raise HTTPException(
             status_code=404,
-            detail=f"theme_id '{body.theme_id}' not found in universe.",
+            detail=f"theme_id '{body.theme_id}' not found in universe. "
+                   f"Valid ids: {sorted(_uni.keys())}",
         )
 
-    try:
-        from data.pg_storage import upsert_theme_ticker_override
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Storage unavailable: {exc}")
+    from services.theme_resolver import resolve_primary_theme_for_ticker
+    prior = resolve_primary_theme_for_ticker(body.ticker)
+    prior_theme_id = prior.get("theme_id")
+    prior_source   = prior.get("source")
 
-    ok = upsert_theme_ticker_override(
+    removed_old = False
+    old_theme_id_cleared: Optional[str] = None
+    if (
+        prior_theme_id
+        and prior_theme_id != body.theme_id
+        and prior_theme_id in _uni
+        and prior_source in ("manual_override", "themes_page_membership")
+    ):
+        try:
+            _perform_membership_write(
+                theme_id=prior_theme_id,
+                symbol=body.ticker,
+                action="remove",
+                note=f"auto-cleared on reassignment to {body.theme_id}",
+                created_by=body.created_by,
+            )
+            removed_old = True
+            old_theme_id_cleared = prior_theme_id
+        except HTTPException as _rhe:
+            print(f"[THEMES_ADMIN] assign-primary-theme old-theme cleanup failed (non-fatal): {_rhe.detail}")
+
+    add_result = _perform_membership_write(
         theme_id=body.theme_id,
-        symbol=body.symbol,
-        action=body.action,
-        source="manual_admin",
+        symbol=body.ticker,
+        action="add",
         note=body.note,
         created_by=body.created_by,
     )
-    if not ok:
-        raise HTTPException(status_code=500, detail="Failed to write override to Neon")
 
-    leader_cleared = False
-    if body.action == "remove":
-        try:
-            from data.pg_storage import get_theme_leaders_map, delete_theme_leader
-            lmap = get_theme_leaders_map()
-            current_leader = lmap.get(body.theme_id, {}).get("leader_symbol")
-            if current_leader == body.symbol:
-                delete_theme_leader(body.theme_id)
-                leader_cleared = True
-        except Exception as _le:
-            print(f"[THEMES_ADMIN] leader auto-clear check error: {_le}")
-
-    _invalidate_caches()
-
-    # ── Options Flow: mark newly-added symbol as high-priority for backfill ───
-    # Fires before the cross-sync so the scanner can start while sync completes.
-    if body.action == "add":
-        try:
-            from data.options_theme_supplement import add_high_priority_symbols as _add_hi
-            _add_hi([body.symbol])
-        except Exception as _hpe:
-            print(f"[THEMES_ADMIN] high-priority hook failed (non-fatal): {_hpe}")
-
-    # ── Cross-sync to Watchlist (category_overrides + theme_ticker_mapper) ────
-    if body.action == "add":
-        try:
-            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_now
-            _display = _eu_now.get(body.theme_id, {}).get("display_name") or body.theme_id
-            from services.category_overrides import upsert_override as _upsert_cat
-            _upsert_cat("default", body.symbol, _display, "themes_page_manual",
-                        f"themes_page:{body.theme_id}")
-            from services.theme_ticker_mapper import register_llm_classified_tickers as _xsync
-            _xsync([{"ticker": body.symbol, "theme": _display, "confidence": "manual"}])
-        except Exception as _xse:
-            print(f"[THEMES_ADMIN] watchlist cross-sync failed (non-fatal): {_xse}")
-
-    # ── Build authoritative basket from freshly-rebuilt enriched universe ─────
-    # _invalidate_caches() called refresh_enriched_universe() which did an
-    # in-place update of ENRICHED_THEME_RS_UNIVERSE.  Reading from it now
-    # guarantees the response reflects the committed Neon row.
-    from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _eu_resp
-    _resp_meta    = _eu_resp.get(body.theme_id, {})
-    _final_basket = sorted(_resp_meta.get("proxy_symbols", []))
-    _manual_added = sorted(_resp_meta.get("manual_added_symbols", []))
-    _manual_removed = sorted(_resp_meta.get("manual_removed_symbols", []))
+    final = resolve_primary_theme_for_ticker(body.ticker)
 
     return {
-        "ok":                   True,
-        "persisted":            True,
-        "theme_id":             body.theme_id,
-        "symbol":               body.symbol,
-        "action":               body.action,
-        "note":                 body.note,
-        "leader_cleared":       leader_cleared,
-        "member_count":         len(_final_basket),
-        "theme_holdings":       _final_basket,
-        "manual_added_symbols": _manual_added,
-        "manual_removed_symbols": _manual_removed,
+        "ok":                  True,
+        "ticker":              body.ticker,
+        "requested_theme_id":  body.theme_id,
+        "prior_theme_id":      prior_theme_id,
+        "prior_theme_source":  prior_source,
+        "removed_old_theme":   removed_old,
+        "old_theme_id_cleared": old_theme_id_cleared,
+        "resolved_theme_name": final.get("theme_name"),
+        "resolved_theme_id":   final.get("theme_id"),
+        "resolved_source":     final.get("source"),
+        "member_count":        add_result.get("member_count"),
         "message": (
-            f"Override saved. '{body.symbol}' {body.action}ed in '{body.theme_id}' only. "
-            + ("Manual leader for this theme was also cleared. " if leader_cleared else "")
-            + "Universe rebuilt and RS cache cleared."
+            f"'{body.ticker}' primary theme assigned to '{body.theme_id}'. "
+            + (f"Removed stale membership from '{old_theme_id_cleared}'. " if removed_old else "")
+            + "Enriched universe rebuilt; Watchlist/Themes-page/downstream consumers will reflect this on next read."
         ),
     }
 

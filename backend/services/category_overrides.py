@@ -94,6 +94,27 @@ def upsert_override(
         return False
 
 
+def delete_override(
+    user_id: str,
+    ticker: str,
+    only_if_category: Optional[str] = None,
+) -> bool:
+    """
+    Delete a single ticker→category override. If only_if_category is given,
+    only deletes when the current stored category matches (safe cleanup on
+    reassignment). Invalidates cache on success.
+    """
+    try:
+        from data.pg_storage import delete_category_override as _db_delete
+        deleted = _db_delete(user_id, ticker.strip().upper(), only_if_category)
+        if deleted:
+            _cache_invalidate(user_id)
+        return deleted
+    except Exception as e:
+        print(f"[CATEGORY_OVERRIDES] delete_override failed: {e}")
+        return False
+
+
 def bulk_upsert(
     user_id: str,
     updates: list[dict],

@@ -1,0 +1,575 @@
+DEV THEME ASSIGNMENT REPAIR — RESTORE AUTHENTICATED MANUAL THEME WRITES FOR WATCHLIST SCREENER UI
+
+Work only in the existing backend Replit project.
+
+This is a targeted Theme assignment/auth/write-path repair.
+
+The current backend Theme architecture has already been repaired and validated:
+
+* current saved Watchlist dynamically synchronizes into the enriched Theme universe
+* canonical primary Theme resolution is centralized in:
+  backend/services/theme_resolver.py::resolve_primary_theme_for_ticker(...)
+* manual Theme membership/assignment uses the existing Theme admin write architecture
+* manual overrides remain authoritative
+* Watchlist Theme identity and Themes-page merged membership are synchronized
+* Watchlist lower Theme performance grouping consumes canonical Watchlist Theme identity
+* Options Sectors / All Stocks consumes ENRICHED_THEME_RS_UNIVERSE downstream
+
+Do not redesign Theme membership.
+
+Do not create a new Watchlist ticker-theme table.
+
+Do not create another ticker→Theme map.
+
+Do not create a new Theme classifier.
+
+Do not modify Theme RS scoring.
+
+Do not modify Theme Rotation scoring.
+
+Do not modify Trade Alignment.
+
+Do not modify Actionability.
+
+Do not modify Options Alignment.
+
+Do not add AI/LLM calls.
+
+Do not add Grok calls.
+
+Do not add provider calls.
+
+Do not modify frontend code.
+
+This task has ONE goal:
+
+RESTORE THE EXISTING MANUAL PRIMARY-THEME ASSIGNMENT WRITE PATH SO AN AUTHENTICATED DEV/ADMIN BROWSER SESSION CAN ASSIGN OR REASSIGN A WATCHLIST TICKER'S THEME FROM A NEW WATCHLIST SCREENER UI.
+
+==================================================
+CURRENT BUG
+===========
+
+The existing Themes-page manual membership interaction now returns:
+
+"Unauthorized — provide a valid X-API-Key header (scripts) or an Authorization: Bearer <JWT> from an admin session (browser)"
+
+Historically the user could:
+
+add a Watchlist ticker
+
+leave it Unassigned
+
+manually add the ticker to a Theme on the Themes page
+
+and:
+
+the Themes page membership updated
+
+the Watchlist Theme field updated
+
+The recent Theme synchronization work preserved the authoritative backend membership architecture, but the current browser manual-write interaction is now blocked by auth.
+
+The user does NOT want to manually paste an X-API-Key into the browser.
+
+The intended new frontend interaction will live in:
+
+Watchlist Screener
+→ Theme column
+→ dev/admin-only Theme dropdown
+
+This backend task must make that UI possible using the EXISTING authoritative Theme assignment path.
+
+==================================================
+PART 0 — AUDIT THE EXISTING MANUAL WRITE PATH
+=============================================
+
+Before editing, trace:
+
+POST /api/themes/admin/memberships
+
+backend route file/function
+
+request schema
+
+add semantics
+
+remove semantics
+
+reassignment semantics
+
+theme_ticker_overrides
+
+upsert_theme_ticker_override
+
+manual removal/exclusion handling
+
+refresh_enriched_universe()
+
+canonical resolver precedence
+
+current auth dependency/middleware
+
+X-API-Key validation
+
+browser JWT/admin-session validation
+
+Trace the exact reason the current browser request receives:
+
+Unauthorized — provide a valid X-API-Key header (scripts) or an Authorization: Bearer <JWT> from an admin session (browser)
+
+Determine:
+
+1. Does the endpoint correctly accept a valid browser JWT today?
+2. Is the frontend simply failing to send Authorization?
+3. Is admin-role validation failing for the current dev account?
+4. Did recent backend auth changes alter the endpoint dependency?
+5. Is the endpoint intended for scripts/admin browser sessions but wired only for API-key flows in practice?
+
+Prove the exact root cause before editing.
+
+==================================================
+PART 1 — PRESERVE ONE AUTHORITATIVE PRIMARY-THEME WRITE
+=======================================================
+
+The new Watchlist Screener dropdown must ultimately use the same authoritative manual assignment semantics as the existing Theme admin membership path.
+
+Do not create:
+
+a separate Watchlist Theme override table
+
+a second manual assignment service
+
+a frontend-only saved Theme
+
+a new canonical resolver source
+
+The desired write remains conceptually:
+
+authenticated dev/admin user
+↓
+assign ticker to canonical existing Theme
+↓
+existing manual Theme override/membership store
+↓
+refresh existing enriched universe
+↓
+canonical resolver sees manual assignment
+↓
+Watchlist Theme identity updates
+↓
+Themes-page membership updates
+↓
+downstream existing consumers update
+
+Reuse the existing function/service where possible.
+
+==================================================
+PART 2 — PRIMARY THEME ASSIGNMENT CONTRACT
+==========================================
+
+Provide a clean authenticated browser-consumable backend contract for:
+
+ASSIGN PRIMARY THEME
+
+and:
+
+REASSIGN PRIMARY THEME
+
+Prefer reusing the existing endpoint if its request contract already cleanly supports this.
+
+Only add a thin route alias/wrapper if the existing admin-membership request semantics are too awkward for the Watchlist Screener UI.
+
+If a thin route is proven necessary, it must call the same existing authoritative write helper.
+
+It must not implement a separate database write path.
+
+Conceptual request:
+
+ticker
+
+theme_id or exact canonical Theme identifier
+
+The backend must validate:
+
+ticker is non-empty
+
+Theme exists in the current canonical Theme universe
+
+Theme ID/name resolves exactly
+
+caller is authenticated dev/admin
+
+Do not accept arbitrary new Theme names.
+
+Do not fuzzy-create Themes.
+
+==================================================
+PART 3 — REASSIGNMENT SEMANTICS
+===============================
+
+The current V1 UI is for ONE canonical primary Theme assignment.
+
+When a ticker currently assigned to:
+
+AI Networking
+
+is reassigned to:
+
+Photonics / Lasers
+
+the resulting primary Theme identity must be:
+
+Photonics / Lasers
+
+Do not leave ambiguous competing manual primary assignments.
+
+Trace the current theme_ticker_overrides schema/semantics and preserve the intended authoritative override behavior.
+
+Show whether reassignment is:
+
+upsert same ticker row
+
+remove old + add new
+
+or another current exact mechanism.
+
+The final canonical resolver must return the newly selected Theme.
+
+Do not implement multi-theme membership in this task.
+
+==================================================
+PART 4 — UNASSIGNED → ASSIGNED
+==============================
+
+Validate the exact workflow for a currently Unassigned Watchlist ticker.
+
+Using a safe current test ticker or transaction rollback strategy:
+
+current canonical Theme = Unassigned
+
+assign existing canonical Theme
+
+refresh existing enriched universe
+
+verify:
+
+canonical resolver Theme changes
+
+Watchlist GET row Theme changes
+
+ticker appears in matching Themes-page merged membership
+
+Watchlist Theme performance grouping places it in the corresponding Theme card
+
+Existing Options Sectors / All Stocks membership path sees the enriched universe naturally
+
+Do not trigger a new Options scan solely for validation.
+
+Do not hardcode ACOG or ABSI if modifying live user data would be unsafe.
+
+Use a rollback or restore the exact original state after testing.
+
+==================================================
+PART 5 — ASSIGNED → REASSIGNED
+==============================
+
+Validate:
+
+ticker currently assigned to Theme A
+
+authenticated manual reassignment to Theme B
+
+verify:
+
+canonical resolver = Theme B
+
+Watchlist row Theme = Theme B
+
+Themes-page merged membership reflects Theme B under the current manual override semantics
+
+lower Watchlist Theme grouping moves ticker to Theme B
+
+No duplicate primary Theme identity is exposed in the Watchlist row
+
+Restore the original test state after validation.
+
+==================================================
+PART 6 — AUTHENTICATED BROWSER SESSION
+======================================
+
+The intended caller is the existing authenticated dev/admin browser session.
+
+Do not expose the admin API key to frontend code.
+
+Do not hardcode an X-API-Key in JavaScript.
+
+Do not weaken the endpoint to anonymous access.
+
+Do not remove admin authorization.
+
+The accepted browser path should use the existing:
+
+Authorization: Bearer <JWT>
+
+or exact current authenticated-session mechanism already used elsewhere in the app.
+
+Audit an existing successful authenticated admin browser write endpoint and reuse its established frontend/backend auth convention.
+
+Backend validation should distinguish:
+
+401 unauthenticated
+
+403 authenticated but not authorized
+
+400 invalid ticker/Theme request
+
+404 canonical Theme not found if appropriate
+
+Use existing API error conventions.
+
+==================================================
+PART 7 — THEME LIST READ CONTRACT
+=================================
+
+The Watchlist frontend dropdown needs the exact current Theme Universe choices.
+
+Audit whether an existing read endpoint already returns:
+
+canonical Theme ID
+
+display name
+
+for every current Theme in THEME_RS_UNIVERSE / enriched Theme architecture.
+
+Reuse it.
+
+Do not add a second hardcoded Theme list.
+
+If the existing Themes-page read payload already contains the necessary IDs/names:
+
+document the exact endpoint and fields.
+
+Only add a minimal read endpoint if no clean existing contract exists.
+
+No provider calls.
+
+No LLM calls.
+
+==================================================
+PART 8 — DEV/ADMIN CAPABILITY
+=============================
+
+This interaction must be restricted to the existing dev/admin authorization model.
+
+Do not infer "dev" from frontend environment alone.
+
+The backend write remains authoritative.
+
+Return how the frontend can determine whether to render the edit control using existing authenticated user/admin state.
+
+If the frontend already has an admin/dev capability field:
+
+reuse it.
+
+Do not create a second authorization concept unless proven necessary.
+
+==================================================
+PART 9 — MULTI-THEME EXPLICITLY OUT OF SCOPE
+============================================
+
+Do not implement sub-themes or multiple Theme memberships in this task.
+
+The current write contract is:
+
+ONE CANONICAL PRIMARY THEME ASSIGNMENT
+
+Multi-theme membership will be audited separately because it may affect:
+
+Theme performance baskets
+
+Options Sectors / All Stocks membership
+
+Theme Alignment
+
+Trade Alignment
+
+Actionability
+
+The current task must not silently change those semantics.
+
+==================================================
+PART 10 — VALIDATION
+====================
+
+Return current backend provenance for:
+
+manual assignment write
+
+canonical resolver
+
+Watchlist Theme row field
+
+Themes-page membership merge
+
+Theme performance grouping
+
+Options downstream membership
+
+Validate one Unassigned → Assigned round trip.
+
+Validate one Assigned → Reassigned round trip.
+
+Restore test ticker state afterward.
+
+Return:
+
+HTTP status
+
+auth mechanism
+
+write helper called
+
+override row behavior
+
+resolver result
+
+Watchlist Theme result
+
+Themes membership result
+
+performance grouping result
+
+downstream enriched-universe result
+
+==================================================
+PART 11 — REGRESSION / COST PROOF
+=================================
+
+Prove:
+
+0 anonymous Theme writes introduced
+
+0 API key exposed to browser
+
+0 new ticker→Theme table
+
+0 new Theme classifier
+
+0 new canonical resolver
+
+0 provider calls
+
+0 Grok calls
+
+0 LLM calls
+
+0 Theme RS scoring changes
+
+0 Theme Rotation scoring changes
+
+0 Trade Alignment changes
+
+0 Actionability changes
+
+0 Options Alignment changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+DEV THEME ASSIGNMENT BACKEND REPORT
+
+FILES CHANGED:
+[list]
+
+AUTH ROOT CAUSE:
+[exact issue]
+
+EXISTING MANUAL WRITE PATH:
+[path]
+
+AUTHORITATIVE WRITE HELPER:
+[helper]
+
+BROWSER AUTH MECHANISM:
+[exact mechanism]
+
+PRIMARY THEME WRITE CONTRACT:
+[endpoint + request]
+
+THEME LIST CONTRACT:
+[endpoint + fields]
+
+REASSIGNMENT SEMANTICS:
+[exact behavior]
+
+UNASSIGNED → ASSIGNED TEST:
+[results]
+
+ASSIGNED → REASSIGNED TEST:
+[results]
+
+WATCHLIST SYNC:
+[proof]
+
+THEMES PAGE SYNC:
+[proof]
+
+PERFORMANCE GROUPING SYNC:
+[proof]
+
+OPTIONS DOWNSTREAM:
+[proof]
+
+COST / SECURITY PROOF:
+[results]
+
+End exactly:
+
+DEV THEME ASSIGNMENT BACKEND VERDICT
+
+AUTHENTICATED BROWSER WRITE FUNCTIONAL:
+[YES / NO]
+
+ANONYMOUS WRITE BLOCKED:
+[YES / NO]
+
+ONE AUTHORITATIVE PRIMARY-THEME WRITE:
+[YES / NO]
+
+CANONICAL RESOLVER UPDATED:
+[YES / NO]
+
+WATCHLIST THEME UPDATED:
+[YES / NO]
+
+THEMES MEMBERSHIP UPDATED:
+[YES / NO]
+
+THEME PERFORMANCE GROUPING UPDATED:
+[YES / NO]
+
+OPTIONS DOWNSTREAM MEMBERSHIP UPDATED:
+[YES / NO]
+
+API KEY EXPOSED TO FRONTEND:
+[NO expected]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+MULTI-THEME IMPLEMENTED:
+[NO expected]
+
+NEXT IMPLEMENTATION:
+WATCHLIST SCREENER DEV THEME DROPDOWN
+
+Do not implement multi-theme membership.
+
+Do not modify Trade Alignment.
+
+Do not modify Actionability.
+
+Do not make unrelated changes.

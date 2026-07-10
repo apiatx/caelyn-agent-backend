@@ -950,6 +950,45 @@ def upsert_category_override(
         _put_conn(conn)
 
 
+def delete_category_override(
+    user_id: str,
+    ticker: str,
+    only_if_category: str | None = None,
+) -> bool:
+    """
+    Delete a single ticker's category override.
+    If only_if_category is given, only deletes when the current stored category
+    matches it (prevents clobbering an override that was already reassigned to a
+    different category by a later write). Returns True if a row was deleted.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cur:
+            if only_if_category is not None:
+                cur.execute(
+                    "DELETE FROM public.watchlist_category_overrides "
+                    "WHERE user_id = %s AND ticker = %s AND category = %s",
+                    (user_id, ticker, only_if_category),
+                )
+            else:
+                cur.execute(
+                    "DELETE FROM public.watchlist_category_overrides "
+                    "WHERE user_id = %s AND ticker = %s",
+                    (user_id, ticker),
+                )
+            deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+    except Exception as e:
+        print(f"[PG_STORAGE] delete_category_override failed: {e}")
+        conn.rollback()
+        return False
+    finally:
+        _put_conn(conn)
+
+
 def bulk_upsert_category_overrides(
     user_id: str,
     updates: list[dict],
