@@ -1,0 +1,1118 @@
+OPTIONS ALIGNMENT V2 — NORMALIZED PREMIUM PRESSURE + NET PREMIUM RATE OF CHANGE
+
+Work only in the existing backend Replit project.
+
+Trade Alignment is already implemented in shadow mode with the locked formula:
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment     25%
+Catalyst Alignment    25%
+
+Social Bonus          +0 to +10
+
+Entry Structure is completely separate.
+
+The upstream Watchlist → Themes membership synchronization has now been restored dynamically using the current saved Watchlist and canonical Theme resolver.
+
+The existing downstream Theme / Sectors / All Stocks architecture should remain unchanged.
+
+This task has ONE goal:
+
+REFINE OPTIONS ALIGNMENT SO ITS 25% TRADE ALIGNMENT INPUT REPRESENTS NORMALIZED PREMIUM PRESSURE + NET PREMIUM DIRECTION / RATE OF CHANGE.
+
+Do not change Trade Alignment weights.
+Do not modify Theme Alignment.
+Do not modify Stage Analysis.
+Do not modify Catalyst Alignment.
+Do not modify Entry Structure.
+Do not build LOW_BASE states in this task.
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not build ELITE_ASSET_REBOUND.
+Do not modify Options Flow producer logic.
+Do not modify the Options Flow Screener.
+Do not modify Sectors → All Stocks producer logic.
+Do not modify Net Premium history producer logic.
+Do not add provider calls.
+Do not add new scans.
+Do not add cache warming.
+Do not add a new cache/LKG.
+Do not add schedulers.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not modify frontend code.
+Do not modify Daily Alpha V1.
+
+==================================================
+PRODUCT DEFINITION
+==================
+
+Options Alignment answers:
+
+"HOW STRONGLY DOES CURRENT OPTIONS PREMIUM PRESSURE CONFIRM A LONG-BIASED SWING-TRADE OPPORTUNITY, AND IS THAT PRESSURE STRENGTHENING OR WEAKENING?"
+
+The user does NOT want Options Alignment dominated by raw dollar Net Premium.
+
+Raw Net Premium alone tells us very little across stocks of radically different size and options ecosystems.
+
+The user specifically wants the same normalized premium concepts already visible in the existing Options Flow product:
+
+% Net Premium
+
+Net Premium / Market Cap
+
+plus:
+
+Call Premium vs Put Premium balance
+
+Effective Premium PCR
+
+Canonical bias / ticker state
+
+Then separately:
+
+1D Net Premium change
+
+7D Net Premium change
+
+30D Net Premium change
+
+The model is locked conceptually as:
+
+CURRENT PREMIUM PRESSURE       70%
+
+DIRECTION / RATE OF CHANGE     30%
+
+==================================================
+PART 0 — TRACE EXISTING CANONICAL OPTIONS FLOW FORMULAS
+=======================================================
+
+Before editing, trace the exact current backend and frontend/backend payload semantics for the fields displayed in the existing Options Flow product as:
+
+% Net Premium
+
+Net Premium / Market Cap
+
+Do not invent formulas.
+
+Find the exact current production field names.
+
+Find the exact current calculation helpers.
+
+Return internally:
+
+display label
+
+production field name
+
+source file/function
+
+formula
+
+unit/scale
+
+whether signed
+
+normalization/capping if any
+
+ticker coverage
+
+Also trace exact canonical fields for:
+
+net_premium
+
+call_premium
+
+put_premium
+
+effective_premium_pcr
+
+raw_premium_pcr
+
+bias
+
+ticker_state
+
+scan_status
+
+net_premium_delta_1d
+
+net_premium_delta_7d
+
+net_premium_delta_30d
+
+Reuse existing calculations wherever they already exist.
+
+Do not duplicate the % Net Premium or Net Premium / Market Cap formula in options_alignment.py if a canonical helper/value already exists.
+
+==================================================
+PART 1 — DYNAMIC WATCHLIST / OPTIONS COVERAGE ACCOUNTING
+========================================================
+
+Do not use hardcoded acceptance counts such as:
+
+249
+287
+374
+378
+478
+598
+
+These were historical snapshots.
+
+The Watchlist changes frequently.
+
+Validation must derive the CURRENT saved Watchlist dynamically.
+
+For every current saved Watchlist ticker, classify Options coverage into the exact existing production statuses where possible.
+
+Conceptually distinguish:
+
+OPTIONS_AVAILABLE
+
+CONFIRMED_NO_OPTIONS
+
+FOREIGN_UNSUPPORTED
+
+OTC_UNSUPPORTED
+
+PENDING / BACKFILL
+
+UNEXPECTED_MISSING
+
+Use actual existing canonical status names when they already exist.
+
+Do not invent duplicate statuses unnecessarily.
+
+Return:
+
+current saved Watchlist count
+
+US-listed / supported candidates
+
+foreign-prefixed count
+
+OTC count
+
+canonical All Stocks options rows
+
+confirmed no-options
+
+pending/backfill
+
+unsupported
+
+unexpected missing
+
+The accounting must reconcile dynamically to the current Watchlist state.
+
+Do not require foreign or OTC symbols to have Tradier options data when the existing provider path does not support them.
+
+Foreign/OTC symbols remain eligible for Trade Alignment through other available signals.
+
+Their Options Alignment must be unavailable with an explicit reason.
+
+Do not give them 0 or 50.
+
+==================================================
+PART 2 — CURRENT PREMIUM PRESSURE SCORE
+=======================================
+
+Replace the current broad-row fallback that primarily derives current options strength from:
+
+Net Premium sign
++
+log-saturating absolute dollar magnitude
+
+with:
+
+premium_pressure_score
+
+0–100
+
+Question answered:
+
+"HOW BULLISH OR BEARISH IS THE CURRENT NORMALIZED PREMIUM PRESSURE FOR THIS SPECIFIC STOCK?"
+
+Use only existing canonical All Stocks / Options Flow premium fields.
+
+The current pressure input set is:
+
+A. % NET PREMIUM
+
+Use the exact existing canonical field/formula already displayed in Options Flow.
+
+This should be a primary directional pressure input.
+
+B. NET PREMIUM / MARKET CAP
+
+Use the exact existing canonical field/formula already displayed in Options Flow or existing Watchlist/Options payloads.
+
+This should identify premium pressure that is unusually large relative to the underlying company.
+
+C. CALL VS PUT PREMIUM BALANCE
+
+Use:
+
+call_premium
+put_premium
+
+and/or an existing canonical premium-balance value if already calculated.
+
+Measure relative premium imbalance.
+
+Do not rely on raw dollar difference alone.
+
+D. EFFECTIVE PREMIUM PCR
+
+Use the canonical:
+
+effective_premium_pcr
+
+where available.
+
+Use raw_premium_pcr only as an explicitly documented fallback if that matches current Options Flow semantics.
+
+E. CANONICAL BIAS / TICKER STATE
+
+Use:
+
+bias
+ticker_state
+
+only as deterministic confirmation of the underlying premium interpretation.
+
+Do not allow a generic label to override contradictory raw premium data without explanation.
+
+---
+
+## LONG-BIASED SCORE SEMANTICS
+
+This score is for long-biased swing Trade Alignment.
+
+Therefore:
+
+strong bullish normalized premium pressure
+→ high score
+
+mixed / balanced pressure
+→ middle score
+
+strong bearish normalized premium pressure
+→ low score
+
+Do not convert absolute magnitude into bullishness.
+
+Direction and imbalance determine bullish/bearish score.
+
+Magnitude/relative intensity may strengthen confidence.
+
+---
+
+## RAW NET PREMIUM
+
+Preserve:
+
+net_premium
+
+as raw diagnostic output.
+
+Raw Net Premium may contribute a bounded confidence/intensity modifier.
+
+It must NOT dominate the score.
+
+A mega-cap with very large absolute premium dollars must not automatically outrank a smaller stock with dramatically stronger:
+
+% Net Premium
+
+Net Premium / Market Cap
+
+or premium imbalance.
+
+==================================================
+PART 3 — PREMIUM PRESSURE COMPONENTS
+====================================
+
+Return transparent subcomponents:
+
+premium_pressure_score
+
+net_premium_pct_component
+
+net_premium_market_cap_component
+
+premium_balance_component
+
+premium_pcr_component
+
+premium_bias_component
+
+premium_magnitude_confidence
+
+premium_pressure_reason_codes
+
+Use 0–100 scores for subcomponents where appropriate.
+
+Do not insert fake neutral 50 subcomponents when a field is unavailable.
+
+Use available-component normalization.
+
+Require a minimum real premium basis:
+
+at least a valid canonical % Net Premium / Net Premium pressure field
+
+OR
+
+valid call_premium + put_premium
+
+If insufficient premium data exists:
+
+premium_pressure_available = false
+
+Options current state unavailable.
+
+==================================================
+PART 4 — CURRENT PREMIUM PRESSURE WEIGHTING
+===========================================
+
+Audit the real field distributions first.
+
+Then choose a deterministic internal weighting that prioritizes normalized pressure.
+
+The intended importance hierarchy is:
+
+highest importance:
+% Net Premium
+
+highest importance:
+Net Premium / Market Cap
+
+major confirmation:
+Call vs Put Premium balance
+
+major confirmation:
+Effective Premium PCR
+
+secondary confirmation:
+Canonical bias / ticker state
+
+bounded confidence only:
+raw Net Premium magnitude
+
+Do not give raw dollar Net Premium a major standalone directional weight.
+
+Document the exact final internal Premium Pressure formula and weights.
+
+Do not change the outer Trade Alignment weight.
+
+Options remains exactly 25% of Trade Alignment.
+
+==================================================
+PART 5 — NET PREMIUM DIRECTION / RATE OF CHANGE
+===============================================
+
+Preserve the existing canonical Net Premium history source and delta calculations.
+
+Use:
+
+net_premium_delta_1d
+
+net_premium_delta_7d
+
+net_premium_delta_30d
+
+Do not duplicate delta calculation.
+
+Do not estimate unavailable historical values.
+
+Do not use fake 0 or 50.
+
+Direction horizon weights:
+
+1D = 20%
+
+7D = 35%
+
+30D = 45%
+
+Renormalize over available horizons.
+
+Examples:
+
+only 1D available
+→ 1D receives 100% of direction weight
+
+1D + 7D available
+→ renormalize 20:35
+
+all three available
+→ 20:35:45
+
+---
+
+## DIRECTION SEMANTICS
+
+The Direction score must interpret change in the context of current premium pressure.
+
+Conceptually:
+
+HIGH / POSITIVE CURRENT PREMIUM PRESSURE
++
+positive deltas
+→ bullish pressure accelerating
+
+HIGH / POSITIVE CURRENT PREMIUM PRESSURE
++
+negative deltas
+→ bullish pressure fading
+
+NEGATIVE CURRENT PREMIUM PRESSURE
++
+negative deltas
+→ bearish pressure accelerating
+
+NEGATIVE CURRENT PREMIUM PRESSURE
++
+positive deltas
+→ bearish pressure easing / potential early turn
+
+MIXED CURRENT PRESSURE
++
+strong positive improvement
+→ improving / early bullish pressure
+
+MIXED CURRENT PRESSURE
++
+strong negative deterioration
+→ worsening pressure
+
+Do not treat:
+
+positive delta
+
+as universally bullish without considering the current Net Premium state.
+
+Return:
+
+options_direction_score
+
+options_direction_available
+
+options_pressure_state
+
+Allowed conceptual states remain:
+
+BULLISH_ACCELERATING
+BULLISH_STEADY
+BULLISH_FADING
+BEARISH_ACCELERATING
+BEARISH_STEADY
+BEARISH_EASING
+MIXED
+INSUFFICIENT_HISTORY
+
+Use actual current enum names if already implemented.
+
+==================================================
+PART 6 — OPTIONS ALIGNMENT V2 FORMULA
+=====================================
+
+Options Alignment is ONE 0–100 signal.
+
+When direction history is available:
+
+options_alignment_score =
+0.70 × premium_pressure_score
++
+0.30 × options_direction_score
+
+When direction history is mathematically unavailable:
+
+options_alignment_score =
+premium_pressure_score
+
+Do not penalize missing history.
+
+Do not add fake direction values.
+
+For Trade Alignment Options Alignment V2:
+
+ALL canonical All Stocks rows must use the same Premium Pressure interpretation.
+
+Do not use the old master-screener:
+
+final_composite_score
+
+composite_score
+
+heat_score
+
+as the primary Options Alignment score for a subset of tickers.
+
+Those fields may remain diagnostic.
+
+Do not create two incomparable scoring semantics where a narrow Screener subset receives gamma/volatility/sentiment scoring while broad All Stocks rows receive premium-pressure scoring.
+
+Options Alignment V2 means:
+
+normalized premium pressure
++
+premium direction / rate of change
+
+for every ticker.
+
+==================================================
+PART 7 — BEST-CASE SETUP BOUNDARY
+=================================
+
+Do NOT add price behavior or Entry Structure into Options Alignment.
+
+The user's ideal setup is:
+
+high / increasing premium pressure
+
+while:
+
+price has not already shot up
+
+and:
+
+the stock is sitting in a constructive pullback / base / retest
+
+That final setup is:
+
+Options Alignment
++
+Entry Structure
+
+It belongs in future Actionability.
+
+Do not reward Options Alignment because price is compressed.
+
+Do not penalize Options Alignment because price already moved.
+
+Options Alignment should only say:
+
+"premium pressure is strong/weak and strengthening/fading."
+
+Preserve this boundary.
+
+==================================================
+PART 8 — MISSING / UNSUPPORTED STATES
+=====================================
+
+For every current Watchlist ticker:
+
+If canonical state proves no listed options:
+
+options_alignment_available = false
+
+reason:
+CONFIRMED_NO_OPTIONS
+
+If foreign listing unsupported by the existing options provider architecture:
+
+unavailable
+
+explicit foreign-unsupported reason
+
+If OTC unsupported:
+
+unavailable
+
+explicit OTC-unsupported reason
+
+If current scan is pending/backfill:
+
+unavailable
+
+explicit pending reason
+
+If a supported current Watchlist ticker has no canonical row and no legitimate unsupported/no-options state:
+
+unavailable
+
+reason:
+UNEXPECTED_MISSING_OPTIONS_DATA
+
+Do not fabricate a score.
+
+Do not fall back to the market-wide Options Flow Screener.
+
+==================================================
+PART 9 — OPTIONS ALIGNMENT V1 VS V2 VALIDATION
+==============================================
+
+Across all current Watchlist symbols with available Options Alignment:
+
+calculate locally:
+
+old Options Alignment V1 score
+
+new Options Alignment V2 score
+
+Do not persist an extra model solely for comparison.
+
+Return:
+
+correlation V1 vs V2
+
+mean absolute score change
+
+mean absolute rank change
+
+Top 25 positive rank movers under V2
+
+Top 25 negative rank movers under V2
+
+For each mover show:
+
+symbol
+
+V1 score
+V1 rank
+
+V2 score
+V2 rank
+
+% Net Premium
+
+Net Premium / Market Cap
+
+call premium
+put premium
+
+effective premium PCR
+
+bias/ticker state
+
+raw Net Premium
+
+reason for rank change
+
+Specifically identify names previously over-rewarded primarily because of very large raw premium dollars.
+
+Also identify smaller-cap / lower-dollar names promoted because normalized premium pressure was unusually strong.
+
+Do not force examples.
+
+==================================================
+PART 10 — DISTRIBUTION / DOMINANCE TEST
+=======================================
+
+Report correlations where mathematically possible:
+
+abs(raw net_premium) vs old V1 current score
+
+abs(raw net_premium) vs premium_pressure_score
+
+% Net Premium vs premium_pressure_score
+
+Net Premium / Market Cap vs premium_pressure_score
+
+premium imbalance vs premium_pressure_score
+
+Expected:
+
+V2 should be substantially less mechanically dominated by absolute premium dollars.
+
+Do not tune merely to force a target correlation.
+
+Report honestly.
+
+Return distributions:
+
+premium_pressure_score:
+min
+p10
+p25
+median
+p75
+p90
+p95
+max
+
+options_alignment_score:
+same
+
+Pressure-state distribution.
+
+==================================================
+PART 11 — NAMED TICKER VALIDATION
+=================================
+
+Show real current results where available for:
+
+ALGM
+AOSL
+BE
+MRVL
+WYFI
+HOOD
+ANET
+AMD
+MU
+CRDO
+WULF
+AAOI
+NBIS
+VRT
+IBRX
+RBRK
+SLAB
+DELL
+
+For each:
+
+symbol
+
+options_alignment_available
+
+options_alignment_score
+
+premium_pressure_score
+
+% Net Premium
+
+Net Premium / Market Cap
+
+premium_balance_component
+
+effective premium PCR
+
+bias/ticker_state
+
+raw Net Premium
+
+options_direction_score
+
+1D delta
+7D delta
+30D delta
+
+options_pressure_state
+
+reason codes
+
+If unavailable:
+
+show exact reason.
+
+==================================================
+PART 12 — REVALIDATE TRADE ALIGNMENT
+====================================
+
+Do not change Trade Alignment weights.
+
+Rebuild the existing THEME_ALIGNMENT archetype using:
+
+Theme Alignment       25%
+
+Stage Quality         25%
+
+Options Alignment V2  25%
+
+Catalyst Alignment    25%
+
+Social Bonus          +0 to +10
+
+Entry remains separate.
+
+Return:
+
+current Trade Alignment universe
+
+Trade Alignment available
+
+Theme signal available
+
+Stage signal available
+
+Options Alignment V2 available
+
+Catalyst signal available
+
+signal-count distribution:
+0
+1
+2
+3
+4
+
+Return:
+
+TOP 50 TRADE ALIGNMENT
+
+For each:
+
+rank
+symbol
+
+trade_alignment_score
+base_trade_alignment_score
+social_bonus_score
+
+Theme score
+Theme
+Theme Rotation
+
+Stage score
+Stage
+
+Options Alignment V2
+premium pressure score
+options pressure state
+
+Catalyst score
+primary catalyst
+
+Entry score
+Entry state
+Entry grade
+
+Entry remains display only.
+
+It must not affect Trade Alignment rank.
+
+==================================================
+PART 13 — HIGH ALIGNMENT / BAD ENTRY
+====================================
+
+Return Top 30:
+
+trade_alignment_score descending
+
+where:
+
+entry_score < 40
+
+or:
+
+entry_grade == AVOID
+
+Show:
+
+symbol
+
+Trade Alignment
+rank
+
+Theme score
+
+Stage score
+
+Options Alignment V2
+
+Catalyst score
+
+Social Bonus
+
+Entry score
+Entry state
+Entry grade
+
+exact Entry conflict
+
+Specifically report:
+
+ALGM
+AOSL
+BE
+MRVL
+WYFI
+HOOD
+
+whether or not each qualifies.
+
+Do not force qualification.
+
+==================================================
+PART 14 — EARLY OPPORTUNITY TEST
+================================
+
+Return Top 30 Trade Alignment names in current canonical forming/pre-breakout Entry states.
+
+Trace actual production Entry enums.
+
+Use only real states.
+
+Show:
+
+symbol
+
+Trade Alignment
+
+Theme
+
+Stage
+
+Options Alignment V2
+
+premium pressure score
+
+options pressure state
+
+Catalyst
+
+Social Bonus
+
+Entry State
+
+Entry Score
+
+The goal is to identify stocks becoming interesting before the move is obvious.
+
+Do not create Actionability labels yet.
+
+==================================================
+PART 15 — COST / PROVIDER PROOF
+===============================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 new provider calls
+
+0 new Options scan
+
+0 Options Flow producer changes
+
+0 Sectors / All Stocks producer changes
+
+0 Options Flow Screener changes
+
+0 Net Premium history producer changes
+
+0 Theme changes
+
+0 Stage changes
+
+0 Entry changes
+
+0 Catalyst changes
+
+0 new cache
+
+0 cache warmer
+
+0 new scheduler
+
+0 Daily Alpha changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+OPTIONS ALIGNMENT V2 IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+CANONICAL % NET PREMIUM:
+[field/formula/source]
+
+CANONICAL NET PREMIUM / MARKET CAP:
+[field/formula/source]
+
+PREMIUM PRESSURE FORMULA:
+[exact components/weights]
+
+OPTIONS DIRECTION FORMULA:
+[exact available-history logic]
+
+OPTIONS ALIGNMENT V2 FORMULA:
+[formula]
+
+DYNAMIC WATCHLIST OPTIONS ACCOUNTING:
+[results]
+
+OPTIONS ALIGNMENT COVERAGE:
+[count / percent]
+
+V1 VS V2:
+[summary]
+
+RAW DOLLAR MAGNITUDE DOMINANCE:
+[correlation comparison]
+
+TRADE ALIGNMENT IMPACT:
+[summary]
+
+HIGH ALIGNMENT / BAD ENTRY:
+[summary]
+
+EARLY OPPORTUNITIES:
+[summary]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+OPTIONS ALIGNMENT V2 VERDICT
+
+CANONICAL % NET PREMIUM REUSED:
+[YES / NO]
+
+CANONICAL NET PREMIUM / MARKET CAP REUSED:
+[YES / NO]
+
+PREMIUM PRESSURE FUNCTIONAL:
+[YES / NO]
+
+RAW DOLLAR MAGNITUDE DOMINANCE REDUCED:
+[YES / NO + evidence]
+
+OPTIONS DIRECTION HISTORY READY:
+[YES / NO + coverage]
+
+OPTIONS ALIGNMENT COVERAGE:
+[count / percent]
+
+TRADE ALIGNMENT FUNCTIONAL:
+[YES / NO]
+
+HIGH-ALIGNMENT BAD-ENTRY VISIBILITY:
+[assessment]
+
+EARLY OPPORTUNITY VISIBILITY:
+[assessment]
+
+ALGM:
+[Trade Alignment + Options + Entry]
+
+AOSL:
+[Trade Alignment + Options + Entry]
+
+BE:
+[Trade Alignment + Options + Entry]
+
+MRVL:
+[Trade Alignment + Options + Entry]
+
+WYFI:
+[Trade Alignment + Options + Entry]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+BIGGEST REMAINING TRADE MODEL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+LOW_BASE ENTRY STRUCTURE TAXONOMY
+
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not build ELITE_ASSET_REBOUND.
+Do not modify Entry Structure.
+Do not make unrelated changes.

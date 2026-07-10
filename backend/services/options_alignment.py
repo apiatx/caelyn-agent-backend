@@ -1,21 +1,52 @@
 """
-Options Alignment — zero-provider-call read layer for Trade Alignment.
+Options Alignment V2 — zero-provider-call read layer for Trade Alignment.
 
-Answers: "How strongly does CURRENT options premium flow confirm a
-swing-trade opportunity, and is that pressure strengthening or weakening?"
+Answers: "How strongly does CURRENT normalized options premium PRESSURE
+confirm a long-biased swing-trade opportunity, and is that pressure
+strengthening or weakening?"
 
 This module performs NO network/provider calls of any kind. It only reads:
-  - the existing canonical options composite produced by
-    backend/data/options_flow_engine.py (via the zero-call merge helper
-    backend/data/options_theme_supplement.py::get_combined_ticker_data)
+  - the existing canonical per-ticker premium fields produced by
+    backend/data/options_flow_sectors.py / backend/data/sectors_chain_summarizer.py
+    (via the zero-call merge helper
+    backend/data/options_theme_supplement.py::get_combined_ticker_data):
+    net_premium, call_premium, put_premium, effective_premium_pcr,
+    raw_premium_pcr, bias, ticker_state, scan_status
   - the existing canonical Net Premium history helpers in
     backend/data/options_net_premium_history.py (Neon
-    public.options_net_premium_daily)
+    public.options_net_premium_daily): net_premium_delta_1d/7d/30d
 
 It does NOT modify the Options Flow producer, does NOT duplicate the
-composite-score or delta-calculation formulas, and does NOT implement the
-final four-component Trade Alignment score. It returns exactly ONE
-0-100 "options_alignment_score" signal plus full transparency fields.
+delta-calculation formulas, and does NOT implement the final four-component
+Trade Alignment score. It returns exactly ONE 0-100 "options_alignment_score"
+signal plus full transparency fields.
+
+V2 CHANGE (Options Alignment V2 spec): the "current pressure" 70% input is no
+longer sourced from the master-screener composite_score/final_composite_score/
+heat_score (gamma/volatility/sentiment scoring only available for a narrow
+Screener subset) nor from a raw-dollar log-magnitude fallback. It is now a
+normalized premium_pressure_score computed uniformly for every canonical
+All Stocks row from:
+  - net_premium_pct   (net_premium / (call_premium+put_premium) * 100) —
+    the same "% Net Premium" imbalance concept shown in the Options Flow
+    product. No dedicated canonical field named "pct_net_premium" exists in
+    the backend today, so this ratio is derived directly from the exact same
+    canonical call_premium/put_premium/net_premium fields already displayed
+    on Options Flow / Sectors / Watchlist ticker rows — not re-derived from
+    a different source, not a new provider call.
+  - net_premium / market_cap — NOT available: no canonical per-ticker live
+    market-cap cache exists anywhere in the backend without a new provider
+    call (which is explicitly disallowed for this task). This component is
+    therefore always "unavailable" today and is excluded from the weighted
+    average via available-component renormalization (see
+    _PREMIUM_PRESSURE_WEIGHTS below). Accepts an optional market_cap kwarg
+    so a future zero-provider-call market-cap cache can be wired in later
+    without changing this formula's shape.
+  - premium_balance   (call_premium share of total premium, 0-100)
+  - effective_premium_pcr (falls back to raw_premium_pcr, spec-documented)
+  - bias / ticker_state (secondary, deterministic confirmation only)
+  - raw net_premium magnitude — bounded ±5pt confidence modifier only,
+    applied post-weighting; never a standalone directional weight.
 """
 
 from __future__ import annotations
@@ -23,32 +54,192 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-# Suggested (non-final) internal weighting, per Trade Alignment Foundation spec.
+# Locked outer Trade-Alignment-facing weighting (Options Alignment V2 spec Part 6).
 _CURRENT_WEIGHT = 0.70
 _DIRECTION_WEIGHT = 0.30
 
-# Suggested (non-final) direction-horizon mix when all three horizons exist.
+# Direction-horizon mix when all three horizons exist (spec Part 5).
 _HORIZON_WEIGHTS = {"1d": 0.20, "7d": 0.35, "30d": 0.45}
 
-# options_current_composite is already a 0-100 scale (see
-# options_flow_engine.py composite_score / final_composite_score). Kept as a
-# named constant so a future rescale only needs to change one place.
-_CURRENT_COMPOSITE_SCALE_MAX = 100.0
+# ── Premium Pressure Score internal weights (spec Part 4) ──────────────────
+# Highest importance: % Net Premium and Net Premium / Market Cap.
+# Major confirmation: Call/Put balance and Effective Premium PCR.
+# Secondary confirmation: canonical bias / ticker_state.
+# Raw $ Net Premium magnitude is NOT a weighted component here — it is a
+# bounded post-hoc confidence modifier only (see _magnitude_confidence_bonus).
+_PREMIUM_PRESSURE_WEIGHTS = {
+    "pct":      0.35,   # net_premium_pct_component
+    "mc":       0.25,   # net_premium_market_cap_component (usually unavailable today)
+    "balance":  0.15,   # premium_balance_component
+    "pcr":      0.15,   # premium_pcr_component
+    "bias":     0.10,   # premium_bias_component
+}
+
+_MAGNITUDE_CONFIDENCE_MAX = 5.0  # bounded +/- points, never dominant
 
 
-def _normalize_current_composite(raw_composite: Optional[float]) -> Optional[float]:
-    """
-    options_flow_engine.py's composite_score / final_composite_score is
-    already produced on a 0-100 scale. This is a pass-through clamp, not a
-    reformulation — no re-derivation of the composite itself.
-    """
-    if raw_composite is None:
+def _pct_net_premium(net_premium: Optional[float], call_p: Optional[float], put_p: Optional[float]) -> Optional[float]:
+    """% Net Premium: net_premium as a share of total premium flow, -100..100."""
+    if call_p is None or put_p is None:
         return None
-    try:
-        val = float(raw_composite)
-    except (TypeError, ValueError):
+    total = (call_p or 0.0) + (put_p or 0.0)
+    if total <= 0:
         return None
-    return max(0.0, min(_CURRENT_COMPOSITE_SCALE_MAX, val))
+    np_val = net_premium if net_premium is not None else (call_p - put_p)
+    return max(-100.0, min(100.0, round((np_val / total) * 100.0, 2)))
+
+
+def _score_from_pct(pct: Optional[float]) -> Optional[float]:
+    """Map -100..100 % Net Premium to 0..100 (50 = neutral/balanced)."""
+    if pct is None:
+        return None
+    return max(0.0, min(100.0, 50.0 + (pct / 2.0)))
+
+
+def _score_from_market_cap_ratio(net_premium: Optional[float], market_cap: Optional[float]) -> Optional[float]:
+    """
+    Net Premium / Market Cap, mapped to 0..100. Unavailable whenever no
+    canonical market_cap is supplied (see module docstring) — never
+    defaulted to a neutral 50, per spec Part 3.
+    """
+    if net_premium is None or not market_cap or market_cap <= 0:
+        return None
+    ratio_pct = (net_premium / market_cap) * 100.0
+    # Saturating map: +/-0.50% of market cap in net premium ~= full-scale signal.
+    scaled = max(-1.0, min(1.0, ratio_pct / 0.50))
+    return max(0.0, min(100.0, 50.0 + 50.0 * scaled))
+
+
+def _score_from_balance(call_p: Optional[float], put_p: Optional[float]) -> Optional[float]:
+    """Call-premium share of total premium (0..100). 50 = balanced."""
+    if call_p is None or put_p is None:
+        return None
+    total = (call_p or 0.0) + (put_p or 0.0)
+    if total <= 0:
+        return None
+    return round((call_p / total) * 100.0, 2)
+
+
+def _score_from_pcr(effective_pcr: Optional[float], raw_pcr: Optional[float]) -> Optional[float]:
+    """
+    Lower put/call premium ratio == more call-dominant == more bullish.
+    Uses canonical effective_premium_pcr; falls back to raw_premium_pcr only
+    when the log-safe clamp is unavailable (documented fallback, spec Part 2E).
+    """
+    pcr = effective_pcr if effective_pcr is not None else raw_pcr
+    if pcr is None or pcr < 0:
+        return None
+    return max(0.0, min(100.0, round((1.0 / (1.0 + pcr)) * 100.0, 2)))
+
+
+def _score_from_bias(bias: Optional[str]) -> Optional[float]:
+    """Deterministic confirmation only — never overrides contradictory raw premium data."""
+    if not bias:
+        return None
+    b = bias.lower()
+    if b == "bullish":
+        return 75.0
+    if b == "bearish":
+        return 25.0
+    if b == "neutral":
+        return 50.0
+    return None
+
+
+def _magnitude_confidence_bonus(net_premium: Optional[float], direction_toward: float) -> float:
+    """
+    Bounded +/-5pt confidence modifier from raw $ net_premium magnitude only.
+    Pushes further in whichever direction the weighted average already points
+    (direction_toward > 50 => bullish push, < 50 => bearish push); never
+    flips or dominates the underlying normalized-pressure verdict.
+    """
+    if net_premium is None:
+        return 0.0
+    import math as _math
+    magnitude = min(1.0, _math.log10(1 + abs(net_premium)) / 7.0)  # saturates ~$10M+
+    if direction_toward > 50.0:
+        return _MAGNITUDE_CONFIDENCE_MAX * magnitude
+    if direction_toward < 50.0:
+        return -_MAGNITUDE_CONFIDENCE_MAX * magnitude
+    return 0.0
+
+
+def _compute_premium_pressure_score(
+    net_premium: Optional[float],
+    call_premium: Optional[float],
+    put_premium: Optional[float],
+    effective_premium_pcr: Optional[float],
+    raw_premium_pcr: Optional[float],
+    bias: Optional[str],
+    market_cap: Optional[float] = None,
+) -> dict:
+    """
+    Options Alignment V2 "current premium pressure" score (spec Parts 2-4).
+    Normalized-pressure-first; raw $ net_premium is a bounded confidence
+    modifier only, never a standalone directional weight.
+    """
+    has_basis = net_premium is not None or ((call_premium or 0) + (put_premium or 0) > 0)
+    if not has_basis:
+        return {
+            "premium_pressure_available": False,
+            "premium_pressure_score": None,
+            "net_premium_pct": None,
+            "net_premium_pct_component": None,
+            "net_premium_market_cap_component": None,
+            "premium_balance_component": None,
+            "premium_pcr_component": None,
+            "premium_bias_component": None,
+            "premium_magnitude_confidence": 0.0,
+            "premium_pressure_reason_codes": ["NO_REAL_PREMIUM_BASIS"],
+        }
+
+    pct = _pct_net_premium(net_premium, call_premium, put_premium)
+    components = {
+        "pct":     _score_from_pct(pct),
+        "mc":      _score_from_market_cap_ratio(net_premium, market_cap),
+        "balance": _score_from_balance(call_premium, put_premium),
+        "pcr":     _score_from_pcr(effective_premium_pcr, raw_premium_pcr),
+        "bias":    _score_from_bias(bias),
+    }
+
+    reasons: list[str] = []
+    available = {k: v for k, v in components.items() if v is not None}
+    if "mc" not in available:
+        reasons.append("NET_PREMIUM_MARKET_CAP_UNAVAILABLE_NO_CANONICAL_MC_CACHE")
+    if not available:
+        reasons.append("NO_USABLE_PREMIUM_PRESSURE_COMPONENT")
+        return {
+            "premium_pressure_available": False,
+            "premium_pressure_score": None,
+            "net_premium_pct": pct,
+            "net_premium_pct_component": components["pct"],
+            "net_premium_market_cap_component": components["mc"],
+            "premium_balance_component": components["balance"],
+            "premium_pcr_component": components["pcr"],
+            "premium_bias_component": components["bias"],
+            "premium_magnitude_confidence": 0.0,
+            "premium_pressure_reason_codes": reasons,
+        }
+
+    weight_sum = sum(_PREMIUM_PRESSURE_WEIGHTS[k] for k in available)
+    weighted = sum(_PREMIUM_PRESSURE_WEIGHTS[k] * v for k, v in available.items()) / weight_sum
+    reasons.append(f"PRESSURE_COMPONENTS_USED:{','.join(sorted(available))}")
+
+    bonus = _magnitude_confidence_bonus(net_premium, weighted)
+    final_score = max(0.0, min(100.0, round(weighted + bonus, 2)))
+
+    return {
+        "premium_pressure_available": True,
+        "premium_pressure_score": final_score,
+        "net_premium_pct": pct,
+        "net_premium_pct_component": components["pct"],
+        "net_premium_market_cap_component": components["mc"],
+        "premium_balance_component": components["balance"],
+        "premium_pcr_component": components["pcr"],
+        "premium_bias_component": components["bias"],
+        "premium_magnitude_confidence": round(bonus, 2),
+        "premium_pressure_reason_codes": reasons,
+    }
 
 
 def _fetch_net_premium_row(ticker: str, entity_type: str = "stock") -> tuple[Optional[dict], list[dict]]:
@@ -168,107 +359,91 @@ def get_options_alignment_for_ticker(
 
     row = (combined_ticker_data or {}).get(sym)
 
+    _UNAVAILABLE_BASE = {
+        "options_signal_available": False,
+        "options_alignment_available": False,
+        "premium_pressure_available": False,
+        "premium_pressure_score": None,
+        "net_premium_pct": None,
+        "net_premium_pct_component": None,
+        "net_premium_market_cap_component": None,
+        "premium_balance_component": None,
+        "premium_pcr_component": None,
+        "premium_bias_component": None,
+        "premium_magnitude_confidence": None,
+        "options_current_composite": None,
+        "options_current_composite_normalized": None,
+        "options_alignment_score": None,
+        "options_pressure_state": "INSUFFICIENT_HISTORY",
+        "options_current_score": None,
+        "options_direction_score": None,
+        "options_direction_available": False,
+        "net_premium": None,
+        "call_premium": None,
+        "put_premium": None,
+        "effective_premium_pcr": None,
+        "raw_premium_pcr": None,
+        "bias": None,
+        "ticker_state": None,
+        "net_premium_delta_1d": None,
+        "net_premium_delta_7d": None,
+        "net_premium_delta_30d": None,
+        "net_premium_1d_available": False,
+        "net_premium_7d_available": False,
+        "net_premium_30d_available": False,
+    }
+
     if not row:
         reasons.append("NO_OPTIONS_DATA_FOR_TICKER")
-        return {
-            "ticker": sym,
-            "options_signal_available": False,
-            "options_current_composite": None,
-            "options_current_composite_normalized": None,
-            "options_alignment_score": None,
-            "options_pressure_state": "INSUFFICIENT_HISTORY",
-            "options_current_score": None,
-            "options_direction_score": None,
-            "options_direction_available": False,
-            "net_premium": None,
-            "call_premium": None,
-            "put_premium": None,
-            "net_premium_delta_1d": None,
-            "net_premium_delta_7d": None,
-            "net_premium_delta_30d": None,
-            "net_premium_1d_available": False,
-            "net_premium_7d_available": False,
-            "net_premium_30d_available": False,
-            "source": None,
-            "options_alignment_reason_codes": reasons,
-        }
+        return {"ticker": sym, **_UNAVAILABLE_BASE, "source": None, "options_alignment_reason_codes": reasons}
 
-    # ── CONFIRMED NO OPTIONS ────────────────────────────────────────────────
-    # The canonical Sectors -> All Stocks classification (_ticker_state in
-    # data/options_flow_sectors.py) tags a symbol as having no tradeable
-    # chain via scan_result/ticker_state == "confirmed_no_options". This must
-    # never be scored as neutral 50 — it is a hard "no signal" state.
-    _scan_result = (row.get("scan_result") or row.get("ticker_state") or "")
-    if _scan_result == "confirmed_no_options":
+    # ── UNSUPPORTED / UNAVAILABLE STATES (spec Part 8) ──────────────────────
+    # ticker_state / scan_status are the canonical Sectors -> All Stocks
+    # classification (data/options_flow_sectors.py::_ticker_state). Any of
+    # these must return unavailable with an explicit reason — never a
+    # fabricated score, never 0, never a neutral 50.
+    _ticker_state = row.get("ticker_state") or row.get("scan_result") or ""
+    _scan_status = row.get("scan_status") or ""
+    if _ticker_state == "confirmed_no_options" or _scan_status == "no_options":
         reasons.append("CONFIRMED_NO_OPTIONS")
-        return {
-            "ticker": sym,
-            "options_signal_available": False,
-            "options_current_composite": None,
-            "options_current_composite_normalized": None,
-            "options_alignment_score": None,
-            "options_pressure_state": "INSUFFICIENT_HISTORY",
-            "options_current_score": None,
-            "options_direction_score": None,
-            "options_direction_available": False,
-            "net_premium": None,
-            "call_premium": None,
-            "put_premium": None,
-            "net_premium_delta_1d": None,
-            "net_premium_delta_7d": None,
-            "net_premium_delta_30d": None,
-            "net_premium_1d_available": False,
-            "net_premium_7d_available": False,
-            "net_premium_30d_available": False,
-            "source": row.get("_source"),
-            "options_alignment_reason_codes": reasons,
-        }
-
-    # ── Current-state composite ──────────────────────────────────────────────
-    # Preferred: the canonical 0-100 composite produced by the master-screener
-    # / TradierFlowEngine enrichment path (options_flow_engine / options_enricher
-    # composite_score, heat_score). Rows scanned by the Sectors -> All Stocks
-    # chain summarizer (sectors_chain_summarizer.py, scan_result=
-    # "sectors_chain_summarized" — the canonical Watchlist-ticker All Stocks
-    # path, which covers the large majority of the tracked universe) never
-    # populate composite_score/heat_score, only raw premium/bias fields. For
-    # those rows we deterministically derive a 0-100 current-state score from
-    # the same canonical net_premium + effective_premium_pcr fields already
-    # displayed on the Sectors -> All Stocks / Watchlist ticker rows — no new
-    # scan, no provider call, no re-derivation of the Options Flow composite
-    # formula itself.
-    raw_composite = row.get("final_composite_score", row.get("composite_score", row.get("heat_score")))
-    current_norm = _normalize_current_composite(raw_composite)
-    current_is_derived = False
-    if current_norm is None:
+        return {"ticker": sym, **_UNAVAILABLE_BASE, "source": row.get("_source"),
+                "ticker_state": _ticker_state, "options_alignment_reason_codes": reasons}
+    if ":" in sym:
+        reasons.append("FOREIGN_EXCHANGE_TICKER_UNSUPPORTED")
+        return {"ticker": sym, **_UNAVAILABLE_BASE, "source": row.get("_source"),
+                "ticker_state": _ticker_state, "options_alignment_reason_codes": reasons}
+    if _ticker_state in ("generic_pending", "optionable_pending_chain", "deferred_retry") or _scan_status in ("pending", "missing_data"):
         _row_net_premium = row.get("net_premium")
         _row_call, _row_put = row.get("call_premium"), row.get("put_premium")
-        _has_real_scan = _row_net_premium is not None or (
-            (_row_call or 0) + (_row_put or 0) > 0
-        )
-        if _has_real_scan:
-            import math as _math
-            _pcr = row.get("effective_premium_pcr") or row.get("raw_premium_pcr")
-            _np = float(_row_net_premium) if _row_net_premium is not None else 0.0
-            _magnitude = min(1.0, _math.log10(1 + abs(_np)) / 6.0)
-            if _np > 0:
-                current_norm = round(50.0 + 50.0 * _magnitude, 2)
-            elif _np < 0:
-                current_norm = round(50.0 - 50.0 * _magnitude, 2)
-            else:
-                current_norm = 50.0
-            current_is_derived = True
-            reasons.append("CURRENT_SCORE_DERIVED_FROM_ALL_STOCKS_NET_PREMIUM")
-        # else: genuinely no scan result yet (generic_pending / deferred_retry /
-        # optionable_pending_chain) — leave current_norm as None, unavailable.
+        _has_real_scan = _row_net_premium is not None or ((_row_call or 0) + (_row_put or 0) > 0)
+        if not _has_real_scan:
+            reasons.append("PENDING_BACKFILL")
+            return {"ticker": sym, **_UNAVAILABLE_BASE, "source": row.get("_source"),
+                    "ticker_state": _ticker_state, "options_alignment_reason_codes": reasons}
+
     source = row.get("_source")
+
+    # ── Premium Pressure Score (spec Parts 2-4) — normalized, uniform for
+    # every canonical All Stocks row. No composite_score/heat_score reliance.
+    _pressure = _compute_premium_pressure_score(
+        net_premium=row.get("net_premium"),
+        call_premium=row.get("call_premium"),
+        put_premium=row.get("put_premium"),
+        effective_premium_pcr=row.get("effective_premium_pcr"),
+        raw_premium_pcr=row.get("raw_premium_pcr"),
+        bias=row.get("bias"),
+    )
+    reasons.extend(_pressure.pop("premium_pressure_reason_codes", []))
+    current_norm = _pressure["premium_pressure_score"]
+    if current_norm is None:
+        reasons.append("UNEXPECTED_MISSING_OPTIONS_DATA" if row.get("net_premium") is None and not (row.get("call_premium") or row.get("put_premium")) else "NO_CURRENT_OPTIONS_COMPOSITE")
 
     # ── Net Premium (current + delta history) ──────────────────────────────
     current_row, history = _fetch_net_premium_row(sym)
 
-    net_premium = current_row["net_premium"] if current_row else None
-    call_premium = current_row["call_premium"] if current_row else None
-    put_premium = current_row["put_premium"] if current_row else None
+    net_premium = current_row["net_premium"] if current_row else row.get("net_premium")
+    call_premium = current_row["call_premium"] if current_row else row.get("call_premium")
+    put_premium = current_row["put_premium"] if current_row else row.get("put_premium")
 
     if net_premium is None:
         reasons.append("NO_NET_PREMIUM_SNAPSHOT_FOR_TODAY")
@@ -311,9 +486,8 @@ def get_options_alignment_for_ticker(
         magnitude = min(1.0, math.log10(1 + abs(weighted_direction)) / 6.0)
         direction_score = 50.0 + (50.0 if weighted_direction >= 0 else -50.0) * magnitude
 
-    # ── Options Alignment Score (single 0-100 signal) ───────────────────────
+    # ── Options Alignment V2 Score (single 0-100 signal, spec Part 6) ──────
     if current_norm is None:
-        reasons.append("NO_CURRENT_OPTIONS_COMPOSITE")
         alignment_score = None
     elif direction_score is not None:
         alignment_score = round(
@@ -321,14 +495,24 @@ def get_options_alignment_for_ticker(
         )
     else:
         alignment_score = round(current_norm, 2)
-        reasons.append("ALIGNMENT_SCORE_IS_CURRENT_COMPOSITE_ONLY")
+        reasons.append("ALIGNMENT_SCORE_IS_PREMIUM_PRESSURE_ONLY")
 
     return {
         "ticker": sym,
         "options_signal_available": current_norm is not None,
-        "options_current_composite": raw_composite,
+        "options_alignment_available": current_norm is not None,
+        "premium_pressure_available": _pressure["premium_pressure_available"],
+        "premium_pressure_score": _pressure["premium_pressure_score"],
+        "net_premium_pct": _pressure["net_premium_pct"],
+        "net_premium_pct_component": _pressure["net_premium_pct_component"],
+        "net_premium_market_cap_component": _pressure["net_premium_market_cap_component"],
+        "premium_balance_component": _pressure["premium_balance_component"],
+        "premium_pcr_component": _pressure["premium_pcr_component"],
+        "premium_bias_component": _pressure["premium_bias_component"],
+        "premium_magnitude_confidence": _pressure["premium_magnitude_confidence"],
+        "options_current_composite": current_norm,
         "options_current_composite_normalized": current_norm,
-        "options_current_score_derived": current_is_derived,
+        "options_current_score_derived": True,
         "options_alignment_score": alignment_score,
         "options_pressure_state": pressure_state,
         "options_current_score": current_norm,
@@ -337,6 +521,10 @@ def get_options_alignment_for_ticker(
         "net_premium": net_premium,
         "call_premium": call_premium,
         "put_premium": put_premium,
+        "effective_premium_pcr": row.get("effective_premium_pcr"),
+        "raw_premium_pcr": row.get("raw_premium_pcr"),
+        "bias": row.get("bias"),
+        "ticker_state": _ticker_state,
         "net_premium_delta_1d": deltas.get("net_premium_delta_1d"),
         "net_premium_delta_7d": deltas.get("net_premium_delta_7d"),
         "net_premium_delta_30d": deltas.get("net_premium_delta_30d"),
