@@ -1,0 +1,847 @@
+WATCHLIST FUNDAMENTALS COVERAGE INTEGRITY AUDIT — PROVE WHY CURRENT INVESTMENT ALIGNMENT TICKERS LACK FUNDAMENTALS SNAPSHOTS
+
+AUDIT ONLY.
+
+ZERO CODE CHANGES.
+
+Work only in the existing backend Replit project.
+
+Real Investment Alignment V1 is implemented and validated.
+
+Its mandatory component is:
+
+Financial Acceleration
+
+Financial Acceleration reads the existing cached Watchlist fundamentals snapshot through:
+
+data/watchlist_fundamentals_store.py
+
+Investment Alignment intentionally requires:
+
+financial_acceleration_available == true
+
+AND
+
+at least two additional real components
+
+Missing Financial Acceleration must NOT be replaced with fake neutral data or bypassed.
+
+A named-ticker sanity validation found these current examples:
+
+DELL
+investment_alignment = INSUFFICIENT_DATA
+financial_acceleration = unavailable
+forward_expectations = unavailable
+reason = NO_FUNDAMENTALS_SNAPSHOT
+
+IBRX
+same fundamentals failure
+
+RBRK
+same fundamentals failure
+
+HOOD
+same fundamentals failure
+
+SOFI
+same fundamentals failure
+
+ABCL
+same fundamentals failure
+
+By contrast:
+
+AMD
+MU
+MRVL
+CRDO
+ANET
+VRT
+NVDA
+AAOI
+AOSL
+ALGM
+BE
+AEVA
+SLAB
+CIFR
+
+have usable existing fundamentals snapshots.
+
+The app already has an existing dynamic weekly FMP fundamentals refresh architecture used by the Watchlist Fundamental Screener.
+
+Prior product requirement:
+
+The fundamental toggle of the Watchlist Screener already dynamically refreshes fundamental column fields for every current Watchlist ticker from FMP on the existing weekly cadence.
+
+That existing updater is considered production infrastructure and must not be redesigned blindly.
+
+The current FMP Starter plan includes limited access to:
+
+Income Statement
+
+Balance Sheet Statement
+
+Cash Flow Statement
+
+Key Metrics
+
+Financial Ratios
+
+Key Metrics TTM
+
+Financial Ratios TTM
+
+Financial Scores
+
+Owner Earnings
+
+Enterprise Values
+
+Income Statement Growth
+
+Balance Sheet Statement Growth
+
+Cashflow Statement Growth
+
+Financial Statement Growth
+
+Financial Estimates
+
+Do not add provider calls in this audit.
+
+Do not modify Investment Alignment.
+
+Do not weaken Financial Acceleration's mandatory evidence rule.
+
+Do not add a new fundamentals cache.
+
+Do not add a new scheduler.
+
+Do not change the weekly refresh cadence.
+
+Do not change FMP budget governance.
+
+Do not modify frontend code.
+
+This task has ONE goal:
+
+PROVE THE EXACT ROOT CAUSE OF MISSING FUNDAMENTALS SNAPSHOTS FOR CURRENT TRACKED TICKERS AND DETERMINE WHETHER INVESTMENT ALIGNMENT COVERAGE IS BEING LIMITED BY LEGITIMATE PROVIDER/DATA GAPS OR BY DRIFT IN THE EXISTING WATCHLIST FUNDAMENTALS REFRESH PIPELINE.
+
+==================================================
+PART 0 — TRACE THE COMPLETE FUNDAMENTALS PIPELINE
+=================================================
+
+Before doing any diagnostics, trace the exact current path for the Watchlist Fundamental Screener weekly refresh.
+
+Find:
+
+scheduler / warmup caller
+
+refresh service
+
+required ticker universe construction
+
+current saved Watchlist loading
+
+portfolio inclusion if any
+
+ticker normalization
+
+eligibility filtering
+
+US / foreign handling
+
+ETF/fund filtering if present
+
+refresh queue construction
+
+freshness/existence checks
+
+FMP budget guard
+
+FMP endpoint(s)
+
+response normalization
+
+field mapping
+
+Neon persistence
+
+watchlist_fundamentals_store
+
+get_snapshot(symbol)
+
+get_snapshots_bulk(symbols)
+
+Watchlist Fundamental Screener row read
+
+Investment Alignment read
+
+Return internally the full path:
+
+universe
+→ eligibility
+→ queue
+→ provider
+→ normalization
+→ persistence
+→ snapshot read
+
+Do not assume Investment Alignment and the Fundamental Screener read the exact same persisted record until proven.
+
+==================================================
+PART 1 — IDENTIFY THE EXACT REFRESH UNIVERSE
+============================================
+
+Return the current dynamic ticker universe used by the existing weekly fundamentals refresh.
+
+Report:
+
+total required tickers
+
+source(s)
+
+Watchlist ticker count
+
+portfolio ticker count if included
+
+deduped count
+
+excluded count
+
+For every exclusion rule return:
+
+rule
+
+count
+
+example tickers
+
+Specifically answer whether the following tickers are in the current required refresh universe:
+
+DELL
+IBRX
+RBRK
+HOOD
+SOFI
+ABCL
+
+AMD
+MU
+NVDA
+BE
+CRDO
+
+For each return:
+
+in current Watchlist?
+
+in portfolio if applicable?
+
+in fundamentals required universe?
+
+eligible for refresh?
+
+exact exclusion reason if not eligible?
+
+Do not fetch provider data.
+
+==================================================
+PART 2 — SNAPSHOT STORE COVERAGE
+================================
+
+Using pure cache/Neon reads only, audit:
+
+watchlist_fundamentals_store
+
+Return for the complete current fundamentals required universe:
+
+required symbols
+
+symbols with any stored snapshot
+
+symbols with no snapshot
+
+coverage %
+
+For stored snapshots report:
+
+fields-present coverage for:
+
+Revenue Growth YoY
+
+Revenue Growth QoQ / current quarter growth field
+
+EPS Growth
+
+Gross Margin
+
+FCF Margin
+
+Free Cash Flow
+
+Rev Growth Next Quarter
+
+EPS Growth This Quarter
+
+and the exact current fields Investment Alignment consumes.
+
+Separate:
+
+NO SNAPSHOT ROW
+
+from:
+
+SNAPSHOT ROW EXISTS BUT REQUIRED FIELDS NULL/MISSING
+
+from:
+
+SNAPSHOT ROW EXISTS BUT FIELD NAMES/SCHEMA DO NOT MATCH INVESTMENT ALIGNMENT LOOKUP
+
+This distinction is critical.
+
+==================================================
+PART 3 — NAMED TICKER TRACE
+===========================
+
+Trace these individually:
+
+DELL
+IBRX
+RBRK
+HOOD
+SOFI
+ABCL
+
+and positive controls:
+
+AMD
+MU
+NVDA
+BE
+CRDO
+
+For each return:
+
+current Watchlist membership
+
+fundamentals required-universe membership
+
+refresh eligibility
+
+last known refresh attempt timestamp if tracked
+
+refresh status
+
+freshness/existence decision
+
+queue status
+
+provider endpoint family intended
+
+cached raw/provider payload exists?
+
+normalized snapshot row exists?
+
+Neon snapshot exists?
+
+get_snapshot(symbol) result
+
+Investment Alignment fundamentals lookup result
+
+exact first point where the ticker stops progressing through the pipeline
+
+Do not make provider calls.
+
+==================================================
+PART 4 — REFRESH HISTORY / FAILURE DIAGNOSTICS
+==============================================
+
+Audit existing logs, status tables, LKG metadata, failure registries, or refresh diagnostics.
+
+For every current required ticker missing a fundamentals snapshot, classify into one exact bucket where possible:
+
+NEVER_QUEUED
+
+EXCLUDED_BY_UNIVERSE
+
+EXCLUDED_BY_ELIGIBILITY
+
+SKIPPED_AS_FRESH
+
+PROVIDER_NOT_ATTEMPTED_BUDGET
+
+PROVIDER_ACCESS_DENIED
+
+PROVIDER_EMPTY_RESPONSE
+
+PROVIDER_SYMBOL_NOT_FOUND
+
+NORMALIZATION_FAILURE
+
+PERSISTENCE_FAILURE
+
+FIELD_SCHEMA_MISMATCH
+
+TEMP_FAILURE_PENDING_RETRY
+
+UNKNOWN
+
+Use actual evidence.
+
+Do not infer a provider failure merely because the row is absent.
+
+Return bucket counts across the complete required universe.
+
+==================================================
+PART 5 — WEEKLY REFRESH EXISTENCE/FRESHNESS SEMANTICS
+=====================================================
+
+Audit the exact refresh gate.
+
+Prior product intent for Watchlist fundamentals has included existence-based cache behavior and a weekly safe updater.
+
+Answer:
+
+Does a ticker with no snapshot always enter the refresh queue?
+
+Can a ticker with a partial/null snapshot be incorrectly treated as complete/fresh?
+
+Does freshness check:
+
+row existence only
+
+timestamp
+
+field completeness
+
+refresh version
+
+or another condition?
+
+Could a newly added Watchlist ticker remain missing until a full weekly cycle?
+
+Does the updater dynamically reconstruct the current Watchlist universe on every run?
+
+Or does it operate on an older/static ticker list/LKG?
+
+Could the Theme work or Watchlist-ID history have caused the fundamentals updater to read a stale Watchlist?
+
+Trace exact code.
+
+==================================================
+PART 6 — WATCHLIST-ID / CURRENT SAVED WATCHLIST CHECK
+=====================================================
+
+Recent Theme audit found an earlier subsystem used a stale hardcoded Watchlist ID before being repaired.
+
+Audit the fundamentals refresh path specifically for the same class of drift.
+
+Does it use:
+
+current saved Watchlist
+
+watchlist_service.load_watchlist()
+
+data.pg_storage.watchlist_read()
+
+most-recently-saved fallback
+
+hardcoded watchlist ID
+
+environment ID
+
+cached static ticker snapshot
+
+Return exact behavior.
+
+Compare the ticker count/source to the current live Primary Watchlist.
+
+Specifically prove whether:
+
+DELL
+IBRX
+RBRK
+HOOD
+SOFI
+ABCL
+
+are visible to the exact Watchlist loader used by the fundamentals updater.
+
+==================================================
+PART 7 — FIELD-MAPPING INTEGRITY
+================================
+
+Investment Alignment currently reads fields reported as:
+
+Revenue Growth YoY
+
+Revenue Growth Q / current quarter field
+
+EPS Growth
+
+Gross Margin
+
+FCF Margin
+
+Free Cash Flow
+
+Rev Growth Next Quarter
+
+EPS Growth This Quarter
+
+Audit the exact canonical field keys stored in:
+
+watchlist_fundamentals_store
+
+and the exact lookup keys in:
+
+investment_alignment_v1.py
+
+Return a field mapping table:
+
+Investment field
+→ requested cache key
+→ actual persisted cache key
+→ match YES/NO
+→ coverage count
+
+Check casing.
+
+Check punctuation.
+
+Check abbreviations.
+
+Check renamed Watchlist Screener columns.
+
+Check percent scaling:
+
+decimal vs whole percentage
+
+Check whether forward fields were recently added but old snapshot rows have not yet been backfilled.
+
+Do not change code.
+
+==================================================
+PART 8 — FUNDAMENTAL SCREENER VS INVESTMENT ALIGNMENT COVERAGE
+==============================================================
+
+For the complete current universe compare:
+
+A. Watchlist Fundamental Screener believes fundamentals are available
+
+B. watchlist_fundamentals_store.get_snapshot returns a row
+
+C. Financial Acceleration available
+
+D. Forward Expectations available
+
+Return cross-tab counts.
+
+Find every ticker where:
+
+Fundamental Screener shows populated fundamental fields
+
+but:
+
+Investment Alignment says NO_FUNDAMENTALS_SNAPSHOT
+
+That would indicate a reader/store mismatch.
+
+Find every ticker where:
+
+snapshot exists
+
+but:
+
+Financial Acceleration unavailable
+
+Return exact reasons.
+
+==================================================
+PART 9 — NEWLY ADDED TICKER BEHAVIOR
+====================================
+
+Audit only.
+
+Trace what happens today when the user adds a new ticker to the Watchlist.
+
+Example lifecycle:
+
+ticker added
+↓
+Watchlist row created
+↓
+fundamental toggle opened or scheduled weekly refresh occurs
+↓
+ticker enters fundamentals refresh universe
+↓
+snapshot persisted
+
+Answer:
+
+Is there an existing dynamic updater that discovers the new ticker?
+
+At what event/cadence?
+
+Can the ticker remain without fundamentals until next weekly refresh?
+
+Does opening the Fundamental toggle trigger refresh?
+
+Is there a manual safe refresh endpoint?
+
+Does the refresh dynamically size to current Watchlist count?
+
+Do not trigger provider calls.
+
+The product expectation is that the existing dynamic safe updater handles the current Watchlist population.
+
+Report whether current code matches that expectation.
+
+==================================================
+PART 10 — FMP PLAN ACCESS VS CURRENT ENDPOINTS
+==============================================
+
+Read the existing FMP provider methods/endpoints used by this fundamentals pipeline.
+
+Do not call them.
+
+Map each existing endpoint to the user's current Starter-plan access where possible.
+
+Return:
+
+endpoint purpose
+
+current use
+
+full / limited / no access based on supplied project plan documentation
+
+whether an access mismatch could explain missing rows
+
+Do not redesign around a different provider in this audit.
+
+The current paid FMP Starter plan is the primary proprietary fundamentals API.
+
+==================================================
+PART 11 — COVERAGE IMPACT ON INVESTMENT ALIGNMENT
+=================================================
+
+Using cache-only local computation:
+
+report current Investment Alignment coverage:
+
+240/378 or current live count
+
+Then simulate only the evidence-availability impact:
+
+For every ticker currently Investment Alignment unavailable because of NO_FUNDAMENTALS_SNAPSHOT:
+
+show which other components already exist:
+
+Forward Expectations
+
+Moat
+
+Theme
+
+Long-Term Leadership
+
+Do not fabricate Financial Acceleration.
+
+Identify how many unavailable Investment rows are blocked solely by the missing fundamentals snapshot.
+
+Return the top 50 blocked names by existing non-fundamental evidence strength.
+
+The goal is to quantify whether fixing an upstream cache-coverage bug would materially improve Investment Alignment coverage.
+
+==================================================
+PART 12 — ROOT CAUSE VERDICT
+============================
+
+Choose one or more exact conclusions:
+
+A. LEGITIMATE PROVIDER / COMPANY DATA GAP
+
+B. CURRENT WATCHLIST UNIVERSE NOT ENTERING REFRESH
+
+C. NEW TICKERS NOT BACKFILLED UNTIL WEEKLY CYCLE
+
+D. MISSING SNAPSHOT RETRY/FRESHNESS BUG
+
+E. SNAPSHOT EXISTS BUT INVESTMENT FIELD-MAPPING BUG
+
+F. FORWARD FIELDS NOT BACKFILLED INTO OLDER SNAPSHOTS
+
+G. PROVIDER ACCESS / ENDPOINT MISMATCH
+
+H. PERSISTENCE FAILURE
+
+I. OTHER — PROVE EXACTLY
+
+Do not recommend weakening Investment Alignment's mandatory Financial Acceleration rule as the primary fix.
+
+==================================================
+PART 13 — RECOMMEND THE NARROWEST NEXT FIX
+==========================================
+
+AUDIT/PROPOSAL ONLY.
+
+Based on proven root cause, recommend the smallest fix.
+
+Examples:
+
+reconstruct required universe from current saved Watchlist
+
+make no-snapshot rows always queue
+
+add completeness/version-aware snapshot invalidation
+
+backfill current Watchlist through the existing weekly updater
+
+correct field-key mapping
+
+persist already-fetched forward fields
+
+The fix must preserve:
+
+existing weekly refresh architecture
+
+dynamic Watchlist sizing
+
+FMP budget governor
+
+existing spacing/cadence
+
+Neon fundamentals store
+
+current Fundamental Screener behavior
+
+Do not propose a parallel Investment-specific fundamentals fetcher.
+
+Investment Alignment must continue to consume the canonical existing fundamentals cache.
+
+==================================================
+PART 14 — COST PROOF
+====================
+
+This audit must make:
+
+0 FMP calls
+
+0 Tradier calls
+
+0 Grok calls
+
+0 LLM calls
+
+0 provider calls
+
+0 database writes
+
+0 cache writes
+
+0 scheduler changes
+
+0 code changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+WATCHLIST FUNDAMENTALS COVERAGE INTEGRITY AUDIT
+
+FILES CHANGED:
+[NONE]
+
+FUNDAMENTALS PIPELINE:
+[exact path]
+
+REQUIRED REFRESH UNIVERSE:
+[count/source]
+
+SNAPSHOT COVERAGE:
+[count/percent]
+
+NO SNAPSHOT COUNT:
+[count]
+
+PARTIAL SNAPSHOT COUNT:
+[count]
+
+FIELD MAPPING:
+[results]
+
+NAMED TICKERS:
+[DELL/IBRX/RBRK/HOOD/SOFI/ABCL and controls]
+
+MISSING-SNAPSHOT FAILURE BUCKETS:
+[distribution]
+
+FRESHNESS / RETRY SEMANTICS:
+[findings]
+
+WATCHLIST SOURCE:
+[exact loader/ID behavior]
+
+NEW TICKER BEHAVIOR:
+[findings]
+
+FMP ENDPOINT / PLAN FIT:
+[findings]
+
+FUNDAMENTAL SCREENER VS INVESTMENT ALIGNMENT:
+[cross-check]
+
+INVESTMENT ALIGNMENT COVERAGE IMPACT:
+[results]
+
+ROOT CAUSE:
+[exact conclusion]
+
+NARROWEST FIX:
+[proposal]
+
+COST PROOF:
+[0-call/read-only validation]
+
+End exactly:
+
+WATCHLIST FUNDAMENTALS COVERAGE VERDICT
+
+CURRENT WATCHLIST UNIVERSE CORRECT:
+[YES / NO]
+
+NO-SNAPSHOT TICKERS ENTER REFRESH:
+[YES / NO]
+
+NEW WATCHLIST TICKERS DYNAMICALLY DISCOVERED:
+[YES / NO]
+
+SNAPSHOT FRESHNESS LOGIC SAFE:
+[YES / NO]
+
+INVESTMENT FIELD KEYS MATCH STORE:
+[YES / NO]
+
+FMP ACCESS MISMATCH:
+[YES / NO]
+
+MISSING SNAPSHOTS LEGITIMATE DATA GAPS:
+[count / assessment]
+
+MISSING SNAPSHOTS PIPELINE GAPS:
+[count / assessment]
+
+INVESTMENT ALIGNMENT RULE SHOULD BE WEAKENED:
+[NO expected]
+
+INCREMENTAL PROVIDER CALLS:
+[0]
+
+NEXT IMPLEMENTATION:
+[exact narrow backend fix or ELITE_ASSET_REBOUND if no pipeline defect]
+
+ZERO CODE CHANGES.
