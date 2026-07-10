@@ -1,0 +1,1543 @@
+ELITE_ASSET_REBOUND V1 — ADD A SECOND TRADE ALIGNMENT ARCHETYPE FOR EXCEPTIONAL ASSETS EMERGING FROM A MAJOR RESET
+
+Work only in the existing backend Replit project.
+
+The backend deterministic alignment architecture is now:
+
+# TRADE ALIGNMENT
+
+"Is a strong long-biased swing-trade opportunity developing?"
+
+Current production archetype:
+
+THEME_ALIGNMENT
+
+Theme Alignment       25%
+Stage Quality         25%
+Options Alignment V2  25%
+Catalyst Alignment    25%
+
+Social Bonus          +0 to +10
+
+# ENTRY STRUCTURE
+
+"Is the current chart/price structure attractive for initiating or adding?"
+
+# ACTIONABILITY V1
+
+Trade Alignment + Entry Structure
+→ setup actionability state
+
+# REAL INVESTMENT ALIGNMENT V1
+
+"Is this an exceptional long-duration asset based on financial trajectory, forward expectations, moat/market role, structural Theme exposure, and long-term leadership?"
+
+Investment Alignment is implemented, validated, and additive.
+
+Current Investment Alignment coverage:
+
+304 / 379 internal Stage2/Confluence symbols
+
+Current live eligible Watchlist fundamentals coverage:
+
+317 / 317 usable
+
+The canonical fundamentals pipeline is repaired.
+
+Multi-theme V1 exists, but current Trade Alignment Theme selection remains PRIMARY THEME ONLY.
+
+Do not modify the existing THEME_ALIGNMENT archetype.
+
+Do not modify its weights.
+
+Do not modify Actionability V1.
+
+Do not modify Entry Structure.
+
+Do not modify Investment Alignment.
+
+Do not modify Options Alignment.
+
+Do not modify Catalyst Alignment.
+
+Do not modify Theme Alignment.
+
+Do not modify Social Bonus.
+
+Do not modify multi-theme semantics.
+
+Do not add AI/LLM calls.
+
+Do not add Grok calls.
+
+Do not add provider calls.
+
+Do not add a scheduler.
+
+Do not add a cache.
+
+Do not modify frontend code.
+
+This task has ONE goal:
+
+ADD A SECOND TRADE ALIGNMENT ARCHETYPE:
+
+ELITE_ASSET_REBOUND
+
+This archetype answers:
+
+"IS AN EXCEPTIONAL ASSET THAT EXPERIENCED A MEANINGFUL RESET BEGINNING TO FORM A HIGH-ASYMMETRY LONG-BIASED REBOUND OPPORTUNITY?"
+
+==================================================
+PRODUCT DEFINITION
+==================
+
+ELITE_ASSET_REBOUND is for stocks that:
+
+1. Have strong or elite Investment Alignment.
+
+2. Previously demonstrated meaningful longer-term leadership or strong asset quality.
+
+3. Experienced a meaningful reset, decline, pullback, or loss of prior momentum.
+
+4. Still retain a strong underlying investment trajectory.
+
+5. Are beginning to show structural rebound / reversal / rebuilding evidence.
+
+6. May show improving Options premium pressure where data exists.
+
+This is NOT:
+
+"buy every high-quality stock after a decline"
+
+This is NOT:
+
+"value investing"
+
+This is NOT:
+
+"fallen angel because price is down"
+
+This is NOT:
+
+a replacement for THEME_ALIGNMENT
+
+This is NOT:
+
+Actionability
+
+This is NOT:
+
+Entry Structure
+
+It is a SECOND TRADE ALIGNMENT ARCHETYPE.
+
+==================================================
+PART 0 — AUDIT CURRENT TRADE ARCHETYPE SELECTION
+================================================
+
+Before editing, trace:
+
+backend/services/confluence_v2_service.py
+
+current THEME_ALIGNMENT scoring
+
+trade_alignment_archetype
+
+trade_alignment_score
+
+trade_alignment_available
+
+trade_alignment_reason_codes
+
+base Trade Alignment score
+
+Social Bonus application
+
+existing legacy verdict
+
+Actionability consumption of:
+
+trade_alignment_score
+
+trade_alignment_archetype if any
+
+supporting Theme/Stage/Options/Catalyst fields
+
+Trace whether current code assumes:
+
+exactly one Trade Alignment archetype
+
+or:
+
+could cleanly evaluate multiple archetypes and choose one.
+
+Return internally:
+
+current scoring function
+
+archetype constant/enum
+
+where THEME_ALIGNMENT is computed
+
+where trade_alignment_score is assigned
+
+where Social Bonus is applied
+
+where Actionability consumes Trade Alignment
+
+smallest additive integration point
+
+Do not modify code until this path is fully traced.
+
+==================================================
+PART 1 — MULTI-ARCHETYPE OUTPUT SEMANTICS
+=========================================
+
+Preserve all existing THEME_ALIGNMENT calculations.
+
+Add additive fields for archetype comparison.
+
+Recommended:
+
+theme_alignment_trade_score
+
+theme_alignment_trade_available
+
+elite_asset_rebound_score
+
+elite_asset_rebound_available
+
+elite_asset_rebound_components
+
+elite_asset_rebound_reason_codes
+
+elite_asset_rebound_strengths
+
+elite_asset_rebound_conflicts
+
+trade_alignment_archetype_scores
+
+Then select one active:
+
+trade_alignment_archetype
+
+trade_alignment_score
+
+based on deterministic archetype selection.
+
+Do not delete existing fields.
+
+Do not rename existing endpoint contracts unnecessarily.
+
+If current fields already use:
+
+legacy_trade_confluence_score
+
+preserve them.
+
+==================================================
+PART 2 — LOCKED ELITE_ASSET_REBOUND OUTER WEIGHTS
+=================================================
+
+Use:
+
+INVESTMENT ALIGNMENT         40%
+
+RESET QUALITY                25%
+
+REBOUND EVIDENCE             25%
+
+OPTIONS PRESSURE IMPROVEMENT 10%
+
+These are locked V1 outer weights.
+
+Missing Options Pressure Improvement:
+
+omit and renormalize over the other available components.
+
+Missing Investment Alignment:
+
+ELITE_ASSET_REBOUND unavailable.
+
+Missing Reset Quality:
+
+unavailable.
+
+Missing Rebound Evidence:
+
+unavailable.
+
+Minimum evidence:
+
+Investment Alignment mandatory
+
+Reset Quality mandatory
+
+Rebound Evidence mandatory
+
+Options optional
+
+Do not fabricate 50 for missing components.
+
+==================================================
+PART 3 — ELITE ASSET GATE
+=========================
+
+Create a deterministic mandatory asset-quality gate.
+
+Recommended V1:
+
+investment_alignment_available == true
+
+AND
+
+investment_alignment_score >= 75
+
+This archetype is intentionally selective.
+
+Do not lower the threshold simply to generate candidates.
+
+Also inspect:
+
+financial_acceleration_score
+
+forward_expectations_score
+
+investment_alignment_state
+
+Use these as thesis-integrity diagnostics.
+
+A stock with high Investment Alignment caused entirely by narrow renormalization but:
+
+financial acceleration severely deteriorating
+
+or:
+
+forward expectations severely deteriorating
+
+should not automatically qualify.
+
+Define one narrow deterministic thesis-integrity gate using existing Investment Alignment component outputs.
+
+Recommended conceptual logic:
+
+Investment Alignment >= 75
+
+AND
+
+Financial Acceleration available
+
+AND
+
+Financial Acceleration >= 45
+
+AND
+
+if Forward Expectations available:
+Forward Expectations >= 40
+
+Do not silently change these thresholds without reporting live-distribution evidence.
+
+The purpose is:
+
+strong asset quality
+
+without obvious fundamental thesis breakdown.
+
+Return exact implemented gate.
+
+Potential reason codes:
+
+ELITE_INVESTMENT_ALIGNMENT
+
+STRONG_INVESTMENT_ALIGNMENT
+
+FINANCIAL_TRAJECTORY_INTACT
+
+FORWARD_EXPECTATIONS_INTACT
+
+FINANCIAL_TRAJECTORY_DAMAGED
+
+FORWARD_EXPECTATIONS_DAMAGED
+
+==================================================
+PART 4 — PRIOR LEADERSHIP / ASSET CONFIRMATION
+==============================================
+
+The archetype must avoid labeling a permanently weak asset as an elite rebound merely because its Investment score is high today.
+
+Use existing:
+
+Investment Alignment Long-Term Leadership
+
+Stage Analysis
+
+Stage technical_metrics
+
+52-week range position
+
+SMA200 relationship
+
+MA stack
+
+prior leadership evidence already computed
+
+Do not fetch bars.
+
+Do not calculate a new long-term technical model.
+
+Use current cached Stage/daily-derived diagnostics.
+
+The question is:
+
+"HAS THIS ASSET SHOWN ENOUGH PRIOR LEADERSHIP OR MARKET CONFIRMATION TO BE A REBOUND CANDIDATE?"
+
+Potential evidence:
+
+long_term_leadership_score >= threshold
+
+Stage 2 / Stage 2B
+
+prior Stage 2 evidence if already persisted
+
+strong historical 52-week positioning combined with reset
+
+bullish MA stack before current reset if existing data supports it
+
+Do not make current Stage 2 mandatory.
+
+A reset candidate may temporarily lose Stage 2.
+
+Return exact prior-leadership gate or diagnostic.
+
+==================================================
+PART 5 — RESET QUALITY — 25%
+============================
+
+Create:
+
+elite_rebound_reset_quality_score
+
+elite_rebound_reset_quality_available
+
+elite_rebound_reset_quality_components
+
+elite_rebound_reset_quality_reason_codes
+
+Question answered:
+
+"DID THE ASSET EXPERIENCE A MEANINGFUL RESET THAT IMPROVED ASYMMETRY WITHOUT PROVING THE STRUCTURE IS IRREPARABLY BROKEN?"
+
+Use EXISTING Entry/Stage/history-derived fields only.
+
+Audit exact current diagnostics available for:
+
+drawdown from 52-week high
+
+base_location
+
+base_archetype
+
+prior advance/decline
+
+range position 52w
+
+pct_vs_sma_200
+
+extension state
+
+Entry state
+
+Entry family
+
+support quality
+
+floor quality
+
+failed breakout confirmation
+
+support loss
+
+Do not calculate a parallel Entry model.
+
+---
+
+## RESET DEPTH
+
+A meaningful reset should score positively.
+
+Examples conceptually:
+
+10–15% reset
+→ mild
+
+20–35% reset
+→ meaningful
+
+35–60% reset
+→ deep
+
+very extreme decline
+→ may become structural damage rather than automatically more attractive
+
+Do not use these exact ranges blindly.
+
+Inspect current drawdown distribution first.
+
+Use a saturating/reset-quality curve.
+
+Do not reward an 85% collapse more than a healthy 35% reset merely because the number is larger.
+
+---
+
+## RESET QUALITY CONFLICTS
+
+These must be handled carefully:
+
+SUPPORT_LOST
+
+DOWNTREND
+
+strict current FAILED_BREAKOUT
+
+weak/broken low-base floor
+
+continuing lower-low structure
+
+severe bearish deterioration
+
+These are not automatically disqualifying for all rebound watch candidates, but they must materially reduce Reset Quality or create a hard conflict.
+
+Do not classify a falling knife as a high-quality reset.
+
+Potential reason codes:
+
+MEANINGFUL_RESET
+
+DEEP_RESET
+
+ASYMMETRY_IMPROVED
+
+RESET_FROM_PRIOR_LEADERSHIP
+
+SUPPORT_RETAINED
+
+DOWNSIDE_DEFINED
+
+RESET_TOO_SHALLOW
+
+STRUCTURAL_DAMAGE
+
+SUPPORT_LOST
+
+FAILED_BREAKOUT
+
+CONTINUING_DOWNTREND
+
+==================================================
+PART 6 — REBOUND EVIDENCE — 25%
+===============================
+
+Create:
+
+elite_rebound_evidence_score
+
+elite_rebound_evidence_available
+
+elite_rebound_evidence_components
+
+elite_rebound_evidence_reason_codes
+
+Question answered:
+
+"IS THE RESET BEGINNING TO TURN INTO A REAL REBOUND / REVERSAL SETUP?"
+
+Use existing Entry Structure states/families/reason codes.
+
+Do not calculate new indicators.
+
+Audit the exact current Entry state distribution and map current canonical states intentionally.
+
+Potential positive contexts:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+REVERSAL_WATCH
+
+CONSTRUCTIVE_DIP
+
+TRENDLINE_SUPPORT_TEST
+
+BREAKOUT_PULLBACK
+
+BREAKOUT_RETEST
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+WAIT_FOR_RETEST
+
+Potential weak contexts:
+
+NO_CLEAR_ENTRY
+
+BASE_FORMING
+
+Potential negative contexts:
+
+SUPPORT_LOST
+
+DOWNTREND
+
+strict FAILED_BREAKOUT
+
+EXTREME_EXTENSION
+
+VERTICAL
+
+---
+
+## STATE SEMANTICS
+
+LOW_BASE_FORMING:
+
+downside becoming defined
+
+momentum unproven
+
+early rebound evidence
+
+LOW_BASE_COILING:
+
+reset structure tightening
+
+better rebound evidence
+
+LOW_BASE_READY:
+
+strong rebound evidence
+
+REVERSAL_WATCH:
+
+turnaround evidence emerging
+
+CONSTRUCTIVE_DIP:
+
+healthy reset context
+
+BREAKOUT_RETEST:
+
+confirmation developing
+
+WAIT_FOR_RETEST:
+
+may still represent a valid asset/reset but poor current entry
+
+Do not automatically equate Entry Score with Rebound Evidence.
+
+Entry Score asks:
+
+"good place now?"
+
+Rebound Evidence asks:
+
+"is the reset beginning to turn?"
+
+Use the state semantics directly.
+
+Return exact state-to-score mapping.
+
+==================================================
+PART 7 — OPTIONS PRESSURE IMPROVEMENT — 10%
+===========================================
+
+Create:
+
+elite_rebound_options_improvement_score
+
+elite_rebound_options_improvement_available
+
+elite_rebound_options_reason_codes
+
+Use existing Options Alignment V2 outputs only.
+
+Do not use raw Net Premium alone.
+
+Use:
+
+options_alignment_score
+
+premium_pressure_score
+
+options_pressure_state
+
+1D / 7D / 30D premium deltas where already available
+
+Potential directional semantics:
+
+BULLISH_ACCELERATING
+→ strongest positive evidence
+
+BEARISH_EASING
+→ positive rebound evidence
+
+MIXED
+→ neutral / low information
+
+BULLISH_FADING
+→ weaker positive
+
+BEARISH_ACCELERATING
+→ negative conflict
+
+INSUFFICIENT_HISTORY
+→ unavailable
+
+No Options data:
+unavailable
+
+Missing Options:
+renormalize over 90% available mandatory components
+
+Do not penalize non-optionable names with fake zero.
+
+Potential reason codes:
+
+BULLISH_PRESSURE_ACCELERATING
+
+BEARISH_PRESSURE_EASING
+
+BULLISH_PRESSURE_FADING
+
+BEARISH_PRESSURE_ACCELERATING
+
+OPTIONS_DIRECTION_MIXED
+
+==================================================
+PART 8 — ELITE_ASSET_REBOUND SCORE
+==================================
+
+Create:
+
+elite_asset_rebound_available
+
+elite_asset_rebound_score
+
+elite_asset_rebound_version
+
+elite_asset_rebound_components
+
+elite_asset_rebound_reason_codes
+
+elite_asset_rebound_strengths
+
+elite_asset_rebound_conflicts
+
+Use one canonical version constant.
+
+Example:
+
+ELITE_ASSET_REBOUND_VERSION = 1
+
+Formula:
+
+Investment Alignment         40
+
+Reset Quality                25
+
+Rebound Evidence             25
+
+Options Pressure Improvement 10
+
+Available-component normalization applies only to Options.
+
+The other three are mandatory.
+
+If minimum evidence fails:
+
+elite_asset_rebound_available = false
+
+Do not fabricate a score.
+
+==================================================
+PART 9 — ELITE REBOUND SCORE SEMANTICS
+======================================
+
+Interpretation:
+
+0–39
+poor / invalid rebound context
+
+40–59
+reset candidate, weak rebound evidence
+
+60–69
+developing rebound opportunity
+
+70–79
+strong rebound setup
+
+80–89
+elite rebound setup
+
+90–100
+rare exceptional rebound alignment
+
+Do not tune to fill every band.
+
+The archetype is expected to be selective.
+
+==================================================
+PART 10 — TRADE ARCHETYPE SELECTION
+===================================
+
+Evaluate BOTH:
+
+THEME_ALIGNMENT
+
+ELITE_ASSET_REBOUND
+
+independently.
+
+Do not mix their component scores.
+
+Do not average the archetypes.
+
+Recommended selection:
+
+If only one available:
+use available archetype
+
+If both available:
+select the archetype with the higher score
+
+Expose:
+
+trade_alignment_archetype_scores
+
+and:
+
+trade_alignment_selected_reason
+
+Potential:
+
+HIGHEST_AVAILABLE_ARCHETYPE_SCORE
+
+Do not hide the losing archetype.
+
+The result should remain inspectable.
+
+---
+
+## IMPORTANT
+
+Do not allow ELITE_ASSET_REBOUND to weaken an existing strong THEME_ALIGNMENT result.
+
+Example:
+
+THEME_ALIGNMENT = 84
+
+ELITE_ASSET_REBOUND = 72
+
+Selected:
+
+THEME_ALIGNMENT 84
+
+Example:
+
+THEME_ALIGNMENT = 58
+
+ELITE_ASSET_REBOUND = 82
+
+Selected:
+
+ELITE_ASSET_REBOUND 82
+
+==================================================
+PART 11 — SOCIAL BONUS
+======================
+
+Audit current Social Bonus application.
+
+Do not double-apply Social Bonus.
+
+Recommended:
+
+THEME_ALIGNMENT retains its current existing Social Bonus semantics unchanged.
+
+ELITE_ASSET_REBOUND V1 does NOT use Social Bonus unless the current architecture applies Social Bonus after archetype selection globally.
+
+If the existing implementation applies Social Bonus globally:
+
+preserve current architecture exactly and report how it affects both archetypes.
+
+Do not invent separate social-rebound scoring.
+
+Return exact final behavior.
+
+==================================================
+PART 12 — ACTIONABILITY COMPATIBILITY
+=====================================
+
+Actionability V1 currently consumes:
+
+trade_alignment_score
+
+Entry Structure
+
+and supporting existing signals.
+
+Do not modify Actionability in this task.
+
+After multi-archetype Trade Alignment selection:
+
+Actionability should naturally consume the selected:
+
+trade_alignment_score
+
+Confirm whether Actionability has any assumption that:
+
+trade_alignment_archetype == THEME_ALIGNMENT
+
+If yes:
+
+make only the minimum compatibility adjustment required to accept ELITE_ASSET_REBOUND without changing Actionability state logic/thresholds.
+
+Do not redesign Actionability.
+
+Do not add special Elite Rebound Actionability states.
+
+Do not add BUY/SELL/HOLD.
+
+==================================================
+PART 13 — FULL-UNIVERSE SHADOW VALIDATION
+=========================================
+
+Run across the complete current Stage2/Confluence universe.
+
+Use exact current denominator.
+
+Return:
+
+universe count
+
+THEME_ALIGNMENT available count
+
+ELITE_ASSET_REBOUND available count
+
+both available
+
+Theme-only available
+
+Elite-only available
+
+neither available
+
+Selected archetype distribution:
+
+THEME_ALIGNMENT
+
+ELITE_ASSET_REBOUND
+
+Return ELITE_ASSET_REBOUND score distribution:
+
+min
+
+p10
+
+p25
+
+median
+
+mean
+
+p75
+
+p90
+
+p95
+
+max
+
+Bands:
+
+0–39
+
+40–59
+
+60–69
+
+70–79
+
+80–89
+
+90–100
+
+Do not omit zero-count bands.
+
+==================================================
+PART 14 — ALL ELITE_ASSET_REBOUND CANDIDATES
+============================================
+
+Return every available ELITE_ASSET_REBOUND row, up to Top 100 by score.
+
+Show:
+
+rank
+
+symbol
+
+Elite Rebound score
+
+Investment Alignment
+
+Investment state
+
+Financial Acceleration
+
+Forward Expectations
+
+Long-Term Leadership
+
+Reset Quality
+
+Rebound Evidence
+
+Options Improvement
+
+Options Pressure State
+
+Entry state
+
+Entry score
+
+Entry grade
+
+base_archetype
+
+extension state
+
+Theme Alignment archetype score
+
+selected Trade archetype
+
+selected Trade Alignment score
+
+Actionability state
+
+strengths
+
+conflicts
+
+reason codes
+
+Do not use qualitative AI stock analysis.
+
+==================================================
+PART 15 — SELECTED ELITE REBOUND ARCHETYPE
+==========================================
+
+Return every ticker where:
+
+trade_alignment_archetype == ELITE_ASSET_REBOUND
+
+Show same fields.
+
+Specifically identify:
+
+Elite Rebound score >=80
+
+Elite Rebound score 70–79
+
+Elite Rebound selected because THEME_ALIGNMENT was unavailable
+
+Elite Rebound selected because it exceeded THEME_ALIGNMENT by >=10 points
+
+Return exact counts.
+
+==================================================
+PART 16 — ELITE ASSET / BAD CURRENT ENTRY
+=========================================
+
+Return every ticker where:
+
+Investment Alignment >=75
+
+AND
+
+Actionability in:
+
+TOO_EXTENDED
+
+WAIT_FOR_RETEST
+
+AVOID
+
+Show:
+
+symbol
+
+Investment Alignment
+
+Elite Rebound score/availability
+
+selected Trade archetype
+
+Trade Alignment
+
+Actionability
+
+Entry state
+
+Reset Quality
+
+Rebound Evidence
+
+conflicts
+
+The purpose is to distinguish:
+
+great asset, still waiting
+
+from:
+
+great asset, rebound genuinely developing
+
+==================================================
+PART 17 — LOW BASE / ELITE ASSET JOIN
+=====================================
+
+Return every:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+joined to Investment Alignment and Elite Rebound.
+
+Show:
+
+symbol
+
+Investment Alignment
+
+Financial Acceleration
+
+Forward Expectations
+
+Long-Term Leadership
+
+Entry state
+
+Reset Quality
+
+Rebound Evidence
+
+Options Pressure State
+
+Elite Rebound score
+
+selected Trade archetype
+
+Actionability
+
+Expected conceptual behavior:
+
+LOW_BASE_FORMING
+→ often early/developing rebound evidence
+
+LOW_BASE_COILING
+→ stronger rebound evidence
+
+LOW_BASE_READY
+→ potentially high Elite Rebound score
+
+Do not change Low Base thresholds.
+
+==================================================
+PART 18 — NAMED TICKER VALIDATION
+=================================
+
+Return exact current results for:
+
+MU
+
+NVDA
+
+DELL
+
+BE
+
+AMD
+
+CRDO
+
+PLTR
+
+LITE
+
+NBIS
+
+ANET
+
+VRT
+
+MRVL
+
+SLAB
+
+ALGM
+
+AAOI
+
+AOSL
+
+IBRX
+
+RBRK
+
+HOOD
+
+SOFI
+
+ABCL
+
+AEVA
+
+CIFR
+
+For each:
+
+Investment Alignment
+
+Elite Rebound available
+
+Elite Rebound score
+
+Investment component
+
+Reset Quality
+
+Rebound Evidence
+
+Options Improvement
+
+THEME_ALIGNMENT score
+
+selected Trade archetype
+
+selected Trade score
+
+Actionability
+
+Entry state
+
+strengths
+
+conflicts
+
+reason codes
+
+Do not force expected archetypes.
+
+==================================================
+PART 19 — FALSE-POSITIVE CONTROLS
+=================================
+
+Across full universe prove:
+
+ELITE_ASSET_REBOUND selected with Investment Alignment <75
+= 0
+
+ELITE_ASSET_REBOUND selected with Financial Acceleration below thesis-integrity minimum
+= 0
+
+ELITE_ASSET_REBOUND selected with Forward Expectations below minimum where available
+= 0
+
+ELITE_ASSET_REBOUND selected with Reset Quality unavailable
+= 0
+
+ELITE_ASSET_REBOUND selected with Rebound Evidence unavailable
+= 0
+
+High Elite Rebound score caused solely by drawdown depth
+= 0
+
+ELITE_ASSET_REBOUND with EXTREME_EXTENSION classified as strong rebound solely due to extension
+= 0
+
+Return exact counts.
+
+==================================================
+PART 20 — ARCHETYPE COMPARISON
+==============================
+
+Compare:
+
+THEME_ALIGNMENT score
+
+ELITE_ASSET_REBOUND score
+
+for every ticker where both are available.
+
+Return:
+
+correlation
+
+mean absolute difference
+
+median difference
+
+Top 30 where Elite Rebound > Theme Alignment
+
+Top 30 where Theme Alignment > Elite Rebound
+
+For each show the main deterministic reason for the divergence.
+
+The archetypes should capture genuinely different setups.
+
+Do not tune to force low correlation.
+
+==================================================
+PART 21 — ACTIONABILITY IMPACT
+==============================
+
+Compare Actionability using:
+
+A. prior THEME_ALIGNMENT-only Trade score
+
+B. selected multi-archetype Trade score
+
+LOCAL/SHADOW comparison only.
+
+Return state changes:
+
+prior → new
+
+READY changes
+
+EARLY_WATCH changes
+
+WAIT_FOR_BREAKOUT changes
+
+WAIT_FOR_RETEST changes
+
+REVERSAL_WATCH changes
+
+TOO_EXTENDED changes
+
+AVOID changes
+
+Show Top 50 meaningful state changes.
+
+Do not alter Actionability thresholds.
+
+Explain each using deterministic fields.
+
+==================================================
+PART 22 — COST / REGRESSION PROOF
+=================================
+
+Prove:
+
+0 new FMP calls
+
+0 Tradier calls
+
+0 Grok calls
+
+0 LLM calls
+
+0 provider calls
+
+0 new scheduler
+
+0 new cache
+
+0 Investment Alignment changes
+
+0 Entry changes
+
+0 Options Alignment changes
+
+0 Catalyst changes
+
+0 Theme Alignment scoring changes
+
+0 multi-theme semantic changes
+
+existing THEME_ALIGNMENT score remains byte-for-byte/equivalent for same inputs
+
+Actionability thresholds/state logic unchanged
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+ELITE_ASSET_REBOUND V1 IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+INTEGRATION POINT:
+[path/function]
+
+ELITE REBOUND VERSION:
+[value]
+
+CURRENT TRADE ARCHETYPE ARCHITECTURE:
+[before]
+
+MULTI-ARCHETYPE ARCHITECTURE:
+[after]
+
+ELITE ASSET GATE:
+[logic]
+
+THESIS-INTEGRITY GATE:
+[logic]
+
+PRIOR LEADERSHIP:
+[logic]
+
+RESET QUALITY:
+[formula/components]
+
+REBOUND EVIDENCE:
+[state mapping/formula]
+
+OPTIONS IMPROVEMENT:
+[formula]
+
+ELITE REBOUND FORMULA:
+[exact weighting/normalization]
+
+ARCHETYPE SELECTION:
+[exact logic]
+
+SOCIAL BONUS:
+[exact behavior]
+
+ACTIONABILITY COMPATIBILITY:
+[behavior]
+
+FULL UNIVERSE:
+[count]
+
+THEME ALIGNMENT AVAILABLE:
+[count]
+
+ELITE REBOUND AVAILABLE:
+[count]
+
+SELECTED ARCHETYPE DISTRIBUTION:
+[results]
+
+ELITE REBOUND SCORE DISTRIBUTION:
+[results]
+
+TOP ELITE REBOUND CANDIDATES:
+[summary]
+
+SELECTED ELITE REBOUND:
+[summary]
+
+ELITE ASSET / BAD ENTRY:
+[summary]
+
+LOW BASE / ELITE ASSET:
+[summary]
+
+NAMED TICKERS:
+[summary]
+
+FALSE-POSITIVE CONTROLS:
+[results]
+
+ARCHETYPE COMPARISON:
+[results]
+
+ACTIONABILITY IMPACT:
+[results]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+ELITE_ASSET_REBOUND V1 VERDICT
+
+ELITE REBOUND FUNCTIONAL:
+[YES / NO]
+
+SECOND TRADE ARCHETYPE FUNCTIONAL:
+[YES / NO]
+
+THEME_ALIGNMENT PRESERVED:
+[YES / NO]
+
+INVESTMENT ALIGNMENT PRESERVED:
+[YES / NO]
+
+ENTRY PRESERVED:
+[YES / NO]
+
+ACTIONABILITY STATE LOGIC PRESERVED:
+[YES / NO]
+
+ELITE REBOUND AVAILABLE:
+[count / percent]
+
+ELITE REBOUND SELECTED:
+[count]
+
+ELITE REBOUND SCORE >=80:
+[count]
+
+ELITE REBOUND SCORE 70–79:
+[count]
+
+INVESTMENT <75 FALSE POSITIVES:
+[count, 0 expected]
+
+THESIS-INTEGRITY FALSE POSITIVES:
+[count, 0 expected]
+
+RESET/EVIDENCE MISSING FALSE POSITIVES:
+[count, 0 expected]
+
+ELITE-ASSET REBOUND VISIBILITY:
+[assessment]
+
+ACTIONABILITY IMPACT:
+[assessment]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+BIGGEST REMAINING ELITE REBOUND WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+WATCHLIST UI / ALIGNMENT SHADOW COMPARISON
+
+Do not modify Investment Alignment.
+
+Do not modify Entry Structure.
+
+Do not modify Options Alignment.
+
+Do not modify multi-theme semantics.
+
+Do not make unrelated changes.

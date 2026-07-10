@@ -128,6 +128,497 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# ELITE_ASSET_REBOUND V1 — second Trade Alignment archetype (SHADOW/additive).
+#
+# "Is an exceptional asset that experienced a meaningful reset beginning to
+#  form a high-asymmetry long-biased rebound opportunity?"
+#
+# Zero provider calls. Reads only already-computed Investment Alignment V1,
+# Entry Structure V2, Stage2 technical_metrics, and Options Alignment V2
+# outputs. Does not modify THEME_ALIGNMENT, Investment Alignment, Entry
+# Structure, Options Alignment, Catalyst Alignment, or Social Bonus.
+# ═════════════════════════════════════════════════════════════════════════════
+
+ELITE_ASSET_REBOUND_VERSION = 1
+
+# Locked V1 outer weights (Part 2). Options is the only omit/renormalize slot.
+_ER_W_INVESTMENT = 40.0
+_ER_W_RESET      = 25.0
+_ER_W_EVIDENCE   = 25.0
+_ER_W_OPTIONS    = 10.0
+
+# Elite Asset Gate (Part 3).
+_ER_GATE_INVESTMENT_MIN         = 75.0
+_ER_THESIS_FIN_ACCEL_MIN        = 45.0
+_ER_THESIS_FWD_EXPECT_MIN       = 40.0
+
+# Prior-leadership diagnostic threshold (Part 4) — informational only, never
+# a hard blocking gate (Stage 2 / Long-Term Leadership is NOT mandatory).
+_ER_PRIOR_LEADERSHIP_MIN = 40.0
+
+# ── Reset Quality state buckets (Part 5) ──────────────────────────────────────
+_ER_RESET_HARD_BREAK_STATES = {"SUPPORT_LOST", "DOWNTREND", "VERTICAL"}
+_ER_RESET_FAVORABLE_STATES = {
+    "LOW_BASE_FORMING", "LOW_BASE_COILING", "LOW_BASE_READY",
+    "REVERSAL_WATCH", "CONSTRUCTIVE_DIP", "TRENDLINE_SUPPORT_TEST",
+    "BREAKOUT_PULLBACK", "BREAKOUT_RETEST", "HIGH_BASE_FORMING",
+    "HIGH_BASE_COILING", "WAIT_FOR_RETEST",
+}
+
+# ── Rebound Evidence state → score map (Part 6) ───────────────────────────────
+# LOW_BASE_* / REVERSAL_WATCH / CONSTRUCTIVE_DIP / retest-family states carry
+# genuine "reset turning into rebound" evidence. EXTREME_EXTENSION / VERTICAL
+# are explicitly NOT rebound evidence (Part 19 false-positive control).
+_ER_REBOUND_EVIDENCE_MAP: dict[str, float] = {
+    "LOW_BASE_READY":         85.0,
+    "BREAKOUT_RETEST":        80.0,
+    "LOW_BASE_COILING":       72.0,
+    "REVERSAL_WATCH":         68.0,
+    "CONSTRUCTIVE_DIP":       66.0,
+    "TRENDLINE_SUPPORT_TEST": 64.0,
+    "BREAKOUT_PULLBACK":      62.0,
+    "HIGH_BASE_COILING":      58.0,
+    "LOW_BASE_FORMING":       55.0,
+    "HIGH_BASE_FORMING":      50.0,
+    "WAIT_FOR_RETEST":        48.0,
+    "BASE_FORMING":           40.0,
+    "NO_CLEAR_ENTRY":         35.0,
+    "EXTREME_EXTENSION":      15.0,
+    "FAILED_BREAKOUT":        12.0,
+    "VERTICAL":               10.0,
+    "SUPPORT_LOST":           10.0,
+    "DOWNTREND":               8.0,
+}
+_ER_REBOUND_EVIDENCE_POSITIVE_STATES = {
+    "LOW_BASE_FORMING", "LOW_BASE_COILING", "LOW_BASE_READY", "REVERSAL_WATCH",
+    "CONSTRUCTIVE_DIP", "TRENDLINE_SUPPORT_TEST", "BREAKOUT_PULLBACK",
+    "BREAKOUT_RETEST", "HIGH_BASE_FORMING", "HIGH_BASE_COILING",
+}
+_ER_REBOUND_EVIDENCE_WEAK_STATES    = {"NO_CLEAR_ENTRY", "BASE_FORMING", "WAIT_FOR_RETEST"}
+_ER_REBOUND_EVIDENCE_NEGATIVE_STATES = {
+    "SUPPORT_LOST", "DOWNTREND", "FAILED_BREAKOUT", "EXTREME_EXTENSION", "VERTICAL",
+}
+
+# ── Options Pressure Improvement state → score map (Part 7) ──────────────────
+_ER_OPTIONS_IMPROVEMENT_MAP: dict[str, float] = {
+    "BULLISH_ACCELERATING": 90.0,
+    "BEARISH_EASING":       75.0,
+    "MIXED":                50.0,
+    "BULLISH_FADING":       40.0,
+    "BEARISH_ACCELERATING": 15.0,
+}
+
+
+def _er_reset_depth_score(pct_from_52w_high: Optional[float]) -> Optional[float]:
+    """
+    Saturating reset-depth curve (Part 5). pct_from_52w_high is expected <= 0
+    (negative = below the 52-week high). Depth = abs(pct_from_52w_high).
+
+    Intentionally does NOT reward an extreme collapse more than a healthy
+    meaningful reset — the curve rises through the "meaningful"/"deep" bands
+    and then flattens/slightly recedes for extreme drawdowns, since very deep
+    declines increasingly risk representing structural damage rather than a
+    higher-quality reset (per spec: "do not reward an 85% collapse more than
+    a healthy 35% reset merely because the number is larger").
+    """
+    if pct_from_52w_high is None:
+        return None
+    depth = abs(pct_from_52w_high)
+    if depth < 10:
+        score = (depth / 10.0) * 30.0                       # <10%: negligible reset
+    elif depth < 20:
+        score = 30.0 + (depth - 10.0) / 10.0 * 25.0          # 10-20%: mild
+    elif depth < 35:
+        score = 55.0 + (depth - 20.0) / 15.0 * 25.0          # 20-35%: meaningful
+    elif depth < 60:
+        score = 80.0 + (depth - 35.0) / 25.0 * 15.0          # 35-60%: deep
+    else:
+        score = 95.0 - min(30.0, (depth - 60.0) * 0.5)       # >60%: plateau/recede
+    return round(_clamp(score, 0.0, 100.0), 1)
+
+
+def _elite_reset_quality(entry_result: Optional[dict], stage2_row: Optional[dict]) -> dict:
+    """
+    ELITE_ASSET_REBOUND — Reset Quality (25% outer weight, Part 5).
+
+    Uses ONLY existing Entry Structure V2 / Stage2 technical_metrics fields:
+    pct_from_52w_high (drawdown), base_archetype, low_base_support_quality,
+    floor_held_recently, floor_break_count, and entry_state (for hard
+    structural-damage conflicts). No new indicators, no bar fetches.
+    """
+    tm = (stage2_row or {}).get("technical_metrics") or {}
+    structure_v2 = (entry_result or {}).get("structure_v2") or {}
+    entry_state  = (entry_result or {}).get("entry_state")
+
+    pct_from_high = tm.get("pct_from_52w_high")
+    depth_score = _er_reset_depth_score(pct_from_high)
+
+    if depth_score is None:
+        return {
+            "elite_rebound_reset_quality_available": False,
+            "elite_rebound_reset_quality_score":     None,
+            "elite_rebound_reset_quality_components": {},
+            "elite_rebound_reset_quality_reason_codes": ["NO_52W_DRAWDOWN_DATA"],
+        }
+
+    reason_codes: list[str] = []
+    depth = abs(pct_from_high)
+    if depth < 10:
+        reason_codes.append("RESET_TOO_SHALLOW")
+    elif depth < 20:
+        reason_codes.append("MEANINGFUL_RESET")
+    elif depth < 35:
+        reason_codes.append("MEANINGFUL_RESET")
+    elif depth < 60:
+        reason_codes.append("DEEP_RESET")
+    else:
+        reason_codes.append("DEEP_RESET")
+
+    components: dict[str, Any] = {
+        "reset_depth": {"available": True, "score": depth_score, "pct_from_52w_high": pct_from_high},
+    }
+    num = _clamp01(1.0) * 0.0  # placeholder to keep structure explicit below
+    num = 0.40 * depth_score
+    den = 0.40
+
+    # ── Support / floor quality component (30%) ─────────────────────────────
+    base_archetype = structure_v2.get("base_archetype")
+    support_quality_map = {"HIGH": 90.0, "MEDIUM": 60.0, "LOW": 30.0}
+    support_score: Optional[float] = None
+    if base_archetype == "LOW_BASE":
+        low_base_support_quality = structure_v2.get("low_base_support_quality")
+        support_score = support_quality_map.get(low_base_support_quality)
+        if support_score is not None:
+            if structure_v2.get("floor_held_recently"):
+                support_score = min(100.0, support_score + 10.0)
+                reason_codes.append("SUPPORT_RETAINED")
+            floor_break_count = structure_v2.get("floor_break_count") or 0
+            if floor_break_count and floor_break_count > 0:
+                support_score = max(0.0, support_score - 15.0)
+        components["support_quality"] = {
+            "available": support_score is not None,
+            "score": support_score,
+            "base_archetype": base_archetype,
+            "low_base_support_quality": low_base_support_quality,
+        }
+    else:
+        components["support_quality"] = {"available": False, "score": None, "base_archetype": base_archetype}
+
+    if support_score is not None:
+        num += 0.30 * support_score
+        den += 0.30
+
+    # ── Trend-context / structural-damage component (30%) ───────────────────
+    trend_score: Optional[float] = None
+    if entry_state is not None:
+        if entry_state in _ER_RESET_HARD_BREAK_STATES:
+            trend_score = 12.0
+            reason_codes.append("STRUCTURAL_DAMAGE")
+            reason_codes.append(entry_state)
+        elif entry_state == "FAILED_BREAKOUT" and structure_v2.get("failed_breakout_confirmed"):
+            trend_score = 15.0
+            reason_codes.append("FAILED_BREAKOUT")
+        elif entry_state in _ER_RESET_FAVORABLE_STATES:
+            trend_score = 75.0
+            reason_codes.append("DOWNSIDE_DEFINED")
+        else:
+            trend_score = 45.0
+        components["trend_context"] = {"available": True, "score": trend_score, "entry_state": entry_state}
+    else:
+        components["trend_context"] = {"available": False, "score": None, "entry_state": None}
+
+    if trend_score is not None:
+        num += 0.30 * trend_score
+        den += 0.30
+
+    reset_quality_score = round(num / den, 1) if den > 0 else None
+
+    hard_conflict = (
+        entry_state in _ER_RESET_HARD_BREAK_STATES or
+        (entry_state == "FAILED_BREAKOUT" and structure_v2.get("failed_breakout_confirmed"))
+    )
+    if hard_conflict:
+        # Materially reduce, never boost, on confirmed structural damage —
+        # a falling knife is never classified as a high-quality reset.
+        reset_quality_score = min(reset_quality_score, 35.0) if reset_quality_score is not None else None
+
+    if depth >= 20 and not hard_conflict:
+        reason_codes.append("ASYMMETRY_IMPROVED")
+    if depth >= 15 and entry_state in _ER_RESET_FAVORABLE_STATES:
+        reason_codes.append("RESET_FROM_PRIOR_LEADERSHIP")
+
+    return {
+        "elite_rebound_reset_quality_available": reset_quality_score is not None,
+        "elite_rebound_reset_quality_score":     reset_quality_score,
+        "elite_rebound_reset_quality_components": components,
+        "elite_rebound_reset_quality_reason_codes": sorted(set(reason_codes)),
+    }
+
+
+def _elite_rebound_evidence(entry_result: Optional[dict]) -> dict:
+    """
+    ELITE_ASSET_REBOUND — Rebound Evidence (25% outer weight, Part 6).
+
+    Uses ONLY the existing Entry Structure state/family — no new indicators.
+    Entry Score asks "good place now?"; Rebound Evidence asks "is the reset
+    beginning to turn?" — these are deliberately NOT equated.
+    """
+    entry_state = (entry_result or {}).get("entry_state")
+    if entry_state is None:
+        return {
+            "elite_rebound_evidence_available": False,
+            "elite_rebound_evidence_score":     None,
+            "elite_rebound_evidence_components": {},
+            "elite_rebound_evidence_reason_codes": ["ENTRY_STATE_UNAVAILABLE"],
+        }
+
+    score = _ER_REBOUND_EVIDENCE_MAP.get(entry_state, 30.0)
+    reason_codes = [f"ENTRY_STATE_{entry_state}"]
+    if entry_state in _ER_REBOUND_EVIDENCE_POSITIVE_STATES:
+        reason_codes.append("REBOUND_EVIDENCE_POSITIVE")
+    elif entry_state in _ER_REBOUND_EVIDENCE_WEAK_STATES:
+        reason_codes.append("REBOUND_EVIDENCE_WEAK")
+    elif entry_state in _ER_REBOUND_EVIDENCE_NEGATIVE_STATES:
+        reason_codes.append("REBOUND_EVIDENCE_NEGATIVE")
+
+    return {
+        "elite_rebound_evidence_available": True,
+        "elite_rebound_evidence_score":     score,
+        "elite_rebound_evidence_components": {"entry_state": entry_state, "mapped_score": score},
+        "elite_rebound_evidence_reason_codes": reason_codes,
+    }
+
+
+def _elite_options_improvement(options_result: Optional[dict]) -> dict:
+    """
+    ELITE_ASSET_REBOUND — Options Pressure Improvement (10% outer weight,
+    Part 7). Uses ONLY existing Options Alignment V2 outputs (pressure state
+    derived from premium deltas) — never raw Net Premium alone, never a
+    fabricated zero for non-optionable names.
+    """
+    options_result = options_result or {}
+    available = bool(options_result.get("options_signal_available"))
+    pressure_state = options_result.get("options_pressure_state")
+
+    if not available or pressure_state is None or pressure_state == "INSUFFICIENT_HISTORY":
+        return {
+            "elite_rebound_options_improvement_available": False,
+            "elite_rebound_options_improvement_score":     None,
+            "elite_rebound_options_reason_codes":          ["OPTIONS_IMPROVEMENT_UNAVAILABLE"],
+        }
+
+    score = _ER_OPTIONS_IMPROVEMENT_MAP.get(pressure_state, 50.0)
+    reason_map = {
+        "BULLISH_ACCELERATING": "BULLISH_PRESSURE_ACCELERATING",
+        "BEARISH_EASING":       "BEARISH_PRESSURE_EASING",
+        "BULLISH_FADING":       "BULLISH_PRESSURE_FADING",
+        "BEARISH_ACCELERATING": "BEARISH_PRESSURE_ACCELERATING",
+        "MIXED":                "OPTIONS_DIRECTION_MIXED",
+    }
+    reason_codes = [reason_map.get(pressure_state, pressure_state)]
+
+    return {
+        "elite_rebound_options_improvement_available": True,
+        "elite_rebound_options_improvement_score":     score,
+        "elite_rebound_options_reason_codes":          reason_codes,
+    }
+
+
+def _elite_asset_gate(investment_alignment_fields: dict) -> tuple[bool, bool, list[str]]:
+    """
+    Part 3 — Elite Asset Gate + thesis-integrity gate.
+
+    Returns (elite_gate_passed, thesis_integrity_passed, reason_codes).
+    """
+    reason_codes: list[str] = []
+    ia_available = bool(investment_alignment_fields.get("investment_alignment_available"))
+    ia_score     = investment_alignment_fields.get("investment_alignment_score")
+
+    if not ia_available or ia_score is None:
+        return False, False, ["INVESTMENT_ALIGNMENT_UNAVAILABLE"]
+
+    elite_gate = ia_score >= _ER_GATE_INVESTMENT_MIN
+    if elite_gate:
+        reason_codes.append("ELITE_INVESTMENT_ALIGNMENT" if ia_score >= 85 else "STRONG_INVESTMENT_ALIGNMENT")
+    else:
+        return False, False, ["INVESTMENT_ALIGNMENT_BELOW_THRESHOLD"]
+
+    components = investment_alignment_fields.get("investment_alignment_components") or {}
+    fa = components.get("financial_acceleration") or {}
+    fe = components.get("forward_expectations") or {}
+
+    fa_available = bool(fa.get("available"))
+    fa_score     = fa.get("score")
+    fe_available = bool(fe.get("available"))
+    fe_score     = fe.get("score")
+
+    thesis_ok = fa_available and fa_score is not None and fa_score >= _ER_THESIS_FIN_ACCEL_MIN
+    if thesis_ok:
+        reason_codes.append("FINANCIAL_TRAJECTORY_INTACT")
+    else:
+        reason_codes.append("FINANCIAL_TRAJECTORY_DAMAGED")
+
+    if thesis_ok and fe_available and fe_score is not None:
+        if fe_score >= _ER_THESIS_FWD_EXPECT_MIN:
+            reason_codes.append("FORWARD_EXPECTATIONS_INTACT")
+        else:
+            reason_codes.append("FORWARD_EXPECTATIONS_DAMAGED")
+            thesis_ok = False
+    elif thesis_ok:
+        reason_codes.append("FORWARD_EXPECTATIONS_UNAVAILABLE")
+
+    return elite_gate, thesis_ok, reason_codes
+
+
+def _elite_prior_leadership_diagnostic(investment_alignment_fields: dict) -> list[str]:
+    """
+    Part 4 — prior-leadership / asset-confirmation diagnostic. Uses the
+    EXISTING Investment Alignment Long-Term Leadership component only.
+    Stage 2 is explicitly NOT mandatory (a reset candidate may temporarily
+    lose Stage 2) — this is informational, never a blocking gate.
+    """
+    components = investment_alignment_fields.get("investment_alignment_components") or {}
+    ll = components.get("long_term_leadership") or {}
+    if not ll.get("available") or ll.get("score") is None:
+        return ["LONG_TERM_LEADERSHIP_UNAVAILABLE"]
+    if ll["score"] >= _ER_PRIOR_LEADERSHIP_MIN:
+        return ["PRIOR_LEADERSHIP_CONFIRMED"]
+    return ["PRIOR_LEADERSHIP_WEAK"]
+
+
+def _elite_asset_rebound_unavailable(reason_codes: list[str]) -> dict:
+    return {
+        "elite_asset_rebound_available":  False,
+        "elite_asset_rebound_score":      None,
+        "elite_asset_rebound_version":    ELITE_ASSET_REBOUND_VERSION,
+        "elite_asset_rebound_components": {},
+        "elite_asset_rebound_reason_codes": reason_codes,
+        "elite_asset_rebound_strengths":  [],
+        "elite_asset_rebound_conflicts":  [],
+        "elite_rebound_reset_quality_available": False,
+        "elite_rebound_reset_quality_score":     None,
+        "elite_rebound_reset_quality_components": {},
+        "elite_rebound_reset_quality_reason_codes": [],
+        "elite_rebound_evidence_available": False,
+        "elite_rebound_evidence_score":     None,
+        "elite_rebound_evidence_components": {},
+        "elite_rebound_evidence_reason_codes": [],
+        "elite_rebound_options_improvement_available": False,
+        "elite_rebound_options_improvement_score":     None,
+        "elite_rebound_options_reason_codes":          [],
+    }
+
+
+def _compute_elite_asset_rebound(
+    sym: str,
+    investment_alignment_fields: dict,
+    entry_result: Optional[dict],
+    stage2_row: Optional[dict],
+    options_result: Optional[dict],
+) -> dict:
+    """
+    ELITE_ASSET_REBOUND V1 — full archetype (Parts 2-9). SHADOW/additive.
+    """
+    elite_gate, thesis_ok, gate_reasons = _elite_asset_gate(investment_alignment_fields)
+
+    if not elite_gate:
+        return _elite_asset_rebound_unavailable(gate_reasons)
+    if not thesis_ok:
+        return _elite_asset_rebound_unavailable(gate_reasons + ["THESIS_INTEGRITY_FAILED"])
+
+    prior_leadership_codes = _elite_prior_leadership_diagnostic(investment_alignment_fields)
+
+    reset = _elite_reset_quality(entry_result, stage2_row)
+    evidence = _elite_rebound_evidence(entry_result)
+    options_improve = _elite_options_improvement(options_result)
+
+    if not reset["elite_rebound_reset_quality_available"]:
+        return _elite_asset_rebound_unavailable(
+            gate_reasons + prior_leadership_codes + ["RESET_QUALITY_UNAVAILABLE"]
+        )
+    if not evidence["elite_rebound_evidence_available"]:
+        return _elite_asset_rebound_unavailable(
+            gate_reasons + prior_leadership_codes + ["REBOUND_EVIDENCE_UNAVAILABLE"]
+        )
+
+    ia_score    = investment_alignment_fields.get("investment_alignment_score")
+    reset_score = reset["elite_rebound_reset_quality_score"]
+    evid_score  = evidence["elite_rebound_evidence_score"]
+    opts_score  = options_improve["elite_rebound_options_improvement_score"]
+    opts_avail  = options_improve["elite_rebound_options_improvement_available"]
+
+    num = _ER_W_INVESTMENT * ia_score + _ER_W_RESET * reset_score + _ER_W_EVIDENCE * evid_score
+    den = _ER_W_INVESTMENT + _ER_W_RESET + _ER_W_EVIDENCE
+    if opts_avail and opts_score is not None:
+        num += _ER_W_OPTIONS * opts_score
+        den += _ER_W_OPTIONS
+
+    final_score = round(_clamp(num / den, 0.0, 100.0), 1)
+
+    strengths: list[str] = [c for c in gate_reasons if c in (
+        "ELITE_INVESTMENT_ALIGNMENT", "STRONG_INVESTMENT_ALIGNMENT",
+        "FINANCIAL_TRAJECTORY_INTACT", "FORWARD_EXPECTATIONS_INTACT",
+    )]
+    if "PRIOR_LEADERSHIP_CONFIRMED" in prior_leadership_codes:
+        strengths.append("PRIOR_LEADERSHIP_CONFIRMED")
+    strengths.extend(c for c in reset["elite_rebound_reset_quality_reason_codes"]
+                      if c in ("MEANINGFUL_RESET", "DEEP_RESET", "ASYMMETRY_IMPROVED",
+                               "RESET_FROM_PRIOR_LEADERSHIP", "SUPPORT_RETAINED"))
+    strengths.extend(c for c in evidence["elite_rebound_evidence_reason_codes"]
+                      if c == "REBOUND_EVIDENCE_POSITIVE")
+    if opts_avail:
+        strengths.extend(c for c in options_improve["elite_rebound_options_reason_codes"]
+                          if c in ("BULLISH_PRESSURE_ACCELERATING", "BEARISH_PRESSURE_EASING"))
+
+    conflicts: list[str] = [c for c in reset["elite_rebound_reset_quality_reason_codes"]
+                             if c in ("STRUCTURAL_DAMAGE", "SUPPORT_LOST", "DOWNTREND",
+                                      "FAILED_BREAKOUT", "RESET_TOO_SHALLOW")]
+    conflicts.extend(c for c in evidence["elite_rebound_evidence_reason_codes"]
+                      if c == "REBOUND_EVIDENCE_NEGATIVE")
+    if opts_avail:
+        conflicts.extend(c for c in options_improve["elite_rebound_options_reason_codes"]
+                          if c in ("BEARISH_PRESSURE_ACCELERATING",))
+
+    reason_codes = list(dict.fromkeys(
+        gate_reasons + prior_leadership_codes +
+        reset["elite_rebound_reset_quality_reason_codes"] +
+        evidence["elite_rebound_evidence_reason_codes"] +
+        (options_improve["elite_rebound_options_reason_codes"] if opts_avail else [])
+    ))
+
+    components = {
+        "investment_alignment": {"available": True, "score": ia_score, "weight_pct": _ER_W_INVESTMENT},
+        "reset_quality":        {"available": True, "score": reset_score, "weight_pct": _ER_W_RESET,
+                                  "detail": reset["elite_rebound_reset_quality_components"]},
+        "rebound_evidence":     {"available": True, "score": evid_score, "weight_pct": _ER_W_EVIDENCE,
+                                  "detail": evidence["elite_rebound_evidence_components"]},
+        "options_pressure_improvement": {"available": opts_avail, "score": opts_score,
+                                          "weight_pct": _ER_W_OPTIONS if opts_avail else 0.0},
+    }
+
+    return {
+        "elite_asset_rebound_available":  True,
+        "elite_asset_rebound_score":      final_score,
+        "elite_asset_rebound_version":    ELITE_ASSET_REBOUND_VERSION,
+        "elite_asset_rebound_components": components,
+        "elite_asset_rebound_reason_codes": reason_codes,
+        "elite_asset_rebound_strengths":  strengths,
+        "elite_asset_rebound_conflicts":  conflicts,
+        "elite_rebound_reset_quality_available": True,
+        "elite_rebound_reset_quality_score":     reset_score,
+        "elite_rebound_reset_quality_components": reset["elite_rebound_reset_quality_components"],
+        "elite_rebound_reset_quality_reason_codes": reset["elite_rebound_reset_quality_reason_codes"],
+        "elite_rebound_evidence_available": True,
+        "elite_rebound_evidence_score":     evid_score,
+        "elite_rebound_evidence_components": evidence["elite_rebound_evidence_components"],
+        "elite_rebound_evidence_reason_codes": evidence["elite_rebound_evidence_reason_codes"],
+        "elite_rebound_options_improvement_available": opts_avail,
+        "elite_rebound_options_improvement_score":     opts_score,
+        "elite_rebound_options_reason_codes":          options_improve["elite_rebound_options_reason_codes"],
+    }
+
+
 def _safe_float(v: Any, default: float = 0.0) -> float:
     try:
         return float(v)
@@ -802,12 +1293,70 @@ def _compute_confluence(
         social_entry    = social_entry,
     )
 
+    # ── ELITE_ASSET_REBOUND V1 (SHADOW, additive-only) — second Trade
+    #    Alignment archetype. Independent of THEME_ALIGNMENT; never mixes or
+    #    averages component scores with it. Zero provider calls. ─────────────
+    try:
+        elite_rebound_fields = _compute_elite_asset_rebound(
+            sym                          = sym,
+            investment_alignment_fields  = investment_alignment_fields,
+            entry_result                 = entry_result,
+            stage2_row                   = stage2_row,
+            options_result               = options_result,
+        )
+    except Exception:
+        elite_rebound_fields = _elite_asset_rebound_unavailable(["ELITE_ASSET_REBOUND_V1_ERROR"])
+
+    # ── TRADE ARCHETYPE SELECTION (Part 10) — evaluate THEME_ALIGNMENT and
+    #    ELITE_ASSET_REBOUND independently and select the higher-scoring
+    #    available archetype. Never averages/mixes components. ───────────────
+    ta_avail = bool(theme_alignment_fields.get("trade_alignment_available"))
+    ta_score = theme_alignment_fields.get("trade_alignment_score")
+    er_avail = bool(elite_rebound_fields.get("elite_asset_rebound_available"))
+    er_score = elite_rebound_fields.get("elite_asset_rebound_score")
+
+    archetype_scores = {
+        "THEME_ALIGNMENT":     ta_score if ta_avail else None,
+        "ELITE_ASSET_REBOUND": er_score if er_avail else None,
+    }
+
+    if ta_avail and er_avail:
+        if er_score is not None and ta_score is not None and er_score > ta_score:
+            selected_archetype, selected_reason = "ELITE_ASSET_REBOUND", "HIGHEST_AVAILABLE_ARCHETYPE_SCORE"
+        else:
+            selected_archetype, selected_reason = "THEME_ALIGNMENT", "HIGHEST_AVAILABLE_ARCHETYPE_SCORE"
+    elif ta_avail:
+        selected_archetype, selected_reason = "THEME_ALIGNMENT", "ONLY_THEME_ALIGNMENT_AVAILABLE"
+    elif er_avail:
+        selected_archetype, selected_reason = "ELITE_ASSET_REBOUND", "ONLY_ELITE_ASSET_REBOUND_AVAILABLE"
+    else:
+        selected_archetype, selected_reason = None, "NO_ARCHETYPE_AVAILABLE"
+
+    # Base ta_fields on THEME_ALIGNMENT output (preserves theme/stage/options/
+    # catalyst component fields Actionability generically reads regardless of
+    # which archetype wins). Only override the top-level trade_alignment_*
+    # decision fields when ELITE_ASSET_REBOUND is selected — the minimum
+    # compatibility adjustment Actionability needs (Part 12).
+    selected_ta_fields = dict(theme_alignment_fields)
+    selected_ta_fields["theme_alignment_trade_score"]     = theme_alignment_fields.get("trade_alignment_score")
+    selected_ta_fields["theme_alignment_trade_available"] = theme_alignment_fields.get("trade_alignment_available")
+    selected_ta_fields["trade_alignment_archetype_scores"]  = archetype_scores
+    selected_ta_fields["trade_alignment_selected_reason"]   = selected_reason
+    if selected_archetype == "ELITE_ASSET_REBOUND":
+        selected_ta_fields["trade_alignment_available"]    = True
+        selected_ta_fields["trade_alignment_archetype"]    = "ELITE_ASSET_REBOUND"
+        selected_ta_fields["trade_alignment_score"]        = er_score
+        selected_ta_fields["trade_alignment_grade"]        = _ta_grade(er_score) if er_score is not None else None
+        selected_ta_fields["trade_alignment_reason_codes"] = list(elite_rebound_fields.get("elite_asset_rebound_reason_codes") or [])
+    selected_ta_fields.update(elite_rebound_fields)
+
     # ── ACTIONABILITY V1 (SHADOW, additive-only) — deterministic decision
-    #    layer combining the EXISTING Trade Alignment + Entry Structure V2
-    #    outputs above. Zero recomputation, zero provider calls. ─────────────
+    #    layer combining the SELECTED Trade Alignment archetype + Entry
+    #    Structure V2 outputs above. Zero recomputation, zero provider
+    #    calls, zero changes to Actionability state logic/thresholds. ───────
     actionability_fields = _compute_actionability(
         entry_result   = entry_result,
-        ta_fields      = theme_alignment_fields,
+        ta_fields      = selected_ta_fields,
         options_result = options_result,
     )
 
@@ -844,7 +1393,7 @@ def _compute_confluence(
         # ── REAL INVESTMENT ALIGNMENT V1 preserves legacy score under a new
         #    name (additive-only; legacy field above is untouched) ───────────
         "legacy_investment_confluence_score": invest_score,
-        **theme_alignment_fields,
+        **selected_ta_fields,
         # ── ACTIONABILITY V1 (SHADOW, additive-only fields) ───────────────────
         **actionability_fields,
         # ── REAL INVESTMENT ALIGNMENT V1 (SHADOW, additive-only fields) ───────
