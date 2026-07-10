@@ -34,14 +34,21 @@ All Stocks row from:
     canonical call_premium/put_premium/net_premium fields already displayed
     on Options Flow / Sectors / Watchlist ticker rows — not re-derived from
     a different source, not a new provider call.
-  - net_premium / market_cap — NOT available: no canonical per-ticker live
-    market-cap cache exists anywhere in the backend without a new provider
-    call (which is explicitly disallowed for this task). This component is
-    therefore always "unavailable" today and is excluded from the weighted
-    average via available-component renormalization (see
-    _PREMIUM_PRESSURE_WEIGHTS below). Accepts an optional market_cap kwarg
-    so a future zero-provider-call market-cap cache can be wired in later
-    without changing this formula's shape.
+  - net_premium / market_cap — sourced from the existing Watchlist
+    Fundamental Screener's zero-provider-call Neon cache
+    (backend/data/watchlist_fundamentals_store.py::get_snapshot, table
+    public.watchlist_fundamentals_cache, field "Market Cap" — populated by
+    the weekly FMP background refresher in
+    backend/services/watchlist_fundamentals_refresh.py, never fetched here).
+    No canonical "Net Premium / Market Cap" display field previously
+    existed anywhere in this backend, so there is no pre-existing formula
+    to reuse; this module defines the ratio itself
+    (net_premium / market_cap * 100, saturating at +/-0.50%) purely from
+    already-cached inputs. When no fundamentals snapshot exists for a
+    ticker (not yet refreshed, or off the Watchlist), this component is
+    omitted from the weighted average via available-component
+    renormalization (see _PREMIUM_PRESSURE_WEIGHTS below) — never defaulted
+    to a fake neutral value.
   - premium_balance   (call_premium share of total premium, 0-100)
   - effective_premium_pcr (falls back to raw_premium_pcr, spec-documented)
   - bias / ticker_state (secondary, deterministic confirmation only)
@@ -329,6 +336,7 @@ def _derive_pressure_state(
 def get_options_alignment_for_ticker(
     ticker: str,
     combined_ticker_data: Optional[dict] = None,
+    fundamentals_map: Optional[dict] = None,
 ) -> dict:
     """
     Zero-provider-call Options Alignment signal for one ticker.
@@ -336,6 +344,12 @@ def get_options_alignment_for_ticker(
     combined_ticker_data: optionally pass a pre-fetched
     options_theme_supplement.get_combined_ticker_data() dict to avoid
     re-reading the in-memory cache per ticker in a batch context.
+
+    fundamentals_map: optionally pass a pre-fetched
+    {SYMBOL: watchlist_fundamentals_store snapshot} dict (from
+    get_snapshots_bulk) to avoid one Neon round-trip per ticker in a batch
+    context. When None, this ticker's snapshot is fetched individually
+    (single-symbol call path only) via the same zero-provider-call reader.
 
     Returns a dict with:
       options_signal_available
@@ -425,6 +439,20 @@ def get_options_alignment_for_ticker(
 
     # ── Premium Pressure Score (spec Parts 2-4) — normalized, uniform for
     # every canonical All Stocks row. No composite_score/heat_score reliance.
+    _market_cap = None
+    try:
+        if fundamentals_map is not None:
+            _snap = fundamentals_map.get(sym)
+        else:
+            from data.watchlist_fundamentals_store import get_snapshot as _get_fund_snapshot
+            _snap = _get_fund_snapshot(sym)
+        if _snap:
+            _mc_raw = (_snap.get("fields") or {}).get("Market Cap")
+            if _mc_raw is not None:
+                _market_cap = float(_mc_raw)
+    except Exception:
+        _market_cap = None
+
     _pressure = _compute_premium_pressure_score(
         net_premium=row.get("net_premium"),
         call_premium=row.get("call_premium"),
@@ -432,6 +460,7 @@ def get_options_alignment_for_ticker(
         effective_premium_pcr=row.get("effective_premium_pcr"),
         raw_premium_pcr=row.get("raw_premium_pcr"),
         bias=row.get("bias"),
+        market_cap=_market_cap,
     )
     reasons.extend(_pressure.pop("premium_pressure_reason_codes", []))
     current_norm = _pressure["premium_pressure_score"]
@@ -540,7 +569,7 @@ def get_options_alignment_bulk(tickers: list[str]) -> dict[str, dict]:
     """
     Batch helper — fetches the combined ticker data cache once and computes
     Options Alignment for every requested ticker off that single snapshot.
-    Still zero provider calls (cache reads only).
+    Still zero provider calls (cache/Neon reads only).
     """
     try:
         from data.options_theme_supplement import get_combined_ticker_data
@@ -548,7 +577,14 @@ def get_options_alignment_bulk(tickers: list[str]) -> dict[str, dict]:
     except Exception:
         combined = {}
 
+    upper_tickers = [(t or "").upper().strip() for t in tickers]
+    try:
+        from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_bulk
+        fundamentals_map = _get_fund_bulk(upper_tickers)
+    except Exception:
+        fundamentals_map = {}
+
     return {
-        (t or "").upper().strip(): get_options_alignment_for_ticker(t, combined_ticker_data=combined)
-        for t in tickers
+        t: get_options_alignment_for_ticker(t, combined_ticker_data=combined, fundamentals_map=fundamentals_map)
+        for t in upper_tickers
     }

@@ -1,0 +1,614 @@
+OPTIONS ALIGNMENT V2 — FINAL INTEGRITY CHECK: FULL UNIVERSE + EXISTING NET PREMIUM / MARKET CAP PATH
+
+AUDIT FIRST.
+
+Implement only a proven zero-provider-call Net Premium / Market Cap reuse correction if the existing product already exposes the required cached data.
+
+Do not redesign Options Alignment.
+Do not change the 70% Premium Pressure / 30% Direction architecture.
+Do not change Trade Alignment weights.
+Do not modify Options Flow producers.
+Do not modify Net Premium history.
+Do not modify Theme, Stage, Entry, Catalyst, or Social.
+Do not add provider calls.
+Do not add caches.
+Do not add schedulers.
+Do not build LOW_BASE states yet.
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not modify frontend code.
+
+==================================================
+PROBLEM 1 — PRIOR REPORT USED A TOP-200 ENDPOINT SLICE
+======================================================
+
+The latest Options Alignment V2 report says:
+
+"Got the full snapshot"
+
+but its validation explicitly reports:
+
+"200-ticker sample via /api/alpha/confluence"
+
+The project has already proven that:
+
+GET /api/alpha/confluence
+
+internally computes the complete snapshot
+
+but:
+
+results[] is sorted/rank-truncated by the endpoint limit
+
+with a maximum request limit of approximately 200.
+
+A previous validation bug incorrectly treated absence from this truncated result as absence from the tracked universe.
+
+Do not repeat that mistake.
+
+==================================================
+PART 1 — VALIDATE AGAINST THE COMPLETE INTERNAL UNIVERSE
+========================================================
+
+Use one of:
+
+the complete internal build_confluence_snapshot() result before endpoint slicing
+
+or
+
+the complete canonical Sectors → All Stocks row universe joined read-only to current Confluence symbols
+
+Do not validate coverage or score distribution from a Top-N endpoint result.
+
+Return:
+
+current internal Confluence symbol count
+
+current saved Watchlist count
+
+current All Stocks required-universe count
+
+complete internal Trade Alignment row count
+
+complete internal Options Alignment available count
+
+complete internal Options Alignment unavailable count
+
+Options unavailable reasons with counts
+
+For every reported denominator, state the exact source universe.
+
+Do not use a generic:
+
+64 / 200
+
+unless explicitly labeled as a Top-200 ranking slice rather than coverage.
+
+==================================================
+PART 2 — FULL OPTIONS ALIGNMENT DISTRIBUTION
+============================================
+
+Across the COMPLETE current universe of rows where:
+
+options_alignment_available = true
+
+return:
+
+count
+
+min
+p10
+p25
+median
+mean
+p75
+p90
+p95
+max
+
+Return complete pressure-state distribution using actual current enum values:
+
+BULLISH_ACCELERATING
+BULLISH_STEADY
+BULLISH_FADING
+BEARISH_ACCELERATING
+BEARISH_STEADY
+BEARISH_EASING
+MIXED
+INSUFFICIENT_HISTORY
+
+or exact current production names.
+
+Also return score bands:
+
+0–19
+20–39
+40–59
+60–69
+70–79
+80–89
+90–100
+
+The question is:
+
+Is the Options Alignment V2 distribution genuinely differentiated across the full universe?
+
+Do not tune thresholds in this task.
+
+If the full-universe median is unusually high, report it honestly.
+
+==================================================
+PROBLEM 2 — NET PREMIUM / MARKET CAP WAS DECLARED UNAVAILABLE
+=============================================================
+
+The latest report says:
+
+"Net Premium / Market Cap — structurally unavailable today; no canonical live per-ticker market-cap cache exists without adding a new provider call."
+
+This needs exact proof.
+
+The existing product already has known market-cap data paths.
+
+The Watchlist Fundamental Screener displays Market Cap and has an existing dynamic weekly FMP fundamental updater/cache.
+
+The user also identifies Net Premium / Market Cap as a metric already visible in the Options Flow product.
+
+Therefore trace the actual existing implementation before concluding the signal is unavailable.
+
+==================================================
+PART 3 — TRACE THE EXISTING OPTIONS FLOW NET PREMIUM / MARKET CAP DISPLAY
+=========================================================================
+
+Start from the actual Options Flow frontend/backend contract for the displayed metric:
+
+Net Premium / Market Cap
+
+Trace:
+
+frontend component
+
+display label
+
+exact response property
+
+endpoint
+
+backend route
+
+backend service
+
+source fields
+
+exact formula
+
+market-cap source
+
+cache/LKG/Neon source
+
+whether any provider call can occur during read
+
+Do not infer.
+
+Prove the actual path.
+
+If the metric is calculated frontend-side:
+
+show the exact frontend formula and exact payload fields.
+
+If calculated backend-side:
+
+show the exact helper/function.
+
+Return:
+
+display label
+production field
+formula
+unit/scale
+market-cap field
+market-cap source
+freshness
+zero-call reusable: YES / NO
+
+==================================================
+PART 4 — TRACE EXISTING CACHED MARKET CAP SOURCES
+=================================================
+
+Separately trace all existing per-ticker market-cap sources already populated in the project.
+
+At minimum inspect the current Watchlist Fundamental Screener path.
+
+Return each viable source:
+
+file/service
+
+field name
+
+storage/cache/LKG/Neon source
+
+refresh cadence
+
+ticker coverage
+
+whether read can trigger FMP/provider calls
+
+whether a pure cache/LKG/Neon accessor exists
+
+Specifically answer:
+
+Can options_alignment.py obtain current or last-known Market Cap for a ticker using a PURE ZERO-PROVIDER-CALL read?
+
+YES or NO.
+
+Do not use a fetch-on-miss helper.
+
+Do not add an FMP call.
+
+Do not add a market-cap producer.
+
+==================================================
+PART 5 — CANONICAL % NET PREMIUM PROOF
+======================================
+
+The prior implementation report also did not provide the required exact canonical trace for:
+
+% Net Premium
+
+Return:
+
+Options Flow display label
+
+production field name
+
+formula
+
+numerator
+
+denominator
+
+signed semantics
+
+scale
+
+source helper/file
+
+Confirm whether Options Alignment V2 reused the exact existing production formula.
+
+If YES:
+
+prove it.
+
+If NO:
+
+report the mismatch.
+
+Do not silently redefine it.
+
+==================================================
+PART 6 — SURGICAL NET PREMIUM / MARKET CAP REUSE
+================================================
+
+ONLY IF Parts 3–4 prove an existing zero-provider-call cached Market Cap path already powers the current product:
+
+update options_alignment.py to consume that exact existing cached value/path.
+
+Requirements:
+
+pure read only
+
+no provider call on miss
+
+no FMP fetch
+
+no new cache
+
+no new table
+
+no producer change
+
+Use the exact existing Net Premium / Market Cap formula/scale.
+
+Do not invent a new normalization.
+
+Then allow:
+
+net_premium_market_cap_component
+
+to participate in Premium Pressure using the existing V2 available-component normalization.
+
+If Market Cap is missing for a specific ticker:
+
+omit that component.
+
+Do not assign fake 50.
+
+Do not make Options Alignment unavailable solely because Market Cap is missing.
+
+If no reusable zero-call path exists:
+
+make ZERO code changes and report proof.
+
+==================================================
+PART 7 — PREMIUM PRESSURE FORMULA PROOF
+=======================================
+
+Return the exact current Premium Pressure V2 formula.
+
+Show:
+
+component
+weight
+availability logic
+
+For:
+
+% Net Premium
+
+Net Premium / Market Cap
+
+Call/Put Premium Balance
+
+Effective Premium PCR
+
+Bias / Ticker State
+
+Raw Net Premium magnitude/confidence if still present
+
+Prove raw dollar Net Premium does not carry a major standalone directional weight.
+
+Return exact formula, not a prose summary.
+
+==================================================
+PART 8 — FULL-V1 VS V2 COMPARISON
+=================================
+
+Across the complete comparable Options Alignment universe:
+
+return:
+
+V1 vs V2 correlation
+
+mean absolute score change
+
+mean absolute rank change
+
+Top-25 rank overlap
+
+Correlation:
+
+abs(raw Net Premium) vs V1 score
+
+abs(raw Net Premium) vs V2 Premium Pressure
+
+% Net Premium vs V2 Premium Pressure
+
+Net Premium / Market Cap vs V2 Premium Pressure if available
+
+premium imbalance vs V2 Premium Pressure
+
+Do not use the top-200 Confluence endpoint slice.
+
+Return Top 20 positive rank movers and Top 20 negative rank movers.
+
+For each:
+
+symbol
+
+V1 score/rank
+V2 score/rank
+
+% Net Premium
+Net Premium / Market Cap if available
+call premium
+put premium
+effective PCR
+bias/ticker state
+raw Net Premium
+
+deterministic reason for rank movement
+
+==================================================
+PART 9 — COMPLETE TRADE ALIGNMENT REVALIDATION
+==============================================
+
+Using the complete internal Trade Alignment universe:
+
+return:
+
+Trade Alignment rows
+
+Trade Alignment available
+
+Theme available
+
+Stage available
+
+Options Alignment V2 available
+
+Catalyst available
+
+signal-count distribution
+
+Return:
+
+Top 50 Trade Alignment
+
+Top 30 high-alignment / bad-entry
+
+Top 30 early opportunities in canonical forming/pre-breakout Entry states
+
+Entry remains display/filter only.
+
+Do not change scoring.
+
+Specifically report:
+
+ALGM
+AOSL
+BE
+MRVL
+WYFI
+HOOD
+AMD
+MU
+CRDO
+IBRX
+AAOI
+
+For each:
+
+Trade Alignment score/rank
+
+Theme
+
+Stage
+
+Options Alignment V2
+
+Premium Pressure
+
+Options Pressure State
+
+Catalyst
+
+Social Bonus
+
+Entry Score
+
+Entry State
+
+Entry Grade
+
+==================================================
+PART 10 — COST PROOF
+====================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 new provider calls
+
+0 FMP calls from Options Alignment
+
+0 fetch-on-miss Market Cap helper
+
+0 new Options scan
+
+0 producer changes
+
+0 new cache
+
+0 scheduler changes
+
+0 Trade Alignment weight changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+OPTIONS ALIGNMENT V2 FINAL INTEGRITY REPORT
+
+FILES CHANGED:
+[list or NONE]
+
+PRIOR TOP-200 VALIDATION LIMITATION:
+[exact impact]
+
+FULL OPTIONS UNIVERSE:
+[source + count]
+
+OPTIONS ALIGNMENT AVAILABLE:
+[count / percent of exact denominator]
+
+FULL SCORE DISTRIBUTION:
+[results]
+
+PRESSURE STATE DISTRIBUTION:
+[results]
+
+CANONICAL % NET PREMIUM:
+[field + exact formula + source]
+
+CANONICAL NET PREMIUM / MARKET CAP:
+[field + exact formula + source]
+
+ZERO-CALL MARKET CAP SOURCE:
+[path or NONE]
+
+NET PREMIUM / MARKET CAP V2 COMPONENT:
+[ACTIVE / UNAVAILABLE + reason]
+
+PREMIUM PRESSURE FORMULA:
+[exact components/weights]
+
+RAW DOLLAR DOMINANCE:
+[correlation comparison]
+
+V1 VS V2:
+[summary]
+
+TRADE ALIGNMENT:
+[summary]
+
+HIGH ALIGNMENT / BAD ENTRY:
+[summary]
+
+EARLY OPPORTUNITIES:
+[summary]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+OPTIONS ALIGNMENT V2 FINAL VERDICT
+
+FULL-UNIVERSE VALIDATION:
+[PASS / FAIL]
+
+CANONICAL % NET PREMIUM REUSED:
+[YES / NO]
+
+CANONICAL NET PREMIUM / MARKET CAP REUSED:
+[YES / NO / PROVEN UNAVAILABLE]
+
+NET PREMIUM / MARKET CAP ZERO-CALL SOURCE:
+[path or NONE]
+
+PREMIUM PRESSURE FUNCTIONAL:
+[YES / NO]
+
+RAW DOLLAR DOMINANCE REDUCED:
+[YES / NO + evidence]
+
+OPTIONS DIRECTION HISTORY:
+[coverage]
+
+OPTIONS ALIGNMENT COVERAGE:
+[count / percent + denominator]
+
+TRADE ALIGNMENT FUNCTIONAL:
+[YES / NO]
+
+HIGH-ALIGNMENT BAD-ENTRY VISIBILITY:
+[assessment]
+
+EARLY OPPORTUNITY VISIBILITY:
+[assessment]
+
+BIGGEST REMAINING TRADE MODEL WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+LOW_BASE ENTRY STRUCTURE TAXONOMY
+
+Do not tune Options thresholds.
+Do not build LOW_BASE states.
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not make unrelated changes.
