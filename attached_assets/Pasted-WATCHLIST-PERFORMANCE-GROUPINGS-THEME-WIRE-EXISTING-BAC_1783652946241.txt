@@ -1,0 +1,382 @@
+WATCHLIST PERFORMANCE GROUPINGS → THEME — WIRE EXISTING BACKEND GROUPING ENDPOINT
+
+Work only in the existing frontend Replit project.
+
+The backend has completed a new deterministic endpoint for the lower Watchlist Theme performance grouping:
+
+GET /api/watchlist/{watchlist_id}/performance/theme
+
+The backend endpoint has already been live-validated against the current 374-ticker Watchlist.
+
+Backend behavior:
+
+* uses the same canonical Theme identity as the upper Watchlist Screener THEME column
+* groups every current Watchlist ticker exactly once
+* 374/374 rows grouped in backend validation
+* no duplicate tickers
+* explicit Unassigned bucket
+* Theme 1D performance is the equal-weight average of available ticker 1D % changes
+* tickers with missing 1D change remain in the card but are omitted from the Theme average denominator
+* Theme cards are already sorted by Theme 1D performance descending
+* tickers inside each Theme card are already sorted by ticker 1D performance descending
+* no AI/LLM grouping
+* no provider calls
+
+This task is frontend wiring only.
+
+Do not modify backend code.
+Do not invent another grouping formula.
+Do not group rows independently in the frontend unless required only as a defensive rendering fallback.
+Do not add a new ticker→Theme map.
+Do not call AI/LLM.
+Do not add quote calls.
+Do not modify the upper Watchlist Screener.
+Do not modify Fundamental performance grouping.
+Do not modify Market Cap performance grouping.
+Do not modify Golden Zone.
+Do not modify HC Investment Zone.
+Do not modify HC Trade Zone.
+Do not modify Growth Momentum.
+Do not modify Options Alignment or Trade Alignment UI.
+
+==================================================
+PART 0 — AUDIT CURRENT LOWER THEME VIEW
+=======================================
+
+Trace the actual Watchlist page:
+
+PERFORMANCE GROUPINGS
+
+FUNDAMENTAL
+THEME
+MARKET CAP
+
+Find the exact rendered THEME branch/component.
+
+Identify:
+
+frontend file/component
+
+current data source
+
+current Theme grouping source
+
+current Theme card component
+
+current ticker row/card component
+
+current loading/error patterns
+
+current selected Watchlist ID source
+
+Do not edit until the exact current render path is understood.
+
+==================================================
+PART 1 — USE THE NEW BACKEND ENDPOINT
+=====================================
+
+When the Performance Groupings → Theme toggle is selected, consume:
+
+GET /api/watchlist/{watchlist_id}/performance/theme
+
+Use the same current Watchlist ID already used by the Watchlist page.
+
+Do not hardcode:
+
+374
+
+the current Primary Watchlist ID
+
+or any ticker list.
+
+The Watchlist changes frequently.
+
+The request must dynamically use the current selected Watchlist.
+
+==================================================
+PART 2 — PRESERVE BACKEND SORTING / GROUPING
+============================================
+
+The backend endpoint already returns deterministic grouping and sort order.
+
+Do not recalculate Theme membership from:
+
+industry
+
+sector
+
+AI classification
+
+static frontend maps
+
+Themes-page data
+
+The backend grouping is authoritative for this lower Theme performance view.
+
+Preserve returned Theme-card order.
+
+Preserve returned ticker order inside each card.
+
+Do not alphabetically re-sort.
+
+Do not use Theme Rotation or Theme RS as the displayed Theme performance value.
+
+==================================================
+PART 3 — RENDER THEME GLASSCARDS
+================================
+
+Use the existing Performance Groupings glasscard design language/components where possible.
+
+Each Theme glasscard should show:
+
+Theme name
+
+Theme 1D performance %
+
+ticker count if already consistent with the design
+
+the current Watchlist tickers assigned to that Theme
+
+Inside the card, preserve existing ticker row fields/styles as closely as possible.
+
+At minimum retain the current ticker identity and existing visible price/change information already used in the lower grouping design.
+
+Do not add unnecessary new fields.
+
+Use existing positive/negative percentage styling.
+
+==================================================
+PART 4 — UNASSIGNED
+===================
+
+Render the backend's explicit Unassigned grouping.
+
+Do not infer Themes in the frontend.
+
+Do not hide Unassigned silently.
+
+Current backend validation found three current Unassigned rows, including ACOG and ABSI.
+
+Use live endpoint data rather than hardcoding these symbols.
+
+==================================================
+PART 5 — MISSING 1D CHANGE
+==========================
+
+The backend may return tickers with missing 1D change.
+
+Keep those tickers visible in their Theme glasscard.
+
+Do not display missing change as 0%.
+
+Use the existing frontend missing-value convention such as:
+
+—
+
+where appropriate.
+
+The backend has already excluded missing values from the Theme average.
+
+Do not recalculate the average.
+
+==================================================
+PART 6 — DYNAMIC REFRESH BEHAVIOR
+=================================
+
+The Theme grouping must reflect the current Watchlist.
+
+When the existing Watchlist query/data is invalidated or refreshed after:
+
+ticker add
+
+ticker delete
+
+Watchlist switch
+
+or existing Theme reassignment flow
+
+ensure the Theme performance query also refreshes through the existing query-cache/invalidation architecture.
+
+Do not add polling if the page already has an appropriate refresh/invalidation pattern.
+
+Do not create an independent membership state.
+
+==================================================
+PART 7 — LOADING / ERROR STATE
+==============================
+
+Reuse existing Watchlist loading and error patterns.
+
+Do not allow a Theme grouping request failure to break the entire Watchlist page.
+
+The upper Screener and other Performance Groupings must remain usable.
+
+==================================================
+PART 8 — VALIDATION
+===================
+
+Validate against the current live Watchlist.
+
+Confirm:
+
+Theme toggle renders real grouped glasscards
+
+backend Theme order is preserved
+
+Theme 1D % is displayed
+
+ticker order inside each card is preserved
+
+Unassigned renders
+
+missing 1D values do not show as 0%
+
+no ticker is duplicated by frontend rendering
+
+no ticker disappears because of frontend filtering/group reconstruction
+
+Specifically spot-check:
+
+AAOI
+ABCL
+AOSL
+ADEA
+ADUR
+AEHR
+AEVA
+AIR
+AKAM
+WYFI
+SLAB
+ANET
+ALGM
+BE
+AMD
+MU
+MRVL
+CRDO
+
+Compare their lower Theme glasscard against the Theme shown in the upper Screener.
+
+Expected:
+
+same Theme identity.
+
+Also report the current first 10 Theme glasscards in rendered order with:
+
+Theme
+Theme 1D %
+ticker count
+
+==================================================
+PART 9 — REGRESSION PROOF
+=========================
+
+Prove:
+
+0 backend changes
+
+0 provider calls added
+
+0 quote calls added
+
+0 AI/LLM calls added
+
+0 new ticker→Theme classification
+
+upper Screener unchanged
+
+Fundamental grouping unchanged
+
+Market Cap grouping unchanged
+
+Golden Zone unchanged
+
+HC Investment Zone unchanged
+
+HC Trade Zone unchanged
+
+Growth Momentum unchanged
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+WATCHLIST THEME GROUPING FRONTEND REPORT
+
+FILES CHANGED:
+[list]
+
+OLD THEME VIEW PATH:
+[path]
+
+NEW ENDPOINT:
+[path]
+
+WATCHLIST ID SOURCE:
+[source]
+
+THEME CARD COMPONENT:
+[component]
+
+THEME ORDER:
+[preserved / issue]
+
+TICKER ORDER:
+[preserved / issue]
+
+UNASSIGNED:
+[rendered behavior]
+
+MISSING 1D:
+[rendered behavior]
+
+CURRENT THEME CARDS:
+[count]
+
+CURRENT GROUPED TICKERS:
+[count]
+
+SPOT CHECK:
+[results]
+
+REGRESSION PROOF:
+[results]
+
+End exactly:
+
+WATCHLIST THEME GROUPING FRONTEND VERDICT
+
+NEW ENDPOINT WIRED:
+[YES / NO]
+
+CANONICAL SCREENER THEME IDENTITY PRESERVED:
+[YES / NO]
+
+THEME 1D PERFORMANCE DISPLAYED:
+[YES / NO]
+
+THEME CARDS SORTED BY 1D:
+[PASS / FAIL]
+
+TICKERS SORTED BY 1D:
+[PASS / FAIL]
+
+UNASSIGNED RENDERED:
+[YES / NO]
+
+DYNAMIC WATCHLIST ID:
+[PASS / FAIL]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+NEXT IMPLEMENTATION:
+OPTIONS ALIGNMENT V2
+
+Do not modify unrelated frontend sections.
