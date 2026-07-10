@@ -691,6 +691,8 @@ async def lifespan(app):
                     from data.pg_storage import watchlist_list as _wl_list, is_available as _pg_ok
                     from data.watchlist_fundamentals_store import list_due_symbols as _due_syms
                     from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
+                    from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_eligible
+                    from services.watchlist_service import load_watchlist as _load_wl
 
                     _fmp_key = _os.getenv("FMP_API_KEY", "")
                     if not _fmp_key or not _pg_ok():
@@ -702,12 +704,31 @@ async def lifespan(app):
                     _cycle_started = datetime.now(timezone.utc)
                     _et_now_str    = _cycle_started.astimezone(_ET).strftime("%H:%M %Z")
 
-                    # Collect due symbols across all known watchlists (oldest-due first).
+                    # Build the CURRENT live eligible symbol universe, per watchlist,
+                    # dynamically from the current membership of each watchlist row
+                    # (not from stored fundamentals rows / stale watchlist_id keys).
+                    # A symbol present in >1 watchlist is only refreshed once —
+                    # attributed to the first (most-recently-updated) watchlist that
+                    # contains it, dedup via _seen_syms.
                     _all_due: dict[str, list[str]] = {}
+                    _seen_syms: set[str] = set()
                     for _wl in (_wl_list() or []):
                         _wl_id = _wl.get("id") or ""
-                        if _wl_id:
-                            _due = _due_syms(_wl_id)
+                        if not _wl_id:
+                            continue
+                        _wl_data = _load_wl(_wl_id) or {}
+                        _raw_tickers = _wl_data.get("tickers") or []
+                        _wl_syms: list[str] = []
+                        for _t in _raw_tickers:
+                            _sym = (_t if isinstance(_t, str) else (_t or {}).get("symbol", "")).upper()
+                            if not _sym or _sym in _seen_syms:
+                                continue
+                            if not _fmp_eligible(_sym):
+                                continue
+                            _wl_syms.append(_sym)
+                            _seen_syms.add(_sym)
+                        if _wl_syms:
+                            _due = _due_syms(_wl_syms)
                             if _due:
                                 _all_due[_wl_id] = _due
 

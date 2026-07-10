@@ -185,8 +185,26 @@ def get_snapshots_bulk(symbols: list[str]) -> dict[str, dict]:
         return {}
 
 
-def list_due_symbols(watchlist_id: str) -> list[str]:
-    """Return symbols whose next_refresh_at <= NOW (i.e. due for refresh)."""
+def list_due_symbols(symbols: list[str]) -> list[str]:
+    """
+    Return which of the given CURRENT eligible symbols are due for refresh.
+
+    A symbol is due when:
+      A. it has no snapshot row at all (never refreshed), or
+      B. its existing row's next_refresh_at <= NOW()
+
+    This is intentionally NOT scoped by any stored `watchlist_id` — the
+    caller passes the current live Watchlist membership (already filtered
+    for FMP eligibility), and due-ness is computed purely from that set
+    against existing rows. This avoids the historical bug where rows were
+    keyed to a stale/rotated watchlist_id and became permanently invisible
+    to refresh even though they were already past their TTL.
+
+    Order: no-snapshot symbols first (never-refreshed backlog), then
+    existing-but-stale rows ordered oldest-due-first.
+    """
+    if not symbols:
+        return []
     try:
         from data.pg_storage import _get_conn, _put_conn
         conn = _get_conn()
@@ -194,17 +212,32 @@ def list_due_symbols(watchlist_id: str) -> list[str]:
             return []
         try:
             cur = conn.cursor()
+            upper = sorted({s.upper() for s in symbols if s})
+            if not upper:
+                return []
             cur.execute(
                 f"""
-                SELECT symbol FROM {_TABLE}
-                WHERE watchlist_id = %s AND next_refresh_at <= NOW()
-                ORDER BY next_refresh_at ASC
+                SELECT symbol, next_refresh_at FROM {_TABLE}
+                WHERE symbol = ANY(%s)
                 """,
-                (watchlist_id,),
+                (upper,),
             )
             rows = cur.fetchall()
             cur.close()
-            return [r[0] for r in rows]
+
+            existing = {r[0]: r[1] for r in rows}
+            now = datetime.now(timezone.utc)
+
+            no_snapshot = [s for s in upper if s not in existing]
+
+            stale_existing = [
+                (s, nxt) for s, nxt in existing.items()
+                if nxt is not None and nxt <= now
+            ]
+            stale_existing.sort(key=lambda x: x[1])
+            stale_symbols = [s for s, _ in stale_existing]
+
+            return no_snapshot + stale_symbols
         finally:
             _put_conn(conn)
     except Exception as exc:

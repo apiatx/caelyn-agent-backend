@@ -3779,6 +3779,18 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         _rv_registry.pop(watchlist_id, None)
         _volmc_registry.pop(watchlist_id, None)
         _news_lkg.pop(watchlist_id, None)
+        # Register the new ticker with the existing canonical fundamentals
+        # refresh pipeline so it is not permanently invisible to the weekly
+        # due-queue. This only writes a row (next_refresh_at = now, i.e.
+        # immediately due) — it does NOT call FMP synchronously; the existing
+        # background weekly loop performs the actual provider work.
+        try:
+            from services.watchlist_quote_cache import is_fmp_symbol_eligible
+            if is_fmp_symbol_eligible(t):
+                from data.watchlist_fundamentals_store import schedule_refresh
+                schedule_refresh(t, watchlist_id, days=0)
+        except Exception as _fund_sched_exc:
+            print(f"[WATCHLIST] schedule_refresh({t}) on add failed: {_fund_sched_exc}")
 
     resp = {
         "success":      True,

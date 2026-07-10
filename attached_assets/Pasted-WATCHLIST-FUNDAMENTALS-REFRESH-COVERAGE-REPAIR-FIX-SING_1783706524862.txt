@@ -1,0 +1,812 @@
+WATCHLIST FUNDAMENTALS REFRESH COVERAGE REPAIR — FIX SINGLE-TICKER REGISTRATION, WATCHLIST-ID DRIFT, AND BACKFILL EXISTING MISSING US TICKERS
+
+Work only in the existing backend Replit project.
+
+A zero-code-change integrity audit proved two production defects in the canonical Watchlist fundamentals refresh pipeline.
+
+Real Investment Alignment V1 is already implemented and must remain unchanged.
+
+The current canonical fundamentals path is:
+
+current Watchlist
+↓
+watchlist_fundamentals_store
+↓
+weekly FMP refresh
+↓
+watchlist_fundamentals_cache in Neon
+↓
+Watchlist Fundamental Screener
++
+Investment Alignment
+
+The audit proved:
+
+CURRENT LIVE PRIMARY WATCHLIST:
+375 tickers
+
+STORED SNAPSHOT COVERAGE:
+246/375
+
+NO SNAPSHOT:
+129
+
+LEGITIMATE FOREIGN EXCLUSIONS:
+58
+
+US-ELIGIBLE PIPELINE GAPS:
+71
+
+Examples among the 71:
+
+DELL
+IBRX
+RBRK
+HOOD
+SOFI
+ABCL
+AMAT
+CRWD
+NET
+OKTA
+ORCL
+PANW
+SNOW
+MDB
+IBM
+HPE
+FTNT
+RBLX
+RDDT
+XYZ
+
+The audit proved the defect is NOT:
+
+field mapping
+
+provider access
+
+FMP plan access
+
+Investment Alignment lookup
+
+persistence after a valid refresh
+
+The exact defects are:
+
+1. `add_ticker_endpoint` / single-ticker add writes the ticker to the Watchlist but never calls `schedule_refresh()`. Therefore a newly added US ticker never receives a `watchlist_fundamentals_cache` row and is structurally invisible to `list_due_symbols()` forever.
+
+2. Existing fundamentals rows are keyed to old Watchlist IDs (`23eec278-...` or `manual`), while the current live Primary Watchlist ID is `00a0e3ea-31dc-4223-97bc-470720dd3215`.
+
+`list_due_symbols(watchlist_id)` currently requires exact stored Watchlist-ID equality.
+
+Therefore the current live weekly loop sees zero due rows even though the existing 251 rows are already past their 7-day TTL.
+
+Do not modify Investment Alignment.
+
+Do not weaken Financial Acceleration's mandatory rule.
+
+Do not create an Investment-specific fundamentals fetcher.
+
+Do not create a new fundamentals table.
+
+Do not create a new scheduler.
+
+Do not change weekly cadence.
+
+Do not remove the FMP budget governor.
+
+Do not change provider endpoints.
+
+Do not modify frontend code.
+
+This task has ONE goal:
+
+RESTORE COMPLETE DYNAMIC COVERAGE OF THE CURRENT LIVE WATCHLIST THROUGH THE EXISTING CANONICAL WEEKLY FUNDAMENTALS REFRESH PIPELINE.
+
+==================================================
+PART 0 — RECONFIRM CURRENT CODE PATHS
+=====================================
+
+Before editing, trace:
+
+watchlist_router.py single-ticker add endpoint
+
+watchlist_service.save_watchlist()
+
+watchlist_fundamentals_store.schedule_refresh()
+
+watchlist_fundamentals_store.list_due_symbols()
+
+watchlist_fundamentals_store.get_snapshot()
+
+watchlist_fundamentals_store.get_snapshots_bulk()
+
+weekly loop in backend/main.py
+
+watchlist_fundamentals_refresh.FmpFundamentalsRefresher
+
+is_fmp_symbol_eligible()
+
+current Watchlist loader
+
+FMP budget guard
+
+Confirm exact signatures and current callers.
+
+Do not create a parallel refresh system.
+
+==================================================
+PART 1 — FIX SINGLE-TICKER ADD REGISTRATION
+===========================================
+
+After a successful single-ticker Watchlist add through the current canonical endpoint:
+
+if ticker is FMP-eligible
+
+register it with the existing fundamentals refresh store using:
+
+schedule_refresh(...)
+
+or the exact current helper.
+
+The new ticker must become eligible for the existing fundamentals refresh pipeline.
+
+Use the exact current Watchlist ID from the active Watchlist row.
+
+Recommended intent:
+
+new eligible ticker
+→ schedule immediately / due now
+
+Use the existing helper's supported semantics.
+
+Do not directly call FMP from the add endpoint.
+
+Do not block the add request on fundamentals enrichment.
+
+Do not run `refresh_symbols()` synchronously.
+
+The add endpoint should only register/schedule the ticker.
+
+The existing background refresh path performs provider work.
+
+Foreign/ineligible tickers remain excluded using the existing eligibility helper.
+
+==================================================
+PART 2 — REMOVE BRITTLE WATCHLIST-ID EQUALITY FROM DUE-SELECTION SEMANTICS
+==========================================================================
+
+The weekly loop must operate on the CURRENT LIVE WATCHLIST MEMBERSHIP.
+
+Do not simply query every stale fundamentals row globally.
+
+Old deleted tickers / old Watchlists must not receive unnecessary refreshes.
+
+Preferred architecture:
+
+weekly loop loads current Watchlist tickers
+
+normalizes/dedupes them
+
+filters via existing FMP eligibility
+
+passes the current eligible symbol set into the fundamentals due-selection logic
+
+Then due selection answers:
+
+"Which CURRENT eligible Watchlist symbols need refresh?"
+
+not:
+
+"Which stored rows happen to carry this Watchlist ID?"
+
+Implement the smallest architecture-appropriate signature change.
+
+Conceptually:
+
+list_due_symbols(
+symbols=current_eligible_symbols,
+...
+)
+
+or an equivalent current-universe-aware helper.
+
+For existing rows:
+
+due when existing `next_refresh_at <= NOW()`
+
+regardless of historical stored `watchlist_id`
+
+The stored Watchlist ID must not make a current symbol invisible.
+
+Do not globally refresh stale rows for tickers that are no longer in the current Watchlist.
+
+==================================================
+PART 3 — INCLUDE NO-SNAPSHOT CURRENT SYMBOLS
+============================================
+
+Critical:
+
+The due-selection logic must include current eligible Watchlist symbols that have NO snapshot row.
+
+Without this, the existing 71 missing US tickers remain absent even after the future single-add bug is fixed.
+
+For current eligible symbols:
+
+A. no snapshot/cache row
+→ due
+
+B. snapshot row exists and `next_refresh_at <= NOW()`
+→ due
+
+C. snapshot row exists and is not yet due
+→ not due
+
+Do not require a placeholder row to exist before a symbol can enter the refresh queue.
+
+Do not assign fake snapshot data.
+
+Do not mark missing symbols fresh.
+
+The due helper may query existing rows and compute:
+
+## current eligible symbol set
+
+non-due existing symbols
+
+or equivalent deterministic logic.
+
+==================================================
+PART 4 — PRESERVE REFRESH BUDGET / BATCH SEMANTICS
+==================================================
+
+The current weekly loop uses:
+
+WATCHLIST_FUNDAMENTALS_MAX_PER_RUN = 50
+
+and existing FMP budget governance.
+
+Preserve this.
+
+The repair may temporarily produce a large backlog:
+
+71 never-refreshed US tickers
++
+existing stale rows
+
+Do not blast the whole backlog synchronously.
+
+Use the existing max-per-run and budget governor.
+
+Preserve the existing provider spacing/cadence.
+
+Do not increase FMP concurrency solely to clear the backlog.
+
+Return the expected initial queue depth after the fix.
+
+==================================================
+PART 5 — CURRENT WATCHLIST AS SOURCE OF TRUTH
+=============================================
+
+Use the existing current Watchlist loader already proven correct by the audit.
+
+The weekly loop currently reads current Watchlists via:
+
+data.pg_storage.watchlist_list()
+
+and/or the exact current canonical service path.
+
+Preserve the current source of truth.
+
+Do not introduce:
+
+hardcoded Watchlist ID
+
+environment-specific Watchlist ID
+
+static ticker file
+
+old Watchlist snapshot
+
+For each Watchlist processed:
+
+derive current ticker membership dynamically.
+
+If the system supports multiple Watchlists, preserve current multi-Watchlist behavior and dedupe symbols safely where appropriate.
+
+Do not assume the current Primary Watchlist is the only possible list unless existing code already does so.
+
+==================================================
+PART 6 — STORED WATCHLIST_ID FIELD
+==================================
+
+Audit whether `watchlist_id` on `watchlist_fundamentals_cache` is required for any current consumer other than due-queue filtering.
+
+Do not remove the column/schema.
+
+Do not migrate the table unless necessary.
+
+If upsert_snapshot() currently persists a Watchlist ID:
+
+preserve it.
+
+The repair should make due-selection resilient to ID drift.
+
+Optionally update the stored Watchlist ID on successful future snapshot upsert if that already occurs naturally.
+
+Do not add a bulk retag migration merely to fix queue visibility if current-symbol due selection makes it unnecessary.
+
+Return exact current remaining role of the stored `watchlist_id`.
+
+==================================================
+PART 7 — DUPLICATE SYMBOL / MULTIPLE WATCHLIST SAFETY
+=====================================================
+
+If the same ticker appears in multiple Watchlists:
+
+avoid duplicate provider refreshes within one canonical weekly pass where the current architecture supports deduplication.
+
+Audit current behavior.
+
+Prefer one symbol refresh per pass, then persist through the existing canonical snapshot store.
+
+Do not change the schema unnecessarily.
+
+Return exact dedupe semantics.
+
+==================================================
+PART 8 — VALIDATE SINGLE-TICKER ADD
+===================================
+
+Use a safe test or reversible strategy.
+
+Do not permanently alter user Watchlist data.
+
+Prove:
+
+ticker added through single-ticker add path
+
+eligible ticker becomes registered/due in fundamentals pipeline
+
+no FMP call happens inside the add request
+
+ticker appears in current-universe due selection
+
+Then restore test state.
+
+If a live add/remove test is unsafe:
+
+unit/integration-test the endpoint helper path against a transaction/mock and report honestly.
+
+Do not leave a test ticker.
+
+==================================================
+PART 9 — VALIDATE EXISTING 71 PIPELINE-GAP TICKERS
+==================================================
+
+After implementation, WITHOUT requiring provider responses yet:
+
+run current-universe due selection.
+
+Report:
+
+current eligible Watchlist symbols
+
+symbols with snapshots
+
+symbols missing snapshots
+
+stale existing symbols
+
+total due symbols
+
+Specifically prove these are now visible in the due queue:
+
+DELL
+
+IBRX
+
+RBRK
+
+HOOD
+
+SOFI
+
+ABCL
+
+AMAT
+
+CRWD
+
+NET
+
+OKTA
+
+ORCL
+
+PANW
+
+SNOW
+
+MDB
+
+IBM
+
+HPE
+
+FTNT
+
+RBLX
+
+RDDT
+
+XYZ
+
+Do not fake refreshed data.
+
+The acceptance criterion at this stage is:
+
+they enter the canonical refresh queue.
+
+==================================================
+PART 10 — RUN EXISTING CANONICAL BACKFILL PATH
+==============================================
+
+After queue visibility is proven:
+
+invoke ONLY the existing canonical fundamentals refresh path.
+
+Do not create a debug provider loop.
+
+Do not bypass the FMP budget governor.
+
+Do not change max-per-run.
+
+Use the existing background/warmup/service function or safe admin path already used by production.
+
+Process according to:
+
+existing max-per-run
+
+existing FMP budget guard
+
+existing provider spacing
+
+The backlog may require multiple canonical runs.
+
+Do not force completion in one run.
+
+Report separately:
+
+due queue before
+
+attempted
+
+successful snapshots persisted
+
+legitimate provider empty/not-found
+
+temporary failures
+
+budget deferred
+
+due queue after
+
+FMP calls used
+
+Do not count an FMP provider empty response as a pipeline bug.
+
+==================================================
+PART 11 — POST-BACKFILL COVERAGE
+================================
+
+After the existing canonical refresh path has processed as much as safely allowed during this task:
+
+report current live Watchlist fundamentals coverage.
+
+Separate:
+
+eligible symbols
+
+foreign/ineligible symbols
+
+snapshot present
+
+snapshot missing
+
+provider-attempted but legitimate empty/not-found
+
+temporary failure/pending
+
+still due/backlogged
+
+Specifically report final cache state for:
+
+DELL
+
+IBRX
+
+RBRK
+
+HOOD
+
+SOFI
+
+ABCL
+
+AMD
+
+MU
+
+BE
+
+CRDO
+
+For each show:
+
+snapshot present
+
+last_refreshed_at
+
+next_refresh_at
+
+stored watchlist_id
+
+key field presence
+
+Do not modify field formulas.
+
+==================================================
+PART 12 — INVESTMENT ALIGNMENT COVERAGE RECHECK
+===============================================
+
+Do not modify Investment Alignment.
+
+After canonical fundamentals backfill:
+
+rerun Investment Alignment V1 over the full 378-symbol internal universe.
+
+Return:
+
+previous coverage:
+240/378 = 63.5%
+
+new coverage:
+[count / percent]
+
+newly available Investment Alignment tickers
+
+still unavailable because Financial Acceleration missing
+
+Specifically show:
+
+DELL
+
+IBRX
+
+RBRK
+
+HOOD
+
+SOFI
+
+ABCL
+
+Return their new Investment Alignment results if fundamentals snapshots are now available.
+
+Do not tune scoring.
+
+Do not alter minimum evidence.
+
+==================================================
+PART 13 — FUNDAMENTAL SCREENER RECHECK
+======================================
+
+Read-only confirm the Watchlist Fundamental Screener now consumes the same repaired cache coverage.
+
+For the newly backfilled names:
+
+verify the existing fundamental fields are present through the canonical Watchlist fundamentals read path.
+
+Do not change frontend code.
+
+Do not change Screener columns.
+
+==================================================
+PART 14 — WEEKLY REFRESH SAFETY RECHECK
+=======================================
+
+Simulate/read-only inspect the next weekly loop selection after the repair.
+
+Prove:
+
+current Watchlist eligible symbols are considered
+
+no-snapshot current tickers are due
+
+stale current tickers are due
+
+fresh current tickers are skipped
+
+old stale rows for tickers no longer in current Watchlists are not selected solely because they exist in the cache
+
+Watchlist-ID drift cannot silently zero out the queue again
+
+Return exact selection counts.
+
+==================================================
+PART 15 — COST / REGRESSION PROOF
+=================================
+
+Prove:
+
+0 new database tables
+
+0 new caches
+
+0 new schedulers
+
+0 Investment Alignment changes
+
+0 Trade Alignment changes
+
+0 Actionability changes
+
+0 Theme changes
+
+0 Options changes
+
+0 field mapping changes
+
+0 FMP endpoint changes
+
+weekly cadence preserved
+
+MAX_PER_RUN preserved
+
+budget governor preserved
+
+provider calls occur only through existing canonical fundamentals refresh path
+
+Report exact incremental FMP calls used during validation/backfill.
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+WATCHLIST FUNDAMENTALS REFRESH COVERAGE REPAIR REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT CAUSE:
+[exact two defects]
+
+SINGLE-TICKER ADD FIX:
+[path/function]
+
+CURRENT-UNIVERSE DUE SELECTION:
+[implementation]
+
+NO-SNAPSHOT QUEUE SEMANTICS:
+[implementation]
+
+WATCHLIST_ID ROLE:
+[assessment]
+
+MULTI-WATCHLIST DEDUPE:
+[behavior]
+
+INITIAL ELIGIBLE UNIVERSE:
+[count]
+
+INITIAL SNAPSHOT COVERAGE:
+[count / percent]
+
+INITIAL MISSING ELIGIBLE:
+[count]
+
+INITIAL STALE EXISTING:
+[count]
+
+INITIAL DUE QUEUE:
+[count]
+
+NAMED MISSING TICKERS QUEUED:
+[proof]
+
+CANONICAL BACKFILL RUN:
+[results]
+
+POST-BACKFILL SNAPSHOT COVERAGE:
+[results]
+
+NAMED TICKER SNAPSHOTS:
+[results]
+
+INVESTMENT ALIGNMENT COVERAGE BEFORE:
+[240 / 378 = 63.5%]
+
+INVESTMENT ALIGNMENT COVERAGE AFTER:
+[count / percent]
+
+NEWLY AVAILABLE INVESTMENT TICKERS:
+[summary]
+
+FUNDAMENTAL SCREENER CACHE RECHECK:
+[results]
+
+NEXT WEEKLY SELECTION:
+[results]
+
+FMP CALLS USED:
+[count]
+
+COST / REGRESSION:
+[results]
+
+End exactly:
+
+WATCHLIST FUNDAMENTALS REFRESH COVERAGE VERDICT
+
+SINGLE-TICKER ADD REGISTRATION:
+[PASS / FAIL]
+
+NO-SNAPSHOT CURRENT SYMBOLS ENTER DUE QUEUE:
+[YES / NO]
+
+WATCHLIST-ID DRIFT CAN SILENTLY ZERO QUEUE:
+[NO expected]
+
+CURRENT WATCHLIST IS SOURCE OF TRUTH:
+[YES / NO]
+
+OLD DELETED TICKERS REFRESHED GLOBALLY:
+[NO expected]
+
+WEEKLY MAX-PER-RUN PRESERVED:
+[YES / NO]
+
+FMP BUDGET GOVERNOR PRESERVED:
+[YES / NO]
+
+FUNDAMENTALS COVERAGE:
+[before → after]
+
+INVESTMENT ALIGNMENT COVERAGE:
+[before → after]
+
+DELL INVESTMENT ALIGNMENT:
+[result]
+
+IBRX INVESTMENT ALIGNMENT:
+[result]
+
+RBRK INVESTMENT ALIGNMENT:
+[result]
+
+HOOD INVESTMENT ALIGNMENT:
+[result]
+
+SOFI INVESTMENT ALIGNMENT:
+[result]
+
+ABCL INVESTMENT ALIGNMENT:
+[result]
+
+INCREMENTAL FMP CALLS:
+[count]
+
+NEXT IMPLEMENTATION:
+ELITE_ASSET_REBOUND ARCHETYPE
+
+Do not modify Investment Alignment.
+
+Do not weaken Financial Acceleration.
+
+Do not create a new fundamentals cache.
+
+Do not make unrelated changes.
