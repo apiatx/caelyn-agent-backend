@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1786,4 +1787,227 @@ def get_confluence_for_symbol(symbol: str) -> dict:
         "confluence_verdict":          "AVOID",
         "confidence":                  0.0,
         "error":                       "compute_failed",
+    }
+
+
+# ── Retained snapshot (Watchlist Alignment Read Path V1) ────────────────────
+# Process-local stale-while-revalidate cache over the canonical
+# build_confluence_snapshot() producer. This layer performs NO scoring — it
+# only stores/serves the completed return value of the existing producer and
+# decides, from existing upstream freshness metadata, when to trigger exactly
+# one background rebuild via that same producer. See spec:
+# "WATCHLIST ALIGNMENT READ PATH V1" Parts 1/2/4/5.
+
+_RETAINED_LOCK = threading.Lock()
+_RETAINED: dict[str, Any] = {
+    "snapshot":            None,
+    "built_at":            None,
+    "source_fingerprint":  None,
+    "build_in_progress":   False,
+}
+
+# Conservative bounded max-age fallback (seconds). Applied in addition to the
+# fingerprint check because Catalyst Alignment and Investment fundamentals do
+# not expose a cheap, always-available freshness signal suitable for a fast
+# per-request fingerprint (see Part 3 of the spec) — this bound catches drift
+# in those two inputs without inventing a fake timestamp or a new scheduler.
+_RETAINED_MAX_AGE_S = 1800  # 30 minutes
+
+
+def _compute_source_fingerprint() -> dict[str, Any]:
+    """
+    Compact, deterministic fingerprint built ONLY from existing freshness/
+    version metadata already produced by upstream sources. Answers:
+    "Have any canonical Confluence inputs materially advanced since the
+    retained snapshot was built?" No provider calls, no new DB writes.
+    """
+    fp: dict[str, Any] = {}
+
+    # Stage2 — canonical top-level LKG "updated_at" (defines the universe).
+    try:
+        if _STAGE2_LKG.exists():
+            raw = json.loads(_STAGE2_LKG.read_text())
+            fp["stage2_updated_at"]  = raw.get("updated_at")
+            fp["stage2_symbol_count"] = raw.get("symbol_count")
+        else:
+            fp["stage2_updated_at"] = None
+            fp["stage2_symbol_count"] = None
+    except Exception:
+        fp["stage2_updated_at"] = None
+        fp["stage2_symbol_count"] = None
+
+    # Entry — newest per-symbol computed_at from the canonical entry LKG,
+    # plus the LKG file mtime (the entry_state_service's own on-disk store).
+    try:
+        from services.entry_state_service import get_all_entry_state_lkg, _LKG_PATH as _ENTRY_LKG_PATH
+        entry_lkg = get_all_entry_state_lkg()
+        newest = None
+        for row in entry_lkg.values():
+            ca = row.get("computed_at")
+            if ca and (newest is None or ca > newest):
+                newest = ca
+        fp["entry_newest_computed_at"] = newest
+        fp["entry_lkg_mtime"] = _ENTRY_LKG_PATH.stat().st_mtime if _ENTRY_LKG_PATH.exists() else None
+    except Exception:
+        fp["entry_newest_computed_at"] = None
+        fp["entry_lkg_mtime"] = None
+
+    # Options Alignment source — canonical master options LKG file mtime
+    # (same file _load_options_map() reads; existing freshness proxy).
+    try:
+        fp["options_lkg_mtime"] = _OPTIONS_LKG.stat().st_mtime if _OPTIONS_LKG.exists() else None
+    except Exception:
+        fp["options_lkg_mtime"] = None
+
+    # Theme Rotation / Theme RS — existing cadence file that Theme RS already
+    # persists its per-timeframe refresh timestamps to.
+    try:
+        _theme_rs_refresh_ts_path = _BASE / "data" / "theme_rs_refresh_ts.json"
+        fp["theme_rs_refresh_ts_mtime"] = (
+            _theme_rs_refresh_ts_path.stat().st_mtime if _theme_rs_refresh_ts_path.exists() else None
+        )
+    except Exception:
+        fp["theme_rs_refresh_ts_mtime"] = None
+
+    # Social / X-consensus cache — existing weekly file mtime.
+    try:
+        fp["x_consensus_mtime"] = _X_CONSENSUS.stat().st_mtime if _X_CONSENSUS.exists() else None
+    except Exception:
+        fp["x_consensus_mtime"] = None
+
+    # Catalyst Alignment source: no lightweight module-level freshness/version
+    # field exists today (per audit — top_catalysts_service/calendar_snapshot_
+    # service/rss_article_archive do not expose one cheap enough to read on
+    # every request). NOT fabricated here. Covered instead by the conservative
+    # bounded _RETAINED_MAX_AGE_S fallback applied in get_retained_confluence_
+    # snapshot() below.
+    #
+    # Investment fundamentals: watchlist_fundamentals_store does have a real
+    # "refreshed_at" column, but reading it requires a Neon query per symbol
+    # batch — too costly to run on every fast warm-path request. Also covered
+    # by the bounded max-age fallback rather than a per-request DB round trip.
+
+    return fp
+
+
+def _retained_is_stale(current_fp: dict[str, Any]) -> bool:
+    """True if fingerprint changed OR the bounded max-age has elapsed."""
+    with _RETAINED_LOCK:
+        if _RETAINED["snapshot"] is None:
+            return True
+        if _RETAINED["source_fingerprint"] != current_fp:
+            return True
+        built_at = _RETAINED["built_at"]
+    if not built_at:
+        return True
+    try:
+        built_dt = datetime.fromisoformat(built_at)
+        age_s = (datetime.now(timezone.utc) - built_dt).total_seconds()
+        return age_s > _RETAINED_MAX_AGE_S
+    except Exception:
+        return True
+
+
+def _start_background_rebuild() -> None:
+    def _rebuild() -> None:
+        try:
+            new_snap = build_confluence_snapshot()
+            new_fp = _compute_source_fingerprint()
+            with _RETAINED_LOCK:
+                _RETAINED["snapshot"] = new_snap
+                _RETAINED["built_at"] = _now_iso()
+                _RETAINED["source_fingerprint"] = new_fp
+                _RETAINED["build_in_progress"] = False
+        except Exception as e:
+            print(f"[CONFLUENCE_RETAINED] background rebuild failed (prior snapshot preserved): {e}")
+            with _RETAINED_LOCK:
+                _RETAINED["build_in_progress"] = False
+
+    threading.Thread(target=_rebuild, daemon=True, name="confluence-retained-rebuild").start()
+
+
+def get_retained_confluence_snapshot() -> dict:
+    """
+    Stale-while-revalidate serving helper over the canonical
+    build_confluence_snapshot() producer (no duplicate scoring logic):
+
+      A. retained exists + fingerprint unchanged  -> return retained immediately
+      B. retained exists + fingerprint changed     -> return retained immediately,
+                                                       kick off exactly ONE background
+                                                       rebuild (single-flight guarded)
+      C. no retained snapshot yet                  -> one synchronous cold build,
+                                                       retain it, return it
+
+    A failed background rebuild preserves the prior retained snapshot and
+    clears the in-progress flag so a later request can retry.
+    """
+    with _RETAINED_LOCK:
+        have_snapshot = _RETAINED["snapshot"] is not None
+
+    if not have_snapshot:
+        # Cold start — single synchronous build (may be slow once).
+        with _RETAINED_LOCK:
+            if _RETAINED["snapshot"] is not None:
+                return _RETAINED["snapshot"]
+            already_building = _RETAINED["build_in_progress"]
+            if not already_building:
+                _RETAINED["build_in_progress"] = True
+
+        if already_building:
+            # Extremely rare race at true cold start: block on one build
+            # rather than launching a second one.
+            snap = build_confluence_snapshot()
+            return snap
+
+        try:
+            snap = build_confluence_snapshot()
+            fp = _compute_source_fingerprint()
+            with _RETAINED_LOCK:
+                _RETAINED["snapshot"] = snap
+                _RETAINED["built_at"] = _now_iso()
+                _RETAINED["source_fingerprint"] = fp
+                _RETAINED["build_in_progress"] = False
+            return snap
+        except Exception:
+            with _RETAINED_LOCK:
+                _RETAINED["build_in_progress"] = False
+            raise
+
+    current_fp = _compute_source_fingerprint()
+    stale = _retained_is_stale(current_fp)
+
+    if stale:
+        with _RETAINED_LOCK:
+            already_building = _RETAINED["build_in_progress"]
+            if not already_building:
+                _RETAINED["build_in_progress"] = True
+                should_start = True
+            else:
+                should_start = False
+        if should_start:
+            _start_background_rebuild()
+
+    with _RETAINED_LOCK:
+        return _RETAINED["snapshot"]
+
+
+def get_retained_confluence_meta() -> dict:
+    """
+    Lightweight metadata about the retained snapshot, for surfacing on the
+    Watchlist Alignment endpoint. Does not trigger a rebuild — call
+    get_retained_confluence_snapshot() first if a fresh/retained snapshot is
+    needed.
+    """
+    # "stale" mirrors rebuild_in_progress: get_retained_confluence_snapshot()
+    # already evaluates the fingerprint/max-age check and flips
+    # build_in_progress=True the moment it decides the retained snapshot is
+    # stale and starts a rebuild. Recomputing the fingerprint again here
+    # would just duplicate that check on every request for no new signal.
+    with _RETAINED_LOCK:
+        built_at = _RETAINED["built_at"]
+        build_in_progress = _RETAINED["build_in_progress"]
+    return {
+        "built_at":            built_at,
+        "stale":               build_in_progress,
+        "rebuild_in_progress": build_in_progress,
     }

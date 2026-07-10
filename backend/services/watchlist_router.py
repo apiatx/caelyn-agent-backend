@@ -3941,6 +3941,144 @@ async def get_by_id_endpoint(watchlist_id: str):
     return store
 
 
+@router.get("/{watchlist_id}/alignment")
+async def get_watchlist_alignment(watchlist_id: str):
+    """
+    WATCHLIST ALIGNMENT READ PATH V1 — compact, full-Watchlist alignment view.
+
+    Joins:
+      - current Watchlist tickers (canonical loader, order preserved)
+      - the retained Confluence V2 snapshot (stale-while-revalidate cache
+        over the existing build_confluence_snapshot() producer — no second
+        scoring producer, no new LKG/table/scheduler)
+      - the existing Entry State LKG (read once, canonical helper)
+
+    Returns exactly one compact row per current Watchlist ticker. Tickers
+    without a Confluence/Entry row are NOT dropped — they get an explicit
+    placeholder row with available=false fields (no fabricated scores).
+
+    Does not join legacy LLM Watchlist sections (Golden Zone, HC Trade Zone,
+    HC Investment Zone, Growth Momentum) and does not invoke /analyze or any
+    LLM. Order matches the current Watchlist order — no server-side score
+    sorting (client performs local sort/filter).
+    """
+    store = load_watchlist(watchlist_id)
+    if store is None:
+        return {"empty": True}
+
+    tickers: list[str] = []
+    seen: set[str] = set()
+    for t in (store.get("tickers") or []):
+        sym = str(t).strip().upper()
+        if sym and sym not in seen:
+            seen.add(sym)
+            tickers.append(sym)
+
+    from services.confluence_v2_service import (
+        get_retained_confluence_snapshot,
+        get_retained_confluence_meta,
+    )
+    from services.entry_state_service import get_all_entry_state_lkg
+
+    try:
+        snap = get_retained_confluence_snapshot()
+    except Exception as exc:
+        print(f"[WATCHLIST_ALIGNMENT] retained Confluence snapshot unavailable: {exc}")
+        snap = {"results": []}
+    meta = get_retained_confluence_meta()
+
+    confluence_by_symbol: Dict[str, dict] = {}
+    for row in (snap.get("results") or []):
+        sym = str(row.get("symbol") or "").strip().upper()
+        if sym:
+            confluence_by_symbol[sym] = row
+
+    try:
+        entry_lkg = get_all_entry_state_lkg() or {}
+    except Exception as exc:
+        print(f"[WATCHLIST_ALIGNMENT] Entry State LKG unavailable: {exc}")
+        entry_lkg = {}
+
+    rows: List[Dict[str, Any]] = []
+    for sym in tickers:
+        row = confluence_by_symbol.get(sym)
+        entry_row = entry_lkg.get(sym) or {}
+
+        if row is None:
+            # No Confluence row at all for this Watchlist ticker — explicit
+            # placeholder, never dropped, never fabricated.
+            rows.append({
+                "symbol": sym,
+                "actionability": {"available": False, "state": None, "score": None},
+                "trade_alignment": {"available": False, "score": None, "archetype": None},
+                "investment_alignment": {"available": False, "score": None, "state": None},
+                "entry": {
+                    "available": bool(entry_row),
+                    "state": entry_row.get("entry_state"),
+                    "score": entry_row.get("entry_score"),
+                    "grade": entry_row.get("entry_grade"),
+                },
+                "theme": {"id": None},
+                "options": {"pressure_state": None},
+            })
+            continue
+
+        actionability_available = bool(row.get("actionability_available"))
+        trade_alignment_available = bool(row.get("trade_alignment_available"))
+        investment_alignment_available = bool(row.get("investment_alignment_available"))
+
+        theme_rotation = ((row.get("signal_breakdown") or {}).get("theme_rotation")) or {}
+        primary_theme_id = theme_rotation.get("primary_rotation_theme")
+
+        # Entry: PART 9 — read from the Entry State LKG directly (canonical
+        # helper), not from get_confluence_for_symbol() and not recomputed.
+        entry_available = bool(entry_row)
+        entry_score = entry_row.get("entry_score") if entry_available else None
+        entry_grade = entry_row.get("entry_grade") if entry_available else None
+        entry_state = entry_row.get("entry_state") if entry_available else None
+
+        rows.append({
+            "symbol": sym,
+            "actionability": {
+                "available": actionability_available,
+                "state":     row.get("actionability_state") if actionability_available else None,
+                "score":     row.get("actionability_score") if actionability_available else None,
+            },
+            "trade_alignment": {
+                "available": trade_alignment_available,
+                "score":     row.get("trade_alignment_score") if trade_alignment_available else None,
+                "archetype": row.get("trade_alignment_archetype") if trade_alignment_available else None,
+            },
+            "investment_alignment": {
+                "available": investment_alignment_available,
+                "score":     row.get("investment_alignment_score") if investment_alignment_available else None,
+                "state":     row.get("investment_alignment_state") if investment_alignment_available else None,
+            },
+            "entry": {
+                "available": entry_available,
+                "state":     entry_state,
+                "score":     entry_score,
+                "grade":     entry_grade,
+            },
+            "theme": {
+                "id": primary_theme_id,
+            },
+            "options": {
+                "pressure_state": row.get("options_pressure_state"),
+            },
+        })
+
+    return {
+        "watchlist_id":                   watchlist_id,
+        "watchlist_name":                 store.get("name"),
+        "row_count":                      len(rows),
+        "snapshot_built_at":              meta.get("built_at"),
+        "snapshot_stale":                 bool(meta.get("stale")),
+        "snapshot_rebuild_in_progress":   bool(meta.get("rebuild_in_progress")),
+        "rows": rows,
+    }
+
+
 def _build_theme_performance_groups(store: dict) -> dict:
     """
     Group the CURRENT watchlist rows (exactly as returned by GET /{watchlist_id})

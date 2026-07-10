@@ -15419,9 +15419,12 @@ async def get_confluence_snapshot(
     router's /{watchlist_id} catch-all route.
     """
     try:
-        from services.confluence_v2_service import build_confluence_snapshot
-        snap = build_confluence_snapshot()
-        results = snap.get("results") or []
+        from services.confluence_v2_service import get_retained_confluence_snapshot
+        retained_snap = get_retained_confluence_snapshot()
+        # Copy — retained_snap is the shared process-local cached object;
+        # filtering/limiting must never mutate it in place.
+        snap = dict(retained_snap)
+        results = list(snap.get("results") or [])
         verdict_filter = verdict.upper().strip()
         if verdict_filter and verdict_filter != "ALL":
             results = [r for r in results if r.get("confluence_verdict") == verdict_filter]

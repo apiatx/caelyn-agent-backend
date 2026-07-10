@@ -1,0 +1,912 @@
+WATCHLIST ALIGNMENT READ PATH V1 — RETAIN THE EXISTING CONFLUENCE PRODUCER OUTPUT AND ADD A COMPACT FULL-WATCHLIST ALIGNMENT ENDPOINT
+
+Work only in the existing backend Replit project.
+
+The backend scoring/model stack is complete for the current phase.
+
+A serving-path audit has proven:
+
+1. `build_confluence_snapshot()` has exactly two effective serving paths today:
+
+   * GET `/api/alpha/confluence`
+   * `get_confluence_for_symbol()` → GET `/api/alpha/confluence/{symbol}`
+
+2. There is currently:
+
+   * no retained Confluence snapshot
+   * no Confluence LKG
+   * no Neon Confluence table
+   * no background Confluence warmer
+   * no Confluence scheduler
+
+3. GET `/api/alpha/confluence`:
+
+   * synchronously builds the full current Stage2/Confluence universe
+   * currently ~379 symbols
+   * takes approximately 70–80 seconds on the measured full build
+   * then hard-caps the returned result list to 200 rows
+   * therefore cannot safely serve the current ~375-ticker Watchlist Alignment UI
+
+4. `get_confluence_for_symbol()` is appropriate for individual detail lookup but must NOT be looped across the full Watchlist because each call reloads the same shared upstream inputs.
+
+5. `build_confluence_snapshot()` is the canonical existing producer and is pure over existing cache/LKG/Neon reads. It adds no provider calls.
+
+The chosen architecture is:
+
+DESIGN C
+
+RETAIN ONE COMPLETED OUTPUT OF THE EXISTING `build_confluence_snapshot()` PRODUCER
+
+AND
+
+JOIN CURRENT WATCHLIST TICKERS AGAINST THAT RETAINED SNAPSHOT.
+
+Do not create a second scoring producer.
+
+Do not create a new scoring service.
+
+Do not create a Confluence Neon table.
+
+Do not create a disk Confluence LKG in this task.
+
+Do not add a fixed high-frequency scheduler.
+
+Do not modify any score formula.
+
+Do not modify:
+
+Trade Alignment
+
+THEME_ALIGNMENT
+
+ELITE_ASSET_REBOUND
+
+Investment Alignment
+
+Actionability
+
+Entry Structure
+
+Options Alignment
+
+Catalyst Alignment
+
+Theme semantics
+
+Social Bonus
+
+Do not modify frontend code.
+
+This task has TWO narrow goals:
+
+1. retain the completed output of the canonical existing `build_confluence_snapshot()` producer with safe stale-while-revalidate semantics
+
+2. add:
+
+GET `/api/watchlist/{watchlist_id}/alignment`
+
+returning one compact model-alignment row for every current Watchlist ticker.
+
+==================================================
+PART 0 — RECONFIRM EXACT LIVE CONTRACTS
+=======================================
+
+Before editing, re-read:
+
+backend/services/confluence_v2_service.py
+
+`build_confluence_snapshot()`
+
+`get_confluence_for_symbol()`
+
+backend/main.py Confluence routes
+
+backend/services/watchlist_router.py
+
+backend/services/watchlist_service.py
+
+backend/services/entry_state_service.py
+
+the exact upstream LKG/cache loaders used inside `build_confluence_snapshot()`
+
+Confirm exact function signatures and current return shapes.
+
+Do not invent prompt-era field names.
+
+==================================================
+PART 1 — RETAIN THE CANONICAL CONFLUENCE OUTPUT
+===============================================
+
+Inside the existing Confluence service layer, add one process-local retained snapshot holder.
+
+The retained state should contain at minimum:
+
+snapshot
+
+built_at
+
+source_fingerprint
+
+build_in_progress state / lock
+
+Do not duplicate scoring logic.
+
+The only function allowed to produce the actual Confluence results remains:
+
+`build_confluence_snapshot()`
+
+The retained layer only stores the completed return value of that function.
+
+Conceptually:
+
+current producer:
+
+`build_confluence_snapshot()`
+
+new serving helper:
+
+`get_retained_confluence_snapshot()`
+
+or exact architecture-appropriate naming.
+
+Do not rename the existing producer unless necessary.
+
+==================================================
+PART 2 — SOURCE FINGERPRINT
+===========================
+
+Critical:
+
+Do NOT invalidate the retained snapshot using only Stage2 and Entry freshness.
+
+Confluence currently depends on independently changing upstream sources including:
+
+Stage2
+
+Entry State
+
+Options Alignment source / options LKG
+
+Catalyst Alignment source
+
+Theme Rotation / Theme RS
+
+Social / X consensus cache
+
+Investment fundamentals cache
+
+The retained snapshot must carry a compact deterministic source fingerprint based on existing freshness/version metadata.
+
+Audit the exact metadata available from the canonical upstream sources.
+
+Use the narrowest stable fingerprint available.
+
+Potential examples:
+
+Stage2:
+top-level LKG `updated_at`
+
+Entry:
+newest per-symbol `computed_at`
+or an existing entry LKG file mtime/version if more appropriate
+
+Options:
+canonical master/options LKG updated timestamp or file mtime already used by existing freshness logic
+
+Theme Rotation:
+Theme RS LKG updated timestamp/version
+
+Social:
+X-consensus file timestamp / updated_at / file mtime
+
+Fundamentals:
+max relevant `refreshed_at` from the canonical fundamentals store
+or an existing store freshness/version helper
+
+Catalyst:
+existing source timestamp/version if available
+
+Do not fabricate freshness metadata.
+
+Do not add database writes solely to build the fingerprint.
+
+Do not hash full payload contents unless no lightweight metadata exists.
+
+Return exact implemented fingerprint fields.
+
+The fingerprint should answer:
+
+"Have any canonical Confluence inputs materially advanced since the retained snapshot was built?"
+
+==================================================
+PART 3 — CATALYST FRESHNESS HONESTY
+===================================
+
+The prior audit found Catalyst Alignment does not expose an obvious explicit module-level freshness field.
+
+Trace its exact current source reads.
+
+If a reliable timestamp/version is available from the underlying cache/Neon source:
+
+include it in the fingerprint.
+
+If not:
+
+do not invent a fake catalyst timestamp.
+
+Choose the narrowest safe alternative and report it.
+
+Examples:
+
+underlying source max-updated timestamp
+
+file mtime
+
+or a conservative bounded retained-snapshot maximum age
+
+Do not add a catalyst scheduler.
+
+Do not change Catalyst Alignment.
+
+==================================================
+PART 4 — STALE-WHILE-REVALIDATE SEMANTICS
+=========================================
+
+The Watchlist UI must not block for ~79 seconds every time an upstream fingerprint changes.
+
+Implement these exact serving semantics:
+
+A. Retained snapshot exists
+AND
+current source fingerprint == retained source fingerprint
+
+→ return retained snapshot immediately
+
+B. Retained snapshot exists
+AND
+fingerprint changed
+
+→ return retained snapshot immediately
+
+→ trigger ONE asynchronous/background rebuild using the EXISTING `build_confluence_snapshot()` producer
+
+→ when the build completes successfully:
+atomically replace retained snapshot
+update built_at
+update source_fingerprint
+
+C. No retained snapshot exists
+
+→ perform one cold build using the existing producer
+
+→ retain the completed snapshot
+
+→ return it
+
+The cold-start path may be slow once.
+
+Steady-state Watchlist page loads must not synchronously rebuild the full Confluence universe.
+
+Do not silently return an empty result while the first build runs.
+
+==================================================
+PART 5 — SINGLE-FLIGHT BUILD PROTECTION
+=======================================
+
+Critical:
+
+Multiple simultaneous requests must not launch multiple full Confluence builds.
+
+Use the existing backend concurrency model appropriately.
+
+Add one lock / in-progress guard.
+
+Expected behavior:
+
+request 1 detects stale
+→ starts background rebuild
+
+requests 2–20 arrive while rebuild is active
+→ serve the same retained stale snapshot
+→ do NOT launch additional rebuilds
+
+When rebuild completes:
+→ future requests receive the new snapshot
+
+If the rebuild fails:
+→ preserve the prior retained snapshot
+→ clear in-progress state
+→ report/log failure
+→ allow a later request to retry
+
+Do not discard a usable retained snapshot because a rebuild failed.
+
+==================================================
+PART 6 — EXISTING CONFLUENCE ROUTE COMPATIBILITY
+================================================
+
+Audit whether GET `/api/alpha/confluence` should also use the retained serving helper.
+
+Preferred architecture:
+
+the existing full Confluence route should use the same retained canonical output rather than independently forcing a new 79-second build on every request.
+
+Preserve:
+
+default limit=50
+
+max limit=200
+
+verdict filtering
+
+response shape
+
+sorting
+
+The route may continue slicing the retained full result after retrieval.
+
+Do not change its public response contract.
+
+GET `/api/alpha/confluence/{symbol}` may continue using the current per-symbol path if that remains the cleanest detail/read behavior.
+
+Do not degrade per-symbol latency.
+
+Return exact behavior.
+
+==================================================
+PART 7 — ADD COMPACT WATCHLIST ALIGNMENT ENDPOINT
+=================================================
+
+Add:
+
+GET `/api/watchlist/{watchlist_id}/alignment`
+
+Use the existing Watchlist router/service architecture.
+
+The endpoint must:
+
+1. load the requested current Watchlist through the canonical existing Watchlist loader
+
+2. preserve the Watchlist's current ticker membership
+
+3. obtain the retained canonical full Confluence snapshot
+
+4. index Confluence results by normalized symbol
+
+5. read the existing Entry State LKG once through the canonical helper
+
+6. return exactly one compact row for every Watchlist ticker
+
+Do not drop a ticker because model data is missing.
+
+For any missing model:
+
+return `available: false`
+
+and null score/state fields where appropriate.
+
+If a Watchlist ticker has no Confluence row at all:
+
+return an explicit compact placeholder row.
+
+Do not fabricate scores.
+
+==================================================
+PART 8 — COMPACT LIST ROW CONTRACT
+==================================
+
+Return one row per Watchlist ticker using this conceptual contract, adapted only to exact current field names:
+
+{
+"symbol": "MU",
+
+"actionability": {
+"available": true,
+"state": "WAIT_FOR_RETEST",
+"score": 68.2
+},
+
+"trade_alignment": {
+"available": true,
+"score": 81.9,
+"archetype": "THEME_ALIGNMENT"
+},
+
+"investment_alignment": {
+"available": true,
+"score": 93.9,
+"state": "ELITE"
+},
+
+"entry": {
+"available": true,
+"state": "WAIT_FOR_RETEST",
+"score": 48,
+"grade": "C"
+},
+
+"theme": {
+"id": "memory_storage"
+},
+
+"options": {
+"pressure_state": "BULLISH_ACCELERATING"
+}
+}
+
+Top-level response should include:
+
+watchlist_id
+
+watchlist_name if available
+
+row_count
+
+snapshot_built_at
+
+snapshot_stale
+
+snapshot_rebuild_in_progress
+
+rows
+
+Do not expose internal lock state beyond a simple boolean.
+
+Do not dump the entire full Confluence row.
+
+==================================================
+PART 9 — EXACT ENTRY FIELD JOIN
+===============================
+
+The audit proved these fields are NOT fully surfaced in the current Confluence result row:
+
+entry_score
+
+entry_grade
+
+base_archetype
+
+extension_state
+
+For the compact list endpoint:
+
+read Entry State LKG once via the existing canonical helper.
+
+Use:
+
+entry_score
+
+entry_grade
+
+and exact current entry state
+
+for the compact row.
+
+Do not call `get_confluence_for_symbol()` to obtain entry detail.
+
+Do not compute Entry again.
+
+For future detail UI:
+
+the existing per-symbol Confluence route remains the detail source.
+
+Do not add a second detail endpoint.
+
+==================================================
+PART 10 — PRIMARY THEME ID
+==========================
+
+Use the exact current primary Theme result already exposed by Confluence:
+
+`signal_breakdown.theme_rotation.primary_rotation_theme`
+
+or the exact audited current path.
+
+This is the canonical PRIMARY Theme identity used by current Trade Alignment semantics.
+
+Do not choose an Additional Theme.
+
+Do not use max Theme score.
+
+Do not change multi-theme semantics.
+
+Return:
+
+theme.id
+
+Human-readable Theme name is not required in V1 of the backend contract if no canonical display-name field already exists in the Confluence result.
+
+Do not hardcode a Theme ID→name map in this endpoint.
+
+==================================================
+PART 11 — RESPONSE ORDER
+========================
+
+Preserve current Watchlist ticker order in the endpoint response.
+
+Do not sort by model score server-side.
+
+The frontend will perform local sort/filter.
+
+This guarantees:
+
+one output row per Watchlist ticker
+
+predictable join/order semantics
+
+no accidental ranked-slice behavior
+
+==================================================
+PART 12 — LEGACY WATCHLIST SECTIONS
+===================================
+
+Do not join:
+
+Golden Zone
+
+HC Trade Zone
+
+HC Investment Zone
+
+Growth Momentum
+
+in this endpoint.
+
+The backend audit proved these are legacy LLM-synthesized grouped outputs from `watchlist_analysis.py`, not current deterministic model fields.
+
+Do not invoke `/analyze`.
+
+Do not invoke Claude/Grok/Gemini.
+
+Do not add stale legacy booleans to the compact row in V1.
+
+The shadow comparison will occur visually in the existing Watchlist UI by leaving the current legacy sections untouched alongside the new Alignment surface.
+
+==================================================
+PART 13 — VALIDATE RETAINED SNAPSHOT
+====================================
+
+Run a controlled validation.
+
+Prove:
+
+first retained-snapshot request with no retained state:
+→ one canonical full build
+→ retained snapshot populated
+
+second immediate request:
+→ retained snapshot served
+→ no full build
+
+same fingerprint:
+→ retained snapshot served
+
+simulate or naturally observe one upstream fingerprint advance:
+→ stale retained snapshot served immediately
+→ exactly one background rebuild starts
+
+concurrent requests during rebuild:
+→ stale retained snapshot served
+→ no duplicate rebuilds
+
+successful rebuild:
+→ retained snapshot atomically replaced
+
+failed rebuild simulation:
+→ prior retained snapshot preserved
+→ in-progress flag cleared
+
+Report timings.
+
+Do not invoke provider calls.
+
+==================================================
+PART 14 — VALIDATE FULL WATCHLIST COVERAGE
+==========================================
+
+Against the current live Primary Watchlist:
+
+report:
+
+Watchlist ticker count
+
+alignment row count
+
+duplicate symbols
+
+missing rows
+
+placeholder rows
+
+Trade Alignment available
+
+Investment Alignment available
+
+Actionability available
+
+Entry available
+
+Prove:
+
+alignment row count == Watchlist ticker count
+
+Expected current scale:
+
+~375 rows
+
+Do not use the existing `/api/alpha/confluence` 200-row slice as the source.
+
+==================================================
+PART 15 — NAMED TICKER VALIDATION
+=================================
+
+Return compact endpoint rows for:
+
+MU
+
+LITE
+
+PLTR
+
+BE
+
+AMD
+
+CRDO
+
+DELL
+
+IBRX
+
+RBRK
+
+HOOD
+
+SOFI
+
+ABCL
+
+Show exact returned compact JSON-equivalent values.
+
+Expected conceptual examples:
+
+MU:
+high Investment
+THEME_ALIGNMENT selected
+WAIT_FOR_RETEST
+
+LITE:
+ELITE_ASSET_REBOUND selected
+REVERSAL_WATCH
+
+PLTR:
+high Investment
+ELITE_ASSET_REBOUND selected
+AVOID
+SUPPORT_LOST entry
+
+Do not force expected results if live data changed.
+
+==================================================
+PART 16 — EXISTING ROUTE REGRESSION
+===================================
+
+Recheck:
+
+GET `/api/alpha/confluence`
+
+GET `/api/alpha/confluence/{symbol}`
+
+Prove:
+
+existing route response contracts preserved
+
+limit clamp preserved
+
+verdict filtering preserved
+
+per-symbol lookup preserved
+
+THEME_ALIGNMENT scores unchanged
+
+ELITE_ASSET_REBOUND scores unchanged
+
+Investment Alignment unchanged
+
+Actionability unchanged
+
+Entry unchanged
+
+==================================================
+PART 17 — PERFORMANCE
+=====================
+
+Return:
+
+cold retained snapshot build time
+
+warm retained read time
+
+Watchlist alignment endpoint warm response time
+
+compact payload size
+
+row count
+
+stale-while-revalidate request latency
+
+background rebuild time
+
+Prove the Watchlist page no longer waits for a synchronous ~79-second build in steady state.
+
+==================================================
+PART 18 — COST / REGRESSION PROOF
+=================================
+
+Prove:
+
+0 new FMP calls
+
+0 Tradier calls
+
+0 Grok calls
+
+0 LLM calls
+
+0 provider calls
+
+0 new database tables
+
+0 database migrations
+
+0 new disk cache
+
+0 new scoring producer
+
+0 new scoring service
+
+0 new high-frequency scheduler
+
+0 changes to Trade Alignment scoring
+
+0 changes to Investment Alignment scoring
+
+0 changes to Actionability state logic
+
+0 changes to Entry
+
+0 changes to Options
+
+0 changes to Catalyst
+
+0 changes to Theme semantics
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+WATCHLIST ALIGNMENT READ PATH V1 IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+CANONICAL PRODUCER:
+[path/function]
+
+RETAINED SNAPSHOT:
+[implementation]
+
+SOURCE FINGERPRINT:
+[exact fields]
+
+CATALYST FRESHNESS:
+[handling]
+
+STALE-WHILE-REVALIDATE:
+[exact behavior]
+
+SINGLE-FLIGHT:
+[implementation]
+
+EXISTING CONFLUENCE ROUTE:
+[behavior]
+
+WATCHLIST ALIGNMENT ENDPOINT:
+[route]
+
+COMPACT ROW CONTRACT:
+[exact payload]
+
+ENTRY JOIN:
+[implementation]
+
+PRIMARY THEME:
+[implementation]
+
+WATCHLIST ORDER:
+[behavior]
+
+LEGACY SECTIONS:
+[unchanged]
+
+COLD BUILD VALIDATION:
+[results]
+
+WARM READ VALIDATION:
+[results]
+
+STALE REBUILD VALIDATION:
+[results]
+
+CONCURRENT REQUEST VALIDATION:
+[results]
+
+FULL WATCHLIST COVERAGE:
+[results]
+
+NAMED TICKERS:
+[results]
+
+EXISTING ROUTE REGRESSION:
+[results]
+
+PERFORMANCE:
+[results]
+
+COST / REGRESSION:
+[results]
+
+End exactly:
+
+WATCHLIST ALIGNMENT READ PATH V1 VERDICT
+
+CANONICAL CONFLUENCE PRODUCER PRESERVED:
+[YES / NO]
+
+SECOND SCORING PRODUCER CREATED:
+[NO expected]
+
+RETAINED SNAPSHOT FUNCTIONAL:
+[YES / NO]
+
+SOURCE FINGERPRINT COVERS INDEPENDENT INPUTS:
+[YES / NO]
+
+STALE SNAPSHOT SERVED WHILE REBUILDING:
+[YES / NO]
+
+DUPLICATE FULL BUILDS PREVENTED:
+[YES / NO]
+
+FULL WATCHLIST REPRESENTED:
+[count / count]
+
+TOP-N SLICE RISK REMOVED:
+[YES / NO]
+
+WARM WATCHLIST ALIGNMENT LATENCY:
+[value]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+SCORING MODELS CHANGED:
+[NO expected]
+
+READY FOR FRONTEND ALIGNMENT UI:
+[YES / NO]
+
+NEXT IMPLEMENTATION:
+FRONTEND WATCHLIST ALIGNMENT SHADOW UI
+
+Do not modify model formulas.
+
+Do not create a new scoring producer.
+
+Do not create a new high-frequency scheduler.
+
+Do not add legacy LLM section membership to the endpoint.
+
+Do not make unrelated changes.
