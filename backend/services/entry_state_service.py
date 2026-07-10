@@ -70,6 +70,19 @@ _LKG_PATH = Path(__file__).parent.parent / "data" / "entry_state_lkg.json"
 _ENTRY_STATE_LKG: dict[str, dict] = {}   # symbol → last result
 _LKG_LOADED = False
 
+# ── Entry analysis model version ────────────────────────────────────────────────
+# Bump this whenever Entry classification semantics/schema change (new states,
+# new archetype fields, precedence changes, etc). Every newly computed result
+# persists this value as "entry_analysis_version". Rows with a missing or older
+# version are considered DERIVED-ANALYSIS-stale (distinct from market-data/TTL
+# freshness) and must be recomputed from already-available daily bars — see
+# is_entry_version_current() below. This is the single authoritative version;
+# do not hardcode version numbers elsewhere.
+#   1 = pre-LOW_BASE (legacy HIGH_BASE-only Entry Structure V2)
+#   2 = LOW_BASE taxonomy added (LOW_BASE_FORMING/COILING/READY + base_archetype,
+#       base_location, low_base_floor diagnostics)
+ENTRY_ANALYSIS_VERSION = 2
+
 # ── Entry family / state / grade constants ─────────────────────────────────────
 FAMILY_PRE_MOVE       = "PRE_MOVE"
 FAMILY_CONTINUATION   = "CONTINUATION"
@@ -884,6 +897,7 @@ def analyze_entry_state_from_bars(
         "extension_reason_codes":  _extension_reason_codes,
         "elapsed_ms":      round((time.time() - t0) * 1000, 1),
         "computed_at":     _now_iso(),
+        "entry_analysis_version": ENTRY_ANALYSIS_VERSION,
     }
 
     # ── Entry Structure V2 diagnostics (present whenever computed) ───────────
@@ -947,6 +961,25 @@ def analyze_entry_state_from_bars(
     else:
         _update_lkg_memory(symbol, result)
     return result
+
+
+def is_entry_version_current(symbol: str) -> bool:
+    """
+    Return True only when a cached Entry row exists AND its
+    entry_analysis_version matches the current ENTRY_ANALYSIS_VERSION.
+
+    This is the DERIVED-ENTRY-ANALYSIS freshness check — distinct from
+    market-data/TTL freshness (which lives in watchlist_stage2_service).
+    Missing, null, older, or unrecognized/future version values all return
+    False (reason: ENTRY_ANALYSIS_VERSION_STALE) and must be recomputed from
+    already-available daily bars — never treated as a market-data staleness
+    signal.
+    """
+    _load_lkg()
+    entry = _ENTRY_STATE_LKG.get(symbol.upper())
+    if not entry:
+        return False
+    return entry.get("entry_analysis_version") == ENTRY_ANALYSIS_VERSION
 
 
 def get_entry_state_lkg(symbol: str) -> Optional[dict]:

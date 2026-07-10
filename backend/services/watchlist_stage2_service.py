@@ -305,20 +305,49 @@ async def warmup_stage2(
 
     deduped = list(dict.fromkeys(s.strip().upper() for s in tickers if s.strip()))
 
+    # ── Version-aware Entry freshness ──────────────────────────────────────────
+    # Two independent freshness concepts:
+    #   1. Market-data / Stage TTL freshness  → _is_fresh() (time-based, unchanged)
+    #   2. Derived Entry analysis freshness   → entry_analysis_version match
+    # A row that is time-fresh but was computed under an older Entry model
+    # version must still be reprocessed so Entry can be recomputed locally from
+    # the same daily bars this pass fetches — it is NOT a market-data staleness
+    # signal and does not bypass/alter the Stage TTL logic itself.
+    try:
+        from services.entry_state_service import is_entry_version_current as _entry_ver_ok
+    except Exception:
+        _entry_ver_ok = None  # pragma: no cover — degrade to time-only freshness
+
+    def _entry_version_stale(sym: str) -> bool:
+        if _entry_ver_ok is None:
+            return False
+        try:
+            return not _entry_ver_ok(sym)
+        except Exception:
+            return False
+
     def _should_skip(sym: str) -> bool:
         if force:
             return False
         if force_nulls and _is_null_entry(sym):
             return False
-        return _is_fresh(sym)
+        if not _is_fresh(sym):
+            return False
+        if _entry_version_stale(sym):
+            return False
+        return True
 
     skip_count = sum(1 for s in deduped if _should_skip(s))
     to_process = [s for s in deduped if not _should_skip(s)]
+    version_stale_count = sum(
+        1 for s in deduped if _is_fresh(s) and _entry_version_stale(s) and s in to_process
+    )
 
     print(
         f"[STAGE2_WL] warmup starting{'[FORCE-NULL]' if force_nulls else ''}: "
         f"{len(deduped)} unique tickers, {skip_count} fresh (skip), "
-        f"{len(to_process)} to compute"
+        f"{len(to_process)} to compute ({version_stale_count} solely due to "
+        f"ENTRY_ANALYSIS_VERSION_STALE)"
     )
 
     if not to_process:
@@ -561,6 +590,7 @@ async def warmup_stage2(
         "total_required":           len(deduped),
         "skipped_fresh":            skip_count,
         "to_process":               len(to_process),
+        "entry_version_stale_only": version_stale_count,
         "valid_stage_count":        computed,
         "null_stage_count":         no_bars_count + fetch_failed_count + too_short + errors,
         "fetch_failed_count":       fetch_failed_count,
