@@ -1,0 +1,660 @@
+LOW BASE ENTRY STRUCTURE — POST-WARMUP FULL-UNIVERSE VALIDATION
+
+AUDIT ONLY.
+
+ZERO CODE CHANGES unless a clear implementation defect is proven and reported before editing.
+
+The LOW_BASE taxonomy has already been implemented in:
+
+backend/services/entry_structure_v2.py
+
+backend/services/entry_state_service.py
+
+Current new canonical states:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+The initial implementation session proved HIGH_BASE regression safety and valid-V2 authority, but did NOT observe a live LOW_BASE example within the six-symbol targeted validation budget.
+
+The prior report explicitly deferred:
+
+full-universe Entry distribution
+
+base-archetype distribution
+
+HIGH_BASE → LOW_BASE migration audit
+
+falling-knife validation
+
+LOW_BASE + Trade Alignment analytical joins
+
+Do not build Actionability until these are validated.
+
+The existing Stage2 / Entry background warmup should already have had time to naturally refresh the current universe.
+
+Use the CURRENT populated Entry/Stage LKG or complete internal snapshot.
+
+Do not force provider history fetches.
+
+Do not add debug endpoints unless absolutely necessary; if temporary diagnostics are used, remove them before completion.
+
+Do not modify Trade Alignment.
+
+Do not modify Options Alignment.
+
+Do not modify Theme Alignment.
+
+Do not modify Stage Analysis.
+
+Do not modify Catalyst Alignment.
+
+Do not tune Low Base thresholds merely to create examples.
+
+Do not build Actionability.
+
+Do not build Investment Alignment.
+
+==================================================
+PART 1 — PROVE SNAPSHOT FRESHNESS
+=================================
+
+Before analyzing states, return:
+
+current time
+
+Entry/Stage snapshot generated_at
+
+symbol count
+
+count of rows containing base_archetype
+
+count of rows containing low_base_reason_codes field
+
+count of rows generated after the LOW_BASE implementation deployment/restart
+
+Determine whether the current universe has actually been recomputed through the new code.
+
+If the majority of rows are still pre-implementation stale:
+
+STOP.
+
+Return:
+
+LOW BASE VALIDATION BLOCKED — ENTRY SNAPSHOT STILL STALE
+
+Do not make code changes.
+
+Do not force a full provider refresh.
+
+==================================================
+PART 2 — COMPLETE ENTRY STATE DISTRIBUTION
+==========================================
+
+Across the complete current Entry universe, return counts for every actual production Entry state.
+
+At minimum explicitly show:
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+BREAKOUT_CONFIRMED
+
+BREAKOUT_RETEST
+
+BREAKOUT_PULLBACK
+
+WAIT_FOR_RETEST
+
+TRENDLINE_SUPPORT_TEST
+
+REVERSAL_WATCH
+
+FAILED_BREAKOUT
+
+SUPPORT_LOST
+
+EXTREME_EXTENSION
+
+NO_CLEAR_ENTRY / safe neutral equivalents
+
+Do not omit zero-count states.
+
+Return total universe count and prove state counts reconcile.
+
+==================================================
+PART 3 — BASE ARCHETYPE DISTRIBUTION
+====================================
+
+Return complete counts:
+
+HIGH_BASE
+
+LOW_BASE
+
+MID_RANGE_BASE
+
+UNCLASSIFIED_BASE
+
+NO_BASE / null
+
+For each archetype return:
+
+count
+
+median Entry score
+
+median base duration
+
+median prior drawdown
+
+median base position in range
+
+median floor touch count where applicable
+
+Do not tune anything.
+
+==================================================
+PART 4 — ALL CURRENT LOW BASES
+==============================
+
+Return EVERY current ticker classified:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+If more than 100 total, return top 100 by Entry score plus total counts.
+
+For each show:
+
+symbol
+
+Entry state
+
+Entry score
+
+Entry grade
+
+base_archetype
+
+prior drawdown %
+
+base_position_in_52w_range
+
+distance_from_52w_high_pct
+
+distance_from_52w_low_pct
+
+base duration
+
+base range %
+
+low_base_floor
+
+floor touch count
+
+floor first date
+
+floor last date
+
+distance to floor %
+
+floor held recently
+
+floor break count
+
+low_base_support_quality
+
+range contraction
+
+higher-low evidence
+
+internal ceiling / reclaim pivot
+
+extension state
+
+Stage
+
+low_base_reason_codes
+
+The purpose is to visually/structurally inspect whether these are genuine deep-reset bases.
+
+==================================================
+PART 5 — STATE QUALITY BY LOW BASE SUBTYPE
+==========================================
+
+For each:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+return aggregate distributions:
+
+count
+
+Entry score min / median / max
+
+prior drawdown median
+
+base duration median
+
+base range median
+
+floor touch count median
+
+support-quality median
+
+range-contraction rate
+
+higher-low evidence rate
+
+pressing-reclaim rate
+
+Stage distribution
+
+extension-state distribution
+
+Explain the deterministic difference between the three groups using actual current data.
+
+The groups should not merely be score buckets with identical geometry.
+
+==================================================
+PART 6 — HIGH-BASE → LOW-BASE MIGRATION AUDIT
+=============================================
+
+Use the pre-change Entry snapshot if retained in LKG/history/session artifacts.
+
+Compare every ticker previously classified:
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY
+
+against its current base_archetype and Entry state.
+
+Return counts:
+
+still HIGH_BASE
+
+now LOW_BASE
+
+now MID_RANGE_BASE
+
+now UNCLASSIFIED / NO_BASE
+
+Return every HIGH_BASE → LOW_BASE migration.
+
+For each:
+
+symbol
+
+old Entry state
+
+new Entry state
+
+prior drawdown
+
+base position in range
+
+distance from prior high
+
+distance from floor
+
+floor touch count
+
+range contraction
+
+old reason codes where available
+
+new reason codes
+
+State whether the migration is structurally sensible.
+
+If a pre-change snapshot is not retained:
+
+say so explicitly.
+
+Do not fabricate comparison.
+
+==================================================
+PART 7 — FALLING-KNIFE NEGATIVE CONTROL
+=======================================
+
+From the current Entry universe, identify up to 30 symbols with the strongest combination of:
+
+large drawdown
+
+continued lower lows
+
+recent support breaks
+
+weak floor quality
+
+negative low sequence
+
+structural deterioration
+
+These are analytical negative controls.
+
+For each show:
+
+symbol
+
+drawdown
+
+recent low sequence / higher-low diagnostic
+
+floor
+
+floor touch count
+
+floor break count
+
+support quality
+
+base archetype
+
+Entry state
+
+Entry score
+
+LOW_BASE state assigned?
+
+Expected:
+
+LOW_BASE_COILING = false
+
+LOW_BASE_READY = false
+
+Count any false positives.
+
+If LOW_BASE_FORMING is assigned to a structurally deteriorating falling knife, flag it separately for review.
+
+Do not automatically edit thresholds.
+
+==================================================
+PART 8 — LOW BASE + TRADE ALIGNMENT
+===================================
+
+Join the current Low Base Entry rows read-only to the existing Trade Alignment snapshot.
+
+Do not modify either score.
+
+Return all current LOW_BASE rows sorted by:
+
+Trade Alignment descending
+
+For each show:
+
+symbol
+
+Trade Alignment score
+
+Trade Alignment rank
+
+Theme score
+
+Theme
+
+Theme Rotation / Theme state
+
+Stage score
+
+Stage
+
+Options Alignment V2
+
+Premium Pressure score
+
+Options Pressure state
+
+Catalyst score
+
+primary catalyst
+
+Social Bonus
+
+Entry state
+
+Entry score
+
+Entry grade
+
+low_base_reason_codes
+
+Then summarize:
+
+LOW_BASE_READY with Trade Alignment >= 70
+
+LOW_BASE_COILING with Trade Alignment >= 70
+
+LOW_BASE_FORMING with Trade Alignment >= 70
+
+LOW_BASE rows with BULLISH_ACCELERATING Options pressure
+
+LOW_BASE rows with BEARISH_EASING Options pressure
+
+Do not create Actionability labels.
+
+==================================================
+PART 9 — SPECIFIC STRUCTURAL REVIEW
+===================================
+
+From the current LOW_BASE population, select:
+
+Top 10 LOW_BASE_READY by Entry score
+
+Top 10 LOW_BASE_COILING by Entry score
+
+Top 10 LOW_BASE_FORMING by Entry score
+
+For each provide a one-line deterministic structural interpretation using only the computed diagnostics.
+
+Examples of the style:
+
+"62% drawdown from prior high; 48-day base in lower 18% of 52w range; 4 floor tests; range contracted 31%; pressing reclaim."
+
+Do not use LLM qualitative stock analysis.
+
+This is deterministic diagnostic interpretation only.
+
+==================================================
+PART 10 — REGRESSION RECHECK
+============================
+
+Return current results for:
+
+SLAB
+
+DELL
+
+ALGM
+
+CIFR
+
+For each:
+
+Entry state
+
+Entry score
+
+Entry grade
+
+base_archetype
+
+extension state
+
+valid V2?
+
+legacy fallback used?
+
+Confirm:
+
+SLAB remains structurally coherent as a HIGH_BASE continuation structure.
+
+DELL remains V2 structure-aware.
+
+ALGM does not regress to naive FAILED_BREAKOUT.
+
+CIFR does not regress to legacy FAILED_BREAKOUT.
+
+Return:
+
+valid V2 → legacy fallthrough count across the complete current universe.
+
+Expected:
+
+0
+
+==================================================
+PART 11 — PROVIDER / COST PROOF
+===============================
+
+Prove:
+
+0 validation-only provider history calls
+
+0 new Tradier calls
+
+0 new FMP calls
+
+0 new Grok calls
+
+0 new LLM calls
+
+0 scheduler changes
+
+0 Entry code changes unless an explicit defect was first proven
+
+0 Trade Alignment changes
+
+0 Options Alignment changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+LOW BASE ENTRY FULL-UNIVERSE VALIDATION REPORT
+
+FILES CHANGED:
+[NONE expected]
+
+SNAPSHOT FRESHNESS:
+[results]
+
+ENTRY UNIVERSE:
+[count]
+
+ENTRY STATE DISTRIBUTION:
+[results]
+
+BASE ARCHETYPE DISTRIBUTION:
+[results]
+
+LOW_BASE_FORMING:
+[count + summary]
+
+LOW_BASE_COILING:
+[count + summary]
+
+LOW_BASE_READY:
+[count + summary]
+
+ALL LOW BASES:
+[results]
+
+HIGH-BASE → LOW-BASE MIGRATIONS:
+[results]
+
+FALLING-KNIFE CONTROL:
+[results]
+
+LOW BASE + TRADE ALIGNMENT:
+[results]
+
+TOP STRUCTURAL EXAMPLES:
+[results]
+
+REGRESSION:
+[results]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+LOW BASE ENTRY FINAL VERDICT
+
+NEW-CODE SNAPSHOT FRESH:
+[YES / NO]
+
+LOW BASE TAXONOMY OBSERVED LIVE:
+[YES / NO]
+
+LOW_BASE_FORMING COUNT:
+[count]
+
+LOW_BASE_COILING COUNT:
+[count]
+
+LOW_BASE_READY COUNT:
+[count]
+
+LOW BASE STATE GEOMETRY DIFFERENTIATED:
+[YES / NO + evidence]
+
+HIGH_BASE → LOW_BASE RECLASSIFICATIONS:
+[count + assessment]
+
+FALLING-KNIFE FALSE-POSITIVE COUNT:
+[count]
+
+VALID V2 → LEGACY FALLTHROUGH:
+[count, 0 expected]
+
+LOW-BASE HIGH-ALIGNMENT OPPORTUNITIES:
+[count + assessment]
+
+REGRESSION SAFETY:
+[PASS / FAIL]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+BIGGEST REMAINING ENTRY WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+ACTIONABILITY V1
+
+Do not tune thresholds.
+
+Do not modify Entry Structure unless a concrete defect is proven and reported first.
+
+Do not build Actionability.
+
+Do not build Investment Alignment.
+
+Do not make unrelated changes.
