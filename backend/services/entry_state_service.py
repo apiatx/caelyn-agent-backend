@@ -94,6 +94,9 @@ _BASE_SCORES: dict[str, int] = {
     "HIGH_BASE_FORMING":   68,   # Entry Structure V2 — early-stage base, still developing
     "HIGH_BASE_COILING":   79,   # Entry Structure V2 — contracting range beneath ceiling
     "HIGH_BASE_READY":     88,   # Entry Structure V2 — mature, tight, pressing the ceiling
+    "LOW_BASE_FORMING":    38,   # Entry Structure V2 — immature lower-region floor, momentum unproven
+    "LOW_BASE_COILING":    56,   # Entry Structure V2 — mature floor tightening, momentum still unproven
+    "LOW_BASE_READY":      70,   # Entry Structure V2 — mature floor + reclaim pressure, asymmetric turn setup
     "BREAKOUT_CONFIRMED":  83,   # Entry Structure V2 — confirmed move above real base ceiling
     "WAIT_FOR_RETEST":     58,   # Entry Structure V2 — extended post-breakout, no retest yet
     "TRENDLINE_SUPPORT_TEST": 69,  # Entry Structure V2 — pullback testing valid rising trendline
@@ -128,6 +131,9 @@ _STATE_TO_FAMILY: dict[str, str] = {
     "HIGH_BASE_FORMING":      FAMILY_CONTINUATION,
     "HIGH_BASE_COILING":      FAMILY_CONTINUATION,
     "HIGH_BASE_READY":        FAMILY_CONTINUATION,
+    "LOW_BASE_FORMING":       FAMILY_PRE_MOVE,
+    "LOW_BASE_COILING":       FAMILY_PRE_MOVE,
+    "LOW_BASE_READY":         FAMILY_PRE_MOVE,
     "BREAKOUT_CONFIRMED":     FAMILY_CONTINUATION,
     "WAIT_FOR_RETEST":        FAMILY_CONTINUATION,
     "TRENDLINE_SUPPORT_TEST": FAMILY_CONTINUATION,
@@ -677,10 +683,12 @@ def analyze_entry_state_from_bars(
                 if _structure_state_raw is None:
                     _structure_state_raw = _v2_override[0]
 
-            # ── 6. PRE-BREAKOUT HIGH BASE — real base, still under the ceiling
+            # ── 6a. PRE-BREAKOUT HIGH BASE — real base, still under the ceiling,
+            #       located in the upper region of a meaningful prior advance.
             elif (
                 _base.get("base_detected") and
                 _base.get("base_breakout_status") in ("IN_RANGE", "PRESSING_CEILING") and
+                _v2_structure.get("base_archetype") == "HIGH_BASE" and
                 ad_sig != "distribution" and
                 ma_stack in ("bull", "mixed")
             ):
@@ -707,6 +715,50 @@ def analyze_entry_state_from_bars(
                     )
                 else:
                     _v2_override = ("HIGH_BASE_FORMING", 0, ev + ["base_still_developing"])
+                _structure_state_raw = _v2_override[0]
+
+            # ── 6b. LOW BASE — real base/floor in the lower region of a
+            #       meaningful prior decline. Momentum is NOT required.
+            elif (
+                _base.get("base_detected") and
+                _base.get("base_breakout_status") in ("IN_RANGE", "PRESSING_CEILING") and
+                _v2_structure.get("base_archetype") == "LOW_BASE"
+            ):
+                _floor = _v2_structure.get("low_base_floor", {})
+                ev = [
+                    "v2_low_base",
+                    f"base_range_pct={_base.get('base_range_pct')}",
+                    f"low_base_support_quality={_floor.get('low_base_support_quality')}",
+                ]
+                low_reason_codes: list[str] = []
+                if _floor.get("low_base_floor") is not None:
+                    low_reason_codes.append("LOW_BASE_FLOOR_DEFINED")
+                else:
+                    low_reason_codes.append("LOW_BASE_FLOOR_WEAK")
+                if (_floor.get("low_base_floor_touch_count") or 0) >= 3:
+                    low_reason_codes.append("LOW_BASE_MULTIPLE_FLOOR_TESTS")
+                contraction = _base.get("range_contraction")
+                if contraction:
+                    low_reason_codes.append("LOW_BASE_RANGE_CONTRACTING")
+                higher_lows = _base.get("higher_lows_count", 0) or 0
+                if higher_lows >= 1:
+                    low_reason_codes.append("LOW_BASE_HIGHER_LOWS")
+                duration = _base.get("base_duration_bars") or 0
+                pressing = _base.get("base_breakout_status") == "PRESSING_CEILING"
+                upper_pos = _base.get("upper_range_position") or 0
+                mature_floor = (_floor.get("low_base_floor_touch_count") or 0) >= 2 and duration >= 20
+                tightening = bool(contraction) and higher_lows >= 1
+
+                if pressing or upper_pos >= 65:
+                    low_reason_codes.append("LOW_BASE_PRESSING_RECLAIM")
+                low_reason_codes.append("LOW_BASE_MOMENTUM_UNPROVEN")
+
+                if mature_floor and tightening and (pressing or upper_pos >= 65):
+                    _v2_override = ("LOW_BASE_READY", 0, ev + low_reason_codes)
+                elif mature_floor and tightening:
+                    _v2_override = ("LOW_BASE_COILING", 0, ev + low_reason_codes)
+                else:
+                    _v2_override = ("LOW_BASE_FORMING", 0, ev + low_reason_codes)
                 _structure_state_raw = _v2_override[0]
 
             # ── 5. STRUCTURAL SUPPORT — sharp pullback still holding trendline
@@ -873,6 +925,17 @@ def analyze_entry_state_from_bars(
             "failed_breakout_reason_codes":_bo.get("failed_breakout_reason_codes"),
             "support_candidates":          _v2_structure.get("support_candidates"),
             "primary_support":             _v2_structure.get("primary_support"),
+            "base_archetype":              _v2_structure.get("base_archetype"),
+            "base_location":               _v2_structure.get("base_location"),
+            "low_base_floor":              _v2_structure.get("low_base_floor", {}).get("low_base_floor"),
+            "low_base_floor_touch_count":  _v2_structure.get("low_base_floor", {}).get("low_base_floor_touch_count"),
+            "low_base_floor_first_date":   _v2_structure.get("low_base_floor", {}).get("low_base_floor_first_date"),
+            "low_base_floor_last_date":    _v2_structure.get("low_base_floor", {}).get("low_base_floor_last_date"),
+            "distance_to_floor_pct":       _v2_structure.get("low_base_floor", {}).get("distance_to_floor_pct"),
+            "floor_held_recently":         _v2_structure.get("low_base_floor", {}).get("floor_held_recently"),
+            "floor_break_count":           _v2_structure.get("low_base_floor", {}).get("floor_break_count"),
+            "low_base_support_quality":    _v2_structure.get("low_base_floor", {}).get("low_base_support_quality"),
+            "low_base_reason_codes":       [c for c in evidence if isinstance(c, str) and c.startswith("LOW_BASE_")] or None,
         }
         if _v2_structure.get("primary_support"):
             result["primary_support_level"]   = _v2_structure["primary_support"].get("level")

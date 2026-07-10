@@ -501,6 +501,204 @@ def build_support_hierarchy(
     return deduped, primary
 
 
+# ── PART 1 — Base location / prior-move context ─────────────────────────────
+
+def compute_base_location(bars: list[dict], base: dict, price: float) -> dict:
+    """
+    Deterministic diagnostics describing WHERE a detected base sits relative
+    to the stock's prior 52w price structure. Pure computation over the same
+    already-fetched daily bars — zero new history calls.
+    """
+    empty = {
+        "base_position_in_52w_range": None,
+        "base_position_in_prior_lookback_range": None,
+        "distance_from_52w_high_pct": None,
+        "distance_from_52w_low_pct": None,
+        "drawdown_from_prior_major_high_pct": None,
+        "prior_advance_pct": None,
+        "prior_decline_pct": None,
+        "base_start_vs_prior_high_pct": None,
+        "base_start_vs_prior_low_pct": None,
+        "base_midpoint_position": None,
+    }
+    if not bars or price is None or price <= 0:
+        return empty
+
+    lookback_52w = bars[-252:] if len(bars) >= 20 else bars
+    closes_52w = [float(b["close"]) for b in lookback_52w]
+    highs_52w = [float(b["high"]) if b.get("high") is not None else float(b["close"]) for b in lookback_52w]
+    lows_52w = [float(b["low"]) if b.get("low") is not None else float(b["close"]) for b in lookback_52w]
+    hi_52w, lo_52w = max(highs_52w), min(lows_52w)
+
+    base_position_in_52w_range = None
+    if hi_52w > lo_52w:
+        base_position_in_52w_range = round((price - lo_52w) / (hi_52w - lo_52w) * 100, 1)
+
+    distance_from_52w_high_pct = round((price - hi_52w) / hi_52w * 100, 2) if hi_52w > 0 else None
+    distance_from_52w_low_pct = round((price - lo_52w) / lo_52w * 100, 2) if lo_52w > 0 else None
+    drawdown_from_prior_major_high_pct = distance_from_52w_high_pct
+
+    # Prior advance / decline: move from the 52w low to the 52w high (whichever
+    # came first) gives the magnitude of the dominant prior directional move.
+    hi_idx = highs_52w.index(hi_52w)
+    lo_idx = lows_52w.index(lo_52w)
+    prior_advance_pct = None
+    prior_decline_pct = None
+    if lo_idx < hi_idx and lo_52w > 0:
+        prior_advance_pct = round((hi_52w - lo_52w) / lo_52w * 100, 2)
+    elif hi_idx < lo_idx and hi_52w > 0:
+        prior_decline_pct = round((lo_52w - hi_52w) / hi_52w * 100, 2)
+
+    base_position_in_prior_lookback_range = None
+    base_start_vs_prior_high_pct = None
+    base_start_vs_prior_low_pct = None
+    base_midpoint_position = None
+    if base.get("base_detected"):
+        b_start_idx = base.get("base_start_index")
+        pre_base_bars = lookback_52w[: max(0, len(lookback_52w) - (len(bars) - (b_start_idx or 0)))] if b_start_idx is not None else []
+        if pre_base_bars:
+            pre_highs = [float(b["high"]) if b.get("high") is not None else float(b["close"]) for b in pre_base_bars]
+            pre_lows = [float(b["low"]) if b.get("low") is not None else float(b["close"]) for b in pre_base_bars]
+            prior_hi, prior_lo = max(pre_highs), min(pre_lows)
+            if prior_hi > 0:
+                base_start_vs_prior_high_pct = round((base.get("base_high", price) - prior_hi) / prior_hi * 100, 2)
+            if prior_lo > 0:
+                base_start_vs_prior_low_pct = round((base.get("base_low", price) - prior_lo) / prior_lo * 100, 2)
+        if hi_52w > lo_52w and base.get("base_high") is not None:
+            base_position_in_prior_lookback_range = round(
+                (base["base_high"] - lo_52w) / (hi_52w - lo_52w) * 100, 1
+            )
+        if base.get("base_mid") is not None and hi_52w > lo_52w:
+            base_midpoint_position = round((base["base_mid"] - lo_52w) / (hi_52w - lo_52w) * 100, 1)
+
+    return {
+        "base_position_in_52w_range": base_position_in_52w_range,
+        "base_position_in_prior_lookback_range": base_position_in_prior_lookback_range,
+        "distance_from_52w_high_pct": distance_from_52w_high_pct,
+        "distance_from_52w_low_pct": distance_from_52w_low_pct,
+        "drawdown_from_prior_major_high_pct": drawdown_from_prior_major_high_pct,
+        "prior_advance_pct": prior_advance_pct,
+        "prior_decline_pct": prior_decline_pct,
+        "base_start_vs_prior_high_pct": base_start_vs_prior_high_pct,
+        "base_start_vs_prior_low_pct": base_start_vs_prior_low_pct,
+        "base_midpoint_position": base_midpoint_position,
+    }
+
+
+# ── PART 2 — Base archetype classification ──────────────────────────────────
+
+def classify_base_archetype(base: dict, location: dict, low_base_floor: dict) -> str:
+    """
+    Classify a detected base as HIGH_BASE, LOW_BASE, MID_RANGE_BASE, or
+    UNCLASSIFIED_BASE using existing base-geometry + location diagnostics.
+    Never forces every base into HIGH or LOW.
+    """
+    if not base.get("base_detected"):
+        return "UNCLASSIFIED_BASE"
+
+    pos_52w = location.get("base_position_in_52w_range")
+    prior_advance = location.get("prior_advance_pct")
+    prior_decline = location.get("prior_decline_pct")
+    dd_from_high = location.get("drawdown_from_prior_major_high_pct")
+    upper_pos = base.get("upper_range_position")
+
+    if pos_52w is None:
+        return "UNCLASSIFIED_BASE"
+
+    # HIGH_BASE: base sits in the upper region of a meaningful prior advance.
+    is_high = (
+        pos_52w >= 55.0 and
+        (prior_advance is not None and prior_advance >= 20.0) and
+        (upper_pos is None or upper_pos >= 40.0)
+    )
+    if is_high:
+        return "HIGH_BASE"
+
+    # LOW_BASE: meaningful prior decline/drawdown + base in lower region +
+    # a real floor with repeat support interactions + no decisive breakdown.
+    is_low = (
+        pos_52w <= 45.0 and
+        (dd_from_high is not None and dd_from_high <= -25.0) and
+        low_base_floor.get("low_base_floor") is not None and
+        (low_base_floor.get("low_base_floor_touch_count") or 0) >= 2 and
+        low_base_floor.get("floor_held_recently") is True and
+        base.get("base_breakout_status") != "BELOW_RANGE"
+    )
+    if is_low:
+        return "LOW_BASE"
+
+    return "MID_RANGE_BASE"
+
+
+# ── PART 3 — Low-base floor detection ───────────────────────────────────────
+
+def detect_low_base_floor(
+    bars: list[dict],
+    swing_lows: list[dict],
+    price: float,
+    atr_pct: Optional[float],
+    base: dict,
+) -> dict:
+    """
+    Derive floor/support evidence for LOW_BASE classification, reusing the
+    existing swing-low detection. Never invents a floor for a falling knife —
+    requires clustered swing lows + recent closes respecting the floor.
+    """
+    empty = {
+        "low_base_floor": None,
+        "low_base_floor_touch_count": 0,
+        "low_base_floor_first_date": None,
+        "low_base_floor_last_date": None,
+        "distance_to_floor_pct": None,
+        "floor_held_recently": False,
+        "floor_break_count": 0,
+        "low_base_support_quality": "NONE",
+    }
+    n = len(bars)
+    if n < 20 or price is None or price <= 0 or not swing_lows:
+        return empty
+
+    lookback = min(n, 130)
+    win_start = n - lookback
+    win_lows = [lo for lo in swing_lows if lo["bar_index"] >= win_start]
+    if not win_lows:
+        return empty
+
+    tol = max((atr_pct or 3.0) * 0.8, 2.5)
+    res = _cluster_levels(win_lows, tol)
+    if res is None:
+        return empty
+    floor_level, touch_count, last_touch_date, cluster = res
+    first_touch_date = min(p["date"] for p in cluster if p.get("date"))
+
+    fail_level = floor_level * (1 - tol / 100.0)
+    recent_bars = bars[-15:]
+    floor_break_count = sum(1 for b in recent_bars if float(b["close"]) < fail_level)
+    floor_held_recently = floor_break_count == 0 and float(bars[-1]["close"]) >= fail_level
+
+    distance_to_floor_pct = round((price - floor_level) / floor_level * 100, 2) if floor_level > 0 else None
+
+    if touch_count >= 3 and floor_held_recently:
+        quality = "STRONG"
+    elif touch_count >= 2 and floor_held_recently:
+        quality = "MODERATE"
+    elif touch_count >= 2:
+        quality = "WEAK"
+    else:
+        quality = "NONE"
+
+    return {
+        "low_base_floor": round(floor_level, 4),
+        "low_base_floor_touch_count": touch_count,
+        "low_base_floor_first_date": first_touch_date,
+        "low_base_floor_last_date": last_touch_date,
+        "distance_to_floor_pct": distance_to_floor_pct,
+        "floor_held_recently": floor_held_recently,
+        "floor_break_count": floor_break_count,
+        "low_base_support_quality": quality,
+    }
+
+
 # ── Master structural classifier ────────────────────────────────────────────
 
 # Allowed final entry states produced/consulted by this module.
@@ -540,6 +738,9 @@ def compute_structure(
         price, base, trendline, breakout, swing_lows,
         sma20, sma50, sma200, ma30w, stage_int,
     )
+    base_location = compute_base_location(bars, base, price)
+    low_base_floor = detect_low_base_floor(bars, swing_lows, price, atr_pct, base)
+    base_archetype = classify_base_archetype(base, base_location, low_base_floor)
     return {
         "base": base,
         "trendline": trendline,
@@ -548,4 +749,7 @@ def compute_structure(
         "primary_support": primary_support,
         "swing_high_count": len(swing_highs),
         "swing_low_count": len(swing_lows),
+        "base_location": base_location,
+        "low_base_floor": low_base_floor,
+        "base_archetype": base_archetype,
     }

@@ -1,0 +1,1085 @@
+ENTRY STRUCTURE V2 — ADD LOW-BASE TAXONOMY WITHOUT REDESIGNING THE EXISTING BASE ENGINE
+
+Work only in the existing backend Replit project.
+
+Trade Alignment Theme archetype is now functioning in shadow mode.
+
+Options Alignment V2 has passed full-universe validation.
+
+Do not modify Trade Alignment.
+Do not modify Options Alignment.
+Do not modify Theme Alignment.
+Do not modify Stage Analysis.
+Do not modify Catalyst Alignment.
+Do not build Actionability yet.
+Do not build Investment Alignment.
+Do not build ELITE_ASSET_REBOUND.
+Do not modify Options Flow.
+Do not add AI/LLM calls.
+Do not add Grok calls.
+Do not add provider calls.
+Do not add intraday bars.
+Do not change the existing Stage daily-history fetch architecture.
+
+This task has ONE goal:
+
+EXTEND THE EXISTING ENTRY STRUCTURE V2 BASE TAXONOMY TO DISTINGUISH HIGH BASES FROM LOW BASES.
+
+Do not rebuild base detection.
+
+The current Entry Structure V2 already has:
+
+find_swing_points()
+
+_cluster_levels()
+
+detect_base()
+
+detect_trendline()
+
+detect_breakout_pivot()
+
+build_support_hierarchy()
+
+compute_structure()
+
+and existing canonical states including:
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY
+
+BREAKOUT_CONFIRMED
+
+BREAKOUT_RETEST
+
+BREAKOUT_PULLBACK
+
+WAIT_FOR_RETEST
+
+TRENDLINE_SUPPORT_TEST
+
+REVERSAL_WATCH
+
+FAILED_BREAKOUT
+
+NO_CLEAR_ENTRY / equivalent
+
+The existing base engine has already passed targeted validation on:
+
+SLAB
+
+DELL
+
+ALGM
+
+CIFR
+
+Do not destabilize those fixes.
+
+==================================================
+PRODUCT DEFINITION
+==================
+
+The user wants to recognize TWO different bullish base archetypes.
+
+---
+
+## HIGH BASE
+
+Concept:
+
+A prior leader / strong uptrend has advanced materially.
+
+Price then consolidates in the upper region of its prior move or broader range.
+
+Momentum and leadership have already been demonstrated.
+
+The base represents:
+
+continuation
+
+compression
+
+another potential leg higher
+
+Trade interpretation:
+
+"PROVEN MOMENTUM LEADER RESETTING FOR CONTINUATION"
+
+Current canonical states:
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY
+
+These states must remain.
+
+---
+
+## LOW BASE
+
+Concept:
+
+A stock has experienced a substantial prior decline, prolonged reset, or major drawdown.
+
+Price stops making meaningful downside progress.
+
+A repeatable structural floor/support area develops.
+
+The range begins to stabilize and/or contract.
+
+Downside becomes increasingly defined.
+
+Momentum has NOT necessarily been proven yet.
+
+The base may require more patience.
+
+The trade represents:
+
+asymmetric turnaround / early reversal potential
+
+rather than momentum continuation.
+
+Trade interpretation:
+
+"DOWNSIDE DEFINED, MOMENTUM UNPROVEN, ASYMMETRIC TURN POTENTIALLY FORMING"
+
+Create canonical states:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+Do not use generic BUY/SELL labels.
+
+==================================================
+PART 0 — AUDIT CURRENT BASE POSITION LOGIC
+==========================================
+
+Before editing, trace exactly how the current V2 engine decides:
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY
+
+Return internally:
+
+files/functions
+
+base geometry inputs
+
+base range fields
+
+prior-trend fields
+
+extension fields
+
+distance-from-high fields
+
+swing structure
+
+range contraction logic
+
+resistance-touch logic
+
+breakout-position logic
+
+Determine whether HIGH_BASE currently means:
+
+a true upper-region base
+
+or:
+
+any valid base that happens to satisfy current geometry gates.
+
+Audit whether current HIGH_BASE counts contain possible low-base / deep-reset structures that are being mislabeled as HIGH_BASE.
+
+Do not change thresholds before proving the classification gap.
+
+==================================================
+PART 1 — DEFINE BASE LOCATION / PRIOR-MOVE CONTEXT
+==================================================
+
+Add deterministic diagnostics that describe WHERE a detected base sits relative to the stock's prior price structure.
+
+Use the existing daily bars.
+
+No new history calls.
+
+Potential useful diagnostics include:
+
+base_position_in_52w_range
+
+base_position_in_prior_lookback_range
+
+distance_from_52w_high_pct
+
+distance_from_52w_low_pct
+
+drawdown_from_prior_major_high_pct
+
+prior_advance_pct
+
+prior_decline_pct
+
+base_start_vs_prior_high_pct
+
+base_start_vs_prior_low_pct
+
+base_midpoint_position
+
+Use existing fields where already available.
+
+Do not duplicate canonical calculations unnecessarily.
+
+The goal is to answer:
+
+Is this base located near the upper region after a prior advance?
+
+or:
+
+Is this base located in the lower region after a major decline/reset?
+
+Return explicit diagnostics.
+
+==================================================
+PART 2 — BASE ARCHETYPE CLASSIFICATION
+======================================
+
+For every valid base detected by the existing base engine, classify:
+
+base_archetype
+
+Allowed values:
+
+HIGH_BASE
+
+LOW_BASE
+
+MID_RANGE_BASE
+
+UNCLASSIFIED_BASE
+
+Do not force every base into HIGH or LOW.
+
+---
+
+## HIGH_BASE INTENT
+
+A HIGH_BASE should require deterministic evidence that the base sits in the upper region of a meaningful prior advance / leadership structure.
+
+Conceptual evidence may include:
+
+strong prior advance
+
+base relatively near prior major high
+
+base located in upper part of meaningful lookback range
+
+Stage 2 / Stage 2B context where available
+
+price remains structurally above major long-term trend support
+
+Do not require all of these blindly.
+
+Inspect actual distributions first.
+
+Preserve current proven high-base behavior.
+
+SLAB must remain a critical regression case.
+
+DELL must remain structure-aware even while EXTREME_EXTENSION.
+
+---
+
+## LOW_BASE INTENT
+
+A LOW_BASE should require evidence of:
+
+meaningful prior decline / drawdown / prolonged reset
+
+base located in lower region of meaningful prior range
+
+defined horizontal or clustered support/floor
+
+multiple support interactions where detectable
+
+downside progress slowing
+
+range stabilizing and/or contracting
+
+no current decisive structural breakdown
+
+The stock does NOT need proven positive momentum.
+
+The stock does NOT need to be near a 52-week high.
+
+The stock does NOT need Stage 2.
+
+Do not classify every oversold stock as a LOW_BASE.
+
+A falling knife is not a base.
+
+A stock making persistent lower lows is not a base.
+
+A one-day bounce is not a base.
+
+Require actual daily structural stabilization.
+
+---
+
+## MID_RANGE_BASE
+
+Use for a valid base that is neither clearly a continuation high base nor a deep-reset low base.
+
+Do not force MID_RANGE_BASE into the new LOW_BASE states.
+
+Preserve existing safe neutral behavior unless another current canonical state already fits.
+
+==================================================
+PART 3 — LOW-BASE FLOOR DETECTION
+=================================
+
+Reuse existing swing-low logic.
+
+Do not create a completely separate base detector.
+
+For LOW_BASE classification, derive floor/support evidence from existing daily bars and swing lows.
+
+Potential evidence:
+
+clustered swing lows within ATR / percentage tolerance
+
+multiple floor tests
+
+recent closes respecting floor
+
+no persistent decisive closes below floor
+
+declining downside range
+
+higher low or flat-low sequence
+
+range contraction after the decline
+
+Return diagnostics:
+
+low_base_floor
+
+low_base_floor_touch_count
+
+low_base_floor_first_date
+
+low_base_floor_last_date
+
+distance_to_floor_pct
+
+floor_held_recently
+
+floor_break_count
+
+low_base_support_quality
+
+Use deterministic definitions.
+
+Do not eyeball.
+
+==================================================
+PART 4 — LOW BASE FORMING / COILING / READY
+===========================================
+
+Create:
+
+LOW_BASE_FORMING
+
+Intent:
+
+A legitimate lower-region base/floor is developing.
+
+Downside deterioration has slowed.
+
+Support exists but structure remains immature, wide, or inconsistent.
+
+Momentum is not proven.
+
+Typical characteristics:
+
+valid low-base archetype
+
+floor evidence present
+
+base duration sufficient
+
+but:
+
+range still relatively loose
+
+or:
+
+few support confirmations
+
+or:
+
+no meaningful contraction / reclaim pressure yet
+
+---
+
+## LOW_BASE_COILING
+
+Intent:
+
+A mature lower-region base is tightening.
+
+Downside remains defined.
+
+Range contraction / higher lows / pressure toward an internal resistance or reclaim level is developing.
+
+Momentum still may not be proven.
+
+Potential evidence:
+
+mature floor
+
+multiple floor tests
+
+range contraction
+
+higher lows or improving lows
+
+decreasing volatility
+
+price migrating toward upper region of the low-base range
+
+Do not require a breakout.
+
+---
+
+## LOW_BASE_READY
+
+Intent:
+
+A mature low base has a well-defined floor and a near-term structural trigger is forming.
+
+The trade has attractive structural asymmetry:
+
+limited downside to defined support
+
+meaningful upside if the early reversal/reclaim succeeds
+
+Momentum is not necessarily proven, so this is DIFFERENT from HIGH_BASE_READY.
+
+Potential evidence:
+
+mature low base
+
+strong floor quality
+
+tightening range
+
+higher lows / accumulation-like compression
+
+price pressing internal base ceiling or reclaim pivot
+
+and/or
+
+recent undercut-reclaim with floor intact
+
+Do not require Stage 2.
+
+Do not require strong prior positive momentum.
+
+Do not label a low base READY solely because price is close to support.
+
+Dead money at support is not automatically ready.
+
+==================================================
+PART 5 — HIGH BASE REGRESSION SAFETY
+====================================
+
+Do not materially redesign current HIGH_BASE thresholds in this task unless the audit proves the current classification is conflating high and low bases.
+
+The following prior validations must remain structurally coherent:
+
+SLAB as-of July 8:
+
+53-bar base
+
+6 resistance touches
+
+ceiling approximately 219.11
+
+no confirmed breakout above ceiling
+
+HIGH_BASE_READY
+
+DELL:
+
+structure analysis remains active despite EXTREME_EXTENSION
+
+previously classified BREAKOUT_RETEST after structural/extension separation
+
+ALGM July 8:
+
+must not regress to naive FAILED_BREAKOUT
+
+CIFR:
+
+valid V2 must not fall through to legacy FAILED_BREAKOUT
+
+Return exact before/after results for these regression symbols.
+
+Do not force unchanged states if new low-base archetype diagnostics legitimately add metadata.
+
+But no unrelated regressions.
+
+==================================================
+PART 6 — CLASSIFICATION PRECEDENCE
+==================================
+
+Preserve current strict V2 authority.
+
+The known architectural rule remains:
+
+valid structure_v2
+→ V2 authoritative
+
+legacy fallback only when V2 unavailable / failed / insufficient
+
+Do not reintroduce valid-V2 → legacy fallthrough.
+
+Strict confirmed FAILED_BREAKOUT logic remains authoritative.
+
+Breakout/retest states should generally take precedence over generic base labels where the current V2 architecture already does so.
+
+The intended conceptual precedence remains approximately:
+
+strict structural failure
+
+confirmed post-breakout / retest states
+
+active breakout states
+
+valid HIGH_BASE states
+
+valid LOW_BASE states
+
+trendline/support-specific states
+
+safe V2 neutral state
+
+legacy only if V2 unavailable
+
+Trace actual current precedence and make the smallest necessary integration.
+
+Do not rewrite the entire classifier.
+
+==================================================
+PART 7 — ENTRY SCORE / GRADE SEMANTICS
+======================================
+
+LOW_BASE states must have differentiated scoring from HIGH_BASE states.
+
+Do not assume:
+
+LOW_BASE_READY = HIGH_BASE_READY score
+
+A high base has:
+
+proven momentum / leadership
+
+A low base has:
+
+defined downside / asymmetry
+
+but:
+
+momentum is less proven
+
+Therefore the scoring philosophy should recognize:
+
+HIGH_BASE_READY
+→ high continuation-quality Entry score
+
+LOW_BASE_READY
+→ potentially strong Entry score, but with explicit patience / momentum-unproven risk
+
+LOW_BASE_COILING
+→ promising early setup
+
+LOW_BASE_FORMING
+→ watch / immature structure
+
+Do not artificially suppress every LOW_BASE merely because Stage is weak.
+
+Entry Score asks:
+
+"IS CURRENT STRUCTURE AN ATTRACTIVE PLACE TO INITIATE OR ADD?"
+
+It does not ask:
+
+"IS THE STOCK ALREADY A LEADER?"
+
+Trade Alignment later supplies opportunity strength.
+
+Return exact final score bands/adjustments for the new states.
+
+Expose reason codes such as:
+
+LOW_BASE_FLOOR_DEFINED
+
+LOW_BASE_MULTIPLE_FLOOR_TESTS
+
+LOW_BASE_RANGE_CONTRACTING
+
+LOW_BASE_HIGHER_LOWS
+
+LOW_BASE_PRESSING_RECLAIM
+
+LOW_BASE_MOMENTUM_UNPROVEN
+
+LOW_BASE_FLOOR_WEAK
+
+Use exact implemented names.
+
+==================================================
+PART 8 — OUTPUT FIELDS
+======================
+
+Preserve all existing Entry fields.
+
+Add:
+
+base_archetype
+
+base_location diagnostics
+
+low_base_floor
+
+low_base_floor_touch_count
+
+low_base_floor_first_date
+
+low_base_floor_last_date
+
+distance_to_floor_pct
+
+floor_held_recently
+
+floor_break_count
+
+low_base_support_quality
+
+low_base_reason_codes
+
+Use null/unavailable where not applicable.
+
+Do not fabricate low-base diagnostics for non-low-base structures.
+
+==================================================
+PART 9 — FULL-UNIVERSE VALIDATION
+=================================
+
+Use the current canonical Stage/Entry daily-bar architecture.
+
+Do not launch another standalone 70+ symbol one-off history fetch process.
+
+Prefer current live service paths and already-populated LKG diagnostics.
+
+If fresh history is required for targeted validation:
+
+maximum 6 targeted symbols.
+
+Report exact validation-only history/provider calls.
+
+Return current full Entry distribution before and after:
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+BREAKOUT_CONFIRMED
+
+BREAKOUT_RETEST
+
+BREAKOUT_PULLBACK
+
+WAIT_FOR_RETEST
+
+TRENDLINE_SUPPORT_TEST
+
+REVERSAL_WATCH
+
+FAILED_BREAKOUT
+
+EXTREME_EXTENSION
+
+NO_CLEAR_ENTRY / equivalents
+
+Return:
+
+base_archetype distribution
+
+HIGH_BASE
+
+LOW_BASE
+
+MID_RANGE_BASE
+
+UNCLASSIFIED_BASE
+
+==================================================
+PART 10 — AUDIT CURRENT HIGH BASES FOR MISCLASSIFIED LOW BASES
+==============================================================
+
+Take every current:
+
+HIGH_BASE_FORMING
+
+HIGH_BASE_COILING
+
+HIGH_BASE_READY
+
+from the pre-change Entry snapshot.
+
+For each, calculate the new base_archetype.
+
+Return counts:
+
+still HIGH_BASE
+
+now LOW_BASE
+
+now MID_RANGE_BASE
+
+unclassified
+
+Return every symbol that changes from a HIGH_BASE state to a LOW_BASE state.
+
+For each:
+
+symbol
+
+old Entry state
+
+new Entry state
+
+prior drawdown
+
+base position in range
+
+distance from prior high
+
+distance from floor
+
+floor touch count
+
+range contraction
+
+reason codes
+
+The question is:
+
+Were some current "HIGH_BASE" labels actually low/deep-reset bases?
+
+Do not tune to force a large migration.
+
+==================================================
+PART 11 — LOW BASE QUALITY VALIDATION
+=====================================
+
+Return Top 50 LOW_BASE structures by Entry score.
+
+For each:
+
+symbol
+
+Entry state
+
+Entry score
+
+Entry grade
+
+base archetype
+
+prior drawdown
+
+base duration
+
+base range %
+
+floor
+
+floor touch count
+
+distance to floor
+
+floor held recently
+
+range contraction
+
+higher-low evidence
+
+internal ceiling/reclaim pivot if present
+
+extension state
+
+Stage
+
+reason codes
+
+The goal is to inspect whether these are real stabilized/asymmetric structures rather than falling knives.
+
+==================================================
+PART 12 — FALLING KNIFE NEGATIVE CONTROL
+========================================
+
+Identify up to 30 current stocks with:
+
+large recent drawdown
+
+continued lower lows / structural deterioration
+
+weak or broken support
+
+For each:
+
+symbol
+
+drawdown
+
+recent low sequence
+
+floor quality
+
+floor break count
+
+base archetype
+
+Entry state
+
+Entry score
+
+Prove these do NOT become:
+
+LOW_BASE_COILING
+
+or:
+
+LOW_BASE_READY
+
+A falling knife must not receive a bullish low-base classification.
+
+==================================================
+PART 13 — LOW BASE + TRADE ALIGNMENT ANALYTICAL VIEW
+====================================================
+
+Do not modify Trade Alignment.
+
+For analysis only, join current Entry results to existing Trade Alignment output.
+
+Return every:
+
+LOW_BASE_FORMING
+
+LOW_BASE_COILING
+
+LOW_BASE_READY
+
+up to 50 each.
+
+Show:
+
+symbol
+
+Trade Alignment
+
+Theme score
+
+Stage score
+
+Options Alignment
+
+Options pressure state
+
+Catalyst score
+
+Social Bonus
+
+Entry state
+
+Entry score
+
+The purpose is to understand:
+
+which low bases also have strong external opportunity alignment?
+
+Examples of interesting analytical combinations:
+
+LOW_BASE_READY
++
+high Trade Alignment
+
+LOW_BASE_COILING
++
+Options BULLISH_ACCELERATING
+
+LOW_BASE_FORMING
++
+Theme Rotation improving
+
+Do not create Actionability labels.
+
+Do not modify scores.
+
+==================================================
+PART 14 — COST / PROVIDER PROOF
+===============================
+
+Prove:
+
+0 incremental Grok calls
+
+0 incremental LLM calls
+
+0 new provider paths
+
+0 new scheduled jobs
+
+0 new intraday calls
+
+0 Trade Alignment changes
+
+0 Options Alignment changes
+
+0 Theme changes
+
+0 Stage fetch architecture changes
+
+Entry Structure continues reusing the existing daily bars from the Stage pass
+
+Report exact validation-only history calls.
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+LOW BASE ENTRY STRUCTURE IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+CURRENT BASE AUDIT:
+[findings]
+
+BASE ARCHETYPE LOGIC:
+[formula/gates]
+
+LOW BASE FLOOR LOGIC:
+[formula/gates]
+
+LOW_BASE_FORMING:
+[logic]
+
+LOW_BASE_COILING:
+[logic]
+
+LOW_BASE_READY:
+[logic]
+
+ENTRY SCORE SEMANTICS:
+[logic]
+
+HIGH BASE REGRESSION:
+[results]
+
+FULL ENTRY DISTRIBUTION:
+[results]
+
+BASE ARCHETYPE DISTRIBUTION:
+[results]
+
+HIGH-BASE → LOW-BASE MIGRATIONS:
+[results]
+
+TOP LOW BASES:
+[summary]
+
+FALLING KNIFE CONTROL:
+[summary]
+
+LOW BASE + TRADE ALIGNMENT:
+[summary]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+LOW BASE ENTRY VERDICT
+
+LOW BASE TAXONOMY FUNCTIONAL:
+[YES / NO]
+
+HIGH BASE REGRESSION:
+[PASS / FAIL]
+
+VALID V2 → LEGACY FALLTHROUGH:
+[count, 0 expected]
+
+LOW_BASE_FORMING COUNT:
+[count]
+
+LOW_BASE_COILING COUNT:
+[count]
+
+LOW_BASE_READY COUNT:
+[count]
+
+HIGH_BASE → LOW_BASE RECLASSIFICATIONS:
+[count]
+
+FALLING KNIFE FALSE-POSITIVE COUNT:
+[count]
+
+LOW-BASE HIGH-ALIGNMENT OPPORTUNITIES:
+[count + assessment]
+
+INCREMENTAL GROK CALLS:
+[0 expected]
+
+INCREMENTAL LLM CALLS:
+[0 expected]
+
+VALIDATION-ONLY HISTORY CALLS:
+[count]
+
+BIGGEST REMAINING ENTRY WEAKNESS:
+[one weakness]
+
+NEXT IMPLEMENTATION:
+ACTIONABILITY V1
+
+Do not modify Trade Alignment.
+Do not modify Options Alignment.
+Do not build Actionability.
+Do not build Investment Alignment.
+Do not make unrelated changes.
