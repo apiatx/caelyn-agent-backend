@@ -1,0 +1,97 @@
+CONFLUENCE SNAPSHOT SERVING-PATH AUDIT — AUDIT ONLY, ZERO CODE CHANGES.
+
+Before implementing GET /api/watchlist/{watchlist_id}/alignment, trace the exact lifecycle of build_confluence_snapshot() and all current callers.
+
+The previous audit proved /api/alpha/confluence synchronously builds the full 379-symbol snapshot in ~79 seconds and then slices results to max 200. The proposed Watchlist Alignment endpoint must not synchronously rebuild the full snapshot on every request and must not call get_confluence_for_symbol() independently for ~375 symbols.
+
+Find every caller of:
+
+build_confluence_snapshot
+
+get_confluence_for_symbol
+
+Also search for every existing Confluence-related:
+
+background loop
+startup warmup
+in-memory snapshot variable
+module-level cache
+LKG JSON/file
+Neon snapshot/table
+scheduled rebuild
+admin refresh endpoint
+diagnostics endpoint
+readiness hook
+downstream service retaining a completed snapshot
+
+For each, return exact path/function and behavior.
+
+Answer these exact questions:
+
+1. Does a canonical completed full Confluence snapshot already exist anywhere after build_confluence_snapshot() finishes?
+
+2. Is the snapshot retained in memory, on disk, or in Neon?
+
+3. Does any background/startup loop already rebuild it periodically?
+
+4. Does any current caller build the full universe for reasons other than /api/alpha/confluence?
+
+5. Can the new Watchlist alignment endpoint safely read an already-computed current snapshot without triggering a rebuild?
+
+6. If no retained snapshot exists, identify the narrowest place to retain the output of the EXISTING build_confluence_snapshot() producer. Do not create a second producer.
+
+7. Audit whether the current Confluence build is pure over LKG/cache inputs and therefore safe to retain with a timestamp/version.
+
+8. Identify which upstream inputs change independently and their existing freshness/version metadata: Stage2, Entry, Options Alignment source, Catalyst source, Theme Rotation, Social cache, Investment fundamentals.
+
+9. Based on those existing freshness signals, recommend the smallest invalidation/warm semantics for a retained Confluence snapshot. Prefer attaching to an existing lifecycle or refresh event. Do not invent a new high-frequency scheduler.
+
+10. Explicitly evaluate these three serving designs:
+
+A. Watchlist endpoint synchronously calls build_confluence_snapshot()
+
+B. Watchlist endpoint loops over get_confluence_for_symbol() for every Watchlist ticker
+
+C. Existing producer output is retained once and the Watchlist endpoint performs a compact symbol join against that retained snapshot
+
+Choose A/B/C and prove why. Expected C unless live code proves another canonical path already exists.
+
+Return only:
+
+CONFLUENCE SNAPSHOT SERVING-PATH AUDIT
+
+FILES CHANGED: NONE
+
+BUILD_CONFLUENCE_SNAPSHOT CALLERS:
+
+GET_CONFLUENCE_FOR_SYMBOL CALLERS:
+
+EXISTING RETAINED SNAPSHOT: YES/NO
+
+EXISTING BACKGROUND WARMER: YES/NO
+
+EXISTING LKG/NEON STORE: YES/NO
+
+FULL BUILD OTHER CONSUMERS:
+
+UPSTREAM FRESHNESS SIGNALS:
+
+DESIGN A:
+
+DESIGN B:
+
+DESIGN C:
+
+RECOMMENDED SERVING PATH:
+
+NARROWEST IMPLEMENTATION:
+
+NEW SCORING PRODUCER REQUIRED: NO
+
+NEW PROVIDER CALLS REQUIRED: NO
+
+NEW HIGH-FREQUENCY SCHEDULER REQUIRED: NO expected
+
+READY TO IMPLEMENT WATCHLIST ALIGNMENT ENDPOINT: YES/NO
+
+Zero code changes. Zero provider calls. Do not implement the endpoint yet.
