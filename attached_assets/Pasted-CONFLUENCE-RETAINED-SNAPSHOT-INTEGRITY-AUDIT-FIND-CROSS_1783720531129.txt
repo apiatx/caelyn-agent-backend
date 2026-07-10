@@ -1,0 +1,747 @@
+CONFLUENCE RETAINED SNAPSHOT INTEGRITY AUDIT — FIND CROSS-GENERATION, INVALIDATION, COLD-START, AND PROCESS-LIFECYCLE HOLES
+
+AUDIT ONLY.
+
+ZERO CODE CHANGES.
+
+Work only in the existing backend Replit project.
+
+The current retained Confluence serving path was just implemented.
+
+Current architecture:
+
+# `build_confluence_snapshot()`
+
+the one canonical scoring producer
+
+A process-local retained snapshot now stores:
+
+snapshot
+
+built_at
+
+source_fingerprint
+
+build_in_progress
+
+GET `/api/alpha/confluence`
+now reads the retained snapshot.
+
+GET `/api/watchlist/{watchlist_id}/alignment`
+joins the retained Confluence snapshot to the current Watchlist and also reads the current Entry State LKG to expose entry fields not currently present in the Confluence row.
+
+Current retained behavior:
+
+cold:
+synchronous full build
+
+warm/fresh:
+serve retained
+
+warm/stale:
+serve retained immediately
++
+single background rebuild
+
+The scoring models are frozen.
+
+Do not modify:
+
+Trade Alignment
+
+THEME_ALIGNMENT
+
+ELITE_ASSET_REBOUND
+
+Investment Alignment
+
+Actionability
+
+Entry Structure scoring
+
+Options Alignment
+
+Catalyst Alignment
+
+Theme semantics
+
+Social Bonus
+
+Do not implement frontend work.
+
+This audit has ONE goal:
+
+PROVE WHETHER THE NEW RETAINED SNAPSHOT / WATCHLIST ALIGNMENT READ PATH CAN RETURN INTERNALLY INCONSISTENT OR OPERATIONALLY UNSAFE DATA.
+
+==================================================
+1 — CROSS-GENERATION ENTRY JOIN
+===============================
+
+Trace the exact current GET:
+
+`/api/watchlist/{watchlist_id}/alignment`
+
+For each compact row prove exact source/generation of:
+
+actionability.available
+
+actionability.state
+
+actionability.score
+
+trade_alignment.available
+
+trade_alignment.score
+
+trade_alignment.archetype
+
+investment_alignment.available
+
+investment_alignment.score
+
+investment_alignment.state
+
+entry.available
+
+entry.state
+
+entry.score
+
+entry.grade
+
+theme.id
+
+options.pressure_state
+
+Specifically answer:
+
+Does Actionability in the retained Confluence snapshot use the Entry result that existed when the retained snapshot was built?
+
+YES / NO
+
+Does the compact endpoint then independently read CURRENT Entry State LKG for:
+
+entry.state
+
+entry.score
+
+entry.grade
+
+YES / NO
+
+If YES to both:
+
+prove whether the endpoint can return a cross-generation row such as:
+
+retained Actionability computed from old Entry
++
+compact Entry fields from newer Entry LKG
+
+Do not answer conceptually.
+
+Run a controlled read-only/safe simulation using copied in-memory data or temporary monkeypatching if necessary.
+
+Do not mutate production LKG files.
+
+Show one exact row before/after Entry-generation divergence.
+
+Return:
+
+CROSS_GENERATION_ENTRY_INCONSISTENCY:
+[PROVEN / NOT PROVEN]
+
+This is the highest-priority question.
+
+==================================================
+2 — CONFLUENCE ENTRY FIELD SOURCE
+=================================
+
+Trace `_compute_confluence()` and the exact `entry_result` consumed by:
+
+ELITE_ASSET_REBOUND
+
+Actionability
+
+legacy/current Confluence fields
+
+Determine whether these exact fields already exist at Confluence compute time:
+
+entry_state
+
+entry_score
+
+entry_grade
+
+entry_family
+
+base_archetype
+
+extension_state
+
+Return exact raw paths.
+
+Answer:
+
+Could the canonical Confluence result row expose the exact Entry fields from the SAME `entry_result` already used during that build without recomputing Entry?
+
+YES / NO
+
+Do not implement.
+
+State whether same-generation emission is the narrowest fix if cross-generation inconsistency is proven.
+
+==================================================
+3 — PLACEHOLDER / COVERAGE CONTRADICTION
+========================================
+
+Reconcile these two prior validated claims:
+
+PRIOR AUDIT:
+
+375 current Watchlist tickers
+
+0 of 375 missing from the 379-symbol Confluence universe
+
+foreign-prefixed symbols pass through Stage2 LKG keys and exist as Confluence rows even when submodels are unavailable
+
+LATEST IMPLEMENTATION REPORT:
+
+375 Alignment rows
+
+27 explicit non-US-listed placeholders described as "outside the US Confluence universe"
+
+These cannot both be literally true.
+
+For all 375 current Watchlist symbols classify mutually exclusively:
+
+A. real retained Confluence row exists
+
+B. no retained Confluence row; Alignment endpoint synthesized placeholder
+
+Return counts and complete B-symbol list.
+
+Then classify foreign-prefixed symbols separately.
+
+Answer exactly what the implementation report meant by "27 placeholders."
+
+==================================================
+4 — FINGERPRINT COMPLETENESS
+============================
+
+Return the exact current `_compute_source_fingerprint()` implementation.
+
+For every Confluence input identify:
+
+input
+
+source loader
+
+fingerprint field
+
+semantic timestamp/version or file mtime
+
+directly fingerprinted YES/NO
+
+bounded only by max-age YES/NO
+
+Inputs:
+
+Stage2
+
+Entry
+
+Options source
+
+Catalyst source
+
+Theme Rotation
+
+Social cache
+
+Investment fundamentals
+
+Any other input read by `build_confluence_snapshot()`
+
+Do not rely on the prior report.
+
+Trace the actual current producer and enumerate every external source read.
+
+Return:
+
+DIRECTLY_FINGERPRINTED_INPUTS
+
+MAX_AGE_ONLY_INPUTS
+
+UNTRACKED_INPUTS
+
+A Confluence source read by the producer but covered by neither direct fingerprint nor bounded max-age should be treated as a defect.
+
+==================================================
+5 — FINGERPRINT CHURN
+=====================
+
+Audit the producer behavior for each mtime-based fingerprint source.
+
+For:
+
+Entry LKG file
+
+Options LKG
+
+Theme RS refresh timestamp file
+
+X-consensus file
+
+answer:
+
+what writes it?
+
+how frequently can it be written?
+
+is the file rewritten when semantic values are unchanged?
+
+is mtime advanced on every producer pass or only meaningful change?
+
+Use code and existing logs/metadata.
+
+Do not trigger providers.
+
+Estimate current expected Confluence invalidation frequency per normal market day.
+
+Return:
+
+source
+
+expected writes/day
+
+semantic-change-aware YES/NO
+
+potential unnecessary Confluence rebuild trigger YES/NO
+
+Identify the highest churn fingerprint source.
+
+==================================================
+6 — REBUILD CHURN / CPU IMPACT
+==============================
+
+The implementation report measured:
+
+warm read:
+~0.5–0.8s
+
+stale serve while background build active:
+~2–4s
+
+background full build:
+~90s
+
+and attributed stale latency to CPU contention on the same core.
+
+Run one controlled retained-snapshot background rebuild with zero provider calls.
+
+During the rebuild measure latency for existing representative endpoints:
+
+GET `/api/home/...`
+choose the current canonical Home payload endpoint
+
+GET `/api/watchlist/{current_watchlist_id}`
+
+one existing Options Flow cached/LKG endpoint
+
+one Themes cached/LKG endpoint
+
+GET `/api/alpha/confluence?limit=5`
+
+GET `/api/watchlist/{current_watchlist_id}/alignment`
+
+Measure each:
+
+before rebuild
+
+during rebuild
+
+after rebuild
+
+Do not invoke provider-refresh endpoints.
+
+Do not trigger Grok/LLM.
+
+Return latency multipliers.
+
+Also inspect whether existing background loops miss/delay scheduled work during the CPU-heavy Confluence build if observable.
+
+Answer:
+
+DOES BACKGROUND CONFLUENCE REBUILD MATERIALLY DEGRADE OTHER USER-FACING CACHED ENDPOINTS?
+
+YES / NO
+
+Define materially as >3x latency or >2 seconds additional wall time for previously fast cached endpoints.
+
+==================================================
+7 — PROCESS MODEL / SINGLE-FLIGHT SCOPE
+=======================================
+
+Trace the actual production server launch command/configuration.
+
+Return:
+
+server
+
+worker count
+
+process count
+
+reload mode
+
+gunicorn/uvicorn configuration
+
+Replit deployment/runtime behavior visible from current project config
+
+Prove whether `_RETAINED` and `_RETAINED_LOCK` exist in:
+
+one process only
+
+or potentially multiple worker processes
+
+Answer:
+
+IS SINGLE-FLIGHT GLOBAL TO THE CURRENT DEPLOYMENT?
+
+YES / NO
+
+If the current deployment is single-process:
+
+say so with proof.
+
+If multiple workers/process replicas are possible:
+
+explain exact duplicate-build risk.
+
+Do not redesign yet.
+
+==================================================
+8 — COLD-START LIFECYCLE
+========================
+
+Trace backend lifespan/startup ordering.
+
+List the exact startup readiness order relevant to Confluence:
+
+Stage2 LKG load
+
+Entry LKG load
+
+Options LKG/cache availability
+
+Theme Rotation/Theme RS load
+
+Social cache load
+
+database/fundamentals readiness
+
+Catalyst source readiness
+
+HTTP route availability
+
+Determine the earliest point at which:
+
+`build_confluence_snapshot()`
+
+can produce a complete normal-quality snapshot.
+
+Answer:
+
+Could a non-blocking startup warm use the existing canonical producer safely?
+
+YES / NO
+
+If YES:
+
+identify the exact existing lifespan point after which it is safe.
+
+If NO:
+
+identify which upstream source has no reliable readiness point.
+
+Do not implement a startup warm.
+
+==================================================
+9 — STALE REASON DIAGNOSTICS
+============================
+
+Trace `_retained_is_stale()`.
+
+Does current code preserve why a snapshot was marked stale?
+
+Examples:
+
+STAGE2_CHANGED
+
+ENTRY_CHANGED
+
+OPTIONS_CHANGED
+
+THEME_CHANGED
+
+SOCIAL_CHANGED
+
+MAX_AGE_EXCEEDED
+
+Does the retained state or endpoint expose/log exact stale reasons?
+
+YES / NO
+
+If NO:
+
+prove whether exact fingerprint deltas are already available at comparison time and could be surfaced in diagnostics without changing scoring or persistence.
+
+Do not implement.
+
+==================================================
+10 — LIST VS DETAIL GENERATION CONSISTENCY
+==========================================
+
+Compare:
+
+Watchlist Alignment list source:
+retained full snapshot
+
+Per-symbol detail source:
+GET `/api/alpha/confluence/{symbol}`
+→ fresh one-symbol `build_confluence_snapshot(symbols=[symbol])`
+
+Prove whether the list and detail endpoints can return different:
+
+trade_alignment_score
+
+trade_alignment_archetype
+
+investment_alignment_score
+
+actionability_state
+
+options_pressure_state
+
+entry-derived diagnostics
+
+during a retained-snapshot stale/rebuild window.
+
+Use copied in-memory/monkeypatched freshness inputs if needed.
+
+Do not mutate production LKGs.
+
+Return:
+
+LIST_DETAIL_GENERATION_DIVERGENCE:
+[PROVEN / NOT PROVEN]
+
+If proven, state whether this is:
+
+acceptable eventual consistency
+
+or
+
+a misleading decision-contract risk
+
+based on the fields that can diverge.
+
+Do not implement a solution.
+
+==================================================
+11 — SHALLOW COPY / RETAINED MUTATION SAFETY
+============================================
+
+The `/api/alpha/confluence` route was changed to copy the retained snapshot dict before applying verdict filtering/limit slicing.
+
+Audit exact code.
+
+Determine whether it performs:
+
+shallow dict copy
+
+deep copy
+
+new results list
+
+row mutation
+
+nested object mutation
+
+Prove whether any current route operation can mutate:
+
+retained snapshot top-level metadata
+
+retained results list
+
+retained individual row dicts
+
+nested reason/strength/component lists or dicts
+
+Run a safe mutation test against a copied retained snapshot if useful.
+
+Return:
+
+RETAINED_SNAPSHOT_MUTATION_RISK:
+[YES / NO]
+
+Do not modify code.
+
+==================================================
+12 — 30-MINUTE MAX-AGE BEHAVIOR
+===============================
+
+Trace `_RETAINED_MAX_AGE_S = 1800`.
+
+Answer:
+
+Does max-age expiry trigger a rebuild on the next read even when every directly fingerprinted source is unchanged?
+
+YES / NO
+
+At normal Watchlist usage, estimate maximum rebuilds/day caused solely by max-age.
+
+Does max-age reset from:
+
+build start
+
+or
+
+successful build completion / built_at?
+
+Could continuous mtime changes plus max-age cause near-continuous rebuild behavior?
+
+Return actual logic.
+
+==================================================
+13 — FINAL HOLE RANKING
+=======================
+
+Rank every proven issue:
+
+P0 correctness
+
+P1 architecture/data consistency
+
+P2 operational/performance
+
+P3 diagnostics/observability
+
+For each return:
+
+issue
+
+proof
+
+affected fields/users
+
+narrowest conceptual repair
+
+Do not implement.
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+CONFLUENCE RETAINED SNAPSHOT INTEGRITY AUDIT
+
+FILES CHANGED:
+[NONE]
+
+CROSS-GENERATION ENTRY INCONSISTENCY:
+[result]
+
+SAME-GENERATION ENTRY EMISSION POSSIBLE:
+[YES / NO]
+
+WATCHLIST CONFLUENCE ROWS:
+[count]
+
+SYNTHESIZED PLACEHOLDER ROWS:
+[count + symbols]
+
+FINGERPRINT DIRECT COVERAGE:
+[inputs]
+
+FINGERPRINT MAX-AGE COVERAGE:
+[inputs]
+
+FINGERPRINT UNTRACKED INPUTS:
+[inputs]
+
+HIGHEST CHURN INVALIDATION SOURCE:
+[result]
+
+EXPECTED REBUILDS / MARKET DAY:
+[result]
+
+BACKGROUND REBUILD ENDPOINT IMPACT:
+[measurements]
+
+DEPLOYMENT PROCESS MODEL:
+[result]
+
+SINGLE-FLIGHT DEPLOYMENT-WIDE:
+[YES / NO]
+
+SAFE STARTUP WARM POINT:
+[result]
+
+STALE REASON DIAGNOSTICS:
+[result]
+
+LIST / DETAIL GENERATION DIVERGENCE:
+[result]
+
+RETAINED MUTATION RISK:
+[result]
+
+MAX-AGE REBUILD BEHAVIOR:
+[result]
+
+PROVEN HOLES:
+[ranked]
+
+NARROWEST REPAIR SEQUENCE:
+[ordered]
+
+COST PROOF:
+[0 provider calls / 0 model changes / 0 code changes]
+
+End exactly:
+
+CONFLUENCE RETAINED SNAPSHOT INTEGRITY VERDICT
+
+DECISION ROWS ARE GENERATION-CONSISTENT:
+[YES / NO]
+
+ALL PRODUCER INPUTS HAVE FRESHNESS COVERAGE:
+[YES / NO]
+
+FINGERPRINT CHURN SAFE:
+[YES / NO]
+
+BACKGROUND REBUILD RESOURCE IMPACT SAFE:
+[YES / NO]
+
+SINGLE-FLIGHT MATCHES DEPLOYMENT PROCESS MODEL:
+[YES / NO]
+
+COLD-START SERVING SAFE:
+[YES / NO]
+
+LIST / DETAIL CONSISTENCY ACCEPTABLE:
+[YES / NO]
+
+RETAINED SNAPSHOT MUTATION SAFE:
+[YES / NO]
+
+READY FOR FRONTEND:
+[YES / NO]
+
+NEXT IMPLEMENTATION:
+[exact narrow backend integrity repair or FRONTEND if no blocking holes]
+
+ZERO CODE CHANGES.
