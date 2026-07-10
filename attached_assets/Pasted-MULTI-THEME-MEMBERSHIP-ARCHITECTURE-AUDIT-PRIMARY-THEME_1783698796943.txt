@@ -1,0 +1,1086 @@
+MULTI-THEME MEMBERSHIP ARCHITECTURE AUDIT — PRIMARY THEME VS ADDITIONAL THEME MEMBERSHIPS
+
+AUDIT ONLY.
+
+ZERO CODE CHANGES.
+
+Work only in the existing backend Replit project.
+
+The Theme architecture has recently been repaired and validated:
+
+* current saved Watchlist dynamically synchronizes into ENRICHED_THEME_RS_UNIVERSE
+* canonical primary Theme resolution is centralized in:
+  backend/services/theme_resolver.py::resolve_primary_theme_for_ticker(...)
+* manual primary Theme assignment/reassignment now uses:
+  POST /api/themes/admin/assign-primary-theme
+* manual add/remove store symmetry has been repaired
+* stale matching llm_theme_overrides.json rows are removed safely
+* Watchlist Theme identity synchronizes with Themes-page membership
+* Watchlist Theme performance grouping uses canonical Theme identity
+* Options Sectors / All Stocks consumes ENRICHED_THEME_RS_UNIVERSE
+* Trade Alignment Theme archetype is live and validated
+* Actionability V1 is live in additive shadow mode and consumes Trade Alignment + Entry
+
+The user is now considering MULTI-THEME membership.
+
+Example product intent:
+
+AAOI
+Primary Theme:
+AI Networking
+
+Additional Theme:
+Photonics / Lasers
+
+VRT
+Primary Theme:
+Data Center Infrastructure
+
+Additional Theme:
+Power / Cooling
+
+A ticker belonging to multiple Themes should potentially appear in all tagged Theme baskets for:
+
+Themes-page membership
+
+Theme performance calculations
+
+Options Flow Sectors / All Stocks sector grouping
+
+However:
+
+Trade Alignment currently uses Theme Alignment as 25% of the THEME_ALIGNMENT archetype.
+
+Actionability consumes Trade Alignment.
+
+Therefore multi-theme semantics must be fully understood before implementation.
+
+Do not implement multi-theme membership.
+
+Do not add a new table.
+
+Do not modify Theme resolution.
+
+Do not modify Theme RS.
+
+Do not modify Theme Rotation.
+
+Do not modify Options Flow.
+
+Do not modify Trade Alignment.
+
+Do not modify Actionability.
+
+Do not modify the Watchlist primary-Theme assignment endpoint.
+
+Do not modify frontend code.
+
+Do not add AI/LLM calls.
+
+Do not add provider calls.
+
+This task has ONE goal:
+
+AUDIT THE EXISTING BACKEND TO DETERMINE WHETHER IT ALREADY SUPPORTS A CLEAN DISTINCTION BETWEEN ONE CANONICAL PRIMARY THEME AND MULTIPLE ADDITIONAL THEME MEMBERSHIPS, AND DOCUMENT EXACT DOWNSTREAM SCORING IMPACT BEFORE IMPLEMENTATION.
+
+==================================================
+PRODUCT DEFINITIONS TO TEST
+===========================
+
+PRIMARY THEME
+
+Intent:
+
+One canonical Theme identity for the ticker.
+
+Used for:
+
+Watchlist Screener Theme column
+
+default ticker Theme identity
+
+manual primary Theme edit/reassignment
+
+potential default Theme used by Trade Alignment
+
+Conceptually:
+
+ticker
+→ exactly one primary_theme
+
+---
+
+## ADDITIONAL THEME MEMBERSHIPS
+
+Intent:
+
+A ticker may genuinely participate in multiple peer Themes.
+
+These are not necessarily hierarchical sub-themes.
+
+Examples:
+
+AI Networking
+
+Photonics / Lasers
+
+Data Center Infrastructure
+
+Power / Cooling
+
+The preferred product term is:
+
+ADDITIONAL THEMES
+
+or:
+
+THEME MEMBERSHIPS
+
+Do not assume "sub-theme" hierarchy.
+
+Conceptually:
+
+ticker
+→ one primary Theme
+→ zero or more additional Theme memberships
+
+A ticker may appear in multiple Theme baskets.
+
+==================================================
+PART 0 — INVENTORY EVERY CURRENT THEME STORE
+============================================
+
+Trace all current Theme identity/membership stores.
+
+At minimum inspect:
+
+theme_ticker_overrides
+
+watchlist_category_overrides
+
+data/llm_theme_overrides.json
+
+THEME_RS_UNIVERSE
+
+ENRICHED_THEME_RS_UNIVERSE
+
+theme_ticker_mapper indexes
+
+category_overrides
+
+Theme admin membership write paths
+
+current Watchlist-derived Theme membership layer
+
+For each store return:
+
+path/table
+
+key structure
+
+one-to-one or many-to-many
+
+fields
+
+add semantics
+
+remove semantics
+
+reassignment semantics
+
+precedence
+
+writer(s)
+
+reader(s)
+
+persistence
+
+whether it represents:
+
+identity
+
+membership
+
+classification
+
+derived merge state
+
+or a mixture
+
+The audit must answer whether the current architecture already contains separate concepts that can become:
+
+primary Theme
+
+additional memberships
+
+without a new table.
+
+==================================================
+PART 1 — THEME_TICKER_OVERRIDES SCHEMA AND SEMANTICS
+====================================================
+
+Inspect the exact Neon schema and service layer for:
+
+theme_ticker_overrides
+
+Return:
+
+primary key / unique constraints
+
+ticker field
+
+theme_id field
+
+action field
+
+whether multiple active add rows for the same ticker across different Themes are permitted
+
+whether current code assumes one row per ticker
+
+whether add Theme B deletes Theme A
+
+whether remove Theme A affects Theme B
+
+whether current admin membership endpoint already supports:
+
+ticker added to Theme A
+
+AND
+
+same ticker added to Theme B
+
+simultaneously
+
+Run a read-only/schema-level proof.
+
+If safely possible without persisting changes, use transaction rollback or local reasoning from constraints/helpers.
+
+Do not alter live membership.
+
+Answer explicitly:
+
+CAN theme_ticker_overrides CURRENTLY REPRESENT MANY-TO-MANY ACTIVE MEMBERSHIP?
+
+YES or NO.
+
+==================================================
+PART 2 — WATCHLIST_CATEGORY_OVERRIDES SEMANTICS
+===============================================
+
+Inspect:
+
+watchlist_category_overrides
+
+and:
+
+category_overrides.py
+
+Return:
+
+schema uniqueness
+
+one row per ticker?
+
+user_id scoping?
+
+Theme/category field
+
+current writer(s)
+
+current reader(s)
+
+resolver precedence
+
+whether multiple Themes per ticker are technically representable
+
+Prove whether this store is already functioning as:
+
+ONE CANONICAL PRIMARY THEME OVERRIDE
+
+or whether its semantics are more ambiguous.
+
+Answer:
+
+CAN watchlist_category_overrides REPRESENT ONE PRIMARY THEME CLEANLY?
+
+YES or NO.
+
+==================================================
+PART 3 — LLM_THEME_OVERRIDES FILE SEMANTICS
+===========================================
+
+Inspect:
+
+data/llm_theme_overrides.json
+
+register_llm_classified_tickers()
+
+remove_llm_theme_override()
+
+theme_ticker_mapper._build_index()
+
+Return:
+
+one row per ticker?
+
+single theme_id per ticker?
+
+whether the current manual write path still writes this file on every manual add
+
+why manual primary assignments are cross-synced into a file named "llm_theme_overrides"
+
+whether this file currently acts as:
+
+AI classification
+
+manual classification fallback
+
+mapper bootstrap
+
+legacy persistence
+
+or mixed semantics
+
+Identify architectural drift.
+
+Do not change it.
+
+Specifically answer:
+
+Should this file logically participate in future ADDITIONAL THEME MEMBERSHIP?
+
+Likely answers:
+
+YES
+
+NO
+
+or:
+
+MIXED / NEEDS SEPARATION
+
+Prove the answer.
+
+==================================================
+PART 4 — CANONICAL RESOLVER SEMANTICS
+=====================================
+
+Trace:
+
+resolve_primary_theme_for_ticker(...)
+
+and:
+
+get_theme_provenance(...)
+
+Return the exact current precedence order.
+
+Prior known conceptual order included:
+
+canonical/static mapper
+
+industry fallback
+
+Themes-page membership
+
+manual category override
+
+but the recent audit also identified llm_classified/file precedence.
+
+Return the REAL current order from code.
+
+For a ticker with:
+
+manual primary Theme A
+
+and:
+
+Theme memberships A + B
+
+what does the resolver return?
+
+For:
+
+no manual primary Theme
+
+but Theme memberships A + B
+
+what happens?
+
+Does the resolver choose:
+
+first membership
+
+last membership
+
+iteration-order membership
+
+a preferred membership
+
+or something else?
+
+This is critical.
+
+Audit whether the current resolver is deterministic when a ticker belongs to multiple Themes in ENRICHED_THEME_RS_UNIVERSE.
+
+Return exact behavior.
+
+==================================================
+PART 5 — ENRICHED THEME MERGE MULTI-MEMBERSHIP BEHAVIOR
+=======================================================
+
+Trace:
+
+theme_merge_layer.py
+
+refresh_enriched_universe()
+
+ENRICHED_THEME_RS_UNIVERSE
+
+current Watchlist-derived membership layer
+
+manual add/remove application
+
+For one ticker present in multiple Theme memberships:
+
+can the final enriched universe contain that ticker under Theme A and Theme B simultaneously?
+
+Does any deduplication remove cross-theme duplication?
+
+Does candidate_symbols/proxy_symbols dedupe only within a Theme or globally?
+
+Does manual reassignment currently remove the ticker from all other Themes?
+
+Does the Watchlist-derived primary membership layer automatically re-add the ticker to its primary Theme even when an additional Theme membership exists?
+
+Return exact merge behavior.
+
+Answer:
+
+CAN ENRICHED_THEME_RS_UNIVERSE CURRENTLY REPRESENT THE SAME TICKER IN MULTIPLE THEMES?
+
+YES or NO.
+
+==================================================
+PART 6 — THEMES PAGE READ PATH
+==============================
+
+Trace the backend endpoint/payload consumed by the Themes page for Theme constituents.
+
+Return:
+
+route
+
+service
+
+source universe
+
+ticker membership field(s)
+
+whether a ticker present in Theme A and Theme B in ENRICHED_THEME_RS_UNIVERSE naturally appears in both Theme payloads
+
+whether any final response-layer deduplication forces one Theme
+
+Do not inspect frontend code beyond backend contract assumptions.
+
+Answer:
+
+WOULD MULTI-MEMBERSHIP NATURALLY DISPLAY A TICKER UNDER MULTIPLE THEMES?
+
+YES or NO.
+
+==================================================
+PART 7 — WATCHLIST THEME PERFORMANCE GROUPING
+=============================================
+
+Trace:
+
+GET /api/watchlist/{watchlist_id}/performance/theme
+
+The current product definition is:
+
+current Watchlist tickers grouped by canonical primary Theme
+
+equal-weight ticker 1D performance
+
+one ticker exactly once
+
+Return:
+
+exact Theme source field
+
+grouping key
+
+duplicate handling
+
+Would a ticker with additional Theme memberships currently appear:
+
+primary Theme only
+
+or:
+
+all Themes?
+
+The user's current lower Watchlist grouping was explicitly designed around:
+
+one canonical Watchlist Theme identity
+
+and:
+
+374/374 grouped exactly once
+
+Do not modify it.
+
+Report whether multi-theme membership should conceptually change this section.
+
+My current expectation:
+
+NO.
+
+The Watchlist lower Theme grouping should probably remain primary-theme grouping so every ticker appears exactly once.
+
+Audit and state implications.
+
+==================================================
+PART 8 — THEME RS / THEME ROTATION IMPACT
+=========================================
+
+Trace exactly how Theme RS and Theme Rotation consume:
+
+candidate_symbols
+
+proxy_symbols
+
+ENRICHED_THEME_RS_UNIVERSE
+
+For a ticker in Theme A and Theme B:
+
+will the ticker contribute to both Theme A and Theme B calculations?
+
+Is each Theme calculated independently?
+
+Is there a global dedupe before score calculation?
+
+Would multi-membership double-count the ticker inside one Theme?
+
+Would it only contribute once per Theme?
+
+Return exact current behavior.
+
+Answer:
+
+MULTI-THEME MEMBERSHIP EFFECT ON THEME PERFORMANCE / RS:
+
+[exact behavior]
+
+Do not modify scoring.
+
+==================================================
+PART 9 — OPTIONS FLOW SECTORS / ALL STOCKS IMPACT
+=================================================
+
+Trace:
+
+data/options_flow_sectors.py
+
+Sectors tab universe construction
+
+All Stocks required-universe construction
+
+ENRICHED_THEME_RS_UNIVERSE consumption
+
+For a ticker in Theme A and Theme B:
+
+Would it appear under both Sector/Theme groupings?
+
+Would All Stocks scan the ticker twice?
+
+Is the All Stocks required universe globally deduped?
+
+Would there be duplicate provider scans?
+
+Would the options payload contain duplicate canonical ticker rows?
+
+Return exact behavior.
+
+The desired product behavior is:
+
+Theme A view:
+ticker visible
+
+Theme B view:
+ticker visible
+
+All Stocks:
+one canonical ticker scan/row
+
+Prove whether the current architecture already behaves that way.
+
+==================================================
+PART 10 — THEME ALIGNMENT / TRADE ALIGNMENT IMPACT
+==================================================
+
+This is the most important scoring audit.
+
+Trace:
+
+backend/services/theme_bridge.py
+
+get_primary_theme_alignment()
+
+_normalize_theme_rotation_key()
+
+confluence_v2_service.py
+
+Trade Alignment Theme score input
+
+Return:
+
+exact current Theme Alignment selection logic
+
+Does it call the canonical primary resolver?
+
+Does it read one theme_id?
+
+Does it inspect all Theme memberships?
+
+Does it choose max score?
+
+Does it average?
+
+Does it use the Theme displayed on Watchlist?
+
+For a hypothetical ticker:
+
+Primary Theme:
+AI Networking
+Theme Alignment score = 62
+
+Additional Theme:
+Photonics / Lasers
+Theme Alignment score = 91
+
+What would current Trade Alignment use?
+
+Prove from code.
+
+Do not change it.
+
+==================================================
+PART 11 — ACTIONABILITY IMPACT
+==============================
+
+Trace only the existing dependency chain.
+
+Actionability consumes:
+
+trade_alignment_score
+
+entry_score/state
+
+and specific supporting signals/reason codes.
+
+Confirm whether changing Theme Alignment semantics would naturally alter:
+
+Trade Alignment
+
+Actionability score
+
+Actionability state thresholds
+
+EARLY_WATCH
+
+READY
+
+WAIT_FOR_RETEST
+
+etc.
+
+Do not recalculate the universe.
+
+Explain the dependency precisely.
+
+The purpose is to prove why multi-theme implementation cannot silently change Theme selection semantics.
+
+==================================================
+PART 12 — CURRENT MULTI-THEME POPULATION
+========================================
+
+Using the current existing Theme membership data:
+
+find every ticker currently present in more than one Theme basket.
+
+Return:
+
+total unique multi-theme tickers
+
+distribution:
+2 Themes
+3 Themes
+4+ Themes
+
+Top 100 by membership count if more than 100.
+
+For each return:
+
+ticker
+
+canonical primary Theme
+
+primary Theme source
+
+all current Theme memberships
+
+manual add memberships
+
+Watchlist-derived membership
+
+file/LLM mapping if present
+
+category override if present
+
+Theme Alignment selected Theme today
+
+Identify examples where:
+
+primary Theme != highest Theme Rotation Theme
+
+primary Theme != highest Theme Alignment Theme
+
+Do not change scoring.
+
+==================================================
+PART 13 — MANUAL ASSIGNMENT ENDPOINT IMPACT
+===========================================
+
+Audit:
+
+POST /api/themes/admin/assign-primary-theme
+
+and:
+
+POST /api/themes/admin/memberships
+
+The first is now intended for:
+
+ONE PRIMARY THEME
+
+The second historically supports Theme basket membership add/remove.
+
+Prove whether they can cleanly serve separate future roles:
+
+assign-primary-theme
+→ primary identity
+
+admin/memberships
+→ additional basket membership
+
+or whether their current cross-sync behavior makes them inseparable.
+
+Critical question:
+
+Does POST /api/themes/admin/memberships add currently also overwrite:
+
+watchlist_category_overrides
+
+llm_theme_overrides.json
+
+thereby changing canonical primary Theme?
+
+If YES:
+
+then the existing membership endpoint CANNOT safely be used for additional Themes without refactoring its cross-sync semantics.
+
+Return exact proof.
+
+==================================================
+PART 14 — PROPOSE MINIMUM-DRIFT ARCHITECTURE
+============================================
+
+AUDIT/PROPOSAL ONLY.
+
+Based on actual code, recommend the smallest safe architecture for:
+
+ONE PRIMARY THEME
+
+PLUS
+
+ZERO OR MORE ADDITIONAL THEME MEMBERSHIPS
+
+The proposal must preserve existing paths where possible.
+
+Evaluate whether this architecture is viable:
+
+PRIMARY THEME:
+
+watchlist_category_overrides
+or the current authoritative primary store
+
+written by:
+
+POST /api/themes/admin/assign-primary-theme
+
+consumed by:
+
+canonical resolver
+
+Watchlist Screener Theme column
+
+Watchlist lower Theme performance grouping
+
+Trade Alignment by default
+
+---
+
+ADDITIONAL THEME MEMBERSHIPS:
+
+theme_ticker_overrides many-to-many active add rows
+
+written by:
+
+a membership-only endpoint/helper
+
+consumed by:
+
+ENRICHED_THEME_RS_UNIVERSE
+
+Themes page baskets
+
+Theme RS / Rotation baskets
+
+Options Flow Sectors
+
+but NOT automatically overwriting primary Theme
+
+---
+
+LEGACY LLM FILE:
+
+determine whether it should:
+
+remain classification fallback only
+
+stop receiving manual membership writes
+
+remain primary-classification persistence
+
+or be migrated/deprecated later
+
+Do not implement any of this.
+
+Return the exact minimal files/functions that would need change.
+
+==================================================
+PART 15 — TRADE ALIGNMENT SEMANTIC OPTIONS
+==========================================
+
+Do not implement.
+
+Compare these possible future Theme Alignment semantics for multi-theme tickers:
+
+A. PRIMARY ONLY
+
+Trade Alignment uses only canonical primary Theme.
+
+Pros/cons.
+
+B. BEST ALIGNED MEMBERSHIP
+
+Evaluate all Theme memberships.
+
+Use highest Theme Alignment score.
+
+Return:
+
+selected_theme
+
+all_theme_alignment_scores
+
+Pros/cons.
+
+C. PRIMARY + ADDITIONAL WEIGHTED
+
+Primary Theme carries greater weight.
+
+Additional memberships contribute partially.
+
+Pros/cons.
+
+D. AVERAGE MEMBERSHIPS
+
+Average all Theme Alignment scores.
+
+Pros/cons.
+
+Using the CURRENT multi-theme population, analytically simulate A vs B if possible without modifying production.
+
+Return:
+
+ticker count affected
+
+Trade Alignment score deltas
+
+Actionability state changes if recalculated locally
+
+Top 30 largest Trade Alignment changes
+
+READY changes
+
+EARLY_WATCH changes
+
+TOO_EXTENDED/WAIT states where opportunity score changes but Entry still blocks action
+
+Do not persist anything.
+
+Do not change production.
+
+The goal is to choose semantics based on real output impact.
+
+==================================================
+PART 16 — COST / REGRESSION PROOF
+=================================
+
+Prove:
+
+0 code changes
+
+0 database changes
+
+0 Theme membership changes
+
+0 provider calls
+
+0 Grok calls
+
+0 LLM calls
+
+0 Trade Alignment changes
+
+0 Actionability changes
+
+0 Options changes
+
+0 Theme RS/Rotation changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+MULTI-THEME MEMBERSHIP ARCHITECTURE AUDIT
+
+FILES CHANGED:
+[NONE]
+
+CURRENT THEME STORES:
+[table/summary]
+
+THEME_TICKER_OVERRIDES MANY-TO-MANY:
+[YES / NO + proof]
+
+WATCHLIST_CATEGORY_OVERRIDES PRIMARY-THEME FIT:
+[assessment]
+
+LLM_THEME_OVERRIDES ROLE:
+[assessment]
+
+CANONICAL RESOLVER MULTI-MEMBERSHIP BEHAVIOR:
+[exact behavior]
+
+ENRICHED UNIVERSE MULTI-MEMBERSHIP:
+[YES / NO + behavior]
+
+THEMES PAGE MULTI-MEMBERSHIP:
+[behavior]
+
+WATCHLIST PERFORMANCE GROUPING:
+[behavior]
+
+THEME RS / ROTATION:
+[behavior]
+
+OPTIONS SECTORS:
+[behavior]
+
+ALL STOCKS DEDUPE:
+[behavior]
+
+CURRENT TRADE ALIGNMENT THEME SELECTION:
+[exact logic]
+
+ACTIONABILITY DEPENDENCY:
+[impact]
+
+CURRENT MULTI-THEME POPULATION:
+[count/distribution/examples]
+
+PRIMARY ASSIGN ENDPOINT:
+[role]
+
+MEMBERSHIP ENDPOINT:
+[current role/cross-sync problem]
+
+MINIMUM-DRIFT ARCHITECTURE:
+[proposal]
+
+TRADE ALIGNMENT OPTION A — PRIMARY ONLY:
+[assessment]
+
+TRADE ALIGNMENT OPTION B — BEST ALIGNED MEMBERSHIP:
+[assessment]
+
+A VS B LIVE IMPACT:
+[simulation]
+
+RECOMMENDATION:
+[exact recommendation]
+
+COST PROOF:
+[results]
+
+End exactly:
+
+MULTI-THEME ARCHITECTURE VERDICT
+
+PRIMARY THEME CONCEPT ALREADY REPRESENTABLE:
+[YES / NO]
+
+ADDITIONAL MEMBERSHIP CONCEPT ALREADY REPRESENTABLE:
+[YES / NO]
+
+NEW DATABASE TABLE REQUIRED:
+[YES / NO]
+
+CURRENT MEMBERSHIP ENDPOINT SAFE FOR ADDITIONAL THEMES:
+[YES / NO]
+
+THEMES PAGE CAN SHOW MULTI-THEME TICKERS:
+[YES / NO]
+
+THEME RS CAN CONSUME MULTI-MEMBERSHIP:
+[YES / NO]
+
+OPTIONS SECTORS CAN CONSUME MULTI-MEMBERSHIP:
+[YES / NO]
+
+ALL STOCKS DUPLICATE SCAN RISK:
+[assessment]
+
+CURRENT TRADE ALIGNMENT USES:
+[PRIMARY ONLY / OTHER]
+
+RECOMMENDED TRADE ALIGNMENT MULTI-THEME SEMANTIC:
+[option]
+
+EXPECTED ACTIONABILITY IMPACT:
+[assessment]
+
+INCREMENTAL PROVIDER CALLS:
+[0]
+
+NEXT IMPLEMENTATION:
+[recommended backend task]
+
+ZERO CODE CHANGES.
