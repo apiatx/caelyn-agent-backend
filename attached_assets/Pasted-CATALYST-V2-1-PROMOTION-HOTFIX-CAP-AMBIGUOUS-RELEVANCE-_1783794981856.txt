@@ -1,0 +1,189 @@
+CATALYST V2.1 PROMOTION HOTFIX — CAP AMBIGUOUS RELEVANCE AND REFRESH RETAINED CONFLUENCE
+
+Implement only this narrow backend hotfix.
+
+Do not touch frontend.
+
+Do not change THEME_ALIGNMENT weights.
+
+Do not change Entry, Options, Investment Alignment, Actionability, Elite Rebound, Theme Alignment, Social Bonus, or retained Confluence infrastructure except for triggering/validating a retained rebuild after the Catalyst hotfix.
+
+No provider calls.
+
+No new tables.
+
+No new collectors.
+
+Problem:
+
+Post-promotion sanity check proved V2.1-promoted is wired correctly, but rel=0.5 AMBIGUOUS articles can still produce COMPELLING Catalyst scores.
+
+Examples from the live promoted output:
+
+AMD  = 79.3 COMPELLING from “Marvell Stock And The Multi-Year Bet Management Made” with rel=0.5
+INTC = 79.3 COMPELLING from the same Marvell article
+SLAB/POWI previously passed on nLight-related articles
+Other broad/analyst/market articles still appear too high
+
+This is not acceptable for Trade Alignment. Ambiguous ticker relevance may be useful as a diagnostic, but it must not become a high-confidence Catalyst component.
+
+Required fix:
+
+1. Keep bullish relevance floor at 0.50 if needed for diagnostic inclusion.
+
+2. Add a hard promoted-score cap for ambiguous relevance.
+
+If ticker_relevance_score < 0.75:
+
+- event may remain visible as low-confidence diagnostic
+- event may contribute to catalyst_v2_reason_codes
+- event must NOT be COMPELLING
+- event must NOT produce promoted Catalyst score above 39.9
+- event must not be selected as catalyst_primary_event if there is a cleaner rel>=0.75 event available
+
+Suggested rule:
+
+if ticker_relevance_score < 0.75:
+    materiality_score = min(materiality_score, 0.399)
+    final event score cap = 39.9
+    state max = WEAK
+
+Or equivalent.
+
+3. Explicit ticker/company/alias/subsidiary matches should still score normally.
+
+Examples that should remain valid if rel >= 0.75:
+
+MU / Micron-GM pact
+PLTR / Nvidia partnership if PLTR explicitly appears
+ABCL / Jazz partnership
+CRDO / DustPhotonics acquisition
+AREC / DOE award
+FLY / Firefly NASA award via alias
+LUNR / NASA contract
+KTOS / AEVEX subsidiary win
+
+4. Ambiguous articles should no longer be top Catalyst drivers.
+
+Expected after fix:
+
+AMD / Marvell article:
+not COMPELLING; capped WEAK unless a real AMD-specific catalyst exists
+
+INTC / Marvell article:
+not COMPELLING; capped WEAK unless a real INTC-specific catalyst exists
+
+SLAB/POWI / nLight article:
+not MODERATE/COMPELLING
+
+Any rel=0.5 event:
+max state WEAK
+max promoted score 39.9
+
+5. Re-run full Catalyst validation.
+
+Return:
+
+total symbols
+promoted available
+COMPELLING / MODERATE / WEAK / UNAVAILABLE counts
+top 30 promoted catalysts
+all rel<0.75 events with score >39.9, expected none
+known ambiguous cases before/after:
+AMD/Marvell
+INTC/Marvell
+SLAB/nLight
+POWI/nLight
+RCAT/Ondas or market commentary
+SNOW/Cognizant
+DELL/BigBear
+
+6. Refresh retained Confluence snapshot after hotfix.
+
+The sanity report showed the retained snapshot was pre-promotion and catalyst_model_version=None.
+
+After the hotfix, trigger or wait for one retained Confluence rebuild.
+
+Then verify:
+
+GET /api/alpha/confluence?limit=5 returns rows with catalyst_model_version = "2.1-promoted" or the current hotfix version
+
+GET /api/watchlist/Primary/alignment returns promoted catalyst fields if that endpoint exposes them
+
+Top Trade Alignment rows now use the hotfixed catalyst scores
+
+No stale pre-promotion retained snapshot remains
+
+7. Cost / regression proof:
+
+0 provider calls
+0 FMP
+0 Tradier
+0 LLM
+0 scoring weight changes
+0 frontend changes
+Confluence endpoint 200
+Watchlist alignment endpoint 200
+Runtime acceptable
+
+Final report:
+
+CATALYST PROMOTION HOTFIX REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT ISSUE:
+[summary]
+
+AMBIGUOUS RELEVANCE CAP:
+[implementation]
+
+REL<0.75 SCORE CAP:
+[exact cap]
+
+KNOWN AMBIGUOUS CASES:
+[before/after table]
+
+GOOD SIGNAL PRESERVATION:
+[table]
+
+TOP PROMOTED CATALYSTS AFTER HOTFIX:
+[table]
+
+RETAINED CONFLUENCE REFRESH:
+[result]
+
+TRADE ALIGNMENT SANITY AFTER REFRESH:
+[top rows]
+
+PROVIDER CALLS:
+[0]
+
+End exactly:
+
+CATALYST PROMOTION HOTFIX VERDICT
+
+AMBIGUOUS REL<0.75 CANNOT BE COMPELLING:
+[YES/NO]
+
+AMBIGUOUS REL<0.75 SCORE CAPPED BELOW 40:
+[YES/NO]
+
+KNOWN AMBIGUOUS FALSE POSITIVES CLEAN:
+[YES/NO]
+
+GOOD REL>=0.75 SIGNALS PRESERVED:
+[YES/NO]
+
+RETAINED CONFLUENCE SNAPSHOT REFRESHED:
+[YES/NO]
+
+TRADE ALIGNMENT USING HOTFIXED CATALYST:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND DISPLAY:
+[YES/NO]

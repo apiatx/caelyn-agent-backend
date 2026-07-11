@@ -669,6 +669,15 @@ def _build_v2_events_from_articles(
         mat   = (sa.get("major_news_score", 0) / 100.0) * rw
         direction = sa["_direction"]
 
+        # Hotfix: cap materiality for ambiguous-relevance events (rel < 0.75).
+        # These events may remain as low-confidence diagnostics in reason_codes
+        # and catalyst_v2_supporting_events, but cannot drive COMPELLING/MODERATE
+        # scores. Cap keeps them in WEAK territory (≤39.9 even with corroboration).
+        # Calendar events always carry ticker_relevance_score=1.0 and are unaffected.
+        rel_score_for_mat = sa.get("_ticker_relevance_score", 1.0)
+        if rel_score_for_mat < 0.75:
+            mat = min(mat, 0.399)
+
         if key not in groups or mat > groups[key]["materiality_score"]:
             sq = sa.get("source_quality", "unknown")
             groups[key] = {
@@ -834,6 +843,13 @@ def _compute_v2_from_events(
                    ) if primary_bear else 0.0
 
     final = round(max(0.0, min(100.0, pos_score - neg_penalty)), 1)
+
+    # Hotfix: if the primary positive event is ambiguous-relevance (rel < 0.75),
+    # cap the final score to WEAK territory regardless of corroboration.
+    # Calendar events carry ticker_relevance_score=1.0 and are never capped.
+    # This prevents AMBIGUOUS/OTHER_COMPANY_LEAD articles from becoming COMPELLING.
+    if primary_pos and primary_pos.get("ticker_relevance_score", 1.0) < 0.75:
+        final = min(final, 39.9)
 
     # Available only when there is at least one meaningful event and score is useful
     available = (
