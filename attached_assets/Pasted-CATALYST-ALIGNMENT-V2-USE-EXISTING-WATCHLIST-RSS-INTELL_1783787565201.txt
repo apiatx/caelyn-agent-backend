@@ -1,0 +1,852 @@
+CATALYST ALIGNMENT V2 — USE EXISTING WATCHLIST RSS INTELLIGENCE FOR BUSINESS-AWARE COMPELLING EVENTS, ZERO NEW PROVIDER CALLS
+
+Work only in the existing backend Replit project.
+
+This is an implementation task.
+
+Do not modify frontend code.
+
+Do not modify Confluence retained snapshot infrastructure.
+
+Do not modify Entry, Actionability, Investment Alignment, Options Alignment, Theme Alignment, Elite Asset Rebound, Social Bonus, or Theme semantics.
+
+Do not add provider calls.
+
+Do not add RSS/news collectors.
+
+Do not add FMP calls.
+
+Do not add Tradier calls.
+
+Do not add Grok/XAI, Gemini, Claude, OpenAI, Perplexity, or other model calls.
+
+Do not add a new general news pipeline.
+
+Catalyst Alignment must remain a pure consumer of existing cached/persisted data.
+
+Existing validated facts:
+
+1. Confluence is provider-pure.
+   `build_confluence_snapshot()` consumes disk LKGs, in-memory caches, and Neon SELECTs only.
+
+2. Watchlist ticker RSS already exists:
+   `backend/services/watchlist_rss_sweeper.py`
+   pulls Yahoo Finance RSS + Google News RSS roughly every 120 seconds.
+
+3. Watchlist RSS articles are persisted in:
+   `watchlist_rss_article_archive`
+
+4. Current Catalyst Alignment V1 already reads:
+   `watchlist_rss_article_archive`
+   via:
+   `query_ticker_activity()`
+   and:
+   `query_ticker_activity_articles()`
+
+5. Current Catalyst Alignment V1 is too crude:
+   it uses its own small regex set:
+   MA_NEWS
+   REGULATORY_NEWS
+   GUIDANCE_NEWS
+   LEGAL_NEWS
+   CORPORATE_ACTION
+   ANALYST_ACTION
+
+6. The Watchlist news display already has a better classifier:
+   `backend/services/news_signal_scorer.py`
+
+It already detects business-relevant events including:
+
+hyperscaler_anchor
+
+government_contract
+
+defense_military
+
+mna
+
+earnings_guidance
+
+financing
+
+commercial_contract
+
+technical_milestone
+
+strategic_partnership
+
+product_launch
+
+routine / analyst
+
+7. That stronger classifier is currently used for Watchlist display only and is not wired into Catalyst Alignment.
+
+This is architectural drift.
+
+The goal of Catalyst Alignment V2:
+
+Turn already-collected Watchlist RSS articles into deterministic, business-aware, compelling catalyst events that can be consumed by Trade Alignment / Confluence without any additional data collection.
+
+==================================================
+PRODUCT OBJECTIVE
+=================
+
+Catalyst Alignment should answer:
+
+"Has something happened, or is something scheduled, that can materially change this ticker's business trajectory, demand, market position, investor expectations, or near-term setup quality?"
+
+Do not score "news volume."
+
+Do not reward routine articles.
+
+Do not average compelling events down because boring articles also exist.
+
+A single major event can be the catalyst.
+
+Examples:
+
+CRDO:
+major hyperscaler design win / production award / strategic AI infrastructure customer
+
+AEVA:
+OEM production award / series production / customer qualification
+
+IBRX:
+FDA milestone / Phase 3 endpoint / PDUFA / approval / clinical hold
+
+RCAT / defense names:
+DoD contract / program award / military procurement
+
+materials/mining:
+offtake agreement / permit / commissioning / first production
+
+early revenue companies:
+commercial launch / first shipment / mass production / capacity ramp
+
+software:
+major enterprise agreement / GA launch / strategic platform partnership
+
+Speculative companies:
+non-dilutive funding is bullish
+dilutive offering / going concern is bearish
+
+==================================================
+IMPLEMENTATION PRINCIPLES
+=========================
+
+1. V2 must be deterministic.
+
+2. V2 must use existing article archives and existing classifiers.
+
+3. V2 must not call providers.
+
+4. V2 must not use LLMs.
+
+5. V2 must not scan the entire historical article archive on every Confluence build.
+
+6. V2 should operate over the same bounded recent window Catalyst V1 already uses, currently 96 hours, unless existing code proves another value is better.
+
+7. V2 must preserve V1 output fields initially.
+
+8. Add V2 fields in shadow/additive mode first.
+
+9. Do not change THEME_ALIGNMENT's primary Catalyst score until V2 validation proves it is better.
+
+10. Do not replace V1 in this task unless explicitly validated and reported as safe.
+
+==================================================
+PART 0 — READ CURRENT CODE BEFORE EDITING
+=========================================
+
+Read:
+
+backend/services/catalyst_alignment.py
+
+backend/services/news_signal_scorer.py
+
+backend/services/rss_article_archive.py
+
+backend/services/watchlist_rss_sweeper.py
+
+backend/services/confluence_v2_service.py
+
+Any existing tests or diagnostics touching Catalyst Alignment.
+
+Confirm exact current function signatures.
+
+Do not invent prompt-era field names.
+
+==================================================
+PART 1 — REUSE NEWS_SIGNAL_SCORER
+=================================
+
+Wire Catalyst Alignment V2 to reuse the existing Watchlist news classifier logic from:
+
+`backend/services/news_signal_scorer.py`
+
+Do not duplicate its taxonomy inside catalyst_alignment.py.
+
+If the existing scorer is display-oriented, add a narrow helper in news_signal_scorer.py that returns structured classification data suitable for Catalyst V2.
+
+Do not break existing Watchlist news display.
+
+The helper should classify already-fetched article records.
+
+Input should use existing article fields:
+
+ticker
+
+title
+
+summary if available
+
+source
+
+url
+
+published_at
+
+Do not fetch article content.
+
+Do not call external URLs.
+
+==================================================
+PART 2 — STRUCTURED CATALYST EVENT RECORD
+=========================================
+
+Add a deterministic V2 event shape.
+
+Conceptual shape:
+
+{
+"event_id": "...",
+"ticker": "CRDO",
+"event_type": "hyperscaler_anchor",
+"event_reason": "MAJOR_CUSTOMER_DEAL",
+"direction": "bullish",
+"materiality_score": 0.0-1.0,
+"confidence_score": 0.0-1.0,
+"status": "confirmed" | "scheduled" | "rumor" | "ambiguous",
+"source": "rss" | "earnings" | "calendar",
+"title": "...",
+"published_at": "...",
+"catalyst_date": "...",
+"days_until": int | null,
+"entity_mentions": [...],
+"url": "..."
+}
+
+Use exact existing article identity fields where possible.
+
+Do not add a database table in this task.
+
+The event records can be computed on the fly from recent cached RSS/calendar data for the requested symbols.
+
+==================================================
+PART 3 — DIRECTION
+==================
+
+Add deterministic direction handling.
+
+Minimum V2 directions:
+
+bullish
+
+bearish
+
+neutral
+
+ambiguous
+
+Examples:
+
+Bullish:
+
+hyperscaler_anchor
+
+government_contract
+
+commercial_contract
+
+strategic_partnership
+
+technical_milestone
+
+product_launch
+
+positive earnings_guidance
+
+approval / FDA acceptance / endpoint met if detected
+
+non-dilutive funding
+
+Bearish:
+
+dilutive offering
+
+registered direct
+
+ATM offering
+
+convertible note issuance if dilution-heavy
+
+going concern warning
+
+clinical hold
+
+CRL
+
+missed endpoint
+
+cuts guidance
+
+withdraws outlook
+
+customer delay
+
+legal/regulatory enforcement risk
+
+Ambiguous/mixed:
+
+M&A acquirer unless wording says company is being acquired
+
+analyst action unless upgrade/downgrade is explicit
+
+routine investor conference
+
+Do not pretend ambiguous events are bullish.
+
+==================================================
+PART 4 — MATERIALITY
+====================
+
+Do not use a plain weighted average across all articles.
+
+Catalyst V2 should identify:
+
+primary_positive_catalyst
+
+supporting_positive_catalysts
+
+primary_bearish_catalyst
+
+materiality/conflict penalty
+
+Do not let routine articles dilute a major event.
+
+Do not let many duplicated syndicated articles count as many independent catalysts.
+
+Use an event-clustering/dedupe step.
+
+Simple V1 event dedupe is acceptable:
+
+same ticker
+
+same event_type
+
+normalized title similarity / shared URL / same day
+
+same major entity mention if available
+
+Collapse duplicate articles into one event with article_count/source_count.
+
+Article count may boost confidence slightly, not create multiple catalysts.
+
+Recommended scoring concept:
+
+positive_score =
+primary_positive_event_score
+
+* small corroboration_bonus capped at +8
+
+negative_penalty =
+primary_bearish_event_score * penalty factor
+
+final_v2_score =
+clamp(positive_score - negative_penalty, 0, 100)
+
+If no meaningful positive or negative catalyst:
+available = false
+score = null
+
+Do not score routine news as a catalyst.
+
+==================================================
+PART 5 — RECENCY
+================
+
+Use recency decay.
+
+Suggested:
+
+0-24h: full materiality
+
+24-48h: mild decay
+
+48-96h: stronger decay
+
+older than current V1 window:
+excluded unless it is a scheduled upcoming event from calendar/earnings.
+
+Keep current V1 96-hour news window unless code shows another canonical value.
+
+Scheduled catalysts should use days_until, not article age.
+
+==================================================
+PART 6 — BUSINESS-AWARE RELEVANCE
+=================================
+
+Use existing deterministic context only.
+
+Available context may include:
+
+primary Theme from theme resolver / theme bridge
+
+additional theme memberships if cheap and already loaded
+
+fundamentals cache sector
+
+fundamentals cache industry
+
+market cap
+
+company description if already cached
+
+curated bottleneck / supply-chain anchor membership if already available without new reads
+
+Do not call providers for context.
+
+Add a simple relevance multiplier or relevance gate.
+
+Examples:
+
+hyperscaler_anchor:
+higher relevance for AI infrastructure, semiconductors, photonics, data center, cloud/software, power/cooling infrastructure
+
+government_contract / defense_military:
+higher relevance for defense, aerospace, drones, space, government contractors
+
+clinical/regulatory:
+higher relevance for biotech/healthcare/life sciences
+
+technical_milestone:
+higher relevance for semiconductors, photonics, hardware, autonomy, robotics, energy tech
+
+product_launch:
+higher relevance for early revenue / product companies
+
+financing:
+higher relevance/risk for smaller market cap, pre-revenue, early revenue, high cash-burn names if such context exists
+
+If context is unavailable:
+use neutral relevance = 1.0.
+
+Do not overfit.
+
+Do not make the event disappear solely because context is missing.
+
+==================================================
+PART 7 — CALENDAR / EARNINGS INTEGRATION
+========================================
+
+Preserve current V1 calendar/event sources:
+
+earnings from top_catalysts_service
+
+IPO/dividend/split from calendar_snapshot_service
+
+Map them into the V2 event shape.
+
+Earnings imminent / this week should remain a scheduled catalyst.
+
+But V2 should distinguish:
+
+scheduled earnings event
+
+from:
+
+earnings/guidance RSS article after the event.
+
+Do not double count the same earnings event if both calendar and article exist; keep them as related/supporting where possible.
+
+==================================================
+PART 8 — V2 OUTPUT FIELDS
+=========================
+
+In Catalyst Alignment result, preserve all current V1 fields.
+
+Add additive V2 fields such as:
+
+catalyst_v2_available
+
+catalyst_v2_score
+
+catalyst_v2_state
+
+catalyst_v2_primary_event
+
+catalyst_v2_supporting_events
+
+catalyst_v2_bearish_event
+
+catalyst_v2_event_count
+
+catalyst_v2_reason_codes
+
+catalyst_v2_conflicts
+
+catalyst_v2_version
+
+Do not remove or rename V1 fields.
+
+Do not change Confluence consumers in this task unless only exposing additive V2 fields in signal_breakdown.
+
+THEME_ALIGNMENT should continue using the existing V1 Catalyst score for now.
+
+==================================================
+PART 9 — VALIDATION SET
+=======================
+
+Run validation on the current Watchlist universe.
+
+Return:
+
+total symbols
+
+symbols with V1 Catalyst available
+
+symbols with V2 Catalyst available
+
+V1-only count
+
+V2-only count
+
+both count
+
+neither count
+
+top 50 V2 catalysts
+
+top 20 bullish V2 catalysts
+
+top 20 bearish/conflict V2 catalysts
+
+event type distribution
+
+direction distribution
+
+materiality distribution
+
+source distribution
+
+business relevance distribution
+
+Symbols where V1 scored high but V2 rejects as routine/weak
+
+Symbols where V1 missed but V2 finds compelling event
+
+==================================================
+PART 10 — HYPERSCALER / DEAL VALIDATION
+=======================================
+
+Specifically validate examples from current archived RSS where available.
+
+Return every recent event classified as:
+
+hyperscaler_anchor
+
+commercial_contract
+
+strategic_partnership
+
+government_contract
+
+technical_milestone
+
+product_launch
+
+For each:
+
+ticker
+
+title
+
+event_type
+
+direction
+
+materiality_score
+
+confidence_score
+
+business relevance
+
+reason codes
+
+whether Catalyst V1 detected it
+
+==================================================
+PART 11 — NEGATIVE EVENT VALIDATION
+===================================
+
+Validate bearish/conflict detection.
+
+Return recent events classified as:
+
+financing dilution
+
+offering
+
+going concern
+
+guidance cut
+
+clinical hold
+
+missed endpoint
+
+legal/regulatory risk
+
+downgrade if supported
+
+For each:
+
+ticker
+
+title
+
+event_type
+
+direction
+
+materiality_score
+
+conflict penalty
+
+whether V1 incorrectly treated it as positive/neutral
+
+==================================================
+PART 12 — SPECIFIC NAMED TICKERS
+================================
+
+Return V1 and V2 Catalyst outputs for:
+
+CRDO
+
+AEVA
+
+IBRX
+
+RBRK
+
+SOFI
+
+ABCL
+
+RCAT
+
+AMD
+
+MU
+
+LITE
+
+BE
+
+PLTR
+
+NVDA
+
+DELL
+
+If no recent catalyst exists, report no recent catalyst.
+
+Do not fabricate events.
+
+==================================================
+PART 13 — PERFORMANCE / COST
+============================
+
+Measure:
+
+get_catalyst_alignment_bulk() current V1 runtime
+
+V2 runtime
+
+runtime added by classification
+
+number of RSS articles scanned
+
+number of symbols scanned
+
+Neon SELECT count unchanged or changed
+
+provider call count
+
+Expected:
+
+0 provider calls
+
+No full archive scan
+
+Only recent bounded article reads for requested symbols
+
+==================================================
+PART 14 — CONFLUENCE ADDITIVE EXPOSURE
+======================================
+
+If Catalyst Alignment results are already embedded in Confluence rows, expose V2 fields additively in the existing catalyst section/signal breakdown.
+
+Do not change Trade Alignment score yet.
+
+Do not change THEME_ALIGNMENT weight yet.
+
+Confluence row may include:
+
+catalyst_alignment_score              # existing V1
+
+catalyst_v2_score                     # additive
+
+catalyst_v2_primary_event             # additive
+
+catalyst_v2_conflicts                 # additive
+
+catalyst_v2_available                 # additive
+
+Do not break existing frontend consumers.
+
+==================================================
+PART 15 — MODEL SAFETY
+======================
+
+Make sure V2 does not:
+
+treat routine investor conferences as bullish catalysts
+
+treat analyst reiterations as major catalysts
+
+treat ambiguous M&A acquirer news as automatically bullish
+
+treat dilution as bullish
+
+count syndicated duplicates as multiple catalysts
+
+score stale old news as current
+
+score a headline for a ticker just because it mentions another company in the same sector
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+CATALYST ALIGNMENT V2 IMPLEMENTATION REPORT
+
+FILES CHANGED:
+[list]
+
+V2 ARCHITECTURE:
+[summary]
+
+DATA SOURCES:
+[list]
+
+PROVIDER CALLS:
+[0 expected]
+
+NEWS_SIGNAL_SCORER REUSE:
+[implementation]
+
+EVENT RECORD:
+[fields]
+
+EVENT DEDUPE:
+[implementation]
+
+DIRECTION HANDLING:
+[implementation]
+
+MATERIALITY SCORING:
+[implementation]
+
+RECENCY DECAY:
+[implementation]
+
+BUSINESS-AWARE RELEVANCE:
+[implementation]
+
+CALENDAR/EARNINGS INTEGRATION:
+[implementation]
+
+V1 PRESERVED:
+[YES / NO]
+
+THEME_ALIGNMENT PRIMARY SCORE CHANGED:
+[NO expected]
+
+ADDITIVE CONFLUENCE FIELDS:
+[list]
+
+VALIDATION SUMMARY:
+[results]
+
+TOP V2 CATALYSTS:
+[table]
+
+V1 MISSED / V2 FOUND:
+[table]
+
+V1 HIGH / V2 REJECTED:
+[table]
+
+BEARISH CONFLICTS:
+[table]
+
+NAMED TICKERS:
+[results]
+
+PERFORMANCE:
+[results]
+
+COST PROOF:
+[0 provider calls]
+
+End exactly:
+
+CATALYST ALIGNMENT V2 VERDICT
+
+ZERO PROVIDER CALLS:
+[YES / NO]
+
+USES EXISTING WATCHLIST RSS:
+[YES / NO]
+
+REUSES EXISTING NEWS CLASSIFIER:
+[YES / NO]
+
+BUSINESS-AWARE:
+[YES / NO]
+
+DIRECTIONAL:
+[YES / NO]
+
+MATERIALITY-AWARE:
+[YES / NO]
+
+DUPLICATE-SAFE:
+[YES / NO]
+
+V1 PRESERVED:
+[YES / NO]
+
+TRADE ALIGNMENT UNCHANGED:
+[YES / NO]
+
+READY FOR SHADOW VALIDATION:
+[YES / NO]
+
+NEXT IMPLEMENTATION:
+[CATALYST V2 SHADOW VALIDATION / PROMOTION DECISION]
+
+Do not make unrelated changes.
