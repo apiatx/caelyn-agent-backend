@@ -15449,7 +15449,9 @@ async def get_confluence_snapshot(
     try:
         import copy
         from services.confluence_v2_service import get_retained_confluence_snapshot
-        retained_snap = get_retained_confluence_snapshot()
+        # Off-load to a thread so the Uvicorn event loop is never blocked during
+        # a cold/warm build (~129 s).  Gunicorn heartbeat stays healthy throughout.
+        retained_snap = await asyncio.to_thread(get_retained_confluence_snapshot)
         # Shallow-copy the top-level dict so we can add/replace keys without
         # touching the retained object.  The results list gets a new list
         # reference (via slicing below), but individual row dicts would still

@@ -3980,7 +3980,9 @@ async def get_watchlist_alignment(watchlist_id: str):
     )
 
     try:
-        snap = get_retained_confluence_snapshot()
+        # Off-load to a thread so the Uvicorn event loop is never blocked during
+        # a cold/warm build (~129 s).  Gunicorn heartbeat stays healthy throughout.
+        snap = await asyncio.to_thread(get_retained_confluence_snapshot)
     except Exception as exc:
         print(f"[WATCHLIST_ALIGNMENT] retained Confluence snapshot unavailable: {exc}")
         snap = {"results": []}

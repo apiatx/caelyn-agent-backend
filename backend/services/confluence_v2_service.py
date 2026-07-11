@@ -1502,11 +1502,18 @@ def build_confluence_snapshot(
     ticker_theme_idx = build_ticker_theme_index()
     rotation_idx     = get_theme_rotation_index()
 
-    # Load entry state LKG if available
+    # Load entry state LKG if available.
+    # Also capture the canonical version constant so that stale-version rows are
+    # treated as unavailable (same semantics as is_entry_version_current()).
     entry_lkg: dict[str, dict] = {}
+    _current_entry_version: Optional[int] = None
     try:
-        from services.entry_state_service import get_all_entry_state_lkg
+        from services.entry_state_service import (
+            get_all_entry_state_lkg,
+            ENTRY_ANALYSIS_VERSION as _ENTRY_ANALYSIS_VERSION,
+        )
         entry_lkg = get_all_entry_state_lkg()
+        _current_entry_version = _ENTRY_ANALYSIS_VERSION
     except Exception:
         pass
 
@@ -1568,9 +1575,24 @@ def build_confluence_snapshot(
     social_bonus_counts = {"0": 0, "2_4": 0, "5_7": 0, "8_10": 0, "eligible": 0, "applied": 0}
 
     for sym in universe:
+        # Normalize Entry: apply canonical current-version check before any
+        # consumer sees the result.  A row that exists but carries a stale
+        # entry_analysis_version is treated identically to a missing row — None.
+        # This ensures emitted entry_available, Actionability, and Elite Rebound
+        # all use the same normalized result without independent re-checks.
+        _raw_entry = entry_lkg.get(sym)
+        _entry_result: Optional[dict] = (
+            _raw_entry
+            if (
+                _raw_entry is not None
+                and _current_entry_version is not None
+                and _raw_entry.get("entry_analysis_version") == _current_entry_version
+            )
+            else None
+        )
         r = _compute_confluence(
             sym          = sym,
-            entry_result = entry_lkg.get(sym),
+            entry_result = _entry_result,
             stage2_row   = stage2_lkg.get(sym),
             themes_idx   = themes_idx,
             options_map  = options_map,
@@ -1820,6 +1842,14 @@ _RETAINED: dict[str, Any] = {
     "stale_reasons":       [],
 }
 
+# Completion signal for the in-progress retained build.
+# Set = no build running (or build just finished).
+# Cleared = a build is actively in progress.
+# Callers that detect already_building=True must wait() here instead of
+# launching a second build_confluence_snapshot() call.
+_RETAINED_BUILD_DONE = threading.Event()
+_RETAINED_BUILD_DONE.set()   # initial state: no build in progress
+
 # ── Stale-reason derivation (DEFECT 6 fix) ────────────────────────────────────
 # Maps each fingerprint key to a human-readable reason code. Keys not listed
 # here get a generic "FINGERPRINT_CHANGED" fallback so new keys are never
@@ -1994,6 +2024,11 @@ def _retained_is_stale(
 
 
 def _start_background_rebuild() -> None:
+    # Clear the completion event BEFORE spawning the thread so any concurrent
+    # caller that already observed build_in_progress=True will block in
+    # _RETAINED_BUILD_DONE.wait() rather than returning from a stale set state.
+    _RETAINED_BUILD_DONE.clear()
+
     def _rebuild() -> None:
         try:
             new_snap = build_confluence_snapshot()
@@ -2007,6 +2042,9 @@ def _start_background_rebuild() -> None:
             print(f"[CONFLUENCE_RETAINED] background rebuild failed (prior snapshot preserved): {e}")
             with _RETAINED_LOCK:
                 _RETAINED["build_in_progress"] = False
+        finally:
+            # Always unblock waiters whether the build succeeded or failed.
+            _RETAINED_BUILD_DONE.set()
 
     threading.Thread(target=_rebuild, daemon=True, name="confluence-retained-rebuild").start()
 
@@ -2020,8 +2058,16 @@ def get_retained_confluence_snapshot() -> dict:
       B. retained exists + fingerprint changed     -> return retained immediately,
                                                        kick off exactly ONE background
                                                        rebuild (single-flight guarded)
-      C. no retained snapshot yet                  -> one synchronous cold build,
-                                                       retain it, return it
+      C. no retained snapshot yet, no build in progress -> become the single-flight
+                                                           cold builder; build
+                                                           synchronously on this thread
+                                                           (routes call via
+                                                           asyncio.to_thread — safe)
+      D. no retained snapshot yet, build already in progress -> wait on
+                                                                _RETAINED_BUILD_DONE;
+                                                                return the result;
+                                                                NEVER call the canonical
+                                                                producer a second time.
 
     A failed background rebuild preserves the prior retained snapshot and
     clears the in-progress flag so a later request can retry.
@@ -2030,20 +2076,40 @@ def get_retained_confluence_snapshot() -> dict:
         have_snapshot = _RETAINED["snapshot"] is not None
 
     if not have_snapshot:
-        # Cold start — single synchronous build (may be slow once).
+        # Cold start — atomically claim the builder role or detect a racing build.
         with _RETAINED_LOCK:
-            if _RETAINED["snapshot"] is not None:
+            if _RETAINED["snapshot"] is not None:   # double-check under lock
                 return _RETAINED["snapshot"]
             already_building = _RETAINED["build_in_progress"]
             if not already_building:
                 _RETAINED["build_in_progress"] = True
+                _RETAINED_BUILD_DONE.clear()         # claim slot, signal in-progress
 
         if already_building:
-            # Extremely rare race at true cold start: block on one build
-            # rather than launching a second one.
-            snap = build_confluence_snapshot()
-            return snap
+            # Single-flight wait — do NOT call build_confluence_snapshot() again.
+            # This thread blocks here; because routes call this function via
+            # asyncio.to_thread(), the Uvicorn event loop remains fully responsive
+            # and Gunicorn heartbeat notifications continue uninterrupted.
+            # Generous timeout: build is ~129 s; 300 s covers restarts/retries.
+            _RETAINED_BUILD_DONE.wait(timeout=300)
+            with _RETAINED_LOCK:
+                snap = _RETAINED["snapshot"]
+            if snap is not None:
+                return snap
+            # The in-progress build failed (snapshot still None after wait).
+            # Allow exactly ONE waiter to become the next single-flight builder;
+            # all other concurrent waiters raise so they do not pile up builds.
+            with _RETAINED_LOCK:
+                if _RETAINED["build_in_progress"]:
+                    raise RuntimeError(
+                        "[CONFLUENCE_RETAINED] startup build failed; "
+                        "a concurrent retry is already in progress"
+                    )
+                _RETAINED["build_in_progress"] = True
+                _RETAINED_BUILD_DONE.clear()
+            # Fall through to the build block as the next single-flight builder.
 
+        # Single builder: run the canonical producer synchronously on this thread.
         try:
             snap = build_confluence_snapshot()
             fp = _compute_source_fingerprint()
@@ -2052,10 +2118,12 @@ def get_retained_confluence_snapshot() -> dict:
                 _RETAINED["built_at"] = _now_iso()
                 _RETAINED["source_fingerprint"] = fp
                 _RETAINED["build_in_progress"] = False
+            _RETAINED_BUILD_DONE.set()
             return snap
         except Exception:
             with _RETAINED_LOCK:
                 _RETAINED["build_in_progress"] = False
+            _RETAINED_BUILD_DONE.set()
             raise
 
     current_fp = _compute_source_fingerprint()

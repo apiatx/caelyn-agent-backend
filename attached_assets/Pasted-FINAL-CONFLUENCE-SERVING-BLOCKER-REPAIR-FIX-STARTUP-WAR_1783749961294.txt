@@ -1,0 +1,747 @@
+FINAL CONFLUENCE SERVING BLOCKER REPAIR — FIX STARTUP-WARM REQUEST RACE AND CANONICAL ENTRY VERSION USABILITY
+
+Work only in the existing backend Replit project.
+
+A final read-only serving audit proved one P0 production bug and one narrow latent Entry-version integrity risk.
+
+Do not modify frontend code.
+
+Do not modify Catalyst Alignment.
+
+Do not modify any scoring formula.
+
+Do not modify:
+
+THEME_ALIGNMENT
+
+ELITE_ASSET_REBOUND scoring
+
+Investment Alignment scoring
+
+Actionability thresholds/state logic
+
+Entry Structure scoring
+
+Options Alignment
+
+Theme semantics
+
+Social Bonus
+
+`build_confluence_snapshot()` must remain the single canonical Confluence producer.
+
+No new provider calls.
+
+No new database tables.
+
+No new disk cache.
+
+No scheduler.
+
+==================================================
+PROVEN P0 BUG — REQUEST DURING STARTUP WARM
+===========================================
+
+Current startup behavior:
+
+`main.py` launches one non-blocking retained Confluence warm through `_start_background_rebuild()`.
+
+That background daemon thread runs:
+
+`build_confluence_snapshot()`
+
+and eventually populates `_RETAINED["snapshot"]`.
+
+However, the current cold/race branch inside:
+
+`get_retained_confluence_snapshot()`
+
+is wrong.
+
+When:
+
+`_RETAINED["snapshot"] is None`
+
+AND
+
+`_RETAINED["build_in_progress"] is True`
+
+the code currently enters an `already_building` branch whose comment says:
+
+"block on one build rather than launching a second one"
+
+but the branch actually executes:
+
+`build_confluence_snapshot()`
+
+again synchronously.
+
+This creates three proven defects:
+
+1. launches a SECOND independent full Confluence build
+
+2. returned result from that racing request build is not retained
+
+3. because async route handlers call `get_retained_confluence_snapshot()` directly, the synchronous ~129-second build freezes the Uvicorn event loop
+
+Production currently runs:
+
+`gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:5000 --timeout 120 main:app`
+
+The event-loop freeze prevents UvicornWorker heartbeat notification.
+
+Gunicorn can kill the worker after 120 seconds before the ~129-second build completes.
+
+The background daemon warm dies with the worker.
+
+This can create a restart/cold-request loop.
+
+This must be fixed.
+
+==================================================
+PART 0 — RECONFIRM EXACT CURRENT IMPLEMENTATION
+===============================================
+
+Before editing, re-read:
+
+backend/services/confluence_v2_service.py
+
+`get_retained_confluence_snapshot()`
+
+`_start_background_rebuild()`
+
+`_RETAINED`
+
+`_RETAINED_LOCK`
+
+backend/main.py
+
+startup Confluence warm
+
+GET `/api/alpha/confluence`
+
+backend/services/watchlist_router.py
+
+GET `/api/watchlist/{watchlist_id}/alignment`
+
+backend/services/entry_state_service.py
+
+`is_entry_version_current()`
+
+`ENTRY_ANALYSIS_VERSION`
+
+Confirm exact current signatures.
+
+Do not rely on prompt-era line numbers.
+
+==================================================
+PART 1 — FIX THE ALREADY-BUILDING COLD PATH
+===========================================
+
+Required invariant:
+
+WHEN A FULL RETAINED CONFLUENCE BUILD IS ALREADY IN PROGRESS:
+
+NO SECOND `build_confluence_snapshot()` CALL MAY START.
+
+The existing single-flight build must remain the only producer invocation.
+
+Do not fix this by launching another executor/thread build.
+
+Do not call the canonical producer twice.
+
+The retained infrastructure needs a completion synchronization primitive associated with the one in-progress build.
+
+Use the narrowest architecture appropriate to the existing threading model.
+
+Conceptually acceptable:
+
+`threading.Event`
+
+or:
+
+`threading.Condition`
+
+owned by the retained snapshot service.
+
+Expected semantics:
+
+cold state:
+
+snapshot = None
+
+build_in_progress = True
+
+request asks for retained snapshot
+
+→ wait for the existing build completion signal
+
+→ after successful build:
+read `_RETAINED["snapshot"]`
+return that exact retained snapshot
+
+→ do not call `build_confluence_snapshot()` again
+
+If the existing build fails:
+
+→ completion signal fires
+
+→ build_in_progress clears
+
+→ waiter sees snapshot still None
+
+→ one caller may become the next single-flight builder using the canonical existing producer
+
+→ do not allow all waiters to launch builds
+
+Preserve usable retained snapshot on stale rebuild failures.
+
+==================================================
+PART 2 — NEVER BLOCK THE ASYNC EVENT LOOP
+=========================================
+
+Both current async routes call the synchronous retained helper directly:
+
+GET `/api/alpha/confluence`
+
+GET `/api/watchlist/{watchlist_id}/alignment`
+
+A wait on a threading Event/Condition must NOT occur on the Uvicorn event loop.
+
+Update the async route call sites to execute the synchronous retained helper off the event loop using the existing Python/FastAPI concurrency model.
+
+Preferred narrow pattern:
+
+`await asyncio.to_thread(get_retained_confluence_snapshot)`
+
+or equivalent existing project pattern.
+
+Apply to both retained-snapshot route consumers.
+
+Do not convert the canonical Confluence producer to async.
+
+Do not rewrite scoring services.
+
+Do not wrap the per-symbol endpoint unless live code proves it needs this retained-helper behavior.
+
+Required invariant:
+
+A cold request may wait for the existing startup build.
+
+BUT:
+
+the Uvicorn event loop remains responsive.
+
+Gunicorn heartbeat continues.
+
+Other async/cached HTTP requests remain serviceable.
+
+No second Confluence build starts.
+
+==================================================
+PART 3 — COLD REQUEST RESPONSE SEMANTICS
+========================================
+
+Preserve the current API contracts.
+
+Do not return empty rows.
+
+Do not fabricate placeholder model values merely because startup warm is running.
+
+Do not introduce HTTP 202 unless absolutely required by an existing project convention.
+
+Preferred V1 behavior:
+
+request during first-ever startup warm
+
+→ waits off-event-loop for the ONE existing build
+
+→ returns the completed retained snapshot normally
+
+This request may still take substantial wall-clock time.
+
+That is acceptable for this narrow repair only if:
+
+event loop remains responsive
+
+Gunicorn heartbeat remains healthy
+
+worker is not killed
+
+no duplicate build occurs
+
+all other endpoints remain serviceable
+
+Be explicit in the final report that:
+
+"first cold Alignment request may wait for warm completion"
+
+is different from:
+
+"first cold request freezes/kills the web worker."
+
+Do not falsely claim the cold request is instant.
+
+==================================================
+PART 4 — CANONICAL ENTRY VERSION USABILITY
+==========================================
+
+The audit proved current live Entry LKG state:
+
+310 rows total
+
+307 real rows with:
+
+`entry_analysis_version == 2`
+
+3 synthetic fixtures:
+
+TEST
+
+TEST3M
+
+TEST2B
+
+with no version
+
+Current emitted:
+
+`entry_available = entry_result is not None`
+
+matches live real-symbol behavior today.
+
+However canonical Entry service freshness semantics are already defined by:
+
+`is_entry_version_current(symbol)`
+
+and:
+
+`ENTRY_ANALYSIS_VERSION`
+
+A future Entry version bump can produce:
+
+old Entry row exists
+
+→ `entry_result is not None`
+
+but:
+
+`is_entry_version_current(symbol) == False`
+
+Current Confluence would emit:
+
+`entry_available = true`
+
+for an Entry generation the canonical Entry service considers outdated.
+
+Do not invent a new availability rule.
+
+Reuse the canonical existing Entry version semantics.
+
+Audit the cleanest integration point inside the Confluence build.
+
+The exact same Entry result used by Actionability and Elite Rebound must be treated as usable only when it satisfies canonical current-version semantics.
+
+Preferred behavior:
+
+current-version Entry row:
+→ normal Entry consumption/emission
+
+missing Entry row:
+→ unavailable
+
+outdated-version Entry row:
+→ unavailable for Confluence decision consumption
+
+Do not alter or delete the Entry LKG row.
+
+Do not recompute Entry inside Confluence.
+
+Do not trigger Stage2.
+
+Do not trigger provider calls.
+
+Do not modify Entry scoring.
+
+==================================================
+PART 5 — CONSUMER CONSISTENCY
+=============================
+
+Critical:
+
+Entry usability must be identical for:
+
+emitted `entry_available`
+
+emitted Entry fields
+
+Actionability's `entry_result`
+
+ELITE_ASSET_REBOUND's Entry/Rebound/Reset inputs
+
+Any legacy Confluence Entry signal derived from the same result
+
+Do not create this inconsistency:
+
+entry_available = false
+
+but Actionability still receives the stale Entry row
+
+or:
+
+Entry fields null
+
+but Elite Rebound still scores the stale Entry row
+
+Normalize Entry usability ONCE before passing the Entry result into the per-symbol Confluence computation.
+
+Conceptually:
+
+raw_entry_result
+
+↓
+
+canonical current-version usability check
+
+↓
+
+usable_entry_result or None
+
+↓
+
+same normalized result passed to:
+
+Confluence row emission
+
+Actionability
+
+Elite Rebound
+
+Entry signal breakdown
+
+Do not independently re-check with different logic in each component.
+
+==================================================
+PART 6 — LIVE VERSION VALIDATION
+================================
+
+Against the current complete Confluence universe, report:
+
+raw Entry LKG rows
+
+current-version usable Entry rows
+
+outdated-version rows
+
+missing Entry rows
+
+synthetic fixture rows
+
+Run a safe in-memory test:
+
+Take one real version=2 row.
+
+Simulate:
+
+`ENTRY_ANALYSIS_VERSION = 3`
+
+or otherwise monkeypatch the canonical version check safely without persistent code/data mutation.
+
+Prove:
+
+the old version=2 Entry result is treated as unavailable by Confluence
+
+`entry_available = false`
+
+entry state/score/grade emitted null
+
+Actionability receives Entry unavailable behavior
+
+ELITE_ASSET_REBOUND does not consume the stale Entry result
+
+Then restore all state.
+
+Do not write the production Entry LKG.
+
+==================================================
+PART 7 — STARTUP RACE VALIDATION
+================================
+
+Restart the workflow/process.
+
+While the startup Confluence warm is actively running and:
+
+snapshot = None
+
+build_in_progress = True
+
+issue concurrently:
+
+GET `/api/watchlist/{current_watchlist_id}/alignment`
+
+GET `/api/alpha/confluence?limit=5`
+
+and at least one unrelated fast cached endpoint.
+
+Measure:
+
+Alignment HTTP status
+
+Alignment wall-clock latency
+
+Confluence HTTP status
+
+Confluence wall-clock latency
+
+unrelated endpoint HTTP status
+
+unrelated endpoint latency
+
+Gunicorn/Uvicorn worker heartbeat health
+
+worker restart count
+
+full Confluence build invocation count
+
+retained snapshot built_at changes
+
+Required:
+
+exactly ONE full Confluence build invocation
+
+no second build from either request
+
+event loop remains responsive
+
+unrelated cached endpoint remains serviceable
+
+worker is not killed after 120 seconds
+
+waiting requests return successfully after the existing warm completes
+
+both retained consumers receive the same completed retained generation
+
+==================================================
+PART 8 — FAILURE PATH VALIDATION
+================================
+
+Safely monkeypatch the canonical producer to fail once during an in-progress cold build.
+
+Prove:
+
+completion signal fires
+
+build_in_progress clears
+
+waiting request does not deadlock forever
+
+snapshot remains None if no prior snapshot exists
+
+exactly one later retry is allowed to become builder
+
+multiple waiters do not all start their own producer calls
+
+Restore producer immediately.
+
+Do not mutate persistent data.
+
+==================================================
+PART 9 — EXISTING ROUTE REGRESSION
+==================================
+
+Recheck:
+
+GET `/api/alpha/confluence`
+
+default limit=50
+
+max limit=200
+
+verdict filtering
+
+deep-copy response safety
+
+GET `/api/alpha/confluence/{symbol}`
+
+GET `/api/watchlist/{watchlist_id}/alignment`
+
+snapshot stale reasons
+
+Watchlist full row coverage
+
+Preserve all current response contracts.
+
+==================================================
+PART 10 — MODEL REGRESSION
+==========================
+
+Confirm zero scoring formula changes.
+
+For identical usable Entry inputs:
+
+THEME_ALIGNMENT unchanged
+
+ELITE_ASSET_REBOUND unchanged
+
+Investment Alignment unchanged
+
+Actionability unchanged
+
+Entry unchanged
+
+Options Alignment unchanged
+
+Catalyst Alignment unchanged
+
+Theme semantics unchanged
+
+The only behavioral change permitted is:
+
+outdated Entry analysis versions are treated as unavailable consistently throughout Confluence.
+
+==================================================
+PART 11 — COST / REGRESSION
+===========================
+
+Prove:
+
+0 incremental FMP calls
+
+0 Tradier calls
+
+0 Grok/XAI calls
+
+0 Gemini calls
+
+0 Claude calls
+
+0 OpenAI calls
+
+0 provider calls
+
+0 new database tables
+
+0 migrations
+
+0 new disk cache
+
+0 second Confluence producer
+
+0 scheduler
+
+0 scoring formula changes
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+FINAL CONFLUENCE SERVING BLOCKER REPAIR REPORT
+
+FILES CHANGED:
+[list]
+
+STARTUP RACE ROOT CAUSE:
+[exact branch]
+
+SYNCHRONOUS EVENT-LOOP BLOCK BEFORE:
+[behavior]
+
+SINGLE-FLIGHT WAIT IMPLEMENTATION:
+[implementation]
+
+ASYNC ROUTE OFFLOAD:
+[implementation]
+
+COLD REQUEST SEMANTICS AFTER:
+[exact behavior]
+
+GUNICORN HEARTBEAT SAFETY:
+[result]
+
+FULL BUILD INVOCATIONS DURING STARTUP RACE:
+[count]
+
+WORKER RESTARTS DURING TEST:
+[count]
+
+UNRELATED ENDPOINT DURING WARM:
+[latency/status]
+
+ENTRY CANONICAL USABILITY RULE:
+[exact reused rule]
+
+ENTRY NORMALIZATION POINT:
+[path/function]
+
+ENTRY LIVE COUNTS:
+[results]
+
+VERSION-BUMP SIMULATION:
+[results]
+
+ACTIONABILITY ENTRY CONSISTENCY:
+[result]
+
+ELITE REBOUND ENTRY CONSISTENCY:
+[result]
+
+FAILURE / WAITER RECOVERY:
+[result]
+
+EXISTING ROUTE REGRESSION:
+[result]
+
+MODEL REGRESSION:
+[result]
+
+COST PROOF:
+[result]
+
+End exactly:
+
+FINAL CONFLUENCE SERVING BLOCKER VERDICT
+
+DUPLICATE COLD BUILDS ELIMINATED:
+[YES / NO]
+
+ASYNC EVENT LOOP REMAINS RESPONSIVE:
+[YES / NO]
+
+GUNICORN 120S WORKER-KILL RISK REMOVED:
+[YES / NO]
+
+COLD WAITERS RECEIVE RETAINED GENERATION:
+[YES / NO]
+
+WAITER FAILURE PATH DEADLOCK-SAFE:
+[YES / NO]
+
+ENTRY VERSION USABILITY CANONICAL:
+[YES / NO]
+
+ACTIONABILITY / ELITE / EMITTED ENTRY USE SAME NORMALIZED RESULT:
+[YES / NO]
+
+SCORING MODELS CHANGED:
+[NO expected]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+READY FOR CATALYST ALIGNMENT V2:
+[YES / NO]
+
+NEXT IMPLEMENTATION:
+[CATALYST ALIGNMENT V2 expected]
+
+Do not modify Catalyst Alignment in this task.
+
+Do not modify scoring formulas.
+
+Do not add a second Confluence producer.
+
+Do not add a scheduler.
+
+Do not make unrelated changes.
