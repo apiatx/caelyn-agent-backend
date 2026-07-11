@@ -1,0 +1,236 @@
+CATALYST ALIGNMENT V2 SHADOW VALIDATION — OUTPUT QUALITY, FALSE POSITIVES, FALSE NEGATIVES, PROMOTION READINESS
+
+Do not make code changes.
+
+Catalyst Alignment V2 has shipped additively.
+
+V1 remains primary.
+
+Trade Alignment still uses V1 Catalyst score.
+
+This task is validation only.
+
+Run Catalyst Alignment V1 and V2 over the full current Watchlist / Confluence universe.
+
+Return:
+
+1. Universe counts
+
+total symbols
+V1 available
+V2 available
+both available
+V1-only
+V2-only
+neither
+
+2. V2 score distribution
+
+min
+p10
+p25
+median
+mean
+p75
+p90
+max
+
+State counts:
+
+COMPELLING
+MODERATE
+WEAK
+UNAVAILABLE
+
+3. Event type distribution
+
+event_type
+count
+average materiality
+top tickers
+
+4. Direction distribution
+
+bullish
+bearish
+conflict
+neutral
+ambiguous
+
+5. Top 50 V2 catalysts
+
+For each:
+
+ticker
+V2 score
+state
+primary_event.event_type
+primary_event.direction
+primary_event.materiality_score
+primary_event.confidence_score
+title
+published_at
+article_count
+source
+V1 score
+whether V1 detected it
+
+6. Top bearish/conflict events
+
+Return top 25 bearish/conflict events.
+
+For each:
+
+ticker
+V2 score
+bearish_event type
+direction
+materiality_score
+title
+penalty
+whether V1 treated it as positive/neutral
+
+7. V1 missed / V2 found
+
+Return all symbols where:
+
+V1 unavailable or weak
+but V2 >= MODERATE
+
+For each explain why V2 found it.
+
+8. V1 high / V2 rejects
+
+Return all symbols where:
+
+V1 score >= 50
+but V2 unavailable or weak
+
+For each explain whether V2 correctly filtered routine/noise or missed something.
+
+9. Hyperscaler / deal validation
+
+Return every event classified as:
+
+hyperscaler_anchor
+commercial_contract
+strategic_partnership
+government_contract
+technical_milestone
+product_launch
+
+Include:
+
+ticker
+title
+event_type
+direction
+materiality_score
+confidence_score
+article_count
+V1 category if any
+
+10. Named ticker review
+
+Return V1 and V2 catalyst output for:
+
+CRDO
+AEVA
+IBRX
+RBRK
+SOFI
+ABCL
+RCAT
+AMD
+MU
+LITE
+BE
+PLTR
+NVDA
+DELL
+
+If no recent catalyst, say no recent catalyst.
+
+Do not fabricate.
+
+11. False positive inspection
+
+List any V2 COMPELLING or MODERATE event that looks weak/routine/noisy, especially:
+
+investor conference
+analyst reiteration
+generic market commentary
+sector article not actually about the ticker
+syndicated duplicate
+old stale article
+headline mentions ticker only incidentally
+
+12. False negative inspection
+
+Search recent RSS headlines for examples that should probably be compelling but V2 did not classify strongly:
+
+major customer
+contract
+selected by
+design win
+production
+FDA
+clinical
+funding
+offering
+government award
+partnership
+launch
+guidance raise/cut
+
+Return examples.
+
+13. Performance / cost
+
+runtime
+Neon SELECT count
+RSS articles scanned
+symbols scanned
+provider calls
+
+Expected provider calls: 0.
+
+14. Promotion recommendation
+
+Answer:
+
+Should Catalyst V2 replace V1 as the Catalyst component inside THEME_ALIGNMENT now?
+
+Options:
+
+NO — keep shadow
+YES — promote directly
+PARTIAL — blend V1/V2 or use V2 only for news while keeping V1 calendar/earnings
+
+Give exact reason.
+
+Final response:
+
+CATALYST V2 SHADOW VALIDATION REPORT
+
+End exactly:
+
+CATALYST V2 SHADOW VERDICT
+
+ZERO PROVIDER CALLS:
+[YES/NO]
+
+FALSE POSITIVES ACCEPTABLE:
+[YES/NO]
+
+FALSE NEGATIVES ACCEPTABLE:
+[YES/NO]
+
+V2 BETTER THAN V1:
+[YES/NO]
+
+READY TO PROMOTE INTO TRADE ALIGNMENT:
+[YES/NO/PARTIAL]
+
+NEXT IMPLEMENTATION:
+[exact next step]
