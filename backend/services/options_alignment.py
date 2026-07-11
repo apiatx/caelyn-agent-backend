@@ -561,6 +561,7 @@ def get_options_alignment_for_ticker(
         "net_premium_7d_available": availability["7d"],
         "net_premium_30d_available": availability["30d"],
         "source": source,
+        "options_primary_signal": row.get("primary_signal"),
         "options_alignment_reason_codes": reasons,
     }
 

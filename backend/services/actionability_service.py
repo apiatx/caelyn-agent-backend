@@ -41,7 +41,7 @@ ALL_STATES = [
 
 # ── Entry-state groupings (exact canonical Entry Structure V2 / legacy names,
 #    verified against services/entry_state_service.py _STATE_TO_FAMILY) ───────
-_HARD_BREAK_STATES = {"SUPPORT_LOST", "DOWNTREND", "FAILED_BREAKOUT"}
+_HARD_BREAK_STATES = {"SUPPORT_LOST", "DOWNTREND", "FAILED_BREAKOUT", "LOWER_LOW_CONFIRMED"}
 _SEVERE_EXTENSION_STATES = {"EXTREME_EXTENSION", "VERTICAL", "CROWDED_MOVE", "VOLUME_CLIMAX"}
 _MILD_EXTENSION_STATE = "EXTENDED"
 
@@ -56,7 +56,7 @@ _WAIT_FOR_BREAKOUT_CONTEXT_STATES = {
     "HIGH_BASE_COILING", "COILED", "LOW_BASE_COILING", "BREAKOUT_READY",
 }
 _WAIT_FOR_RETEST_CONTEXT_STATES = {"WAIT_FOR_RETEST"}
-_REVERSAL_WATCH_CONTEXT_STATES = {"LOW_BASE_FORMING", "REVERSAL_WATCH"}
+_REVERSAL_WATCH_CONTEXT_STATES = {"LOW_BASE_FORMING", "REVERSAL_WATCH", "SUPPORT_TEST", "LOWER_HIGH_WARNING"}
 
 # FLOW_LEADING_PRICE eligible Entry states (pre-move / constructive contexts only;
 # never severe-extension states — enforced separately as a hard exclusion).
@@ -89,6 +89,25 @@ def _safe(v: Optional[float]) -> Optional[float]:
         return None
 
 
+_SETUP_SUMMARY_MAP: dict[str, str] = {
+    "READY":             "Setup ready — entry and alignment converging",
+    "EARLY_WATCH":       "Early setup forming — entry structure building",
+    "WATCH":             "Watching — no clear action yet",
+    "WAIT_FOR_BREAKOUT": "Waiting for breakout trigger — base maturing",
+    "WAIT_FOR_RETEST":   "Extended after move — wait for pullback",
+    "REVERSAL_WATCH":    "Reversal watch — turnaround structure forming",
+    "TOO_EXTENDED":      "Entry too extended — avoid chasing",
+    "AVOID":             "Structural break — avoid",
+}
+
+
+def _compute_setup_summary(state: Optional[str], options_entry_conflict: bool) -> Optional[str]:
+    """Shadow diagnostic summary (Bug 1).  Not used for any scoring."""
+    if state == TOO_EXTENDED and options_entry_conflict:
+        return "Options signal present but entry extended — wait for pullback"
+    return _SETUP_SUMMARY_MAP.get(state or "", None)
+
+
 def _unavailable(reason: str, entry_family: Optional[str] = None) -> dict:
     return {
         "actionability_available":     False,
@@ -99,10 +118,13 @@ def _unavailable(reason: str, entry_family: Optional[str] = None) -> dict:
         "actionability_strengths":     [],
         "actionability_entry_family":  entry_family,
         "actionability_version":       ACTIONABILITY_VERSION,
+        "options_entry_conflict":      False,
+        "options_primary_signal":      None,
+        "setup_summary":               None,
     }
 
 
-def compute_actionability(
+def _compute_actionability_core(
     entry_result:    Optional[dict],
     ta_fields:       dict,
     options_result:  Optional[dict] = None,
@@ -391,3 +413,41 @@ def compute_actionability(
         "actionability_entry_family": entry_family,
         "actionability_version":      ACTIONABILITY_VERSION,
     }
+
+
+def compute_actionability(
+    entry_result:    Optional[dict],
+    ta_fields:       dict,
+    options_result:  Optional[dict] = None,
+) -> dict:
+    """
+    Public wrapper around _compute_actionability_core.
+
+    Injects three shadow diagnostic fields (Bug 1 — Asymmetric RR isolation).
+    These fields are ADDITIVE only; they never change any score or state.
+
+    options_entry_conflict : True when entry_state is in _SEVERE_EXTENSION_STATES
+                             (e.g. EXTREME_EXTENSION) and the options alignment
+                             score is >= 60.  Signals that an options-layer
+                             bullish signal (e.g. 'asymmetric_rr') is present but
+                             must NOT override the entry-level extended reading.
+    options_primary_signal : raw primary_signal label from the options flow engine
+                             (e.g. 'asymmetric_rr'), forwarded from the options
+                             alignment result.  Options-only context.
+    setup_summary          : human-readable synthesis for display / explainability.
+    """
+    result = _compute_actionability_core(entry_result, ta_fields, options_result)
+
+    entry_state = (entry_result or {}).get("entry_state")
+    options_alignment_score = _safe((ta_fields or {}).get("options_alignment_score"))
+    options_entry_conflict = bool(
+        entry_state in _SEVERE_EXTENSION_STATES
+        and options_alignment_score is not None
+        and options_alignment_score >= 60.0
+    )
+    result["options_entry_conflict"] = options_entry_conflict
+    result["options_primary_signal"] = (options_result or {}).get("options_primary_signal")
+    result["setup_summary"] = _compute_setup_summary(
+        result.get("actionability_state"), options_entry_conflict
+    )
+    return result

@@ -132,6 +132,10 @@ _BASE_SCORES: dict[str, int] = {
     "NO_CLEAR_ENTRY":     30,
     "INSUFFICIENT_DATA":  20,
     "REVERSAL_WATCH":     22,   # Entry Structure V2 — pivot lost, structure ambiguous, watch not entry
+    # ── Broken-support nuanced states (Bug 2 — replaces blanket SUPPORT_LOST) ──
+    "SUPPORT_TEST":        52,   # Marginal break below SMA50 — testing support, break unconfirmed
+    "LOWER_HIGH_WARNING":  38,   # Lower high formed; no lower-low yet — structural caution
+    "LOWER_LOW_CONFIRMED": 12,   # Lower-low confirmed with buffer — structural break validated
 }
 
 _STATE_TO_FAMILY: dict[str, str] = {
@@ -167,6 +171,9 @@ _STATE_TO_FAMILY: dict[str, str] = {
     "NO_CLEAR_ENTRY":      FAMILY_BROKEN,
     "INSUFFICIENT_DATA":   FAMILY_BROKEN,
     "REVERSAL_WATCH":      FAMILY_BROKEN,
+    "SUPPORT_TEST":        FAMILY_BROKEN,
+    "LOWER_HIGH_WARNING":  FAMILY_BROKEN,
+    "LOWER_LOW_CONFIRMED": FAMILY_BROKEN,
 }
 
 
@@ -439,6 +446,93 @@ def _classify_entry_state(
     # ── Fallback ───────────────────────────────────────────────────────────────
     evidence.append("fallback_no_match")
     return "NO_CLEAR_ENTRY", 0, evidence
+
+
+# ── Broken-support nuanced classifier (Bug 2) ──────────────────────────────────
+def _classify_broken_support(
+    sorted_bars:  list[dict],
+    price:        float,
+    sma50:        Optional[float],
+    sma200:       Optional[float],
+    pct_vs_sma50: Optional[float],
+) -> Optional[tuple[str, int, list[str]]]:
+    """
+    Called only when ext_risk == 'broken' (price < SMA50 and price < SMA200).
+    Uses the existing daily bars to produce a more nuanced classification
+    before falling through to the legacy blanket SUPPORT_LOST signal.
+
+    Strategy
+    --------
+    1.  Marginal break (within 5 % below SMA50) without a confirmed lower-low →
+        SUPPORT_TEST (testing support, not a structural break).
+    2.  Lower-high formed but no confirmed lower-low yet →
+        LOWER_HIGH_WARNING (structural caution, momentum weakening).
+    3.  Lower-low confirmed (second-half minimum > 3 % below first-half minimum)
+        → LOWER_LOW_CONFIRMED (structural break validated).
+    4.  Significant break, no confirmed lower-low yet → fall through (None)
+        so the legacy SUPPORT_LOST signal fires.
+
+    Returns (state, score_adj, evidence) or None to fall through.
+    Zero new provider calls.  Operates on sorted_bars already in memory.
+    """
+    if not sorted_bars or len(sorted_bars) < 30:
+        return None
+
+    evidence: list[str] = ["broken_support_nuanced_classifier"]
+
+    if pct_vs_sma50 is not None:
+        evidence.append(f"pct_vs_sma50={pct_vs_sma50:.1f}")
+
+    # ── Marginal break flag — within 5 % below SMA50 ─────────────────────────
+    marginal_break = (pct_vs_sma50 is not None and pct_vs_sma50 >= -5.0)
+
+    # ── HH/HL structure from the last 40 bars (close, high, low) ─────────────
+    window = sorted_bars[-40:]
+    closes: list[float] = []
+    lows:   list[float] = []
+    for b in window:
+        c = b.get("close")
+        if c is None:
+            continue
+        try:
+            closes.append(float(c))
+            lows.append(float(b.get("low") or c))
+        except (TypeError, ValueError):
+            pass
+
+    if len(closes) < 20:
+        return None
+
+    mid          = len(closes) // 2
+    first_high   = max(closes[:mid])
+    second_high  = max(closes[mid:])
+    first_low    = min(lows[:mid])
+    second_low   = min(lows[mid:])
+
+    # Lower-low: second-half minimum more than 3 % below first-half minimum
+    lower_low_confirmed = second_low < first_low * 0.97
+
+    # Lower-high: recent peak more than 3 % below prior peak
+    lower_high = second_high < first_high * 0.97
+
+    if lower_low_confirmed:
+        evidence.append("lower_low_confirmed")
+        evidence.append(f"prior_low={first_low:.2f}_recent_low={second_low:.2f}")
+        return ("LOWER_LOW_CONFIRMED", 0, evidence)
+
+    if marginal_break:
+        evidence.append("marginal_break_below_sma50")
+        if lower_high:
+            evidence.append("lower_high_no_lower_low_yet")
+            return ("LOWER_HIGH_WARNING", 0, evidence)
+        return ("SUPPORT_TEST", 0, evidence)
+
+    if lower_high:
+        evidence.append("lower_high_no_lower_low_yet")
+        return ("LOWER_HIGH_WARNING", 0, evidence)
+
+    # Significant break, no confirmed lower-low — fall through to SUPPORT_LOST
+    return None
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -834,6 +928,21 @@ def analyze_entry_state_from_bars(
             )
             _v2_structure = None
             _v2_override = None
+
+    # ── Broken-support nuanced classifier (Bug 2) ────────────────────────────
+    # ext_risk == "broken" excluded V2 scope above; run a bar-geometry check
+    # before falling through to the legacy blanket SUPPORT_LOST signal.
+    if _v2_override is None and ext_risk == "broken" and price is not None and len(sorted_bars) >= 30:
+        _broken_nuance = _classify_broken_support(
+            sorted_bars  = sorted_bars,
+            price        = price,
+            sma50        = sma50,
+            sma200       = sma200,
+            pct_vs_sma50 = pct50,
+        )
+        if _broken_nuance is not None:
+            _v2_override         = _broken_nuance
+            _structure_state_raw = _v2_override[0]
 
     # ── Classify ──────────────────────────────────────────────────────────────
     if _v2_override is not None:

@@ -530,10 +530,24 @@ def compute_investment_alignment(
     )
 
     if not minimum_evidence_met:
+        # ── Derive unavailable reason (Bug 3) ─────────────────────────────────
+        _all_comp_unavailable = not any(avail for avail, _ in component_map.values())
+        if not fa["financial_acceleration_available"]:
+            if "NO_FUNDAMENTALS_SNAPSHOT" in fa["financial_acceleration_reason_codes"]:
+                _inv_unavail_reason = "fundamentals_missing"
+            else:
+                _inv_unavail_reason = "cache_missing"
+        elif additional_available < 2 and _all_comp_unavailable:
+            _inv_unavail_reason = "not_in_investment_universe"
+        elif additional_available < 2:
+            _inv_unavail_reason = "insufficient_data"
+        else:
+            _inv_unavail_reason = "unknown"
         return {
             "investment_alignment_available": False,
             "investment_alignment_score": None,
             "investment_alignment_state": "INSUFFICIENT_DATA",
+            "investment_unavailable_reason": _inv_unavail_reason,
             "investment_alignment_version": INVESTMENT_ALIGNMENT_VERSION,
             "investment_alignment_components": component_map_to_dict(fa, fe, mm, ae, tt, ll),
             "investment_alignment_reason_codes": reason_codes,

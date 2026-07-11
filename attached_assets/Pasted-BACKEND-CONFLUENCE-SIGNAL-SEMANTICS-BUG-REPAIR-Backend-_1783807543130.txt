@@ -1,0 +1,236 @@
+BACKEND — CONFLUENCE SIGNAL SEMANTICS BUG REPAIR
+
+Backend only.
+
+Do not touch frontend.
+
+Do not change Catalyst scoring.
+Do not change Theme Policy scoring.
+Do not change Trade Alignment weights.
+Do not add provider calls.
+Do not add LLM calls.
+Do not add new APIs unless absolutely necessary.
+
+Goal:
+
+Fix backend signal semantics so Confluence does not misclassify setup quality.
+
+Observed bugs:
+
+1. “Asymmetric RR” appears on vertically extended/parabolic names like CRWD / FTNT.
+
+Important context:
+“Asymmetric RR” is likely an Options signal, not a general stock-entry signal.
+
+Required backend behavior:
+
+If “Asymmetric RR” comes from Options Alignment:
+- keep it as an Options-only signal
+- do not let it become the overall setup/actionability label
+- do not let it override Entry Structure
+- if Entry says EXTREME_EXTENSION / TOO_EXTENDED / VERTICAL / CROWDED_MOVE, final setup/actionability must remain extended/wait/avoid, even if Options says Asymmetric RR
+
+Backend should support this distinction clearly in output fields.
+
+Acceptable output concept:
+
+options_signal: "ASYMMETRIC_RR"
+entry_state: "EXTREME_EXTENSION"
+actionability: "TOO_EXTENDED"
+summary: "Options asymmetric, but entry extended"
+
+Never allow backend final setup/actionability to imply:
+“Asymmetric entry”
+
+when the chart is parabolic/extended.
+
+2. Support lost / failed breakout appears to overfire.
+
+Symbols visually flagged by user:
+
+BE
+NVEC
+MARA
+INTC
+
+Issue:
+Some appear to be testing support, sitting on support, or pulling back within structure — not confirmed support lost.
+
+Required backend behavior:
+
+Distinguish:
+
+SUPPORT_TEST / TESTING_SUPPORT
+CONSTRUCTIVE_PULLBACK
+WAIT_FOR_RETEST
+LOWER_HIGH_WARNING
+LOWER_LOW_CONFIRMED
+SUPPORT_LOST
+FAILED_BREAKOUT
+
+Support lost should require:
+- close below support by meaningful buffer
+- confirmation
+- or lower-low / broken-structure confirmation
+
+Failed breakout should require:
+- prior breakout above pivot
+- then confirmed close back below pivot/support
+- not just a normal retest
+
+Add or expose HH/HL structure if possible using existing bars already available in Entry/Stage LKG:
+
+HH_HL_UPTREND
+PULLBACK_WITHIN_UPTREND
+LOWER_HIGH_WARNING
+LOWER_LOW_CONFIRMED
+DOWNTREND
+RANGE_BOUND
+
+Do not fetch new price data.
+
+Use existing daily/weekly bars already available to Entry/Stage.
+
+For INTC-like cases:
+If weakening but no lower low, use LOWER_HIGH_WARNING or SUPPORT_TEST, not confirmed SUPPORT_LOST.
+
+For BE / NVEC / MARA-like support tests:
+Use SUPPORT_TEST / TRENDLINE_SUPPORT_TEST / CONSTRUCTIVE_DIP / WAIT_FOR_RETEST where appropriate, not SUPPORT_LOST.
+
+3. Investment unavailable needs a backend reason.
+
+Audit why Investment Alignment is unavailable for rows where frontend shows “Investment unavailable.”
+
+Return or expose one of:
+
+investment_unavailable_reason: "fundamentals_missing"
+investment_unavailable_reason: "insufficient_data"
+investment_unavailable_reason: "not_in_investment_universe"
+investment_unavailable_reason: "cache_missing"
+investment_unavailable_reason: "unknown"
+
+Do not change Investment Alignment scoring.
+
+4. Preserve all recent backend work.
+
+Do not touch:
+- Catalyst V2.1 promoted scoring
+- Theme Policy Catalyst scoring
+- Options Alignment scoring except labeling/context if needed
+- Trade Alignment weights
+- Actionability thresholds unless directly required to prevent Options-only Asymmetric RR overriding extended Entry
+- Confluence retained snapshot infrastructure
+
+Validation symbols:
+
+CRWD
+FTNT
+BE
+NVEC
+MARA
+INTC
+AAOI
+AEHR
+AMAT
+AMKR
+AMD
+MU
+MRVL
+PLTR
+ABCL
+SOFI
+OKLO
+TSM
+GLW
+NVDA
+
+Return before/after for:
+
+1. CRWD / FTNT:
+options signal
+entry_state
+extension_state
+actionability
+final setup label
+
+Expected:
+Options may still say Asymmetric RR, but final actionability/setup must say extended/wait if Entry is extended.
+
+2. BE / NVEC / MARA / INTC:
+old entry_state
+new entry_state
+support level if available
+lower-low confirmation yes/no
+display recommendation
+
+Expected:
+Support test should not be labeled confirmed support lost unless lower-low/break confirmation exists.
+
+3. Investment unavailable:
+sample tickers
+reason returned
+
+4. Provider calls:
+must be 0.
+
+Final response:
+
+BACKEND CONFLUENCE SIGNAL SEMANTICS REPORT
+
+FILES CHANGED:
+[list]
+
+ASYMMETRIC RR SOURCE:
+[Options / other]
+
+ASYMMETRIC RR FIX:
+[summary]
+
+ENTRY EXTENSION OVERRIDE:
+[summary]
+
+SUPPORT LOST FIX:
+[summary]
+
+HH/HL STRUCTURE:
+[implemented / not implemented + why]
+
+INVESTMENT UNAVAILABLE REASON:
+[summary]
+
+VALIDATION:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+BACKEND CONFLUENCE SEMANTICS VERDICT
+
+ASYMMETRIC RR KEPT OPTIONS-ONLY:
+[YES/NO]
+
+EXTENDED/PARABOLIC SETUPS NO LONGER DISPLAY AS ASYMMETRIC ENTRY:
+[YES/NO]
+
+SUPPORT TESTS NO LONGER CLASSIFIED AS CONFIRMED SUPPORT LOST:
+[YES/NO]
+
+HH/HL OR LOWER-LOW CONFIRMATION USED:
+[YES/NO]
+
+INVESTMENT UNAVAILABLE REASON EXPOSED:
+[YES/NO]
+
+CATALYST SCORING UNCHANGED:
+[YES/NO]
+
+THEME POLICY SCORING UNCHANGED:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND FIX:
+[YES/NO]

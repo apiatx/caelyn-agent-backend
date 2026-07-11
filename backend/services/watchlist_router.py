@@ -4052,9 +4052,11 @@ async def get_watchlist_alignment(watchlist_id: str):
         rows.append({
             "symbol": sym,
             "actionability": {
-                "available": actionability_available,
-                "state":     row.get("actionability_state") if actionability_available else None,
-                "score":     row.get("actionability_score") if actionability_available else None,
+                "available":             actionability_available,
+                "state":                 row.get("actionability_state") if actionability_available else None,
+                "score":                 row.get("actionability_score") if actionability_available else None,
+                "options_entry_conflict": bool(row.get("options_entry_conflict")) if actionability_available else False,
+                "setup_summary":         row.get("setup_summary") if actionability_available else None,
             },
             "trade_alignment": {
                 "available": trade_alignment_available,
@@ -4062,9 +4064,10 @@ async def get_watchlist_alignment(watchlist_id: str):
                 "archetype": row.get("trade_alignment_archetype") if trade_alignment_available else None,
             },
             "investment_alignment": {
-                "available": investment_alignment_available,
-                "score":     row.get("investment_alignment_score") if investment_alignment_available else None,
-                "state":     row.get("investment_alignment_state") if investment_alignment_available else None,
+                "available":         investment_alignment_available,
+                "score":             row.get("investment_alignment_score") if investment_alignment_available else None,
+                "state":             row.get("investment_alignment_state") if investment_alignment_available else None,
+                "unavailable_reason": row.get("investment_unavailable_reason") if not investment_alignment_available else None,
             },
             "entry": {
                 "available": entry_available,
@@ -4077,6 +4080,7 @@ async def get_watchlist_alignment(watchlist_id: str):
             },
             "options": {
                 "pressure_state": row.get("options_pressure_state"),
+                "primary_signal": row.get("options_primary_signal"),
             },
             "catalyst": {
                 "available":          bool(row.get("catalyst_alignment_available")),
