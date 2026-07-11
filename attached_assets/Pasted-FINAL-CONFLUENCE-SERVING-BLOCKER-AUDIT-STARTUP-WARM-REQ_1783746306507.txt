@@ -1,0 +1,185 @@
+FINAL CONFLUENCE SERVING BLOCKER AUDIT — STARTUP-WARM REQUEST SAFETY + CANONICAL ENTRY AVAILABILITY ONLY
+
+AUDIT ONLY. ZERO CODE CHANGES.
+
+The provider-purity audit is complete. Do not re-audit Catalyst, RSS, Tradier, FMP, or provider calls.
+
+Two serving questions remain before frontend or Catalyst V2 implementation.
+
+1. STARTUP-WARM REQUEST SAFETY
+
+Production command is currently:
+
+gunicorn -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:5000 --timeout 120 main:app
+
+Full retained Confluence build has recently measured approximately 129 seconds.
+
+Trace the exact current implementation of:
+
+get_retained_confluence_snapshot()
+
+_start_background_rebuild()
+
+the startup warm call
+
+GET /api/alpha/confluence
+
+GET /api/watchlist/{watchlist_id}/alignment
+
+Run one controlled process restart.
+
+While startup Confluence warm is actively running and _RETAINED["snapshot"] is None and _RETAINED["build_in_progress"] is True, immediately issue:
+
+GET /api/watchlist/{current_watchlist_id}/alignment
+
+and:
+
+GET /api/alpha/confluence?limit=5
+
+Do not wait for warm completion first.
+
+For each return:
+
+HTTP status
+
+response body shape
+
+wall-clock latency
+
+whether it blocks until the existing build completes
+
+whether it polls/waits
+
+whether a duplicate build starts
+
+whether Gunicorn's 120-second timeout applies
+
+whether the worker is killed/restarted
+
+whether the request completes before timeout
+
+Answer:
+
+REQUEST DURING STARTUP WARM USER-SAFE: YES/NO
+
+FIRST-HIT >120S TIMEOUT RISK: YES/NO
+
+No code changes.
+
+2. CANONICAL ENTRY AVAILABILITY
+
+Current Confluence emission uses:
+
+entry_available = entry_result is not None
+
+Audit the exact canonical Entry State service semantics:
+
+get_entry_state()
+
+get_all_entry_state_lkg()
+
+is_entry_version_current()
+
+ENTRY_ANALYSIS_VERSION
+
+failure/unavailable rows
+
+empty dict possibilities
+
+malformed/stale rows
+
+synthetic fixtures
+
+Determine the exact existing condition under which Entry is considered usable by:
+
+Actionability
+
+ELITE_ASSET_REBOUND
+
+and the Stage2/Entry service itself.
+
+Across the complete current Confluence universe, return the cross-tab:
+
+A = entry_result is not None
+
+B = canonical Entry usable
+
+Counts:
+
+A=true / B=true
+
+A=true / B=false
+
+A=false / B=false
+
+A=false / B=true
+
+Return every symbol where A != B and the exact reason.
+
+Compare:
+
+emitted entry_available
+
+Actionability Entry usability
+
+Elite Asset Rebound Entry usability
+
+Answer:
+
+ENTRY_AVAILABLE EMISSION MATCHES CANONICAL ENTRY USABILITY: YES/NO
+
+Do not invent a new Entry availability rule.
+
+No code changes.
+
+FINAL RESPONSE
+
+Return:
+
+FINAL CONFLUENCE SERVING BLOCKER AUDIT
+
+FILES CHANGED: NONE
+
+STARTUP WARM REQUEST PATH:
+
+ALIGNMENT DURING WARM:
+
+CONFLUENCE DURING WARM:
+
+GUNICORN TIMEOUT BEHAVIOR:
+
+REQUEST DURING STARTUP WARM USER-SAFE:
+
+FIRST-HIT >120S TIMEOUT RISK:
+
+CANONICAL ENTRY USABILITY RULE:
+
+ENTRY AVAILABILITY CROSS-TAB:
+
+ENTRY AVAILABILITY MISMATCH SYMBOLS:
+
+ACTIONABILITY ENTRY SEMANTICS:
+
+ELITE REBOUND ENTRY SEMANTICS:
+
+ENTRY_AVAILABLE EMISSION MATCHES CANONICAL ENTRY USABILITY:
+
+PROVEN BLOCKERS:
+
+NARROWEST NEXT REPAIR:
+
+End exactly:
+
+FINAL CONFLUENCE SERVING BLOCKER VERDICT
+
+STARTUP-WARM REQUEST SAFE: [YES/NO]
+
+FIRST-HIT 120S TIMEOUT RISK: [YES/NO]
+
+ENTRY AVAILABILITY SEMANTICS MATCH: [YES/NO]
+
+READY FOR CATALYST V2 BACKEND WORK: [YES/NO]
+
+NEXT IMPLEMENTATION: [exact repair or CATALYST ALIGNMENT V2]
+
+ZERO CODE CHANGES.
