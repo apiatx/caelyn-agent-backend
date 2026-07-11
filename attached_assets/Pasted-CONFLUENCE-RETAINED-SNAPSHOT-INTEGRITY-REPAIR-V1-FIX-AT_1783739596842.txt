@@ -1,0 +1,736 @@
+CONFLUENCE RETAINED SNAPSHOT INTEGRITY REPAIR V1 — FIX ATOMIC DECISION ROWS, OPTIONS INVALIDATION, PRODUCTION WORKER SEMANTICS, COLD START, AND MUTATION SAFETY
+
+Work only in the existing backend Replit project.
+
+A read-only integrity audit has proven multiple defects in the recently added retained Confluence serving path.
+
+The scoring models are frozen.
+
+Do not modify:
+
+Trade Alignment
+THEME_ALIGNMENT
+ELITE_ASSET_REBOUND scoring
+Investment Alignment
+Actionability state logic
+Entry Structure scoring
+Options Alignment scoring
+Catalyst Alignment
+Theme semantics
+Social Bonus
+
+Do not create a second Confluence producer.
+
+build_confluence_snapshot() must remain the single canonical scoring producer.
+
+Do not add provider calls.
+
+Do not modify frontend code.
+
+The proven defects are:
+
+DEFECT 1 — CROSS-GENERATION ENTRY JOIN
+
+build_confluence_snapshot() loads one Entry LKG generation and uses that exact entry_result to compute Elite Asset Rebound and Actionability.
+
+But:
+
+GET /api/watchlist/{watchlist_id}/alignment
+
+independently calls get_all_entry_state_lkg() again at request time for:
+
+entry.state
+
+entry.score
+
+entry.grade
+
+Therefore a stale retained Confluence snapshot at generation T0 can be joined to newer Entry generation T1.
+
+This was empirically reproduced:
+
+retained Actionability:
+WAIT_FOR_RETEST / 63.1
+
+retained Trade Alignment:
+81.9
+
+live joined Entry:
+BROKEN_STRUCTURE / 5 / AVOID
+
+That combination never existed in one model generation.
+
+DEFECT 2 — OPTIONS FINGERPRINT TRACKS THE WRONG SOURCE
+
+_compute_source_fingerprint() currently fingerprints:
+
+options_master_lkg_v1.json
+
+But the Options Alignment result consumed by:
+
+Trade Alignment
+
+Actionability
+
+and the compact row's options.pressure_state
+
+comes from:
+
+options_alignment.get_options_alignment_bulk()
+
+→
+
+data.options_theme_supplement.get_combined_ticker_data()
+
+backed by the options Theme supplement cache/LKG.
+
+The fingerprint currently does not directly track the canonical source that feeds Options Alignment.
+
+DEFECT 3 — PRODUCTION PROCESS MODEL DOES NOT MATCH SINGLE-FLIGHT DESIGN
+
+Development is single-process Uvicorn.
+
+Production .replit deployment currently launches:
+
+gunicorn -w 2 -k uvicorn.workers.UvicornWorker ...
+
+_RETAINED and _RETAINED_LOCK are module-level process-local globals.
+
+Therefore:
+
+worker A and worker B have independent retained snapshots and independent locks.
+
+Two workers can independently run ~129-second full Confluence builds and serve different snapshot generations.
+
+DEFECT 4 — COLD START
+
+No retained snapshot is warmed at startup.
+
+First request to a retained-snapshot consumer can synchronously pay ~129 seconds.
+
+DEFECT 5 — SHALLOW COPY MUTATION HAZARD
+
+/api/alpha/confluence uses a shallow top-level copy of the retained snapshot.
+
+Row dictionaries and nested objects remain shared with the canonical retained object.
+
+A safe test proved mutating a row or nested signal_breakdown on the copied side mutates the retained cache itself.
+
+DEFECT 6 — NO STALE-REASON DIAGNOSTICS
+
+_retained_is_stale() returns only boolean.
+
+Fingerprint deltas are available but discarded.
+
+==================================================
+PART 0 — RECONFIRM CURRENT PATHS
+
+Re-read:
+
+backend/services/confluence_v2_service.py
+
+build_confluence_snapshot()
+
+_compute_confluence()
+
+retained snapshot helpers
+
+backend/main.py
+
+Confluence routes
+
+backend lifespan/startup ordering
+
+backend/services/watchlist_router.py
+
+Alignment endpoint
+
+backend/services/entry_state_service.py
+
+backend/services/options_alignment.py
+
+backend/data/options_theme_supplement.py
+
+.replit
+
+Confirm exact current signatures before editing.
+
+==================================================
+PART 1 — EMIT SAME-GENERATION ENTRY FIELDS FROM CONFLUENCE
+
+In _compute_confluence(), use the exact existing entry_result already passed into:
+
+Elite Asset Rebound
+
+Actionability
+
+Emit additive top-level Entry fields on the Confluence result row:
+
+entry_state
+
+entry_score
+
+entry_grade
+
+entry_family
+
+base_archetype
+
+extension_state
+
+Use the exact current raw paths in entry_result.
+
+Do not recompute Entry.
+
+Do not reload Entry.
+
+Do not alter Entry values.
+
+These emitted fields must represent the exact same Entry generation used to compute the row's:
+
+actionability_*
+
+and:
+
+elite_asset_rebound_*
+
+Preserve existing nested signal_breakdown.entry_state output.
+
+Additive fields only.
+
+==================================================
+PART 2 — REMOVE LIVE ENTRY JOIN FROM ALIGNMENT ENDPOINT
+
+Update:
+
+GET /api/watchlist/{watchlist_id}/alignment
+
+The endpoint must NOT call get_all_entry_state_lkg() to fill compact Entry fields.
+
+Read:
+
+entry.state
+
+entry.score
+
+entry.grade
+
+directly from the retained Confluence row's same-generation emitted Entry fields.
+
+The endpoint must remain a pure compact projection of one retained Confluence generation.
+
+For rows without Entry:
+
+available: false
+
+state/score/grade null
+
+Do not fabricate values.
+
+Acceptance invariant:
+
+every compact row's Actionability and Entry fields came from the exact same entry_result generation.
+
+==================================================
+PART 3 — FIX OPTIONS ALIGNMENT FINGERPRINT SOURCE
+
+Trace the exact canonical cache/LKG backing:
+
+get_options_alignment_bulk()
+
+Use the actual options Theme supplement source freshness metadata in _compute_source_fingerprint().
+
+Fingerprint the source that feeds:
+
+options_result
+
+not merely the old/raw options master signal.
+
+If Confluence still separately consumes the raw options master LKG for another signal:
+
+retain its fingerprint too.
+
+The fingerprint may therefore contain:
+
+raw_options_master freshness
+
+and:
+
+options_alignment_supplement freshness
+
+as separate fields.
+
+Do not collapse distinct sources incorrectly.
+
+Return exact fingerprint keys and paths.
+
+==================================================
+PART 4 — PRODUCTION WORKER SEMANTICS
+
+Do not blindly add Redis or a distributed lock.
+
+First evaluate the current application/runtime needs against the actual .replit production command.
+
+The retained snapshot architecture is process-local by design.
+
+For this current application, compare:
+
+A. production Gunicorn -w 1
+
+B. preserve -w 2 and add distributed retained-snapshot/build coordination
+
+Use actual current runtime architecture, traffic expectations, blocking behavior, existing background loops, and CPU-heavy ~129-second Confluence build.
+
+Prefer the narrowest correct design.
+
+Unless live architecture proves two web workers are required, preferred V1 is:
+
+use one Gunicorn/Uvicorn worker so:
+
+_RETAINED
+
+_RETAINED_LOCK
+
+single-flight
+
+all operate deployment-wide within the one web process.
+
+Do not change worker count without reporting the tradeoff.
+
+If changing to -w 1:
+
+preserve Gunicorn/Uvicorn worker class and existing bind/timeout semantics unless another exact issue requires adjustment.
+
+Verify all existing background loops are already designed to run in a single server process.
+
+Critically check whether -w 2 currently causes duplicate background loops for:
+
+Theme RS
+
+Stage2
+
+Options
+
+X consensus
+
+fundamentals
+
+other lifespan tasks
+
+Report this.
+
+A finding that -w 2 duplicates background jobs is additional evidence for -w 1.
+
+==================================================
+PART 5 — SAFE ONE-TIME STARTUP WARM
+
+Add no scheduler.
+
+Add no periodic Confluence loop.
+
+Use the same canonical retained helper / producer.
+
+Trace lifespan startup readiness.
+
+Start one non-blocking retained Confluence warm only after the minimum canonical source readiness required for a normal-quality build.
+
+It must:
+
+not delay HTTP server startup synchronously
+
+not run before Theme membership re-sync / required DB readiness if those are necessary for correct output
+
+not create a second producer
+
+call the same canonical retained build path
+
+populate _RETAINED
+
+Use a one-time startup task.
+
+If Stage2's startup warm intentionally waits 60 seconds and the existing Stage2 LKG is already disk-loaded/readable:
+
+distinguish:
+
+"existing LKG usable at startup"
+
+from:
+
+"fresh Stage2 recompute pending"
+
+A retained snapshot may be warmed from valid current LKGs and later invalidated when Stage2 freshness advances.
+
+Do not wait 60 seconds merely because another warm loop sleeps if the canonical LKG is already valid.
+
+Return the exact lifespan insertion point and rationale.
+
+==================================================
+PART 6 — COPY-ON-READ / MUTATION SAFETY
+
+The canonical retained snapshot must not be handed to route formatting code as mutable shared row/nested references.
+
+Fix:
+
+GET /api/alpha/confluence
+
+so verdict filtering / limiting / future response decoration cannot mutate retained rows or nested structures.
+
+Use the narrowest safe copy strategy.
+
+Deep-copying the final sliced/filtered response rows is acceptable at max 200 rows.
+
+Do not deep-copy the full 379-row retained snapshot unnecessarily on every request if a narrower safe strategy exists.
+
+Preserve response shape.
+
+Also audit:
+
+/api/watchlist/{watchlist_id}/alignment
+
+It constructs new compact dictionaries and should naturally avoid retained mutation.
+
+Prove it does not return retained row dictionaries directly.
+
+==================================================
+PART 7 — STALE REASON DIAGNOSTICS
+
+Change stale evaluation from boolean-only to also derive deterministic reason codes.
+
+Potential reasons based on actual fingerprint keys:
+
+STAGE2_CHANGED
+
+ENTRY_CHANGED
+
+RAW_OPTIONS_CHANGED
+
+OPTIONS_ALIGNMENT_CHANGED
+
+THEME_CHANGED
+
+SOCIAL_CHANGED
+
+MAX_AGE_EXCEEDED
+
+Use exact implemented fingerprint names.
+
+Do not add a database table.
+
+Retain current:
+
+snapshot_stale
+
+snapshot_rebuild_in_progress
+
+Add a compact:
+
+snapshot_stale_reasons
+
+to the Watchlist Alignment top-level response.
+
+Optionally expose it in retained metadata / logs for the existing Confluence route if architecture allows without changing its public result-row contract.
+
+Do not expose full raw fingerprint paths or internal filesystem details to frontend.
+
+==================================================
+PART 8 — SAME-GENERATION VALIDATION
+
+Reproduce the prior MU cross-generation test safely.
+
+Before fix, proven:
+
+retained:
+Actionability WAIT_FOR_RETEST / 63.1
+
+live Entry:
+BROKEN_STRUCTURE / 5 / AVOID
+
+After fix:
+
+mutate/monkeypatch a copied or in-memory current Entry generation after the retained snapshot was built.
+
+Request Alignment row.
+
+Expected:
+
+compact Entry fields remain the T0 values stored in the retained Confluence row
+
+Actionability remains T0
+
+Trade Alignment remains T0
+
+no T1 Entry values leak into the compact row
+
+Then after retained rebuild:
+
+Actionability/Trade/Entry all advance together to the new generation.
+
+Return exact before/during/after values.
+
+==================================================
+PART 9 — OPTIONS INVALIDATION VALIDATION
+
+Safely simulate or observe freshness advancement of the actual Options Alignment supplement source.
+
+Do not change provider data.
+
+Content must remain byte-identical if touching metadata for simulation.
+
+Prove:
+
+supplement source freshness changes
+
+→ fingerprint changes
+
+→ stale reason contains the options-alignment reason
+
+→ exactly one retained rebuild begins
+
+Also prove:
+
+raw options master changes
+
+→ independently triggers its raw-options reason if still a separate producer input
+
+==================================================
+PART 10 — SINGLE-WORKER / BACKGROUND LOOP VALIDATION
+
+If production worker count is changed to 1:
+
+prove:
+
+one process
+
+one _RETAINED
+
+one retained lock
+
+one Confluence single-flight domain
+
+Audit startup logs/task registrations and show whether the prior -w 2 setup would have duplicated lifespan/background loops.
+
+Do not trigger provider jobs manually.
+
+Verify existing HTTP endpoints still serve normally under one worker.
+
+Measure representative warm cached endpoints while one background Confluence build is running:
+
+Home cached endpoint
+
+Watchlist base endpoint
+
+Options cached endpoint
+
+Themes cached endpoint
+
+Confluence limit=5
+
+Alignment endpoint
+
+Report latency.
+
+Be honest if one worker plus a CPU-heavy Python thread still degrades cached endpoint responsiveness.
+
+==================================================
+PART 11 — STARTUP WARM VALIDATION
+
+Restart the live workflow/process.
+
+Prove:
+
+HTTP server becomes available without waiting synchronously for the ~129-second Confluence build.
+
+one startup Confluence warm begins
+
+no user request is required to initiate it
+
+no duplicate startup warm starts
+
+retained snapshot becomes populated
+
+first Alignment request AFTER warm completes is fast
+
+Also test a request DURING startup warm.
+
+Required behavior:
+
+do not start a duplicate full build
+
+If no retained snapshot exists yet and a request arrives during the startup cold build:
+
+join/wait on the existing in-progress cold build or use another safe single-flight behavior
+
+do not launch a second producer build.
+
+Do not silently return an empty Watchlist Alignment payload.
+
+Return exact latency/behavior.
+
+==================================================
+PART 12 — COVERAGE / MODEL REGRESSION
+
+Run over the complete current Confluence universe.
+
+Confirm:
+
+universe count unchanged except legitimate live universe movement
+
+THEME_ALIGNMENT scores unchanged for same inputs
+
+ELITE_ASSET_REBOUND scores unchanged for same inputs
+
+Investment Alignment unchanged
+
+Actionability logic unchanged
+
+Entry scoring unchanged
+
+Options Alignment scoring unchanged
+
+Catalyst unchanged
+
+Theme semantics unchanged
+
+The only additive model-row changes should be same-generation Entry fields.
+
+Recheck named:
+
+MU
+
+LITE
+
+PLTR
+
+BE
+
+AMD
+
+CRDO
+
+DELL
+
+==================================================
+PART 13 — COST / REGRESSION
+
+Prove:
+
+0 incremental FMP calls
+
+0 Tradier calls
+
+0 Grok calls
+
+0 LLM calls
+
+0 provider calls
+
+0 new database tables
+
+0 migrations
+
+0 new disk cache
+
+0 second Confluence producer
+
+0 new high-frequency scheduler
+
+0 scoring formula changes
+
+==================================================
+FINAL RESPONSE
+
+Return:
+
+CONFLUENCE RETAINED SNAPSHOT INTEGRITY REPAIR V1 REPORT
+
+FILES CHANGED:
+
+ROOT DEFECTS:
+
+SAME-GENERATION ENTRY EMISSION:
+
+ALIGNMENT ENTRY SOURCE BEFORE:
+
+ALIGNMENT ENTRY SOURCE AFTER:
+
+OPTIONS FINGERPRINT BEFORE:
+
+OPTIONS FINGERPRINT AFTER:
+
+PRODUCTION WORKER MODEL BEFORE:
+
+PRODUCTION WORKER MODEL AFTER:
+
+BACKGROUND LOOP DUPLICATION FINDING:
+
+STARTUP WARM:
+
+COPY-ON-READ SAFETY:
+
+STALE REASON DIAGNOSTICS:
+
+CROSS-GENERATION VALIDATION:
+
+OPTIONS INVALIDATION VALIDATION:
+
+SINGLE-FLIGHT VALIDATION:
+
+STARTUP COLD/WARM VALIDATION:
+
+BACKGROUND BUILD ENDPOINT IMPACT:
+
+FULL UNIVERSE:
+
+NAMED TICKERS:
+
+MODEL REGRESSION:
+
+COST PROOF:
+
+End exactly:
+
+CONFLUENCE RETAINED SNAPSHOT INTEGRITY VERDICT
+
+DECISION ROWS GENERATION-CONSISTENT:
+[YES / NO]
+
+OPTIONS ALIGNMENT SOURCE FINGERPRINTED:
+[YES / NO]
+
+SINGLE-FLIGHT DEPLOYMENT-WIDE:
+[YES / NO]
+
+DUPLICATE BACKGROUND LOOPS ELIMINATED:
+[YES / NO / NOT APPLICABLE]
+
+STARTUP FIRST-HIT 129S BUILD REMOVED:
+[YES / NO]
+
+REQUEST DURING STARTUP WARM SAFE:
+[YES / NO]
+
+RETAINED SNAPSHOT MUTATION SAFE:
+[YES / NO]
+
+STALE REASONS OBSERVABLE:
+[YES / NO]
+
+SCORING MODELS CHANGED:
+[NO expected]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+READY FOR FRONTEND:
+[YES / NO]
+
+NEXT IMPLEMENTATION:
+[FRONTEND WATCHLIST ALIGNMENT SHADOW UI expected]
+
+Do not modify scoring formulas.
+
+Do not create a second scoring producer.
+
+Do not add distributed cache infrastructure unless the actual worker audit proves one worker cannot safely serve the current application.
+
+Do not make unrelated changes.

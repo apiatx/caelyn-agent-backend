@@ -3978,7 +3978,6 @@ async def get_watchlist_alignment(watchlist_id: str):
         get_retained_confluence_snapshot,
         get_retained_confluence_meta,
     )
-    from services.entry_state_service import get_all_entry_state_lkg
 
     try:
         snap = get_retained_confluence_snapshot()
@@ -3993,30 +3992,24 @@ async def get_watchlist_alignment(watchlist_id: str):
         if sym:
             confluence_by_symbol[sym] = row
 
-    try:
-        entry_lkg = get_all_entry_state_lkg() or {}
-    except Exception as exc:
-        print(f"[WATCHLIST_ALIGNMENT] Entry State LKG unavailable: {exc}")
-        entry_lkg = {}
-
     rows: List[Dict[str, Any]] = []
     for sym in tickers:
         row = confluence_by_symbol.get(sym)
-        entry_row = entry_lkg.get(sym) or {}
 
         if row is None:
             # No Confluence row at all for this Watchlist ticker — explicit
             # placeholder, never dropped, never fabricated.
+            # Entry fields unavailable (no same-generation row exists).
             rows.append({
                 "symbol": sym,
                 "actionability": {"available": False, "state": None, "score": None},
                 "trade_alignment": {"available": False, "score": None, "archetype": None},
                 "investment_alignment": {"available": False, "score": None, "state": None},
                 "entry": {
-                    "available": bool(entry_row),
-                    "state": entry_row.get("entry_state"),
-                    "score": entry_row.get("entry_score"),
-                    "grade": entry_row.get("entry_grade"),
+                    "available": False,
+                    "state": None,
+                    "score": None,
+                    "grade": None,
                 },
                 "theme": {"id": None},
                 "options": {"pressure_state": None},
@@ -4030,12 +4023,14 @@ async def get_watchlist_alignment(watchlist_id: str):
         theme_rotation = ((row.get("signal_breakdown") or {}).get("theme_rotation")) or {}
         primary_theme_id = theme_rotation.get("primary_rotation_theme")
 
-        # Entry: PART 9 — read from the Entry State LKG directly (canonical
-        # helper), not from get_confluence_for_symbol() and not recomputed.
-        entry_available = bool(entry_row)
-        entry_score = entry_row.get("entry_score") if entry_available else None
-        entry_grade = entry_row.get("entry_grade") if entry_available else None
-        entry_state = entry_row.get("entry_state") if entry_available else None
+        # Entry: read from the same-generation fields emitted by _compute_confluence()
+        # (DEFECT 1 fix). These fields were computed from the exact same entry_result
+        # that produced Actionability and Trade Alignment above — one consistent
+        # Entry generation per row, never a fresh cross-generation LKG call.
+        entry_available = bool(row.get("entry_available"))
+        entry_state = row.get("entry_state") if entry_available else None
+        entry_score = row.get("entry_score") if entry_available else None
+        entry_grade = row.get("entry_grade") if entry_available else None
 
         rows.append({
             "symbol": sym,
@@ -4075,6 +4070,7 @@ async def get_watchlist_alignment(watchlist_id: str):
         "snapshot_built_at":              meta.get("built_at"),
         "snapshot_stale":                 bool(meta.get("stale")),
         "snapshot_rebuild_in_progress":   bool(meta.get("rebuild_in_progress")),
+        "snapshot_stale_reasons":         list(meta.get("stale_reasons") or []),
         "rows": rows,
     }
 

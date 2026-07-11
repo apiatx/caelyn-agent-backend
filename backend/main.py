@@ -942,6 +942,34 @@ async def lifespan(app):
         asyncio.create_task(_wl_stage2_warmup(startup_delay_s=60.0))
     except Exception as _e:
         print(f"[STARTUP] Watchlist Stage2 warmup error: {_e}")
+    # Retained Confluence snapshot startup warm (DEFECT 4 fix).
+    # Kicks off exactly one background build so the first request to
+    # /api/alpha/confluence or /{watchlist_id}/alignment does NOT
+    # synchronously pay the ~129-second cold-build cost.
+    # Runs AFTER: theme_merge_refresh (Theme membership), Stage2 disk LKG
+    # load, supplement LKG load, and Sectors LKG load — all canonical
+    # Confluence inputs that are available from disk before this point.
+    # No new producer: delegates to the same _start_background_rebuild()
+    # used by the stale-revalidate path.  Single-flight guard in
+    # get_retained_confluence_snapshot() prevents a duplicate if a request
+    # races in before the background build completes.
+    try:
+        from services.confluence_v2_service import (
+            _RETAINED,
+            _RETAINED_LOCK,
+            _start_background_rebuild,
+        )
+        with _RETAINED_LOCK:
+            _already = _RETAINED["build_in_progress"] or _RETAINED["snapshot"] is not None
+            if not _already:
+                _RETAINED["build_in_progress"] = True
+        if not _already:
+            print("[STARTUP] Kicking off background Confluence retained snapshot warm")
+            _start_background_rebuild()
+        else:
+            print("[STARTUP] Confluence warm skipped (snapshot already present or build in progress)")
+    except Exception as _conf_err:
+        print(f"[STARTUP] Confluence retained warm error (non-fatal): {_conf_err}")
     try:
         from data.options_screener_snapshot import load_state as _load_opt_snapshot
         _load_opt_snapshot()
@@ -15419,18 +15447,24 @@ async def get_confluence_snapshot(
     router's /{watchlist_id} catch-all route.
     """
     try:
+        import copy
         from services.confluence_v2_service import get_retained_confluence_snapshot
         retained_snap = get_retained_confluence_snapshot()
-        # Copy — retained_snap is the shared process-local cached object;
-        # filtering/limiting must never mutate it in place.
+        # Shallow-copy the top-level dict so we can add/replace keys without
+        # touching the retained object.  The results list gets a new list
+        # reference (via slicing below), but individual row dicts would still
+        # be shared.  Deep-copy only the final sliced rows (≤200 rows) so
+        # any future per-row decoration in this route cannot corrupt the
+        # retained cache.  Full snapshot deep-copy on every request is
+        # intentionally avoided (DEFECT 5 fix).
         snap = dict(retained_snap)
         results = list(snap.get("results") or [])
         verdict_filter = verdict.upper().strip()
         if verdict_filter and verdict_filter != "ALL":
             results = [r for r in results if r.get("confluence_verdict") == verdict_filter]
         limit = max(1, min(int(limit), 200))
-        snap["results"] = results[:limit]
-        snap["filtered_count"] = len(results[:limit])
+        snap["results"] = copy.deepcopy(results[:limit])
+        snap["filtered_count"] = len(snap["results"])
         if verdict_filter != "ALL":
             snap["verdict_filter"] = verdict_filter
         return JSONResponse(content=snap)

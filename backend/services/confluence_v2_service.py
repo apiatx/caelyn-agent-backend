@@ -1413,6 +1413,19 @@ def _compute_confluence(
             "freshness_score":    round(soc_fresh, 3),
             "has_top_conviction": soc_top,
         },
+        # ── Same-generation Entry fields (DEFECT 1 fix) ───────────────────────
+        # Emitted directly from the entry_result already used to compute
+        # Actionability and Elite Asset Rebound above — never reloaded,
+        # never recomputed. Downstream consumers (alignment endpoint etc.)
+        # must read Entry fields from here, not from a fresh LKG call, so
+        # that every field in this row reflects one consistent Entry generation.
+        "entry_available":   entry_result is not None,
+        "entry_state":       (entry_result or {}).get("entry_state"),
+        "entry_score":       entry_result.get("entry_score") if entry_result else None,
+        "entry_grade":       entry_result.get("entry_grade") if entry_result else None,
+        "entry_family":      entry_result.get("entry_family") if entry_result else None,
+        "base_archetype":    ((entry_result or {}).get("structure_v2") or {}).get("base_archetype"),
+        "extension_state":   (entry_result or {}).get("extension_state"),
         # ── Per-signal breakdown ─────────────────────────────────────────────
         "signal_breakdown": {
             "entry_state": {
@@ -1804,7 +1817,53 @@ _RETAINED: dict[str, Any] = {
     "built_at":            None,
     "source_fingerprint":  None,
     "build_in_progress":   False,
+    "stale_reasons":       [],
 }
+
+# ── Stale-reason derivation (DEFECT 6 fix) ────────────────────────────────────
+# Maps each fingerprint key to a human-readable reason code. Keys not listed
+# here get a generic "FINGERPRINT_CHANGED" fallback so new keys are never
+# silently swallowed.
+_FP_KEY_TO_REASON: dict[str, str] = {
+    "stage2_updated_at":           "STAGE2_CHANGED",
+    "stage2_symbol_count":         "STAGE2_CHANGED",
+    "entry_newest_computed_at":    "ENTRY_CHANGED",
+    "entry_lkg_mtime":             "ENTRY_CHANGED",
+    "options_lkg_mtime":           "RAW_OPTIONS_CHANGED",
+    "options_supplement_lkg_mtime": "OPTIONS_ALIGNMENT_CHANGED",
+    "theme_rs_refresh_ts_mtime":   "THEME_CHANGED",
+    "x_consensus_mtime":           "SOCIAL_CHANGED",
+}
+
+
+def _derive_stale_reasons(
+    old_fp: Optional[dict],
+    new_fp: dict,
+    age_s:  Optional[float],
+    max_age_s: float,
+) -> list[str]:
+    """Return deduplicated reason codes for why the retained snapshot is stale."""
+    reasons: list[str] = []
+    seen: set[str] = set()
+
+    def _add(code: str) -> None:
+        if code not in seen:
+            seen.add(code)
+            reasons.append(code)
+
+    if age_s is not None and age_s > max_age_s:
+        _add("MAX_AGE_EXCEEDED")
+
+    if old_fp is None:
+        _add("NO_PRIOR_FINGERPRINT")
+        return reasons
+
+    for key, new_val in new_fp.items():
+        old_val = old_fp.get(key)
+        if old_val != new_val:
+            _add(_FP_KEY_TO_REASON.get(key, "FINGERPRINT_CHANGED"))
+
+    return reasons
 
 # Conservative bounded max-age fallback (seconds). Applied in addition to the
 # fingerprint check because Catalyst Alignment and Investment fundamentals do
@@ -1852,12 +1911,25 @@ def _compute_source_fingerprint() -> dict[str, Any]:
         fp["entry_newest_computed_at"] = None
         fp["entry_lkg_mtime"] = None
 
-    # Options Alignment source — canonical master options LKG file mtime
-    # (same file _load_options_map() reads; existing freshness proxy).
+    # Options signals — two independent sources tracked separately:
+    #   1. options_lkg_mtime: raw composite signal (o_sig/o_bias) from
+    #      _load_options_map() → options_master_lkg_v1.json
+    #   2. options_supplement_lkg_mtime: Options Alignment result
+    #      (options_result → Actionability / Trade Alignment /
+    #      options.pressure_state) from get_options_alignment_bulk()
+    #      → data.options_theme_supplement → options_supplement_lkg_v1.json
+    #      These are DISTINCT files; collapsing them was DEFECT 2.
     try:
         fp["options_lkg_mtime"] = _OPTIONS_LKG.stat().st_mtime if _OPTIONS_LKG.exists() else None
     except Exception:
         fp["options_lkg_mtime"] = None
+    try:
+        from data.options_theme_supplement import _SUPPLEMENT_LKG_DISK_PATH as _SUPP_LKG_PATH
+        fp["options_supplement_lkg_mtime"] = (
+            _SUPP_LKG_PATH.stat().st_mtime if _SUPP_LKG_PATH.exists() else None
+        )
+    except Exception:
+        fp["options_supplement_lkg_mtime"] = None
 
     # Theme Rotation / Theme RS — existing cadence file that Theme RS already
     # persists its per-timeframe refresh timestamps to.
@@ -1890,22 +1962,35 @@ def _compute_source_fingerprint() -> dict[str, Any]:
     return fp
 
 
-def _retained_is_stale(current_fp: dict[str, Any]) -> bool:
-    """True if fingerprint changed OR the bounded max-age has elapsed."""
+def _retained_is_stale(
+    current_fp: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """
+    True if fingerprint changed OR the bounded max-age has elapsed.
+    Returns (stale: bool, reasons: list[str]) — reasons are empty when not stale.
+    """
     with _RETAINED_LOCK:
         if _RETAINED["snapshot"] is None:
-            return True
-        if _RETAINED["source_fingerprint"] != current_fp:
-            return True
+            return True, ["NO_SNAPSHOT"]
+        old_fp  = _RETAINED["source_fingerprint"]
         built_at = _RETAINED["built_at"]
-    if not built_at:
-        return True
-    try:
-        built_dt = datetime.fromisoformat(built_at)
-        age_s = (datetime.now(timezone.utc) - built_dt).total_seconds()
-        return age_s > _RETAINED_MAX_AGE_S
-    except Exception:
-        return True
+
+    age_s: Optional[float] = None
+    if built_at:
+        try:
+            built_dt = datetime.fromisoformat(built_at)
+            age_s = (datetime.now(timezone.utc) - built_dt).total_seconds()
+        except Exception:
+            pass
+
+    fp_changed = (old_fp != current_fp)
+    age_exceeded = (age_s is not None and age_s > _RETAINED_MAX_AGE_S) or (age_s is None)
+
+    if not fp_changed and not age_exceeded:
+        return False, []
+
+    reasons = _derive_stale_reasons(old_fp, current_fp, age_s, _RETAINED_MAX_AGE_S)
+    return True, reasons
 
 
 def _start_background_rebuild() -> None:
@@ -1974,17 +2059,19 @@ def get_retained_confluence_snapshot() -> dict:
             raise
 
     current_fp = _compute_source_fingerprint()
-    stale = _retained_is_stale(current_fp)
+    stale, reasons = _retained_is_stale(current_fp)
 
     if stale:
         with _RETAINED_LOCK:
             already_building = _RETAINED["build_in_progress"]
             if not already_building:
                 _RETAINED["build_in_progress"] = True
+                _RETAINED["stale_reasons"] = reasons
                 should_start = True
             else:
                 should_start = False
         if should_start:
+            print(f"[CONFLUENCE_RETAINED] stale — reasons={reasons} — starting background rebuild")
             _start_background_rebuild()
 
     with _RETAINED_LOCK:
@@ -2004,10 +2091,12 @@ def get_retained_confluence_meta() -> dict:
     # stale and starts a rebuild. Recomputing the fingerprint again here
     # would just duplicate that check on every request for no new signal.
     with _RETAINED_LOCK:
-        built_at = _RETAINED["built_at"]
+        built_at          = _RETAINED["built_at"]
         build_in_progress = _RETAINED["build_in_progress"]
+        stale_reasons     = list(_RETAINED.get("stale_reasons") or [])
     return {
         "built_at":            built_at,
         "stale":               build_in_progress,
         "rebuild_in_progress": build_in_progress,
+        "stale_reasons":       stale_reasons if build_in_progress else [],
     }
