@@ -1,0 +1,135 @@
+CATALYST DISPLAY FIELDS — FORWARD PROMOTED CATALYST PROVENANCE THROUGH CONFLUENCE RESPONSES
+
+Implement only response-shape plumbing.
+
+Do not change Catalyst scoring.
+
+Do not change THEME_ALIGNMENT weights.
+
+Do not change Entry, Options, Investment Alignment, Actionability, Elite Rebound, Theme Alignment, Social Bonus, or retained Confluence concurrency.
+
+No provider calls.
+
+No new tables.
+
+No new collectors.
+
+Problem:
+
+Catalyst V2.1-promoted scoring is complete and hotfixed.
+
+The retained Confluence snapshot is using hotfixed catalyst scores.
+
+But the final hotfix report says:
+
+"catalyst_model_version, catalyst_primary_source are not forwarded through the confluence snapshot builder's output schema — scoring is correct, they appear as null in the snapshot response."
+
+That blocks frontend display/explainability.
+
+Goal:
+
+Forward the existing promoted Catalyst provenance fields through every Confluence/Alignment response shape that already exposes catalyst_alignment_score.
+
+Required fields to preserve/forward if present from Catalyst Alignment:
+
+catalyst_model_version
+catalyst_primary_source
+catalyst_primary_event
+catalyst_scheduled_event
+catalyst_rss_event
+catalyst_bearish_conflict
+
+Also preserve existing additive V2 fields:
+
+catalyst_v2_available
+catalyst_v2_score
+catalyst_v2_state
+catalyst_v2_primary_event
+catalyst_v2_conflicts
+
+Apply to:
+
+1. build_confluence_snapshot row output
+2. GET /api/alpha/confluence retained snapshot response
+3. GET /api/alpha/confluence/{symbol} fresh symbol response, if separate
+4. GET /api/watchlist/{watchlist_id}/alignment compact response, if it has a catalyst section or can safely add one
+
+Do not rename existing fields.
+
+Do not remove old fields.
+
+Do not change score math.
+
+Validation:
+
+Run:
+
+GET /api/alpha/confluence?limit=10
+
+GET /api/alpha/confluence/MRVL
+
+GET /api/watchlist/Primary/alignment
+
+Confirm at least MRVL or another top promoted catalyst returns:
+
+catalyst_alignment_score
+catalyst_model_version = "2.1-promoted" or current hotfix version
+catalyst_primary_source
+catalyst_primary_event.title
+catalyst_v2_score
+catalyst_v2_primary_event
+catalyst_bearish_conflict if present/null if absent
+
+Confirm:
+
+Trade Alignment score unchanged before/after this plumbing task.
+
+Catalyst score unchanged before/after.
+
+Provider calls = 0.
+
+Confluence endpoints return 200.
+
+Final response:
+
+CATALYST DISPLAY FIELD PLUMBING REPORT
+
+FILES CHANGED:
+[list]
+
+FIELDS FORWARDED:
+[list]
+
+CONFLUENCE SNAPSHOT SAMPLE:
+[MRVL or top catalyst row]
+
+PER-SYMBOL SAMPLE:
+[MRVL or top catalyst row]
+
+WATCHLIST ALIGNMENT SAMPLE:
+[if exposed]
+
+SCORING CHANGED:
+[NO expected]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+CATALYST DISPLAY FIELD PLUMBING VERDICT
+
+PROMOTED CATALYST SCORE STILL UNCHANGED:
+[YES/NO]
+
+PROVENANCE FIELDS EXPOSED:
+[YES/NO]
+
+RETAINED CONFLUENCE RESPONSE READY:
+[YES/NO]
+
+WATCHLIST ALIGNMENT RESPONSE READY:
+[YES/NO]
+
+READY FOR FRONTEND DISPLAY:
+[YES/NO]
