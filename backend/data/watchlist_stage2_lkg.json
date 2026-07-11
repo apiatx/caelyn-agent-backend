@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-07-11T19:59:33.794514+00:00",
+  "updated_at": "2026-07-11T22:45:58.604156+00:00",
   "symbol_count": 379,
   "results": {
     "AAOI": {
@@ -70,7 +70,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ACLS": {
       "score": 80.0,
@@ -140,7 +140,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ADEA": {
       "score": 100.0,
@@ -210,7 +210,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ADUR": {
       "score": 100.0,
@@ -280,7 +280,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AEHR": {
       "score": 80.0,
@@ -350,7 +350,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AEVA": {
       "score": 80.0,
@@ -420,35 +420,35 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AIM:FTC": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "AIM:ENSI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "AIM:IQE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "AIM:TRT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "AIR": {
       "score": 100.0,
@@ -518,7 +518,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ALAB": {
       "score": 100.0,
@@ -588,7 +588,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AKAM": {
       "score": 80.0,
@@ -658,7 +658,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ALGM": {
       "score": 100.0,
@@ -728,7 +728,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ALMU": {
       "score": 53.8,
@@ -786,8 +786,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "tradier",
@@ -798,14 +798,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ALOY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "AMBA": {
       "score": 44.4,
@@ -875,7 +875,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AMD": {
       "score": 100.0,
@@ -945,7 +945,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AME": {
       "score": 91.2,
@@ -1015,7 +1015,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AMKR": {
       "score": 100.0,
@@ -1085,7 +1085,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AMPG": {
       "score": 100.0,
@@ -1155,7 +1155,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AMPX": {
       "score": 39.4,
@@ -1213,8 +1213,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "tradier",
@@ -1225,7 +1225,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AMRC": {
       "score": 3.9,
@@ -1283,8 +1283,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "tradier",
@@ -1295,7 +1295,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ANET": {
       "score": 100.0,
@@ -1365,7 +1365,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AMSC": {
       "score": 50.5,
@@ -1423,8 +1423,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "tradier",
@@ -1435,7 +1435,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AOSL": {
       "score": 80.0,
@@ -1505,7 +1505,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "APH": {
       "score": 98.1,
@@ -1575,7 +1575,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "APLD": {
       "score": 47.4,
@@ -1633,8 +1633,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "tradier",
@@ -1645,7 +1645,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ARM": {
       "score": 100.0,
@@ -1715,7 +1715,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ARRY": {
       "score": 1.9,
@@ -1773,8 +1773,8 @@
       "technical_state": "broken",
       "technical_timing_score": 5.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "tradier",
@@ -1785,7 +1785,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ASPI": {
       "score": 18.0,
@@ -1843,9 +1843,9 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -1855,7 +1855,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ASTS": {
       "score": 35.6,
@@ -1913,8 +1913,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "tradier",
@@ -1925,21 +1925,21 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AIM:VLX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "AMS:BESI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "ASYS": {
       "score": 80.0,
@@ -2009,7 +2009,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ATOM": {
       "score": 80.0,
@@ -2079,21 +2079,21 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ASX:AXE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "ASX:EOS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "AUR": {
       "score": 80.0,
@@ -2163,7 +2163,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AVAV": {
       "score": 0.0,
@@ -2221,8 +2221,8 @@
       "technical_state": "broken",
       "technical_timing_score": 10.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -2233,14 +2233,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AVEX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "AXTI": {
       "score": 59.1,
@@ -2310,7 +2310,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BB": {
       "score": 100.0,
@@ -2380,7 +2380,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BE": {
       "score": 80.0,
@@ -2450,7 +2450,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BKSY": {
       "score": 41.2,
@@ -2508,8 +2508,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -2520,7 +2520,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BTDR": {
       "score": 76.5,
@@ -2578,9 +2578,9 @@
       "technical_state": "broken",
       "technical_timing_score": 40.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -2590,7 +2590,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BWA": {
       "score": 80.0,
@@ -2660,7 +2660,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BZAI": {
       "score": 0.0,
@@ -2718,9 +2718,9 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -2730,7 +2730,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CAMT": {
       "score": 44.5,
@@ -2788,8 +2788,8 @@
       "technical_state": "broken",
       "technical_timing_score": 30.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -2800,14 +2800,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CBRS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "CEG": {
       "score": 0.2,
@@ -2865,8 +2865,8 @@
       "technical_state": "broken",
       "technical_timing_score": 12.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -2877,7 +2877,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CEVA": {
       "score": 100.0,
@@ -2947,7 +2947,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CGNX": {
       "score": 90.0,
@@ -3017,7 +3017,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CIEN": {
       "score": 80.0,
@@ -3087,7 +3087,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CIFR": {
       "score": 90.0,
@@ -3157,7 +3157,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CLFD": {
       "score": 66.1,
@@ -3227,7 +3227,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "COHR": {
       "score": 80.0,
@@ -3297,14 +3297,77 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CLSK": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "status": "no_bars",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "score": 71.3,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +4.2% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling. Vol 0.8\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 4.2,
+        "ma_30w_slope_pct": 1.78,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -20.79,
+        "volume_ratio": 0.79,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": -3.89,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 15.2215,
+        "sma_50": 15.1638,
+        "sma_200": 13.307,
+        "pct_vs_sma_20": -15.58,
+        "pct_vs_sma_50": -15.26,
+        "pct_vs_sma_200": -3.43,
+        "ma_stack": "bull",
+        "extension_risk": "broken",
+        "high_52w": 23.2,
+        "low_52w": 8.18,
+        "pct_from_52w_high": -44.61,
+        "pct_from_52w_low": 57.09,
+        "range_position_52w": 31.1,
+        "high_20d": 17.45,
+        "high_50d": 18.81,
+        "breakout_signal": "failed_breakout",
+        "entry_zone": "broken",
+        "avg_volume_20d": 18522059.0,
+        "accumulation_days_20d": 1,
+        "distribution_days_20d": 1,
+        "accumulation_distribution_score": 0,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 1.4595,
+        "atr_14_pct": 11.36,
+        "range_20d_pct": 55.29,
+        "squeeze_signal": "volatile",
+        "roc_20d": -13.76,
+        "roc_50d": 8.99,
+        "momentum_trend": "negative",
+        "technical_state": "broken",
+        "technical_timing_score": 40.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "broken",
+      "technical_timing_score": 40.0,
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
+      "entry_grade": "AVOID",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-06",
+      "history_end_date": "2026-07-10",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "status": "ok",
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CODA": {
       "score": 35.6,
@@ -3362,8 +3425,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -3374,7 +3437,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CORZ": {
       "score": 80.0,
@@ -3444,7 +3507,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "COHU": {
       "score": 100.0,
@@ -3514,7 +3577,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CPSH": {
       "score": 55.2,
@@ -3584,7 +3647,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CRDO": {
       "score": 100.0,
@@ -3654,7 +3717,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CRCL": {
       "score": 3.8,
@@ -3712,8 +3775,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -3724,7 +3787,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CRML": {
       "score": 33.1,
@@ -3782,8 +3845,8 @@
       "technical_state": "broken",
       "technical_timing_score": 5.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -3794,7 +3857,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CRUS": {
       "score": 67.7,
@@ -3864,7 +3927,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CSIQ": {
       "score": 0.0,
@@ -3922,8 +3985,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -3934,7 +3997,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "DGXX": {
       "score": 80.0,
@@ -4004,7 +4067,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "DNN": {
       "score": 48.6,
@@ -4062,9 +4125,9 @@
       "technical_state": "broken",
       "technical_timing_score": 37.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -4074,14 +4137,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ASX:EQR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "DRS": {
       "score": 70.8,
@@ -4151,7 +4214,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "DVLT": {
       "score": 0.0,
@@ -4209,8 +4272,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -4221,7 +4284,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ELVA": {
       "score": 52.2,
@@ -4291,7 +4354,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ENLT": {
       "score": 80.0,
@@ -4361,7 +4424,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ENPH": {
       "score": 72.6,
@@ -4431,7 +4494,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ENTG": {
       "score": 100.0,
@@ -4501,7 +4564,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ENVX": {
       "score": 5.6,
@@ -4559,8 +4622,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -4571,7 +4634,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "EOSE": {
       "score": 0.0,
@@ -4629,8 +4692,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -4641,35 +4704,35 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CSE:FTEL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "CSE:MAXX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "EPA:ALRIB": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "EPA:MRN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "EQIX": {
       "score": 78.2,
@@ -4739,7 +4802,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "EQT": {
       "score": 1.0,
@@ -4797,8 +4860,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -4809,7 +4872,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ETN": {
       "score": 97.7,
@@ -4879,7 +4942,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ESLT": {
       "score": 53.6,
@@ -4949,49 +5012,49 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "EPA:SOI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "EPA:XFAB": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "ETR:AIXA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "ETR:JEN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "ETR:LPK": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "ETR:P4O": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "FCEL": {
       "score": 80.0,
@@ -5061,14 +5124,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FJET": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "FLNC": {
       "score": 11.6,
@@ -5126,8 +5189,8 @@
       "technical_state": "broken",
       "technical_timing_score": 40.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -5138,7 +5201,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FLY": {
       "score": 39.4,
@@ -5198,8 +5261,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -5210,7 +5273,7 @@
       "has_200d": true,
       "has_252d": false,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FN": {
       "score": 39.4,
@@ -5268,8 +5331,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -5280,7 +5343,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FORM": {
       "score": 80.0,
@@ -5350,21 +5413,21 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ETR:SMHN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "ETR:TPE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "FRMI": {
       "score": 27.1,
@@ -5425,9 +5488,9 @@
       "technical_state": "broken",
       "technical_timing_score": 45.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "SUPPORT_TEST",
+      "entry_score": 52,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 194,
@@ -5437,7 +5500,7 @@
       "has_200d": false,
       "has_252d": false,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FSLR": {
       "score": 26.6,
@@ -5495,9 +5558,9 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -5507,7 +5570,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FTAI": {
       "score": 48.6,
@@ -5577,7 +5640,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "GFS": {
       "score": 80.0,
@@ -5647,7 +5710,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "GILT": {
       "score": 28.7,
@@ -5705,8 +5768,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -5717,7 +5780,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "GLW": {
       "score": 80.0,
@@ -5787,7 +5850,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "GLXY": {
       "score": 54.5,
@@ -5845,8 +5908,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -5857,14 +5920,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ETR:WAF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "GNRC": {
       "score": 77.6,
@@ -5934,7 +5997,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "GSIT": {
       "score": 42.9,
@@ -5992,8 +6055,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -6004,7 +6067,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HIMX": {
       "score": 80.0,
@@ -6074,7 +6137,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HLIT": {
       "score": 80.0,
@@ -6144,7 +6207,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HNRG": {
       "score": 9.0,
@@ -6214,7 +6277,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HUT": {
       "score": 80.0,
@@ -6284,7 +6347,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HYLN": {
       "score": 80.0,
@@ -6354,7 +6417,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ICHR": {
       "score": 100.0,
@@ -6424,7 +6487,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "IMSR": {
       "score": 3.8,
@@ -6482,8 +6545,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -6494,7 +6557,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "INDI": {
       "score": 74.4,
@@ -6564,21 +6627,21 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "INFQ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "FRA:APR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "INTC": {
       "score": 80.0,
@@ -6648,7 +6711,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "INTT": {
       "score": 80.0,
@@ -6718,7 +6781,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "IONQ": {
       "score": 44.4,
@@ -6776,8 +6839,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -6788,7 +6851,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "INV": {
       "score": 67.1,
@@ -6858,7 +6921,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "IPGP": {
       "score": 56.8,
@@ -6928,7 +6991,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "IPI": {
       "score": 48.5,
@@ -6998,7 +7061,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "IPWR": {
       "score": 77.0,
@@ -7068,14 +7131,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FRA:KLA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "IPX": {
       "score": 1.9,
@@ -7133,8 +7196,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -7145,7 +7208,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "JOBY": {
       "score": 1.9,
@@ -7203,8 +7266,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -7215,7 +7278,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "IREN": {
       "score": 39.9,
@@ -7273,8 +7336,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -7285,7 +7348,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KEYS": {
       "score": 80.0,
@@ -7355,7 +7418,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KLAC": {
       "score": 100.0,
@@ -7425,7 +7488,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KEEL": {
       "score": 80.0,
@@ -7495,7 +7558,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KLIC": {
       "score": 100.0,
@@ -7565,7 +7628,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KRMN": {
       "score": 0.0,
@@ -7623,8 +7686,8 @@
       "technical_state": "broken",
       "technical_timing_score": 12.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -7635,7 +7698,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KTOS": {
       "score": 0.0,
@@ -7693,8 +7756,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -7705,7 +7768,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KOPN": {
       "score": 80.0,
@@ -7775,7 +7838,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LAES": {
       "score": 0.0,
@@ -7833,9 +7896,9 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -7845,7 +7908,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KULR": {
       "score": 60.3,
@@ -7903,8 +7966,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -7915,7 +7978,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LAC": {
       "score": 1.9,
@@ -7973,8 +8036,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -7985,7 +8048,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LITE": {
       "score": 80.0,
@@ -8055,7 +8118,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LASR": {
       "score": 80.0,
@@ -8125,7 +8188,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LIDR": {
       "score": 0.0,
@@ -8183,8 +8246,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -8195,7 +8258,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LOGI": {
       "score": 36.0,
@@ -8253,8 +8316,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -8265,42 +8328,42 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "KRX:000660": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "LON:0RPO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "LON:0ABT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "LON:CWR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "LON:QQ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "LPTH": {
       "score": 51.9,
@@ -8370,7 +8433,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LSCC": {
       "score": 80.0,
@@ -8440,7 +8503,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LUNR": {
       "score": 39.4,
@@ -8498,8 +8561,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -8510,7 +8573,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "LWLG": {
       "score": 44.3,
@@ -8568,8 +8631,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -8580,7 +8643,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MARA": {
       "score": 80.0,
@@ -8650,7 +8713,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MEI": {
       "score": 100.0,
@@ -8720,7 +8783,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MDA": {
       "score": 79.7,
@@ -8790,7 +8853,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MCHP": {
       "score": 80.0,
@@ -8860,7 +8923,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MPWR": {
       "score": 75.6,
@@ -8930,7 +8993,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MP": {
       "score": 10.6,
@@ -8988,8 +9051,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -9000,7 +9063,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MNTS": {
       "score": 8.6,
@@ -9058,9 +9121,9 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -9070,7 +9133,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MRAM": {
       "score": 80.0,
@@ -9140,7 +9203,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MRVL": {
       "score": 100.0,
@@ -9210,7 +9273,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MTSI": {
       "score": 80.0,
@@ -9280,7 +9343,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MX": {
       "score": 71.9,
@@ -9350,7 +9413,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MU": {
       "score": 100.0,
@@ -9420,7 +9483,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MXL": {
       "score": 80.0,
@@ -9490,7 +9553,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NNE": {
       "score": 3.8,
@@ -9548,8 +9611,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -9560,7 +9623,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NBIS": {
       "score": 90.0,
@@ -9630,7 +9693,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NNBR": {
       "score": 100.0,
@@ -9700,7 +9763,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NOK": {
       "score": 80.0,
@@ -9770,7 +9833,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NTAP": {
       "score": 100.0,
@@ -9840,7 +9903,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NUAI": {
       "score": 57.6,
@@ -9910,7 +9973,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NRGV": {
       "score": 25.1,
@@ -9968,8 +10031,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -9980,7 +10043,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NVEC": {
       "score": 90.0,
@@ -10050,7 +10113,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NVTS": {
       "score": 57.6,
@@ -10120,7 +10183,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NVT": {
       "score": 80.0,
@@ -10190,7 +10253,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NXT": {
       "score": 51.5,
@@ -10260,7 +10323,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NXXT": {
       "score": 0.0,
@@ -10318,9 +10381,9 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -10330,7 +10393,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ON": {
       "score": 80.0,
@@ -10400,7 +10463,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OKLO": {
       "score": 0.0,
@@ -10458,8 +10521,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -10470,7 +10533,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OCC": {
       "score": 100.0,
@@ -10540,7 +10603,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ONDS": {
       "score": 14.2,
@@ -10598,8 +10661,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -10610,7 +10673,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OPTX": {
       "score": 80.0,
@@ -10680,7 +10743,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ONTO": {
       "score": 100.0,
@@ -10750,7 +10813,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ORA": {
       "score": 40.0,
@@ -10808,8 +10871,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -10820,7 +10883,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OSS": {
       "score": 80.0,
@@ -10890,35 +10953,35 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OSL:NAPA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "OSL:SMOP": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "OTC:ATEYY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "OTC:CGEH": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "OUST": {
       "score": 100.0,
@@ -10988,7 +11051,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "P": {
       "score": 53.0,
@@ -11058,7 +11121,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PATH": {
       "score": 32.6,
@@ -11128,7 +11191,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PDFS": {
       "score": 100.0,
@@ -11198,7 +11261,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PH": {
       "score": 82.7,
@@ -11268,7 +11331,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PENG": {
       "score": 100.0,
@@ -11338,7 +11401,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PKE": {
       "score": 80.0,
@@ -11408,7 +11471,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PI": {
       "score": 38.1,
@@ -11478,7 +11541,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PLAB": {
       "score": 31.9,
@@ -11536,8 +11599,8 @@
       "technical_state": "broken",
       "technical_timing_score": 37.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -11548,7 +11611,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PL": {
       "score": 42.6,
@@ -11618,7 +11681,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "POET": {
       "score": 55.9,
@@ -11688,7 +11751,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PLUG": {
       "score": 44.7,
@@ -11746,8 +11809,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -11758,7 +11821,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "POWI": {
       "score": 90.0,
@@ -11828,7 +11891,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "POWL": {
       "score": 80.0,
@@ -11898,7 +11961,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "Q": {
       "score": 76.2,
@@ -11971,7 +12034,7 @@
       "has_200d": false,
       "has_252d": false,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PPSI": {
       "score": 29.4,
@@ -12029,9 +12092,9 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -12041,7 +12104,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "QS": {
       "score": 0.0,
@@ -12099,8 +12162,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -12111,7 +12174,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "QRVO": {
       "score": 56.0,
@@ -12169,8 +12232,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -12181,21 +12244,21 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OTC:HGRAF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "OTC:KRKNF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "RDW": {
       "score": 47.9,
@@ -12265,7 +12328,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "QUIK": {
       "score": 80.0,
@@ -12335,7 +12398,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RGTI": {
       "score": 8.3,
@@ -12393,9 +12456,9 @@
       "technical_state": "broken",
       "technical_timing_score": 5.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -12405,7 +12468,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RKLB": {
       "score": 50.9,
@@ -12475,7 +12538,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ROK": {
       "score": 100.0,
@@ -12545,7 +12608,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RMBS": {
       "score": 58.0,
@@ -12615,7 +12678,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RUN": {
       "score": 1.9,
@@ -12673,8 +12736,8 @@
       "technical_state": "broken",
       "technical_timing_score": 12.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -12685,7 +12748,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SANM": {
       "score": 80.0,
@@ -12755,7 +12818,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SATL": {
       "score": 42.5,
@@ -12825,7 +12888,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SATS": {
       "score": null,
@@ -12902,7 +12965,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SEI": {
       "score": 80.0,
@@ -12972,14 +13035,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SHAZ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "SES": {
       "score": 0.0,
@@ -13037,8 +13100,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -13049,7 +13112,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SHLS": {
       "score": 90.0,
@@ -13119,7 +13182,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SHMD": {
       "score": 33.8,
@@ -13177,8 +13240,8 @@
       "technical_state": "broken",
       "technical_timing_score": 30.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -13189,7 +13252,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SILC": {
       "score": 80.0,
@@ -13259,7 +13322,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SIDU": {
       "score": 39.4,
@@ -13317,8 +13380,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -13329,7 +13392,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SIMO": {
       "score": 100.0,
@@ -13399,7 +13462,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SITM": {
       "score": 80.0,
@@ -13469,7 +13532,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SKYT": {
       "score": 74.4,
@@ -13539,7 +13602,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SLAB": {
       "score": 90.0,
@@ -13609,7 +13672,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SLNH": {
       "score": 26.9,
@@ -13667,8 +13730,8 @@
       "technical_state": "broken",
       "technical_timing_score": 5.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -13679,7 +13742,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SMCI": {
       "score": 8.5,
@@ -13802,8 +13865,8 @@
       "technical_state": "broken",
       "technical_timing_score": 5.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -13814,7 +13877,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SMTC": {
       "score": 80.0,
@@ -13884,7 +13947,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SNDK": {
       "score": 100.0,
@@ -13954,7 +14017,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SPIR": {
       "score": 67.1,
@@ -14024,7 +14087,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SSYS": {
       "score": 12.7,
@@ -14082,9 +14145,9 @@
       "technical_state": "broken",
       "technical_timing_score": 12.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -14094,7 +14157,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "STEM": {
       "score": 0.0,
@@ -14152,8 +14215,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -14164,7 +14227,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "STM": {
       "score": 100.0,
@@ -14234,35 +14297,35 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "STO:ACCON": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "STO:GAPW.B": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "STO:HTRO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "STO:SILEX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "STX": {
       "score": 100.0,
@@ -14332,7 +14395,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SVCO": {
       "score": 100.0,
@@ -14402,7 +14465,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SYNA": {
       "score": 80.0,
@@ -14472,7 +14535,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SYM": {
       "score": 0.0,
@@ -14530,8 +14593,8 @@
       "technical_state": "broken",
       "technical_timing_score": 20.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -14542,7 +14605,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TE": {
       "score": 55.1,
@@ -14612,7 +14675,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SYPR": {
       "score": 29.5,
@@ -14670,8 +14733,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -14682,7 +14745,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TEL": {
       "score": 6.5,
@@ -14740,9 +14803,9 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "SUPPORT_TEST",
+      "entry_score": 52,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -14752,7 +14815,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TER": {
       "score": 90.0,
@@ -14822,7 +14885,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TOYO": {
       "score": 39.4,
@@ -14880,8 +14943,8 @@
       "technical_state": "broken",
       "technical_timing_score": 15.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -14892,35 +14955,35 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SWX:HUBN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "STO:SIVE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TPE:3661": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TPE:8271": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TRMB": {
       "score": 0.0,
@@ -14978,8 +15041,8 @@
       "technical_state": "broken",
       "technical_timing_score": 17.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -14990,7 +15053,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TPL": {
       "score": 51.4,
@@ -15060,7 +15123,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TRT": {
       "score": 80.0,
@@ -15130,7 +15193,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TSAT": {
       "score": 73.1,
@@ -15200,7 +15263,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TSEM": {
       "score": 80.0,
@@ -15270,7 +15333,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TSM": {
       "score": 100.0,
@@ -15340,63 +15403,63 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TPEX:6643": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TSX:MAL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TSX:HPS.A": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TSX:FLT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TSXV:AAG": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TSX:VNP": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TSXV:XBOT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TSX:MOLY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "TXN": {
       "score": 90.0,
@@ -15466,7 +15529,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TYGO": {
       "score": 35.6,
@@ -15524,8 +15587,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -15536,7 +15599,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TTI": {
       "score": 51.1,
@@ -15606,7 +15669,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "UFO": {
       "score": 53.3,
@@ -15676,7 +15739,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "UAMY": {
       "score": 33.8,
@@ -15734,8 +15797,8 @@
       "technical_state": "broken",
       "technical_timing_score": 30.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -15746,7 +15809,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "UCTT": {
       "score": 100.0,
@@ -15816,7 +15879,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "UMAC": {
       "score": 100.0,
@@ -15886,7 +15949,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "USAR": {
       "score": 47.5,
@@ -15944,8 +16007,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -15956,7 +16019,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "UUUU": {
       "score": 19.4,
@@ -16014,8 +16077,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -16026,7 +16089,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VECO": {
       "score": 80.0,
@@ -16096,7 +16159,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VELO": {
       "score": 43.9,
@@ -16166,7 +16229,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VIAV": {
       "score": 80.0,
@@ -16236,7 +16299,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VICR": {
       "score": 90.0,
@@ -16306,7 +16369,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VLN": {
       "score": 78.2,
@@ -16376,7 +16439,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VIVO": {
       "score": 100.0,
@@ -16446,7 +16509,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VRT": {
       "score": 80.0,
@@ -16516,7 +16579,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VOYG": {
       "score": 57.4,
@@ -16586,7 +16649,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VPG": {
       "score": 80.0,
@@ -16656,7 +16719,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VSAT": {
       "score": 80.0,
@@ -16726,7 +16789,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "VSH": {
       "score": 80.0,
@@ -16796,7 +16859,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "WDC": {
       "score": 100.0,
@@ -16866,7 +16929,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "WOLF": {
       "score": 80.0,
@@ -16936,7 +16999,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "WULF": {
       "score": 80.0,
@@ -17006,7 +17069,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "WYFI": {
       "score": 100.0,
@@ -17078,14 +17141,14 @@
       "has_200d": true,
       "has_252d": false,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "XNDU": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "XTIA": {
       "score": 39.4,
@@ -17143,8 +17206,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -17155,28 +17218,28 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TYO:6315": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "WSE:VGO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "XSAT:SMOL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "PLTR": {
       "score": 1.4,
@@ -17234,8 +17297,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -17246,7 +17309,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NVDA": {
       "score": 80.8,
@@ -17381,7 +17444,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ADPT": {
       "score": 96.2,
@@ -17451,7 +17514,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ABCL": {
       "score": 100.0,
@@ -17521,7 +17584,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AMAT": {
       "score": 100.0,
@@ -17591,7 +17654,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BAND": {
       "score": 100.0,
@@ -17661,7 +17724,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BTBT": {
       "score": 13.4,
@@ -17731,7 +17794,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CAI": {
       "score": 20.0,
@@ -17789,9 +17852,9 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "SUPPORT_TEST",
+      "entry_score": 52,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 266,
@@ -17801,7 +17864,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "BTQ": {
       "score": 21.9,
@@ -17871,21 +17934,147 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CLS": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "status": "no_bars",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "score": 79.5,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +9.6% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: falling. Vol 0.7\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 9.62,
+        "ma_30w_slope_pct": 1.55,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -3.3,
+        "volume_ratio": 0.72,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 14.75,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 364.154,
+        "sma_50": 377.1944,
+        "sma_200": 321.0023,
+        "pct_vs_sma_20": -1.18,
+        "pct_vs_sma_50": -4.6,
+        "pct_vs_sma_200": 12.1,
+        "ma_stack": "mixed",
+        "extension_risk": "pullback_buy_zone",
+        "high_52w": 472.4,
+        "low_52w": 156.91,
+        "pct_from_52w_high": -23.83,
+        "pct_from_52w_low": 129.34,
+        "range_position_52w": 64.3,
+        "high_20d": 403.45,
+        "high_50d": 472.4,
+        "breakout_signal": "failed_breakout",
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 1692208.0,
+        "accumulation_days_20d": 1,
+        "distribution_days_20d": 3,
+        "accumulation_distribution_score": -2,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 24.1592,
+        "atr_14_pct": 6.71,
+        "range_20d_pct": 25.53,
+        "squeeze_signal": "volatile",
+        "roc_20d": -0.85,
+        "roc_50d": -0.47,
+        "momentum_trend": "negative",
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 55.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 55.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "BREAKOUT_PULLBACK",
+      "entry_score": 65,
+      "entry_grade": "B",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-06",
+      "history_end_date": "2026-07-10",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "status": "ok",
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CLYM": {
-      "score": null,
-      "label": null,
-      "reason": null,
-      "status": "no_bars",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +73.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 1.8\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 73.08,
+        "ma_30w_slope_pct": 21.61,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 26.02,
+        "volume_ratio": 1.79,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 231.75,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 12.549,
+        "sma_50": 11.5047,
+        "sma_200": 6.2642,
+        "pct_vs_sma_20": 11.56,
+        "pct_vs_sma_50": 21.69,
+        "pct_vs_sma_200": 123.49,
+        "ma_stack": "bull",
+        "extension_risk": "extended",
+        "high_52w": 14.0,
+        "low_52w": 1.35,
+        "pct_from_52w_high": 0.0,
+        "pct_from_52w_low": 937.04,
+        "range_position_52w": 100.0,
+        "high_20d": 14.0,
+        "high_50d": 14.0,
+        "breakout_signal": "fresh_breakout",
+        "entry_zone": "extended",
+        "avg_volume_20d": 1568992.0,
+        "accumulation_days_20d": 3,
+        "distribution_days_20d": 0,
+        "accumulation_distribution_score": 3,
+        "accumulation_distribution_signal": "accumulation",
+        "atr_14": 0.921,
+        "atr_14_pct": 6.58,
+        "range_20d_pct": 26.82,
+        "squeeze_signal": "volatile",
+        "roc_20d": 29.63,
+        "roc_50d": 51.19,
+        "momentum_trend": "positive",
+        "technical_state": "extended",
+        "technical_timing_score": 78.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "extended",
+      "technical_timing_score": 78.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "WAIT_FOR_RETEST",
+      "entry_score": 35,
+      "entry_grade": "C",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-06",
+      "history_end_date": "2026-07-10",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "status": "ok",
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "DELL": {
       "score": 100.0,
@@ -17955,7 +18144,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "CRWD": {
       "score": 100.0,
@@ -18025,7 +18214,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FTNT": {
       "score": 100.0,
@@ -18095,7 +18284,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "FLR": {
       "score": 95.2,
@@ -18165,7 +18354,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "DIOD": {
       "score": 80.0,
@@ -18235,7 +18424,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "EVMN": {
       "score": 1.9,
@@ -18296,8 +18485,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -18308,7 +18497,7 @@
       "has_200d": false,
       "has_252d": false,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "GEV": {
       "score": 100.0,
@@ -18378,7 +18567,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HIMS": {
       "score": 62.5,
@@ -18448,7 +18637,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "GRAL": {
       "score": 48.3,
@@ -18518,7 +18707,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HALO": {
       "score": 97.6,
@@ -18588,7 +18777,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HPE": {
       "score": 100.0,
@@ -18658,7 +18847,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "IBM": {
       "score": 63.2,
@@ -18728,7 +18917,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HIVE": {
       "score": 80.0,
@@ -18798,7 +18987,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "HOOD": {
       "score": 64.4,
@@ -18868,7 +19057,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "IBRX": {
       "score": 100.0,
@@ -18938,7 +19127,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "INKT": {
       "score": 56.3,
@@ -18996,9 +19185,9 @@
       "technical_state": "broken",
       "technical_timing_score": 30.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "SUPPORT_TEST",
+      "entry_score": 52,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -19008,7 +19197,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MDB": {
       "score": 58.1,
@@ -19078,7 +19267,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NAUT": {
       "score": 10.1,
@@ -19136,8 +19325,8 @@
       "technical_state": "broken",
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -19148,7 +19337,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NET": {
       "score": 100.0,
@@ -19218,7 +19407,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NGEN": {
       "score": 0.0,
@@ -19276,9 +19465,9 @@
       "technical_state": "broken",
       "technical_timing_score": 12.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -19288,7 +19477,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NKLR": {
       "score": 16.3,
@@ -19349,8 +19538,8 @@
       "technical_state": "broken",
       "technical_timing_score": 17.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -19361,7 +19550,7 @@
       "has_200d": false,
       "has_252d": false,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NKTR": {
       "score": 94.4,
@@ -19431,7 +19620,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "NTSK": {
       "score": 47.4,
@@ -19503,7 +19692,7 @@
       "has_200d": true,
       "has_252d": false,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OCGN": {
       "score": 56.9,
@@ -19573,7 +19762,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OKTA": {
       "score": 100.0,
@@ -19643,7 +19832,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ORCL": {
       "score": 9.4,
@@ -19701,8 +19890,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -19713,7 +19902,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OSCR": {
       "score": 100.0,
@@ -19783,7 +19972,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PANW": {
       "score": 100.0,
@@ -19853,14 +20042,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PBLS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "PRME": {
       "score": 54.8,
@@ -19930,7 +20119,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "PSNL": {
       "score": 100.0,
@@ -20000,7 +20189,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "QBTS": {
       "score": 20.2,
@@ -20058,9 +20247,9 @@
       "technical_state": "broken",
       "technical_timing_score": 5.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -20070,14 +20259,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "QNT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "QUBT": {
       "score": 15.0,
@@ -20135,8 +20324,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -20147,7 +20336,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "QURE": {
       "score": 98.1,
@@ -20217,7 +20406,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RBLX": {
       "score": 26.9,
@@ -20287,7 +20476,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RBRK": {
       "score": 91.9,
@@ -20357,7 +20546,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RCAT": {
       "score": 33.8,
@@ -20415,9 +20604,9 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
-      "entry_grade": "AVOID",
+      "entry_state": "LOWER_HIGH_WARNING",
+      "entry_score": 38,
+      "entry_grade": "C",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
       "bars_count": 274,
@@ -20427,7 +20616,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RDDT": {
       "score": 58.8,
@@ -20497,7 +20686,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RR": {
       "score": 0.0,
@@ -20555,8 +20744,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -20567,7 +20756,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "RXRX": {
       "score": 35.7,
@@ -20637,14 +20826,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OTC:IFNNY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "SNOW": {
       "score": 98.1,
@@ -20714,14 +20903,14 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "OTC:NLST": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "SOFI": {
       "score": 30.5,
@@ -20791,7 +20980,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SPAI": {
       "score": 7.5,
@@ -20849,8 +21038,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -20861,28 +21050,28 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "SPCX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "SHA:603986": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "SHA:688008": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-11T19:56:31.667461+00:00"
+      "computed_at": "2026-07-11T22:43:02.663142+00:00"
     },
     "STIM": {
       "score": 74.9,
@@ -20952,7 +21141,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TAC": {
       "score": 76.9,
@@ -21022,7 +21211,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TEM": {
       "score": 57.1,
@@ -21092,7 +21281,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TARS": {
       "score": 1.3,
@@ -21162,7 +21351,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "UMC": {
       "score": 100.0,
@@ -21232,7 +21421,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "TGTX": {
       "score": 100.0,
@@ -21302,7 +21491,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "XYZ": {
       "score": 100.0,
@@ -21372,7 +21561,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ZETA": {
       "score": 100.0,
@@ -21442,7 +21631,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ZURA": {
       "score": 63.5,
@@ -21512,7 +21701,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ZVRA": {
       "score": 100.0,
@@ -21582,7 +21771,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "MSFT": {
       "score": 8.9,
@@ -21717,7 +21906,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "AREC": {
       "score": 0.0,
@@ -21775,8 +21964,8 @@
       "technical_state": "broken",
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "SUPPORT_LOST",
-      "entry_score": 14,
+      "entry_state": "LOWER_LOW_CONFIRMED",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "tradier",
@@ -21787,7 +21976,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ACOG": {
       "score": 96.2,
@@ -21857,7 +22046,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ABSI": {
       "score": 100.0,
@@ -21927,7 +22116,7 @@
       "has_200d": true,
       "has_252d": true,
       "status": "ok",
-      "computed_at": "2026-07-11T01:31:15.007479+00:00"
+      "computed_at": "2026-07-11T22:19:39.927494+00:00"
     },
     "ADTN": {
       "score": 76.5,
