@@ -1,0 +1,1142 @@
+CONFLUENCE PROVIDER PURITY + CATALYST INTELLIGENCE AUDIT — PROVE ZERO FETCH-ON-READ AND MAP EXISTING RSS NEWS INTO A BUSINESS-AWARE COMPELLING EVENT ENGINE
+
+AUDIT ONLY.
+
+ZERO CODE CHANGES.
+
+Work only in the existing backend Replit project.
+
+PRODUCT RULE — NON-NEGOTIABLE:
+
+CONFLUENCE MUST NOT FETCH NEW DATA.
+
+Confluence exists to automatically make sense of data Caelyn already collects, caches, persists, and derives elsewhere.
+
+A call to any of these must NOT be caused by:
+
+build_confluence_snapshot()
+
+get_retained_confluence_snapshot()
+
+startup Confluence warm
+
+stale Confluence rebuild
+
+GET /api/alpha/confluence
+
+GET /api/alpha/confluence/{symbol}
+
+GET /api/watchlist/{watchlist_id}/alignment
+
+Forbidden incremental provider calls from those paths:
+
+Tradier
+
+FMP
+
+Grok/XAI
+
+Gemini
+
+Claude/Anthropic
+
+OpenAI
+
+DeepSeek
+
+Perplexity
+
+Finnhub
+
+Polygon
+
+TwelveData
+
+AlphaVantage
+
+or any other external provider.
+
+Confluence must consume canonical existing:
+
+LKGs
+
+in-memory caches
+
+disk caches
+
+Neon rows
+
+persisted RSS/news archives
+
+already-derived model outputs
+
+No fetch-on-miss.
+
+No provider refresh triggered by a read.
+
+A recent implementation work log stated:
+
+"The background build is running (Tradier throttling = Catalyst Alignment fetching)."
+
+and:
+
+"The full Confluence build is underway (throttling through Catalyst)."
+
+This directly conflicts with the intended zero-provider architecture and must be traced exactly.
+
+Separately, Catalyst Alignment V1 currently consumes existing calendar/catalyst/news data, but product intent is broader:
+
+Catalyst Alignment should identify genuinely COMPELLING ticker events from news Caelyn ALREADY COLLECTS.
+
+Examples include:
+
+hyperscaler / major-customer wins
+
+strategic partnerships
+
+major contracts
+
+design wins
+
+production awards
+
+qualification milestones
+
+commercial launches
+
+mass/volume production
+
+first shipments
+
+capacity ramps
+
+clinical-trial results
+
+primary endpoints
+
+FDA milestones/approvals/holds
+
+major funding or non-dilutive grants
+
+dilutive offerings / liquidity risk
+
+M&A / joint ventures
+
+guidance raises/cuts
+
+backlog/demand inflections
+
+supply/bottleneck developments
+
+regulatory/policy tailwinds or risks
+
+scheduled binary events
+
+The classifier should eventually be business-aware:
+
+a hyperscaler win matters to AI infrastructure
+
+an OEM production award matters to autonomy/automotive
+
+a Phase 3 endpoint matters to biotech
+
+an offtake agreement matters to mining/materials
+
+a government contract matters to defense
+
+Do not implement this engine yet.
+
+This audit has TWO goals:
+
+1. prove the entire Confluence serving/build path is zero-provider-call and identify any violation
+
+2. map the exact existing Watchlist RSS + NotifAI/general RSS data architecture and determine how Catalyst Alignment can consume already-collected compelling news more intelligently with zero new collection calls
+
+==================================================
+PART 1 — FULL TRANSITIVE CONFLUENCE CALL GRAPH
+==============================================
+
+Trace:
+
+build_confluence_snapshot()
+
+through every direct and transitive function it calls.
+
+At minimum trace:
+
+Stage2 reads
+
+Entry reads
+
+Theme bridge / Theme Alignment
+
+Options Alignment
+
+Catalyst Alignment
+
+Social cache
+
+Investment Alignment
+
+Actionability
+
+Elite Asset Rebound
+
+For every transitive function classify:
+
+PURE MEMORY READ
+
+DISK/LKG READ
+
+NEON SELECT
+
+HTTP CALL POSSIBLE
+
+HTTP CALL GUARANTEED
+
+FETCH-ON-MISS POSSIBLE
+
+BACKGROUND REFRESH TRIGGER POSSIBLE
+
+Return the exact call graph.
+
+Do not rely on import names or comments.
+
+Read function bodies.
+
+==================================================
+PART 2 — TRACE THE "TRADIER THROTTLING" LOG EXACTLY
+===================================================
+
+Find the exact log text observed during the Confluence startup warm/rebuild.
+
+Return:
+
+exact log message
+
+emitting file
+
+emitting function
+
+provider
+
+caller's call stack where possible
+
+Determine whether the emitting function is inside:
+
+build_confluence_snapshot()
+
+→ catalyst_alignment
+
+call graph.
+
+Or whether it came from an unrelated concurrently-running background loop.
+
+The prior agent statement:
+
+"Tradier throttling = Catalyst Alignment fetching"
+
+must be proven:
+
+CORRECT
+
+or:
+
+INCORRECT ATTRIBUTION
+
+Do not infer from concurrent timestamps.
+
+==================================================
+PART 3 — CONTROLLED PROVIDER-CALL INSTRUMENTATION
+=================================================
+
+Run one controlled full:
+
+build_confluence_snapshot()
+
+Instrument existing provider wrappers / HTTP clients narrowly enough to count outbound calls attributable to this call.
+
+Do not change persistent code.
+
+Use monkeypatching/in-memory instrumentation where safe.
+
+Count:
+
+Tradier
+
+FMP
+
+Grok/XAI
+
+Gemini
+
+Claude
+
+OpenAI
+
+DeepSeek
+
+Perplexity
+
+other HTTP
+
+Return exact call counts.
+
+Also run:
+
+get_retained_confluence_snapshot()
+
+on:
+
+fresh retained read
+
+stale-trigger read
+
+startup warm producer invocation if safely testable
+
+Separate:
+
+request-path provider calls
+
+background rebuild provider calls
+
+The acceptance expectation is:
+
+0 across all providers.
+
+If any call occurs:
+
+return exact provider/function/call chain and purpose.
+
+==================================================
+PART 4 — CURRENT CATALYST ALIGNMENT V1
+======================================
+
+Trace exact current:
+
+backend/services/catalyst_alignment.py
+
+Return:
+
+every data source
+
+every function called
+
+every database table
+
+every disk/LKG/cache source
+
+every event category
+
+every scoring weight/rule
+
+minimum evidence
+
+availability semantics
+
+recency windows
+
+deduplication
+
+ticker matching
+
+positive/negative direction handling
+
+Return exact current output fields.
+
+Specifically answer:
+
+Does Catalyst Alignment currently include only earnings?
+
+YES / NO
+
+Does it include:
+
+earnings
+
+IPO
+
+dividend
+
+split
+
+RSS/news
+
+M&A
+
+regulatory
+
+legal
+
+guidance
+
+corporate events
+
+analyst events
+
+Return exact current behavior.
+
+==================================================
+PART 5 — WATCHLIST TICKER NEWS COLLECTION
+=========================================
+
+Trace the exact news/RSS pipeline feeding the Watchlist page's ticker news.
+
+The user confirms the app already collects ticker-specific Watchlist RSS news and has successfully detected hyperscaler-deal articles.
+
+Find:
+
+routes
+
+collectors
+
+RSS feed sources
+
+ticker matching
+
+article normalization
+
+article archive/storage
+
+dedupe logic
+
+retention
+
+refresh cadence
+
+Hyperscaler detection/classification logic
+
+Return the exact full path:
+
+RSS source
+→ collector
+→ normalization
+→ ticker resolution
+→ persistence/cache
+→ Watchlist page read
+
+Determine:
+
+Are Watchlist ticker-specific articles persisted in:
+
+rss_article_archive
+
+another Neon table
+
+JSON/LKG
+
+in-memory cache
+
+or multiple stores?
+
+Return counts and current coverage where available.
+
+==================================================
+PART 6 — NOTIFAI / GENERAL RSS NEWS COLLECTION
+==============================================
+
+Trace the existing general RSS/news pipeline used on the NotifAI page.
+
+Find:
+
+routes
+
+collectors
+
+feed sources
+
+normalization
+
+article persistence
+
+dedupe
+
+ticker/entity matching
+
+refresh cadence
+
+Return exact path:
+
+general RSS feed
+→ collector
+→ normalization
+→ persistence
+→ NotifAI page
+
+Determine whether these articles share a canonical archive with Watchlist ticker news.
+
+If separate:
+
+prove exact stores and schemas.
+
+==================================================
+PART 7 — RSS UNION / DUPLICATION MAP
+====================================
+
+Compare:
+
+Watchlist ticker RSS articles
+
+NotifAI/general RSS articles
+
+current Catalyst Alignment RSS input
+
+For each return:
+
+store
+
+schema
+
+ticker field
+
+headline/title
+
+summary/description
+
+source
+
+published_at
+
+url/id
+
+existing classification fields
+
+existing tags
+
+existing materiality fields
+
+existing bullish/bearish direction fields
+
+Determine whether Catalyst Alignment today is seeing:
+
+all Watchlist ticker news
+
+all NotifAI general news
+
+a subset
+
+or a completely separate archive.
+
+Return a source-overlap matrix.
+
+Do not merge anything.
+
+==================================================
+PART 8 — HYPERSCALER DEAL DETECTOR
+==================================
+
+Trace the exact existing logic that recognizes hyperscaler-deal news for Watchlist tickers.
+
+Return:
+
+file/function
+
+input fields
+
+keyword/phrase patterns
+
+company/entity matching
+
+ticker mapping
+
+confidence logic if any
+
+false-positive safeguards
+
+output fields
+
+where result is displayed
+
+whether classification is persisted
+
+Determine whether the logic is:
+
+generic/reusable event classifier architecture
+
+or:
+
+hardcoded hyperscaler-specific detector.
+
+Return at least 20 recent classified examples if available:
+
+ticker
+
+headline
+
+matched event
+
+classification
+
+reason
+
+Do not call news providers.
+
+==================================================
+PART 9 — CURRENT MATERIAL NEWS CLASSIFIER
+=========================================
+
+Trace the exact material-news classifier used by Catalyst Alignment today.
+
+For categories:
+
+M&A
+
+regulatory
+
+legal
+
+guidance
+
+corporate
+
+analyst
+
+Return:
+
+keyword patterns
+
+score contribution
+
+directionality
+
+materiality logic
+
+recency decay
+
+ticker matching
+
+Does it treat:
+
+"company presents at conference"
+
+and:
+
+"company wins $1B multi-year production contract"
+
+as materially different?
+
+Does it understand:
+
+deal size
+
+customer importance
+
+production stage
+
+clinical phase
+
+regulatory milestone direction
+
+guidance raise vs guidance cut
+
+dilution vs non-dilutive funding
+
+Return exact answers.
+
+==================================================
+PART 10 — COMPELLING EVENT TAXONOMY COVERAGE
+============================================
+
+Using ONLY existing archived RSS/news articles:
+
+do a read-only classification-gap study.
+
+Search recent archived articles for evidence of these event families:
+
+COMMERCIAL_VALIDATION
+
+major contract
+major customer
+selected by
+design win
+production award
+strategic agreement
+partnership
+offtake agreement
+government contract
+
+PRODUCT_PRODUCTION_INFLECTION
+
+commercial launch
+mass production
+volume production
+series production
+first shipment
+production ramp
+capacity expansion
+commercial operations
+general availability
+
+CLINICAL_REGULATORY
+
+Phase 1/2/3
+primary endpoint
+topline data
+interim data
+FDA acceptance
+NDA
+BLA
+PDUFA
+Fast Track
+Breakthrough Therapy
+approval
+clinical hold
+CRL
+
+TECHNOLOGY_QUALIFICATION
+
+qualification
+sampling
+tape-out
+production silicon
+validated with
+certified
+integrated into
+reference design
+
+CAPACITY_SUPPLY
+
+capacity expansion
+new facility
+new line
+supply agreement
+sold out
+backlog
+bookings
+lead times
+shortage
+constrained supply
+
+CAPITAL_FUNDING
+
+non-dilutive funding
+grant
+DOE award
+strategic investment
+project financing
+debt facility
+ATM offering
+registered direct
+secondary offering
+convertible notes
+going concern
+
+M&A_STRATEGIC
+
+acquisition
+merger
+strategic alternatives
+joint venture
+spin-off
+divestiture
+
+GUIDANCE_EXPECTATIONS
+
+raises guidance
+raises outlook
+cuts guidance
+withdraws outlook
+record backlog
+book-to-bill
+accelerating demand
+customer delay
+inventory correction
+demand softness
+
+REGULATORY_POLICY
+
+subsidy
+tax credit
+tariff
+export restriction
+CHIPS Act
+IRA
+DOE
+FAA
+FCC
+CMS
+government mandate
+
+SCHEDULED_BINARY_EVENT
+
+earnings
+FDA decision
+clinical data presentation
+investor day
+launch date
+shareholder vote
+regulatory decision
+
+For each family report:
+
+recent archived article count
+
+example tickers
+
+example headlines
+
+whether current Catalyst Alignment classifies it
+
+current category if classified
+
+currently missed count
+
+Do not create classifiers.
+
+==================================================
+PART 11 — BUSINESS-AWARE CONTEXT SOURCES
+========================================
+
+Audit existing deterministic per-ticker context already available without provider calls.
+
+Potential:
+
+canonical primary Theme
+
+Additional Themes
+
+industry
+
+sector
+
+company description/profile cache
+
+Moat / Market Role
+
+curated bottleneck role
+
+Chain Reaction role
+
+Investment Alignment component outputs
+
+pre-revenue / early-revenue clues from fundamentals
+
+market cap
+
+business-role tags
+
+Return exact existing sources and coverage.
+
+Determine whether a future compelling-event classifier can use existing context to apply category-specific vocabularies such as:
+
+Biotech:
+clinical/FDA
+
+AI Infrastructure:
+hyperscaler/design win/interconnect/customer qualification
+
+Semiconductors:
+sampling/design win/qualification/mass production
+
+Autonomy/Automotive:
+OEM/series production/production award
+
+Defense:
+DoD/government contract/program of record
+
+Mining/Materials:
+offtake/permit/resource/production/commissioning
+
+Energy:
+PPA/interconnection/commercial operations/capacity
+
+Software:
+ARR/customer win/enterprise contract/GA launch
+
+Do not use an LLM.
+
+Do not make provider calls.
+
+Answer feasibility based on current context coverage.
+
+==================================================
+PART 12 — DIRECTION / MATERIALITY / CONFIDENCE
+==============================================
+
+Audit whether existing article fields/classifiers can distinguish:
+
+event category
+
+bullish / bearish / mixed direction
+
+materiality
+
+classification confidence
+
+confirmed event vs speculation/rumor
+
+article recency
+
+source duplication
+
+If unavailable, identify exact missing derived fields.
+
+Do not implement.
+
+Recommend a deterministic V1 event record contract.
+
+Conceptual:
+
+{
+ticker,
+event_category,
+event_reason,
+direction,
+materiality_score,
+confidence_score,
+status,
+published_at,
+source,
+article_id
+}
+
+Use exact existing article identity fields where possible.
+
+==================================================
+PART 13 — CATALYST ALIGNMENT V2 ARCHITECTURE PROPOSAL
+=====================================================
+
+PROPOSAL ONLY.
+
+Based strictly on the audit, propose the smallest deterministic Catalyst Alignment V2 architecture.
+
+Hard requirements:
+
+ZERO new RSS/news provider calls
+
+ZERO Tradier calls
+
+ZERO FMP calls
+
+ZERO Grok calls
+
+ZERO LLM calls
+
+Reuse existing RSS/news collection
+
+Reuse existing article persistence
+
+Reuse canonical Watchlist ticker context
+
+No new general news collector
+
+No parallel article archive
+
+No duplicate news fetching
+
+The future flow should conceptually be:
+
+existing RSS collectors
+↓
+existing persisted article archive(s)
+↓
+deterministic compelling-event classification
+↓
+canonical ticker event records
+↓
+Catalyst Alignment reads event records
+↓
+Trade Alignment reads Catalyst Alignment
+↓
+Confluence remains read-only
+
+Determine:
+
+where classification belongs
+
+whether classification should happen:
+
+at article ingest
+
+in an existing nightly/background processing pass
+
+or cache-only lazily outside Confluence
+
+Do NOT recommend classification inside build_confluence_snapshot() if it requires scanning the entire article archive every rebuild.
+
+Recommend event retention and recency behavior.
+
+==================================================
+PART 14 — CONFLUENCE PURITY VERDICT
+===================================
+
+Answer:
+
+Can Confluence remain a pure consumer of:
+
+Trade Alignment components
+
+Investment Alignment
+
+Entry
+
+Options
+
+Theme
+
+Social
+
+Catalyst event cache
+
+with zero incremental providers?
+
+YES / NO
+
+If YES:
+
+state exact producer/consumer boundary.
+
+If NO:
+
+prove why.
+
+==================================================
+PART 15 — DO NOT IMPLEMENT YET
+==============================
+
+ZERO CODE CHANGES.
+
+This task is an architecture/data audit.
+
+Do not:
+
+change Catalyst Alignment
+
+add keywords
+
+change weights
+
+add event tables
+
+modify RSS collectors
+
+add provider calls
+
+change Confluence
+
+change frontend
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+CONFLUENCE PROVIDER PURITY + CATALYST INTELLIGENCE AUDIT
+
+FILES CHANGED:
+[NONE]
+
+FULL CONFLUENCE CALL GRAPH:
+[summary]
+
+TRADIER THROTTLING LOG SOURCE:
+[path/function]
+
+TRADIER LOG ATTRIBUTION:
+[CORRECT / INCORRECT]
+
+CONFLUENCE PROVIDER CALL COUNTS:
+[by provider]
+
+FULL CONFLUENCE BUILD PROVIDER-PURE:
+[YES / NO]
+
+CURRENT CATALYST ALIGNMENT SOURCES:
+[list]
+
+CURRENT CATALYST EVENT TYPES:
+[list]
+
+CURRENT CATALYST IS EARNINGS-ONLY:
+[YES / NO]
+
+WATCHLIST NEWS PIPELINE:
+[path]
+
+WATCHLIST NEWS STORE:
+[store/schema]
+
+NOTIFAI NEWS PIPELINE:
+[path]
+
+NOTIFAI NEWS STORE:
+[store/schema]
+
+CATALYST RSS INPUT:
+[source]
+
+RSS SOURCE OVERLAP:
+[matrix]
+
+HYPERSCALER DETECTOR:
+[path/behavior]
+
+CURRENT MATERIAL NEWS CLASSIFIER:
+[behavior]
+
+COMPELLING EVENT GAP STUDY:
+[results]
+
+BUSINESS-AWARE CONTEXT:
+[sources/coverage]
+
+DIRECTION / MATERIALITY / CONFIDENCE:
+[current capability]
+
+PROPOSED EVENT RECORD:
+[contract]
+
+CATALYST ALIGNMENT V2 PROPOSAL:
+[architecture]
+
+PRODUCER / CONSUMER BOUNDARY:
+[exact boundary]
+
+CONFLUENCE ZERO-CALL DESIGN:
+[proof]
+
+COST PROOF:
+[0 code changes / provider calls attributable to audit]
+
+End exactly:
+
+CONFLUENCE + CATALYST INTELLIGENCE VERDICT
+
+CONFLUENCE MAKES TRADIER CALLS:
+[YES / NO]
+
+CONFLUENCE MAKES FMP CALLS:
+[YES / NO]
+
+CONFLUENCE MAKES ANY PROVIDER CALLS:
+[YES / NO]
+
+CURRENT CATALYST INCLUDES TICKER RSS NEWS:
+[YES / NO]
+
+CURRENT CATALYST INCLUDES GENERAL RSS NEWS:
+[YES / NO]
+
+CURRENT CATALYST IS BUSINESS-AWARE:
+[YES / NO]
+
+EXISTING RSS DATA SUFFICIENT FOR COMPELLING EVENT V1:
+[YES / NO]
+
+NEW NEWS COLLECTION REQUIRED:
+[NO expected]
+
+NEW PROVIDER CALLS REQUIRED:
+[NO expected]
+
+BUSINESS-AWARE DETERMINISTIC CLASSIFICATION FEASIBLE:
+[YES / NO]
+
+CONFLUENCE CAN REMAIN PURE READ/DERIVATION:
+[YES / NO expected YES]
+
+NEXT IMPLEMENTATION:
+[exact narrow Catalyst V2 / Confluence serving repair sequence]
+
+ZERO CODE CHANGES.
