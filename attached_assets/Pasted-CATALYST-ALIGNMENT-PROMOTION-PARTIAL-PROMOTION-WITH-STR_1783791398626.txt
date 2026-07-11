@@ -1,0 +1,271 @@
+CATALYST ALIGNMENT PROMOTION — PARTIAL PROMOTION WITH STRICTER RELEVANCE GATE
+
+Implement only the promotion decision from the V2.1 validation.
+
+Do not touch frontend.
+
+Do not touch Confluence retained snapshot infrastructure.
+
+Do not change THEME_ALIGNMENT weights.
+
+Do not change Options, Entry, Actionability, Investment Alignment, Elite Rebound, Theme Alignment, or Social Bonus.
+
+No provider calls.
+
+No new tables.
+
+No new RSS collectors.
+
+Goal:
+
+Promote Catalyst V2.1 for RSS/news-derived catalyst intelligence, while preserving V1 scheduled calendar/earnings catalysts.
+
+Before promotion, make one strictness adjustment:
+
+Raise bullish RSS relevance acceptance floor from 0.40 to 0.50.
+
+Keep bearish relevance threshold at 0.75.
+
+Reason:
+
+V2.1 validation showed rel=0.5 AMBIGUOUS articles are the remaining false-positive class. We do not want rel<0.50 ambiguous/weak ticker-subject matches feeding Trade Alignment. rel=0.5 can pass; rel below 0.5 cannot. Do not raise above 0.50 in this task because it may suppress legitimate alias/subsidiary cases.
+
+Implementation target:
+
+Inside catalyst_alignment.py, create a promoted Catalyst score that combines:
+
+1. scheduled V1 catalyst events:
+   earnings
+   IPO
+   split
+   dividend
+
+2. V2 RSS/news catalysts:
+   hyperscaler_anchor
+   government_contract
+   defense_military
+   mna
+   earnings_guidance article
+   financing
+   commercial_contract
+   technical_milestone
+   strategic_partnership
+   product_launch
+   investigation / legal / regulatory risk where supported
+
+3. V2 bearish conflict penalty:
+   only when ticker relevance >= 0.75
+
+Do not use V1 crude RSS regex categories as primary RSS catalyst source after promotion.
+
+Preserve legacy fields:
+
+catalyst_alignment_score
+catalyst_available
+catalyst_events
+catalyst_reason
+
+But update their source logic so the primary score reflects:
+
+max_or_best_scheduled_event
+combined with V2 RSS primary event
+minus V2 bearish conflict penalty
+
+Do not average down a major catalyst because routine articles exist.
+
+Expected scoring concept:
+
+scheduled_score = best scheduled V1 event score, if any
+
+rss_score = catalyst_v2_score, if catalyst_v2_available
+
+promoted_score = max(scheduled_score, rss_score), with bearish conflict already embedded in rss_score
+
+If both scheduled and RSS exist and are directionally supportive, allow a small additive corroboration bonus capped at +5.
+
+Clamp final score to 0–100.
+
+If only scheduled exists, preserve scheduled score.
+
+If only RSS V2 exists, use V2 score.
+
+If bearish conflict dominates and no positive event exists, keep unavailable or expose bearish conflict as diagnostic, but do not create a bullish catalyst score.
+
+Add provenance fields:
+
+catalyst_primary_source:
+"scheduled" | "rss_v2" | "combined" | "none"
+
+catalyst_primary_event:
+structured event object
+
+catalyst_scheduled_event:
+event object or null
+
+catalyst_rss_event:
+event object or null
+
+catalyst_bearish_conflict:
+event object or null
+
+catalyst_model_version:
+"2.1-promoted"
+
+Preserve additive V2 fields already exposed in Confluence:
+
+catalyst_v2_available
+catalyst_v2_score
+catalyst_v2_state
+catalyst_v2_primary_event
+catalyst_v2_conflicts
+
+Validation:
+
+Run full Watchlist universe.
+
+Return before/after:
+
+total symbols
+promoted catalyst available
+V1 available
+V2 available
+scheduled-only
+rss-only
+combined
+neither
+
+Top 50 promoted catalysts:
+ticker
+promoted score
+primary source
+scheduled score
+rss_v2 score
+bearish conflict
+primary event title
+
+Known contamination regression must remain clean:
+
+SNOW / Cognizant-Google
+AMD / Rackspace
+PLTR / Rackspace
+RBRK / Rackspace
+CEG / Fermi
+GEV / Fermi
+OKLO / Fermi
+SMR / Fermi
+DELL / BigBear
+RCAT / Iran market roundup
+IPI / CFO RSU
+
+Check rel=0.40–0.49 events are now rejected.
+
+Check rel=0.50 events are allowed but should not become COMPELLING unless materiality is very high and no conflict exists.
+
+Named ticker review:
+
+CRDO
+AEVA
+IBRX
+RBRK
+SOFI
+ABCL
+RCAT
+AMD
+MU
+LITE
+BE
+PLTR
+NVDA
+DELL
+
+Cost proof:
+
+0 provider calls
+0 FMP
+0 Tradier
+0 LLM
+0 scoring weight changes
+0 frontend changes
+
+Final response:
+
+CATALYST ALIGNMENT PARTIAL PROMOTION REPORT
+
+FILES CHANGED:
+[list]
+
+PROMOTION ARCHITECTURE:
+[summary]
+
+BULLISH RELEVANCE FLOOR:
+[old/new]
+
+SCHEDULED EVENT HANDLING:
+[summary]
+
+RSS V2 HANDLING:
+[summary]
+
+BEARISH CONFLICT HANDLING:
+[summary]
+
+LEGACY FIELD PRESERVATION:
+[summary]
+
+NEW PROVENANCE FIELDS:
+[list]
+
+VALIDATION COUNTS:
+[table]
+
+TOP PROMOTED CATALYSTS:
+[table]
+
+CONTAMINATION REGRESSION:
+[table]
+
+REL 0.40–0.49 REJECTION CHECK:
+[results]
+
+NAMED TICKERS:
+[results]
+
+TRADE ALIGNMENT WEIGHTS CHANGED:
+[NO expected]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+CATALYST ALIGNMENT PROMOTION VERDICT
+
+PARTIAL PROMOTION COMPLETE:
+[YES/NO]
+
+V2 RSS IS PRIMARY NEWS CATALYST SOURCE:
+[YES/NO]
+
+V1 SCHEDULED EVENTS PRESERVED:
+[YES/NO]
+
+BULLISH RELEVANCE FLOOR RAISED TO 0.50:
+[YES/NO]
+
+BEARISH THRESHOLD STILL 0.75:
+[YES/NO]
+
+CONTAMINATION REGRESSION CLEAN:
+[YES/NO]
+
+TRADE ALIGNMENT WEIGHTS UNCHANGED:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND DISPLAY / CONFLUENCE REVIEW:
+[YES/NO]
+
+NEXT IMPLEMENTATION:
+[FRONTEND CATALYST DISPLAY / CONFLUENCE REVIEW / OTHER]

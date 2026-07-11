@@ -1,37 +1,48 @@
 """
 catalyst_alignment.py — Clean Catalyst Alignment (zero-provider-call)
 ======================================================================
-V1: deterministic, cache-only Catalyst signal using 6 regex categories (unchanged).
+V1: deterministic, cache-only Catalyst signal using 6 regex categories (retained
+    for scheduled calendar events only after promotion).
+
 V2: reuses existing news_signal_scorer.py taxonomy for richer, business-aware,
-    directional, materiality-weighted catalyst events (additive shadow fields).
+    directional, materiality-weighted catalyst events.
 
-V2.1 additions (no scoring model changes, V1 unchanged):
-    • Ticker-subject relevance gate  — articles about other companies are rejected
-      or confidence-downweighted before V2 scoring.
-    • Primary-subject mismatch check — explicit (TICKER) in title, leading-company
-      extraction, and market-index detection all suppress cross-feed contamination.
-    • Subsidiary / alias exception   — small hardcoded map for confirmed subsidiary
-      relationships (e.g. KTOS→AEVEX).
-    • Governance / compensation filter — CFO grants, bylaw amendments, routine
-      conference presentations cannot produce COMPELLING/MODERATE V2 scores.
-    • Bearish application stricter    — bearish penalties only apply when the article
-      is demonstrably about the scored ticker (relevance ≥ 0.75).
-    • Performance fix                 — single bulk Neon fetch replaces N per-symbol
-      queries; target < 5s for 317 symbols.
+V2.1: ticker-subject relevance gate, governance filter, alias map, bearish
+    threshold (≥0.75), performance (2 Neon queries for 317 symbols).
 
-Sources consumed (ALL pure reads of already-persisted data — zero provider calls):
+V2.1-promoted (current):
+    V2 RSS/news is now the PRIMARY RSS catalyst source.
+    V1 scheduled calendar events (earnings, IPO, split, dividend) are preserved
+    and combined with V2 RSS in a promoted score.
+    V1 crude RSS regex categories are RETIRED as the primary RSS source.
+
+    Promotion changes vs V2.1:
+    • Bullish RSS relevance floor raised 0.40 → 0.50 to eliminate AMBIGUOUS-class
+      articles (rel exactly 0.5) from Trade Alignment input.
+    • _compute_promoted_score() combines scheduled V1 + V2 RSS:
+          promoted = max(scheduled_score, rss_score) + corroboration_bonus (≤+5)
+      Bearish conflict already embedded in rss_score via _V2_BEARISH_FACTOR.
+    • Legacy fields (catalyst_alignment_score, catalyst_alignment_available,
+      primary_catalyst, catalyst_events, catalyst_alignment_reason) now reflect
+      the promoted score so downstream consumers automatically benefit.
+    • New provenance fields added (catalyst_primary_source, catalyst_primary_event,
+      catalyst_scheduled_event, catalyst_rss_event, catalyst_bearish_conflict,
+      catalyst_model_version).
+    • All V2 shadow fields (catalyst_v2_*) preserved unchanged.
+
+Sources consumed (ALL pure reads — zero provider calls):
     • services.top_catalysts_service.get_top_catalysts()
-          -> earnings:curated:week:{from}:{to} cache (data.cache)
+          -> earnings:curated:week:{from}:{to} cache
     • services.calendar_snapshot_service.get_snapshot("ipos"/"dividends"/"splits")
           -> Neon calendar_snapshots table (falls back to disk JSON)
     • data.rss_article_archive.query_ticker_activity (bulk count, 1 query)
       data.rss_article_archive.query_recent_articles_for_scoring (bulk articles, 1 query)
           -> Neon watchlist_rss_article_archive table
-    • services.news_signal_scorer.score_article (V2 only)
+    • services.news_signal_scorer.score_article
           -> pure-Python in-memory scoring (no I/O)
 
 Zero provider calls.  Zero LLM calls.  Zero new schedulers.  Zero new DB tables.
-V1 output fields preserved.  THEME_ALIGNMENT primary score unchanged.
+THEME_ALIGNMENT weights unchanged.  Options/Entry/Actionability unchanged.
 """
 
 from __future__ import annotations
@@ -136,15 +147,24 @@ _V2_EMPTY: dict[str, Any] = {
     "catalyst_v2_version":           _V2_VERSION,
 }
 
-# ── V2.1 — Ticker Relevance Gate constants ────────────────────────────────────
+# ── Promoted model version ────────────────────────────────────────────────────
+_PROMOTED_VERSION = "2.1-promoted"
 
-# Minimum relevance score for a bullish event to contribute to V2.
-# 0.5 = ambiguous (no explicit ticker match but no obvious other-company lead).
-_V2_REL_BULLISH_MIN  = 0.40
+# ── V2.1-promoted — Ticker Relevance Gate constants ───────────────────────────
+
+# Minimum relevance score for a bullish RSS event to contribute.
+# Raised from 0.40 → 0.50 at promotion: AMBIGUOUS articles (exactly 0.50) still
+# pass; articles with rel < 0.50 (OTHER_COMPANY_LEAD=0.35, EXPLICIT_OTHER_TICKER=0.20,
+# MARKET_INDEX_LEAD=0.20) are rejected.  rel=0.50 is the acceptance boundary.
+_V2_REL_BULLISH_MIN  = 0.50
 
 # Minimum relevance score for a bearish penalty to apply.
-# Stricter: require near-certain attribution to the scored ticker.
+# Unchanged: require near-certain attribution to the scored ticker.
 _V2_REL_BEARISH_MIN  = 0.75
+
+# Corroboration bonus when BOTH a scheduled event AND an RSS event exist and are
+# directionally supportive. Capped to avoid over-inflating the combined score.
+_PROMOTED_CORROBORATION_BONUS = 5.0
 
 # Ticker → known company name fragments (lowercase) for tickers whose articles
 # often appear without an explicit "(TICKER)" parens pattern.
@@ -862,6 +882,177 @@ def _compute_v2_from_events(
     }
 
 
+# ── Promoted Catalyst scorer ──────────────────────────────────────────────────
+
+def _compute_promoted_score(
+    sched_events_v1:  list[dict],
+    v2_rss_result:    dict[str, Any],
+    full_v2_result:   dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Combine V1 scheduled calendar events with V2 RSS events into the promoted
+    Catalyst score.  Replaces the legacy fields (catalyst_alignment_score, etc.)
+    with the promoted result while preserving all V2 shadow fields.
+
+    Scoring:
+        scheduled_score = best V1 calendar event score, or None
+        rss_score       = catalyst_v2_score from RSS-only V2 result, or None
+
+        If both exist and rss is bullish/neutral:
+            promoted = max(scheduled_score, rss_score) + _PROMOTED_CORROBORATION_BONUS (≤+5)
+        Else:
+            promoted = max(scheduled_score or 0, rss_score or 0)
+        Clamped to 0–100.
+
+    Primary source selection:
+        "combined"   → both scheduled and RSS V2 available and directionally coherent
+        "scheduled"  → only scheduled events present (no RSS V2)
+        "rss_v2"     → only RSS V2 present (no scheduled events)
+        "none"       → neither available
+
+    Bearish conflict note:
+        The rss_score already embeds the V2 bearish conflict penalty via
+        _V2_BEARISH_FACTOR (0.70 × bearish materiality subtracted from positive).
+        We do NOT add a second penalty at the promoted layer.
+        If bearish conflict dominates and produces rss_score < _V2_AVAIL_THRESHOLD,
+        rss_score is None and the scheduled score (if any) is used alone.
+
+    Legacy field preservation:
+        catalyst_alignment_score      → promoted_score (or None)
+        catalyst_alignment_available  → bool
+        primary_catalyst              → structured event object (V2 shape or V1 shape)
+        catalyst_events               → V1 calendar events list (unchanged)
+        catalyst_alignment_reason     → descriptive reason code
+    """
+    # ── Scheduled ─────────────────────────────────────────────────────────────
+    sched_event_v1:  Optional[dict] = None
+    scheduled_score: Optional[float] = None
+    if sched_events_v1:
+        best = max(sched_events_v1, key=lambda e: e.get("score", 0))
+        scheduled_score = float(best["score"])
+        sched_event_v1  = best
+
+    # ── RSS V2 ────────────────────────────────────────────────────────────────
+    rss_available    = v2_rss_result.get("catalyst_v2_available", False)
+    rss_score        = v2_rss_result.get("catalyst_v2_score")          # None if unavailable
+    rss_primary_ev   = v2_rss_result.get("catalyst_v2_primary_event")  # may be None
+    rss_bearish_ev   = v2_rss_result.get("catalyst_v2_bearish_event")  # may be None
+
+    # ── Promoted score ────────────────────────────────────────────────────────
+    has_sched = scheduled_score is not None
+    has_rss   = rss_score is not None and rss_available
+
+    if not has_sched and not has_rss:
+        # Neither available
+        promoted_score  = None
+        primary_source  = "none"
+        corr_bonus      = 0.0
+    elif has_sched and not has_rss:
+        promoted_score = scheduled_score
+        primary_source = "scheduled"
+        corr_bonus     = 0.0
+    elif has_rss and not has_sched:
+        promoted_score = rss_score
+        primary_source = "rss_v2"
+        corr_bonus     = 0.0
+    else:
+        # Both present — check directional coherence before bonus
+        rss_state    = v2_rss_result.get("catalyst_v2_state", "UNAVAILABLE")
+        rss_bullish  = rss_state in ("COMPELLING", "MODERATE", "WEAK") and (
+            (rss_primary_ev or {}).get("direction") in ("bullish", "neutral")
+        )
+        corr_bonus   = _PROMOTED_CORROBORATION_BONUS if rss_bullish else 0.0
+        raw          = max(scheduled_score, rss_score) + corr_bonus
+        promoted_score = round(min(100.0, max(0.0, raw)), 1)
+        primary_source = "combined"
+
+    # ── Promoted availability & reason ───────────────────────────────────────
+    promoted_available = promoted_score is not None and promoted_score >= _V2_AVAIL_THRESHOLD
+    if not promoted_available:
+        if rss_bearish_ev and not has_sched and not has_rss:
+            reason = "CATALYST_BEARISH_CONFLICT_ONLY"
+        else:
+            reason = "CATALYST_UNAVAILABLE_NO_EVENTS"
+    elif primary_source == "combined":
+        reason = "CATALYST_COMBINED_SCHEDULED_RSS"
+    elif primary_source == "scheduled":
+        reason = "CATALYST_SCHEDULED_EVENT"
+    elif primary_source == "rss_v2":
+        reason = "CATALYST_RSS_V2_EVENT"
+    else:
+        reason = "CATALYST_EVENT_DETECTED"
+
+    # ── Primary catalyst for legacy field ────────────────────────────────────
+    # Prefer the highest-materiality event as the canonical primary.
+    # If combined: if RSS score > scheduled, use RSS V2 primary; else use V1 scheduled.
+    if primary_source == "combined":
+        if rss_score >= scheduled_score:                      # type: ignore[operator]
+            legacy_primary = _v2_event_to_v1_shape(rss_primary_ev, primary_source)
+        else:
+            legacy_primary = sched_event_v1
+    elif primary_source == "rss_v2":
+        legacy_primary = _v2_event_to_v1_shape(rss_primary_ev, primary_source)
+    elif primary_source == "scheduled":
+        legacy_primary = sched_event_v1
+    else:
+        legacy_primary = None
+
+    # ── Provenance object — catalyst_scheduled_event ──────────────────────────
+    # Structured V2-shape scheduled event for the highest-scoring calendar item.
+    sched_event_v2: Optional[dict] = None
+    if sched_event_v1:
+        sched_event_v2 = {
+            "event_type":       sched_event_v1.get("type", "").lower(),
+            "event_reason":     sched_event_v1.get("type", ""),
+            "direction":        "neutral",
+            "materiality_score": round(sched_event_v1.get("score", 0) / 100.0, 4),
+            "confidence_score":  1.0,
+            "status":            "scheduled",
+            "source":            "calendar",
+            "title":             sched_event_v1.get("description", ""),
+            "catalyst_date":     sched_event_v1.get("date"),
+        }
+
+    # ── Build output ─────────────────────────────────────────────────────────
+    promoted_fields: dict[str, Any] = {
+        # Legacy fields — now driven by promoted score
+        "catalyst_alignment_score":      round(promoted_score, 1) if promoted_score is not None else None,
+        "catalyst_alignment_available":  promoted_available,
+        "primary_catalyst":              legacy_primary,
+        "catalyst_events":               sched_events_v1[:5],   # V1 calendar events only
+        "catalyst_alignment_reason":     reason,
+        # Provenance fields (new)
+        "catalyst_primary_source":       primary_source,
+        "catalyst_primary_event":        rss_primary_ev if primary_source in ("rss_v2", "combined") else sched_event_v2,
+        "catalyst_scheduled_event":      sched_event_v2,
+        "catalyst_rss_event":            rss_primary_ev,
+        "catalyst_bearish_conflict":     rss_bearish_ev,
+        "catalyst_model_version":        _PROMOTED_VERSION,
+    }
+
+    # Merge promoted fields with full V2 shadow fields (catalyst_v2_*)
+    return {**promoted_fields, **full_v2_result}
+
+
+def _v2_event_to_v1_shape(ev: Optional[dict], source: str) -> Optional[dict]:
+    """
+    Convert a V2 event dict to the V1 primary_catalyst shape for legacy consumers.
+    Returns None if ev is None.
+    """
+    if not ev:
+        return None
+    return {
+        "type":        (ev.get("event_reason") or ev.get("event_type") or "RSS_V2").upper(),
+        "date":        (ev.get("catalyst_date") or ev.get("published_at") or "")[:10],
+        "description": ev.get("title") or ev.get("event_type") or "",
+        "score":       round((ev.get("materiality_score") or 0) * 100.0, 1),
+        "url":         ev.get("url"),
+        "source":      source,
+        "event_type":  ev.get("event_type"),
+        "direction":   ev.get("direction"),
+    }
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def get_catalyst_alignment_bulk(symbols: list[str]) -> dict[str, dict]:
@@ -874,13 +1065,20 @@ def get_catalyst_alignment_bulk(symbols: list[str]) -> dict[str, dict]:
         2. query_recent_articles_for_scoring() — articles for all active syms (1 query)
 
     Returns {SYMBOL: {
-        # ── V1 fields (unchanged) ──────────────────────────────────────────
+        # ── Promoted legacy fields (now driven by V2.1-promoted scorer) ────
         catalyst_alignment_score:      float | None (0-100),
         catalyst_alignment_available:  bool,
-        primary_catalyst:              dict | None,
-        catalyst_events:               list[dict],
+        primary_catalyst:              dict | None,   # V2 shape or V1 shape
+        catalyst_events:               list[dict],    # V1 calendar events only
         catalyst_alignment_reason:     str,
-        # ── V2 additive shadow fields ──────────────────────────────────────
+        # ── Provenance (new in V2.1-promoted) ─────────────────────────────
+        catalyst_primary_source:       str,           # "scheduled"|"rss_v2"|"combined"|"none"
+        catalyst_primary_event:        dict | None,   # highest-confidence event object
+        catalyst_scheduled_event:      dict | None,   # best scheduled V1 event (V2 shape)
+        catalyst_rss_event:            dict | None,   # V2 RSS primary event
+        catalyst_bearish_conflict:     dict | None,   # V2 bearish event if present
+        catalyst_model_version:        str,           # "2.1-promoted"
+        # ── V2 shadow fields (unchanged) ──────────────────────────────────
         catalyst_v2_available:         bool,
         catalyst_v2_score:             float | None,
         catalyst_v2_state:             str,
@@ -912,10 +1110,11 @@ def get_catalyst_alignment_bulk(symbols: list[str]) -> dict[str, dict]:
     out: dict[str, dict] = {}
 
     for sym in syms:
-        v1_events: list[dict] = []
+        # ── 1) Earnings this week (V1 calendar) ────────────────────────────
+        earn            = earnings_map.get(sym)
+        cal_evs_for_sym = calendar_map.get(sym, [])
+        sched_events_v1: list[dict] = []
 
-        # ── 1) Earnings this week (V1) ──────────────────────────────────────
-        earn = earnings_map.get(sym)
         if earn:
             try:
                 ed       = datetime.strptime(earn["date"], "%Y-%m-%d").date()
@@ -927,15 +1126,14 @@ def get_catalyst_alignment_bulk(symbols: list[str]) -> dict[str, dict]:
                 if (days_out is not None and -1 <= days_out <= 1)
                 else _SCORE_EARNINGS_THIS_WEEK
             )
-            v1_events.append({
+            sched_events_v1.append({
                 "type":        "EARNINGS_THIS_WEEK",
                 "date":        earn["date"],
                 "description": f"Earnings report on {earn['date']}",
                 "score":       score,
             })
 
-        # ── 2) Calendar events this week (V1) ──────────────────────────────
-        cal_evs_for_sym = calendar_map.get(sym, [])
+        # ── 2) Other calendar events this week (V1 calendar) ───────────────
         for ev in cal_evs_for_sym:
             kind = ev["kind"]
             score = {
@@ -943,70 +1141,47 @@ def get_catalyst_alignment_bulk(symbols: list[str]) -> dict[str, dict]:
                 "dividend": _SCORE_DIVIDEND_THIS_WEEK,
                 "split":    _SCORE_SPLIT_THIS_WEEK,
             }[kind]
-            v1_events.append({
+            sched_events_v1.append({
                 "type":        f"{kind.upper()}_THIS_WEEK",
                 "date":        ev["date"],
                 "description": f"{kind.capitalize()} calendar event on {ev['date']}",
                 "score":       score,
             })
 
-        # ── 3) Articles — from bulk pre-fetch (V2.1 performance fix) ────────
-        #
-        # raw_articles is retrieved from the bulk dict (no per-symbol query).
-        # V1 only triggers on articles_48h > 0 (existing behavior preserved).
-        # V2 also considers previous_articles_48h (48–96h window).
+        # ── 3) Articles — from bulk pre-fetch (2 total Neon queries) ────────
         counts        = news_counts.get(sym) or {}
         articles_48h  = int(counts.get("articles_48h")          or 0)
         prev_articles = int(counts.get("previous_articles_48h") or 0)
-        has_recent    = articles_48h > 0
-        has_any       = has_recent or (prev_articles > 0)
-
+        has_any       = articles_48h > 0 or prev_articles > 0
         raw_articles: list[dict] = bulk_articles.get(sym, []) if has_any else []
 
-        # ── 4) V1 material news (unchanged regex-based classifier) ──────────
-        if has_recent and raw_articles:
-            news_hit = _classify_news_titles(raw_articles)
-            if news_hit:
-                cat, score, art = news_hit
-                v1_events.append({
-                    "type":        cat,
-                    "date":        (art.get("published_at") or "")[:10],
-                    "description": art.get("title") or cat,
-                    "score":       score,
-                    "url":         art.get("url"),
-                })
-
-        # ── 5) V1 result (fields and logic unchanged) ───────────────────────
-        if not v1_events:
-            v1_result: dict[str, Any] = {
-                "catalyst_alignment_score":     None,
-                "catalyst_alignment_available": False,
-                "primary_catalyst":             None,
-                "catalyst_events":              [],
-                "catalyst_alignment_reason":    "CATALYST_UNAVAILABLE_NO_EVENTS",
-            }
-        else:
-            v1_events.sort(key=lambda e: -e["score"])
-            primary = v1_events[0]
-            v1_result = {
-                "catalyst_alignment_score":     round(primary["score"], 1),
-                "catalyst_alignment_available": True,
-                "primary_catalyst":             primary,
-                "catalyst_events":              v1_events[:5],
-                "catalyst_alignment_reason":    "CATALYST_EVENT_DETECTED",
-            }
-
-        # ── 6) V2 pipeline (additive — zero effect on V1 fields) ────────────
+        # ── 4) V2 RSS pipeline ───────────────────────────────────────────────
         #
-        # Build company aliases once per sym (no I/O — pure dict lookup).
-        # Calls services.news_signal_scorer.score_article() (pure Python, no I/O).
-        # Does not change THEME_ALIGNMENT weights.
+        # Runs news_signal_scorer.score_article() (pure Python, no I/O).
+        # relevance gate now requires bullish rel >= 0.50 (floor raised at promotion).
+        # DOES NOT change THEME_ALIGNMENT weights.
         company_frags = _build_company_frags(sym)
         v2_rss_events = _build_v2_events_from_articles(sym, raw_articles, company_frags)
-        v2_cal_events = _calendar_events_to_v2(sym, earn, cal_evs_for_sym)
-        v2_result     = _compute_v2_from_events(v2_rss_events, v2_cal_events)
 
-        out[sym] = {**v1_result, **v2_result}
+        # RSS-only V2 result (no calendar) — used as rss_score in promoted scorer.
+        v2_rss_result = _compute_v2_from_events(v2_rss_events, [])
+
+        # Full V2 result (RSS + calendar) — preserved in catalyst_v2_* shadow fields.
+        v2_cal_events = _calendar_events_to_v2(sym, earn, cal_evs_for_sym)
+        full_v2_result = _compute_v2_from_events(v2_rss_events, v2_cal_events)
+
+        # ── 5) Promoted scorer — combines scheduled V1 + V2 RSS ─────────────
+        #
+        # Replaces the legacy V1 RSS regex as the primary news source.
+        # Updates catalyst_alignment_score, catalyst_alignment_available,
+        # primary_catalyst, catalyst_events, catalyst_alignment_reason.
+        # Adds provenance fields (catalyst_primary_source, etc.).
+        # Merges full V2 shadow fields (catalyst_v2_*) unchanged.
+        out[sym] = _compute_promoted_score(
+            sched_events_v1 = sched_events_v1,
+            v2_rss_result   = v2_rss_result,
+            full_v2_result  = full_v2_result,
+        )
 
     return out
 
