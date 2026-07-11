@@ -1115,6 +1115,12 @@ def _compute_theme_alignment(
         "catalyst_alignment_available":  catalyst_available,
         "primary_catalyst":              catalyst_result.get("primary_catalyst"),
         "catalyst_events":               catalyst_result.get("catalyst_events") or [],
+        # ── V2 additive shadow fields (do not affect any scoring) ─────────
+        "catalyst_v2_available":         bool(catalyst_result.get("catalyst_v2_available")),
+        "catalyst_v2_score":             catalyst_result.get("catalyst_v2_score"),
+        "catalyst_v2_state":             catalyst_result.get("catalyst_v2_state") or "UNAVAILABLE",
+        "catalyst_v2_primary_event":     catalyst_result.get("catalyst_v2_primary_event"),
+        "catalyst_v2_conflicts":         catalyst_result.get("catalyst_v2_conflicts") or [],
     }
 
 
@@ -1164,6 +1170,12 @@ def _theme_alignment_unavailable(
         "catalyst_alignment_available":  catalyst_available,
         "primary_catalyst":              catalyst_result.get("primary_catalyst"),
         "catalyst_events":               catalyst_result.get("catalyst_events") or [],
+        # ── V2 additive shadow fields (do not affect any scoring) ─────────
+        "catalyst_v2_available":         bool(catalyst_result.get("catalyst_v2_available")),
+        "catalyst_v2_score":             catalyst_result.get("catalyst_v2_score"),
+        "catalyst_v2_state":             catalyst_result.get("catalyst_v2_state") or "UNAVAILABLE",
+        "catalyst_v2_primary_event":     catalyst_result.get("catalyst_v2_primary_event"),
+        "catalyst_v2_conflicts":         catalyst_result.get("catalyst_v2_conflicts") or [],
     }
 
 
