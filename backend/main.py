@@ -959,15 +959,21 @@ async def lifespan(app):
             _RETAINED_LOCK,
             _start_background_rebuild,
         )
+        # _start_background_rebuild() now owns the full atomic state transition:
+        # it clears _RETAINED_BUILD_DONE and sets build_in_progress=True under
+        # _RETAINED_LOCK in a single acquisition — eliminating the race window
+        # where build_in_progress=True was visible while the event was still set.
+        # No manual state manipulation here.
         with _RETAINED_LOCK:
-            _already = _RETAINED["build_in_progress"] or _RETAINED["snapshot"] is not None
-            if not _already:
-                _RETAINED["build_in_progress"] = True
-        if not _already:
-            print("[STARTUP] Kicking off background Confluence retained snapshot warm")
-            _start_background_rebuild()
+            _have_snap = _RETAINED["snapshot"] is not None
+        if not _have_snap:
+            started = _start_background_rebuild()
+            if started:
+                print("[STARTUP] Kicking off background Confluence retained snapshot warm")
+            else:
+                print("[STARTUP] Confluence warm skipped (build already in progress)")
         else:
-            print("[STARTUP] Confluence warm skipped (snapshot already present or build in progress)")
+            print("[STARTUP] Confluence warm skipped (snapshot already present)")
     except Exception as _conf_err:
         print(f"[STARTUP] Confluence retained warm error (non-fatal): {_conf_err}")
     try:

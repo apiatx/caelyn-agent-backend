@@ -2023,11 +2023,29 @@ def _retained_is_stale(
     return True, reasons
 
 
-def _start_background_rebuild() -> None:
-    # Clear the completion event BEFORE spawning the thread so any concurrent
-    # caller that already observed build_in_progress=True will block in
-    # _RETAINED_BUILD_DONE.wait() rather than returning from a stale set state.
-    _RETAINED_BUILD_DONE.clear()
+def _start_background_rebuild() -> bool:
+    """
+    Atomically claim the builder slot then spawn the rebuild thread.
+
+    Returns True  — a new build was started.
+    Returns False — a build is already in progress; caller must not start another.
+
+    INVARIANT ENFORCED:
+      _RETAINED_BUILD_DONE.clear() and _RETAINED["build_in_progress"] = True
+      happen under the same _RETAINED_LOCK acquisition.  No external observer can
+      ever see (build_in_progress=True AND event=set) — that impossible state is
+      permanently eliminated.
+
+    The background thread only *sets* the event (in finally) — it never clears it.
+    """
+    with _RETAINED_LOCK:
+        if _RETAINED["build_in_progress"]:
+            return False
+        # Atomic: clear event then mark in-progress, both under the lock.
+        # Any waiter that subsequently reads build_in_progress=True is guaranteed
+        # to find the event already cleared and will block on wait().
+        _RETAINED_BUILD_DONE.clear()
+        _RETAINED["build_in_progress"] = True
 
     def _rebuild() -> None:
         try:
@@ -2044,9 +2062,11 @@ def _start_background_rebuild() -> None:
                 _RETAINED["build_in_progress"] = False
         finally:
             # Always unblock waiters whether the build succeeded or failed.
+            # Never clear the event here — that is the caller's job under the lock.
             _RETAINED_BUILD_DONE.set()
 
     threading.Thread(target=_rebuild, daemon=True, name="confluence-retained-rebuild").start()
+    return True
 
 
 def get_retained_confluence_snapshot() -> dict:
@@ -2082,8 +2102,11 @@ def get_retained_confluence_snapshot() -> dict:
                 return _RETAINED["snapshot"]
             already_building = _RETAINED["build_in_progress"]
             if not already_building:
+                # Spec-correct ordering: clear event BEFORE setting flag,
+                # both under the same lock so no observer can see the
+                # impossible state (build_in_progress=True, event=set).
+                _RETAINED_BUILD_DONE.clear()
                 _RETAINED["build_in_progress"] = True
-                _RETAINED_BUILD_DONE.clear()         # claim slot, signal in-progress
 
         if already_building:
             # Single-flight wait — do NOT call build_confluence_snapshot() again.
@@ -2130,17 +2153,14 @@ def get_retained_confluence_snapshot() -> dict:
     stale, reasons = _retained_is_stale(current_fp)
 
     if stale:
-        with _RETAINED_LOCK:
-            already_building = _RETAINED["build_in_progress"]
-            if not already_building:
-                _RETAINED["build_in_progress"] = True
+        # _start_background_rebuild() atomically clears the event and sets
+        # build_in_progress under _RETAINED_LOCK — no separate state manipulation
+        # needed here (which was the source of the race window).
+        started = _start_background_rebuild()
+        if started:
+            with _RETAINED_LOCK:
                 _RETAINED["stale_reasons"] = reasons
-                should_start = True
-            else:
-                should_start = False
-        if should_start:
             print(f"[CONFLUENCE_RETAINED] stale — reasons={reasons} — starting background rebuild")
-            _start_background_rebuild()
 
     with _RETAINED_LOCK:
         return _RETAINED["snapshot"]

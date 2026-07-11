@@ -1,0 +1,427 @@
+FIX THE FINAL CONFLUENCE STARTUP-WARM RACE — IMPLEMENT, VALIDATE, STOP
+
+Work only in the backend Replit project.
+
+This is an implementation task, not another broad audit.
+
+Do not touch Catalyst.
+
+Do not touch frontend.
+
+Do not touch scoring models.
+
+Do not modify:
+
+THEME_ALIGNMENT
+
+ELITE_ASSET_REBOUND scoring
+
+Investment Alignment
+
+Actionability state logic
+
+Entry scoring
+
+Options Alignment
+
+Theme semantics
+
+Social Bonus
+
+No provider calls.
+
+No new scheduler.
+
+No new producer.
+
+No new database table.
+
+The only target is the retained Confluence snapshot concurrency bug.
+
+==================================================
+THE BUG
+=======
+
+Current retained Confluence state uses:
+
+_RETAINED["snapshot"]
+
+_RETAINED["build_in_progress"]
+
+_RETAINED_BUILD_DONE
+
+The report showed:
+
+_RETAINED_BUILD_DONE is initialized set.
+
+_start_background_rebuild() clears _RETAINED_BUILD_DONE inside the background thread.
+
+Startup warm sets build_in_progress=True and starts the thread.
+
+That creates a race window:
+
+snapshot is None
+
+build_in_progress is True
+
+_RETAINED_BUILD_DONE is still set
+
+If a request enters get_retained_confluence_snapshot() during that window:
+
+already_building=True
+
+_RETAINED_BUILD_DONE.wait() returns immediately because the event is still set
+
+snapshot is still None
+
+the request can take the wrong path
+
+This state must be impossible:
+
+snapshot is None
+
+build_in_progress is True
+
+_RETAINED_BUILD_DONE.is_set() is True
+
+==================================================
+REQUIRED FIX
+============
+
+Centralize retained build start state transition.
+
+There must be exactly one safe way to start a retained Confluence build.
+
+Implement a helper in backend/services/confluence_v2_service.py.
+
+Conceptually:
+
+def _mark_retained_build_started_locked():
+# caller holds _RETAINED_LOCK
+if _RETAINED["build_in_progress"]:
+return False
+_RETAINED_BUILD_DONE.clear()
+_RETAINED["build_in_progress"] = True
+return True
+
+Or equivalent.
+
+The important invariant:
+
+_RETAINED_BUILD_DONE.clear()
+
+must happen under the same lock/critical path before build_in_progress=True becomes observable to any waiter.
+
+Do not clear _RETAINED_BUILD_DONE for the first time inside the background thread.
+
+The thread may still set it in finally.
+
+The correct ordering is:
+
+with _RETAINED_LOCK:
+if build already running:
+do not start another
+_RETAINED_BUILD_DONE.clear()
+_RETAINED["build_in_progress"] = True
+
+start thread after releasing lock
+
+Background thread:
+
+try:
+snap = build_confluence_snapshot()
+fp = _compute_source_fingerprint()
+with _RETAINED_LOCK:
+_RETAINED["snapshot"] = snap
+_RETAINED["built_at"] = _now_iso()
+_RETAINED["source_fingerprint"] = fp
+_RETAINED["build_in_progress"] = False
+except:
+with _RETAINED_LOCK:
+_RETAINED["build_in_progress"] = False
+raise
+finally:
+_RETAINED_BUILD_DONE.set()
+
+Also fix the synchronous cold-build path to use the same ordering:
+
+before build_confluence_snapshot():
+
+with _RETAINED_LOCK:
+_RETAINED_BUILD_DONE.clear()
+_RETAINED["build_in_progress"] = True
+
+after success/failure:
+
+_RETAINED_BUILD_DONE.set()
+
+Do not allow any code path to set build_in_progress=True while the event remains set.
+
+==================================================
+STARTUP WARM CALLER
+===================
+
+Fix startup warm so it does not manually set build_in_progress separately from event clearing.
+
+There should not be scattered code like:
+
+with _RETAINED_LOCK:
+_RETAINED["build_in_progress"] = True
+_start_background_rebuild()
+
+Replace that with the centralized safe starter.
+
+Example acceptable behavior:
+
+_start_background_rebuild()
+
+internally:
+
+with _RETAINED_LOCK:
+if build_in_progress:
+return False
+_RETAINED_BUILD_DONE.clear()
+_RETAINED["build_in_progress"] = True
+
+then starts the background thread.
+
+Return True/False for whether a build was started.
+
+Startup warm should call this helper and log whether it started or was already in progress.
+
+==================================================
+WAITER BEHAVIOR
+===============
+
+In get_retained_confluence_snapshot():
+
+If snapshot is None and build_in_progress=True:
+
+do NOT start a new build.
+
+do NOT return immediately.
+
+do NOT raise unless the existing build fails and no retry can be safely elected.
+
+Wait on _RETAINED_BUILD_DONE.
+
+Because route handlers already call this through asyncio.to_thread(), waiting is allowed here.
+
+After wait returns:
+
+with _RETAINED_LOCK:
+if _RETAINED["snapshot"] is not None:
+return _RETAINED["snapshot"]
+
+If snapshot is still None, the build failed.
+
+Elect exactly one retry builder using the same centralized safe starter semantics.
+
+Multiple waiters must not all retry.
+
+==================================================
+VALIDATION — MUST RUN
+=====================
+
+Run these exact validations.
+
+1. Race-state impossibility test
+
+Force in memory:
+
+snapshot = None
+
+_RETAINED_BUILD_DONE.set()
+
+Then call the real startup/background build starter.
+
+Immediately, before the background thread has time to run build_confluence_snapshot(), assert under lock:
+
+snapshot is None
+
+build_in_progress is True
+
+_RETAINED_BUILD_DONE.is_set() is False
+
+This is the core acceptance test.
+
+2. Waiter immediate-return test
+
+Force the exact dangerous old state if possible:
+
+snapshot = None
+
+build_in_progress = True
+
+_RETAINED_BUILD_DONE initially set
+
+Then invoke the corrected starter/path.
+
+Prove the event is cleared before any waiter observes build_in_progress=True.
+
+Start a waiter.
+
+Prove it does not immediately return with snapshot=None.
+
+3. Concurrent waiter test
+
+Start one simulated long build.
+
+Send 5 waiters into get_retained_confluence_snapshot().
+
+Expected:
+
+build_confluence_snapshot invocation count = 1
+
+all 5 waiters receive the same retained snapshot
+
+no waiter returns None
+
+no duplicate build starts
+
+4. Failure path
+
+Make the single build fail once.
+
+Expected:
+
+_RETAINED_BUILD_DONE.set() happens in finally
+
+build_in_progress=False
+
+waiters unblock
+
+no deadlock
+
+only one retry builder is elected
+
+no thundering herd
+
+5. Real HTTP startup-warm test
+
+Restart the workflow.
+
+While startup warm is running and before retained snapshot exists, issue:
+
+GET /api/watchlist/{current_watchlist_id}/alignment
+
+GET /api/alpha/confluence?limit=5
+
+Expected:
+
+no duplicate build
+
+event loop remains responsive
+
+Gunicorn worker not killed
+
+requests complete after the one warm build finishes
+
+unrelated cached endpoint responds during warm
+
+6. Regression
+
+Confirm:
+
+/api/alpha/confluence?limit=5 returns 200
+
+/api/watchlist/{id}/alignment returns 200
+
+entry version normalization still works
+
+same-generation entry fields still work
+
+stale reasons still work
+
+zero scoring formula changes
+
+zero provider calls
+
+==================================================
+REPORT FORMAT
+=============
+
+Return:
+
+FINAL CONFLUENCE RACE FIX REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT BUG:
+[one paragraph]
+
+STATE INVARIANT ENFORCED:
+snapshot None + build_in_progress True + event set is impossible: YES/NO
+
+CENTRALIZED BUILD STARTER:
+[path/function]
+
+STARTUP WARM BEFORE:
+[old behavior]
+
+STARTUP WARM AFTER:
+[new behavior]
+
+WAITER BEHAVIOR:
+[exact behavior]
+
+DUPLICATE BUILD PREVENTION:
+[validation]
+
+FAILURE PATH:
+[validation]
+
+REAL HTTP STARTUP-WARM TEST:
+[status/latency/result]
+
+GUNICORN WORKER KILL RISK:
+[removed YES/NO]
+
+EVENT LOOP RESPONSIVENESS:
+[validation]
+
+REGRESSION:
+[results]
+
+COST:
+[0 provider calls, 0 scoring changes]
+
+End exactly:
+
+FINAL CONFLUENCE RACE FIX VERDICT
+
+IMPOSSIBLE STATE ELIMINATED:
+[YES / NO]
+
+DUPLICATE COLD BUILDS ELIMINATED:
+[YES / NO]
+
+WAITERS SAFE:
+[YES / NO]
+
+FAILURE PATH SAFE:
+[YES / NO]
+
+REAL HTTP STARTUP WARM SAFE:
+[YES / NO]
+
+SCORING MODELS CHANGED:
+[NO expected]
+
+INCREMENTAL PROVIDER CALLS:
+[0 expected]
+
+READY FOR CATALYST ALIGNMENT V2:
+[YES / NO]
+
+NEXT IMPLEMENTATION:
+CATALYST ALIGNMENT V2
+
+Do not do another broad audit.
+
+Fix the race.
+
+Validate the race.
+
+Stop.
