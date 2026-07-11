@@ -1,0 +1,493 @@
+THEME POLICY CATALYST V1 — GOVERNMENT / TRUMP / FEDERAL STRATEGIC INVESTMENT THEME BOOST
+
+Backend only.
+
+Do not touch frontend.
+
+Do not change Trade Alignment weights yet.
+
+Do not modify Entry, Options, Investment Alignment, Actionability, Elite Rebound, Theme Alignment, Social Bonus, or Confluence retained concurrency.
+
+No provider calls.
+
+No new LLM calls.
+
+No FMP/Tradier calls.
+
+Use only existing cached/persisted news/RSS/calendar/policy data already available in the app.
+
+Goal:
+
+Add a deterministic Theme Policy Catalyst layer that detects government / Trump / White House / federal strategic investment and industrial-policy announcements that can lift an entire theme, not just one ticker.
+
+This is separate from ticker-specific Catalyst V2.
+
+Ticker Catalyst V2 answers:
+
+“Did something happen for this company?”
+
+Theme Policy Catalyst answers:
+
+“Did something happen that should boost this entire theme or industry?”
+
+Examples:
+
+rare earths / critical minerals strategic investment
+quantum strategic investment
+government support for AI infrastructure
+national-security industrial policy
+defense procurement theme
+gold/silver reserve accumulation
+tariffs/export controls favoring domestic suppliers
+DOE/DoD/CHIPS/IRA/FAA/FCC/CMS policy tailwinds
+sovereign AI / data center / grid / nuclear policy support
+
+==================================================
+PART 0 — READ CURRENT SOURCES
+==================================================
+
+Read:
+
+backend/services/catalyst_alignment.py
+backend/services/news_signal_scorer.py
+backend/services/watchlist_rss_sweeper.py
+backend/services/rss_article_archive.py
+backend/services/theme_resolver.py
+backend/services/theme_merge_layer.py
+backend/services/confluence_v2_service.py
+
+Find existing theme identity fields available during Confluence:
+
+primary_theme
+additional theme memberships if already available
+sector
+industry
+company profile / description if already cached
+watchlist category / theme mapping
+
+Do not call providers for missing context.
+
+==================================================
+PART 1 — DEFINE NEW EVENT TYPE
+==================================================
+
+Add a new additive catalyst type:
+
+theme_policy_catalyst
+
+or equivalent.
+
+It should detect policy/government headlines that are not necessarily about one ticker but clearly affect a theme.
+
+Required event fields:
+
+policy_event_id
+policy_event_type
+policy_theme
+policy_theme_confidence
+policy_direction
+policy_materiality_score
+policy_source
+policy_title
+policy_published_at
+policy_keywords
+affected_themes
+affected_tickers
+reason_codes
+
+Examples of policy_event_type:
+
+government_strategic_investment
+federal_procurement_push
+national_security_priority
+critical_minerals_policy
+quantum_policy_tailwind
+ai_infrastructure_policy
+energy_grid_policy
+nuclear_policy
+defense_policy
+tariff_policy
+export_control_policy
+reserve_accumulation
+regulatory_tailwind
+regulatory_headwind
+
+==================================================
+PART 2 — DETECTION RULES
+==================================================
+
+Use deterministic headline/title/summary classification.
+
+Policy source phrases:
+
+Trump
+White House
+administration
+federal government
+U.S. government
+Department of Energy
+DOE
+Department of Defense
+DoD
+Pentagon
+Commerce Department
+Treasury
+NASA
+FAA
+FCC
+CMS
+CHIPS Act
+IRA
+strategic reserve
+national security
+critical minerals
+strategic investment
+government stake
+equity stake
+loan guarantee
+grant
+funding
+subsidy
+procurement
+contracting push
+executive order
+tariff
+export restriction
+ban
+stockpile
+reserve accumulation
+
+Theme phrases:
+
+rare earths
+critical minerals
+uranium
+nuclear
+quantum
+AI infrastructure
+data centers
+power grid
+grid modernization
+natural gas
+copper
+gold
+silver
+defense drones
+space
+semiconductors
+chips
+photonics
+battery materials
+domestic manufacturing
+reshoring
+shipbuilding
+robotics
+autonomy
+
+Classify direction:
+
+bullish:
+strategic investment
+government funding
+procurement expansion
+reserve accumulation
+tariff protects domestic producers
+export controls favor domestic supply
+loan guarantee
+grant
+government stake
+national priority designation
+
+bearish:
+funding cut
+contract cancellation
+export ban hurting suppliers
+regulatory crackdown
+tariff hurting input costs
+investigation/enforcement against theme
+
+ambiguous:
+speech/commentary without capital/procurement/policy mechanism
+
+==================================================
+PART 3 — THEME MAPPING
+==================================================
+
+Map policy events to existing app themes.
+
+Do not create a separate theme taxonomy.
+
+Use the existing canonical theme names from the app.
+
+Examples:
+
+rare earths / critical minerals / magnets
+→ Rare Earths / Critical Minerals / Defense Materials theme if exists
+
+quantum / quantum computing / quantum security
+→ Quantum theme
+
+AI infrastructure / data centers / sovereign AI / servers
+→ AI Infrastructure / Data Centers / Semiconductors / Power Grid depending on existing themes
+
+gold / silver / reserves
+→ Precious Metals / Metals & Miners theme
+
+nuclear / uranium / SMR / DOE nuclear
+→ Nuclear / Uranium / Energy Infrastructure theme
+
+drones / unmanned / defense autonomy
+→ Drones / Defense Tech theme
+
+If exact theme does not exist:
+map to closest existing theme.
+
+Report all mappings.
+
+==================================================
+PART 4 — APPLY TO TICKERS
+==================================================
+
+For each ticker, calculate theme_policy_boost only if:
+
+ticker primary_theme matches affected theme
+
+or ticker additional theme membership matches affected theme
+
+or ticker industry/description strongly matches affected theme
+
+Do not boost unrelated tickers.
+
+Boost should depend on theme fit:
+
+primary theme exact match:
+full boost
+
+additional theme match:
+partial boost
+
+sector/industry-only weak match:
+small boost
+
+Suggested cap:
+
+theme_policy_boost max +15 to Catalyst score
+
+or expose separately first as shadow field:
+
+theme_policy_boost_score
+theme_policy_event
+theme_policy_relevance
+
+Do not let theme policy alone create a BUY.
+
+It should improve Catalyst Alignment / Trade Alignment, but Stage/Options/Theme/Entry still matter.
+
+==================================================
+PART 5 — SCORING
+==================================================
+
+Keep ticker-specific Catalyst V2 intact.
+
+Compute:
+
+ticker_catalyst_score = existing promoted Catalyst score
+
+theme_policy_score = 0–100 internal
+
+ticker_theme_relevance = 0.0–1.0
+
+theme_policy_boost = min(15, theme_policy_score * ticker_theme_relevance * 0.15)
+
+combined_catalyst_score =
+clamp(ticker_catalyst_score + theme_policy_boost - bearish_penalty, 0, 100)
+
+If no ticker catalyst exists but theme_policy_boost exists:
+
+combined_catalyst_score should become available only if boost is meaningful, e.g. >= 8.
+
+But mark primary_source = "theme_policy", not "rss_v2".
+
+Do not hide that it is theme-level, not company-specific.
+
+==================================================
+PART 6 — OUTPUT FIELDS
+==================================================
+
+Add fields additively:
+
+theme_policy_available
+theme_policy_score
+theme_policy_boost
+theme_policy_event
+theme_policy_source
+theme_policy_theme
+theme_policy_relevance
+theme_policy_reason_codes
+
+In promoted catalyst provenance:
+
+catalyst_primary_source may be:
+
+rss_v2
+scheduled
+combined
+theme_policy
+rss_v2_plus_theme_policy
+scheduled_plus_theme_policy
+
+Do not remove existing fields.
+
+==================================================
+PART 7 — VALIDATION
+==================================================
+
+Run over the current Watchlist universe.
+
+Return:
+
+policy events detected in recent archive
+affected themes
+affected tickers
+top boosted tickers
+boost amount
+combined catalyst score before/after
+primary source before/after
+
+Specifically search recent cached headlines for policy/theme examples:
+
+Trump
+White House
+government
+strategic investment
+rare earths
+critical minerals
+quantum
+gold
+silver
+reserve
+DOE
+DoD
+Pentagon
+CHIPS
+tariff
+export controls
+nuclear
+data center
+AI infrastructure
+
+Do not fabricate if no recent examples exist.
+
+Return examples found and examples not found.
+
+==================================================
+PART 8 — SAFETY CHECKS
+==================================================
+
+Do not treat every political mention as bullish.
+
+Reject:
+
+generic political commentary
+election commentary
+opinion pieces with no capital/procurement/policy mechanism
+broad macro articles that do not map to a specific theme
+articles where Trump/government is mentioned but no investable theme is clear
+
+Require:
+
+policy actor
++
+policy mechanism
++
+theme mapping
+
+for full boost.
+
+==================================================
+PART 9 — COST / REGRESSION
+==================================================
+
+Prove:
+
+0 provider calls
+0 FMP
+0 Tradier
+0 LLM
+0 new table
+0 frontend changes
+existing ticker Catalyst V2 still works
+existing scheduled catalyst still works
+Trade Alignment weights unchanged
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+THEME POLICY CATALYST V1 REPORT
+
+FILES CHANGED:
+[list]
+
+POLICY EVENT DETECTOR:
+[summary]
+
+THEME MAPPING:
+[summary/table]
+
+SCORING:
+[summary]
+
+OUTPUT FIELDS:
+[list]
+
+POLICY EVENTS FOUND:
+[table]
+
+AFFECTED THEMES:
+[table]
+
+TOP BOOSTED TICKERS:
+[table]
+
+BEFORE/AFTER CATALYST SCORES:
+[table]
+
+FALSE POSITIVE FILTERS:
+[summary]
+
+COST PROOF:
+[0 provider calls]
+
+PROMOTION STATUS:
+[shadow/additive or active]
+
+End exactly:
+
+THEME POLICY CATALYST VERDICT
+
+ZERO PROVIDER CALLS:
+[YES/NO]
+
+POLICY ACTOR REQUIRED:
+[YES/NO]
+
+POLICY MECHANISM REQUIRED:
+[YES/NO]
+
+THEME MAPPING REQUIRED:
+[YES/NO]
+
+THEME BOOST CAPPED:
+[YES/NO]
+
+TICKER-SPECIFIC CATALYST PRESERVED:
+[YES/NO]
+
+TRADE ALIGNMENT WEIGHTS UNCHANGED:
+[YES/NO]
+
+READY FOR FRONTEND DISPLAY:
+[YES/NO]

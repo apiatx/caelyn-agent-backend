@@ -1071,7 +1071,10 @@ def _v2_event_to_v1_shape(ev: Optional[dict], source: str) -> Optional[dict]:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def get_catalyst_alignment_bulk(symbols: list[str]) -> dict[str, dict]:
+def get_catalyst_alignment_bulk(
+    symbols: list[str],
+    ticker_theme_idx: Optional[dict[str, list[str]]] = None,
+) -> dict[str, dict]:
     """
     Compute the clean Catalyst Alignment result for every symbol in `symbols`.
     Zero provider calls (all sources are pre-persisted caches).
@@ -1121,6 +1124,15 @@ def get_catalyst_alignment_bulk(symbols: list[str]) -> dict[str, dict]:
         or int((news_counts.get(s) or {}).get("previous_articles_48h", 0) or 0) > 0
     ]
     bulk_articles: dict[str, list[dict]] = _load_articles_bulk(active_syms) if active_syms else {}
+
+    # ── Theme Policy Catalyst V1 — one cross-ticker pass over ALL cached articles
+    # looking for government/strategic investment signals. Zero provider calls.
+    _policy_events: list = []
+    try:
+        from services.theme_policy_catalyst import detect_policy_events as _detect_pol
+        _policy_events = _detect_pol(bulk_articles) if bulk_articles else []
+    except Exception:
+        _policy_events = []
 
     today = _et_today()
     out: dict[str, dict] = {}
@@ -1199,6 +1211,52 @@ def get_catalyst_alignment_bulk(symbols: list[str]) -> dict[str, dict]:
             full_v2_result  = full_v2_result,
         )
 
+        # ── 6) Theme Policy Catalyst V1 (additive shadow layer) ─────────────
+        # Detects government/Trump/federal strategic investment signals that
+        # affect entire themes, not just one ticker. No provider calls.
+        try:
+            from services.theme_policy_catalyst import (
+                compute_theme_policy_fields as _ctp,
+            )
+            _sym_themes = list((ticker_theme_idx or {}).get(sym, []))
+            _tp = _ctp(
+                sym           = sym,
+                sym_theme_ids = _sym_themes,
+                policy_events = _policy_events,
+            )
+        except Exception:
+            _tp = {
+                "theme_policy_available":    False,
+                "theme_policy_score":        None,
+                "theme_policy_boost":        0.0,
+                "theme_policy_event":        None,
+                "theme_policy_source":       None,
+                "theme_policy_theme":        None,
+                "theme_policy_relevance":    0.0,
+                "theme_policy_reason_codes": ["THEME_POLICY_INIT_ERROR"],
+            }
+        out[sym].update(_tp)
+
+        # Apply boost in-place to existing catalyst_alignment_score
+        _boost = float(_tp.get("theme_policy_boost") or 0.0)
+        if _boost > 0.0:
+            _curr = out[sym].get("catalyst_alignment_score")
+            if _curr is not None:
+                _new = round(min(100.0, _curr + _boost), 1)
+                out[sym]["catalyst_alignment_score"]     = _new
+                out[sym]["catalyst_alignment_available"] = _new >= _V2_AVAIL_THRESHOLD
+                _src = out[sym].get("catalyst_primary_source", "none")
+                if _src == "rss_v2":
+                    out[sym]["catalyst_primary_source"] = "rss_v2_plus_theme_policy"
+                elif _src == "scheduled":
+                    out[sym]["catalyst_primary_source"] = "scheduled_plus_theme_policy"
+                # "combined" / "none" left as-is at the promoted layer
+            elif _boost >= 8.0:
+                # No existing ticker catalyst — theme policy alone meets the threshold
+                out[sym]["catalyst_alignment_score"]     = round(_boost, 1)
+                out[sym]["catalyst_alignment_available"] = True
+                out[sym]["catalyst_primary_source"]      = "theme_policy"
+
     return out
 
 
@@ -1211,4 +1269,12 @@ def get_catalyst_alignment_for_ticker(symbol: str) -> dict:
         "catalyst_events":               [],
         "catalyst_alignment_reason":     "CATALYST_UNAVAILABLE_NO_EVENTS",
         **_V2_EMPTY,
+        "theme_policy_available":        False,
+        "theme_policy_score":            None,
+        "theme_policy_boost":            0.0,
+        "theme_policy_event":            None,
+        "theme_policy_source":           None,
+        "theme_policy_theme":            None,
+        "theme_policy_relevance":        0.0,
+        "theme_policy_reason_codes":     ["THEME_POLICY_NO_MATCH"],
     }

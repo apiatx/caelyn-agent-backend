@@ -1128,6 +1128,15 @@ def _compute_theme_alignment(
         "catalyst_v2_state":             catalyst_result.get("catalyst_v2_state") or "UNAVAILABLE",
         "catalyst_v2_primary_event":     catalyst_result.get("catalyst_v2_primary_event"),
         "catalyst_v2_conflicts":         catalyst_result.get("catalyst_v2_conflicts") or [],
+        # ── Theme Policy Catalyst V1 shadow fields (zero scoring effect) ──
+        "theme_policy_available":        bool(catalyst_result.get("theme_policy_available")),
+        "theme_policy_score":            catalyst_result.get("theme_policy_score"),
+        "theme_policy_boost":            float(catalyst_result.get("theme_policy_boost") or 0.0),
+        "theme_policy_event":            catalyst_result.get("theme_policy_event"),
+        "theme_policy_source":           catalyst_result.get("theme_policy_source"),
+        "theme_policy_theme":            catalyst_result.get("theme_policy_theme"),
+        "theme_policy_relevance":        float(catalyst_result.get("theme_policy_relevance") or 0.0),
+        "theme_policy_reason_codes":     catalyst_result.get("theme_policy_reason_codes") or [],
     }
 
 
@@ -1190,6 +1199,15 @@ def _theme_alignment_unavailable(
         "catalyst_v2_state":             catalyst_result.get("catalyst_v2_state") or "UNAVAILABLE",
         "catalyst_v2_primary_event":     catalyst_result.get("catalyst_v2_primary_event"),
         "catalyst_v2_conflicts":         catalyst_result.get("catalyst_v2_conflicts") or [],
+        # ── Theme Policy Catalyst V1 shadow fields (zero scoring effect) ──
+        "theme_policy_available":        bool(catalyst_result.get("theme_policy_available")),
+        "theme_policy_score":            catalyst_result.get("theme_policy_score"),
+        "theme_policy_boost":            float(catalyst_result.get("theme_policy_boost") or 0.0),
+        "theme_policy_event":            catalyst_result.get("theme_policy_event"),
+        "theme_policy_source":           catalyst_result.get("theme_policy_source"),
+        "theme_policy_theme":            catalyst_result.get("theme_policy_theme"),
+        "theme_policy_relevance":        float(catalyst_result.get("theme_policy_relevance") or 0.0),
+        "theme_policy_reason_codes":     catalyst_result.get("theme_policy_reason_codes") or [],
     }
 
 
@@ -1584,7 +1602,7 @@ def build_confluence_snapshot(
     catalyst_align_map: dict[str, dict] = {}
     try:
         from services.catalyst_alignment import get_catalyst_alignment_bulk
-        catalyst_align_map = get_catalyst_alignment_bulk(universe)
+        catalyst_align_map = get_catalyst_alignment_bulk(universe, ticker_theme_idx=ticker_theme_idx)
     except Exception:
         catalyst_align_map = {}
 
