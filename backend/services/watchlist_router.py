@@ -4015,6 +4015,21 @@ async def get_watchlist_alignment(watchlist_id: str):
                 },
                 "theme": {"id": None},
                 "options": {"pressure_state": None},
+                "catalyst": {
+                    "available":        False,
+                    "score":            None,
+                    "model_version":    None,
+                    "primary_source":   None,
+                    "primary_event":    None,
+                    "scheduled_event":  None,
+                    "rss_event":        None,
+                    "bearish_conflict": None,
+                    "v2_available":     False,
+                    "v2_score":         None,
+                    "v2_state":         "UNAVAILABLE",
+                    "v2_primary_event": None,
+                    "v2_conflicts":     [],
+                },
             })
             continue
 
@@ -4062,6 +4077,21 @@ async def get_watchlist_alignment(watchlist_id: str):
             },
             "options": {
                 "pressure_state": row.get("options_pressure_state"),
+            },
+            "catalyst": {
+                "available":          bool(row.get("catalyst_alignment_available")),
+                "score":              row.get("catalyst_alignment_score"),
+                "model_version":      row.get("catalyst_model_version"),
+                "primary_source":     row.get("catalyst_primary_source"),
+                "primary_event":      row.get("catalyst_primary_event"),
+                "scheduled_event":    row.get("catalyst_scheduled_event"),
+                "rss_event":          row.get("catalyst_rss_event"),
+                "bearish_conflict":   row.get("catalyst_bearish_conflict"),
+                "v2_available":       bool(row.get("catalyst_v2_available")),
+                "v2_score":           row.get("catalyst_v2_score"),
+                "v2_state":           row.get("catalyst_v2_state") or "UNAVAILABLE",
+                "v2_primary_event":   row.get("catalyst_v2_primary_event"),
+                "v2_conflicts":       row.get("catalyst_v2_conflicts") or [],
             },
         })
 

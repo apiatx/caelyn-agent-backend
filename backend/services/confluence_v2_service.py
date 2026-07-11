@@ -1115,6 +1115,13 @@ def _compute_theme_alignment(
         "catalyst_alignment_available":  catalyst_available,
         "primary_catalyst":              catalyst_result.get("primary_catalyst"),
         "catalyst_events":               catalyst_result.get("catalyst_events") or [],
+        # ── V2.1-promoted provenance fields (display/explainability only) ─
+        "catalyst_model_version":        catalyst_result.get("catalyst_model_version"),
+        "catalyst_primary_source":       catalyst_result.get("catalyst_primary_source"),
+        "catalyst_primary_event":        catalyst_result.get("catalyst_primary_event"),
+        "catalyst_scheduled_event":      catalyst_result.get("catalyst_scheduled_event"),
+        "catalyst_rss_event":            catalyst_result.get("catalyst_rss_event"),
+        "catalyst_bearish_conflict":     catalyst_result.get("catalyst_bearish_conflict"),
         # ── V2 additive shadow fields (do not affect any scoring) ─────────
         "catalyst_v2_available":         bool(catalyst_result.get("catalyst_v2_available")),
         "catalyst_v2_score":             catalyst_result.get("catalyst_v2_score"),
@@ -1170,6 +1177,13 @@ def _theme_alignment_unavailable(
         "catalyst_alignment_available":  catalyst_available,
         "primary_catalyst":              catalyst_result.get("primary_catalyst"),
         "catalyst_events":               catalyst_result.get("catalyst_events") or [],
+        # ── V2.1-promoted provenance fields (display/explainability only) ─
+        "catalyst_model_version":        catalyst_result.get("catalyst_model_version"),
+        "catalyst_primary_source":       catalyst_result.get("catalyst_primary_source"),
+        "catalyst_primary_event":        catalyst_result.get("catalyst_primary_event"),
+        "catalyst_scheduled_event":      catalyst_result.get("catalyst_scheduled_event"),
+        "catalyst_rss_event":            catalyst_result.get("catalyst_rss_event"),
+        "catalyst_bearish_conflict":     catalyst_result.get("catalyst_bearish_conflict"),
         # ── V2 additive shadow fields (do not affect any scoring) ─────────
         "catalyst_v2_available":         bool(catalyst_result.get("catalyst_v2_available")),
         "catalyst_v2_score":             catalyst_result.get("catalyst_v2_score"),
