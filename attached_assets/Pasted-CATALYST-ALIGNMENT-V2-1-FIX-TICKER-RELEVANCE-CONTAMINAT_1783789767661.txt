@@ -1,0 +1,700 @@
+CATALYST ALIGNMENT V2.1 — FIX TICKER RELEVANCE CONTAMINATION AND PERFORMANCE BEFORE PROMOTION
+
+Work only in the existing backend Replit project.
+
+This is an implementation task.
+
+Do not modify frontend code.
+
+Do not modify Confluence retained snapshot infrastructure.
+
+Do not modify Trade Alignment weights.
+
+Do not promote Catalyst V2 into the primary THEME_ALIGNMENT catalyst score yet.
+
+Do not modify:
+
+THEME_ALIGNMENT scoring
+
+ELITE_ASSET_REBOUND scoring
+
+Investment Alignment
+
+Actionability
+
+Entry Structure
+
+Options Alignment
+
+Theme semantics
+
+Social Bonus
+
+Do not add provider calls.
+
+Do not add RSS/news collectors.
+
+Do not add FMP calls.
+
+Do not add Tradier calls.
+
+Do not add LLM/model calls.
+
+Catalyst V2 must remain a pure consumer of existing cached/persisted Watchlist RSS data.
+
+==================================================
+WHY THIS TASK EXISTS
+====================
+
+Catalyst V2 shadow validation proved the concept works, but it exposed two blockers:
+
+1. Cross-ticker RSS contamination
+
+Examples from validation:
+
+SNOW scored on a Cognizant–Google Cloud partnership.
+
+AMD / PLTR / RBRK got bearish penalties from Rackspace articles.
+
+CEG / GEV / OKLO / SMR / FRMI got bearish penalties from a Fermi offering article.
+
+RCAT scored on broad market commentary.
+
+IPI scored a CFO stock grant as a commercial contract.
+
+2. Runtime / query performance problem
+
+Validation reported approximately:
+
+70s for 317 symbols
+
+~220ms per symbol
+
+This is too slow for Catalyst Alignment inside Confluence.
+
+V2 must be both:
+
+ticker-relevant
+
+and
+
+bounded/fast.
+
+==================================================
+PART 0 — READ BEFORE EDITING
+============================
+
+Read:
+
+backend/services/catalyst_alignment.py
+
+backend/services/news_signal_scorer.py
+
+backend/services/rss_article_archive.py
+
+backend/services/watchlist_rss_sweeper.py
+
+Any current query helpers:
+
+query_ticker_activity
+
+query_ticker_activity_articles
+
+bulk count/article functions if present
+
+Confirm exact current call pattern and runtime bottleneck before editing.
+
+==================================================
+PART 1 — TICKER-SUBJECT RELEVANCE GATE
+======================================
+
+Before an RSS article can contribute to Catalyst V2 for a ticker, it must pass a deterministic ticker-subject relevance gate.
+
+Being present in that ticker's RSS feed is NOT enough.
+
+An article is eligible for ticker Catalyst V2 only if one of these is true:
+
+A. Title directly mentions the ticker symbol or company name / normalized company alias.
+
+B. Title directly mentions a known subsidiary / acquired business that belongs to the ticker.
+
+C. Title directly describes a partnership/deal involving the ticker's company.
+
+D. Article is an official press release or source strongly associated with the ticker and title is company-specific.
+
+E. Existing archive metadata proves the article was collected from a ticker-specific feed and the title's primary company/entity matches the ticker.
+
+Reject or strongly downweight:
+
+sector roundups
+
+market commentary
+
+peer-company articles
+
+articles where the ticker is merely mentioned incidentally
+
+articles whose primary named company is a different ticker
+
+articles about broad ETFs/indices
+
+generic analyst/market articles
+
+Examples that must be rejected for that ticker:
+
+SNOW:
+"Cognizant Strengthens AI Portfolio Through Google Cloud Partnership"
+
+AMD:
+"Rackspace Technology (RXT) Is Down 6.6%"
+
+PLTR:
+"Rackspace Technology Cuts 2026 Outlook"
+
+DELL:
+"Defense AI Heats Up: BigBear.ai Lands First European Validation"
+
+RCAT:
+"Nasdaq, S&P 500 Futures Cheer Iran Breakthrough"
+
+IPI:
+"CFO granted restricted stock" should not become commercial_contract.
+
+Use only existing cached context:
+
+ticker
+
+company name if available
+
+sector/industry if already loaded
+
+RSS source/title/summary
+
+URL/source
+
+Do not call providers for company aliases.
+
+If company name is not available for a symbol, use a conservative fallback:
+
+allow symbol/title exact match
+
+allow exact ticker in parentheses
+
+allow existing high-confidence ticker mapping if present
+
+otherwise reduce confidence or reject ambiguous sector articles.
+
+==================================================
+PART 2 — PRIMARY SUBJECT / ENTITY MISMATCH HANDLING
+===================================================
+
+Add deterministic safeguards against article-subject mismatch.
+
+If the headline clearly identifies another company as the event subject, do not apply the catalyst to the current ticker.
+
+Examples:
+
+"Fermi America Sinks 11.5% with $375M Offering"
+
+should apply to Fermi / FRMI only, not CEG, GEV, OKLO, SMR, etc.
+
+"Rackspace Technology Cuts 2026 Outlook"
+
+should apply to RXT/Rackspace, not AMD, PLTR, RBRK.
+
+"Cognizant Strengthens AI Portfolio Through Google Cloud Partnership"
+
+should apply to Cognizant, not SNOW.
+
+"Nvidia partnership article"
+
+should not automatically become a PLTR catalyst unless Palantir is actually a named partner or the relationship is directly Palantir-specific.
+
+Implement with simple deterministic rules:
+
+extract explicit ticker-in-parentheses patterns like `(RXT)`
+
+extract leading company phrase before verbs like:
+
+announces
+
+wins
+
+lands
+
+signs
+
+partners
+
+acquires
+
+cuts
+
+raises
+
+sinks
+
+reports
+
+launches
+
+selected
+
+If extracted primary subject does not match the current ticker/company aliases, mark:
+
+ticker_relevance = false
+
+or:
+
+ticker_relevance_score <= 0.25
+
+and do not allow COMPELLING/MODERATE Catalyst contribution.
+
+==================================================
+PART 3 — SUBSIDIARY / ACQUIRED BUSINESS EXCEPTION
+=================================================
+
+Do not over-filter legitimate subsidiary events.
+
+Example from validation:
+
+KTOS article about AEVEX may be legitimate if AEVEX is a Kratos subsidiary/acquired business.
+
+Implement a narrow deterministic exception:
+
+If existing company/subsidiary aliases are already available, use them.
+
+If not available, add a small hardcoded local alias map only for confirmed obvious cases already present in validation, such as:
+
+KTOS -> AEVEX
+
+Do not create a giant manual company database.
+
+Report every hardcoded alias added.
+
+If unsure, classify as lower-confidence rather than COMPELLING.
+
+==================================================
+PART 4 — GOVERNANCE / COMPENSATION / ROUTINE FILTER
+===================================================
+
+Prevent routine corporate governance/compensation events from becoming commercial catalysts.
+
+Examples to reject/downweight:
+
+CFO granted restricted stock
+
+director grants
+
+bylaw amendment
+
+proxy rule change
+
+board appointment unless CEO/founder strategic turnaround language exists
+
+investor conference
+
+presentation at conference
+
+routine dividend
+
+ordinary analyst opinion
+
+These may still appear as neutral/routine metadata, but they must not create COMPELLING or MODERATE bullish Catalyst V2 scores.
+
+==================================================
+PART 5 — BULLISH / BEARISH APPLICATION RULE
+===========================================
+
+Bearish events must pass the same ticker-subject relevance gate.
+
+Do not penalize AMD/PLTR/RBRK because Rackspace had bearish news.
+
+Do not penalize CEG/GEV/OKLO/SMR because Fermi had an offering.
+
+Only apply bearish penalty when the bearish event's primary subject matches the ticker.
+
+If relevance is ambiguous:
+
+keep the event as a low-confidence conflict note if useful
+
+but do not apply the full bearish penalty.
+
+==================================================
+PART 6 — PERFORMANCE FIX
+========================
+
+Catalyst V2 validation reported ~70s for 317 symbols.
+
+This is too slow.
+
+Audit and fix the article retrieval path.
+
+Expected architecture:
+
+one bounded bulk read of recent RSS articles for all requested symbols
+
+one in-memory classification pass
+
+one grouped result map by ticker
+
+not:
+
+317 separate Neon article queries
+
+not:
+
+per-symbol sleeps
+
+not:
+
+full archive scan
+
+If existing helpers do not support this, add the narrowest bulk helper in rss_article_archive.py.
+
+Requirements:
+
+query only the recent V2 window, e.g. 96h
+
+query only requested symbols
+
+return fields needed for classification
+
+preserve V1 behavior
+
+share fetched articles between V1 and V2 where possible
+
+Do not add a new table.
+
+Do not add a new cache unless absolutely necessary.
+
+Do not call providers.
+
+Target performance:
+
+get_catalyst_alignment_bulk() over ~317 symbols should be materially faster than 70s.
+
+Aim for <5s if Neon query volume allows.
+
+Report exact before/after runtime.
+
+==================================================
+PART 7 — OUTPUT FIELD ADDITIONS FOR DEBUGGING
+=============================================
+
+Add additive debug fields to V2 event records, not to primary scoring fields:
+
+ticker_relevance_score
+
+ticker_relevance_reason
+
+primary_subject
+
+rejected_reason if rejected
+
+These are needed for validation.
+
+Do not expose internal regex spam in normal UI if not necessary, but include in backend validation output.
+
+==================================================
+PART 8 — VALIDATION — CONTAMINATION REGRESSION SET
+==================================================
+
+Re-run the exact known contamination examples.
+
+Expected behavior:
+
+SNOW / Cognizant-Google article:
+rejected or weak, not MODERATE/COMPELLING for SNOW.
+
+AMD / Rackspace article:
+no bearish penalty for AMD.
+
+PLTR / Rackspace article:
+no bearish penalty for PLTR.
+
+RBRK / Rackspace article:
+no bearish penalty for RBRK.
+
+CEG / Fermi offering:
+no bearish penalty for CEG.
+
+GEV / Fermi offering:
+no bearish penalty for GEV.
+
+OKLO / Fermi offering:
+no bearish penalty for OKLO.
+
+SMR / Fermi offering:
+no bearish penalty for SMR.
+
+DELL / BigBear.ai article:
+not DELL catalyst.
+
+RCAT / Iran market commentary:
+not RCAT catalyst.
+
+IPI / CFO restricted stock grant:
+not commercial_contract Catalyst.
+
+KTOS / AEVEX:
+allowed only if subsidiary/alias relationship is proven; otherwise lower-confidence.
+
+Return before/after for each.
+
+==================================================
+PART 9 — POSITIVE SIGNAL PRESERVATION
+=====================================
+
+Make sure the relevance gate does not destroy the good V2 discoveries.
+
+Expected to preserve if article genuinely matches ticker:
+
+CRWV hyperscaler/Microsoft deal
+
+LWLG Microsoft partnership
+
+POET hyperscaler deal
+
+ANET AI infrastructure deal
+
+ENVX hyperscaler partnership
+
+CEVA AI chip deployment if ticker-relevant
+
+LUNR NASA contract
+
+FLY NASA award
+
+AREC DOE award
+
+MU GM chip supply pact
+
+ABCL M&A
+
+ONDS acquisition
+
+Return before/after for each.
+
+If any are rejected, explain why and whether the rejection is correct.
+
+==================================================
+PART 10 — FULL SHADOW VALIDATION AFTER FIX
+==========================================
+
+Run over the same current universe.
+
+Return:
+
+total symbols
+
+V1 available
+
+V2 available
+
+both
+
+V1-only
+
+V2-only
+
+neither
+
+V2 score distribution
+
+state distribution
+
+event type distribution
+
+direction distribution
+
+top 50 V2 catalysts
+
+top 25 bearish/conflict events
+
+V1 missed / V2 found
+
+V1 high / V2 rejected
+
+false positive inspection
+
+false negative inspection
+
+named tickers:
+
+CRDO
+
+AEVA
+
+IBRX
+
+RBRK
+
+SOFI
+
+ABCL
+
+RCAT
+
+AMD
+
+MU
+
+LITE
+
+BE
+
+PLTR
+
+NVDA
+
+DELL
+
+Do not fabricate missing tickers.
+
+==================================================
+PART 11 — PROMOTION RECOMMENDATION
+==================================
+
+Do not promote in this task.
+
+Recommend after validation:
+
+NO — keep shadow
+
+PARTIAL — use V2 for RSS/news but preserve V1 calendar/earnings
+
+YES — promote V2 fully
+
+Expected likely answer:
+
+PARTIAL
+
+because V2 is better for RSS/news but V1 scheduled calendar/earnings should probably remain.
+
+But decide based on validation.
+
+==================================================
+PART 12 — COST / REGRESSION
+===========================
+
+Prove:
+
+0 provider calls
+
+0 FMP calls
+
+0 Tradier calls
+
+0 LLM calls
+
+0 new tables
+
+0 scoring model changes outside Catalyst V2 shadow fields
+
+V1 fields preserved
+
+Trade Alignment primary score unchanged
+
+Confluence weights unchanged
+
+==================================================
+FINAL RESPONSE
+==============
+
+Return:
+
+CATALYST V2.1 RELEVANCE + PERFORMANCE REPAIR REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT ISSUES:
+[summary]
+
+TICKER RELEVANCE GATE:
+[implementation]
+
+PRIMARY SUBJECT CHECK:
+[implementation]
+
+SUBSIDIARY EXCEPTION:
+[implementation]
+
+ROUTINE FILTER:
+[implementation]
+
+BEARISH EVENT APPLICATION:
+[implementation]
+
+PERFORMANCE FIX:
+[implementation]
+
+RUNTIME BEFORE:
+[value]
+
+RUNTIME AFTER:
+[value]
+
+CONTAMINATION REGRESSION:
+[table]
+
+POSITIVE SIGNAL PRESERVATION:
+[table]
+
+FULL VALIDATION:
+[summary]
+
+TOP V2 CATALYSTS:
+[table]
+
+BEARISH CONFLICTS:
+[table]
+
+V1 MISSED / V2 FOUND:
+[table]
+
+V1 HIGH / V2 REJECTED:
+[table]
+
+NAMED TICKERS:
+[results]
+
+PROMOTION RECOMMENDATION:
+[NO / PARTIAL / YES with reason]
+
+COST PROOF:
+[0 provider calls]
+
+End exactly:
+
+CATALYST V2.1 VERDICT
+
+ZERO PROVIDER CALLS:
+[YES / NO]
+
+TICKER CONTAMINATION FIXED:
+[YES / NO]
+
+BEARISH MISATTRIBUTION FIXED:
+[YES / NO]
+
+GOOD SIGNALS PRESERVED:
+[YES / NO]
+
+RUNTIME ACCEPTABLE:
+[YES / NO]
+
+V1 PRESERVED:
+[YES / NO]
+
+TRADE ALIGNMENT UNCHANGED:
+[YES / NO]
+
+READY FOR PROMOTION DECISION:
+[YES / NO]
+
+NEXT IMPLEMENTATION:
+[PROMOTE V2 NEWS SIGNAL PARTIALLY / KEEP SHADOW / OTHER]
+
+Do not make unrelated changes.
