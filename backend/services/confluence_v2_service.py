@@ -1396,6 +1396,11 @@ def _compute_confluence(
         selected_ta_fields["trade_alignment_grade"]        = _ta_grade(er_score) if er_score is not None else None
         selected_ta_fields["trade_alignment_reason_codes"] = list(elite_rebound_fields.get("elite_asset_rebound_reason_codes") or [])
     selected_ta_fields.update(elite_rebound_fields)
+    # Forward investment_alignment_score into ta_fields so actionability can
+    # apply the ia_score gate for ASYMMETRIC_SUPPORT_ENTRY (Part 4 of spec).
+    selected_ta_fields["investment_alignment_score"] = (
+        investment_alignment_fields.get("investment_alignment_score")
+    )
 
     # ── ACTIONABILITY V1 (SHADOW, additive-only) — deterministic decision
     #    layer combining the SELECTED Trade Alignment archetype + Entry
@@ -1472,6 +1477,14 @@ def _compute_confluence(
         "entry_family":      entry_result.get("entry_family") if entry_result else None,
         "base_archetype":    ((entry_result or {}).get("structure_v2") or {}).get("base_archetype"),
         "extension_state":   (entry_result or {}).get("extension_state"),
+        # ── Entry Risk/Reward State (Part 6 of support confluence spec) ───────
+        "entry_risk_reward_state":        (entry_result or {}).get("entry_risk_reward_state"),
+        "entry_risk_reward_score":        (entry_result or {}).get("entry_risk_reward_score"),
+        "entry_risk_reward_reason_codes": (entry_result or {}).get("entry_risk_reward_reason_codes"),
+        "distance_to_active_support_pct": (entry_result or {}).get("distance_to_active_support_pct"),
+        "critical_break_level":           (entry_result or {}).get("critical_break_level"),
+        "reclaim_level":                  (entry_result or {}).get("reclaim_level"),
+        "next_downside_support":          (entry_result or {}).get("next_downside_support"),
         # ── Per-signal breakdown ─────────────────────────────────────────────
         "signal_breakdown": {
             "entry_state": {

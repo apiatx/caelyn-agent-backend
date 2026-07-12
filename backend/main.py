@@ -2267,7 +2267,7 @@ async def debug_confluence_accuracy(
     tab_counts["total_retained_rows"] = len(_retained_syms)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
-    from services.entry_state_service import _classify_active_support_zone
+    from services.entry_state_service import _classify_active_support_zone, _compute_entry_risk_reward
     from services.actionability_service import _compute_actionability_core, compute_actionability
 
     def _lvl(support_levels: list, label: str):
@@ -2308,18 +2308,45 @@ async def debug_confluence_accuracy(
                 sorted_bars    = [],
             )
 
+        # ── Entry Risk/Reward — computed inline from supp + entry LKG ───────────
+        _rr: dict = {}
+        if supp and entry.get("entry_state"):
+            _sv2b_dbg = sv2.get("base") or {}
+            try:
+                _rr = _compute_entry_risk_reward(
+                    entry_state            = entry.get("entry_state", "NO_CLEAR_ENTRY"),
+                    entry_score            = entry.get("entry_score") or 30,
+                    active_support_status  = supp.get("active_support_status"),
+                    active_support_type    = supp.get("active_support_type"),
+                    active_support_touches = supp.get("active_support_touch_count") or 1,
+                    dist_to_active_pct     = supp.get("distance_to_major_support_pct"),
+                    prior_pivot_status     = supp.get("prior_pivot_status"),
+                    lower_low_confirmed    = supp.get("lower_low_confirmed"),
+                    extension_state        = ext_state,
+                    base_archetype         = sv2.get("base_archetype"),
+                    support_touch_count    = _sv2b_dbg.get("support_touch_count"),
+                    critical_break_level   = supp.get("critical_break_level"),
+                )
+            except Exception:
+                pass
+
+        # Merge computed RR back into a synthetic entry_result dict so the
+        # simulated actionability call can read entry_risk_reward_state.
+        _entry_with_rr = {**entry, **_rr}
+
         # ── Simulated actionability — verifies extension-guard fix in-process ──
         # Uses entry LKG row as entry_result (contains extension_state, entry_state,
         # entry_score, structure_v2) + simulated strong TA score.  Not the same as
         # live retained-snapshot actionability but proves the guard fires correctly.
         sim_ta = {"trade_alignment_available": True, "trade_alignment_score": 75.0,
                   "theme_alignment_score": 70.0, "options_alignment_score": None,
-                  "options_pressure_state": None, "catalyst_alignment_available": False}
+                  "options_pressure_state": None, "catalyst_alignment_available": False,
+                  "investment_alignment_score": 75.0}
         sim_act: dict = {}
         if entry:
             try:
                 sim_act = compute_actionability(
-                    entry_result   = entry,
+                    entry_result   = _entry_with_rr,
                     ta_fields      = sim_ta,
                     options_result = None,
                 )
@@ -2371,6 +2398,12 @@ async def debug_confluence_accuracy(
             "critical_break_level":    supp.get("critical_break_level"),
             "next_downside_support":   supp.get("next_downside_support"),
             "reclaim_level":           supp.get("reclaim_level"),
+
+            # ── Entry Risk/Reward State (computed inline from supp + entry LKG) ─
+            "entry_risk_reward_state":        _rr.get("entry_risk_reward_state"),
+            "entry_risk_reward_score":        _rr.get("entry_risk_reward_score"),
+            "entry_risk_reward_reason_codes": _rr.get("entry_risk_reward_reason_codes"),
+            "distance_to_active_support_pct": _rr.get("distance_to_active_support_pct"),
 
             # ── Support Hierarchy (backward-compat; now tracks active zone) ────
             "support_level_price":     supp.get("support_level_price"),

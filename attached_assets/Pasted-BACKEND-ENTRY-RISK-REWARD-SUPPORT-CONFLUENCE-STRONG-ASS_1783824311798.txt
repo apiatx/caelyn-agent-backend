@@ -1,0 +1,348 @@
+BACKEND — ENTRY RISK/REWARD SUPPORT CONFLUENCE: STRONG ASSETS AT ACTIVE SUPPORT
+
+Backend only.
+
+Do not touch frontend.
+
+Do not change Catalyst scoring.
+Do not change Theme Policy scoring.
+Do not change Investment Alignment scoring.
+Do not change Options Alignment.
+Do not add provider calls.
+Do not add LLM calls.
+
+Goal:
+
+Make Entry Structure and Actionability explicitly reward strong assets that are consolidating at or near active critical support, while still blocking broken or overextended setups.
+
+The Active Support Zone Engine now exposes:
+
+prior_pivot_level
+prior_pivot_status
+active_support_zone
+active_support_type
+active_support_status
+critical_break_level
+next_downside_support
+reclaim_level
+major_support_lost
+lower_low_confirmed
+structure_state
+
+Now use these fields to derive an Entry risk/reward state.
+
+==================================================
+PART 1 — AUDIT CURRENT ENTRY SCORING
+==================================================
+
+Inspect current Entry scoring and Actionability logic.
+
+Determine whether the following are already factored into entry_score/actionability:
+
+active_support_status
+distance to active support
+support zone consolidation
+repeated support touches / double bounce
+Investment Alignment score
+lower_low_confirmed
+extension_state
+base_archetype
+consolidation duration
+
+Return current behavior before changing anything.
+
+Validation symbols:
+
+BE
+NVEC
+MARA
+INTC
+CRWD
+FTNT
+PLTR
+OKLO
+AMD
+MU
+MRVL
+ABCL
+SOFI
+
+==================================================
+PART 2 — ADD ENTRY RISK/REWARD STATE
+==================================================
+
+Add derived fields to Entry / Confluence output:
+
+entry_risk_reward_state
+entry_risk_reward_score
+entry_risk_reward_reason_codes
+
+Suggested states:
+
+ASYMMETRIC_SUPPORT_ENTRY
+SUPPORT_TEST_CONFIRMING
+SUPPORT_TEST_NEEDS_CONFIRMATION
+LOW_BASE_RISK_DEFINED
+PULLBACK_TO_SUPPORT
+STRONG_ASSET_EXTENDED_WAIT
+BROKEN_SUPPORT_AVOID
+NO_CLEAR_ENTRY
+
+Rules:
+
+ASYMMETRIC_SUPPORT_ENTRY requires:
+
+investment_alignment_score >= 70 if available
+active_support_status in above_support / testing_support / bounced_from_support
+price near active support zone, preferably within +0% to +8% above zone
+lower_low_confirmed is false
+extension_state is not EXTREME_EXTENSION / VERTICAL / CROWDED_MOVE
+entry_state is not SUPPORT_LOST / LOWER_LOW_CONFIRMED / FAILED_BREAKOUT
+some consolidation/base/support evidence exists:
+  repeated support touches
+  base_archetype LOW_BASE or HIGH_BASE
+  active_support_type double_bounce_support / base_low / trendline_support / range_low
+
+SUPPORT_TEST_CONFIRMING:
+
+active support is being tested or recently bounced
+trade_alignment_score >= 55
+lower_low_confirmed false
+needs reclaim / bounce confirmation
+
+SUPPORT_TEST_NEEDS_CONFIRMATION:
+
+support nearby but trade/investment quality is not strong enough yet
+or no confirmation
+
+LOW_BASE_RISK_DEFINED:
+
+LOW_BASE_FORMING / REVERSAL_WATCH with clear critical_break_level nearby
+but not enough confirmation for READY
+
+STRONG_ASSET_EXTENDED_WAIT:
+
+investment_alignment_score >= 70
+but extension_state is EXTREME_EXTENSION / VERTICAL / CROWDED_MOVE
+or distance from active support is too far
+
+BROKEN_SUPPORT_AVOID:
+
+active_support_status = lost_confirmed
+or lower_low_confirmed = true
+
+==================================================
+PART 3 — ENTRY SCORE INTEGRATION
+==================================================
+
+Use entry_risk_reward_state to influence entry_score.
+
+Do not blindly override existing Entry V2.
+
+Additive adjustment only:
+
+ASYMMETRIC_SUPPORT_ENTRY:
+raise/support entry_score into strong zone, e.g. 70–85, unless other hard risk exists
+
+SUPPORT_TEST_CONFIRMING:
+entry_score 60–75 depending on confirmation
+
+SUPPORT_TEST_NEEDS_CONFIRMATION:
+entry_score 45–60
+
+LOW_BASE_RISK_DEFINED:
+entry_score 45–65
+
+STRONG_ASSET_EXTENDED_WAIT:
+entry_score capped below actionable threshold, e.g. max 45
+
+BROKEN_SUPPORT_AVOID:
+entry_score capped very low, e.g. max 20
+
+Do not make support proximity alone a BUY.
+
+Actionability still requires Trade Alignment and confirmation.
+
+==================================================
+PART 4 — ACTIONABILITY INTEGRATION
+==================================================
+
+Actionability should understand the new Entry risk/reward states.
+
+If:
+
+entry_risk_reward_state = ASYMMETRIC_SUPPORT_ENTRY
+and trade_alignment_score >= threshold
+and no lower low / no extreme extension
+
+then actionability can be:
+
+READY
+or WATCH/WAIT_FOR_RECLAIM depending on confirmation.
+
+If:
+
+SUPPORT_TEST_CONFIRMING
+
+then:
+
+WATCH / WAIT_FOR_RECLAIM / WAIT_FOR_BOUNCE_CONFIRMATION
+
+If:
+
+STRONG_ASSET_EXTENDED_WAIT
+
+then:
+
+TOO_EXTENDED / WAIT_FOR_RESET
+
+If:
+
+BROKEN_SUPPORT_AVOID
+
+then:
+
+AVOID
+
+Do not let Options Asymmetric RR override Entry.
+
+==================================================
+PART 5 — VALIDATION
+==================================================
+
+For each symbol return before/after:
+
+BE
+NVEC
+MARA
+INTC
+CRWD
+FTNT
+PLTR
+OKLO
+AMD
+MU
+MRVL
+ABCL
+SOFI
+
+Fields:
+
+symbol
+investment_alignment_score
+trade_alignment_score
+entry_state
+active_support_status
+active_support_type
+distance_to_active_support_pct
+critical_break_level
+reclaim_level
+lower_low_confirmed
+extension_state
+entry_risk_reward_state
+entry_risk_reward_score
+entry_score before
+entry_score after
+actionability before
+actionability after
+reason_codes
+
+Expected:
+
+BE:
+prior pivot lost, active support intact.
+Should become support/risk-defined watch state, not support lost.
+Not necessarily BUY because reclaim needed.
+
+NVEC:
+support/trendline test should be rewarded if active support intact.
+Could become ASYMMETRIC_SUPPORT_ENTRY or SUPPORT_TEST_CONFIRMING if investment/trade quality qualifies.
+
+MARA:
+low-base/range support should become LOW_BASE_RISK_DEFINED or SUPPORT_TEST_NEEDS_CONFIRMATION, not support lost.
+
+INTC:
+if lower low not confirmed, should be LOWER_HIGH_WARNING / SUPPORT_TEST_NEEDS_CONFIRMATION, not confirmed breakdown.
+
+CRWD/FTNT:
+strong assets but extended.
+Should be STRONG_ASSET_EXTENDED_WAIT / TOO_EXTENDED, not asymmetric support entry.
+
+PLTR/OKLO:
+if lower low confirmed, remain BROKEN_SUPPORT_AVOID / AVOID.
+
+==================================================
+PART 6 — OUTPUT FIELDS
+==================================================
+
+Forward new fields through Confluence and Watchlist Alignment rows:
+
+entry_risk_reward_state
+entry_risk_reward_score
+entry_risk_reward_reason_codes
+distance_to_active_support_pct if available
+critical_break_level
+reclaim_level
+next_downside_support
+
+Do not remove existing fields.
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+ENTRY RISK/REWARD SUPPORT CONFLUENCE REPORT
+
+FILES CHANGED:
+[list]
+
+CURRENT BEHAVIOR AUDIT:
+[summary]
+
+NEW ENTRY RR STATE:
+[summary]
+
+SCORING INTEGRATION:
+[summary]
+
+ACTIONABILITY INTEGRATION:
+[summary]
+
+VALIDATION TABLE:
+[BE/NVEC/MARA/INTC/CRWD/FTNT/etc.]
+
+OUTPUT FIELDS:
+[list]
+
+PROVIDER CALLS:
+[0]
+
+End exactly:
+
+ENTRY RR SUPPORT CONFLUENCE VERDICT
+
+STRONG ASSETS AT ACTIVE SUPPORT REWARDED:
+[YES/NO]
+
+SUPPORT PROXIMITY FACTORED INTO ENTRY:
+[YES/NO]
+
+CONSOLIDATION / REPEATED SUPPORT FACTORED:
+[YES/NO]
+
+EXTENDED STRONG ASSETS BLOCKED FROM ASYMMETRIC ENTRY:
+[YES/NO]
+
+BROKEN SUPPORT STILL BLOCKED:
+[YES/NO]
+
+ACTIONABILITY UPDATED:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND DISPLAY:
+[YES/NO]

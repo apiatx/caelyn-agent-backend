@@ -45,6 +45,16 @@ _HARD_BREAK_STATES = {"SUPPORT_LOST", "DOWNTREND", "FAILED_BREAKOUT", "LOWER_LOW
 _SEVERE_EXTENSION_STATES = {"EXTREME_EXTENSION", "VERTICAL", "CROWDED_MOVE", "VOLUME_CLIMAX"}
 _MILD_EXTENSION_STATE = "EXTENDED"
 
+# ── Entry RR state groupings ───────────────────────────────────────────────────
+# States for which ASYMMETRIC_SUPPORT_ENTRY can upgrade actionability beyond
+# the default step-10 WATCH. Excludes _READY_CONTEXT_STATES (handled by step 5)
+# and _WAIT_FOR_BREAKOUT_CONTEXT_STATES (handled by step 7).
+_ASYMMETRIC_ELIGIBLE_STATES = {
+    "RANGE_SUPPORT_TEST", "NO_CLEAR_ENTRY",
+    "LOW_BASE_FORMING",   "REVERSAL_WATCH",
+    "SUPPORT_TEST",       "LOWER_HIGH_WARNING",
+}
+
 _READY_CONTEXT_STATES = {
     "HIGH_BASE_READY", "BREAKOUT_RETEST", "BREAKOUT_PULLBACK",
     "CONSTRUCTIVE_DIP", "TRENDLINE_SUPPORT_TEST", "LOW_BASE_READY",
@@ -188,6 +198,12 @@ def _compute_actionability_core(
         reasons.append("FLOW_LEADING_PRICE")
         strengths.append("FLOW_LEADING_PRICE")
 
+    # ── Read Entry RR state (Part 4 of support confluence spec) ─────────────
+    rr_state     = entry_result.get("entry_risk_reward_state")
+    ia_score_val = _safe(ta_fields.get("investment_alignment_score"))
+    # "investment_alignment_score >= 70 if available" gate for ASYMMETRIC_SUPPORT_ENTRY
+    ia_score_ok  = ia_score_val is None or ia_score_val >= 70.0
+
     # ── PART 4/24 — STATE PRECEDENCE (exact order, first match wins) ─────────
 
     # 1) Hard structural break → AVOID (overrides Trade Alignment strength).
@@ -200,6 +216,24 @@ def _compute_actionability_core(
     if entry_state in _HARD_BREAK_STATES:
         conflicts.append("STRUCTURE_BROKEN")
         reasons.append("STRUCTURE_BROKEN")
+        reasons.append(f"ENTRY_STATE_{entry_state}")
+        return {
+            "actionability_available":    True,
+            "actionability_state":        AVOID,
+            "actionability_score":        actionability_score,
+            "actionability_reason_codes": reasons,
+            "actionability_conflicts":    conflicts,
+            "actionability_strengths":    strengths,
+            "actionability_entry_family": entry_family,
+            "actionability_version":      ACTIONABILITY_VERSION,
+        }
+
+    # 1b) RR engine: active support lost / structural break not captured by
+    #     entry_state alone (e.g. active_support_status=lost_confirmed but
+    #     entry_state is NO_CLEAR_ENTRY) → AVOID.
+    if rr_state == "BROKEN_SUPPORT_AVOID" and entry_state not in _HARD_BREAK_STATES:
+        conflicts.append("ACTIVE_SUPPORT_BROKEN")
+        reasons.append("ACTIVE_SUPPORT_BROKEN")
         reasons.append(f"ENTRY_STATE_{entry_state}")
         return {
             "actionability_available":    True,
@@ -263,6 +297,30 @@ def _compute_actionability_core(
             "actionability_version":      ACTIONABILITY_VERSION,
         }
 
+    # 2c) RR engine: STRONG_ASSET_EXTENDED_WAIT for cases NOT already caught
+    #     by the extension guard above (e.g. extension=EXTENDED or far from
+    #     active support without being labelled EXTREME in entry_state).
+    if (
+        rr_state == "STRONG_ASSET_EXTENDED_WAIT"
+        and entry_state not in _SEVERE_EXTENSION_STATES
+        and entry_state not in _HARD_BREAK_STATES
+    ):
+        conflicts.append("ENTRY_EXTENDED_FROM_SUPPORT")
+        reasons.append("WAIT_FOR_RESET")
+        if ta_available and ta_score is not None and ta_score >= _READY_TA_MIN:
+            strengths.append("STRONG_TRADE_ALIGNMENT")
+            reasons.append("STRONG_ALIGNMENT_BAD_ENTRY")
+        return {
+            "actionability_available":    True,
+            "actionability_state":        TOO_EXTENDED,
+            "actionability_score":        actionability_score,
+            "actionability_reason_codes": reasons,
+            "actionability_conflicts":    conflicts,
+            "actionability_strengths":    strengths,
+            "actionability_entry_family": entry_family,
+            "actionability_version":      ACTIONABILITY_VERSION,
+        }
+
     # 3) Mild extension: TA-gated WAIT_FOR_RETEST vs TOO_EXTENDED.
     if entry_state == _MILD_EXTENSION_STATE:
         if ta_available and ta_score is not None and ta_score >= _EXTENDED_WAIT_RETEST_TA_MIN:
@@ -300,6 +358,40 @@ def _compute_actionability_core(
 
     # ── From here Entry is structurally sound and Trade Alignment is
     #    available — classify by Entry state context + Trade Alignment gate.
+
+    # 4b) ASYMMETRIC_SUPPORT_ENTRY fast-track for states that would otherwise
+    #     fall through to REVERSAL_WATCH (step 8) or default WATCH (step 10).
+    #     States already in _READY_CONTEXT_STATES are handled by step 5 below
+    #     (their entry_score was already raised by the RR engine, so step 5
+    #     applies the READY/WAIT thresholds correctly without interception here).
+    if rr_state == "ASYMMETRIC_SUPPORT_ENTRY" and entry_state in _ASYMMETRIC_ELIGIBLE_STATES:
+        if ia_score_ok and ta_score >= _REVERSAL_WATCH_TA_MIN:
+            strengths.append("ASYMMETRIC_SUPPORT_ENTRY")
+            strengths.append("ACTIVE_SUPPORT_HOLDING")
+            reasons.extend(["ASYMMETRIC_SUPPORT_ENTRY", "DOWNSIDE_DEFINED"])
+            if ta_score >= _EARLY_WATCH_TA_MIN:
+                strengths.append("STRONG_TRADE_ALIGNMENT")
+                reasons.append("STRONG_TRADE_ALIGNMENT")
+            if ia_score_val is not None and ia_score_val >= 70.0:
+                strengths.append("STRONG_INVESTMENT_ALIGNMENT")
+                reasons.append("STRONG_INVESTMENT_ALIGNMENT")
+            state = REVERSAL_WATCH
+        else:
+            reasons.append("ASYMMETRIC_SUPPORT_ENTRY")
+            if not ia_score_ok:
+                reasons.append("INVESTMENT_ALIGNMENT_INSUFFICIENT")
+            reasons.append("INSUFFICIENT_ALIGNMENT")
+            state = WATCH
+        return {
+            "actionability_available":    True,
+            "actionability_state":        state,
+            "actionability_score":        actionability_score,
+            "actionability_reason_codes": reasons,
+            "actionability_conflicts":    conflicts,
+            "actionability_strengths":    strengths,
+            "actionability_entry_family": entry_family,
+            "actionability_version":      ACTIONABILITY_VERSION,
+        }
 
     # 5) READY.
     if entry_state in _READY_CONTEXT_STATES:

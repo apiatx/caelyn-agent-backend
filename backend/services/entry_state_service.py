@@ -82,7 +82,7 @@ _LKG_LOADED = False
 #   1 = pre-LOW_BASE (legacy HIGH_BASE-only Entry Structure V2)
 #   2 = LOW_BASE taxonomy added (LOW_BASE_FORMING/COILING/READY + base_archetype,
 #       base_location, low_base_floor diagnostics)
-ENTRY_ANALYSIS_VERSION = 2
+ENTRY_ANALYSIS_VERSION = 3
 
 # ── Entry family / state / grade constants ─────────────────────────────────────
 FAMILY_PRE_MOVE       = "PRE_MOVE"
@@ -630,6 +630,236 @@ def _classify_active_support_zone(
 
 # Backward-compat alias — call sites that imported the old name still work.
 _classify_support_hierarchy = _classify_active_support_zone
+
+
+# ── Entry Risk/Reward State Engine ─────────────────────────────────────────────
+
+_RR_SEVERE_EXT = {"EXTREME_EXTENSION", "VERTICAL", "CROWDED_MOVE", "VOLUME_CLIMAX"}
+_RR_HARD_BREAK = {"SUPPORT_LOST", "LOWER_LOW_CONFIRMED", "FAILED_BREAKOUT", "DOWNTREND"}
+_RR_STRUCTURAL_SUPPORT_TYPES = {"double_bounce_support", "base_low", "range_low"}
+_RR_STRUCTURAL_ENTRY_STATES  = {
+    "TRENDLINE_SUPPORT_TEST", "BREAKOUT_RETEST", "BREAKOUT_PULLBACK",
+    "LOW_BASE_FORMING", "LOW_BASE_COILING", "LOW_BASE_READY",
+    "SUPPORT_HOLD", "CONSTRUCTIVE_DIP",
+}
+_RR_PRE_RECOVERY_STATES = {"LOW_BASE_FORMING", "REVERSAL_WATCH", "RANGE_SUPPORT_TEST"}
+
+
+def _compute_entry_risk_reward(
+    entry_state:             str,
+    entry_score:             int,
+    active_support_status:   Optional[str],
+    active_support_type:     Optional[str],
+    active_support_touches:  int,
+    dist_to_active_pct:      Optional[float],
+    prior_pivot_status:      Optional[str],
+    lower_low_confirmed:     Optional[bool],
+    extension_state:         Optional[str],
+    base_archetype:          Optional[str],
+    support_touch_count:     Optional[int],
+    critical_break_level:    Optional[float],
+) -> dict:
+    """
+    Derive an Entry Risk/Reward state from Active Support Zone + Entry Structure.
+
+    Returns:
+        entry_risk_reward_state         — canonical RR state string
+        entry_risk_reward_score         — 0–100 score for this state
+        entry_risk_reward_reason_codes  — list[str] diagnostic codes
+        distance_to_active_support_pct  — convenience alias for dist_to_active_pct
+        entry_score_rr_adjusted         — entry_score after floor/cap from RR state
+
+    States (priority order):
+        BROKEN_SUPPORT_AVOID          — active support lost or structural break
+        STRONG_ASSET_EXTENDED_WAIT    — severely extended / too far from support
+        ASYMMETRIC_SUPPORT_ENTRY      — best RR: support holding, structural evidence
+        SUPPORT_TEST_CONFIRMING       — support tested/bounced, needs confirmation
+        PULLBACK_TO_SUPPORT           — continuation pullback toward support
+        LOW_BASE_RISK_DEFINED         — pre-recovery with defined downside
+        SUPPORT_TEST_NEEDS_CONFIRMATION — support nearby, insufficient confirmation
+        NO_CLEAR_ENTRY                — default; no adjustment
+
+    Zero provider calls. Pure computation.
+    """
+    reasons: list[str]  = []
+    asst    = active_support_status or "no_clear_support"
+    ext     = extension_state or "HEALTHY"
+    llc     = bool(lower_low_confirmed)
+    dist    = dist_to_active_pct  # positive = price above active support
+
+    severely_extended = ext in _RR_SEVERE_EXT
+
+    # ── 1. BROKEN_SUPPORT_AVOID ───────────────────────────────────────────────
+    broken = (
+        asst == "lost_confirmed"
+        or llc
+        or entry_state in _RR_HARD_BREAK
+    )
+    if broken:
+        if asst == "lost_confirmed":
+            reasons.append("ACTIVE_SUPPORT_LOST_CONFIRMED")
+        if llc:
+            reasons.append("LOWER_LOW_CONFIRMED")
+        if entry_state in _RR_HARD_BREAK:
+            reasons.append(f"ENTRY_STATE_{entry_state}")
+        return {
+            "entry_risk_reward_state":        "BROKEN_SUPPORT_AVOID",
+            "entry_risk_reward_score":        10,
+            "entry_risk_reward_reason_codes": reasons,
+            "distance_to_active_support_pct": dist,
+            "entry_score_rr_adjusted":        min(entry_score, 20),
+        }
+
+    # ── 2. STRONG_ASSET_EXTENDED_WAIT ─────────────────────────────────────────
+    # Severely extended from 30w MA, or price far above any active support.
+    far_from_support = dist is not None and dist > 35.0
+    if severely_extended or far_from_support:
+        if severely_extended:
+            reasons.append(f"EXTENSION_STATE_{ext}")
+        if far_from_support and dist is not None:
+            reasons.append(f"DIST_TO_SUPPORT_{dist:.1f}PCT_TOO_FAR")
+        return {
+            "entry_risk_reward_state":        "STRONG_ASSET_EXTENDED_WAIT",
+            "entry_risk_reward_score":        30,
+            "entry_risk_reward_reason_codes": reasons,
+            "distance_to_active_support_pct": dist,
+            "entry_score_rr_adjusted":        min(entry_score, 45),
+        }
+
+    # ── Shared convenience flags ──────────────────────────────────────────────
+    in_zone      = asst in ("testing_support", "bounced_from_support")
+    near_support = asst == "above_support" and dist is not None and dist <= 12.0
+    support_ok   = asst in ("above_support", "testing_support", "bounced_from_support")
+
+    has_structural_support = (
+        active_support_touches >= 2
+        or (active_support_type in _RR_STRUCTURAL_SUPPORT_TYPES)
+        or (base_archetype == "LOW_BASE")
+        or (support_touch_count is not None and support_touch_count >= 2)
+        or entry_state in _RR_STRUCTURAL_ENTRY_STATES
+    )
+
+    # ── 3. ASYMMETRIC_SUPPORT_ENTRY ───────────────────────────────────────────
+    # Best risk/reward: active support is visible, nearby, and structurally
+    # defined. Excludes pre-recovery states (need dedicated LOW_BASE path).
+    if (
+        support_ok
+        and not llc
+        and not severely_extended
+        and entry_state not in _RR_HARD_BREAK
+        and entry_state not in _RR_PRE_RECOVERY_STATES
+        and (in_zone or near_support)
+        and has_structural_support
+    ):
+        reasons.append("ACTIVE_SUPPORT_HOLDING")
+        reasons.append(f"SUPPORT_TYPE_{active_support_type}")
+        if active_support_touches >= 2:
+            reasons.append(f"SUPPORT_TOUCHES_{active_support_touches}")
+        if base_archetype == "LOW_BASE":
+            reasons.append("LOW_BASE_ARCHETYPE")
+        if in_zone:
+            reasons.append("PRICE_IN_SUPPORT_ZONE")
+        if near_support and dist is not None:
+            reasons.append(f"NEAR_SUPPORT_{dist:.1f}PCT")
+        if critical_break_level is not None:
+            reasons.append("CRITICAL_BREAK_DEFINED")
+        return {
+            "entry_risk_reward_state":        "ASYMMETRIC_SUPPORT_ENTRY",
+            "entry_risk_reward_score":        80,
+            "entry_risk_reward_reason_codes": reasons,
+            "distance_to_active_support_pct": dist,
+            "entry_score_rr_adjusted":        max(entry_score, 70),
+        }
+
+    # ── 4. SUPPORT_TEST_CONFIRMING ────────────────────────────────────────────
+    # Actively testing or recently bounced, but structural evidence not strong
+    # enough for ASYMMETRIC (single touch, MA zone only, not near enough).
+    # Excludes pre-recovery states.
+    if (
+        in_zone
+        and support_ok
+        and not llc
+        and entry_state not in _RR_HARD_BREAK
+        and entry_state not in _RR_PRE_RECOVERY_STATES
+    ):
+        reasons.append(f"SUPPORT_TESTING_{asst}")
+        if critical_break_level is not None:
+            reasons.append("CRITICAL_BREAK_DEFINED")
+        reasons.append("CONFIRMATION_NEEDED")
+        return {
+            "entry_risk_reward_state":        "SUPPORT_TEST_CONFIRMING",
+            "entry_risk_reward_score":        60,
+            "entry_risk_reward_reason_codes": reasons,
+            "distance_to_active_support_pct": dist,
+            "entry_score_rr_adjusted":        min(max(entry_score, 60), 75),
+        }
+
+    # ── 5. PULLBACK_TO_SUPPORT ────────────────────────────────────────────────
+    # Established uptrend pulling back toward an active support level.
+    _continuation_states = {
+        "PULLBACK_IN_UPTREND", "BREAKOUT_PULLBACK", "CONSTRUCTIVE_DIP",
+        "TRENDLINE_SUPPORT_TEST", "BREAKOUT_RETEST",
+    }
+    if near_support and entry_state in _continuation_states:
+        reasons.append("PULLBACK_TO_SUPPORT")
+        if dist is not None:
+            reasons.append(f"DIST_TO_SUPPORT_{dist:.1f}PCT")
+        return {
+            "entry_risk_reward_state":        "PULLBACK_TO_SUPPORT",
+            "entry_risk_reward_score":        65,
+            "entry_risk_reward_reason_codes": reasons,
+            "distance_to_active_support_pct": dist,
+            "entry_score_rr_adjusted":        max(entry_score, 60),
+        }
+
+    # ── 6. LOW_BASE_RISK_DEFINED ──────────────────────────────────────────────
+    # Pre-recovery state: price forming a base near critical support with a
+    # defined break level. Needs reclaim/bounce confirmation for higher state.
+    if (
+        entry_state in _RR_PRE_RECOVERY_STATES
+        and support_ok
+        and critical_break_level is not None
+    ):
+        reasons.append("LOW_BASE_RISK_DEFINED")
+        reasons.append("CRITICAL_BREAK_DEFINED")
+        if dist is not None:
+            reasons.append(f"DIST_TO_SUPPORT_{dist:.1f}PCT")
+        return {
+            "entry_risk_reward_state":        "LOW_BASE_RISK_DEFINED",
+            "entry_risk_reward_score":        50,
+            "entry_risk_reward_reason_codes": reasons,
+            "distance_to_active_support_pct": dist,
+            "entry_score_rr_adjusted":        min(max(entry_score, 45), 65),
+        }
+
+    # ── 7. SUPPORT_TEST_NEEDS_CONFIRMATION ────────────────────────────────────
+    # Support is nearby but evidence is insufficient for any higher state.
+    if support_ok and dist is not None and dist <= 15.0:
+        reasons.append("SUPPORT_NEARBY")
+        reasons.append("CONFIRMATION_NEEDED")
+        if dist is not None:
+            reasons.append(f"DIST_TO_SUPPORT_{dist:.1f}PCT")
+        return {
+            "entry_risk_reward_state":        "SUPPORT_TEST_NEEDS_CONFIRMATION",
+            "entry_risk_reward_score":        45,
+            "entry_risk_reward_reason_codes": reasons,
+            "distance_to_active_support_pct": dist,
+            "entry_score_rr_adjusted":        min(max(entry_score, 45), 60),
+        }
+
+    # ── 8. Default — NO_CLEAR_ENTRY ───────────────────────────────────────────
+    reasons.append("NO_CLEAR_RR_SETUP")
+    if dist is not None:
+        reasons.append(f"DIST_TO_SUPPORT_{dist:.1f}PCT")
+    if asst == "no_clear_support":
+        reasons.append("NO_ACTIVE_SUPPORT_IDENTIFIED")
+    return {
+        "entry_risk_reward_state":        "NO_CLEAR_ENTRY",
+        "entry_risk_reward_score":        max(entry_score, 30),
+        "entry_risk_reward_reason_codes": reasons,
+        "distance_to_active_support_pct": dist,
+        "entry_score_rr_adjusted":        entry_score,
+    }
 
 
 # ── Core classification ────────────────────────────────────────────────────────
@@ -1356,6 +1586,31 @@ def analyze_entry_state_from_bars(
     entry_score  = max(0, min(100, base_score + adj))
     entry_grade  = _grade(entry_score)
 
+    # ── Entry Risk/Reward State ────────────────────────────────────────────────
+    # Must run AFTER entry_state is final and _support_hier is computed.
+    _rr: dict = {}
+    if price is not None and _support_hier:
+        _sv2b_rr = (_v2_structure or {}).get("base", {})
+        _rr = _compute_entry_risk_reward(
+            entry_state            = entry_state,
+            entry_score            = entry_score,
+            active_support_status  = _support_hier.get("active_support_status"),
+            active_support_type    = _support_hier.get("active_support_type"),
+            active_support_touches = _support_hier.get("active_support_touch_count") or 1,
+            dist_to_active_pct     = _support_hier.get("distance_to_major_support_pct"),
+            prior_pivot_status     = _support_hier.get("prior_pivot_status"),
+            lower_low_confirmed    = _support_hier.get("lower_low_confirmed"),
+            extension_state        = ext_state,
+            base_archetype         = (_v2_structure or {}).get("base_archetype"),
+            support_touch_count    = _sv2b_rr.get("support_touch_count"),
+            critical_break_level   = _support_hier.get("critical_break_level"),
+        )
+        # Apply score adjustment from RR engine (floor or cap depending on state)
+        _rr_adj = _rr.get("entry_score_rr_adjusted")
+        if _rr_adj is not None and _rr_adj != entry_score:
+            entry_score = max(0, min(100, int(_rr_adj)))
+            entry_grade = _grade(entry_score)
+
     # ── Support levels (legacy, backward-compat) ──────────────────────────────
     support_levels: list[dict] = []
     if price is not None:
@@ -1392,6 +1647,11 @@ def analyze_entry_state_from_bars(
         "computed_at":     _now_iso(),
         "entry_analysis_version": ENTRY_ANALYSIS_VERSION,
         **_support_hier,
+        # ── Entry Risk/Reward State (Part 2/3 of support confluence spec) ────
+        "entry_risk_reward_state":        _rr.get("entry_risk_reward_state"),
+        "entry_risk_reward_score":        _rr.get("entry_risk_reward_score"),
+        "entry_risk_reward_reason_codes": _rr.get("entry_risk_reward_reason_codes"),
+        "distance_to_active_support_pct": _rr.get("distance_to_active_support_pct"),
     }
 
     # ── Entry Structure V2 diagnostics (present whenever computed) ───────────
