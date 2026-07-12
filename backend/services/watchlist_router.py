@@ -4020,7 +4020,63 @@ async def get_watchlist_alignment(watchlist_id: str):
             # Entry fields unavailable (no same-generation row exists).
             rows.append({
                 "symbol": sym,
-                "actionability": {"available": False, "state": None, "score": None},
+                # ── PHASE 2: canonical score fields (null — no snapshot row) ──
+                "caelyn_confluence_score":              None,
+                "caelyn_confluence_bucket":             None,
+                "caelyn_confluence_reason_codes":       [],
+                "caelyn_confluence_normalized_score":   None,
+                "caelyn_confluence_confidence_score":   None,
+                "caelyn_confluence_raw_score":          None,
+                "caelyn_confluence_core_score":         None,
+                "caelyn_confluence_bonus_score":        None,
+                "caelyn_confluence_total_score":        None,
+                # ── PHASE 2: V4 debug fields ─────────────────────────────────
+                "caelyn_confluence_v4_score":               None,
+                "caelyn_confluence_v4_raw_score":           None,
+                "caelyn_confluence_v4_normalized_score":    None,
+                "caelyn_confluence_v4_confidence_score":    None,
+                "caelyn_confluence_v4_bucket":              None,
+                "caelyn_confluence_v4_components":          {},
+                "caelyn_confluence_v4_bonus_breakdown":     {},
+                "caelyn_confluence_v4_reason_codes":        [],
+                "caelyn_confluence_v4_actionability":       None,
+                # ── PHASE 2: component breakdown fields ─────────────────────
+                "theme_alignment_score":                None,
+                "theme_alignment_points":               None,
+                "stage_quality_score":                  None,
+                "stage_quality_points":                 None,
+                "options_alignment_score":              None,
+                "options_alignment_points":             None,
+                "options_status":                       None,
+                "options_snapshot_status":              None,
+                "options_as_of":                        None,
+                "entry_risk_reward_score":              None,
+                "entry_risk_reward_points":             None,
+                "pattern_type":                         "NO_PATTERN",
+                "extension_quality":                    "NORMAL",
+                "catalyst_alignment_score":             None,
+                "catalyst_alignment_points":            None,
+                "catalyst_status":                      None,
+                "catalyst_detail_status":               "no_catalyst",
+                "investment_alignment_score":           None,
+                "investment_alignment_points":          None,
+                "investment_quality_label":             None,
+                # ── PHASE 2: bonus points ────────────────────────────────────
+                "social_bonus_points":                  None,
+                "theme_policy_bonus_points":            None,
+                "prediction_market_bonus_points":       None,
+                "whale_insider_bonus_points":           None,
+                "bottleneck_bonus_points":              None,
+                # ── PHASE 2: legacy compat ──────────────────────────────────
+                "legacy_trade_alignment_score":         None,
+                "legacy_trade_alignment_archetype":     None,
+                "legacy_trade_alignment_status":        "compat_only",
+                "legacy_actionability_state":           None,
+                "actionability_state":                  None,
+                # ── Legacy nested ────────────────────────────────────────────
+                "actionability": {
+                    "available": False, "state": None, "legacy_state": None, "score": None,
+                },
                 "trade_alignment": {"available": False, "score": None, "archetype": None},
                 "investment_alignment": {"available": False, "score": None, "state": None},
                 "entry": {
@@ -4145,9 +4201,12 @@ async def get_watchlist_alignment(watchlist_id: str):
             "theme_policy_theme":                   row.get("theme_policy_theme"),
 
             # ── Nested: Actionability ─────────────────────────────────────────
+            # state: V4-promoted actionability (always set when V4 succeeded).
+            # legacy_state: pre-V4 actionability, preserved for compat.
             "actionability": {
                 "available":              actionability_available,
-                "state":                  row.get("actionability_state") if actionability_available else None,
+                "state":                  row.get("actionability_state"),
+                "legacy_state":           row.get("legacy_actionability_state"),
                 "score":                  row.get("actionability_score") if actionability_available else None,
                 "options_entry_conflict": bool(row.get("options_entry_conflict")) if actionability_available else False,
                 "setup_summary":          row.get("setup_summary") if actionability_available else None,
@@ -4272,6 +4331,41 @@ async def get_watchlist_alignment(watchlist_id: str):
             "caelyn_confluence_v4_confidence_score":    row.get("caelyn_confluence_v4_confidence_score"),
             "caelyn_confluence_v4_actionability":       row.get("caelyn_confluence_v4_actionability"),
             "legacy_trade_alignment_score":             row.get("legacy_trade_alignment_score") or row.get("trade_alignment_score"),
+
+            # ── PHASE 2: Canonical extended score fields ──────────────────────
+            "caelyn_confluence_normalized_score":       row.get("caelyn_confluence_normalized_score"),
+            "caelyn_confluence_confidence_score":       row.get("caelyn_confluence_confidence_score"),
+            "caelyn_confluence_raw_score":              row.get("caelyn_confluence_raw_score"),
+            "caelyn_confluence_core_score":             row.get("caelyn_confluence_core_score"),
+            "caelyn_confluence_bonus_score":            row.get("caelyn_confluence_bonus_score"),
+            "caelyn_confluence_total_score":            row.get("caelyn_confluence_total_score"),
+
+            # ── PHASE 2: Component breakdown (first-class, no frontend derivation) ──
+            "theme_alignment_points":                   row.get("theme_alignment_points"),
+            "stage_quality_score":                      row.get("stage_quality_score"),
+            "stage_quality_points":                     row.get("stage_quality_points"),
+            "options_alignment_points":                 row.get("options_alignment_points"),
+            "options_status":                           row.get("options_status"),
+            "options_snapshot_status":                  row.get("options_snapshot_status"),
+            "options_as_of":                            row.get("options_as_of"),
+            "entry_risk_reward_points":                 row.get("entry_risk_reward_points"),
+            "catalyst_alignment_points":                row.get("catalyst_alignment_points"),
+            "catalyst_status":                          row.get("catalyst_status"),
+            "investment_alignment_points":              row.get("investment_alignment_points"),
+
+            # ── PHASE 2: Bonus point breakdown ───────────────────────────────
+            "social_bonus_points":                      row.get("social_bonus_points"),
+            "theme_policy_bonus_points":                row.get("theme_policy_bonus_points"),
+            "prediction_market_bonus_points":           row.get("prediction_market_bonus_points"),
+            "whale_insider_bonus_points":               row.get("whale_insider_bonus_points"),
+            "bottleneck_bonus_points":                  row.get("bottleneck_bonus_points"),
+
+            # ── PHASE 2: Legacy trade alignment compat fields ─────────────────
+            "legacy_trade_alignment_archetype":         row.get("legacy_trade_alignment_archetype"),
+            "legacy_trade_alignment_status":            row.get("legacy_trade_alignment_status") or "compat_only",
+
+            # ── PHASE 2: Legacy actionability (pre-V4 state preserved) ───────
+            "legacy_actionability_state":               row.get("legacy_actionability_state"),
         })
 
     # ── v3: theme leadership (cross-symbol ranking, computed after all rows) ──
