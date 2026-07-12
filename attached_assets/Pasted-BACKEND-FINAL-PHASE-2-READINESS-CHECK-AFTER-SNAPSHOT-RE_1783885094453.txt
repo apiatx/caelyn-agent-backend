@@ -1,0 +1,252 @@
+BACKEND — FINAL PHASE 2 READINESS CHECK AFTER SNAPSHOT REBUILD FIX
+
+Backend only.
+
+Do not change code unless validation reveals a bug.
+Do not touch frontend.
+Do not call LLMs.
+Do not add provider calls.
+Do not promote V4 yet.
+
+Goal:
+
+Verify that the retained Confluence snapshot rebuild fix fully resolved the Phase 2 blocker and that the latest options/no-options fixes are reflected in the live canonical alignment snapshot.
+
+Recent fixed issue:
+
+get_options_alignment_bulk() was hanging because it made 379 sequential Neon calls through _fetch_net_premium_row(sym).
+This was fixed by bulk preloading net premium history once and passing preloaded_net_premium into per-ticker options alignment.
+Verified rebuild time improved to ~10.6 seconds.
+
+Now validate final promotion readiness.
+
+==================================================
+PART 1 — RETAINED SNAPSHOT STATUS
+==================================================
+
+Return:
+
+snap_built_at or generated_at
+snapshot_age_minutes
+rebuild_status
+rebuild_elapsed_ms
+row_count
+v4_rows_scored
+provider_calls
+
+Expected:
+
+snap_built_at/generated_at is populated.
+row_count = 379 or current expected count.
+v4_rows_scored = row_count.
+rebuild completed in reasonable time.
+provider_calls = 0.
+
+==================================================
+PART 2 — OPTIONS STATUS AFTER SUCCESSFUL REBUILD
+==================================================
+
+Return V4 options status counts:
+
+available_live
+available_cached
+lkg_market_closed
+stale_but_usable
+confirmed_no_options
+not_scanned
+missing_cache
+stale_invalid
+
+Also return:
+
+confidence_avg
+confidence >= 70 count
+confidence 40–69 count
+confidence < 40 count
+
+Expected:
+
+not_scanned should be lower than the previous 29 if the sectors-LKG CNO and AMS:BESI fixes are reflected.
+
+Specifically validate:
+
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+AMS:BESI
+
+Expected:
+
+These should now be confirmed_no_options unless there is a precise reason they are still pending.
+
+==================================================
+PART 3 — REMAINING NOT_SCANNED LIST
+==================================================
+
+Return the complete remaining not_scanned list.
+
+For each:
+
+symbol
+classification
+reason_not_scanned
+is_in_supplement_universe
+is_in_supplement_lkg
+is_in_master_lkg
+scan_status
+next_resolution_path
+
+Classify as:
+
+NO_HISTORICAL_LKG_BUT_QUEUED
+INSUFFICIENT_HISTORY
+OPTIONABLE_PENDING_CHAIN
+UNEXPECTED_MISSING
+OTHER
+
+Expected:
+
+No unexplained not_scanned names.
+No foreign tickers left as not_scanned.
+No known confirmed_no_options names left as not_scanned.
+No US watchlist tickers missing from supplement scanner universe.
+
+==================================================
+PART 4 — V4 SCORE/Bucket SANITY CHECK
+==================================================
+
+Return bucket distribution:
+
+ACTIONABLE
+NEAR_ACTIONABLE
+CONFLUENCE_AT_SUPPORT
+WATCH_FOR_RESET
+INVESTMENT_QUALITY
+RISK_CONFLICT
+NO_CLEAR_CONFLUENCE
+
+Validate:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+MSFT
+NVDA
+SMCI
+APH
+
+For each:
+
+symbol
+v4_score
+v4_normalized_score
+v4_confidence_score
+v4_bucket
+actionability_v4_state
+options_status
+options_points
+catalyst_status
+entry_points
+pattern_type
+extension_quality
+reason_codes
+
+==================================================
+PART 5 — PHASE 2 READINESS DECISION
+==================================================
+
+Return YES/NO:
+
+- retained snapshot rebuild completes
+- snap_built_at/generated_at populated
+- options statuses reflect latest LKG/no-options fixes
+- remaining not_scanned fully explained
+- options flow does not blank on weekend/closed market
+- V4 uses cached/LKG options only
+- all 379 rows have V4 fields
+- provider calls = 0
+- no stale old-session snapshot is being served as canonical
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+FINAL PHASE 2 READINESS CHECK REPORT
+
+RETAINED SNAPSHOT STATUS:
+[summary]
+
+OPTIONS STATUS COUNTS:
+[table]
+
+CONFIDENCE COUNTS:
+[table]
+
+REMAINING NOT_SCANNED:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+BUCKET DISTRIBUTION:
+[table]
+
+PHASE 2 READINESS:
+[YES/NO + reason]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+FINAL PHASE 2 READINESS VERDICT
+
+RETAINED SNAPSHOT REBUILDS SUCCESSFULLY:
+[YES/NO]
+
+SNAP_BUILT_AT_OR_GENERATED_AT POPULATED:
+[YES/NO]
+
+LATEST OPTIONS FIXES REFLECTED IN LIVE SNAPSHOT:
+[YES/NO]
+
+KNOWN NO_OPTIONS SYMBOLS CORRECTLY CLASSIFIED:
+[YES/NO]
+
+REMAINING NOT_SCANNED FULLY EXPLAINED:
+[YES/NO]
+
+V4 OPTIONS COVERAGE HEALTHY:
+[YES/NO]
+
+ALL ROWS HAVE V4 FIELDS:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR PHASE 2 PROMOTION:
+[YES/NO]
