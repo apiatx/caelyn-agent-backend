@@ -1,0 +1,356 @@
+BACKEND — PHASE 2.1: CANONICAL CONFLUENCE DISPLAY CONTRACT CLEANUP
+
+Backend only.
+
+Do not touch frontend.
+Do not call LLMs.
+Do not add provider calls.
+Do not change the V4 scoring formula.
+Do not reverse Phase 2 promotion.
+Do not reverse options LKG, CNO, retained snapshot, V4, catalyst, pattern, support, or confidence fixes.
+
+Goal:
+
+Clean up the backend display contract after V4 promotion so frontend can consume one canonical Confluence model without deriving or resolving contradictions.
+
+Phase 2 succeeded:
+
+- 379/379 rows have canonical caelyn_confluence_score
+- 379/379 rows have V4 debug fields
+- 379/379 rows have component breakdown
+- options status: 293 available_cached, 64 confirmed_no_options, 22 not_scanned
+- provider calls = 0
+
+But Phase 2 report exposed two display-contract issues:
+
+1. Bucket/actionability mismatch:
+   KLIC has caelyn_confluence_bucket = ACTIONABLE but actionability_state = WATCH.
+   TER has caelyn_confluence_bucket = ACTIONABLE but actionability_state = NEAR_ACTIONABLE.
+
+2. Validation table shows CRWD with blank canonical score fields despite the report saying 379/379 rows have scores.
+
+These must be fixed before frontend.
+
+==================================================
+PART 1 — DEFINE CLEAN BACKEND SEMANTICS
+==================================================
+
+Make the backend contract unambiguous:
+
+caelyn_confluence_score:
+Ranking score.
+
+caelyn_confluence_bucket:
+User-facing category. Must be actionability-aware.
+
+actionability_state:
+Decision layer. Answers what to do now.
+
+A ticker must not have:
+
+caelyn_confluence_bucket = ACTIONABLE
+
+unless actionability_state is one of:
+
+READY
+NEAR_ACTIONABLE
+
+or another explicitly approved actionable state.
+
+If actionability_state = WATCH, then bucket cannot be ACTIONABLE.
+
+If the model wants to preserve high-score-but-not-actionable names, use a bucket like:
+
+HIGH_CONFLUENCE_WATCH
+HIGH_CONFLUENCE_NOT_ACTIONABLE
+INVESTMENT_QUALITY
+WATCH_FOR_RESET
+NO_CLEAR_CONFLUENCE
+
+Pick the cleanest existing-compatible label.
+
+Do not leave contradictory labels.
+
+==================================================
+PART 2 — FIX BUCKET / ACTIONABILITY CONSISTENCY
+==================================================
+
+Audit every row for contradictions:
+
+caelyn_confluence_bucket = ACTIONABLE
+and actionability_state not in READY / NEAR_ACTIONABLE
+
+caelyn_confluence_bucket = RISK_CONFLICT
+and actionability_state = READY / NEAR_ACTIONABLE
+
+caelyn_confluence_bucket = WATCH_FOR_RESET
+and actionability_state = READY
+
+caelyn_confluence_bucket = NO_CLEAR_CONFLUENCE
+and actionability_state = READY
+
+Return before/after mismatch counts.
+
+Expected after fix:
+
+0 contradictory rows.
+
+Specific expected fixes:
+
+KLIC:
+Do not show ACTIONABLE + WATCH.
+Either actionability becomes NEAR_ACTIONABLE/READY if it truly qualifies,
+or bucket becomes HIGH_CONFLUENCE_WATCH / WATCH / NO_CLEAR depending rules.
+
+TER:
+ACTIONABLE + NEAR_ACTIONABLE is less bad, but still clarify whether ACTIONABLE bucket means READY only or READY/NEAR_ACTIONABLE.
+
+==================================================
+PART 3 — DECIDE ACTIONABLE TAB ELIGIBILITY
+==================================================
+
+Expose a backend boolean:
+
+is_actionable_setup
+
+Rules:
+
+true only if:
+
+- actionability_state in READY / NEAR_ACTIONABLE
+- no major risk conflict
+- no chase extension
+- no confirmed support break
+- confluence confidence passes minimum
+- entry/pattern is valid or near-valid
+
+false otherwise.
+
+Also expose:
+
+is_near_actionable
+is_watch_for_reset
+is_risk_conflict
+is_investment_quality
+
+Frontend should be able to filter tabs directly without deriving.
+
+==================================================
+PART 4 — CLEAN LEGACY ACTIONABILITY DISPLAY
+==================================================
+
+Do not mix canonical and legacy states in one display string.
+
+Bad:
+
+WATCH (AVOID)
+
+Good:
+
+actionability_state = WATCH
+legacy_actionability_state = AVOID
+legacy_actionability_status = compat_only
+
+If there is a legacy AVOID but V4 says WATCH, expose reason codes so we understand why V4 changed it.
+
+Do not let frontend display mixed strings.
+
+==================================================
+PART 5 — CRWD VALIDATION BLANK AUDIT
+==================================================
+
+The Phase 2 report says all 379 rows have canonical score fields, but the validation table shows CRWD as blank:
+
+CRWD — — — — WATCH available_cached available
+
+Audit whether this was:
+
+- validation script lookup bug
+- symbol normalization bug
+- alignment endpoint omission
+- row-building bug
+- retained snapshot row exists but not alignment row
+- CRWD duplicate/format issue
+
+Return:
+
+CRWD in retained snapshot: yes/no
+CRWD in alignment endpoint: yes/no
+CRWD canonical score
+CRWD normalized score
+CRWD confidence score
+CRWD bucket
+CRWD actionability_state
+CRWD options_status
+CRWD catalyst_status
+
+Fix if needed.
+
+==================================================
+PART 6 — OUTPUT CONTRACT VALIDATION
+==================================================
+
+Validate all 379 rows.
+
+Return:
+
+row_count
+rows with canonical score
+rows with normalized score
+rows with confidence score
+rows with component breakdown
+rows with actionability_state
+rows with is_actionable_setup
+bucket/actionability mismatches before
+bucket/actionability mismatches after
+legacy mixed-state strings count
+
+Expected:
+
+379 rows
+0 mismatches
+0 mixed-state display strings
+
+==================================================
+PART 7 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+KLIC
+TER
+CRWD
+WYFI
+OSCR
+FTNT
+MU
+AMD
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+LITE
+PLTR
+OKLO
+SOFI
+AMKR
+ENTG
+KLAC
+ONTO
+SNDK
+NVDA
+MSFT
+SMCI
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+AMS:BESI
+
+For each return:
+
+symbol
+caelyn_confluence_score
+caelyn_confluence_normalized_score
+caelyn_confluence_confidence_score
+caelyn_confluence_bucket
+actionability_state
+legacy_actionability_state
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+is_risk_conflict
+options_status
+catalyst_status
+pattern_type
+extension_quality
+reason_codes
+
+==================================================
+PART 8 — FRONTEND READINESS
+==================================================
+
+Do not update frontend.
+
+Return whether frontend can now safely use:
+
+caelyn_confluence_score for sorting
+caelyn_confluence_bucket for category
+actionability_state for decision label
+is_actionable_setup for Actionable tab
+component fields for breakdown
+bonus fields for bonus chips
+legacy fields only in debug/details
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+PHASE 2.1 BACKEND DISPLAY CONTRACT CLEANUP REPORT
+
+FILES CHANGED:
+[list]
+
+SEMANTIC CONTRACT:
+[summary]
+
+BUCKET/ACTIONABILITY CONSISTENCY:
+[before/after mismatch counts]
+
+ACTIONABLE BOOLEAN FIELDS:
+[summary]
+
+LEGACY ACTIONABILITY CLEANUP:
+[summary]
+
+CRWD AUDIT:
+[summary]
+
+ROW COVERAGE:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+PHASE 2.1 DISPLAY CONTRACT VERDICT
+
+BUCKET/ACTIONABILITY CONTRADICTIONS REMOVED:
+[YES/NO]
+
+ACTIONABLE BUCKET ONLY CONTAINS ACTIONABLE DECISIONS:
+[YES/NO]
+
+IS_ACTIONABLE_SETUP EXPOSED:
+[YES/NO]
+
+LEGACY ACTIONABILITY KEPT SEPARATE:
+[YES/NO]
+
+CRWD BLANK VALIDATION FIXED OR EXPLAINED:
+[YES/NO]
+
+ALL ROWS HAVE CANONICAL SCORE:
+[YES/NO]
+
+ALL ROWS HAVE DISPLAY CONTRACT FIELDS:
+[YES/NO]
+
+FRONTEND CAN FILTER WITHOUT DERIVING:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND UPDATE:
+[YES/NO]

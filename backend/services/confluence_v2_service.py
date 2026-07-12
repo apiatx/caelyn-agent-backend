@@ -1922,6 +1922,39 @@ def build_confluence_snapshot(
         if _v4_act:
             r["actionability_state"] = _v4_act
 
+        # PART 5 — Bucket / actionability consistency correction.
+        # ACTIONABLE bucket must only appear when the decision layer is also
+        # actionable. Approved states: READY, NEAR_ACTIONABLE, WAIT_FOR_BREAKOUT.
+        # Any other combination (e.g. ACTIONABLE bucket + WATCH) is contradictory
+        # and must be resolved by downgrading the bucket before the row is surfaced.
+        _ACT_APPROVED_FOR_ACTIONABLE_BUCKET = {"READY", "NEAR_ACTIONABLE", "WAIT_FOR_BREAKOUT"}
+        _p5_bucket = r.get("caelyn_confluence_bucket") or ""
+        _p5_act    = r.get("actionability_state") or ""
+        if _p5_bucket == "ACTIONABLE" and _p5_act not in _ACT_APPROVED_FOR_ACTIONABLE_BUCKET:
+            r["caelyn_confluence_bucket"] = "NEAR_ACTIONABLE"
+            _p5_rcs = list(r.get("caelyn_confluence_reason_codes") or [])
+            _p5_rcs.append("BUCKET_DOWNGRADED_ACT_CONSISTENCY")
+            r["caelyn_confluence_reason_codes"] = _p5_rcs
+
+        # PART 6 — Boolean filter fields for direct frontend tab filtering.
+        # Frontend should use these booleans rather than deriving them.
+        _p6_bucket = r.get("caelyn_confluence_bucket") or ""
+        _p6_act    = r.get("actionability_state") or ""
+        _p6_rcs    = r.get("caelyn_confluence_reason_codes") or []
+        _p6_risk   = _p6_bucket == "RISK_CONFLICT" or _p6_act == "AVOID"
+
+        r["is_actionable_setup"]  = (
+            _p6_act in {"READY", "NEAR_ACTIONABLE"}
+            and not _p6_risk
+        )
+        r["is_near_actionable"]   = (
+            _p6_act in {"NEAR_ACTIONABLE", "WAIT_FOR_BREAKOUT"}
+            and not _p6_risk
+        )
+        r["is_watch_for_reset"]   = _p6_act == "WATCH_FOR_RESET"
+        r["is_risk_conflict"]     = bool(_p6_risk)
+        r["is_investment_quality"] = _p6_bucket == "INVESTMENT_QUALITY" and not _p6_risk
+
         results.append(r)
 
         # Tally social bonus distribution (LEGACY bonus, unchanged behavior).

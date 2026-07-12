@@ -4073,6 +4073,12 @@ async def get_watchlist_alignment(watchlist_id: str):
                 "legacy_trade_alignment_status":        "compat_only",
                 "legacy_actionability_state":           None,
                 "actionability_state":                  None,
+                # ── PHASE 2.1: boolean filter fields ────────────────────────
+                "is_actionable_setup":                  False,
+                "is_near_actionable":                   False,
+                "is_watch_for_reset":                   False,
+                "is_risk_conflict":                     False,
+                "is_investment_quality":                False,
                 # ── Legacy nested ────────────────────────────────────────────
                 "actionability": {
                     "available": False, "state": None, "legacy_state": None, "score": None,
@@ -4366,6 +4372,13 @@ async def get_watchlist_alignment(watchlist_id: str):
 
             # ── PHASE 2: Legacy actionability (pre-V4 state preserved) ───────
             "legacy_actionability_state":               row.get("legacy_actionability_state"),
+
+            # ── PHASE 2.1: Boolean filter fields (no frontend derivation needed) ─
+            "is_actionable_setup":                      row.get("is_actionable_setup", False),
+            "is_near_actionable":                       row.get("is_near_actionable", False),
+            "is_watch_for_reset":                       row.get("is_watch_for_reset", False),
+            "is_risk_conflict":                         row.get("is_risk_conflict", False),
+            "is_investment_quality":                    row.get("is_investment_quality", False),
         })
 
     # ── v3: theme leadership (cross-symbol ranking, computed after all rows) ──

@@ -32,3 +32,21 @@ so scores are more comparable across the universe.
 Any new consumer reading `caelyn_confluence_score` gets V4. V4 debug fields still
 available under `caelyn_confluence_v4_*` prefix. Do NOT re-introduce sort by
 `trade_confluence_score` — it bypasses the V4 normalization.
+
+## Phase 2.1 addendum — Display contract cleanup
+
+### Bucket/actionability consistency rule
+ACTIONABLE bucket requires actionability_state in {READY, NEAR_ACTIONABLE, WAIT_FOR_BREAKOUT}.
+Applied as post-processing correction in `confluence_v2_service.py` PART 5 block.
+Violation: downgrade bucket to NEAR_ACTIONABLE + append BUCKET_DOWNGRADED_ACT_CONSISTENCY reason code.
+V4 engine `caelyn_confluence_v4_bucket` field retains original (for debug tracing).
+
+### Boolean filter fields
+is_actionable_setup, is_near_actionable, is_watch_for_reset, is_risk_conflict, is_investment_quality
+Computed in PART 6 (confluence_v2_service.py), surfaced in watchlist_router.py.
+Frontend must use these — do not re-derive from bucket/actionability strings.
+
+### CRWD blank root cause
+Phase 2 validation showed CRWD blank because the alignment endpoint was called while
+the retained snapshot rebuild was still in progress — served stale row without promoted fields.
+No bug in alignment logic; stale snapshot served pending rebuild completion.
