@@ -40,6 +40,7 @@ Social Bonus (additive, max +10 points)
 
 from __future__ import annotations
 
+import concurrent.futures as _cft
 import json
 import statistics
 import threading

@@ -575,11 +575,19 @@ def get_options_alignment_for_ticker(
     }
 
 
-def get_options_alignment_bulk(tickers: list[str]) -> dict[str, dict]:
+def get_options_alignment_bulk(
+    tickers: list[str],
+    preloaded_fundamentals: "Optional[dict]" = None,
+) -> dict[str, dict]:
     """
     Batch helper — fetches the combined ticker data cache once and computes
     Options Alignment for every requested ticker off that single snapshot.
     Still zero provider calls (cache/Neon reads only).
+
+    preloaded_fundamentals: if provided by the caller, skip the internal
+    get_snapshots_bulk() Neon read and use this dict instead.  This avoids
+    duplicate Neon round-trips when build_confluence_snapshot() already
+    fetched fundamentals for the Investment Alignment step.
     """
     try:
         from data.options_theme_supplement import get_combined_ticker_data
@@ -588,11 +596,15 @@ def get_options_alignment_bulk(tickers: list[str]) -> dict[str, dict]:
         combined = {}
 
     upper_tickers = [(t or "").upper().strip() for t in tickers]
-    try:
-        from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_bulk
-        fundamentals_map = _get_fund_bulk(upper_tickers)
-    except Exception:
-        fundamentals_map = {}
+
+    if preloaded_fundamentals is not None:
+        fundamentals_map = preloaded_fundamentals
+    else:
+        try:
+            from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_bulk
+            fundamentals_map = _get_fund_bulk(upper_tickers)
+        except Exception:
+            fundamentals_map = {}
 
     return {
         t: get_options_alignment_for_ticker(t, combined_ticker_data=combined, fundamentals_map=fundamentals_map)

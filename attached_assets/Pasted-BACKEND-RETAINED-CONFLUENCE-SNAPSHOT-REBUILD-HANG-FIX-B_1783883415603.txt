@@ -1,0 +1,355 @@
+BACKEND — RETAINED CONFLUENCE SNAPSHOT REBUILD HANG FIX BEFORE PHASE 2
+
+Backend only.
+
+Do not touch frontend.
+Do not promote V4.
+Do not call LLMs.
+Do not add request-time provider calls.
+Do not reverse the options weekend LKG fixes.
+Do not reverse the V4 component, catalyst, shelf, confidence, or coverage fixes.
+
+Problem:
+
+The Options Flow weekend LKG repair is mostly working:
+
+- Options Flow endpoint no longer blanks on closed market
+- /api/options-flow/sectors serves 403 LKG tickers
+- coverage is 97.7%
+- source = shared_options_symbol_cache
+- provider calls = 0
+- V4 options status improved to 293 available_cached, 57 confirmed_no_options, 29 not_scanned
+
+But Phase 2 cannot proceed because the retained Confluence snapshot rebuild is hanging.
+
+Current observed state:
+
+- snap_built_at = null
+- Stage2 finished at 18:30:50Z
+- two CONFLUENCE_RETAINED background rebuilds were triggered
+- no rebuild completion log after ~20 minutes
+- old session snapshot continues to serve
+- latest fixes do not appear until rebuild completes:
+  - CODA/OCC/SLNH/SVCO/TRT/TYGO should flip to confirmed_no_options
+  - AMS:BESI should flip to confirmed_no_options
+  - any latest V4 options changes should reflect in alignment rows
+
+Likely suspected cause:
+
+build_confluence_snapshot() may hang inside slow Neon calls, especially get_snapshots_bulk() from watchlist_fundamentals_store, which appears to be called more than once:
+- once inside get_options_alignment_bulk
+- once directly for Investment Alignment / fundamentals
+
+Goal:
+
+Make retained Confluence snapshot rebuild deterministic, observable, timeout-safe, and non-hanging.
+
+==================================================
+PART 1 — TRACE THE HANG EXACTLY
+==================================================
+
+Instrument build_confluence_snapshot() with step-level timing logs.
+
+Add timing around every bulk read and major compute section:
+
+- _load_stage2_lkg()
+- _load_options_map() / options LKG read
+- get_options_alignment_bulk()
+- get_combined_ticker_data()
+- get_snapshots_bulk() inside options path if applicable
+- get_historical_snapshots_bulk()
+- get_catalyst_alignment_bulk()
+- get_snapshots_bulk() direct fundamentals/investment path
+- theme index / theme rotation reads
+- entry LKG read
+- investment alignment compute
+- per-symbol V4 compute
+- retained snapshot publish
+
+Each log should include:
+
+step name
+started_at
+elapsed_ms
+row_count / symbol_count where relevant
+success/failure
+timeout/fallback used
+
+Add a final success log:
+
+[CONFLUENCE_RETAINED] Rebuild complete rows=X elapsed_ms=Y built_at=Z
+
+Add a failure log:
+
+[CONFLUENCE_RETAINED] Rebuild failed step=... error=... elapsed_ms=...
+
+Do not swallow exceptions silently.
+
+==================================================
+PART 2 — ADD SNAPSHOT REBUILD TIMEOUTS
+==================================================
+
+The background rebuild must not hang indefinitely.
+
+Add timeout handling around external-ish cache/database reads, especially Neon reads.
+
+Candidate timeout:
+
+10–20 seconds per Neon bulk step
+60–90 seconds max total rebuild wall-clock
+
+If a step times out:
+
+- log the timeout
+- use last known retained snapshot if available
+- preserve old snapshot
+- mark snapshot metadata with rebuild_status = failed_timeout
+- expose failed step in metadata
+- do not leave build_in_progress stuck forever
+
+Required metadata:
+
+rebuild_status:
+  idle
+  running
+  complete
+  failed
+  failed_timeout
+  serving_stale
+
+rebuild_started_at
+rebuild_finished_at
+rebuild_elapsed_ms
+rebuild_step
+rebuild_failed_step
+rebuild_error
+serving_snapshot_built_at
+serving_snapshot_age_seconds
+serving_stale_snapshot: true/false
+
+==================================================
+PART 3 — PREVENT MULTIPLE OVERLAPPING REBUILDS
+==================================================
+
+The report says two background rebuilds were triggered.
+
+Ensure only one retained rebuild can run at a time.
+
+If rebuild already running:
+
+- do not start another thread
+- return current status
+- log:
+  [CONFLUENCE_RETAINED] Rebuild already running; skipping duplicate trigger
+
+If rebuild is stuck beyond max wall-clock:
+
+- mark it failed_timeout
+- allow a new rebuild attempt
+- keep serving old snapshot
+
+Do not let build_in_progress remain true forever.
+
+==================================================
+PART 4 — AVOID DUPLICATE FUNDAMENTALS NEON READS
+==================================================
+
+Audit whether build_confluence_snapshot() calls get_snapshots_bulk() twice for the same symbol universe.
+
+If yes:
+
+- fetch fundamentals once
+- pass the same fundamentals map to:
+  - options alignment if it needs market cap/fundamentals
+  - investment alignment
+  - V4 components
+- do not make duplicate Neon reads for the same data
+
+Do not change scoring semantics.
+
+This is a performance/stability fix only.
+
+Return before/after number of get_snapshots_bulk calls per rebuild.
+
+==================================================
+PART 5 — MAKE OPTIONS ALIGNMENT BULK ACCEPT PRELOADED FUNDAMENTALS IF NEEDED
+==================================================
+
+If get_options_alignment_bulk() currently calls get_snapshots_bulk() internally, add an optional preloaded_fundamentals argument.
+
+Behavior:
+
+If preloaded_fundamentals provided:
+- use it
+- do not query Neon again
+
+If not provided:
+- preserve existing behavior for compatibility
+
+This avoids architectural drift while reducing duplicate DB calls.
+
+==================================================
+PART 6 — SNAPSHOT PUBLISH SAFETY
+==================================================
+
+A failed rebuild must never clear the current retained snapshot.
+
+Rules:
+
+- old snapshot remains served until new snapshot fully completes
+- new snapshot only replaces old snapshot after full successful build
+- partial/empty result cannot overwrite retained snapshot
+- if new result row_count is unexpectedly 0, reject publish unless explicitly allowed
+
+Add reason codes:
+
+SKIP_EMPTY_RETAINED_SNAPSHOT_PUBLISH
+PRESERVED_LAST_GOOD_RETAINED_SNAPSHOT
+REBUILD_FAILED_SERVING_STALE
+
+==================================================
+PART 7 — VALIDATE NEW SNAPSHOT REFLECTS LATEST OPTIONS FIXES
+==================================================
+
+After the rebuild completes, validate:
+
+- snap_built_at is not null
+- rebuild_status = complete
+- row_count = 379 or expected full count
+- available_cached count
+- confirmed_no_options count
+- not_scanned count
+- confidence avg
+
+Expected after successful rebuild:
+
+- CODA, OCC, SLNH, SVCO, TRT, TYGO should become confirmed_no_options
+- AMS:BESI should become confirmed_no_options
+- not_scanned should drop from 29 to around 21–22, unless another reason is found
+- old snapshot should no longer be the active serving snapshot
+
+Validate symbols:
+
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+AMS:BESI
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+NVDA
+MSFT
+APH
+NVEC
+
+For each:
+
+symbol
+options_status_before
+options_status_after
+options_snapshot_status
+options_as_of
+v4_score
+v4_confidence
+v4_bucket
+reason_codes
+
+==================================================
+PART 8 — PROMOTION READINESS
+==================================================
+
+Do not promote V4.
+
+Phase 2 can proceed only if:
+
+- retained snapshot rebuild completes successfully
+- snap_built_at is populated
+- rebuild metadata shows complete
+- no rebuild thread is hanging
+- duplicate rebuild triggers are controlled
+- failed rebuilds preserve old snapshot
+- empty rebuilds cannot overwrite old snapshot
+- latest options/no-options fixes are reflected in live alignment rows
+- provider calls = 0
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+RETAINED CONFLUENCE SNAPSHOT REBUILD HANG FIX REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT CAUSE:
+[exact hanging step, not just likely cause]
+
+TIMING TRACE:
+[table of build steps with elapsed_ms and row counts]
+
+TIMEOUT SAFETY:
+[summary]
+
+DUPLICATE REBUILD GUARD:
+[summary]
+
+DUPLICATE NEON READ REDUCTION:
+[before/after get_snapshots_bulk call count]
+
+SNAPSHOT PUBLISH SAFETY:
+[summary]
+
+OPTIONS FIX REFLECTION:
+[before/after counts]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+RETAINED SNAPSHOT REBUILD VERDICT
+
+HANG ROOT CAUSE IDENTIFIED:
+[YES/NO]
+
+REBUILD COMPLETES:
+[YES/NO]
+
+SNAP_BUILT_AT POPULATED:
+[YES/NO]
+
+REBUILD TIMEOUTS INSTALLED:
+[YES/NO]
+
+DUPLICATE REBUILDS PREVENTED:
+[YES/NO]
+
+DUPLICATE FUNDAMENTALS NEON READ REMOVED:
+[YES/NO]
+
+FAILED REBUILD PRESERVES LAST GOOD SNAPSHOT:
+[YES/NO]
+
+EMPTY SNAPSHOT CANNOT OVERWRITE LAST GOOD:
+[YES/NO]
+
+LATEST OPTIONS FIXES REFLECTED IN LIVE ALIGNMENT:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR PHASE 2 PROMOTION:
+[YES/NO]
