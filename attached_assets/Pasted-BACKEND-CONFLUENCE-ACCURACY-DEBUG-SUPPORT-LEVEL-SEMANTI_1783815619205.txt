@@ -1,0 +1,350 @@
+BACKEND — CONFLUENCE ACCURACY DEBUG + SUPPORT LEVEL SEMANTICS REPAIR
+
+Backend only.
+
+Do not touch frontend.
+
+Do not change Catalyst scoring.
+Do not change Theme Policy scoring.
+Do not change Trade Alignment weights.
+Do not add provider calls.
+Do not add LLM calls.
+
+The frontend repair failed because the UI still shows bad Confluence semantics:
+
+1. CRWD / FTNT remain in Confluence despite being grossly overextended.
+2. BE / NVEC / MARA / INTC still show SUPPORT_LOST even though visually they appear to be testing support or sitting above major support.
+3. The UI cannot tell what support level was supposedly lost.
+4. Theme Policy and Catalyst tabs may be empty because the frontend may not be receiving the expected fields.
+
+This task has two goals:
+
+A. Create a timeout-safe Confluence debug payload for selected symbols.
+B. Fix Entry/support semantics so support lost means confirmed loss of important support, not minor level noise.
+
+==================================================
+PART 1 — ADD / RUN DEBUG DIAGNOSTIC FOR SELECTED SYMBOLS
+==================================================
+
+Create a temporary diagnostic script or existing admin/debug route if one already exists.
+
+Do not add a permanent public endpoint unless the project already has debug conventions.
+
+For these symbols:
+
+CRWD
+FTNT
+BE
+NVEC
+MARA
+INTC
+AMD
+MU
+MRVL
+PLTR
+ABCL
+SOFI
+OKLO
+TSM
+GLW
+NVDA
+
+Return one JSON object per symbol with:
+
+symbol
+price
+trade_alignment_score
+investment_alignment_score
+investment_alignment_available
+investment_unavailable_reason
+actionability_verdict
+actionability_state
+setup_summary
+
+entry_state
+entry_score
+entry_grade
+base_archetype
+extension_state
+
+support_level_price
+support_level_type
+support_level_source
+distance_to_support_pct
+support_break_confirmed
+minor_support_lost
+major_support_lost
+
+structure_state
+higher_high_confirmed
+higher_low_confirmed
+lower_high_confirmed
+lower_low_confirmed
+recent_swing_high
+recent_swing_low
+prior_swing_high
+prior_swing_low
+
+distance_from_50dma_pct
+distance_from_200dma_pct
+one_month_return_pct
+three_month_return_pct
+vertical_extension_score
+
+options_alignment_score
+options_primary_signal
+options_entry_conflict
+
+catalyst_alignment_score
+catalyst_primary_source
+catalyst_primary_event
+theme_policy_available
+theme_policy_boost
+theme_policy_event
+catalyst_bearish_conflict
+
+Also return whether the row would be included in:
+Actionable Setups
+Investment Quality
+Theme Policy Tailwinds
+New Catalysts
+Risk / Conflicts
+
+Do not fetch new market data. Use existing Stage/Entry bars and caches.
+
+==================================================
+PART 2 — SUPPORT SEMANTICS REPAIR
+==================================================
+
+Audit current Entry logic for SUPPORT_LOST / FAILED_BREAKOUT.
+
+The current behavior is wrong if a ticker is merely sitting on or testing a major support zone.
+
+Implement or expose support hierarchy:
+
+1. major support:
+   base low
+   prior breakout pivot
+   major horizontal cluster
+   200DMA / long MA zone if relevant
+   weekly swing low
+
+2. minor support:
+   short-term moving average
+   small pivot
+   recent micro swing
+
+SUPPORT_LOST should require:
+
+- close below major support by meaningful buffer
+- confirmation close or lower-low confirmation
+- not merely touching / slightly under a minor level
+
+SUPPORT_TEST should mean:
+
+- price is within support zone
+- support is not confirmed broken
+
+LOWER_HIGH_WARNING should mean:
+
+- lower high likely formed
+- but lower low not confirmed
+
+LOWER_LOW_CONFIRMED should mean:
+
+- current structure has taken out prior meaningful swing low
+
+FAILED_BREAKOUT should require:
+
+- prior breakout above pivot
+- then confirmed failure below breakout pivot / base support
+- not just normal retest
+
+For BE / NVEC / MARA / INTC:
+
+Return before/after:
+
+old entry_state
+new entry_state
+important support level
+support_level_type
+distance_to_support_pct
+lower_low_confirmed
+reason
+
+Expected unless data proves otherwise:
+
+BE:
+likely SUPPORT_TEST / CONSTRUCTIVE_PULLBACK, not confirmed SUPPORT_LOST
+
+NVEC:
+likely SUPPORT_TEST / TRENDLINE_SUPPORT_TEST, not confirmed SUPPORT_LOST
+
+MARA:
+likely range/support test, not confirmed SUPPORT_LOST unless lower low is proven
+
+INTC:
+possibly LOWER_HIGH_WARNING, but not SUPPORT_LOST unless lower low is proven
+
+If the backend data actually proves support was lost, explain exactly which major support and what confirmation.
+
+==================================================
+PART 3 — EXTENSION / PARABOLIC GUARD
+==================================================
+
+CRWD / FTNT-style names should not be treated as asymmetric entry setups.
+
+Add or expose extension diagnostics:
+
+vertical_extension_score
+distance_from_50dma_pct
+distance_from_200dma_pct
+one_month_return_pct
+three_month_return_pct
+extension_state
+
+If extension is extreme:
+
+actionability should be TOO_EXTENDED / WAIT_FOR_RESET / WATCH, not actionable.
+
+Options signal may remain bullish, but options_entry_conflict must be true if options are bullish while entry is extended.
+
+Return before/after for:
+
+CRWD
+FTNT
+
+Expected:
+
+entry/extension state reflects overextension
+actionability does not imply good entry
+setup_summary says wait for reset / options signal but entry extended
+
+==================================================
+PART 4 — CONFLUENCE TAB FIELD VALIDATION
+==================================================
+
+Using the same selected-symbol diagnostic and a full retained snapshot if needed, prove whether backend rows include fields needed by frontend tabs.
+
+For Theme Policy Tailwinds:
+
+Count rows with:
+theme_policy_available true
+theme_policy_boost > 0
+theme_policy_event present
+
+For New Catalysts:
+
+Count rows with:
+catalyst_primary_event
+catalyst_rss_event
+catalyst_scheduled_event
+catalyst_v2_primary_event
+
+For Risk / Conflicts:
+
+Count rows with:
+bearish conflict
+options_entry_conflict
+extension risk
+support risk
+lower_low_confirmed
+
+Return counts and sample rows.
+
+If counts are zero, explain whether data is truly absent or fields are not forwarded.
+
+==================================================
+PART 5 — VALIDATION
+==================================================
+
+No provider calls.
+
+Validate:
+
+CRWD
+FTNT
+BE
+NVEC
+MARA
+INTC
+AMD
+MU
+MRVL
+PLTR
+ABCL
+SOFI
+OKLO
+TSM
+GLW
+NVDA
+
+Final response:
+
+BACKEND CONFLUENCE ACCURACY REPAIR REPORT
+
+FILES CHANGED:
+[list]
+
+DEBUG DIAGNOSTIC:
+[how run / where output is]
+
+SUPPORT SEMANTICS:
+[summary]
+
+BE / NVEC / MARA / INTC BEFORE AFTER:
+[table]
+
+EXTENSION / PARABOLIC GUARD:
+[summary]
+
+CRWD / FTNT BEFORE AFTER:
+[table]
+
+HH/HL STRUCTURE:
+[summary]
+
+SUPPORT LEVELS EXPOSED:
+[fields]
+
+TAB FIELD COUNTS:
+Theme Policy rows:
+New Catalyst rows:
+Risk rows:
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+BACKEND CONFLUENCE ACCURACY VERDICT
+
+IMPORTANT SUPPORT LEVEL IDENTIFIED:
+[YES/NO]
+
+SUPPORT TEST SEPARATED FROM SUPPORT LOST:
+[YES/NO]
+
+LOWER LOW CONFIRMATION USED:
+[YES/NO]
+
+PARABOLIC/EXTENDED SETUPS BLOCKED FROM ACTIONABLE/ASYMMETRIC ENTRY:
+[YES/NO]
+
+OPTIONS ASYMMETRIC SIGNAL STILL PRESERVED AS OPTIONS-ONLY:
+[YES/NO]
+
+THEME POLICY FIELDS PRESENT FOR FRONTEND:
+[YES/NO]
+
+CATALYST EVENT FIELDS PRESENT FOR FRONTEND:
+[YES/NO]
+
+RISK FIELDS PRESENT FOR FRONTEND:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND REPAIR:
+[YES/NO]

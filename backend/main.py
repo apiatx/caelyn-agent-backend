@@ -2201,6 +2201,270 @@ async def debug_quote_consistency(symbol: str):
     }
 
 
+@app.get("/api/debug/confluence-accuracy")
+async def debug_confluence_accuracy(
+    symbols: str = "CRWD,FTNT,BE,NVEC,MARA,INTC,AMD,MU,MRVL,PLTR,ABCL,SOFI,OKLO,TSM,GLW,NVDA",
+):
+    """
+    Confluence accuracy diagnostic for selected symbols.
+    Reads only from in-process LKG caches and retained snapshot — zero provider calls.
+    """
+    from services.entry_state_service import get_all_entry_state_lkg
+    from services.watchlist_stage2_service import _STAGE2_LKG
+    from services.confluence_v2_service import get_retained_confluence_snapshot as _get_retained
+    import time as _time
+
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    entry_lkg   = get_all_entry_state_lkg()
+    retained    = _get_retained()
+
+    # ── Tab field validation counters ─────────────────────────────────────────
+    tab_counts: dict = {
+        "theme_policy": {"available": 0, "boost_gt0": 0, "has_event": 0, "sample": []},
+        "new_catalysts": {"has_primary_event": 0, "has_rss_event": 0, "has_scheduled_event": 0, "has_v2_event": 0, "sample": []},
+        "risk": {"bearish_conflict": 0, "options_entry_conflict": 0, "extension_risk": 0, "support_risk": 0, "lower_low_confirmed": 0, "sample": []},
+    }
+    _retained_syms = [k for k, v in retained.items() if isinstance(v, dict)]
+    for _rs in _retained_syms:
+        _r = retained[_rs]
+        # Theme Policy
+        if _r.get("theme_policy_available"):
+            tab_counts["theme_policy"]["available"] += 1
+        if (_r.get("theme_policy_boost") or 0) > 0:
+            tab_counts["theme_policy"]["boost_gt0"] += 1
+            if len(tab_counts["theme_policy"]["sample"]) < 3:
+                tab_counts["theme_policy"]["sample"].append(_rs)
+        if _r.get("theme_policy_event"):
+            tab_counts["theme_policy"]["has_event"] += 1
+        # Catalyst
+        if _r.get("catalyst_primary_event") or _r.get("catalyst_v2_primary_event"):
+            tab_counts["new_catalysts"]["has_primary_event"] += 1
+            if len(tab_counts["new_catalysts"]["sample"]) < 3:
+                tab_counts["new_catalysts"]["sample"].append(_rs)
+        if _r.get("catalyst_rss_event"):
+            tab_counts["new_catalysts"]["has_rss_event"] += 1
+        if _r.get("catalyst_scheduled_event"):
+            tab_counts["new_catalysts"]["has_scheduled_event"] += 1
+        if _r.get("catalyst_v2_primary_event"):
+            tab_counts["new_catalysts"]["has_v2_event"] += 1
+        # Risk
+        bc = _r.get("bearish_conflict") or _r.get("catalyst_bearish_conflict")
+        if bc:
+            tab_counts["risk"]["bearish_conflict"] += 1
+        if _r.get("options_entry_conflict"):
+            tab_counts["risk"]["options_entry_conflict"] += 1
+        ext_s = _r.get("extension_state") or (entry_lkg.get(_rs) or {}).get("extension_state")
+        if ext_s in ("EXTREME_EXTENSION", "VERTICAL", "CROWDED_MOVE"):
+            tab_counts["risk"]["extension_risk"] += 1
+        es = _r.get("entry_state") or (entry_lkg.get(_rs) or {}).get("entry_state")
+        if es in ("SUPPORT_LOST", "FAILED_BREAKOUT", "LOWER_LOW_CONFIRMED", "SUPPORT_TEST", "LOWER_HIGH_WARNING"):
+            tab_counts["risk"]["support_risk"] += 1
+        if es == "LOWER_LOW_CONFIRMED":
+            tab_counts["risk"]["lower_low_confirmed"] += 1
+            if len(tab_counts["risk"]["sample"]) < 3:
+                tab_counts["risk"]["sample"].append(_rs)
+
+    tab_counts["total_retained_rows"] = len(_retained_syms)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    from services.entry_state_service import _classify_support_hierarchy
+    from services.actionability_service import _compute_actionability_core, compute_actionability
+
+    def _lvl(support_levels: list, label: str):
+        for sl in support_levels:
+            if sl.get("label") == label:
+                return sl.get("level")
+        return None
+
+    # ── Per-symbol payload ────────────────────────────────────────────────────
+    rows = []
+    for sym in sym_list:
+        entry   = entry_lkg.get(sym) or {}
+        ret_row = retained.get(sym) if isinstance(retained.get(sym), dict) else {}
+        s2      = _STAGE2_LKG.get(sym) or {}
+        s2tech  = s2.get("tech") or {}
+        sv2     = entry.get("structure_v2") or {}
+
+        ext_state = entry.get("extension_state")
+        price     = entry.get("price") or s2tech.get("price")
+        support_levels_list = entry.get("support_levels") or []
+
+        # ── Support hierarchy — computed in-memory from stored LKG fields ──────
+        supp: dict = {}
+        if price:
+            sma50_val  = _lvl(support_levels_list, "SMA50")
+            sma200_val = _lvl(support_levels_list, "SMA200")
+            ma30w_val  = _lvl(support_levels_list, "30w_MA")
+            base_low_val      = sv2.get("base_low")
+            breakout_pivot_val= sv2.get("breakout_pivot")
+            # sorted_bars=[] — HH/HL structure fields will be None; major/minor levels compute fine
+            supp = _classify_support_hierarchy(
+                price          = float(price),
+                sma50          = float(sma50_val)  if sma50_val  else None,
+                sma200         = float(sma200_val) if sma200_val else None,
+                ma30w          = float(ma30w_val)  if ma30w_val  else None,
+                base_low       = float(base_low_val)       if base_low_val       else None,
+                breakout_pivot = float(breakout_pivot_val) if breakout_pivot_val else None,
+                sorted_bars    = [],
+            )
+
+        # ── Simulated actionability — verifies extension-guard fix in-process ──
+        # Uses entry LKG row as entry_result (contains extension_state, entry_state,
+        # entry_score, structure_v2) + simulated strong TA score.  Not the same as
+        # live retained-snapshot actionability but proves the guard fires correctly.
+        sim_ta = {"trade_alignment_available": True, "trade_alignment_score": 75.0,
+                  "theme_alignment_score": 70.0, "options_alignment_score": None,
+                  "options_pressure_state": None, "catalyst_alignment_available": False}
+        sim_act: dict = {}
+        if entry:
+            try:
+                sim_act = compute_actionability(
+                    entry_result   = entry,
+                    ta_fields      = sim_ta,
+                    options_result = None,
+                )
+            except Exception:
+                pass
+
+        # SMA distance fallback (retained snapshot distances if stage2 unavailable)
+        pct50_raw  = s2tech.get("pct_vs_sma_50")
+        pct200_raw = s2tech.get("pct_vs_sma_200")
+        if pct50_raw is None and support_levels_list:
+            pct50_raw = next((sl.get("distance_pct") for sl in support_levels_list if sl.get("label") == "SMA50"), None)
+        if pct200_raw is None and support_levels_list:
+            pct200_raw = next((sl.get("distance_pct") for sl in support_levels_list if sl.get("label") == "SMA200"), None)
+
+        row = {
+            # ── Identity ──
+            "symbol":     sym,
+            "price":      price,
+            "lkg_source": "entry_lkg" if entry else ("stage2" if s2 else "none"),
+
+            # ── Trade + Investment Alignment (from retained snapshot) ──────────
+            "trade_alignment_score":          ret_row.get("trade_alignment_score"),
+            "investment_alignment_score":     ret_row.get("investment_alignment_score"),
+            "investment_alignment_available": ret_row.get("investment_alignment_available"),
+            "investment_unavailable_reason":  ret_row.get("investment_unavailable_reason"),
+
+            # ── Actionability (retained = live; sim = extension-guard proof) ──
+            "actionability_verdict":    ret_row.get("actionability_state") or sim_act.get("actionability_state"),
+            "actionability_state":      ret_row.get("actionability_state"),
+            "actionability_simulated":  sim_act.get("actionability_state"),
+            "actionability_sim_reason": sim_act.get("actionability_reason_codes"),
+            "setup_summary":            ret_row.get("setup_summary") or sim_act.get("setup_summary"),
+
+            # ── Entry Structure ──
+            "entry_state":     entry.get("entry_state"),
+            "entry_score":     entry.get("entry_score"),
+            "entry_grade":     entry.get("entry_grade"),
+            "base_archetype":  sv2.get("base_archetype"),
+            "extension_state": ext_state,
+
+            # ── Support Hierarchy (computed in-memory) ────────────────────────
+            "support_level_price":     supp.get("support_level_price"),
+            "support_level_type":      supp.get("support_level_type"),
+            "support_level_source":    supp.get("support_level_source"),
+            "distance_to_support_pct": supp.get("distance_to_major_support_pct"),
+            "support_break_confirmed": supp.get("support_break_confirmed"),
+            "minor_support_lost":      supp.get("minor_support_lost"),
+            "major_support_lost":      supp.get("major_support_lost"),
+            "major_support_type":      supp.get("major_support_type"),
+            "minor_support_type":      supp.get("minor_support_type"),
+            "major_support_level":     supp.get("major_support_level"),
+            "minor_support_level":     supp.get("minor_support_level"),
+
+            # ── HH/HL structure (from bars — None since bars not loaded here) ─
+            # Note: these will be populated after next fresh analyze_entry_state_from_bars call
+            "structure_state":       entry.get("structure_state"),
+            "higher_high_confirmed": supp.get("higher_high_confirmed"),
+            "higher_low_confirmed":  supp.get("higher_low_confirmed"),
+            "lower_high_confirmed":  supp.get("lower_high_confirmed"),
+            "lower_low_confirmed":   supp.get("lower_low_confirmed"),
+            "recent_swing_high":     supp.get("recent_swing_high"),
+            "recent_swing_low":      supp.get("recent_swing_low"),
+            "prior_swing_high":      supp.get("prior_swing_high"),
+            "prior_swing_low":       supp.get("prior_swing_low"),
+
+            # ── Extension Metrics ──
+            "distance_from_50dma_pct":  pct50_raw,
+            "distance_from_200dma_pct": pct200_raw,
+            "one_month_return_pct":     s2tech.get("ret_1m"),
+            "three_month_return_pct":   s2tech.get("ret_3m"),
+            "vertical_extension_score": s2tech.get("vertical_extension_score"),
+            "extension_pct_30w_ma":     entry.get("extension_pct"),
+
+            # ── Options (retained snapshot) ──
+            "options_alignment_score": ret_row.get("options_alignment_score"),
+            "options_primary_signal":  ret_row.get("options_primary_signal"),
+            "options_entry_conflict":  ret_row.get("options_entry_conflict") or sim_act.get("options_entry_conflict"),
+
+            # ── Catalyst ──
+            "catalyst_alignment_score":  ret_row.get("catalyst_alignment_score"),
+            "catalyst_primary_source":   ret_row.get("catalyst_primary_source"),
+            "catalyst_primary_event":    ret_row.get("catalyst_primary_event") or ret_row.get("catalyst_v2_primary_event"),
+            "catalyst_bearish_conflict": ret_row.get("catalyst_bearish_conflict") or ret_row.get("bearish_conflict"),
+
+            # ── Theme Policy ──
+            "theme_policy_available": ret_row.get("theme_policy_available"),
+            "theme_policy_boost":     ret_row.get("theme_policy_boost"),
+            "theme_policy_event":     ret_row.get("theme_policy_event"),
+
+            # ── Tab inclusion verdicts (based on all available data) ───────────
+            "in_actionable_setups":       ret_row.get("actionability_state") in ("READY", "EARLY_WATCH"),
+            "in_investment_quality":      bool(ret_row.get("investment_alignment_available")),
+            "in_theme_policy_tailwinds":  bool(ret_row.get("theme_policy_available") and (ret_row.get("theme_policy_boost") or 0) > 0),
+            "in_new_catalysts":           bool(ret_row.get("catalyst_primary_event") or ret_row.get("catalyst_v2_primary_event") or ret_row.get("catalyst_rss_event")),
+            "in_risk_conflicts":          bool(
+                ret_row.get("options_entry_conflict")
+                or sim_act.get("options_entry_conflict")
+                or ret_row.get("catalyst_bearish_conflict")
+                or ret_row.get("bearish_conflict")
+                or supp.get("major_support_lost")
+                or supp.get("lower_low_confirmed")
+                or ext_state in ("EXTREME_EXTENSION", "VERTICAL", "CROWDED_MOVE")
+            ),
+
+            # ── V2 structure diagnostics ──
+            "base_detected":   sv2.get("base_detected"),
+            "base_low":        sv2.get("base_low"),
+            "breakout_pivot":  sv2.get("breakout_pivot"),
+            "failed_breakout": sv2.get("failed_breakout_confirmed"),
+            "primary_support": entry.get("primary_support_level"),
+
+            # ── Meta ──
+            "in_retained_snapshot": isinstance(retained.get(sym), dict),
+            "in_entry_lkg":         bool(entry),
+            "in_stage2_lkg":        bool(s2),
+        }
+        rows.append(row)
+
+    # ── Validation summary ────────────────────────────────────────────────────
+    extreme_ext_syms  = [r["symbol"] for r in rows if r.get("extension_state") == "EXTREME_EXTENSION"]
+    too_ext_syms      = [r["symbol"] for r in rows if r.get("actionability_simulated") == "TOO_EXTENDED"]
+    support_test_syms = [r["symbol"] for r in rows if r.get("entry_state") in ("SUPPORT_TEST", "LOWER_HIGH_WARNING", "LOWER_LOW_CONFIRMED")]
+    support_lost_syms = [r["symbol"] for r in rows if r.get("entry_state") in ("SUPPORT_LOST", "FAILED_BREAKOUT")]
+    major_lost_syms   = [r["symbol"] for r in rows if r.get("major_support_lost") is True]
+
+    validation = {
+        "extreme_extension_symbols":    extreme_ext_syms,
+        "simulated_too_extended":       too_ext_syms,
+        "extension_guard_effective":    all(s in too_ext_syms for s in extreme_ext_syms),
+        "support_test_nuanced":         support_test_syms,
+        "blanket_support_lost":         support_lost_syms,
+        "major_support_lost_confirmed": major_lost_syms,
+        "provider_calls":               0,
+        "data_source":                  "entry_lkg+stage2_lkg+retained_snapshot+in_memory_compute",
+    }
+
+    return {
+        "generated_at":  _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "symbols":       sym_list,
+        "rows":          rows,
+        "tab_field_counts": tab_counts,
+        "validation":    validation,
+    }
+
+
 @app.get("/api/presets")
 async def list_presets(request: Request):
     """List all available preset_intent values the backend supports.

@@ -287,6 +287,133 @@ def _build_support_levels(
     return result
 
 
+# ── Support hierarchy classifier ───────────────────────────────────────────────
+
+def _classify_support_hierarchy(
+    price:          float,
+    sma50:          Optional[float],
+    sma200:         Optional[float],
+    ma30w:          Optional[float],
+    base_low:       Optional[float],
+    breakout_pivot: Optional[float],
+    sorted_bars:    list[dict],
+) -> dict:
+    """
+    Classify support levels as MAJOR or MINOR and detect HH/HL structure.
+
+    Major support — structural / long-term levels that require meaningful
+    confirmation to declare lost:
+      breakout_pivot → base_low → 200DMA → 30w_MA (highest first)
+
+    Minor support — short-term levels that can be tested without structural damage:
+      SMA50 → recent 20-bar swing low
+
+    Returns a flat dict with all support hierarchy fields.  Zero provider calls.
+    """
+    out: dict = {}
+
+    # ── Major support: take the highest level below or nearest to price ───────
+    major_candidates: list[tuple[str, float]] = []
+    for label, lvl in [
+        ("breakout_pivot", breakout_pivot),
+        ("base_low",       base_low),
+        ("200DMA",         sma200),
+        ("30w_MA",         ma30w),
+    ]:
+        if lvl is not None and lvl > 0:
+            major_candidates.append((label, lvl))
+    # Sort descending by level — closest to current price first
+    major_candidates.sort(key=lambda t: t[1], reverse=True)
+
+    major_level: Optional[float] = None
+    major_type:  Optional[str]   = None
+    if major_candidates:
+        major_type, major_level = major_candidates[0]
+
+    if major_level is not None and price > 0:
+        dist_pct = round((price - major_level) / major_level * 100, 2)
+        out["major_support_level"]            = round(major_level, 4)
+        out["major_support_type"]             = major_type
+        out["major_support_source"]           = "v2_structure" if major_type in ("breakout_pivot", "base_low") else "ma"
+        out["distance_to_major_support_pct"]  = dist_pct
+        # Lost = more than 3 % below (minor test alone does not count)
+        out["major_support_lost"]             = dist_pct < -3.0
+    else:
+        out["major_support_level"]           = None
+        out["major_support_type"]            = None
+        out["major_support_source"]          = None
+        out["distance_to_major_support_pct"] = None
+        out["major_support_lost"]            = None
+
+    # ── Minor support ─────────────────────────────────────────────────────────
+    minor_level: Optional[float] = None
+    minor_type:  Optional[str]   = None
+    if sma50 and sma50 > 0:
+        minor_level, minor_type = sma50, "SMA50"
+    elif len(sorted_bars) >= 20:
+        w = sorted_bars[-20:]
+        lows = [float(b.get("low") or b.get("close") or 0) for b in w if (b.get("low") or b.get("close"))]
+        if lows:
+            minor_level, minor_type = min(lows), "recent_swing"
+
+    out["minor_support_level"] = round(minor_level, 4) if minor_level else None
+    out["minor_support_type"]  = minor_type
+    out["minor_support_lost"]  = (price < minor_level) if (minor_level and price > 0) else None
+
+    # ── Best display level ────────────────────────────────────────────────────
+    out["support_level_price"]  = out["major_support_level"] or out["minor_support_level"]
+    out["support_level_type"]   = out["major_support_type"]  or out["minor_support_type"]
+    out["support_level_source"] = ("major" if out["major_support_level"] else
+                                   ("minor" if out["minor_support_level"] else None))
+
+    # ── HH/HL structure from the last 40 bars ────────────────────────────────
+    if len(sorted_bars) >= 40:
+        window = sorted_bars[-40:]
+        closes: list[float] = []
+        lows_w: list[float] = []
+        highs_w: list[float] = []
+        for b in window:
+            c = b.get("close")
+            if c is None:
+                continue
+            try:
+                cv = float(c)
+                closes.append(cv)
+                lows_w.append(float(b.get("low")  or cv))
+                highs_w.append(float(b.get("high") or cv))
+            except (TypeError, ValueError):
+                pass
+
+        if len(closes) >= 20:
+            mid = len(closes) // 2
+            prior_high  = max(highs_w[:mid])
+            recent_high = max(highs_w[mid:])
+            prior_low   = min(lows_w[:mid])
+            recent_low  = min(lows_w[mid:])
+
+            out["prior_swing_high"]       = round(prior_high,  4)
+            out["recent_swing_high"]      = round(recent_high, 4)
+            out["prior_swing_low"]        = round(prior_low,   4)
+            out["recent_swing_low"]       = round(recent_low,  4)
+            out["higher_high_confirmed"]  = recent_high > prior_high  * 1.02
+            out["higher_low_confirmed"]   = recent_low  > prior_low   * 1.02
+            out["lower_high_confirmed"]   = recent_high < prior_high  * 0.97
+            out["lower_low_confirmed"]    = recent_low  < prior_low   * 0.97
+            out["support_break_confirmed"]= out["lower_low_confirmed"]
+        else:
+            for k in ("prior_swing_high", "recent_swing_high", "prior_swing_low",
+                      "recent_swing_low", "higher_high_confirmed", "higher_low_confirmed",
+                      "lower_high_confirmed", "lower_low_confirmed", "support_break_confirmed"):
+                out[k] = None
+    else:
+        for k in ("prior_swing_high", "recent_swing_high", "prior_swing_low",
+                  "recent_swing_low", "higher_high_confirmed", "higher_low_confirmed",
+                  "lower_high_confirmed", "lower_low_confirmed", "support_break_confirmed"):
+            out[k] = None
+
+    return out
+
+
 # ── Core classification ────────────────────────────────────────────────────────
 
 def _classify_entry_state(
@@ -979,6 +1106,21 @@ def analyze_entry_state_from_bars(
             price, sma20, sma50, sma200, ma30w_price
         )
 
+    # ── Support hierarchy (major/minor + HH/HL structure) ────────────────────
+    _support_hier: dict = {}
+    if price is not None:
+        _sv2b = (_v2_structure or {}).get("base", {})
+        _sv2o = (_v2_structure or {}).get("breakout", {})
+        _support_hier = _classify_support_hierarchy(
+            price          = price,
+            sma50          = sma50,
+            sma200         = sma200,
+            ma30w          = ma30w_price,
+            base_low       = _sv2b.get("base_low"),
+            breakout_pivot = _sv2o.get("breakout_pivot"),
+            sorted_bars    = sorted_bars,
+        )
+
     result: dict[str, Any] = {
         "symbol":          symbol,
         "entry_family":    entry_family,
@@ -1007,6 +1149,7 @@ def analyze_entry_state_from_bars(
         "elapsed_ms":      round((time.time() - t0) * 1000, 1),
         "computed_at":     _now_iso(),
         "entry_analysis_version": ENTRY_ANALYSIS_VERSION,
+        **_support_hier,
     }
 
     # ── Entry Structure V2 diagnostics (present whenever computed) ───────────

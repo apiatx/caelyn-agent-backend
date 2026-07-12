@@ -232,6 +232,37 @@ def _compute_actionability_core(
             "actionability_version":      ACTIONABILITY_VERSION,
         }
 
+    # 2b) V2 structural labelling may re-assign EXTREME_EXTENSION → WAIT_FOR_RETEST
+    #     for post-breakout chase contexts (base detected, pct > 15 above 30w MA).
+    #     The entry_state label no longer triggers step 2 above, so we must check
+    #     extension_state from the raw entry_result directly.  If EXTREME_EXTENSION
+    #     was the underlying reality the actionability is always TOO_EXTENDED —
+    #     the structural re-label must NOT produce a WAIT_FOR_RETEST verdict for
+    #     overextended names like CRWD / FTNT.
+    extension_state_raw = entry_result.get("extension_state")
+    if (
+        extension_state_raw == "EXTREME_EXTENSION"
+        and entry_state not in _SEVERE_EXTENSION_STATES
+        and entry_state not in _HARD_BREAK_STATES
+    ):
+        conflicts.append("EXTREME_EXTENSION")
+        conflicts.append("CHASE_RISK")
+        reasons.append("V2_EXTREME_EXTENSION_RELABELED")
+        reasons.append("CHASE_RISK")
+        if ta_available and ta_score is not None and ta_score >= _READY_TA_MIN:
+            strengths.append("STRONG_TRADE_ALIGNMENT")
+            reasons.append("STRONG_ALIGNMENT_BAD_ENTRY")
+        return {
+            "actionability_available":    True,
+            "actionability_state":        TOO_EXTENDED,
+            "actionability_score":        actionability_score,
+            "actionability_reason_codes": reasons,
+            "actionability_conflicts":    conflicts,
+            "actionability_strengths":    strengths,
+            "actionability_entry_family": entry_family,
+            "actionability_version":      ACTIONABILITY_VERSION,
+        }
+
     # 3) Mild extension: TA-gated WAIT_FOR_RETEST vs TOO_EXTENDED.
     if entry_state == _MILD_EXTENSION_STATE:
         if ta_available and ta_score is not None and ta_score >= _EXTENDED_WAIT_RETEST_TA_MIN:
