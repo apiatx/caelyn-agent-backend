@@ -5120,7 +5120,7 @@ async def v4_report_endpoint(watchlist_id: str):
             "total":   len(rows),
             "scored":  len(scored),
             "errors":  len(errors),
-            "snap_built_at": snap.get("built_at"),
+            "snap_built_at": snap.get("generated_at") or snap.get("built_at"),
         },
         "bucket_distribution":          buckets,
         "actionability_distribution":   act_states,

@@ -337,6 +337,7 @@ def get_options_alignment_for_ticker(
     ticker: str,
     combined_ticker_data: Optional[dict] = None,
     fundamentals_map: Optional[dict] = None,
+    preloaded_net_premium: "Optional[dict]" = None,
 ) -> dict:
     """
     Zero-provider-call Options Alignment signal for one ticker.
@@ -474,7 +475,12 @@ def get_options_alignment_for_ticker(
         reasons.append("UNEXPECTED_MISSING_OPTIONS_DATA" if row.get("net_premium") is None and not (row.get("call_premium") or row.get("put_premium")) else "NO_CURRENT_OPTIONS_COMPOSITE")
 
     # ── Net Premium (current + delta history) ──────────────────────────────
-    current_row, history = _fetch_net_premium_row(sym)
+    # Use preloaded bulk data when available (avoids one Neon round-trip per
+    # ticker in the bulk path — 379 individual calls replaced by 1).
+    if preloaded_net_premium is not None and sym in preloaded_net_premium:
+        current_row, history = preloaded_net_premium[sym]
+    else:
+        current_row, history = _fetch_net_premium_row(sym)
 
     net_premium = current_row["net_premium"] if current_row else row.get("net_premium")
     call_premium = current_row["call_premium"] if current_row else row.get("call_premium")
@@ -588,7 +594,15 @@ def get_options_alignment_bulk(
     get_snapshots_bulk() Neon read and use this dict instead.  This avoids
     duplicate Neon round-trips when build_confluence_snapshot() already
     fetched fundamentals for the Investment Alignment step.
+
+    Net premium history: fetched in ONE bulk Neon query for all tickers
+    (instead of 379 sequential per-ticker queries — the root cause of
+    the retained snapshot rebuild hang).  A 25-second timeout prevents
+    indefinite blocking; tickers without history receive (None, []).
     """
+    import concurrent.futures as _cft_b
+    import time as _time_b
+
     try:
         from data.options_theme_supplement import get_combined_ticker_data
         combined = get_combined_ticker_data()
@@ -606,7 +620,55 @@ def get_options_alignment_bulk(
         except Exception:
             fundamentals_map = {}
 
+    # ── SINGLE bulk net-premium Neon read (replaces N×per-ticker queries) ──
+    # Root cause of the retained-snapshot rebuild hang: _fetch_net_premium_row
+    # called get_historical_snapshots_bulk with a 1-ticker list PER TICKER,
+    # producing 379 sequential Neon round-trips.  One IN-clause query instead.
+    #
+    # Timeout design: we use shutdown(wait=False) so a stuck Neon socket
+    # does NOT block the calling thread beyond timeout_s.  The hung
+    # background thread drains on its own once the socket unblocks.
+    net_premium_preloaded: dict[str, tuple] = {}
+    _t_npm = _time_b.time()
+    try:
+        from datetime import date as _d_b, timedelta as _td_b
+        from data.options_net_premium_history import get_historical_snapshots_bulk as _gnpm
+        _since = _d_b.today() - _td_b(days=35)
+        _entities = [("stock", t) for t in upper_tickers if t]
+        _npm_pool = _cft_b.ThreadPoolExecutor(max_workers=1, thread_name_prefix="npm-bulk")
+        _npm_fut = _npm_pool.submit(_gnpm, _entities, _since)
+        try:
+            _npm_raw = _npm_fut.result(timeout=25) or {}
+        except _cft_b.TimeoutError:
+            _npm_raw = {}
+            print(
+                f"[OPTIONS_ALIGNMENT_BULK] net_premium_bulk TIMEOUT "
+                f"elapsed_ms={int((_time_b.time()-_t_npm)*1000)} — skipping delta history"
+            )
+        except Exception as _ne:
+            _npm_raw = {}
+            print(f"[OPTIONS_ALIGNMENT_BULK] net_premium_bulk ERROR: {_ne}")
+        finally:
+            _npm_pool.shutdown(wait=False)   # never block on hung Neon socket
+
+        for t in upper_tickers:
+            _hist = _npm_raw.get(("stock", t), [])
+            net_premium_preloaded[t] = (_hist[0] if _hist else None, _hist[1:] if _hist else [])
+        print(
+            f"[OPTIONS_ALIGNMENT_BULK] net_premium_bulk ok "
+            f"tickers_with_data={sum(1 for v in net_premium_preloaded.values() if v[0])} "
+            f"elapsed_ms={int((_time_b.time()-_t_npm)*1000)}"
+        )
+    except Exception as _setup_e:
+        print(f"[OPTIONS_ALIGNMENT_BULK] net_premium_bulk setup ERROR: {_setup_e}")
+    # ───────────────────────────────────────────────────────────────────────
+
     return {
-        t: get_options_alignment_for_ticker(t, combined_ticker_data=combined, fundamentals_map=fundamentals_map)
+        t: get_options_alignment_for_ticker(
+            t,
+            combined_ticker_data=combined,
+            fundamentals_map=fundamentals_map,
+            preloaded_net_premium=net_premium_preloaded if net_premium_preloaded else None,
+        )
         for t in upper_tickers
     }

@@ -1732,30 +1732,91 @@ def build_confluence_snapshot(
     except Exception:
         theme_align_map = {}
 
-    # Options Alignment — reuse services.options_alignment (zero provider calls).
+    # ── Step timer helper (inline) ─────────────────────────────────────────────
+    def _snap_log(step: str, elapsed_ms: int, **kw: Any) -> None:
+        extra = "  ".join(f"{k}={v}" for k, v in kw.items())
+        print(f"[CONFLUENCE_SNAP] step={step} elapsed_ms={elapsed_ms}  {extra}".rstrip())
+
+    def _timed_neon(fn, *args, timeout_s: int = 20, step: str = "neon", **kwargs):
+        """
+        Run fn(*args, **kwargs) in a side-thread with a hard timeout.
+        Returns (result_or_fallback, elapsed_ms, timed_out: bool).
+
+        IMPORTANT: uses shutdown(wait=False) so a wedged Neon socket does NOT
+        block this caller — the background thread drains on its own once the
+        socket eventually unblocks.  Never use the context-manager form of
+        ThreadPoolExecutor here because its __exit__ calls shutdown(wait=True).
+        """
+        _t = time.time()
+        _pool = _cft.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"snap-{step}")
+        _fut = _pool.submit(fn, *args, **kwargs)
+        try:
+            result = _fut.result(timeout=timeout_s)
+            ms = int((time.time() - _t) * 1000)
+            _pool.shutdown(wait=False)
+            return result, ms, False
+        except _cft.TimeoutError:
+            ms = int((time.time() - _t) * 1000)
+            _pool.shutdown(wait=False)
+            print(f"[CONFLUENCE_SNAP] step={step} TIMEOUT elapsed_ms={ms} limit_s={timeout_s}")
+            return None, ms, True
+        except Exception as _e:
+            ms = int((time.time() - _t) * 1000)
+            _pool.shutdown(wait=False)
+            print(f"[CONFLUENCE_SNAP] step={step} ERROR elapsed_ms={ms} error={_e}")
+            return None, ms, False
+
+    # ── Fundamentals — SINGLE Neon read, shared across Options + Investment ────
+    # Previously called twice (once inside get_options_alignment_bulk, once here).
+    # Now fetched ONCE with a 20-second timeout and passed to both consumers.
+    # Before: 2× get_snapshots_bulk calls per rebuild
+    # After:  1× get_snapshots_bulk call per rebuild
+    _t_fund = time.time()
+    fundamentals_map: dict[str, dict] = {}
+    _fund_timed_out = False
+    try:
+        from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_bulk
+        _fund_result, _fund_ms, _fund_timed_out = _timed_neon(
+            _get_fund_bulk, universe, timeout_s=20, step="fundamentals_neon"
+        )
+        fundamentals_map = _fund_result or {}
+    except Exception as _fe:
+        _fund_ms = int((time.time() - _t_fund) * 1000)
+        print(f"[CONFLUENCE_SNAP] step=fundamentals_neon ERROR elapsed_ms={_fund_ms} error={_fe}")
+    _snap_log(
+        "fundamentals_neon",
+        _fund_ms,
+        row_count=len(fundamentals_map),
+        timed_out=_fund_timed_out,
+        status="timeout_fallback" if _fund_timed_out else "ok",
+    )
+
+    # ── Options Alignment — pass preloaded fundamentals to avoid 2nd Neon read ─
     options_align_map: dict[str, dict] = {}
+    _t_opts = time.time()
     try:
         from services.options_alignment import get_options_alignment_bulk
-        options_align_map = get_options_alignment_bulk(universe)
-    except Exception:
-        options_align_map = {}
+        options_align_map = get_options_alignment_bulk(
+            universe,
+            preloaded_fundamentals=fundamentals_map,
+        )
+        _snap_log("options_alignment_bulk", int((time.time() - _t_opts) * 1000),
+                  row_count=len(options_align_map), status="ok")
+    except Exception as _oe:
+        _snap_log("options_alignment_bulk", int((time.time() - _t_opts) * 1000),
+                  status=f"error:{_oe}")
 
-    # Catalyst Alignment — clean, zero-provider-call (services.catalyst_alignment).
+    # ── Catalyst Alignment — zero-provider-call ────────────────────────────────
     catalyst_align_map: dict[str, dict] = {}
+    _t_cat = time.time()
     try:
         from services.catalyst_alignment import get_catalyst_alignment_bulk
         catalyst_align_map = get_catalyst_alignment_bulk(universe, ticker_theme_idx=ticker_theme_idx)
-    except Exception:
-        catalyst_align_map = {}
-
-    # Fundamentals cache (Neon, weekly-refreshed, zero calls on read) — used
-    # exclusively by REAL INVESTMENT ALIGNMENT V1 (SHADOW, additive-only).
-    fundamentals_map: dict[str, dict] = {}
-    try:
-        from data.watchlist_fundamentals_store import get_snapshots_bulk
-        fundamentals_map = get_snapshots_bulk(universe)
-    except Exception:
-        fundamentals_map = {}
+        _snap_log("catalyst_alignment_bulk", int((time.time() - _t_cat) * 1000),
+                  row_count=len(catalyst_align_map), status="ok")
+    except Exception as _ce:
+        _snap_log("catalyst_alignment_bulk", int((time.time() - _t_cat) * 1000),
+                  status=f"error:{_ce}")
 
     results: list[dict] = []
     social_bonus_counts = {"0": 0, "2_4": 0, "5_7": 0, "8_10": 0, "eligible": 0, "applied": 0}
@@ -1955,6 +2016,10 @@ def build_confluence_snapshot(
         },
     }
 
+    _total_ms = round((time.time() - t0) * 1000, 1)
+    print(
+        f"[CONFLUENCE_SNAP] build_complete symbol_count={len(results)} elapsed_ms={_total_ms}"
+    )
     return {
         "ok":               True,
         "generated_at":     _now_iso(),
@@ -1986,7 +2051,7 @@ def build_confluence_snapshot(
         "theme_bridge_diagnostics": _theme_bridge_diagnostics(ticker_theme_idx, rotation_idx, universe),
         "trade_alignment_diagnostics": trade_alignment_diagnostics,
         "actionability_diagnostics": actionability_diagnostics,
-        "elapsed_ms":  round((time.time() - t0) * 1000, 1),
+        "elapsed_ms":  _total_ms,
         "results":     results,
     }
 
@@ -2040,12 +2105,27 @@ def get_confluence_for_symbol(symbol: str) -> dict:
 
 _RETAINED_LOCK = threading.Lock()
 _RETAINED: dict[str, Any] = {
-    "snapshot":            None,
-    "built_at":            None,
-    "source_fingerprint":  None,
-    "build_in_progress":   False,
-    "stale_reasons":       [],
+    "snapshot":              None,
+    "built_at":              None,
+    "source_fingerprint":    None,
+    "build_in_progress":     False,
+    "stale_reasons":         [],
+    # Rich rebuild observability (Parts 1-3 of hang-fix spec)
+    "rebuild_status":        "idle",    # idle | running | complete | failed | failed_timeout | serving_stale
+    "rebuild_started_at":    None,
+    "rebuild_finished_at":   None,
+    "rebuild_elapsed_ms":    None,
+    "rebuild_step":          None,      # most-recently logged step during an active build
+    "rebuild_failed_step":   None,
+    "rebuild_error":         None,
+    "serving_stale":         False,     # True when serving old snapshot after a failed rebuild
 }
+
+# Maximum wall-clock allowed for a single background rebuild before it is
+# declared "stuck" and the next trigger is allowed to attempt a fresh build.
+# This is NOT a hard kill — the stuck thread may still be waiting on a Neon
+# socket, but the serving path is unblocked.
+_REBUILD_MAX_WALL_CLOCK_S = 120
 
 # Completion signal for the in-progress retained build.
 # Set = no build running (or build just finished).
@@ -2233,7 +2313,11 @@ def _start_background_rebuild() -> bool:
     Atomically claim the builder slot then spawn the rebuild thread.
 
     Returns True  — a new build was started.
-    Returns False — a build is already in progress; caller must not start another.
+    Returns False — a build is already in progress (and not yet stuck).
+
+    STUCK DETECTION: if build_in_progress has been True for longer than
+    _REBUILD_MAX_WALL_CLOCK_S, the prior build is declared failed_timeout,
+    old snapshot is preserved, and a fresh build is allowed to start.
 
     INVARIANT ENFORCED:
       _RETAINED_BUILD_DONE.clear() and _RETAINED["build_in_progress"] = True
@@ -2245,26 +2329,106 @@ def _start_background_rebuild() -> bool:
     """
     with _RETAINED_LOCK:
         if _RETAINED["build_in_progress"]:
-            return False
+            # Stuck-build detection: if the in-progress build started more than
+            # _REBUILD_MAX_WALL_CLOCK_S ago, force-reset and allow a new attempt.
+            started_at_str = _RETAINED.get("rebuild_started_at")
+            is_stuck = False
+            if started_at_str:
+                try:
+                    started_dt = datetime.fromisoformat(started_at_str)
+                    age_s = (datetime.now(timezone.utc) - started_dt).total_seconds()
+                    if age_s > _REBUILD_MAX_WALL_CLOCK_S:
+                        is_stuck = True
+                        print(
+                            f"[CONFLUENCE_RETAINED] Rebuild stuck — age={age_s:.0f}s "
+                            f"limit={_REBUILD_MAX_WALL_CLOCK_S}s — force-resetting; "
+                            f"PRESERVED_LAST_GOOD_RETAINED_SNAPSHOT"
+                        )
+                        _RETAINED["rebuild_status"]  = "failed_timeout"
+                        _RETAINED["rebuild_error"]   = f"stuck_beyond_{_REBUILD_MAX_WALL_CLOCK_S}s"
+                        _RETAINED["serving_stale"]   = _RETAINED["snapshot"] is not None
+                        _RETAINED["build_in_progress"] = False
+                        _RETAINED_BUILD_DONE.set()
+                    else:
+                        print(
+                            f"[CONFLUENCE_RETAINED] Rebuild already running "
+                            f"(age={age_s:.0f}s); skipping duplicate trigger"
+                        )
+                        return False
+                except Exception:
+                    print("[CONFLUENCE_RETAINED] Rebuild already running; skipping duplicate trigger")
+                    return False
+            else:
+                print("[CONFLUENCE_RETAINED] Rebuild already running; skipping duplicate trigger")
+                return False
+            if not is_stuck:
+                return False
         # Atomic: clear event then mark in-progress, both under the lock.
-        # Any waiter that subsequently reads build_in_progress=True is guaranteed
-        # to find the event already cleared and will block on wait().
         _RETAINED_BUILD_DONE.clear()
         _RETAINED["build_in_progress"] = True
+        _RETAINED["rebuild_status"]    = "running"
+        _RETAINED["rebuild_started_at"] = _now_iso()
+        _RETAINED["rebuild_step"]       = "starting"
+        _RETAINED["rebuild_error"]      = None
+        _RETAINED["rebuild_failed_step"] = None
 
     def _rebuild() -> None:
+        _t_rebuild = time.time()
         try:
+            with _RETAINED_LOCK:
+                _RETAINED["rebuild_step"] = "build_confluence_snapshot"
             new_snap = build_confluence_snapshot()
+            row_count = len((new_snap or {}).get("results", []))
+
+            # ── Publish safety: never overwrite a good snapshot with empty results ─
+            if row_count == 0:
+                elapsed_ms = int((time.time() - _t_rebuild) * 1000)
+                print(
+                    f"[CONFLUENCE_RETAINED] SKIP_EMPTY_RETAINED_SNAPSHOT_PUBLISH — "
+                    f"0 rows returned; PRESERVED_LAST_GOOD_RETAINED_SNAPSHOT "
+                    f"elapsed_ms={elapsed_ms}"
+                )
+                with _RETAINED_LOCK:
+                    _RETAINED["build_in_progress"]  = False
+                    _RETAINED["rebuild_status"]      = "failed"
+                    _RETAINED["rebuild_finished_at"] = _now_iso()
+                    _RETAINED["rebuild_elapsed_ms"]  = elapsed_ms
+                    _RETAINED["rebuild_failed_step"] = "empty_snapshot_guard"
+                    _RETAINED["rebuild_error"]       = "SKIP_EMPTY_RETAINED_SNAPSHOT_PUBLISH"
+                    _RETAINED["serving_stale"]       = _RETAINED["snapshot"] is not None
+                return
+
             new_fp = _compute_source_fingerprint()
+            elapsed_ms = int((time.time() - _t_rebuild) * 1000)
             with _RETAINED_LOCK:
-                _RETAINED["snapshot"] = new_snap
-                _RETAINED["built_at"] = _now_iso()
-                _RETAINED["source_fingerprint"] = new_fp
-                _RETAINED["build_in_progress"] = False
+                _RETAINED["snapshot"]            = new_snap
+                _RETAINED["built_at"]            = _now_iso()
+                _RETAINED["source_fingerprint"]  = new_fp
+                _RETAINED["build_in_progress"]   = False
+                _RETAINED["rebuild_status"]       = "complete"
+                _RETAINED["rebuild_finished_at"]  = _now_iso()
+                _RETAINED["rebuild_elapsed_ms"]   = elapsed_ms
+                _RETAINED["rebuild_step"]          = "done"
+                _RETAINED["serving_stale"]         = False
+            print(
+                f"[CONFLUENCE_RETAINED] Rebuild complete "
+                f"rows={row_count} elapsed_ms={elapsed_ms} built_at={_RETAINED['built_at']}"
+            )
         except Exception as e:
-            print(f"[CONFLUENCE_RETAINED] background rebuild failed (prior snapshot preserved): {e}")
+            elapsed_ms = int((time.time() - _t_rebuild) * 1000)
+            print(
+                f"[CONFLUENCE_RETAINED] Rebuild failed step={_RETAINED.get('rebuild_step')} "
+                f"error={e} elapsed_ms={elapsed_ms}  "
+                f"REBUILD_FAILED_SERVING_STALE"
+            )
             with _RETAINED_LOCK:
-                _RETAINED["build_in_progress"] = False
+                _RETAINED["build_in_progress"]   = False
+                _RETAINED["rebuild_status"]       = "failed"
+                _RETAINED["rebuild_finished_at"]  = _now_iso()
+                _RETAINED["rebuild_elapsed_ms"]   = elapsed_ms
+                _RETAINED["rebuild_failed_step"]  = _RETAINED.get("rebuild_step")
+                _RETAINED["rebuild_error"]        = str(e)
+                _RETAINED["serving_stale"]        = _RETAINED["snapshot"] is not None
         finally:
             # Always unblock waiters whether the build succeeded or failed.
             # Never clear the event here — that is the caller's job under the lock.
@@ -2378,18 +2542,43 @@ def get_retained_confluence_meta() -> dict:
     get_retained_confluence_snapshot() first if a fresh/retained snapshot is
     needed.
     """
-    # "stale" mirrors rebuild_in_progress: get_retained_confluence_snapshot()
-    # already evaluates the fingerprint/max-age check and flips
-    # build_in_progress=True the moment it decides the retained snapshot is
-    # stale and starts a rebuild. Recomputing the fingerprint again here
-    # would just duplicate that check on every request for no new signal.
     with _RETAINED_LOCK:
-        built_at          = _RETAINED["built_at"]
-        build_in_progress = _RETAINED["build_in_progress"]
-        stale_reasons     = list(_RETAINED.get("stale_reasons") or [])
+        built_at              = _RETAINED["built_at"]
+        build_in_progress     = _RETAINED["build_in_progress"]
+        stale_reasons         = list(_RETAINED.get("stale_reasons") or [])
+        rebuild_status        = _RETAINED.get("rebuild_status", "idle")
+        rebuild_started_at    = _RETAINED.get("rebuild_started_at")
+        rebuild_finished_at   = _RETAINED.get("rebuild_finished_at")
+        rebuild_elapsed_ms    = _RETAINED.get("rebuild_elapsed_ms")
+        rebuild_step          = _RETAINED.get("rebuild_step")
+        rebuild_failed_step   = _RETAINED.get("rebuild_failed_step")
+        rebuild_error         = _RETAINED.get("rebuild_error")
+        serving_stale         = _RETAINED.get("serving_stale", False)
+
+    snap_age_s: Optional[float] = None
+    if built_at:
+        try:
+            snap_age_s = round(
+                (datetime.now(timezone.utc) - datetime.fromisoformat(built_at)).total_seconds(), 1
+            )
+        except Exception:
+            pass
+
     return {
-        "built_at":            built_at,
-        "stale":               build_in_progress,
-        "rebuild_in_progress": build_in_progress,
-        "stale_reasons":       stale_reasons if build_in_progress else [],
+        # Legacy fields — unchanged
+        "built_at":              built_at,
+        "stale":                 build_in_progress,
+        "rebuild_in_progress":   build_in_progress,
+        "stale_reasons":         stale_reasons if build_in_progress else [],
+        # Rich rebuild observability (hang-fix spec Parts 1-3)
+        "rebuild_status":        rebuild_status,
+        "rebuild_started_at":    rebuild_started_at,
+        "rebuild_finished_at":   rebuild_finished_at,
+        "rebuild_elapsed_ms":    rebuild_elapsed_ms,
+        "rebuild_step":          rebuild_step,
+        "rebuild_failed_step":   rebuild_failed_step,
+        "rebuild_error":         rebuild_error,
+        "serving_stale_snapshot": serving_stale,
+        "serving_snapshot_built_at":   built_at,
+        "serving_snapshot_age_seconds": snap_age_s,
     }
