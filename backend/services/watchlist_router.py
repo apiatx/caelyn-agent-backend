@@ -4049,42 +4049,139 @@ async def get_watchlist_alignment(watchlist_id: str):
         entry_score = row.get("entry_score") if entry_available else None
         entry_grade = row.get("entry_grade") if entry_available else None
 
+        # ── Derived: catalyst detail status ───────────────────────────────────
+        _cat_score    = row.get("catalyst_alignment_score")
+        _cat_sched    = row.get("catalyst_scheduled_event")
+        _cat_rss      = row.get("catalyst_rss_event")
+        _cat_v2       = row.get("catalyst_v2_primary_event")
+        _cat_src      = row.get("catalyst_primary_source") or "none"
+        if _cat_sched:
+            _cat_detail_status = "scheduled_event"
+        elif _cat_rss or _cat_v2:
+            _cat_detail_status = "rss_event"
+        elif "theme_policy" in _cat_src:
+            _cat_detail_status = "theme_policy_event"
+        elif _cat_score and _cat_score > 0:
+            _cat_detail_status = "score_only_missing_event"
+        else:
+            _cat_detail_status = "no_catalyst"
+
+        # ── Derived: investment quality label ─────────────────────────────────
+        _ia_score  = row.get("investment_alignment_score")
+        _ia_state  = row.get("investment_alignment_state")
+        _act_state = row.get("actionability_state")
+        _rr_state  = row.get("entry_risk_reward_state")
+        def _investment_quality_label(ia_score, ia_state, act, rr):
+            if ia_score is None or not investment_alignment_available:
+                return None
+            if ia_score >= 90:   base = "HIGHEST_QUALITY"
+            elif ia_score >= 80: base = "STRONG_QUALITY"
+            elif ia_score >= 70: base = "HIGH_GROWTH"
+            elif ia_score >= 60: base = "QUALITY"
+            else:                return None
+            if act == "AVOID" or rr == "BROKEN_SUPPORT_AVOID":
+                return f"{base}_WITH_CONFIRMED_RISK"
+            if act == "TOO_EXTENDED" or rr == "STRONG_ASSET_EXTENDED_WAIT":
+                return f"{base}_WATCH_FOR_RESET"
+            if act in ("READY", "EARLY_WATCH", "WAIT_FOR_RETEST", "WAIT_FOR_BREAKOUT", "REVERSAL_WATCH", "WATCH"):
+                return f"{base}_NEAR_SUPPORT"
+            return f"{base}_NO_CLEAR_ENTRY"
+        _iq_label = _investment_quality_label(_ia_score, _ia_state, _act_state, _rr_state)
+
         rows.append({
             "symbol": sym,
+
+            # ── Canonical Caelyn Confluence Score (flat, source of truth) ─────
+            "caelyn_confluence_score":              row.get("caelyn_confluence_score"),
+            "caelyn_confluence_bucket":             row.get("caelyn_confluence_bucket"),
+            "caelyn_confluence_reason_codes":       row.get("caelyn_confluence_reason_codes") or [],
+
+            # ── Confluence At Support ─────────────────────────────────────────
+            "confluence_at_support":                row.get("confluence_at_support"),
+            "confluence_at_support_score":          row.get("confluence_at_support_score"),
+            "confluence_at_support_state":          row.get("confluence_at_support_state"),
+            "confluence_at_support_reason_codes":   row.get("confluence_at_support_reason_codes") or [],
+
+            # ── Entry Risk/Reward (flat) ──────────────────────────────────────
+            "entry_risk_reward_state":              _rr_state,
+            "entry_risk_reward_score":              row.get("entry_risk_reward_score"),
+            "entry_risk_reward_reason_codes":       row.get("entry_risk_reward_reason_codes") or [],
+
+            # ── Active Support Hierarchy (flat) ───────────────────────────────
+            "active_support_status":                row.get("active_support_status"),
+            "active_support_type":                  row.get("active_support_type"),
+            "active_support_touch_count":           row.get("active_support_touch_count"),
+            "lower_low_confirmed":                  row.get("lower_low_confirmed"),
+            "distance_to_active_support_pct":       row.get("distance_to_active_support_pct"),
+            "critical_break_level":                 row.get("critical_break_level"),
+            "reclaim_level":                        row.get("reclaim_level"),
+            "next_downside_support":                row.get("next_downside_support"),
+            "extension_state":                      row.get("extension_state"),
+
+            # ── Flat scalars for easy frontend access ─────────────────────────
+            "trade_alignment_score":                row.get("trade_alignment_score") if trade_alignment_available else None,
+            "investment_alignment_score":           row.get("investment_alignment_score") if investment_alignment_available else None,
+            "catalyst_alignment_score":             row.get("catalyst_alignment_score"),
+            "options_alignment_score":              row.get("options_alignment_score"),
+            "theme_policy_boost":                   row.get("theme_policy_boost"),
+            "theme_policy_available":               bool(row.get("theme_policy_available")),
+            "theme_policy_event":                   row.get("theme_policy_event"),
+            "theme_policy_theme":                   row.get("theme_policy_theme"),
+
+            # ── Nested: Actionability ─────────────────────────────────────────
             "actionability": {
-                "available":             actionability_available,
-                "state":                 row.get("actionability_state") if actionability_available else None,
-                "score":                 row.get("actionability_score") if actionability_available else None,
+                "available":              actionability_available,
+                "state":                  row.get("actionability_state") if actionability_available else None,
+                "score":                  row.get("actionability_score") if actionability_available else None,
                 "options_entry_conflict": bool(row.get("options_entry_conflict")) if actionability_available else False,
-                "setup_summary":         row.get("setup_summary") if actionability_available else None,
+                "setup_summary":          row.get("setup_summary") if actionability_available else None,
+                "reason_codes":           row.get("actionability_reason_codes") or [],
             },
+
+            # ── Nested: Trade Alignment ───────────────────────────────────────
             "trade_alignment": {
-                "available": trade_alignment_available,
-                "score":     row.get("trade_alignment_score") if trade_alignment_available else None,
-                "archetype": row.get("trade_alignment_archetype") if trade_alignment_available else None,
+                "available":            trade_alignment_available,
+                "score":                row.get("trade_alignment_score") if trade_alignment_available else None,
+                "archetype":            row.get("trade_alignment_archetype") if trade_alignment_available else None,
+                "theme_alignment_score":row.get("theme_alignment_score"),
+                "stage_quality_score":  row.get("stage_quality_score"),
             },
+
+            # ── Nested: Investment Alignment ──────────────────────────────────
             "investment_alignment": {
-                "available":         investment_alignment_available,
-                "score":             row.get("investment_alignment_score") if investment_alignment_available else None,
-                "state":             row.get("investment_alignment_state") if investment_alignment_available else None,
-                "unavailable_reason": row.get("investment_unavailable_reason") if not investment_alignment_available else None,
+                "available":              investment_alignment_available,
+                "score":                  row.get("investment_alignment_score") if investment_alignment_available else None,
+                "state":                  row.get("investment_alignment_state") if investment_alignment_available else None,
+                "unavailable_reason":     row.get("investment_unavailable_reason") if not investment_alignment_available else None,
+                "investment_quality_label": _iq_label,
+                "financial_acceleration_score": row.get("financial_acceleration_score"),
+                "forward_expectations_score":   row.get("forward_expectations_score"),
             },
+
+            # ── Nested: Entry ─────────────────────────────────────────────────
             "entry": {
                 "available": entry_available,
                 "state":     entry_state,
                 "score":     entry_score,
                 "grade":     entry_grade,
             },
+
+            # ── Nested: Theme ─────────────────────────────────────────────────
             "theme": {
                 "id": primary_theme_id,
             },
+
+            # ── Nested: Options ───────────────────────────────────────────────
             "options": {
                 "pressure_state": row.get("options_pressure_state"),
                 "primary_signal": row.get("options_primary_signal"),
             },
+
+            # ── Nested: Catalyst ──────────────────────────────────────────────
             "catalyst": {
                 "available":          bool(row.get("catalyst_alignment_available")),
                 "score":              row.get("catalyst_alignment_score"),
+                "detail_status":      _cat_detail_status,
                 "model_version":      row.get("catalyst_model_version"),
                 "primary_source":     row.get("catalyst_primary_source"),
                 "primary_event":      row.get("catalyst_primary_event"),
@@ -4096,6 +4193,10 @@ async def get_watchlist_alignment(watchlist_id: str):
                 "v2_state":           row.get("catalyst_v2_state") or "UNAVAILABLE",
                 "v2_primary_event":   row.get("catalyst_v2_primary_event"),
                 "v2_conflicts":       row.get("catalyst_v2_conflicts") or [],
+                "theme_policy_available": bool(row.get("theme_policy_available")),
+                "theme_policy_boost":     row.get("theme_policy_boost"),
+                "theme_policy_event":     row.get("theme_policy_event"),
+                "theme_policy_theme":     row.get("theme_policy_theme"),
             },
         })
 

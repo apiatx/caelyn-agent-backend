@@ -1,0 +1,725 @@
+BACKEND — CANONICAL FULL-UNIVERSE CONFLUENCE ALIGNMENT REPAIR
+
+Backend only.
+
+Do not touch frontend.
+Do not call LLMs.
+Do not add provider calls.
+Do not change Catalyst scoring yet.
+Do not rebuild Investment Alignment from scratch.
+Do not rebuild Options Alignment.
+Do not remove existing fields.
+
+Context:
+
+Frontend is now correctly calling:
+
+/api/watchlist/{watchlist_id}/alignment
+
+But the rows still do not have canonical populated caelyn_confluence_score fields. The frontend is flattening nested row objects and deriving buckets as a workaround.
+
+That is not good enough.
+
+The backend must make the alignment endpoint the source of truth for the full Caelyn Confluence universe.
+
+The goal:
+
+Every watchlist ticker returned by /api/watchlist/{watchlist_id}/alignment should have a complete, deterministic confluence row with:
+
+- true overall confluence score
+- true bucket
+- clear catalyst fields/provenance
+- clear actionability/entry fields
+- Investment Quality fields
+- no double-counted Options
+- no vague “Risk” bucket for merely extended names
+- enough diagnostics to explain WYFI, OSCR, catalysts, and Investment Quality coverage
+
+Use cached/structured data only.
+
+No provider calls.
+
+==================================================
+PART 1 — AUDIT CURRENT ALIGNMENT ENDPOINT SHAPE
+==================================================
+
+Before changing logic, audit the current /api/watchlist/{watchlist_id}/alignment output.
+
+Return:
+
+watchlist_id
+total rows
+unique symbols
+sample row keys
+nested object keys
+flat fields currently present
+flat fields currently missing
+
+Specifically check coverage for:
+
+caelyn_confluence_score
+caelyn_confluence_bucket
+caelyn_confluence_reason_codes
+confluence_at_support_score
+confluence_at_support_state
+entry_risk_reward_state
+entry_risk_reward_score
+trade_alignment_score
+investment_alignment_score
+catalyst_alignment_score
+theme_policy_boost
+options_alignment_score
+actionability.state
+entry.state
+active_support_status
+lower_low_confirmed
+
+Validate these symbols exist and show their current raw row:
+
+OSCR
+WYFI
+CRWD
+FTNT
+AMD
+MU
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+AMKR
+ENTG
+PLTR
+OKLO
+SOFI
+NVDA
+
+==================================================
+PART 2 — POPULATE CANONICAL CONFLUENCE SCORE ON ALIGNMENT ROWS
+==================================================
+
+Populate these fields on every alignment row:
+
+caelyn_confluence_score
+caelyn_confluence_bucket
+caelyn_confluence_reason_codes
+confluence_at_support_score
+confluence_at_support_state
+confluence_at_support_reason_codes
+
+These should be backend source-of-truth fields, not frontend-derived fields.
+
+Important scoring rule:
+
+Do not double-count Options.
+
+Trade Alignment already includes:
+
+Theme Alignment — 25%
+Stage Quality — 25%
+Options Alignment — 25%
+Catalyst Alignment — 25%
+
+Therefore, overall All Confluence should not add Options separately again.
+
+Suggested All Confluence formula:
+
+Trade Alignment — 45%
+Entry Risk/Reward — 35%
+Catalyst / Theme Policy — 20%
+
+Investment Alignment should not be included in the All Confluence score for now.
+
+Reason:
+
+Investment Quality is a separate tab. All Confluence should rank trade/swing confluence across the watchlist, not just high-quality companies.
+
+Investment can be shown as a separate column/tie-breaker, but it should not drive All Confluence.
+
+If any component is missing:
+
+trade missing -> use conservative neutral, not zero
+entry missing -> conservative neutral or NO_CLEAR_ENTRY equivalent
+catalyst missing -> zero or neutral depending current Catalyst semantics, but explain choice
+theme policy missing -> zero
+investment missing -> not applicable to All Confluence
+
+Return the exact formula used.
+
+==================================================
+PART 3 — FIX BUCKET SEMANTICS
+==================================================
+
+Populate:
+
+caelyn_confluence_bucket
+
+Allowed buckets:
+
+ACTIONABLE
+NEAR_ACTIONABLE
+CONFLUENCE_AT_SUPPORT
+WATCH_FOR_RESET
+INVESTMENT_QUALITY
+SPECULATIVE_TRADE
+RISK_CONFLICT
+NO_CLEAR_CONFLUENCE
+
+Rules:
+
+ACTIONABLE:
+- actionability state is READY / actionable equivalent
+- not too extended
+- not lower-low confirmed
+- not active support lost
+- not BROKEN_SUPPORT_AVOID
+
+NEAR_ACTIONABLE:
+- WAIT_FOR_RETEST / WAIT_FOR_BREAKOUT / EARLY_WATCH / REVERSAL_WATCH
+- setup developing
+- not too extended
+- not broken
+
+CONFLUENCE_AT_SUPPORT:
+- active support intact/testing/bounced
+- confluence_at_support_score strong
+- lower_low_confirmed false
+- not too extended
+- not broken
+
+WATCH_FOR_RESET:
+- actionability = TOO_EXTENDED
+- OR entry_risk_reward_state = STRONG_ASSET_EXTENDED_WAIT
+- OR extension_state = EXTREME_EXTENSION / VERTICAL / CROWDED_MOVE
+
+Important:
+
+TOO_EXTENDED is not RISK_CONFLICT.
+Extended means timing/chase risk, not chart broken.
+
+RISK_CONFLICT:
+Only use for true risk/breakdown/conflict:
+
+- lower_low_confirmed = true
+- active_support_status = lost_confirmed
+- entry_state = SUPPORT_LOST / FAILED_BREAKOUT / LOWER_LOW_CONFIRMED
+- actionability = AVOID
+- entry_risk_reward_state = BROKEN_SUPPORT_AVOID
+- material bearish catalyst conflict
+
+Do not bucket a name as RISK_CONFLICT just because it is extended.
+
+INVESTMENT_QUALITY:
+Use only when this row is primarily a high-quality investment name but not currently actionable.
+Do not force all strong investments into this bucket if they belong in WATCH_FOR_RESET or CONFLUENCE_AT_SUPPORT.
+
+SPECULATIVE_TRADE:
+Trade/catalyst/options/theme confluence exists, but Investment Alignment is weak or unavailable.
+
+NO_CLEAR_CONFLUENCE:
+Everything else.
+
+Caps:
+
+If WATCH_FOR_RESET:
+cap caelyn_confluence_score at 60 unless explicitly justified.
+
+If RISK_CONFLICT:
+cap caelyn_confluence_score at 45 unless shown only inside Risk.
+
+If CONFLUENCE_AT_SUPPORT:
+allow score to rank well if support is intact and trade/catalyst alignment exists.
+
+==================================================
+PART 4 — CATALYST PROVENANCE AUDIT AND FIELD REPAIR
+==================================================
+
+Do not change Catalyst scoring yet.
+
+First audit what Catalyst Alignment is actually using and returning.
+
+Catalyst Alignment should mean:
+
+“Is there a specific identifiable development or scheduled event that could drive this stock over a days-to-months swing horizon?”
+
+Valid catalyst families:
+
+- earnings
+- FDA / biotech / regulatory event
+- IPO-linked event
+- major contract / customer deal
+- government award
+- product launch
+- technical milestone
+- investor day / conference
+- strategic partnership
+- M&A
+- stock split if materially relevant
+- company-specific high-impact news
+- theme-level policy tailwind
+- bearish company-specific conflict such as investigation, dilution, failed trial, regulatory problem
+
+No LLM scoring on request.
+Use existing cached/structured data.
+
+Audit full universe:
+
+total rows
+rows with catalyst_alignment_score > 0
+rows with catalyst_primary_event
+rows with catalyst_rss_event
+rows with catalyst_scheduled_event
+rows with catalyst_v2_primary_event
+rows with catalyst_bearish_conflict
+rows with theme_policy_boost > 0
+rows with catalyst score but no event object
+rows with event object but zero score
+
+For rows with catalyst score but no event object, forward a reason/provenance field such as:
+
+catalyst_detail_status:
+- scheduled_event
+- rss_event
+- theme_policy_event
+- score_only_missing_event
+- no_catalyst
+
+Forward on every alignment row:
+
+catalyst_alignment_score
+catalyst_primary_source
+catalyst_primary_event
+catalyst_rss_event
+catalyst_scheduled_event
+catalyst_v2_primary_event
+catalyst_bearish_conflict
+catalyst_detail_status
+catalyst_reason_codes if available
+
+Theme Policy fields:
+
+theme_policy_available
+theme_policy_boost
+theme_policy_event
+theme_policy_theme
+theme_policy_score
+theme_policy_reason_codes if available
+
+Expected:
+
+If 145 rows have catalyst scores, alignment rows should expose enough event/provenance detail for frontend to avoid showing “Catalyst: None.”
+
+If event details are missing, say “score_only_missing_event” rather than leaving the UI to guess.
+
+==================================================
+PART 5 — PRESERVE INVESTMENT QUALITY LOGIC, EXPAND COVERAGE
+==================================================
+
+Do not rebuild Investment Alignment from scratch.
+
+The current Investment Quality output appears directionally useful. Preserve the existing investment_alignment_score logic unless a specific bug is found.
+
+Problem:
+
+Frontend only shows around 12 Investment Quality cards, but the watchlist likely has many more quality/growth/speculative-growth candidates.
+
+Goal:
+
+Expand Investment Quality coverage and expose clearer backend fields without replacing the working logic.
+
+Audit full universe:
+
+total rows
+rows with investment_alignment_score
+rows with investment_alignment_available = true
+rows with investment_alignment_score >= 90
+rows with investment_alignment_score >= 80
+rows with investment_alignment_score >= 70
+rows with investment_alignment_score >= 60
+rows with investment_alignment_available = false
+investment_unavailable_reason counts
+top 100 by investment_alignment_score
+
+Forward or preserve:
+
+investment_alignment_score
+investment_alignment_available
+investment_unavailable_reason
+investment_alignment_state / label if available
+financial_acceleration if available
+forward_expectations if available
+fundamental_quality if available
+growth_quality if available
+speculative_growth_label if already exists
+quality_label if already exists
+
+If existing HC Investments Zone / setup/performance group rankings already classify:
+
+- High Growth
+- Speculative Growth
+- Quality Compounder
+- Cash Flow / Low Debt
+- Forward Estimate Growth
+
+then reuse or expose those labels rather than rebuilding them.
+
+Do not invent a new fundamental model if one already exists.
+
+Suggested backend labels for frontend display:
+
+HIGHEST_QUALITY
+STRONG_QUALITY
+HIGH_GROWTH
+SPECULATIVE_GROWTH
+QUALITY_NEAR_SUPPORT
+QUALITY_WATCH_FOR_RESET
+QUALITY_WITH_CONFIRMED_RISK
+QUALITY_NO_CLEAR_ENTRY
+
+Important label rules:
+
+Do not call something “Broken/Risk” unless true risk is confirmed:
+
+- lower_low_confirmed
+- active_support_status = lost_confirmed
+- entry_risk_reward_state = BROKEN_SUPPORT_AVOID
+- actionability = AVOID
+
+If simply extended:
+
+label = QUALITY_WATCH_FOR_RESET
+
+If sitting near support:
+
+label = QUALITY_NEAR_SUPPORT
+
+If no clean entry:
+
+label = QUALITY_NO_CLEAR_ENTRY
+
+Return:
+
+investment rows shown before if known
+backend investment-quality candidate count after
+top 50 investment quality names
+bucket breakdown among investment quality names
+
+==================================================
+PART 6 — WYFI TRACE
+==================================================
+
+WYFI previously appeared in Actionable Setups and looked like a strong trade candidate.
+
+Now it disappeared.
+
+Do a one-symbol trace.
+
+Return:
+
+symbol
+present in alignment rows yes/no
+trade_alignment_score
+theme_alignment_score
+stage_quality_score
+options_alignment_score
+catalyst_alignment_score
+investment_alignment_score
+entry_state
+entry_risk_reward_state
+entry_risk_reward_score
+actionability state
+extension_state
+active_support_status
+lower_low_confirmed
+caelyn_confluence_score
+caelyn_confluence_bucket
+reason_codes
+why included/excluded from Actionable
+which bucket/tab it should appear in
+
+Do not guess.
+Explain exactly what changed or what filter excludes it.
+
+==================================================
+PART 7 — OSCR TRACE
+==================================================
+
+OSCR appeared ranked #1 in All Confluence while showing:
+
+RISK / CONFLICT
+TOO EXTENDED
+Trade 87
+CCS missing/null
+
+This is wrong behavior for the main All Confluence ranking.
+
+Trace OSCR:
+
+symbol
+trade_alignment_score
+entry_risk_reward_score
+catalyst_alignment_score
+investment_alignment_score
+actionability state
+entry_state
+entry_risk_reward_state
+extension_state
+active_support_status
+lower_low_confirmed
+caelyn_confluence_score
+caelyn_confluence_bucket
+reason_codes
+
+Expected:
+
+If OSCR is TOO_EXTENDED:
+bucket should be WATCH_FOR_RESET, not RISK_CONFLICT unless true break/conflict exists.
+It should not rank #1 overall unless CCS explicitly supports that after caps.
+
+==================================================
+PART 8 — FULL VALIDATION
+==================================================
+
+Run over full current watchlist alignment universe.
+
+Return:
+
+row count
+rows with caelyn_confluence_score
+rows with caelyn_confluence_bucket
+bucket distribution
+top 50 by caelyn_confluence_score
+top 25 ACTIONABLE
+top 25 NEAR_ACTIONABLE
+top 25 CONFLUENCE_AT_SUPPORT
+top 25 WATCH_FOR_RESET
+top 25 RISK_CONFLICT
+top 50 INVESTMENT QUALITY
+catalyst provenance counts
+investment coverage counts
+
+Validate symbols:
+
+OSCR
+WYFI
+CRWD
+FTNT
+AMD
+MU
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+AMKR
+ENTG
+PLTR
+OKLO
+SOFI
+NVDA
+ANET
+TSM
+ALAB
+SNDK
+MU
+LITE
+LSCC
+TER
+SIMO
+
+For each return:
+
+symbol
+caelyn_confluence_score
+caelyn_confluence_bucket
+trade_alignment_score
+entry_risk_reward_state
+entry_risk_reward_score
+actionability
+investment_alignment_score
+investment_quality_label if available
+catalyst_alignment_score
+catalyst_detail_status
+theme_policy_boost
+active_support_status
+lower_low_confirmed
+which frontend tabs it should appear in
+
+==================================================
+PART 9 — OUTPUT CONTRACT
+==================================================
+
+Every /api/watchlist/{watchlist_id}/alignment row should expose either flat fields or clearly documented nested fields for:
+
+Core:
+symbol
+company_name
+caelyn_confluence_score
+caelyn_confluence_bucket
+caelyn_confluence_reason_codes
+
+Trade:
+trade_alignment_score
+theme_alignment_score if available
+stage_quality_score if available
+
+Entry:
+entry_state
+entry_score
+entry_risk_reward_state
+entry_risk_reward_score
+entry_risk_reward_reason_codes
+active_support_status
+active_support_type
+distance_to_active_support_pct
+critical_break_level
+reclaim_level
+next_downside_support
+lower_low_confirmed
+extension_state
+
+Actionability:
+actionability.state
+actionability.reason_codes
+setup_summary
+
+Investment:
+investment_alignment_score
+investment_alignment_available
+investment_unavailable_reason
+investment_quality_label if available
+
+Catalyst:
+catalyst_alignment_score
+catalyst_primary_source
+catalyst_primary_event
+catalyst_rss_event
+catalyst_scheduled_event
+catalyst_v2_primary_event
+catalyst_bearish_conflict
+catalyst_detail_status
+
+Theme Policy:
+theme_policy_available
+theme_policy_boost
+theme_policy_event
+theme_policy_theme
+
+Options:
+options_alignment_score
+options_primary_signal
+
+Do not remove nested objects if frontend already uses them.
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return exactly:
+
+CANONICAL CONFLUENCE ALIGNMENT REPAIR REPORT
+
+FILES CHANGED:
+[list]
+
+CURRENT ALIGNMENT AUDIT:
+[row shape, missing fields]
+
+SCORING FORMULA:
+[formula]
+
+OPTIONS DOUBLE COUNT:
+[explain removed / not removed]
+
+INVESTMENT IN ALL CONFLUENCE:
+[explain removed / not removed]
+
+BUCKET LOGIC:
+[summary]
+
+ROW COVERAGE:
+[table]
+
+BUCKET DISTRIBUTION:
+[table]
+
+TOP 50 ALL CONFLUENCE:
+[table]
+
+TOP ACTIONABLE:
+[table]
+
+TOP CONFLUENCE AT SUPPORT:
+[table]
+
+WATCH FOR RESET:
+[table]
+
+RISK CONFLICT:
+[table]
+
+CATALYST PROVENANCE AUDIT:
+[counts + explanation]
+
+INVESTMENT QUALITY COVERAGE:
+[counts + top names]
+
+WYFI TRACE:
+[full explanation]
+
+OSCR TRACE:
+[full explanation]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+CANONICAL CONFLUENCE ALIGNMENT VERDICT
+
+ALIGNMENT ENDPOINT HAS CANONICAL CCS:
+[YES/NO]
+
+ALL ROWS HAVE CCS:
+[YES/NO]
+
+OPTIONS NOT DOUBLE COUNTED:
+[YES/NO]
+
+INVESTMENT QUALITY SEPARATED FROM ALL CONFLUENCE:
+[YES/NO]
+
+TOO_EXTENDED MAPS TO WATCH_FOR_RESET:
+[YES/NO]
+
+RISK_CONFLICT RESERVED FOR TRUE BREAKDOWN/CONFLICT:
+[YES/NO]
+
+CATALYST PROVENANCE EXPOSED:
+[YES/NO]
+
+CATALYST SCORE NO LONGER ORPHANED WITHOUT STATUS:
+[YES/NO]
+
+INVESTMENT QUALITY LOGIC PRESERVED:
+[YES/NO]
+
+INVESTMENT QUALITY COVERAGE EXPANDED/EXPLAINED:
+[YES/NO]
+
+WYFI EXPLAINED:
+[YES/NO]
+
+OSCR EXPLAINED:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND REFRESH:
+[YES/NO]

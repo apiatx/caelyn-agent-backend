@@ -21,15 +21,16 @@ from __future__ import annotations
 from typing import Optional
 
 # ── Weights (must sum to 1.0) ──────────────────────────────────────────────────
-_W_TA  = 0.30
-_W_RR  = 0.25
+# Formula: Trade 45% + Entry RR 35% + Catalyst/Theme 20%
+# Options NOT double-counted (already embedded in Trade Alignment 25% component)
+# Investment Alignment NOT in All Confluence score — it is a separate column/
+# tie-breaker that should not dominate trade/swing rankings.
+_W_TA  = 0.45
+_W_RR  = 0.35
 _W_CAT = 0.20
-_W_OPT = 0.15
-_W_IA  = 0.10
 
 # Neutral fallback values when a signal is unavailable
-_NEUTRAL_IA  = 50.0   # Investment Alignment: neutral per spec
-_NEUTRAL_OTH = 40.0   # Other signals: slightly cautious
+_NEUTRAL_OTH = 40.0   # Slightly cautious neutral for trade/entry/catalyst
 
 # Extension states that disqualify support confluence
 _SEVERE_EXT = {"EXTREME_EXTENSION", "VERTICAL", "CROWDED_MOVE", "VOLUME_CLIMAX"}
@@ -78,21 +79,19 @@ def _compute_caelyn_confluence_score(
     ta_score:  Optional[float],
     rr_score:  Optional[float],
     cat_score: Optional[float],
-    opt_score: Optional[float],
-    ia_score:  Optional[float],
-    ia_available: bool,
 ) -> tuple[float, list[str]]:
     """
-    Returns (raw_score 0-100, reason_codes).
-    Before caps/penalties.
+    Returns (raw_score 0-100, reason_codes).  Before caps/penalties.
+
+    Formula: Trade 45% + Entry RR 35% + Catalyst/ThemePolicy 20%
+    Options: NOT included — already embedded in Trade Alignment (25% of TA).
+    Investment: NOT included — shown as a separate column, not a confluence driver.
     """
     reasons: list[str] = []
 
     ta_val  = ta_score  if ta_score  is not None else _NEUTRAL_OTH
     rr_val  = rr_score  if rr_score  is not None else _NEUTRAL_OTH
     cat_val = cat_score if cat_score is not None else _NEUTRAL_OTH
-    opt_val = opt_score if opt_score is not None else _NEUTRAL_OTH
-    ia_val  = (ia_score if ia_score is not None else _NEUTRAL_IA) if ia_available else _NEUTRAL_IA
 
     if ta_score is None:
         reasons.append("TRADE_ALIGNMENT_UNAVAILABLE")
@@ -100,17 +99,11 @@ def _compute_caelyn_confluence_score(
         reasons.append("ENTRY_RR_UNAVAILABLE")
     if cat_score is None:
         reasons.append("CATALYST_ALIGNMENT_UNAVAILABLE")
-    if opt_score is None:
-        reasons.append("OPTIONS_ALIGNMENT_UNAVAILABLE")
-    if not ia_available:
-        reasons.append("INVESTMENT_ALIGNMENT_NEUTRAL_50")
 
     raw = (
         _W_TA  * ta_val  +
         _W_RR  * rr_val  +
-        _W_CAT * cat_val +
-        _W_OPT * opt_val +
-        _W_IA  * ia_val
+        _W_CAT * cat_val
     )
     return round(_clamp(raw), 1), reasons
 
@@ -386,13 +379,13 @@ def compute_caelyn_confluence(
     """
 
     # ── Layer 1 — base score (before caps) ────────────────────────────────────
+    # Formula: Trade 45% + Entry RR 35% + Catalyst/Theme 20%
+    # Options are part of Trade Alignment (not double-counted here).
+    # Investment Alignment is a separate column, not a confluence driver.
     base_score, base_reasons = _compute_caelyn_confluence_score(
         ta_score  = trade_alignment_score,
         rr_score  = entry_risk_reward_score,
         cat_score = catalyst_alignment_score,
-        opt_score = options_alignment_score,
-        ia_score  = investment_alignment_score,
-        ia_available = investment_alignment_available,
     )
 
     # ── Layer 2 — confluence at support ───────────────────────────────────────
