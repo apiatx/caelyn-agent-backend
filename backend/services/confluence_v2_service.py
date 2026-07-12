@@ -1428,6 +1428,65 @@ def _compute_confluence(
     soc_fresh    = _safe_float(social_entry.get("freshness_score"), 0.0) if social_entry else 0.0
     soc_top      = bool(social_entry.get("has_top_conviction")) if social_entry else False
 
+    # ── v3: trade_core_score_ex_catalyst (Theme+Stage+Options, ex Catalyst) ─────
+    _tc_score: Optional[float] = None
+    try:
+        from services.caelyn_confluence import compute_trade_core_ex_catalyst
+        _tc_score = compute_trade_core_ex_catalyst(
+            theme_alignment_score   = selected_ta_fields.get("theme_alignment_score"),
+            stage_alignment_score   = selected_ta_fields.get("stage_alignment_score"),
+            options_alignment_score = selected_ta_fields.get("options_alignment_score"),
+        )
+    except Exception:
+        _tc_score = None
+
+    # ── v3: continuation pattern engine (pattern type + extension quality) ─────
+    _pattern_fields: dict = {}
+    _constructive_ext: bool = False
+    _chase_ext:        bool = False
+    _shelf_dist:       Optional[float] = None
+    try:
+        from services.continuation_pattern_engine import detect_continuation_pattern
+        _tm   = (stage2_row or {}).get("technical_metrics") or {}
+        _ssig = (stage2_row or {}).get("stage_signals") or {}
+        _ba   = ((entry_result or {}).get("structure_v2") or {}).get("base_archetype")
+        _pattern_fields = detect_continuation_pattern(
+            entry_state                    = (entry_result or {}).get("entry_state"),
+            entry_family                   = (entry_result or {}).get("entry_family"),
+            extension_state                = (entry_result or {}).get("extension_state"),
+            active_support_status          = (entry_result or {}).get("active_support_status"),
+            lower_low_confirmed            = (entry_result or {}).get("lower_low_confirmed"),
+            distance_to_active_support_pct = (entry_result or {}).get("distance_to_active_support_pct"),
+            active_support_touch_count     = (entry_result or {}).get("active_support_touch_count"),
+            stage_alignment_score          = selected_ta_fields.get("stage_alignment_score"),
+            trade_alignment_score          = selected_ta_fields.get("trade_alignment_score"),
+            entry_risk_reward_state        = (entry_result or {}).get("entry_risk_reward_state"),
+            base_archetype                 = _ba,
+            actionability_state            = actionability_fields.get("actionability_state"),
+            range_20d_pct                  = _tm.get("range_20d_pct"),
+            prior_26w_trend_pct            = _ssig.get("prior_26w_trend_pct"),
+            squeeze_signal                 = _tm.get("squeeze_signal"),
+            pct_from_52w_high              = _tm.get("pct_from_52w_high"),
+        )
+        _constructive_ext = bool(_pattern_fields.get("constructive_extension"))
+        _chase_ext        = bool(_pattern_fields.get("chase_extension"))
+        _shelf_dist       = _pattern_fields.get("estimated_shelf_distance_pct")
+    except Exception:
+        _pattern_fields = {
+            "pattern_type":                  "NO_PATTERN",
+            "pattern_state":                 "NOT_DETECTED",
+            "pattern_score":                 0,
+            "pattern_reason_codes":          ["PATTERN_ENGINE_ERROR"],
+            "constructive_extension":        False,
+            "chase_extension":               False,
+            "extension_quality":             "NORMAL",
+            "extension_reason_codes":        [],
+            "current_shelf_support":         None,
+            "pattern_breakout_trigger":      None,
+            "pattern_invalidation_level":    None,
+            "estimated_shelf_distance_pct":  None,
+        }
+
     # ── Caelyn Confluence Ranking (zero provider calls) ───────────────────────
     _cc_fields: dict = {}
     try:
@@ -1454,6 +1513,12 @@ def _compute_confluence(
             distance_to_active_support_pct = (entry_result or {}).get("distance_to_active_support_pct"),
             extension_state                = (entry_result or {}).get("extension_state"),
             bearish_conflict               = _bearish,
+            trade_core_score_ex_catalyst   = _tc_score,
+            constructive_extension         = _constructive_ext,
+            chase_extension                = _chase_ext,
+            estimated_shelf_distance_pct   = _shelf_dist,
+            theme_alignment_score          = selected_ta_fields.get("theme_alignment_score"),
+            stage_alignment_score          = selected_ta_fields.get("stage_alignment_score"),
         )
     except Exception:
         _cc_fields = {
@@ -1464,6 +1529,12 @@ def _compute_confluence(
             "confluence_at_support_score":          0,
             "confluence_at_support_state":          "NO_SUPPORT_CONFLUENCE",
             "confluence_at_support_reason_codes":   ["ERROR"],
+            "major_lower_low_confirmed":            False,
+            "minor_lower_low":                      False,
+            "trade_core_score_ex_catalyst":         _tc_score,
+            "entry_pattern_rr_score":               None,
+            "catalyst_detail_status":               "neutral",
+            "investment_quality_label":             "not_assessed",
         }
 
     return {
@@ -1576,6 +1647,10 @@ def _compute_confluence(
         "computed_at": _now_iso(),
         # ── Caelyn Confluence Ranking (additive-only) ─────────────────────────
         **_cc_fields,
+        # ── v3: trade core (ex Catalyst) ──────────────────────────────────────
+        "trade_core_score_ex_catalyst":  _tc_score,
+        # ── v3: pattern engine (continuation pattern + extension quality) ──────
+        **_pattern_fields,
     }
 
 

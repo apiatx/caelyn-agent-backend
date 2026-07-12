@@ -1,0 +1,569 @@
+BACKEND — PATTERN-AWARE ACTIONABILITY, THEME LEADERS, AND CONFLUENCE COVERAGE REPAIR
+
+Backend only.
+
+Do not touch frontend.
+Do not call LLMs.
+Do not add request-time provider calls.
+Do not add new scoring producers unless required.
+Do not remove existing fields.
+Do not rebuild Catalyst, Options, Investment, or Entry from scratch.
+
+Goal:
+
+Fix remaining Confluence/Actionability flaws:
+
+1. WYFI-style high-tight continuation setups are incorrectly classified as TOO_EXTENDED.
+2. LITE-style leader/support pullbacks may be incorrectly classified as RISK_CONFLICT / BROKEN_SUPPORT.
+3. All Confluence currently risks double-counting Catalyst because Trade Alignment already contains Catalyst and CCS adds Catalyst again.
+4. Component coverage is incomplete for Entry, Options, and Catalyst; we need root-level coverage/status fields, not patchy UI guesses.
+5. Theme leaders pulling back into support should be treated as opportunity candidates, not automatically risk.
+
+Use cached bars, existing Stage/Entry LKG, existing catalyst cache, existing options cache, existing theme data, existing watchlist fundamentals, and existing alignment rows only.
+
+No new provider calls.
+
+==================================================
+PART 1 — CLARIFY SCORE ARCHITECTURE
+==================================================
+
+Audit current scoring stack and return:
+
+trade_alignment_score formula
+whether trade_alignment_score includes catalyst
+whether trade_alignment_score includes options
+caelyn_confluence_score formula
+effective weight of Theme, Stage, Options, Catalyst, Entry in CCS
+
+Current concern:
+
+Trade Alignment includes Catalyst at 25%, and CCS also adds Catalyst at 20%.
+That means Catalyst may be double-counted.
+
+Fix:
+
+Create or expose:
+
+trade_core_score_ex_catalyst
+
+This should represent the non-catalyst trade setup core:
+
+Theme
+Stage
+Options
+
+Use available-signal normalization if one component is missing.
+
+Keep existing trade_alignment_score unchanged for backward compatibility.
+
+Then update CCS to use:
+
+caelyn_confluence_score =
+  0.40 × trade_core_score_ex_catalyst
+  0.35 × entry_pattern_rr_score
+  0.15 × catalyst_alignment_score
+  0.10 × theme_leadership_score
+
+Alternative acceptable if theme_leadership_score is not ready:
+
+caelyn_confluence_score =
+  0.45 × trade_core_score_ex_catalyst
+  0.35 × entry_pattern_rr_score
+  0.20 × catalyst_alignment_score
+
+Do not use full trade_alignment_score plus catalyst again.
+
+Investment Alignment remains separate from All Confluence.
+
+Return before/after formula and effective component weights.
+
+==================================================
+PART 2 — ADD CONTINUATION PATTERN ENGINE
+==================================================
+
+Add a deterministic pattern layer using existing bars only.
+
+Do not attempt subjective Elliott Wave labeling as a black box.
+
+Instead, implement coded pattern states that approximate the setups we care about.
+
+New fields:
+
+pattern_state
+pattern_score
+pattern_type
+pattern_reason_codes
+pattern_support_level
+pattern_breakout_trigger
+pattern_invalidation_level
+constructive_extension
+chase_extension
+
+Pattern types:
+
+HIGH_TIGHT_FLAG
+BULL_FLAG
+BREAKOUT_SHELF_CONSOLIDATION
+CUP_HANDLE
+VCP_CONTRACTION
+BREAKOUT_RETEST
+LOW_BASE_REVERSAL
+WAVE_CONTINUATION_PROXY
+NO_PATTERN
+
+WYFI-like logic:
+
+A ticker should not be classified as TOO_EXTENDED just because it is far above an old base if:
+
+- price recently had a strong impulse move
+- price then consolidated high and tight
+- consolidation range is relatively tight vs prior impulse
+- price is holding above breakout shelf / current flag support
+- active support has shifted up to the current consolidation shelf
+- lower_low_confirmed is false
+- active_support_status is above_support / testing_support / bounced_from_support
+- stage is Stage 2 / S2 breakout / S2-S3 advance
+- price is near the upper part of the consolidation and trying to break out
+
+Classify as:
+
+pattern_type = HIGH_TIGHT_FLAG or BREAKOUT_SHELF_CONSOLIDATION
+constructive_extension = true
+chase_extension = false
+entry_risk_reward_state = BREAKOUT_CONTINUATION_READY or CONTINUATION_SETUP
+actionability = READY / NEAR_ACTIONABLE / WAIT_FOR_BREAKOUT depending confirmation
+
+Do not force WATCH_FOR_RESET unless:
+
+- price is extended with no consolidation
+- no current shelf support
+- no flag/base structure
+- volume climax without consolidation
+- distance from current active support is too high
+- lower_low_confirmed or support lost
+
+==================================================
+PART 3 — REFINE EXTENSION LOGIC
+==================================================
+
+Separate:
+
+CHASE_EXTENSION
+from
+CONSTRUCTIVE_EXTENSION
+
+CHASE_EXTENSION:
+- vertical move
+- no consolidation
+- far above current active support
+- crowded/volume climax
+- no defined invalidation nearby
+
+CONSTRUCTIVE_EXTENSION:
+- strong move
+- then consolidation
+- active support has moved up
+- invalidation is nearby
+- breakout trigger is identifiable
+- no lower low confirmed
+
+Only CHASE_EXTENSION should force TOO_EXTENDED / WATCH_FOR_RESET.
+
+CONSTRUCTIVE_EXTENSION can remain Actionable or Near Actionable if trade/core and entry pattern qualify.
+
+Add fields:
+
+extension_quality:
+  CHASE
+  CONSTRUCTIVE
+  NORMAL
+  BROKEN
+
+extension_reason_codes
+
+==================================================
+PART 4 — CURRENT SHELF / FLAG SUPPORT
+==================================================
+
+Improve Active Support Zone selection.
+
+Add support candidate type:
+
+current_consolidation_shelf
+high_tight_flag_support
+breakout_shelf_support
+handle_low
+flag_low
+
+These should outrank old lower base support when price is consolidating high and tight.
+
+For WYFI-like charts, active support should likely be the recent consolidation shelf / flag low, not the old base.
+
+Expose:
+
+current_shelf_support
+current_shelf_lower_bound
+current_shelf_upper_bound
+current_shelf_touch_count
+current_shelf_duration_bars
+current_shelf_range_pct
+
+Use these in Entry RR and Actionability.
+
+==================================================
+PART 5 — THEME LEADERSHIP / BUY-THE-DIP LOGIC
+==================================================
+
+Add or expose theme leadership fields using existing theme/watchlist data.
+
+Fields:
+
+theme_leadership_score
+theme_leadership_rank
+theme_leadership_bucket
+is_theme_leader
+is_top_3_theme_leader
+theme_leader_reason_codes
+
+Leadership should consider, using existing cached data only:
+
+- relative strength within theme
+- trade_core_score_ex_catalyst
+- stage quality
+- price leadership / near highs
+- volume/accumulation if available
+- theme RS / leading theme status if available
+- market cap/liquidity sanity if available
+
+Buckets:
+
+THEME_LEADER
+EMERGING_LEADER
+THEME_PARTICIPANT
+LAGGARD
+UNKNOWN
+
+Actionability rule:
+
+If is_top_3_theme_leader = true
+and active support is intact/testing/bounced
+and lower_low_confirmed = false
+and pattern is pullback/flag/retest/support setup
+then label:
+
+LEADER_AT_SUPPORT
+LEADER_PULLBACK_BUY_ZONE
+LEADER_CONTINUATION_READY
+
+Do not label a theme leader at active support as broken/risk unless active support is actually lost or lower_low_confirmed is true.
+
+==================================================
+PART 6 — LITE AND SUPPORT-RISK FALSE POSITIVES
+==================================================
+
+Run a focused trace for LITE.
+
+Current backend report places LITE in RISK_CONFLICT with:
+
+llc=True
+act=AVOID
+rr=BROKEN_SUPPORT_AVOID
+
+The user visually believes LITE is sitting on support and likely to move higher.
+
+Do not assume the user is right, but audit precisely.
+
+Return:
+
+LITE recent swing lows
+prior swing low used for lower_low_confirmed
+active_support_zone
+active_support_status
+current_shelf_support if any
+lower_low_confirmed calculation
+entry_state
+entry_risk_reward_state
+pattern_state
+theme_leadership_rank/bucket
+actionability
+why RISK_CONFLICT was assigned
+
+If lower_low_confirmed is from a minor/micro swing but active major support is intact, correct it.
+
+Confirmed breakdown should require:
+
+- meaningful active support lost
+- lower low below important swing/base support
+- not just a small undercut / retest / support sweep
+
+Add distinction:
+
+minor_lower_low
+major_lower_low_confirmed
+
+Only major_lower_low_confirmed should trigger RISK_CONFLICT.
+
+==================================================
+PART 7 — WYFI TRACE AND RECLASSIFICATION
+==================================================
+
+Run a focused trace for WYFI using the screenshot logic.
+
+Return:
+
+price
+recent impulse move %
+recent consolidation duration
+consolidation range %
+current shelf support
+flag/high-tight support
+breakout trigger
+invalidation level
+stage
+active_support_status
+distance_to_current_shelf_support_pct
+distance_to_old_base_support_pct
+pattern_type
+pattern_score
+constructive_extension
+chase_extension
+old actionability
+new actionability
+old bucket
+new bucket
+reason codes
+
+Expected:
+
+If WYFI has a real high-tight continuation structure:
+
+- no longer classify as STRONG_ASSET_EXTENDED_WAIT solely from distance to old support
+- classify as BREAKOUT_SHELF_CONSOLIDATION / HIGH_TIGHT_FLAG / WAVE_CONTINUATION_PROXY
+- bucket should become ACTIONABLE / NEAR_ACTIONABLE / CONFLUENCE_AT_SUPPORT depending confirmation
+- show clear invalidation and breakout trigger
+
+If data does not support this, explain exactly why.
+
+==================================================
+PART 8 — COMPONENT COVERAGE STATUS
+==================================================
+
+Add root-level coverage/status fields on every alignment row.
+
+Do not patch by making new request-time provider calls.
+
+Fields:
+
+component_coverage:
+  trade_core_status
+  entry_status
+  pattern_status
+  catalyst_status
+  options_status
+  investment_status
+
+Each status should be one of:
+
+available
+not_applicable
+no_signal
+stale
+missing_cache
+not_scanned
+confirmed_no_options
+provider_unavailable
+
+Options examples:
+
+confirmed_no_options = no listed options, not a failure
+not_scanned = options producer has not covered it yet
+stale = old options cache
+available = options alignment available
+
+Catalyst examples:
+
+no_signal = checked, no catalyst
+available = event/score exists
+missing_cache = catalyst source unavailable
+stale = archive/cache stale
+
+Entry examples:
+
+available = bars/LKG present
+missing_cache = no entry LKG
+stale = old bars
+not_applicable = non-equity if relevant
+
+Also add:
+
+confluence_confidence_score
+
+This should reflect how complete/fresh the input set is.
+
+Important:
+
+Do not let missing optional components fully exclude tickers.
+But low coverage should lower confidence, not silently degrade score.
+
+==================================================
+PART 9 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+WYFI
+LITE
+OSCR
+CRWD
+FTNT
+AMD
+MU
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+ANET
+TSM
+PLTR
+OKLO
+SOFI
+ALAB
+SNDK
+SIMO
+
+For each return:
+
+symbol
+old_bucket
+new_bucket
+old_actionability
+new_actionability
+caelyn_confluence_score old/new
+trade_alignment_score
+trade_core_score_ex_catalyst
+entry_risk_reward_state
+entry_pattern_rr_score
+pattern_type
+pattern_state
+pattern_score
+constructive_extension
+chase_extension
+theme_leadership_bucket
+theme_leadership_rank
+active_support_status
+current_shelf_support
+critical_break_level
+breakout_trigger
+major_lower_low_confirmed
+minor_lower_low
+catalyst_status
+options_status
+confluence_confidence_score
+reason_codes
+
+==================================================
+PART 10 — FINAL REPORT
+==================================================
+
+Return:
+
+PATTERN-AWARE CONFLUENCE / ACTIONABILITY REPAIR REPORT
+
+FILES CHANGED:
+[list]
+
+ARCHITECTURE CLARIFICATION:
+[Trade Alignment vs Entry vs CCS vs Actionability]
+
+FORMULA CHANGE:
+[old formula, new formula, effective weights]
+
+CATALYST DOUBLE COUNT:
+[removed / not removed + explanation]
+
+CONTINUATION PATTERN ENGINE:
+[summary]
+
+EXTENSION QUALITY:
+[summary]
+
+THEME LEADERSHIP:
+[summary]
+
+WYFI CASE STUDY:
+[before/after + explanation]
+
+LITE CASE STUDY:
+[before/after + explanation]
+
+COMPONENT COVERAGE:
+[counts by status]
+
+TOP 50 ALL CONFLUENCE:
+[table]
+
+TOP ACTIONABLE:
+[table]
+
+TOP LEADER PULLBACKS:
+[table]
+
+WATCH FOR RESET:
+[table]
+
+RISK CONFLICT:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+PATTERN-AWARE CONFLUENCE VERDICT
+
+CATALYST NO LONGER DOUBLE-COUNTED:
+[YES/NO]
+
+TRADE_CORE_EX_CATALYST ADDED:
+[YES/NO]
+
+CONTINUATION PATTERNS DETECTED:
+[YES/NO]
+
+WYFI RECLASSIFIED OR FULLY EXPLAINED:
+[YES/NO]
+
+CHASE_EXTENSION SEPARATED FROM CONSTRUCTIVE_EXTENSION:
+[YES/NO]
+
+CURRENT_SHELF_SUPPORT USED:
+[YES/NO]
+
+THEME LEADERSHIP FACTORED:
+[YES/NO]
+
+LEADER_PULLBACKS TREATED AS OPPORTUNITY WHEN SUPPORT HOLDS:
+[YES/NO]
+
+LITE RISK CLASSIFICATION CONFIRMED OR CORRECTED:
+[YES/NO]
+
+MAJOR_LOWER_LOW SEPARATED FROM MINOR_UNDERCUT:
+[YES/NO]
+
+COMPONENT COVERAGE STATUS EXPOSED:
+[YES/NO]
+
+CONFLUENCE_CONFIDENCE_SCORE EXPOSED:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND DISPLAY:
+[YES/NO]

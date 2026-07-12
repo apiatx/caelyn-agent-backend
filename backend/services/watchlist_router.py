@@ -4198,7 +4198,88 @@ async def get_watchlist_alignment(watchlist_id: str):
                 "theme_policy_event":     row.get("theme_policy_event"),
                 "theme_policy_theme":     row.get("theme_policy_theme"),
             },
+
+            # ── v3: major / minor lower-low classification ────────────────────
+            "major_lower_low_confirmed":            bool(row.get("major_lower_low_confirmed")),
+            "minor_lower_low":                      bool(row.get("minor_lower_low")),
+
+            # ── v3: trade core (ex Catalyst, avoids double-count) ─────────────
+            "trade_core_score_ex_catalyst":         row.get("trade_core_score_ex_catalyst"),
+            "entry_pattern_rr_score":               row.get("entry_pattern_rr_score"),
+
+            # ── v3: continuation pattern + extension quality ───────────────────
+            "pattern_type":                         row.get("pattern_type") or "NO_PATTERN",
+            "pattern_state":                        row.get("pattern_state") or "NOT_DETECTED",
+            "pattern_score":                        row.get("pattern_score") or 0,
+            "pattern_reason_codes":                 row.get("pattern_reason_codes") or [],
+            "constructive_extension":               bool(row.get("constructive_extension")),
+            "chase_extension":                      bool(row.get("chase_extension")),
+            "extension_quality":                    row.get("extension_quality") or "NORMAL",
+            "extension_reason_codes":               row.get("extension_reason_codes") or [],
+            "estimated_shelf_distance_pct":         row.get("estimated_shelf_distance_pct"),
+
+            # ── v3: extra flat scalars (needed by theme leadership + UI) ───────
+            "stage_alignment_score":                row.get("stage_alignment_score"),
+            "base_trade_alignment_score":           row.get("base_trade_alignment_score"),
+            "trade_alignment_archetype":            row.get("trade_alignment_archetype"),
+            "actionability_state":                  row.get("actionability_state"),
+            "catalyst_detail_status":               row.get("catalyst_detail_status") or _cat_detail_status,
+            "investment_quality_label":             row.get("investment_quality_label") or _iq_label,
+
+            # ── v3: component coverage + confidence (populated below) ─────────
+            "component_coverage":               None,
+            "confluence_confidence_score":      None,
+
+            # ── v3: theme leadership (populated below after all rows built) ────
+            "theme_leadership_score":           None,
+            "theme_leadership_rank":            None,
+            "theme_leadership_total":           None,
+            "theme_leadership_bucket":          None,
+            "is_theme_leader":                  False,
+            "is_top_3_theme_leader":            False,
+            "leader_context":                   None,
+            "theme_leader_reason_codes":        [],
+            "leadership_theme":                 None,
         })
+
+    # ── v3: theme leadership (cross-symbol ranking, computed after all rows) ──
+    try:
+        from services.theme_leadership_service import (
+            compute_theme_leadership_for_rows,
+            build_component_coverage,
+        )
+        _snap_rows_for_leadership = [
+            confluence_by_symbol[r["symbol"]]
+            for r in rows
+            if r["symbol"] in confluence_by_symbol
+        ]
+        leadership_map = compute_theme_leadership_for_rows(_snap_rows_for_leadership)
+
+        for r in rows:
+            sym = r["symbol"]
+            # Component coverage — use the flat confluence snapshot row (which has
+            # all fields at top-level), NOT the response row (which nests them).
+            try:
+                _snap_r = confluence_by_symbol.get(sym) or r
+                cov = build_component_coverage(_snap_r)
+                r["component_coverage"]         = cov["component_coverage"]
+                r["confluence_confidence_score"] = cov["confluence_confidence_score"]
+            except Exception:
+                pass
+            # Theme leadership
+            ldr = leadership_map.get(sym)
+            if ldr:
+                r["theme_leadership_score"]    = ldr.get("theme_leadership_score")
+                r["theme_leadership_rank"]     = ldr.get("theme_leadership_rank")
+                r["theme_leadership_total"]    = ldr.get("theme_leadership_total")
+                r["theme_leadership_bucket"]   = ldr.get("theme_leadership_bucket")
+                r["is_theme_leader"]           = ldr.get("is_theme_leader", False)
+                r["is_top_3_theme_leader"]     = ldr.get("is_top_3_theme_leader", False)
+                r["leader_context"]            = ldr.get("leader_context")
+                r["theme_leader_reason_codes"] = ldr.get("theme_leader_reason_codes") or []
+                r["leadership_theme"]          = ldr.get("leadership_theme")
+    except Exception as _ldr_exc:
+        print(f"[WATCHLIST_ALIGNMENT] theme leadership/coverage error (non-fatal): {_ldr_exc}")
 
     return {
         "watchlist_id":                   watchlist_id,
