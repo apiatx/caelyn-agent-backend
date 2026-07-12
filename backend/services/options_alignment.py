@@ -421,8 +421,20 @@ def get_options_alignment_for_ticker(
     _scan_status = row.get("scan_status") or ""
     if _ticker_state == "confirmed_no_options" or _scan_status == "no_options":
         reasons.append("CONFIRMED_NO_OPTIONS")
-        return {"ticker": sym, **_UNAVAILABLE_BASE, "source": row.get("_source"),
-                "ticker_state": _ticker_state, "options_alignment_reason_codes": reasons}
+        reasons.append("CONFIRMED_NO_OPTIONS_SECTORS_LKG")
+        return {
+            "ticker": sym,
+            **_UNAVAILABLE_BASE,
+            # Override the two fields that V4 uses to classify the options status.
+            # _UNAVAILABLE_BASE sets options_pressure_state="INSUFFICIENT_HISTORY",
+            # but V4 checks `"confirmed_no" in pressure` — that string must be present
+            # or V4 falls through to status="not_scanned" instead of confirmed_no_options.
+            "options_pressure_state":  "confirmed_no_options",
+            "options_snapshot_status": "confirmed_no_options",
+            "source": row.get("_source"),
+            "ticker_state": _ticker_state,
+            "options_alignment_reason_codes": reasons,
+        }
     if ":" in sym:
         reasons.append("FOREIGN_EXCHANGE_TICKER_UNSUPPORTED")
         return {"ticker": sym, **_UNAVAILABLE_BASE, "source": row.get("_source"),

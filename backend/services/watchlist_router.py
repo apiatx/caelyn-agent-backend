@@ -3994,6 +3994,22 @@ async def get_watchlist_alignment(watchlist_id: str):
         if sym:
             confluence_by_symbol[sym] = row
 
+    # ── Include any retained-snapshot symbols not in the watchlist tickers list ──
+    # The retained snapshot universe is derived from stage2_lkg.keys(), which
+    # persists across sessions and may contain tickers added in a previous session
+    # but not yet reflected in the current watchlist store query (e.g. MSFT/NVDA/SMCI).
+    # The retained snapshot IS the canonical confluence universe; /alignment should
+    # expose the same canonical set.
+    _snap_only = 0
+    for _snap_sym in confluence_by_symbol:
+        if _snap_sym not in seen:
+            seen.add(_snap_sym)
+            tickers.append(_snap_sym)
+            _snap_only += 1
+    if _snap_only:
+        print(f"[WATCHLIST_ALIGNMENT] retained-snapshot supplement: +{_snap_only} symbols "
+              f"not in watchlist store tickers list")
+
     rows: List[Dict[str, Any]] = []
     for sym in tickers:
         row = confluence_by_symbol.get(sym)
