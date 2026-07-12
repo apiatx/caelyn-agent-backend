@@ -1,0 +1,210 @@
+BACKEND — ACTIVE SUPPORT ZONE ENGINE / PRIOR PIVOT VS CRITICAL SUPPORT
+
+Backend only.
+
+Do not touch frontend.
+Do not change Catalyst scoring.
+Do not change Theme Policy scoring.
+Do not change Trade Alignment weights.
+Do not add provider calls.
+Do not add LLM calls.
+
+Problem:
+
+The current support logic treats a prior breakout pivot as “major support” even after price has already failed below it and formed a new lower active structure.
+
+Example: BE
+
+Diagnostic said:
+major_support = breakout_pivot 321.42
+price = -23.9% below it
+major_support_lost = true
+
+But visually, 321 was an upper pivot / prior support shelf that failed. It is now overhead resistance / reclaim level, not the current critical support.
+
+The current active critical support is lower, around the recent double-bounce zone near the prior 1.618 extension / lower range support. If that zone breaks, then the next downside support/magnet is around the prior major level near 180.
+
+Required change:
+
+Separate these concepts:
+
+1. prior_pivot_level
+2. prior_pivot_status:
+   - intact
+   - lost_now_overhead
+   - reclaimed
+
+3. active_support_zone:
+   - lower_bound
+   - upper_bound
+   - midpoint
+
+4. active_support_type:
+   - base_low
+   - range_low
+   - double_bounce_support
+   - trendline_support
+   - fib_extension_retest
+   - moving_average_zone
+   - prior_major_swing_low
+
+5. active_support_status:
+   - above_support
+   - testing_support
+   - bounced_from_support
+   - broken_unconfirmed
+   - lost_confirmed
+
+6. critical_break_level:
+   the level that actually invalidates the current structure
+
+7. next_downside_support:
+   next major lower support / magnet if critical_break_level fails
+
+8. reclaim_level:
+   level that would improve the structure, often the old failed pivot / upper shelf
+
+Do not call SUPPORT_LOST just because price is below prior_pivot_level.
+
+SUPPORT_LOST should require:
+- active critical support broken
+- meaningful close below active support zone
+- confirmation and/or lower low
+- not merely a failed upper pivot
+
+If prior pivot is lost but active support is holding, classify as:
+
+prior_pivot_lost = true
+active_support_status = testing_support or bounced_from_support
+entry_state = SUPPORT_TEST / RANGE_SUPPORT_TEST / CONSTRUCTIVE_PULLBACK
+display_label = "Testing critical support; prior pivot lost"
+
+For BE-like charts:
+
+Expected output should be conceptually:
+
+prior_pivot_level: ~321
+prior_pivot_status: lost_now_overhead
+active_support_zone: around current lower double-bounce support
+active_support_status: bounced_from_support or testing_support
+critical_break_level: active support lower bound
+next_downside_support: next major lower support, approximately prior range / 200DMA / major swing zone
+support_lost_confirmed: false
+entry_state: SUPPORT_TEST / RANGE_SUPPORT_TEST / CONSTRUCTIVE_PULLBACK, not SUPPORT_LOST
+
+Implementation guidance:
+
+Use existing bars only. No new provider calls.
+
+Build active support candidates from:
+- recent swing lows
+- clustered lows in the latest range
+- repeated bounce zones
+- trendline support if available
+- base low
+- 50DMA / 200DMA zone if relevant
+- prior breakout pivot only if it is near current price or recently reclaimed
+
+Rank support candidates by:
+1. proximity to current price
+2. number of touches / bounces
+3. recency
+4. whether it aligns with moving average / range low / base low
+5. whether it is below or around current price, not far above
+
+If a prior pivot is far above current price, classify it as overhead/reclaim level, not active support.
+
+Validation symbols:
+
+BE
+NVEC
+MARA
+INTC
+CRWD
+FTNT
+
+For each return:
+
+current price
+prior_pivot_level
+prior_pivot_status
+active_support_zone
+active_support_type
+active_support_status
+critical_break_level
+next_downside_support
+reclaim_level
+lower_low_confirmed
+entry_state before
+entry_state after
+recommended display label
+
+Expected:
+
+BE:
+Prior pivot lost, active lower support holding/testing. Not confirmed support lost.
+
+NVEC:
+Likely trendline/support test, not support lost, unless active critical support broke.
+
+MARA:
+Likely range/low-base support test or weak range, not support lost unless active support broke.
+
+INTC:
+Likely lower-high warning or range breakdown risk; confirmed support lost only if lower low broke.
+
+CRWD/FTNT:
+Overextended / wait for reset regardless of options signal.
+
+Final response:
+
+ACTIVE SUPPORT ZONE ENGINE REPORT
+
+FILES CHANGED:
+[list]
+
+PRIOR PIVOT VS ACTIVE SUPPORT:
+[summary]
+
+SUPPORT CANDIDATE RANKING:
+[summary]
+
+BEFORE / AFTER:
+[table]
+
+BE CASE STUDY:
+[explain 321 pivot vs active lower support]
+
+SUPPORT LOST REQUIREMENTS:
+[summary]
+
+PROVIDER CALLS:
+[0]
+
+End exactly:
+
+ACTIVE SUPPORT ZONE VERDICT
+
+PRIOR PIVOT NO LONGER TREATED AS ACTIVE SUPPORT WHEN FAR ABOVE PRICE:
+[YES/NO]
+
+ACTIVE CRITICAL SUPPORT IDENTIFIED:
+[YES/NO]
+
+SUPPORT TEST SEPARATED FROM SUPPORT LOST:
+[YES/NO]
+
+NEXT DOWNSIDE SUPPORT EXPOSED:
+[YES/NO]
+
+RECLAIM LEVEL EXPOSED:
+[YES/NO]
+
+BE/NVEC/MARA/INTC CORRECTED OR EXPLAINED:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND DISPLAY REPAIR:
+[YES/NO]

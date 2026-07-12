@@ -40,7 +40,8 @@ Entry States (per family)
 
   BROKEN_OR_UNCLEAR:
     DOWNTREND           — Stage 4 / broken MA structure
-    SUPPORT_LOST        — recently broke below key support
+    SUPPORT_LOST        — active critical support broken with lower-low confirmed
+    RANGE_SUPPORT_TEST  — prior breakout pivot lost (now overhead); testing lower active support zone
     NO_CLEAR_ENTRY      — transitional / undefined structure
     INSUFFICIENT_DATA   — not enough bars for reliable classification
 
@@ -136,6 +137,8 @@ _BASE_SCORES: dict[str, int] = {
     "SUPPORT_TEST":        52,   # Marginal break below SMA50 — testing support, break unconfirmed
     "LOWER_HIGH_WARNING":  38,   # Lower high formed; no lower-low yet — structural caution
     "LOWER_LOW_CONFIRMED": 12,   # Lower-low confirmed with buffer — structural break validated
+    # ── Active support zone states ────────────────────────────────────────────
+    "RANGE_SUPPORT_TEST":  36,   # Prior pivot lost (overhead); testing lower active support zone
 }
 
 _STATE_TO_FAMILY: dict[str, str] = {
@@ -174,6 +177,7 @@ _STATE_TO_FAMILY: dict[str, str] = {
     "SUPPORT_TEST":        FAMILY_BROKEN,
     "LOWER_HIGH_WARNING":  FAMILY_BROKEN,
     "LOWER_LOW_CONFIRMED": FAMILY_BROKEN,
+    "RANGE_SUPPORT_TEST":  FAMILY_BROKEN,
 }
 
 
@@ -287,9 +291,75 @@ def _build_support_levels(
     return result
 
 
-# ── Support hierarchy classifier ───────────────────────────────────────────────
+# ── Active Support Zone Engine ─────────────────────────────────────────────────
 
-def _classify_support_hierarchy(
+def _find_bounce_zone(sorted_bars: list[dict], price: float) -> Optional[dict]:
+    """
+    Identify the most significant price cluster below current price where
+    price has bounced one or more times in the recent 60 bars.
+
+    Uses 3-point local minima detection, clusters within 3 % tolerance,
+    and scores by touches × recency × proximity.
+
+    Returns the best cluster dict or None.  Zero provider calls.
+    """
+    if not sorted_bars or len(sorted_bars) < 10:
+        return None
+
+    window = sorted_bars[-60:] if len(sorted_bars) >= 60 else sorted_bars
+
+    raw_lows: list[dict] = []
+    for i in range(1, len(window) - 1):
+        try:
+            prev_low = float(window[i - 1].get("low") or window[i - 1].get("close") or 0)
+            curr_low = float(window[i].get("low")     or window[i].get("close")     or 0)
+            next_low = float(window[i + 1].get("low") or window[i + 1].get("close") or 0)
+        except (TypeError, ValueError):
+            continue
+        if curr_low > 0 and curr_low <= prev_low and curr_low <= next_low:
+            raw_lows.append({"level": curr_low, "recency": (i + 1) / len(window)})
+
+    below = [sl for sl in raw_lows if sl["level"] <= price * 1.01]
+    if not below:
+        return None
+
+    TOLERANCE = 0.03
+    clusters: list[dict] = []
+    for sl in sorted(below, key=lambda x: x["level"]):
+        merged = False
+        for cl in clusters:
+            if abs(sl["level"] - cl["level"]) / cl["level"] < TOLERANCE:
+                n = cl["touches"]
+                cl["level"]   = (cl["level"] * n + sl["level"]) / (n + 1)
+                cl["touches"] += 1
+                cl["recency"] = max(cl["recency"], sl["recency"])
+                merged = True
+                break
+        if not merged:
+            clusters.append({"level": sl["level"], "touches": 1, "recency": sl["recency"]})
+
+    if not clusters:
+        return None
+
+    max_level = max(c["level"] for c in clusters)
+    for cl in clusters:
+        prox = cl["level"] / max_level if max_level > 0 else 0.0
+        cl["score"] = (
+            0.5 * min(cl["touches"] / 3.0, 1.0)
+            + 0.3 * cl["recency"]
+            + 0.2 * prox
+        )
+    clusters.sort(key=lambda c: -c["score"])
+    best = clusters[0]
+    return {
+        "level":   round(best["level"], 4),
+        "touches": best["touches"],
+        "score":   round(best["score"], 3),
+        "source":  "bars_clustered_lows",
+    }
+
+
+def _classify_active_support_zone(
     price:          float,
     sma50:          Optional[float],
     sma200:         Optional[float],
@@ -299,45 +369,187 @@ def _classify_support_hierarchy(
     sorted_bars:    list[dict],
 ) -> dict:
     """
-    Classify support levels as MAJOR or MINOR and detect HH/HL structure.
+    Active Support Zone Engine.
 
-    Major support — structural / long-term levels that require meaningful
-    confirmation to declare lost:
-      breakout_pivot → base_low → 200DMA → 30w_MA (highest first)
+    Key semantic change vs. old _classify_support_hierarchy
+    --------------------------------------------------------
+    A prior breakout pivot that price has fallen meaningfully below is
+    classified as ``prior_pivot_status = "lost_now_overhead"`` — overhead
+    resistance / reclaim target — NOT as active major support.
 
-    Minor support — short-term levels that can be tested without structural damage:
-      SMA50 → recent 20-bar swing low
+    Active support candidates are ranked by proximity × touches × recency:
+      1. Swing-low cluster from recent bars  (most touches → highest priority)
+      2. base_low from V2 structure          (structural floor)
+      3. SMA200 / 30w_MA                    (long-term MA support)
+      4. SMA50                               (medium-term MA)
+      5. breakout_pivot ONLY if within 8 %  (still intact / recently reclaimed)
 
-    Returns a flat dict with all support hierarchy fields.  Zero provider calls.
+    SUPPORT_LOST semantics
+    ----------------------
+    ``major_support_lost = True`` ← active_support_status == "lost_confirmed"
+      (price > 5 % below active zone lower bound)
+    NOT triggered merely by price being below the breakout_pivot.
+
+    Backward-compat keys
+    --------------------
+    All old major_support_* / minor_support_* / support_level_* / HH-HL keys
+    are still returned so callers need no changes.  Their semantics now reflect
+    the ACTIVE zone instead of the prior pivot.
+
+    Zero provider calls.
     """
     out: dict = {}
 
-    # ── Major support: take the highest level below or nearest to price ───────
-    major_candidates: list[tuple[str, float]] = []
-    for label, lvl in [
-        ("breakout_pivot", breakout_pivot),
-        ("base_low",       base_low),
-        ("200DMA",         sma200),
-        ("30w_MA",         ma30w),
-    ]:
-        if lvl is not None and lvl > 0:
-            major_candidates.append((label, lvl))
-    # Sort descending by level — closest to current price first
-    major_candidates.sort(key=lambda t: t[1], reverse=True)
+    # ── 1. Prior pivot classification ─────────────────────────────────────────
+    prior_pivot_level:  Optional[float] = None
+    prior_pivot_status: Optional[str]   = None
+    reclaim_level:      Optional[float] = None
 
-    major_level: Optional[float] = None
-    major_type:  Optional[str]   = None
-    if major_candidates:
-        major_type, major_level = major_candidates[0]
+    if breakout_pivot is not None and float(breakout_pivot) > 0:
+        prior_pivot_level = round(float(breakout_pivot), 4)
+        if price >= prior_pivot_level * 0.97:
+            prior_pivot_status = "intact"
+        else:
+            prior_pivot_status = "lost_now_overhead"
+            reclaim_level      = prior_pivot_level
+            # Reclaim: last 3 closes all at/above pivot
+            if len(sorted_bars) >= 3:
+                recent_cls = []
+                for b in sorted_bars[-3:]:
+                    try:
+                        c = float(b.get("close") or 0)
+                        if c > 0:
+                            recent_cls.append(c)
+                    except (TypeError, ValueError):
+                        pass
+                if recent_cls and all(c >= prior_pivot_level * 0.99 for c in recent_cls):
+                    prior_pivot_status = "reclaimed"
+                    reclaim_level      = None
 
-    if major_level is not None and price > 0:
-        dist_pct = round((price - major_level) / major_level * 100, 2)
-        out["major_support_level"]            = round(major_level, 4)
-        out["major_support_type"]             = major_type
-        out["major_support_source"]           = "v2_structure" if major_type in ("breakout_pivot", "base_low") else "ma"
-        out["distance_to_major_support_pct"]  = dist_pct
-        # Lost = more than 3 % below (minor test alone does not count)
-        out["major_support_lost"]             = dist_pct < -3.0
+    out["prior_pivot_level"]  = prior_pivot_level
+    out["prior_pivot_status"] = prior_pivot_status
+    out["reclaim_level"]      = reclaim_level
+
+    # ── 2. Build active support candidates ───────────────────────────────────
+    # A level is active support only if it is at or near current price (not overhead).
+    OVERHEAD_CUTOFF  = 1.08   # > 8 % above price → overhead, skip
+    NEAR_GRACE       = 1.03   # within 3 % above price → may still be testing
+
+    raw_candidates: list[dict] = []
+
+    def _add(label: str, level: Optional[float], type_: str, source: str, bonus: float) -> None:
+        if level is None or float(level) <= 0:
+            return
+        lv = float(level)
+        if lv > price * OVERHEAD_CUTOFF:
+            return
+        if lv > price * NEAR_GRACE:
+            return
+        dist_pct   = (price - lv) / price * 100          # positive = price above level
+        prox_score = max(0.0, 1.0 - dist_pct / 20.0)    # 1.0 = same level, 0 = 20% away
+        raw_candidates.append({
+            "label":    label,
+            "level":    round(lv, 4),
+            "type":     type_,
+            "source":   source,
+            "score":    prox_score + bonus,
+            "touches":  1,
+            "dist_pct": round(dist_pct, 2),
+        })
+
+    # Bar-derived bounce zone
+    _bounce = _find_bounce_zone(sorted_bars, price)
+    if _bounce:
+        _bt  = "double_bounce_support" if _bounce["touches"] >= 2 else "range_low"
+        _bl  = "double_bounce"         if _bounce["touches"] >= 2 else "swing_low_cluster"
+        _bon = 0.30 * min(_bounce["touches"] / 2.0, 1.0)
+        _add(_bl, _bounce["level"], _bt, "bars", _bon)
+        for c in raw_candidates:
+            if c["label"] == _bl:
+                c["touches"] = _bounce["touches"]
+
+    # Structural and MA levels
+    _add("base_low", base_low,  "base_low",             "v2_structure", 0.25)
+    _add("SMA200",   sma200,    "moving_average_zone",  "ma",           0.20)
+    _add("30w_MA",   ma30w,     "moving_average_zone",  "ma",           0.15)
+    _add("SMA50",    sma50,     "moving_average_zone",  "ma",           0.10)
+
+    # Breakout pivot as active support ONLY when it has not been lost
+    if prior_pivot_status in ("intact", "reclaimed"):
+        _add("breakout_pivot", breakout_pivot, "prior_major_swing_low", "v2_structure", 0.25)
+
+    raw_candidates.sort(key=lambda c: -c["score"])
+
+    # ── 3. Primary active support ──────────────────────────────────────────────
+    active_level:   Optional[float] = None
+    active_type:    Optional[str]   = None
+    active_label:   Optional[str]   = None
+    active_source:  Optional[str]   = None
+    active_touches: int             = 1
+    next_downside:  Optional[dict]  = None
+
+    if raw_candidates:
+        pri            = raw_candidates[0]
+        active_level   = pri["level"]
+        active_type    = pri["type"]
+        active_label   = pri["label"]
+        active_source  = pri["source"]
+        active_touches = pri.get("touches", 1)
+        for c in raw_candidates[1:]:
+            if c["level"] < active_level * 0.97:
+                next_downside = {"level": c["level"], "type": c["type"], "label": c["label"]}
+                break
+
+    out["active_support_type"]         = active_type
+    out["active_support_label"]        = active_label
+    out["active_support_touch_count"]  = active_touches
+    out["next_downside_support"]       = next_downside
+
+    # ── 4. Active support zone (±2 % band) ────────────────────────────────────
+    lb: Optional[float] = None
+    ub: Optional[float] = None
+    if active_level is not None:
+        lb = round(active_level * 0.98, 4)
+        ub = round(active_level * 1.02, 4)
+        out["active_support_zone"]  = {"lower_bound": lb, "upper_bound": ub, "midpoint": round(active_level, 4)}
+        out["critical_break_level"] = lb
+    else:
+        out["active_support_zone"]  = None
+        out["critical_break_level"] = None
+
+    # ── 5. Active support status ───────────────────────────────────────────────
+    if active_level is None or lb is None:
+        asst = "no_clear_support"
+    else:
+        recently_touched = False
+        for b in sorted_bars[-5:]:
+            try:
+                b_low = float(b.get("low") or b.get("close") or 0)
+                if lb * 0.99 <= b_low <= ub:
+                    recently_touched = True
+                    break
+            except (TypeError, ValueError):
+                pass
+
+        if price < lb * 0.97:
+            asst = "lost_confirmed"
+        elif price < lb:
+            asst = "broken_unconfirmed"
+        elif price <= (ub or active_level) * 1.02:
+            asst = "bounced_from_support" if recently_touched else "testing_support"
+        else:
+            asst = "above_support"
+
+    out["active_support_status"] = asst
+
+    # ── 6. Backward-compat major/minor fields (now track active zone) ──────────
+    if active_level is not None:
+        dist_to_active = round((price - active_level) / active_level * 100, 2)
+        out["major_support_level"]           = round(active_level, 4)
+        out["major_support_type"]            = active_type
+        out["major_support_source"]          = active_source
+        out["distance_to_major_support_pct"] = dist_to_active
+        out["major_support_lost"]            = asst in ("lost_confirmed", "broken_unconfirmed")
     else:
         out["major_support_level"]           = None
         out["major_support_type"]            = None
@@ -345,32 +557,39 @@ def _classify_support_hierarchy(
         out["distance_to_major_support_pct"] = None
         out["major_support_lost"]            = None
 
-    # ── Minor support ─────────────────────────────────────────────────────────
+    # Minor support: SMA50 (if not already primary), else next candidate
     minor_level: Optional[float] = None
     minor_type:  Optional[str]   = None
-    if sma50 and sma50 > 0:
-        minor_level, minor_type = sma50, "SMA50"
-    elif len(sorted_bars) >= 20:
-        w = sorted_bars[-20:]
-        lows = [float(b.get("low") or b.get("close") or 0) for b in w if (b.get("low") or b.get("close"))]
-        if lows:
-            minor_level, minor_type = min(lows), "recent_swing"
+    if sma50 and float(sma50) > 0 and float(sma50) <= price * 1.01 and active_label != "SMA50":
+        minor_level = round(float(sma50), 4)
+        minor_type  = "moving_average_zone"
+    if minor_level is None and len(raw_candidates) > 1:
+        for c in raw_candidates[1:]:
+            if c["level"] < (active_level or price) * 0.99:
+                minor_level = c["level"]
+                minor_type  = c["type"]
+                break
 
-    out["minor_support_level"] = round(minor_level, 4) if minor_level else None
+    out["minor_support_level"] = minor_level
     out["minor_support_type"]  = minor_type
     out["minor_support_lost"]  = (price < minor_level) if (minor_level and price > 0) else None
 
-    # ── Best display level ────────────────────────────────────────────────────
-    out["support_level_price"]  = out["major_support_level"] or out["minor_support_level"]
-    out["support_level_type"]   = out["major_support_type"]  or out["minor_support_type"]
-    out["support_level_source"] = ("major" if out["major_support_level"] else
-                                   ("minor" if out["minor_support_level"] else None))
+    out["support_level_price"]  = active_level or minor_level
+    out["support_level_type"]   = active_type  or minor_type
+    out["support_level_source"] = (
+        "active_zone" if active_level else ("minor" if minor_level else None)
+    )
 
-    # ── HH/HL structure from the last 40 bars ────────────────────────────────
+    # ── 7. HH/HL structure from the last 40 bars ──────────────────────────────
+    _HH_HL_KEYS = (
+        "prior_swing_high", "recent_swing_high", "prior_swing_low", "recent_swing_low",
+        "higher_high_confirmed", "higher_low_confirmed",
+        "lower_high_confirmed",  "lower_low_confirmed", "support_break_confirmed",
+    )
     if len(sorted_bars) >= 40:
         window = sorted_bars[-40:]
-        closes: list[float] = []
-        lows_w: list[float] = []
+        closes:  list[float] = []
+        lows_w:  list[float] = []
         highs_w: list[float] = []
         for b in window:
             c = b.get("close")
@@ -385,12 +604,11 @@ def _classify_support_hierarchy(
                 pass
 
         if len(closes) >= 20:
-            mid = len(closes) // 2
+            mid         = len(closes) // 2
             prior_high  = max(highs_w[:mid])
             recent_high = max(highs_w[mid:])
             prior_low   = min(lows_w[:mid])
             recent_low  = min(lows_w[mid:])
-
             out["prior_swing_high"]       = round(prior_high,  4)
             out["recent_swing_high"]      = round(recent_high, 4)
             out["prior_swing_low"]        = round(prior_low,   4)
@@ -401,17 +619,17 @@ def _classify_support_hierarchy(
             out["lower_low_confirmed"]    = recent_low  < prior_low   * 0.97
             out["support_break_confirmed"]= out["lower_low_confirmed"]
         else:
-            for k in ("prior_swing_high", "recent_swing_high", "prior_swing_low",
-                      "recent_swing_low", "higher_high_confirmed", "higher_low_confirmed",
-                      "lower_high_confirmed", "lower_low_confirmed", "support_break_confirmed"):
+            for k in _HH_HL_KEYS:
                 out[k] = None
     else:
-        for k in ("prior_swing_high", "recent_swing_high", "prior_swing_low",
-                  "recent_swing_low", "higher_high_confirmed", "higher_low_confirmed",
-                  "lower_high_confirmed", "lower_low_confirmed", "support_break_confirmed"):
+        for k in _HH_HL_KEYS:
             out[k] = None
 
     return out
+
+
+# Backward-compat alias — call sites that imported the old name still work.
+_classify_support_hierarchy = _classify_active_support_zone
 
 
 # ── Core classification ────────────────────────────────────────────────────────
@@ -1094,6 +1312,45 @@ def analyze_entry_state_from_bars(
             bars_count      = len(daily_bars),
         )
 
+    # ── Active Support Zone — computed early so it can correct entry_state ────
+    _support_hier: dict = {}
+    if price is not None:
+        _sv2b = (_v2_structure or {}).get("base", {})
+        _sv2o = (_v2_structure or {}).get("breakout", {})
+        _support_hier = _classify_active_support_zone(
+            price          = price,
+            sma50          = sma50,
+            sma200         = sma200,
+            ma30w          = ma30w_price,
+            base_low       = _sv2b.get("base_low"),
+            breakout_pivot = _sv2o.get("breakout_pivot"),
+            sorted_bars    = sorted_bars,
+        )
+
+    # ── Post-classification correction: SUPPORT_LOST gate ─────────────────────
+    # SUPPORT_LOST requires the ACTIVE critical support to be broken, not merely
+    # the prior breakout pivot.  If the active support zone is still holding
+    # (testing / bouncing), reclassify to a nuanced state.
+    if entry_state == "SUPPORT_LOST" and _support_hier:
+        _asst = _support_hier.get("active_support_status", "no_clear_support")
+        _pvst = _support_hier.get("prior_pivot_status")
+        if _asst in ("above_support", "testing_support", "bounced_from_support"):
+            if _pvst == "lost_now_overhead":
+                # Prior pivot now overhead resistance; active lower support holds
+                entry_state = "RANGE_SUPPORT_TEST"
+                evidence    = list(evidence) + [
+                    "prior_pivot_lost_now_overhead",
+                    f"active_support_{_asst}",
+                    "support_lost_corrected→range_support_test",
+                ]
+            else:
+                # Active support is holding; prior pivot still near price
+                entry_state = "SUPPORT_TEST"
+                evidence    = list(evidence) + [
+                    f"active_support_{_asst}",
+                    "support_lost_corrected→support_test",
+                ]
+
     entry_family = _STATE_TO_FAMILY.get(entry_state, FAMILY_BROKEN)
     base_score   = _BASE_SCORES.get(entry_state, 20)
     entry_score  = max(0, min(100, base_score + adj))
@@ -1104,21 +1361,6 @@ def analyze_entry_state_from_bars(
     if price is not None:
         support_levels = _build_support_levels(
             price, sma20, sma50, sma200, ma30w_price
-        )
-
-    # ── Support hierarchy (major/minor + HH/HL structure) ────────────────────
-    _support_hier: dict = {}
-    if price is not None:
-        _sv2b = (_v2_structure or {}).get("base", {})
-        _sv2o = (_v2_structure or {}).get("breakout", {})
-        _support_hier = _classify_support_hierarchy(
-            price          = price,
-            sma50          = sma50,
-            sma200         = sma200,
-            ma30w          = ma30w_price,
-            base_low       = _sv2b.get("base_low"),
-            breakout_pivot = _sv2o.get("breakout_pivot"),
-            sorted_bars    = sorted_bars,
         )
 
     result: dict[str, Any] = {

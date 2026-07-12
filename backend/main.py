@@ -2267,7 +2267,7 @@ async def debug_confluence_accuracy(
     tab_counts["total_retained_rows"] = len(_retained_syms)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
-    from services.entry_state_service import _classify_support_hierarchy
+    from services.entry_state_service import _classify_active_support_zone
     from services.actionability_service import _compute_actionability_core, compute_actionability
 
     def _lvl(support_levels: list, label: str):
@@ -2298,7 +2298,7 @@ async def debug_confluence_accuracy(
             base_low_val      = sv2.get("base_low")
             breakout_pivot_val= sv2.get("breakout_pivot")
             # sorted_bars=[] — HH/HL structure fields will be None; major/minor levels compute fine
-            supp = _classify_support_hierarchy(
+            supp = _classify_active_support_zone(
                 price          = float(price),
                 sma50          = float(sma50_val)  if sma50_val  else None,
                 sma200         = float(sma200_val) if sma200_val else None,
@@ -2360,7 +2360,19 @@ async def debug_confluence_accuracy(
             "base_archetype":  sv2.get("base_archetype"),
             "extension_state": ext_state,
 
-            # ── Support Hierarchy (computed in-memory) ────────────────────────
+            # ── Prior Pivot vs Active Support Zone (new) ──────────────────────
+            "prior_pivot_level":       supp.get("prior_pivot_level"),
+            "prior_pivot_status":      supp.get("prior_pivot_status"),
+            "active_support_zone":     supp.get("active_support_zone"),
+            "active_support_type":     supp.get("active_support_type"),
+            "active_support_label":    supp.get("active_support_label"),
+            "active_support_status":   supp.get("active_support_status"),
+            "active_support_touches":  supp.get("active_support_touch_count"),
+            "critical_break_level":    supp.get("critical_break_level"),
+            "next_downside_support":   supp.get("next_downside_support"),
+            "reclaim_level":           supp.get("reclaim_level"),
+
+            # ── Support Hierarchy (backward-compat; now tracks active zone) ────
             "support_level_price":     supp.get("support_level_price"),
             "support_level_type":      supp.get("support_level_type"),
             "support_level_source":    supp.get("support_level_source"),
@@ -2439,21 +2451,28 @@ async def debug_confluence_accuracy(
         rows.append(row)
 
     # ── Validation summary ────────────────────────────────────────────────────
-    extreme_ext_syms  = [r["symbol"] for r in rows if r.get("extension_state") == "EXTREME_EXTENSION"]
-    too_ext_syms      = [r["symbol"] for r in rows if r.get("actionability_simulated") == "TOO_EXTENDED"]
-    support_test_syms = [r["symbol"] for r in rows if r.get("entry_state") in ("SUPPORT_TEST", "LOWER_HIGH_WARNING", "LOWER_LOW_CONFIRMED")]
-    support_lost_syms = [r["symbol"] for r in rows if r.get("entry_state") in ("SUPPORT_LOST", "FAILED_BREAKOUT")]
-    major_lost_syms   = [r["symbol"] for r in rows if r.get("major_support_lost") is True]
+    extreme_ext_syms   = [r["symbol"] for r in rows if r.get("extension_state") == "EXTREME_EXTENSION"]
+    too_ext_syms       = [r["symbol"] for r in rows if r.get("actionability_simulated") == "TOO_EXTENDED"]
+    support_test_syms  = [r["symbol"] for r in rows if r.get("entry_state") in (
+        "SUPPORT_TEST", "LOWER_HIGH_WARNING", "LOWER_LOW_CONFIRMED", "RANGE_SUPPORT_TEST")]
+    range_test_syms    = [r["symbol"] for r in rows if r.get("entry_state") == "RANGE_SUPPORT_TEST"]
+    support_lost_syms  = [r["symbol"] for r in rows if r.get("entry_state") in ("SUPPORT_LOST", "FAILED_BREAKOUT")]
+    active_lost_syms   = [r["symbol"] for r in rows if r.get("major_support_lost") is True]
+    prior_overhead_syms= [r["symbol"] for r in rows if r.get("prior_pivot_status") == "lost_now_overhead"]
+    pivot_intact_syms  = [r["symbol"] for r in rows if r.get("prior_pivot_status") == "intact"]
 
     validation = {
-        "extreme_extension_symbols":    extreme_ext_syms,
-        "simulated_too_extended":       too_ext_syms,
-        "extension_guard_effective":    all(s in too_ext_syms for s in extreme_ext_syms),
-        "support_test_nuanced":         support_test_syms,
-        "blanket_support_lost":         support_lost_syms,
-        "major_support_lost_confirmed": major_lost_syms,
-        "provider_calls":               0,
-        "data_source":                  "entry_lkg+stage2_lkg+retained_snapshot+in_memory_compute",
+        "extreme_extension_symbols":        extreme_ext_syms,
+        "simulated_too_extended":           too_ext_syms,
+        "extension_guard_effective":        all(s in too_ext_syms for s in extreme_ext_syms),
+        "support_test_nuanced":             support_test_syms,
+        "range_support_test_symbols":       range_test_syms,
+        "blanket_support_lost":             support_lost_syms,
+        "active_critical_support_lost":     active_lost_syms,
+        "prior_pivot_overhead_symbols":     prior_overhead_syms,
+        "prior_pivot_intact_symbols":       pivot_intact_syms,
+        "provider_calls":                   0,
+        "data_source":                      "entry_lkg+stage2_lkg+retained_snapshot+in_memory_compute",
     }
 
     return {
