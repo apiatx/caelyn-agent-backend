@@ -1,0 +1,272 @@
+BACKEND — FINAL V4 OPTIONS COVERAGE VERIFICATION BEFORE PHASE 2
+
+Backend only.
+
+Do not change code unless the validation proves a bug.
+Do not promote V4.
+Do not touch frontend.
+Do not call LLMs.
+Do not make Confluence fetch fresh options.
+
+Goal:
+
+Verify that the Options Coverage Gap Repair fully settled after snapshot warm and scanner-universe registration.
+
+Current latest state:
+
+- not_scanned improved from 86 to 29
+- confirmed_no_options improved from 0 to 57
+- avg confidence improved to 81.7%
+- 318 US watchlist tickers registered into the supplement scanner universe
+- 57 foreign-prefixed tickers now classify as confirmed_no_options
+- sectors LKG no-options seed is active
+- 13 previously missing US watchlist tickers are now queued for next supplement scan
+- 9 tickers have supplement LKG rows but INSUFFICIENT_HISTORY / optionable_pending_chain
+- MSFT should now be queued via watchlist registration
+
+Do not make new architectural changes unless the counts prove the automatic resolution path failed.
+
+==================================================
+PART 1 — SNAPSHOT WARM VERIFICATION
+==================================================
+
+Confirm the latest retained alignment snapshot is fresh after the recent restart.
+
+Return:
+
+snapshot_as_of
+snapshot_age_minutes
+row_count
+v4_rows_scored
+options_status_counts
+confirmed_no_options_symbols
+not_scanned_symbols
+confidence_avg
+confidence_distribution
+
+Expected:
+
+The 6 sectors-LKG confirmed_no_options names should now flip from not_scanned to confirmed_no_options if snapshot warm completed:
+
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+
+If they did not flip, explain why.
+
+==================================================
+PART 2 — REMAINING NOT_SCANNED CLASSIFICATION
+==================================================
+
+Return the complete current not_scanned list.
+
+For each symbol:
+
+symbol
+is_foreign_prefixed
+is_us_watchlist_ticker
+is_in_supplement_universe
+is_in_supplement_lkg
+is_in_master_lkg
+is_confirmed_no_options_from_sectors_lkg
+scan_status
+ticker_state
+options_snapshot_status
+options_as_of
+reason_not_scanned
+next_resolution_path
+
+Classify each as:
+
+WAITING_NEXT_MARKET_SCAN
+INSUFFICIENT_HISTORY
+OPTIONABLE_PENDING_CHAIN
+NO_HISTORICAL_LKG
+UNEXPECTED_MISSING
+CONFIRMED_NO_OPTIONS_PENDING_SNAPSHOT
+OTHER
+
+==================================================
+PART 3 — VERIFY SCANNER UNIVERSE FIX
+==================================================
+
+Confirm the supplement scanner universe now includes the full Confluence/watchlist universe where applicable.
+
+Return:
+
+full confluence universe count
+watchlist US ticker count
+supplement scanner universe count
+foreign confirmed_no_options count
+missing US watchlist tickers from scanner universe
+missing symbols
+
+Expected:
+
+No US watchlist ticker should be outside the supplement scanner universe unless intentionally excluded with a reason.
+
+==================================================
+PART 4 — OPTIONS FLOW PAGE VALIDATION
+==================================================
+
+Validate the Options Flow page / backend endpoint still serves LKG data during closed market.
+
+Return:
+
+endpoint path
+row count
+unique ticker count
+options_snapshot_status
+options_as_of
+options_lkg_age_hours
+source
+does endpoint return blank
+reason if blank
+
+Expected:
+
+Options Flow should not be blank when Friday LKG exists.
+
+==================================================
+PART 5 — V4 PROMOTION READINESS CHECK
+==================================================
+
+V4 can only be promoted if:
+
+- not_scanned is no longer a blanket/systemic failure
+- all remaining not_scanned symbols are explicitly classified
+- foreign symbols are confirmed_no_options
+- known no-options symbols are confirmed_no_options
+- US watchlist symbols are in the scanner universe
+- Options Flow endpoint does not blank during closed market
+- V4 uses cached/LKG options only
+- provider calls = 0
+
+Return YES/NO for each.
+
+==================================================
+PART 6 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+GLW
+VRT
+BE
+NVEC
+MARA
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+MSFT
+NVDA
+SMCI
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+ACOG
+ADTN
+APH
+DVLT
+INKT
+LIDR
+NXXT
+OPTX
+PBLS
+SILC
+XTIA
+
+For each:
+
+symbol
+options_status
+options_snapshot_status
+options_as_of
+options_alignment_score
+options_points
+confidence_impact
+reason_codes
+v4_score
+v4_bucket
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+FINAL V4 OPTIONS COVERAGE VERIFICATION REPORT
+
+SNAPSHOT WARM STATUS:
+[summary]
+
+OPTIONS STATUS COUNTS:
+[table]
+
+REMAINING NOT_SCANNED CLASSIFICATION:
+[table]
+
+SCANNER UNIVERSE VERIFICATION:
+[summary]
+
+OPTIONS FLOW PAGE VALIDATION:
+[summary]
+
+VALIDATION SYMBOLS:
+[table]
+
+PHASE 2 READINESS:
+[YES/NO + why]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+FINAL V4 OPTIONS COVERAGE VERDICT
+
+SNAPSHOT WARM COMPLETE:
+[YES/NO]
+
+OPTIONS FLOW DOES NOT BLANK ON WEEKEND/CLOSED MARKET:
+[YES/NO]
+
+FOREIGN SYMBOLS MARKED CONFIRMED_NO_OPTIONS:
+[YES/NO]
+
+KNOWN NO-OPTIONS SYMBOLS MARKED CONFIRMED_NO_OPTIONS:
+[YES/NO]
+
+US WATCHLIST SYMBOLS INCLUDED IN SUPPLEMENT SCANNER UNIVERSE:
+[YES/NO]
+
+REMAINING NOT_SCANNED FULLY EXPLAINED:
+[YES/NO]
+
+V4 OPTIONS STATUS IS HEALTHY ENOUGH FOR PROMOTION:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR PHASE 2 PROMOTION:
+[YES/NO]

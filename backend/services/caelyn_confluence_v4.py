@@ -247,7 +247,7 @@ def _score_options_alignment(row: dict) -> dict:
     # classify immediately as confirmed_no_options — a KNOWN state that earns
     # confidence points rather than a gap that lowers them.
     _FOREIGN_PFX = (
-        "AIM:", "ASX:", "CSE:", "EPA:", "ETR:", "FRA:", "KRX:",
+        "AIM:", "AMS:", "ASX:", "CSE:", "EPA:", "ETR:", "FRA:", "KRX:",
         "LON:", "OSL:", "SHA:", "STO:", "SWX:", "TPE:", "TPEX:",
         "TSX:", "TSXV:", "TYO:", "WSE:", "XSAT:", "OTC:",
     )
