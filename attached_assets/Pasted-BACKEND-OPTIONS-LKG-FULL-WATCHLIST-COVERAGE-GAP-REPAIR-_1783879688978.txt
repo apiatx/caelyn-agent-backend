@@ -1,0 +1,252 @@
+BACKEND — OPTIONS LKG FULL WATCHLIST COVERAGE GAP REPAIR
+
+Backend only.
+
+Do not touch frontend.
+Do not promote V4.
+Do not call LLMs.
+Do not make Confluence fetch fresh options.
+Do not reverse the weekend LKG fix.
+
+The weekend LKG fix worked:
+
+V4 not_scanned improved from 379/379 to 86/379.
+available_cached improved from 0 to 293.
+Friday stale-but-usable LKG now loads correctly.
+
+But the report says the 86 remaining not_scanned are watchlist tickers outside the theme universe because the supplement scanner never reached them.
+
+That is not acceptable as final behavior for full-watchlist Caelyn Confluence.
+
+Goal:
+
+Audit and fix the remaining 86 options coverage gaps so the Options/V4 universe matches the full Confluence universe.
+
+==================================================
+PART 1 — IDENTIFY THE 86 NOT_SCANNED SYMBOLS
+==================================================
+
+Return the full list of the 86 symbols where:
+
+V4 options_status = not_scanned
+
+For each return:
+
+symbol
+is_in_watchlist
+is_in_theme_universe
+is_in_portfolio
+is_optionable_if_known
+has_options_flow_page_row
+has_master_lkg_row
+has_supplement_lkg_row
+has_neon_options_history
+scan_status_if_known
+reason_not_scanned
+
+Classify each as:
+
+OUTSIDE_SCANNER_UNIVERSE
+CONFIRMED_NO_OPTIONS
+MISSING_LKG_BUT_OPTIONABLE
+MISSING_LKG_UNKNOWN_OPTIONABILITY
+STALE_INVALID
+OTHER
+
+==================================================
+PART 2 — DEFINE CANONICAL OPTIONS REQUIRED UNIVERSE
+==================================================
+
+The required options universe for Confluence should be:
+
+- all current watchlist symbols
+- all portfolio underlying symbols
+- all close-watch / favorite symbols if separate
+- all symbols appearing in current Confluence alignment rows
+
+Do not limit options coverage to theme universe only.
+
+Return:
+
+current options scanner universe count
+current Confluence universe count
+missing from scanner universe count
+missing symbols
+
+==================================================
+PART 3 — DO NOT SCAN FROM CONFLUENCE
+==================================================
+
+Confluence must not request live options data.
+
+Instead, update the options producer/scanner universe so the next scheduled options run covers the required Confluence universe.
+
+If market is closed:
+- do not scan now
+- persist coverage gaps
+- keep Friday LKG for covered names
+- mark uncovered names as not_scanned with reason OUTSIDE_SCANNER_UNIVERSE until next valid options scan
+
+==================================================
+PART 4 — CONFIRMED NO-OPTIONS HANDLING
+==================================================
+
+For any of the 86 symbols that are already known to be non-optionable from previous scans:
+
+set V4 options_status = confirmed_no_options
+
+Do not leave known non-optionable names as not_scanned.
+
+confirmed_no_options should be neutral, not a system failure.
+
+==================================================
+PART 5 — LKG/NEON BACKFILL
+==================================================
+
+For the 86 symbols, check existing Neon/disk history.
+
+If prior options data exists:
+- restore latest valid cached row
+- mark status = stale_but_usable or available_cached depending age/source
+- do not call provider
+
+If no prior data exists:
+- leave status = not_scanned
+- reason = NO_HISTORICAL_OPTIONS_LKG
+- include it in next scanner universe
+
+==================================================
+PART 6 — V4 CONFIDENCE RULE
+==================================================
+
+After this repair:
+
+available_cached / stale_but_usable:
+positive or mild confidence impact
+
+confirmed_no_options:
+neutral confidence impact
+
+not_scanned because outside scanner universe:
+confidence penalty and reason code
+
+Do not normalize away true coverage gaps silently.
+
+==================================================
+PART 7 — VALIDATION
+==================================================
+
+Return:
+
+total V4 rows
+available_cached count
+stale_but_usable count
+confirmed_no_options count
+not_scanned count
+missing_cache count
+
+Return before/after:
+
+not_scanned 86 -> ?
+
+Validate:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+GLW
+VRT
+BE
+NVEC
+MARA
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+
+For each:
+
+symbol
+options_status_before
+options_status_after
+options_source
+options_as_of
+options_alignment_score
+options_points
+confidence impact
+reason_codes
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+OPTIONS FULL WATCHLIST COVERAGE GAP REPORT
+
+FILES CHANGED:
+[list]
+
+86 NOT_SCANNED CLASSIFICATION:
+[table / counts]
+
+CANONICAL OPTIONS UNIVERSE:
+[summary]
+
+SCANNER UNIVERSE FIX:
+[summary]
+
+CONFIRMED_NO_OPTIONS FIX:
+[summary]
+
+LKG/NEON BACKFILL:
+[summary]
+
+V4 OPTIONS STATUS BEFORE / AFTER:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+OPTIONS FULL WATCHLIST COVERAGE VERDICT
+
+WEEKEND LKG FIX PRESERVED:
+[YES/NO]
+
+FULL CONFLUENCE UNIVERSE IDENTIFIED:
+[YES/NO]
+
+OPTIONS SCANNER UNIVERSE MATCHES CONFLUENCE UNIVERSE:
+[YES/NO]
+
+KNOWN NON-OPTIONABLES MARKED CONFIRMED_NO_OPTIONS:
+[YES/NO]
+
+PRIOR OPTIONS LKG/NEON DATA REUSED WHERE AVAILABLE:
+[YES/NO]
+
+NOT_SCANNED REDUCED OR FULLY EXPLAINED:
+[YES/NO]
+
+V4 OPTIONS STATUS IS NO LONGER THEME-UNIVERSE LIMITED:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY TO RERUN PHASE 1.6 VALIDATION:
+[YES/NO]
