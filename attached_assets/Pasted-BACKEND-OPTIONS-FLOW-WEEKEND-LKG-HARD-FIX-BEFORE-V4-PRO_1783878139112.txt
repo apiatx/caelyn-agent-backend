@@ -1,0 +1,310 @@
+BACKEND — OPTIONS FLOW WEEKEND LKG HARD FIX BEFORE V4 PROMOTION
+
+Backend only.
+
+Do not touch frontend.
+Do not promote V4.
+Do not call LLMs.
+Do not add request-time provider calls from Confluence.
+Do not make Confluence scan fresh options.
+Do not wait until Monday’s live scan as the fix.
+
+Problem:
+
+Phase 1.6 still reports:
+
+Options — all 379 not_scanned.
+“Expected on a weekend restart — the disk LKG fallback is wired and will populate once the options master screener runs a full pass on Monday market open.”
+
+That is not acceptable.
+
+Options Flow cannot go blank on weekends or closed-market periods.
+
+The correct behavior:
+
+If the options market is closed, the Options Flow page and V4 options component must use the last known good completed options session, usually Friday close, until the next live options session refreshes.
+
+==================================================
+PART 1 — ROOT AUDIT OPTIONS FLOW LKG PERSISTENCE
+==================================================
+
+Audit the canonical Options Flow pipeline.
+
+Find and report:
+
+1. Options Flow page endpoint
+2. canonical options producer / scanner
+3. canonical options LKG file path
+4. Neon options tables used
+5. options_master_lkg path
+6. options_theme_supplement path
+7. options_net_premium_daily source
+8. startup cache loader
+9. market-closed behavior
+10. whether weekend restart loses in-memory options state
+11. whether disk LKG contains full Friday scan or only partial test scan
+12. whether empty scans overwrite the LKG
+13. whether closed-market endpoint returns [] instead of LKG
+
+Return:
+
+disk LKG exists yes/no
+disk LKG symbol count
+Neon latest options snapshot symbol count
+latest options as_of timestamp
+latest market session represented
+Options Flow endpoint row count right now
+why page was blank on Sunday
+why V4 sees 379 not_scanned
+
+==================================================
+PART 2 — DO NOT ALLOW EMPTY OPTIONS OVERWRITE
+==================================================
+
+Add a guard:
+
+If market is closed or scan result is empty/partial due to closed market:
+- do not overwrite last known good full options LKG
+- do not replace valid Friday data with empty arrays
+- do not mark all symbols not_scanned if Friday data exists
+
+A scan can update LKG only if:
+
+- market is open OR scan is explicitly allowed
+- result has meaningful row count
+- result passes minimum coverage threshold
+- result has valid as_of timestamp
+- result is not an empty closed-market response
+
+Expose reason codes:
+
+SKIP_EMPTY_MARKET_CLOSED_SCAN
+SKIP_PARTIAL_SCAN_BELOW_THRESHOLD
+PRESERVED_LAST_GOOD_OPTIONS_LKG
+
+==================================================
+PART 3 — WEEKEND / CLOSED MARKET SERVING RULE
+==================================================
+
+Options Flow endpoint must serve:
+
+live options data if market open and fresh
+else last known good options LKG
+else stale_but_usable LKG if available
+else explicit missing_cache status
+
+Never silently return blank if LKG exists.
+
+Return metadata:
+
+options_snapshot_status:
+  live
+  lkg_market_closed
+  stale_but_usable
+  missing_cache
+  confirmed_no_options
+
+options_as_of
+options_lkg_age_hours
+options_source:
+  memory
+  disk_lkg
+  neon
+  scanner_live
+
+options_market_session
+options_next_refresh_at
+
+==================================================
+PART 4 — BACKFILL / REBUILD LKG FROM NEON IF DISK LKG IS PARTIAL
+==================================================
+
+If disk LKG only contains partial test data, rebuild the runtime LKG from Neon tables where possible.
+
+Use existing Neon options data only.
+
+Possible sources:
+
+options_net_premium_daily
+canonical options snapshots table if present
+options supplement data if present
+
+No provider calls.
+
+If Neon has enough data:
+- reconstruct last known options alignment rows
+- persist disk LKG
+- mark source = neon_rebuilt_lkg
+
+If Neon does not have enough data:
+- return exact missing tables/counts
+- keep endpoint explicit, not blank
+
+==================================================
+PART 5 — V4 OPTIONS COMPONENT MUST READ CANONICAL LKG
+==================================================
+
+After Options Flow LKG serving is fixed, V4 should read the same canonical cached source.
+
+V4 must not scan fresh options.
+
+V4 options statuses:
+
+available_live
+available_cached
+lkg_market_closed
+stale_but_usable
+confirmed_no_options
+not_scanned
+missing_cache
+stale_invalid
+
+Expected:
+
+If Friday/LKG data exists:
+V4 options_status should not be 379/379 not_scanned.
+
+If only partial LKG exists:
+V4 should show partial available + missing_cache/not_scanned for truly missing symbols, not blanket 379 not_scanned.
+
+==================================================
+PART 6 — VALIDATION
+==================================================
+
+Validate:
+
+Options Flow page endpoint:
+- row count
+- unique ticker count
+- status
+- as_of
+- source
+- not blank
+
+V4 alignment:
+- total rows
+- options available count
+- confirmed_no_options count
+- not_scanned count
+- missing_cache count
+- stale_but_usable count
+
+Validate symbols:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+GLW
+VRT
+BE
+NVEC
+MARA
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+
+For each:
+
+symbol
+options_cache_present
+options_snapshot_status
+options_as_of
+options_alignment_score
+options_primary_signal
+net_premium
+net_premium_1d_delta
+net_premium_7d_delta
+net_premium_30d_delta
+V4 options_status
+V4 options_points
+reason_codes
+
+==================================================
+PART 7 — PROMOTION READINESS
+==================================================
+
+Do not promote V4.
+
+Phase 2 can proceed only if:
+
+- Options Flow endpoint does not blank on weekend/closed market when LKG exists
+- empty closed-market scans cannot overwrite LKG
+- disk LKG or Neon-backed LKG is durable across restart
+- V4 options_status is not blanket 379/379 not_scanned unless proven truly no LKG exists
+- provider calls = 0
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+OPTIONS WEEKEND LKG HARD FIX REPORT
+
+FILES CHANGED:
+[list]
+
+ROOT CAUSE:
+[why Options Flow was blank / why V4 saw 379 not_scanned]
+
+LKG SOURCES:
+[disk / Neon / memory counts]
+
+EMPTY OVERWRITE GUARD:
+[summary]
+
+WEEKEND SERVING RULE:
+[summary]
+
+NEON REBUILD:
+[performed / not performed + why]
+
+OPTIONS FLOW ENDPOINT VALIDATION:
+[row count, unique tickers, status, as_of, source]
+
+V4 OPTIONS VALIDATION:
+[counts]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+OPTIONS WEEKEND LKG VERDICT
+
+OPTIONS FLOW NO LONGER BLANKS WHEN LKG EXISTS:
+[YES/NO]
+
+EMPTY CLOSED-MARKET SCANS CANNOT OVERWRITE LKG:
+[YES/NO]
+
+LKG SURVIVES WEEKEND RESTART:
+[YES/NO]
+
+NEON REBUILD AVAILABLE IF DISK LKG PARTIAL:
+[YES/NO]
+
+V4 READS CANONICAL OPTIONS LKG:
+[YES/NO]
+
+V4 NO LONGER BLANKET 379/379 NOT_SCANNED UNLESS PROVEN TRUE:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY TO RE-RUN PHASE 1.6 VALIDATION:
+[YES/NO]

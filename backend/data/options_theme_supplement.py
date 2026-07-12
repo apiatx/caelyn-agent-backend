@@ -42,7 +42,9 @@ import time
 from typing import Optional
 
 _SUPPLEMENT_LKG_DISK_PATH    = _pathlib.Path(__file__).resolve().parent / "options_supplement_lkg_v1.json"
-_SUPPLEMENT_LKG_DISK_MAX_AGE = 86400   # 24 h — reject snapshots older than this
+_SUPPLEMENT_LKG_DISK_MAX_AGE = 345600  # 96 h (4 days) — keeps Friday-close data live over weekend
+_SUPPLEMENT_LKG_STALE_TTL    = 345600  # 96 h cache TTL for stale (>24 h) startup loads
+_SUPPLEMENT_LKG_FRESH_AGE    = 86400   # rows < 24 h old are "lkg_market_closed"; older = "stale_but_usable"
 
 _NO_OPTIONS_CACHE_KEY  = "options_no_options_tracking:v1"
 _NO_OPTIONS_CACHE_TTL  = 86400   # 24 h
@@ -203,9 +205,41 @@ def _save_supplement_lkg_to_disk(ticker_data: dict) -> None:
     restarted before a full pass completes.
 
     Entries older than _SUPPLEMENT_LKG_DISK_MAX_AGE are pruned on save.
+
+    EMPTY OVERWRITE GUARD: if market is closed and the new batch is tiny
+    compared with the existing disk LKG, the existing LKG is preserved and
+    the batch is skipped.  Reason code: PRESERVED_LAST_GOOD_OPTIONS_LKG.
     """
     if not ticker_data:
         return
+    # ── Empty overwrite guard ────────────────────────────────────────────────
+    # Prevent a handful of closed-market supplement rows from erasing a large
+    # Friday-close LKG that has accumulated 500+ tickers.
+    try:
+        if _SUPPLEMENT_LKG_DISK_PATH.exists():
+            _existing = _json.loads(
+                _SUPPLEMENT_LKG_DISK_PATH.read_text(encoding="utf-8")
+            )
+            _existing_count = len((_existing or {}).get("ticker_data", {}))
+            _new_count = len(ticker_data)
+            if (
+                _existing_count > 50
+                and _new_count < _existing_count * 0.5
+            ):
+                try:
+                    from data.tradier_market_session import get_session as _gs
+                    _sess = _gs()
+                except Exception:
+                    _sess = "unknown"
+                if _sess not in ("regular", "pre", "post"):
+                    print(
+                        f"[SUPP_LKG] PRESERVED_LAST_GOOD_OPTIONS_LKG: "
+                        f"existing={_existing_count} new={_new_count} "
+                        f"session={_sess} — skipping overwrite"
+                    )
+                    return
+    except Exception:
+        pass  # guard failure is non-fatal — proceed with normal save
     try:
         now = time.time()
         merged: dict = {}
@@ -246,7 +280,15 @@ def _load_supplement_lkg_from_disk() -> None:
     any request is served so the sectors endpoint has data immediately.
 
     Rows are tagged _source='supplement_lkg' to distinguish from fresh
-    session scans.  Loaded into _SUPPLEMENT_LKG_CACHE_KEY (4h in-memory TTL).
+    session scans.  Loaded into _SUPPLEMENT_LKG_CACHE_KEY.
+
+    Age policy (weekend-resilient):
+      < 24 h  → lkg_market_closed  (same session, fresh)
+      24–96 h → stale_but_usable   (Friday-close data on Sat/Sun/Mon restart)
+      > 96 h  → rejected            (too stale to serve)
+
+    Uses a 96 h in-memory TTL for stale loads so data survives until Monday
+    market open when the live scan will overwrite it.
     """
     if not _SUPPLEMENT_LKG_DISK_PATH.exists():
         print("[SUPP_LKG] No disk LKG — supplement data builds from scratch this session")
@@ -266,15 +308,33 @@ def _load_supplement_lkg_from_disk() -> None:
         if not ticker_data:
             print("[SUPP_LKG] Disk LKG: empty ticker_data — skipping")
             return
-        # Tag all rows as supplement_lkg so sectors endpoint can distinguish
-        tagged = {sym: {**row, "_source": "supplement_lkg"} for sym, row in ticker_data.items()}
+
+        # Age-based status tag so downstream consumers know how fresh the data is
+        _snap_status = (
+            "lkg_market_closed" if age_s < _SUPPLEMENT_LKG_FRESH_AGE
+            else "stale_but_usable"
+        )
+        tagged = {
+            sym: {
+                **row,
+                "_source":          "supplement_lkg",
+                "_snapshot_status": _snap_status,
+                "_lkg_age_s":       age_s,
+            }
+            for sym, row in ticker_data.items()
+        }
+        # Use extended TTL for stale data so it persists until Monday market open
+        _ttl = _SUPPLEMENT_LKG_CACHE_TTL if age_s < _SUPPLEMENT_LKG_FRESH_AGE else _SUPPLEMENT_LKG_STALE_TTL
         from data.cache import cache
         cache.set(
             _SUPPLEMENT_LKG_CACHE_KEY,
             {"ticker_data": tagged, "loaded_at": now, "saved_at": saved_at},
-            _SUPPLEMENT_LKG_CACHE_TTL,
+            _ttl,
         )
-        print(f"[SUPP_LKG] Loaded {len(tagged)} supplement tickers from disk (age={age_s}s)")
+        print(
+            f"[SUPP_LKG] Loaded {len(tagged)} supplement tickers from disk "
+            f"(age={age_s//3600:.0f}h, status={_snap_status}, ttl={_ttl//3600:.0f}h)"
+        )
     except Exception as exc:
         print(f"[SUPP_LKG] Disk load failed (non-fatal): {exc}")
 
@@ -556,36 +616,69 @@ def get_combined_ticker_data() -> dict[str, dict]:
 
         # ── Disk LKG fallback — serves Friday close data on weekend/off-hours ──
         # When both in-memory caches are empty (e.g. post-restart on weekend
-        # before the master screener has run), fall back to the disk snapshot.
-        # This prevents the Options Flow page from going blank over weekends.
+        # before the master screener has run), fall back to disk snapshots.
+        # Priority: supplement disk LKG (643 tickers) > master disk LKG (19).
+        # This prevents the Options Flow page/V4 from going blank over weekends.
         if not combined:
             import pathlib as _pl_supp, json as _js_supp
-            _disk_path = _pl_supp.Path(__file__).parent.parent / "data" / "options_master_lkg_v1.json"
-            if _disk_path.exists():
+            _DISK_STALE_MAX_AGE = 345600  # 96 h — same as _SUPPLEMENT_LKG_DISK_MAX_AGE
+
+            # Layer A: supplement disk LKG (full per-ticker options data, ~600+ tickers)
+            if _SUPPLEMENT_LKG_DISK_PATH.exists():
                 try:
-                    _disk_raw   = _js_supp.loads(_disk_path.read_text())
+                    _sd_raw  = _js_supp.loads(_SUPPLEMENT_LKG_DISK_PATH.read_text())
+                    _sd_sa   = _sd_raw.get("saved_at") or 0
+                    _sd_age  = _now_supp - float(_sd_sa) if _sd_sa else 999999
+                    if _sd_age < _DISK_STALE_MAX_AGE:
+                        _sd_st  = "lkg_market_closed" if _sd_age < 86400 else "stale_but_usable"
+                        for sym, row in (_sd_raw.get("ticker_data") or {}).items():
+                            sym = sym.upper()
+                            if sym:
+                                combined[sym] = {
+                                    **row,
+                                    "_source":          "disk_lkg_supplement",
+                                    "_snapshot_status": _sd_st,
+                                    "_cached_at":       _sd_sa,
+                                    "_lkg_age_s":       round(_sd_age),
+                                }
+                        if combined:
+                            print(
+                                f"[OPTIONS_COMBINED] Supplement disk fallback: {len(combined)} tickers "
+                                f"(age={_sd_age/3600:.1f}h, status={_sd_st})"
+                            )
+                except Exception as _sd_exc:
+                    print(f"[OPTIONS_COMBINED] Supplement disk fallback failed: {_sd_exc}")
+
+            # Layer B: master screener disk LKG (screener top-results, ~19 tickers)
+            _master_disk = _pl_supp.Path(__file__).parent.parent / "data" / "options_master_lkg_v1.json"
+            if _master_disk.exists():
+                try:
+                    _disk_raw   = _js_supp.loads(_master_disk.read_text())
                     _disk_ca    = _disk_raw.get("cached_at") or 0
                     _disk_age   = _now_supp - float(_disk_ca) if _disk_ca else 999999
-                    _disk_st    = "lkg_market_closed" if _disk_age < 86400 else "stale_but_usable"
-                    _disk_as_of = _disk_raw.get("updated_at") or _disk_raw.get("cached_at")
-                    for row in _disk_raw.get("tickers", []):
-                        sym = (row.get("ticker") or "").upper()
-                        if sym:
-                            combined[sym] = {
-                                **row,
-                                "_source":          "disk_lkg",
-                                "_snapshot_status": _disk_st,
-                                "_cached_at":       _disk_ca,
-                                "_lkg_age_s":       round(_disk_age),
-                                "_as_of":           _disk_as_of,
-                            }
-                    if combined:
-                        print(
-                            f"[OPTIONS_COMBINED] Disk LKG fallback: {len(combined)} tickers "
-                            f"(age={round(_disk_age/3600,1)}h, status={_disk_st})"
-                        )
+                    if _disk_age < _DISK_STALE_MAX_AGE:
+                        _disk_st    = "lkg_market_closed" if _disk_age < 86400 else "stale_but_usable"
+                        _disk_as_of = _disk_raw.get("updated_at") or _disk_raw.get("cached_at")
+                        _added = 0
+                        for row in _disk_raw.get("tickers", []):
+                            sym = (row.get("ticker") or "").upper()
+                            if sym and sym not in combined:
+                                combined[sym] = {
+                                    **row,
+                                    "_source":          "disk_lkg",
+                                    "_snapshot_status": _disk_st,
+                                    "_cached_at":       _disk_ca,
+                                    "_lkg_age_s":       round(_disk_age),
+                                    "_as_of":           _disk_as_of,
+                                }
+                                _added += 1
+                        if _added:
+                            print(
+                                f"[OPTIONS_COMBINED] Master disk fallback: +{_added} tickers "
+                                f"(age={_disk_age/3600:.1f}h, status={_disk_st})"
+                            )
                 except Exception as _disk_exc:
-                    print(f"[OPTIONS_COMBINED] Disk LKG fallback failed (non-fatal): {_disk_exc}")
+                    print(f"[OPTIONS_COMBINED] Master disk fallback failed: {_disk_exc}")
         # ─────────────────────────────────────────────────────────────────────
 
         return combined
@@ -693,7 +786,7 @@ def get_supplement_debug_info() -> dict:
 # restart). This ensures high coverage immediately after restart.
 
 _SECTORS_LKG_DISK_PATH    = _pathlib.Path(__file__).resolve().parent / "options_sectors_universe_lkg_v1.json"
-_SECTORS_LKG_DISK_MAX_AGE = 86400   # 24 h
+_SECTORS_LKG_DISK_MAX_AGE = 345600  # 96 h — weekend-resilient, same policy as supplement LKG
 
 # Loop tracking (updated by _sectors_fast_backfill_loop via update_sectors_backfill_tracking)
 _sectors_backfill_pass_count:      int   = 0

@@ -12181,8 +12181,10 @@ def _master_prefilter_disk_path() -> "_pathlib.Path":
     return _LKG_DISK_DIR / "options_master_prefilter_v1.json"
 
 
-_LKG_DISK_MAX_AGE_S = 86400   # reject snapshots older than 24 h (stale beyond usefulness)
-_LKG_DISK_MIN_TICKERS = 1     # reject empty snapshots (scan found true_zero_results)
+_LKG_DISK_MAX_AGE_S       = 345600  # 96 h (4 days) — keeps Friday-close data live over weekend
+_LKG_DISK_FRESH_AGE_S     = 86400   # < 24 h → lkg_market_closed; 24–96 h → stale_but_usable
+_LKG_DISK_STALE_CACHE_TTL = 345600  # 96 h in-memory TTL for stale startup loads
+_LKG_DISK_MIN_TICKERS = 1           # reject empty snapshots (scan found true_zero_results)
 
 
 def _save_lkg_to_disk(tab: str, payload: dict) -> None:
@@ -12216,11 +12218,10 @@ def _load_lkg_from_disk() -> None:
     starts so users immediately get stale-but-usable data on revisit after
     any server restart / deployment.
 
-    Validation guardrails (guardrail #1):
-      - payload must be a dict with a non-empty 'tickers' list
-      - snapshot must be newer than _LKG_DISK_MAX_AGE_S (24 h)
-      - JSON must parse cleanly; corrupt files are skipped without crashing
-      - .tmp partial files are ignored (atomic write guarantee)
+    Age policy (weekend-resilient):
+      < 24 h  → lkg_market_closed  (fresh session data)
+      24–96 h → stale_but_usable   (Friday-close data served over weekend)
+      > 96 h  → rejected
     """
     import json as _json
     import time as _t
@@ -12235,7 +12236,6 @@ def _load_lkg_from_disk() -> None:
             raw = path.read_text(encoding="utf-8")
             payload = _json.loads(raw)
 
-            # ── Content validation ───────────────────────────────────────
             if not isinstance(payload, dict):
                 print(f"[OPTIONS_LKG_DISK] [{tab}] Skipping: not a dict")
                 continue
@@ -12255,10 +12255,12 @@ def _load_lkg_from_disk() -> None:
                 print(f"[OPTIONS_LKG_DISK] [{tab}] Skipping: too old ({age_s}s > {_LKG_DISK_MAX_AGE_S}s limit)")
                 continue
 
-            # Mark snapshot as disk-loaded so metadata reflects its true origin
-            payload = {**payload, "source": "disk_lkg", "disk_loaded": True}
-            _cache.set(_options_lkg_cache_key(tab), payload, _OPTIONS_LKG_CACHE_TTL)
-            print(f"[OPTIONS_LKG_DISK] [{tab}] Loaded: {len(tickers)} tickers, age={age_s}s")
+            snap_status = "lkg_market_closed" if age_s < _LKG_DISK_FRESH_AGE_S else "stale_but_usable"
+            payload = {**payload, "source": "disk_lkg", "disk_loaded": True,
+                       "_disk_snapshot_status": snap_status}
+            _ttl = _OPTIONS_LKG_CACHE_TTL if age_s < _LKG_DISK_FRESH_AGE_S else _LKG_DISK_STALE_CACHE_TTL
+            _cache.set(_options_lkg_cache_key(tab), payload, _ttl)
+            print(f"[OPTIONS_LKG_DISK] [{tab}] Loaded: {len(tickers)} tickers, age={age_s//3600:.0f}h, status={snap_status}")
             loaded += 1
 
         except _json.JSONDecodeError as _je:
@@ -12276,13 +12278,42 @@ def _load_lkg_from_disk() -> None:
 # Single master LKG file replaces 4 separate tab LKG files in the new arch.
 
 def _save_master_lkg_to_disk(payload: dict) -> None:
-    """Atomically persist master screener LKG snapshot to disk."""
+    """
+    Atomically persist master screener LKG snapshot to disk.
+
+    EMPTY OVERWRITE GUARD: if market is closed and the new scan result is
+    significantly smaller than the existing disk LKG, the existing LKG is
+    preserved.  Reason code: PRESERVED_LAST_GOOD_OPTIONS_LKG.
+    """
     import json as _json
     tickers = payload.get("tickers")
     if not isinstance(tickers, list) or len(tickers) < _LKG_DISK_MIN_TICKERS:
+        print(f"[MASTER_LKG_DISK] SKIP_EMPTY_MARKET_CLOSED_SCAN: {len(tickers) if isinstance(tickers, list) else 0} tickers")
         return
+    path = _master_lkg_disk_path()
+    # ── Empty overwrite guard ────────────────────────────────────────────────
     try:
-        path = _master_lkg_disk_path()
+        if path.exists():
+            _existing = _json.loads(path.read_text(encoding="utf-8"))
+            _existing_count = len((_existing or {}).get("tickers", []))
+            _new_count = len(tickers)
+            if _existing_count > 5 and _new_count < _existing_count * 0.5:
+                try:
+                    from data.tradier_market_session import get_session as _gs
+                    _sess = _gs()
+                except Exception:
+                    _sess = "unknown"
+                if _sess not in ("regular", "pre", "post"):
+                    print(
+                        f"[MASTER_LKG_DISK] PRESERVED_LAST_GOOD_OPTIONS_LKG: "
+                        f"existing={_existing_count} new={_new_count} "
+                        f"session={_sess} — skipping overwrite"
+                    )
+                    return
+    except Exception:
+        pass  # guard failure is non-fatal — proceed with normal save
+    # ────────────────────────────────────────────────────────────────────────
+    try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
         serialized = _json.dumps(payload, default=str)
@@ -12294,7 +12325,14 @@ def _save_master_lkg_to_disk(payload: dict) -> None:
 
 
 def _load_master_lkg_from_disk() -> None:
-    """Load master screener LKG from disk into the in-memory cache at startup."""
+    """
+    Load master screener LKG from disk into the in-memory cache at startup.
+
+    Age policy (weekend-resilient):
+      < 24 h  → lkg_market_closed  (fresh session)
+      24–96 h → stale_but_usable   (Friday-close data served over weekend)
+      > 96 h  → rejected
+    """
     import json as _json
     import time as _t
     from data.cache import cache as _cache
@@ -12320,9 +12358,16 @@ def _load_master_lkg_from_disk() -> None:
         if age_s > _LKG_DISK_MAX_AGE_S:
             print(f"[MASTER_LKG_DISK] Skipping: too old ({age_s}s > {_LKG_DISK_MAX_AGE_S}s limit)")
             return
-        payload = {**payload, "source": "disk_lkg", "disk_loaded": True}
-        _cache.set(_OPTIONS_MASTER_LKG_KEY, payload, _OPTIONS_LKG_CACHE_TTL)
-        print(f"[MASTER_LKG_DISK] Loaded: {len(tickers)} tickers, age={age_s}s — master screener ready on first request")
+        snap_status = "lkg_market_closed" if age_s < _LKG_DISK_FRESH_AGE_S else "stale_but_usable"
+        payload = {**payload, "source": "disk_lkg", "disk_loaded": True,
+                   "_disk_snapshot_status": snap_status}
+        _ttl = _OPTIONS_LKG_CACHE_TTL if age_s < _LKG_DISK_FRESH_AGE_S else _LKG_DISK_STALE_CACHE_TTL
+        _cache.set(_OPTIONS_MASTER_LKG_KEY, payload, _ttl)
+        print(
+            f"[MASTER_LKG_DISK] Loaded: {len(tickers)} tickers, "
+            f"age={age_s//3600:.0f}h, status={snap_status} — "
+            f"master screener ready on first request"
+        )
     except _json.JSONDecodeError as _je:
         print(f"[MASTER_LKG_DISK] JSON parse error (skipping): {_je}")
     except Exception as _e:
