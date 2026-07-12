@@ -1,0 +1,268 @@
+BACKEND — PHASE 1.7 FINAL CLEANUP BEFORE V4 PROMOTION
+
+Backend only.
+
+Do not touch frontend.
+Do not promote V4 yet.
+Do not call LLMs.
+Do not add provider calls.
+Do not reverse V4, options LKG, retained snapshot, catalyst, pattern, or confidence fixes.
+
+Goal:
+
+Clean up the final promotion blockers from the Phase 2 readiness report.
+
+Current good state:
+
+- Retained snapshot rebuild no longer hangs.
+- Full rebuild completes in ~10.6s.
+- 379/379 retained snapshot rows have V4 fields.
+- Options status: 293 available_cached, 58 confirmed_no_options, 28 not_scanned.
+- Options Flow does not blank on weekend/closed market.
+- Provider calls = 0.
+
+Remaining blockers:
+
+1. CODA / OCC / SLNH / SVCO / TRT / TYGO are known no-options but still show not_scanned.
+2. Retained snapshot has 379 rows, but /alignment exposes 375 rows.
+3. MSFT / NVDA / SMCI are in retained snapshot but missing from /alignment.
+4. Remaining not_scanned names are mostly explained, but major optionable names should be rechecked after supplement warmup.
+
+==================================================
+PART 1 — FIX SECTORS-LKG CONFIRMED_NO_OPTIONS FLAG GAP
+==================================================
+
+The report says:
+
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+
+are in the sectors-LKG confirmed_no_options layer, but the injected combined_ticker_data entries have:
+
+confirmed_no_options = None
+has_chain = False
+
+That causes Options Alignment to classify them as not_scanned.
+
+Fix the Sectors-LKG CNO layer so these injected entries explicitly set:
+
+confirmed_no_options = true
+scan_status = confirmed_no_options
+options_snapshot_status = confirmed_no_options
+has_chain = false
+alignment_score = null
+reason_codes include CONFIRMED_NO_OPTIONS_SECTORS_LKG
+
+Then validate they appear as:
+
+options_status = confirmed_no_options
+
+not:
+
+not_scanned
+
+No provider calls.
+
+==================================================
+PART 2 — FIX RETAINED SNAPSHOT VS ALIGNMENT ROW COUNT DISCREPANCY
+==================================================
+
+The report says:
+
+v4-report retained snapshot rows = 379
+alignment endpoint rows = 375
+
+MSFT / NVDA / SMCI are in retained snapshot but absent from /alignment.
+
+Audit why /api/watchlist/{watchlist_id}/alignment filters out 4 symbols.
+
+Find:
+
+- retained snapshot symbol list
+- watchlist symbol list
+- symbols in retained snapshot but missing from alignment endpoint
+- symbols in alignment endpoint but missing from retained snapshot
+- whether this is due to dedupe, inactive watchlist membership, symbol format, category filtering, or endpoint cross-reference logic
+
+Fix only if these symbols should be part of the watchlist/confluence universe.
+
+Expected:
+
+If retained snapshot is the canonical confluence universe, /alignment should expose the same canonical set unless there is an explicit exclusion reason.
+
+Return:
+
+retained_count
+alignment_count_before
+alignment_count_after
+missing_symbols_before
+missing_symbols_after
+exclusion_reason if any
+
+==================================================
+PART 3 — RECHECK REMAINING NOT_SCANNED AFTER WARMUP
+==================================================
+
+After the CNO fix and alignment count fix, rerun the V4 report.
+
+Return final not_scanned list.
+
+For each remaining not_scanned:
+
+symbol
+classification
+reason
+is_optionable_likely
+in_supplement_universe
+in_supplement_lkg
+in_master_lkg
+scan_status
+next_resolution_path
+
+Classifications:
+
+OPTIONABLE_PENDING_CHAIN
+INSUFFICIENT_HISTORY
+NO_HISTORICAL_LKG_BUT_QUEUED
+MICROCAP_INSUFFICIENT_HISTORY
+UNEXPECTED_MISSING
+
+Important:
+
+Major liquid names such as:
+
+MSFT
+NVDA
+CRWD
+MRVL
+APH
+NVEC
+
+should not remain not_scanned forever.
+
+If they remain not_scanned, confirm they are queued and explain exactly when/how they resolve.
+
+==================================================
+PART 4 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+AMS:BESI
+MSFT
+NVDA
+SMCI
+CRWD
+MRVL
+APH
+NVEC
+WYFI
+OSCR
+FTNT
+MU
+AMD
+GLW
+VRT
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+
+For each:
+
+symbol
+in_retained_snapshot
+in_alignment_endpoint
+options_status_before
+options_status_after
+options_snapshot_status
+options_as_of
+options_points
+v4_score
+v4_normalized_score
+v4_confidence_score
+v4_bucket
+reason_codes
+
+==================================================
+PART 5 — FINAL PROMOTION READINESS
+==================================================
+
+Phase 2 can proceed only if:
+
+- known no-options symbols are confirmed_no_options
+- no foreign symbols remain not_scanned
+- retained snapshot and alignment endpoint row counts are reconciled or fully explained
+- MSFT / NVDA / SMCI absence from /alignment is fixed or explicitly justified
+- remaining not_scanned symbols are fully classified
+- V4 still has 0 provider calls
+- retained snapshot rebuild still completes successfully
+- all alignment rows have V4 fields
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+PHASE 1.7 FINAL CLEANUP REPORT
+
+FILES CHANGED:
+[list]
+
+CNO FLAG GAP FIX:
+[summary]
+
+RETAINED VS ALIGNMENT ROW COUNT:
+[summary]
+
+REMAINING NOT_SCANNED:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+PHASE 1.7 FINAL CLEANUP VERDICT
+
+KNOWN NO_OPTIONS SYMBOLS NOW CONFIRMED_NO_OPTIONS:
+[YES/NO]
+
+RETAINED SNAPSHOT AND ALIGNMENT ROW COUNTS RECONCILED:
+[YES/NO]
+
+MSFT/NVDA/SMCI ALIGNMENT ABSENCE FIXED OR JUSTIFIED:
+[YES/NO]
+
+REMAINING NOT_SCANNED FULLY EXPLAINED:
+[YES/NO]
+
+V4 OPTIONS COVERAGE HEALTHY:
+[YES/NO]
+
+ALL ALIGNMENT ROWS HAVE V4 FIELDS:
+[YES/NO]
+
+RETAINED SNAPSHOT REBUILDS SUCCESSFULLY:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR PHASE 2 PROMOTION:
+[YES/NO]
