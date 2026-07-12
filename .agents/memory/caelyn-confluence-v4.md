@@ -65,3 +65,39 @@ Fix: TIER1_CONSTRUCTIVE = {HIGH_TIGHT_FLAG, BULL_FLAG, BREAKOUT_SHELF, VCP} → 
 ## Validated Distribution (375-ticker Primary watchlist)
 
 ACTIONABLE=3, NEAR_ACTIONABLE=55, CAS=8, INVESTMENT_QUALITY=2, RISK_CONFLICT=17, WATCH_FOR_RESET=43, NO_CLEAR=247
+
+## Phase 1.5 Changes (Calibration)
+
+### Constructive Extension Hardening
+Three hard gates before TIER1 constructive override fires:
+1. `pattern_score >= 55` (or 0/None which means "no score from engine" → allowed via `if pat_score > 0 and pat_score < 55`)
+2. `active_support_status not in (support_lost, breakdown, major_breakdown)`
+3. `lower_low_confirmed == False` (minor LLC also disqualifies, not just major)
+
+Shelf quality caps max pts earned:
+- `current_shelf_support is not None` → `SHELF_CONFIRMED` → 15 pts max
+- `dist_active <= 20` → `SHELF_NOT_CONFIRMED_ESTIMATED` → 12 pts max  
+- otherwise → `SHELF_ABSENT_WIDE_EXTENSION` → 10 pts max
+
+### Confidence Score Changes
+`_compute_v4_confidence` takes `shelf_confirmed: bool` and `used_constructive_tier1: bool`. Penalty: `-6 pts from earned` when tier1 constructive was used but no confirmed shelf. Effect: WYFI/CRWD/FTNT drop 60.9 → 54.3.
+
+### Confidence Guards on Bucket Assignment
+- ACTIONABLE: `confidence >= 55`
+- NEAR_ACTIONABLE primary: `confidence >= 45`
+- NEAR_ACTIONABLE softer: `confidence >= 45`
+- READY actionability: `confidence >= 70`
+
+Confidence computed BEFORE bucket assignment so guards can use it.
+
+### Score Field Clarification
+- `caelyn_confluence_v4_raw_score` = explicit alias for `total_score` (added as new field)
+- Frontend should display `normalized_score`; confidence is a context badge
+- `raw_score` = pts earned; `normalized_score` = adjusted for availability; `confidence_score` = completeness
+
+### Current Data Coverage Facts
+- Options: ALL 375 symbols are `not_scanned` (universal gap, no options scoring)
+- Catalyst: 97 available (26%), 238 missing_cache (63%), 40 theme_policy_overlay (11%)
+- All case study symbols have `current_shelf_support=None` (estimated shelf treatment)
+
+**Why:** TIER1 constructive with no shelf confirmation must be visibly lower quality — confidence penalty and 12pt cap make this traceable without blocking correct setups.

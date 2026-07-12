@@ -4243,6 +4243,7 @@ async def get_watchlist_alignment(watchlist_id: str):
 
             # ── V4: unified confluence (additive alongside current CCS) ────────
             "caelyn_confluence_v4_score":               row.get("caelyn_confluence_v4_score"),
+            "caelyn_confluence_v4_raw_score":           row.get("caelyn_confluence_v4_raw_score"),
             "caelyn_confluence_v4_core_score":          row.get("caelyn_confluence_v4_core_score"),
             "caelyn_confluence_v4_bonus_score":         row.get("caelyn_confluence_v4_bonus_score"),
             "caelyn_confluence_v4_total_score":         row.get("caelyn_confluence_v4_total_score"),

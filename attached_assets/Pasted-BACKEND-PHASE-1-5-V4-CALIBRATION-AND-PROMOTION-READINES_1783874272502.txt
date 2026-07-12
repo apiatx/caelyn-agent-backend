@@ -1,0 +1,452 @@
+BACKEND — PHASE 1.5: V4 CALIBRATION AND PROMOTION READINESS
+
+Backend only.
+
+Do not touch frontend.
+Do not call LLMs.
+Do not add provider calls.
+Do not remove V4 fields.
+Do not promote V4 to canonical yet.
+Do not reverse the WYFI/LITE/pattern/support fixes.
+
+Goal:
+
+Calibrate V4 before Phase 2 promotion.
+
+Phase 1 successfully added V4 fields and scored 375/375 symbols, but it is not ready for canonical promotion until we validate:
+
+1. Constructive extension is not too permissive.
+2. Options/catalyst missing coverage does not get normalized away too aggressively.
+3. READY / NEAR_ACTIONABLE / WATCH_FOR_RESET thresholds are sane.
+4. CRWD / FTNT / MU / OSCR are not incorrectly treated like WYFI.
+5. V4 display score, normalized score, and confidence score are clearly separated.
+
+==================================================
+PART 1 — RAW VS NORMALIZED SCORE POLICY
+==================================================
+
+Audit V4 scoring fields:
+
+caelyn_confluence_v4_score
+caelyn_confluence_v4_raw_score
+caelyn_confluence_v4_normalized_score
+caelyn_confluence_v4_total_score
+caelyn_confluence_v4_confidence_score
+
+If these names differ, report exact names.
+
+Problem:
+
+Buckets are currently driven by normalized score because missing options/catalyst deflate raw total.
+
+That is reasonable, but we need a confidence guard.
+
+Define clearly:
+
+raw_score:
+actual points earned out of full possible model
+
+normalized_score:
+score adjusted for available components
+
+confidence_score:
+how complete/fresh the input set is
+
+Promotion rule:
+
+Do not let a low-confidence normalized score create READY.
+
+Suggested:
+
+READY requires:
+normalized_score >= threshold
+AND confidence_score >= 70
+AND no hard risk
+AND entry/actionability confirmation
+
+NEAR_ACTIONABLE can allow confidence_score >= 50 if setup is technically strong.
+
+WATCH can allow lower confidence.
+
+Return top 50 sorted by:
+raw score
+normalized score
+confidence-adjusted score
+
+Recommend which score should be shown in frontend.
+
+==================================================
+PART 2 — HARDEN CONSTRUCTIVE EXTENSION
+==================================================
+
+Current issue:
+
+WYFI was correctly rescued by HIGH_TIGHT_FLAG + CONSTRUCTIVE.
+But CRWD / FTNT / MU / OSCR also became NEAR_ACTIONABLE.
+
+That may be too permissive.
+
+A constructive extension should require real current-shelf evidence, not just “extended + pattern label.”
+
+Add stricter requirements:
+
+constructive_extension can override TOO_EXTENDED only if:
+
+- pattern_type in HIGH_TIGHT_FLAG / BULL_FLAG / BREAKOUT_SHELF / VCP / STAGE2_BREAKOUT
+- pattern_score >= minimum threshold
+- current_shelf_support exists
+- distance_to_current_shelf_support_pct is reasonable
+- consolidation duration >= minimum bars
+- consolidation range is not too wide
+- price is not wildly above shelf
+- active_support_status is above_support / testing_support / bounced_from_support
+- lower_low_confirmed false
+- major_lower_low_confirmed false
+- no volume climax / exhaustion flag
+- no failed breakout
+- no active support lost
+
+If these are not met:
+
+extension_quality = CHASE
+bucket = WATCH_FOR_RESET
+
+Do not remove WYFI fix. Make the distinction better.
+
+==================================================
+PART 3 — WYFI VS CRWD / FTNT / MU / OSCR CASE STUDY
+==================================================
+
+Run detailed traces for:
+
+WYFI
+CRWD
+FTNT
+MU
+OSCR
+
+Return:
+
+symbol
+price
+pattern_type
+pattern_score
+constructive_extension
+chase_extension
+extension_quality
+current_shelf_support
+distance_to_current_shelf_support_pct
+distance_to_old_base_support_pct
+consolidation_duration_bars
+consolidation_range_pct
+active_support_status
+lower_low_confirmed
+major_lower_low_confirmed
+entry_state
+entry_risk_reward_state
+v4_score
+v4_normalized_score
+confidence_score
+old bucket
+new calibrated bucket
+reason_codes
+
+Expected:
+
+WYFI:
+Should remain NEAR_ACTIONABLE if high-tight shelf logic is truly valid.
+
+CRWD / FTNT:
+Should only remain NEAR_ACTIONABLE if they have real high-tight/current-shelf consolidation. Otherwise WATCH_FOR_RESET.
+
+MU:
+Same.
+
+OSCR:
+Same.
+
+Do not assume all constructive-extension names are equal.
+
+==================================================
+PART 4 — OPTIONS COVERAGE / FIRST-CLASS COMPONENT CHECK
+==================================================
+
+Options Alignment is now a first-class 15-point component.
+
+Audit:
+
+rows with options available
+rows confirmed_no_options
+rows not_scanned
+rows missing_cache
+rows stale
+rows with options score
+top 50 V4 rows and options status
+top 25 actionable/near-actionable and options status
+
+Rules:
+
+confirmed_no_options:
+not a failure, but no options boost
+
+not_scanned:
+coverage gap; confidence penalty
+
+missing_cache/stale:
+coverage gap; confidence penalty
+
+Do not normalize away a missing options component as if it was irrelevant for optionable tickers.
+
+Suggested:
+
+If options_status = not_scanned or missing_cache:
+- do not block NEAR_ACTIONABLE
+- but block READY unless all other components are extremely strong
+- lower confidence_score
+
+Return impact on top names.
+
+==================================================
+PART 5 — CATALYST COVERAGE CHECK
+==================================================
+
+Catalyst is a first-class 15-point component.
+
+Audit:
+
+rows with catalyst available
+rows with no_catalyst
+rows with missing_cache
+rows stale
+rows rss_event
+rows scheduled_event
+rows theme_policy_event
+rows score_only_missing_event
+
+Rules:
+
+no_catalyst:
+valid zero catalyst; not a cache failure
+
+missing_cache:
+coverage gap; confidence penalty
+
+theme_policy_event:
+should not be company catalyst unless company-specific.
+Theme policy should go to Theme Policy bonus.
+
+Confirm this separation.
+
+==================================================
+PART 6 — ACTIONABILITY V4 CALIBRATION
+==================================================
+
+Actionability V4 must remain a decision layer, not another score.
+
+Calibrate:
+
+READY:
+high V4 normalized score
+confidence sufficient
+valid entry pattern
+not chase extension
+not confirmed risk
+
+NEAR_ACTIONABLE:
+good V4 score
+valid setup
+may need breakout/retest/confirmation
+
+WATCH_FOR_RESET:
+chase extension or too far from current shelf
+
+AVOID:
+confirmed breakdown / active support lost / major lower low
+
+WATCH:
+incomplete or insufficient confluence
+
+Return bucket/actionability distribution before and after calibration.
+
+Target:
+
+ACTIONABLE should not be zero, but should be selective.
+NEAR_ACTIONABLE should surface good setups.
+WATCH_FOR_RESET should capture true extended/chase names.
+RISK_CONFLICT should stay reserved for confirmed breakdown/risk.
+
+==================================================
+PART 7 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+WYFI
+CRWD
+FTNT
+MU
+OSCR
+LITE
+BE
+NVEC
+MARA
+GLW
+VRT
+ANET
+TSM
+AMD
+MRVL
+PLTR
+OKLO
+SOFI
+ALAB
+SNDK
+SIMO
+LSCC
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+ROK
+
+For each return:
+
+symbol
+v4_raw_score
+v4_normalized_score
+v4_confidence_score
+old v4 bucket
+calibrated v4 bucket
+actionability_v4_state
+theme points
+stage points
+options points
+entry points
+catalyst points
+investment points
+social bonus
+overlay bonus
+options_status
+catalyst_status
+pattern_type
+extension_quality
+constructive_extension
+chase_extension
+current_shelf_support
+active_support_status
+major_lower_low_confirmed
+reason_codes
+
+==================================================
+PART 8 — PROMOTION READINESS
+==================================================
+
+Do not promote.
+
+Return whether Phase 2 should proceed.
+
+Phase 2 can proceed only if:
+
+- WYFI remains correctly near/actionable
+- CRWD/FTNT/MU/OSCR are correctly separated between constructive and chase
+- options coverage gaps are visible and affect confidence
+- catalyst coverage gaps are visible and affect confidence
+- READY does not include low-confidence names
+- WATCH_FOR_RESET is not overloaded
+- RISK_CONFLICT remains only true breakdown/conflict
+- all 375 rows still have V4 fields
+- provider calls = 0
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+PHASE 1.5 V4 CALIBRATION REPORT
+
+FILES CHANGED:
+[list]
+
+RAW VS NORMALIZED SCORE POLICY:
+[summary]
+
+CONSTRUCTIVE EXTENSION HARDENING:
+[summary]
+
+WYFI / CRWD / FTNT / MU / OSCR CASE STUDY:
+[table]
+
+OPTIONS COVERAGE IMPACT:
+[summary + counts]
+
+CATALYST COVERAGE IMPACT:
+[summary + counts]
+
+ACTIONABILITY V4 CALIBRATION:
+[summary]
+
+BUCKET DISTRIBUTION BEFORE / AFTER:
+[table]
+
+TOP 50 CALIBRATED V4:
+[table]
+
+TOP ACTIONABLE:
+[table]
+
+TOP NEAR_ACTIONABLE:
+[table]
+
+WATCH_FOR_RESET:
+[table]
+
+RISK_CONFLICT:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+PHASE 1.5 CALIBRATION VERDICT
+
+V4 STILL ADDITIVE:
+[YES/NO]
+
+WYFI REMAINS CORRECTLY CLASSIFIED:
+[YES/NO]
+
+CONSTRUCTIVE EXTENSION HARDENED:
+[YES/NO]
+
+CHASE EXTENSION SEPARATED FROM CONTINUATION:
+[YES/NO]
+
+CRWD/FTNT/MU/OSCR CORRECTLY CLASSIFIED:
+[YES/NO]
+
+OPTIONS COVERAGE AFFECTS CONFIDENCE:
+[YES/NO]
+
+CATALYST COVERAGE AFFECTS CONFIDENCE:
+[YES/NO]
+
+READY BLOCKS LOW-CONFIDENCE SETUPS:
+[YES/NO]
+
+RISK_CONFLICT RESERVED FOR TRUE BREAKDOWN:
+[YES/NO]
+
+ALL ROWS STILL HAVE V4 FIELDS:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR PHASE 2 PROMOTION:
+[YES/NO]

@@ -391,22 +391,50 @@ def _score_entry_risk_reward(row: dict) -> dict:
 
     raw = _safe_float(raw_score, 0)
 
-    # ── CONSTRUCTIVE + TIER-1 PATTERN → score STRONGLY ───────────────────────
-    # For HIGH_TIGHT_FLAG/BULL_FLAG/BREAKOUT_SHELF with constructive extension:
-    # entry_rr_score being low (30-50) is EXPECTED because you are extended from
-    # the base. The pattern quality defines the entry, not the raw R/R score.
-    # Per spec: "entry should score strongly or near-strongly" for these.
+    # ── Determine scoring mode ────────────────────────────────────────────────
+    # Phase 1.5 hardening: TIER1 constructive override requires all gates to pass:
+    #   1. pattern_score >= 55 (minimum quality — 0 means no score from engine)
+    #   2. active_support_status not in structural breakdown set
+    #   3. minor lower_low not confirmed (major already handled above)
+    # Shelf quality then caps pts:
+    #   SHELF_CONFIRMED (current_shelf_support is not None):  full 15 pts
+    #   SHELF_NOT_CONFIRMED_ESTIMATED (dist_active <= 20):    capped at 12 pts
+    #   SHELF_ABSENT_WIDE_EXTENSION (dist_active > 20):       capped at 10 pts
+    _tier1_constructive = False
+    _shelf_quality: Optional[str] = None
+
     if constructive and pattern in TIER1_CONSTRUCTIVE:
-        # Pattern quality score (0-100) from the pattern engine, or fallback to 70
+        _constructive_denied = False
+        if pat_score > 0 and pat_score < 55:
+            reason_codes.append("CONSTRUCTIVE_OVERRIDE_DENIED_WEAK_PATTERN")
+            _constructive_denied = True
+        elif asst_status in ("support_lost", "breakdown", "major_breakdown"):
+            reason_codes.append("CONSTRUCTIVE_OVERRIDE_DENIED_SUPPORT_LOST")
+            _constructive_denied = True
+        elif bool(row.get("lower_low_confirmed")):
+            reason_codes.append("CONSTRUCTIVE_OVERRIDE_DENIED_MINOR_LLC")
+            _constructive_denied = True
+        if not _constructive_denied:
+            _tier1_constructive = True
+
+    if _tier1_constructive:
         effective_pat = pat_score if pat_score > 0 else 70.0
-        breakpoints = [
-            (0,   9.0),
-            (50, 11.0),
-            (65, 12.0),
-            (80, 13.5),
-            (92, 15.0),
-        ]
-        pts = _score_to_pts(effective_pat, breakpoints, 15.0)
+        has_shelf   = row.get("current_shelf_support") is not None
+        dist_active = _safe_float(row.get("distance_to_active_support_pct"), 0)
+        if has_shelf:
+            _shelf_quality = "confirmed"
+            max_pts_c = 15.0
+            reason_codes.append("SHELF_CONFIRMED")
+        elif 0 < dist_active <= 20.0:
+            _shelf_quality = "estimated"
+            max_pts_c = 12.0
+            reason_codes.append("SHELF_NOT_CONFIRMED_ESTIMATED")
+        else:
+            _shelf_quality = "absent"
+            max_pts_c = 10.0
+            reason_codes.append("SHELF_ABSENT_WIDE_EXTENSION")
+        breakpoints = [(0, 9.0), (50, 11.0), (65, 12.0), (80, 13.5), (92, 15.0)]
+        pts = min(max_pts_c, _score_to_pts(effective_pat, breakpoints, 15.0))
         reason_codes.append(f"CONSTRUCTIVE_{pattern}_STRONG_ENTRY")
 
     # ── CONSTRUCTIVE + OTHER VALID PATTERN ───────────────────────────────────
@@ -474,6 +502,7 @@ def _score_entry_risk_reward(row: dict) -> dict:
         "entry_state":              row.get("entry_state"),
         "pattern_type":             pattern,
         "extension_quality":        ext_quality,
+        "shelf_quality":            _shelf_quality,
         "active_support_status":    asst_status,
         "critical_break_level":     row.get("critical_break_level"),
         "breakout_trigger":         row.get("pattern_breakout_trigger"),
@@ -921,6 +950,7 @@ def _assign_v4_bucket(
     ext_quality: str,
     entry_pts: float,
     invest_pts: float,
+    confidence: float = 100.0,
 ) -> str:
     """
     V4 Bucket assignment.
@@ -954,11 +984,13 @@ def _assign_v4_bucket(
         return "WATCH_FOR_RESET"
 
     # ── ACTIONABLE ────────────────────────────────────────────────────────────
-    if normalized_total >= 72 and entry_pts >= 10 and not chase:
+    # Confidence >= 55 required: blocks low-coverage symbols from ACTIONABLE
+    if normalized_total >= 72 and entry_pts >= 10 and not chase and confidence >= 55:
         return "ACTIONABLE"
 
     # ── NEAR_ACTIONABLE ───────────────────────────────────────────────────────
-    if normalized_total >= 55 and entry_pts >= 4 and not chase:
+    # Confidence >= 45 required: very low coverage is a coverage gap, not a setup
+    if normalized_total >= 55 and entry_pts >= 4 and not chase and confidence >= 45:
         return "NEAR_ACTIONABLE"
 
     # ── CONFLUENCE_AT_SUPPORT ─────────────────────────────────────────────────
@@ -966,7 +998,7 @@ def _assign_v4_bucket(
         return "CONFLUENCE_AT_SUPPORT"
 
     # ── NEAR_ACTIONABLE (softer — decent normalized, no specific support req) ─
-    if normalized_total >= 65 and entry_pts >= 3:
+    if normalized_total >= 65 and entry_pts >= 3 and confidence >= 45:
         return "NEAR_ACTIONABLE"
 
     # ── INVESTMENT_QUALITY ────────────────────────────────────────────────────
@@ -999,6 +1031,7 @@ def _derive_actionability_v4(
     asst_status: str,
     entry_rr_score: Optional[float],
     entry_score: Optional[float],
+    confidence: float = 100.0,
 ) -> str:
     """
     Actionability V4 — decision layer, not a second score.
@@ -1020,8 +1053,9 @@ def _derive_actionability_v4(
     if chase and not constructive:
         return "WATCH_FOR_RESET"
 
-    # ── READY: high total + good entry + valid pattern + no risk gate ─────────
-    if total_score >= 85 and rr >= 65 and bucket in ("ACTIONABLE", "NEAR_ACTIONABLE"):
+    # ── READY: high total + good entry + valid pattern + confidence guard ───────
+    # confidence >= 70 required: READY must not fire for low-coverage setups
+    if total_score >= 85 and rr >= 65 and bucket in ("ACTIONABLE", "NEAR_ACTIONABLE") and confidence >= 70:
         return "READY"
 
     # ── WAIT_FOR_BREAKOUT: shelf/VCP patterns near breakout trigger ───────────
@@ -1048,28 +1082,40 @@ def _derive_actionability_v4(
     return "WATCH"
 
 
-def _compute_v4_confidence(components: dict, social_available: bool) -> float:
+def _compute_v4_confidence(
+    components: dict,
+    social_available: bool,
+    shelf_confirmed: bool = True,
+    used_constructive_tier1: bool = False,
+) -> float:
     """
-    V4 confidence: % of components that are available.
+    V4 confidence: % of components available, with structural penalties.
 
     Max 100. Each of 6 core components = 14 pts. Social = 8 pts.
     Max = 6*14 + 8 = 92 → normalised to 100.
+
+    Structural penalties (deducted from earned before normalising):
+      used_constructive_tier1 AND NOT shelf_confirmed: -6 pts
+        Entry quality is estimated from extension pattern alone, not
+        anchored to a confirmed shelf/consolidation zone.
     """
     comp_weights = {
-        "theme_alignment":   14,
-        "stage_quality":     14,
-        "options_alignment": 14,
-        "entry_risk_reward": 14,
-        "catalyst_alignment": 14,
+        "theme_alignment":      14,
+        "stage_quality":        14,
+        "options_alignment":    14,
+        "entry_risk_reward":    14,
+        "catalyst_alignment":   14,
         "investment_alignment": 14,
     }
-    total_possible = sum(comp_weights.values()) + 8  # 8 for social
+    total_possible = sum(comp_weights.values()) + 8  # 8 for social = 92
     earned = sum(
         w for k, w in comp_weights.items()
         if (components.get(k) or {}).get("available")
     )
     if social_available:
         earned += 8
+    if used_constructive_tier1 and not shelf_confirmed:
+        earned = max(0, earned - 6)
     return round(earned / total_possible * 100, 1)
 
 
@@ -1172,6 +1218,21 @@ def compute_confluence_v4(
         min(115.0, min(100.0, normalized_core + soc_bonus["points"]) + overlay_bonus), 1
     )
 
+    # ── Confidence (computed before bucket so bucket can guard on it) ──────────
+    # Extract shelf quality from entry component (set by Phase 1.5 hardening)
+    _entry_shelf_quality   = entry_comp.get("shelf_quality")
+    _entry_shelf_confirmed = _entry_shelf_quality == "confirmed"
+    _entry_used_tier1      = any(
+        "CONSTRUCTIVE_" in rc and "_STRONG_ENTRY" in rc
+        for rc in (entry_comp.get("reason_codes") or [])
+    )
+    v4_confidence = _compute_v4_confidence(
+        components,
+        soc_bonus.get("available", False),
+        shelf_confirmed=_entry_shelf_confirmed,
+        used_constructive_tier1=_entry_used_tier1,
+    )
+
     # ── V4 bucket + actionability ──────────────────────────────────────────────
     v4_bucket = _assign_v4_bucket(
         normalized_total = normalized_total,
@@ -1190,6 +1251,7 @@ def compute_confluence_v4(
         ext_quality      = snapshot_row.get("extension_quality") or "NORMAL",
         entry_pts        = entry_comp["points"],
         invest_pts       = invest_comp["points"],
+        confidence       = v4_confidence,
     )
 
     v4_actionability = _derive_actionability_v4(
@@ -1206,10 +1268,8 @@ def compute_confluence_v4(
         asst_status  = snapshot_row.get("active_support_status") or "",
         entry_rr_score = snapshot_row.get("entry_risk_reward_score"),
         entry_score    = snapshot_row.get("entry_score"),
+        confidence     = v4_confidence,
     )
-
-    # ── Confidence ─────────────────────────────────────────────────────────────
-    v4_confidence = _compute_v4_confidence(components, soc_bonus.get("available", False))
 
     # ── Reason codes (flat union) ──────────────────────────────────────────────
     all_reason_codes: list[str] = []
@@ -1234,6 +1294,7 @@ def compute_confluence_v4(
     return {
         # ── V4 primary fields ─────────────────────────────────────────────────
         "caelyn_confluence_v4_score":               total_score,
+        "caelyn_confluence_v4_raw_score":           total_score,
         "caelyn_confluence_v4_core_score":          core_score,
         "caelyn_confluence_v4_bonus_score":         bonus_score,
         "caelyn_confluence_v4_total_score":         total_score,
