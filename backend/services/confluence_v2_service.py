@@ -1783,6 +1783,25 @@ def build_confluence_snapshot(
             catalyst_align_map = catalyst_align_map,
             fundamentals_map   = fundamentals_map,
         )
+
+        # ── Caelyn Confluence V4 (additive, zero provider calls) ──────────────
+        try:
+            from services.caelyn_confluence_v4 import compute_confluence_v4
+            v4 = compute_confluence_v4(r, social_map=social_map)
+            r.update(v4)
+        except Exception as _v4_exc:
+            r["caelyn_confluence_v4_score"]           = None
+            r["caelyn_confluence_v4_core_score"]      = None
+            r["caelyn_confluence_v4_bonus_score"]     = None
+            r["caelyn_confluence_v4_total_score"]     = None
+            r["caelyn_confluence_v4_bucket"]          = "NO_CLEAR_CONFLUENCE"
+            r["caelyn_confluence_v4_components"]      = {}
+            r["caelyn_confluence_v4_bonus_breakdown"] = {}
+            r["caelyn_confluence_v4_reason_codes"]    = [f"V4_ERROR:{_v4_exc}"]
+            r["caelyn_confluence_v4_confidence_score"] = 0
+            r["caelyn_confluence_v4_actionability"]   = "WATCH"
+            r["legacy_trade_alignment_score"]         = r.get("trade_alignment_score")
+
         results.append(r)
 
         # Tally social bonus distribution (LEGACY bonus, unchanged behavior).

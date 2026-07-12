@@ -4240,6 +4240,21 @@ async def get_watchlist_alignment(watchlist_id: str):
             "leader_context":                   None,
             "theme_leader_reason_codes":        [],
             "leadership_theme":                 None,
+
+            # ── V4: unified confluence (additive alongside current CCS) ────────
+            "caelyn_confluence_v4_score":               row.get("caelyn_confluence_v4_score"),
+            "caelyn_confluence_v4_core_score":          row.get("caelyn_confluence_v4_core_score"),
+            "caelyn_confluence_v4_bonus_score":         row.get("caelyn_confluence_v4_bonus_score"),
+            "caelyn_confluence_v4_total_score":         row.get("caelyn_confluence_v4_total_score"),
+            "caelyn_confluence_v4_normalized_score":    row.get("caelyn_confluence_v4_normalized_score"),
+            "caelyn_confluence_v4_available_max_pts":   row.get("caelyn_confluence_v4_available_max_pts"),
+            "caelyn_confluence_v4_bucket":              row.get("caelyn_confluence_v4_bucket") or "NO_CLEAR_CONFLUENCE",
+            "caelyn_confluence_v4_components":          row.get("caelyn_confluence_v4_components") or {},
+            "caelyn_confluence_v4_bonus_breakdown":     row.get("caelyn_confluence_v4_bonus_breakdown") or {},
+            "caelyn_confluence_v4_reason_codes":        row.get("caelyn_confluence_v4_reason_codes") or [],
+            "caelyn_confluence_v4_confidence_score":    row.get("caelyn_confluence_v4_confidence_score"),
+            "caelyn_confluence_v4_actionability":       row.get("caelyn_confluence_v4_actionability"),
+            "legacy_trade_alignment_score":             row.get("legacy_trade_alignment_score") or row.get("trade_alignment_score"),
         })
 
     # ── v3: theme leadership (cross-symbol ranking, computed after all rows) ──

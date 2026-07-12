@@ -1,0 +1,929 @@
+BACKEND — PHASE 1: ADD UNIFIED CAELYN CONFLUENCE V4 SCORE ADDITIVELY
+
+Backend only.
+
+Do not touch frontend.
+Do not call LLMs.
+Do not add provider calls.
+Do not remove existing fields.
+Do not delete current caelyn_confluence_score yet.
+Do not delete trade_alignment_score yet.
+Do not reverse the recent Pattern-Aware Actionability, Theme Leadership, WYFI, LITE, component coverage, or support-zone fixes.
+
+This is Phase 1 of a seamless migration.
+
+Goal:
+
+Add a new unified V4 Confluence scoring model alongside the current system, validate it across the full watchlist, and prove it is better before promotion.
+
+Current important backend state to preserve:
+
+- Pattern engine exists and detects HIGH_TIGHT_FLAG, BULL_FLAG, BREAKOUT_SHELF, VCP, STAGE2_BREAKOUT, BASE_BOTTOM.
+- WYFI was fixed by HIGH_TIGHT_FLAG + CONSTRUCTIVE extension.
+- LITE was fixed by separating minor lower low from true support break.
+- Component coverage and confluence_confidence_score are now emitted.
+- Theme leadership fields are now emitted.
+- /api/watchlist/{watchlist_id}/alignment has canonical rows and must remain stable.
+
+Do not break any of that.
+
+==================================================
+PHASE 1 OBJECTIVE
+==================================================
+
+Add these new fields to every /alignment row:
+
+caelyn_confluence_v4_score
+caelyn_confluence_v4_core_score
+caelyn_confluence_v4_bonus_score
+caelyn_confluence_v4_total_score
+caelyn_confluence_v4_bucket
+caelyn_confluence_v4_components
+caelyn_confluence_v4_bonus_breakdown
+caelyn_confluence_v4_reason_codes
+caelyn_confluence_v4_confidence_score
+caelyn_confluence_v4_actionability
+
+Do not replace current caelyn_confluence_score yet.
+
+==================================================
+V4 CORE SCORE — 85 POINTS
+==================================================
+
+Build V4 from first-class components.
+
+Do not use trade_alignment_score as a blended parent score.
+
+Reuse the existing underlying components that already feed trade alignment, entry, options, catalyst, investment, etc.
+
+Core score:
+
+Theme Alignment — 15 points
+Stage Quality — 15 points
+Options Alignment — 15 points
+Entry Risk/Reward — 15 points
+Catalyst Alignment — 15 points
+Investment Alignment — 10 points
+
+Subtotal max = 85
+
+Required component output:
+
+caelyn_confluence_v4_components = {
+  "theme_alignment": {
+    "raw_score": 0-100,
+    "points": 0-15,
+    "available": true/false,
+    "status": "...",
+    "reason_codes": [...]
+  },
+  "stage_quality": {
+    "raw_score": 0-100,
+    "points": 0-15,
+    "available": true/false,
+    "status": "...",
+    "stage_label": "...",
+    "reason_codes": [...]
+  },
+  "options_alignment": {
+    "raw_score": 0-100,
+    "points": 0-15,
+    "available": true/false,
+    "status": "...",
+    "net_premium_score": ...,
+    "net_premium_acceleration_score": ...,
+    "reason_codes": [...]
+  },
+  "entry_risk_reward": {
+    "raw_score": 0-100,
+    "points": 0-15,
+    "available": true/false,
+    "status": "...",
+    "entry_state": "...",
+    "pattern_type": "...",
+    "extension_quality": "...",
+    "reason_codes": [...]
+  },
+  "catalyst_alignment": {
+    "raw_score": 0-100,
+    "points": 0-15,
+    "available": true/false,
+    "status": "...",
+    "detail_status": "...",
+    "reason_codes": [...]
+  },
+  "investment_alignment": {
+    "raw_score": 0-100,
+    "points": 0-10,
+    "available": true/false,
+    "status": "...",
+    "investment_quality_label": "...",
+    "reason_codes": [...]
+  }
+}
+
+Important:
+
+Do not fabricate missing inputs.
+
+If a component is missing:
+- mark status clearly
+- contribute neutral only if current architecture already treats that missing component as neutral
+- otherwise contribute 0 with reason code
+- expose confidence impact
+
+No silent failures.
+
+==================================================
+THEME ALIGNMENT — 15 POINTS
+==================================================
+
+Theme Alignment should measure whether the ticker belongs to a currently attractive theme.
+
+It should not require the single top-ranked theme.
+
+Top 5–6 investible themes should still score well.
+
+Suggested mapping:
+
+Theme is top 1–2 / leading:
+13–15 pts
+
+Theme is top 3–6 / leading or emerging:
+10–13 pts
+
+Theme is emerging / improving:
+7–10 pts
+
+Theme is neutral:
+3–7 pts
+
+Theme is lagging / unavailable:
+0–3 pts
+
+Use existing canonical theme resolver and Theme Rotation data.
+
+Return exactly how this is calculated:
+
+theme_name
+theme_rank if available
+theme_rotation_label
+theme_alignment_raw_score
+theme_alignment_points
+theme_reason_codes
+
+==================================================
+THEME POLICY AS THEME BONUS, NOT COMPANY CATALYST
+==================================================
+
+Theme Policy should not be counted as a direct ticker catalyst unless the event is company-specific.
+
+Move Theme Policy into the bonus/overlay layer that boosts Theme Alignment.
+
+Theme Policy bonus max:
+
++2.5 points
+
+Expose:
+
+theme_policy_bonus_points
+theme_policy_event
+theme_policy_theme
+theme_policy_reason_codes
+
+If current Catalyst rows include theme_policy_event, preserve the field for display, but do not double-count it as a company catalyst.
+
+==================================================
+STAGE QUALITY — 15 POINTS
+==================================================
+
+Stage Quality should reward the sweet spot:
+
+Best:
+S1/S1-2 basing-to-emerging
+S2 breakout / early Stage 2
+S2-S3 advance when constructive
+
+Caution:
+late S3 / extended Stage 3
+
+Bad:
+Stage 4 / breakdown
+
+Suggested mapping:
+
+S1-2 / early S2:
+13–15 pts
+
+S2:
+12–15 pts
+
+S2-S3 constructive:
+8–12 pts
+
+S1:
+7–12 pts depending base quality
+
+S3:
+4–10 depending extension/constructive pattern
+
+S4 / breakdown:
+0–3
+
+Use existing Stage2/Stage Quality fields.
+
+Expose:
+
+stage_label
+stage_quality_score
+stage_quality_points
+stage_reason_codes
+
+==================================================
+OPTIONS ALIGNMENT — 15 POINTS
+==================================================
+
+Options are important and should be first-class in V4.
+
+Use existing Options Alignment.
+
+Do not add provider calls.
+
+Options score should distinguish:
+
+1. Current net premium / flow pressure
+2. Net premium acceleration over 1D / 7D / 30D when available
+
+Best options state:
+
+Bullish net premium
++
+positive acceleration
+
+Required fields:
+
+options_alignment_score
+options_current_score
+options_net_premium_score
+options_acceleration_score
+net_premium_1d_available
+net_premium_7d_available
+net_premium_30d_available
+net_premium_1d_delta
+net_premium_7d_delta
+net_premium_30d_delta
+options_pressure_state
+options_reason_codes
+options_component_status
+
+If options are confirmed no-options:
+status = confirmed_no_options
+Do not treat as failure.
+
+If options are not scanned:
+status = not_scanned
+Confidence should reflect missing coverage.
+
+==================================================
+ENTRY RISK/REWARD — 15 POINTS
+==================================================
+
+Entry Risk/Reward should reward any valid entry pattern.
+
+This is an either/or setup detector, not a requirement that every pattern exists.
+
+Valid entry setups:
+
+HIGH_TIGHT_FLAG
+BULL_FLAG
+BREAKOUT_SHELF
+CUP_HANDLE
+VCP
+BREAKOUT_RETEST
+EMA_PULLBACK
+20DMA_PULLBACK
+30DMA_PULLBACK
+50DMA_PULLBACK
+200DMA_RECLAIM
+SUPPORT_BOUNCE
+LEADER_PULLBACK
+LOW_BASE_REVERSAL
+STAGE2_BREAKOUT
+CUP_AND_HANDLE if detectable
+WAVE_CONTINUATION_PROXY if current engine supports it
+
+Scoring:
+
+Full entry points if a valid entry setup is present and not broken:
+13–15 pts
+
+Near entry / needs confirmation:
+7–12 pts
+
+No clear entry:
+2–6 pts
+
+Broken support / major lower low:
+0–2 pts
+
+Important:
+
+Constructive extension should not be treated as chase extension.
+
+If pattern_type is HIGH_TIGHT_FLAG / BREAKOUT_SHELF / BULL_FLAG and constructive_extension = true:
+entry should score strongly or near-strongly.
+
+If chase_extension = true:
+entry should score low and bucket should be Watch for Reset.
+
+Expose:
+
+entry_risk_reward_score
+entry_risk_reward_points
+entry_pattern_rr_score
+pattern_type
+pattern_state
+pattern_score
+constructive_extension
+chase_extension
+extension_quality
+active_support_status
+current_shelf_support
+critical_break_level
+breakout_trigger
+reason_codes
+
+==================================================
+CATALYST ALIGNMENT — 15 POINTS
+==================================================
+
+Catalyst should mean:
+
+Specific identifiable development or scheduled event that could drive the stock over days-to-months swing horizon.
+
+Include:
+
+earnings
+FDA / biotech / regulatory event
+IPO-linked event
+major contract / customer deal
+government award
+product launch
+technical milestone
+investor day / conference
+strategic partnership
+M&A
+stock split when materially relevant
+company-specific high-impact news
+bearish catalyst conflicts
+
+Do not include broad Theme Policy here unless company-specific.
+
+Theme Policy belongs as a theme bonus.
+
+Expose:
+
+catalyst_alignment_score
+catalyst_alignment_points
+catalyst_detail_status
+catalyst_primary_event
+catalyst_rss_event
+catalyst_scheduled_event
+catalyst_bearish_conflict
+catalyst_reason_codes
+
+Weighted catalyst quality:
+
+Compelling direct catalyst:
+12–15 pts
+
+Moderate catalyst:
+7–12 pts
+
+Weak / ambiguous:
+2–7 pts
+
+No catalyst:
+0 pts
+
+Bearish catalyst:
+do not just zero it; expose bearish conflict and apply risk/volatility logic separately.
+
+==================================================
+INVESTMENT ALIGNMENT — 10 POINTS
+==================================================
+
+Investment Alignment is included, but intentionally lower weight.
+
+It should reward:
+
+fundamental strength
+cash flow positive / strong margins / little debt
+strong revenue or earnings growth
+high speculative forward revenue/earnings growth
+strong analyst/forward estimates if available
+
+Use existing Investment Alignment.
+
+Do not rebuild it.
+
+Expose:
+
+investment_alignment_score
+investment_alignment_points
+investment_alignment_available
+investment_quality_label
+investment_unavailable_reason
+investment_reason_codes
+
+==================================================
+SOCIAL BONUS — UP TO +15
+==================================================
+
+Social should be a bonus to overall Confluence, not part of Trade Alignment.
+
+Use existing Social page/Grok/X cache only.
+
+No new Grok calls.
+
+Social bonus:
+
+0 to +15
+
+Suggested:
+
+Ticker appears on Social page with strong positive signal:
++8 to +15
+
+Moderate positive social:
++3 to +8
+
+Weak/neutral:
+0 to +3
+
+Bearish social:
+negative warning or zero bonus, depending current social model
+
+Expose:
+
+social_bonus_points
+social_signal_available
+social_signal_source
+social_reason_codes
+
+==================================================
+OTHER BONUSES / OVERLAYS — UP TO +15
+==================================================
+
+These can push final score above 100.
+
+Core + Social is capped at 100.
+Other overlays can push to 115.
+
+Overlays:
+
+Theme Policy bonus:
+0 to +2.5
+
+Prediction Markets bonus:
+0 to +2.5
+
+Whale / Insider / Politician activity bonus:
+0 to +5
+
+Bottleneck / Supply Chain bonus:
+0 to +5
+
+Important:
+
+Use existing cached/page data only.
+No new provider calls.
+If a data source is not currently wired/cached, status must be missing_cache or unavailable and bonus = 0.
+
+Do not fabricate.
+
+==================================================
+PREDICTION MARKETS BONUS
+==================================================
+
+Prediction Markets should be theme-level, not ticker-level unless the market explicitly names the ticker.
+
+Use existing Prediction Markets page/cache if available.
+
+Examples:
+
+NVDA largest company odds rising:
+boost AI infrastructure / semis / networking / power/cooling bottlenecks slightly
+
+Fed cut odds rising:
+boost rate-sensitive themes slightly if mapped
+
+No rate-cut odds rising:
+boost themes that benefit from higher-for-longer if mapped
+
+Max +2.5.
+
+Expose:
+
+prediction_market_bonus_points
+prediction_market_signal_available
+prediction_market_event
+prediction_market_theme_mapping
+prediction_market_reason_codes
+
+==================================================
+WHALE / INSIDER / POLITICIAN BONUS
+==================================================
+
+Use existing Whale Watch / Insider / Politician page/cache if available.
+
+No new provider calls.
+
+Max +5.
+
+Because this data is lagged, it should not overpower fresh technical/actionability data.
+
+Positive buys > sells:
+bonus
+
+Heavy selling:
+warning / no bonus / bearish flag depending current data
+
+Expose:
+
+whale_insider_bonus_points
+whale_insider_signal_available
+whale_insider_signal_type
+whale_insider_reason_codes
+
+==================================================
+BOTTLENECK / SUPPLY CHAIN BONUS
+==================================================
+
+Use existing Bottlenecks / Supply Chain page/cache.
+
+Max +5.
+
+User concept:
++3 raw per anchor, 13 anchors = 39 raw max.
+
+Convert to capped score:
+
+bottleneck_raw_anchor_points = anchor_count * 3
+bottleneck_bonus_points = min(5, bottleneck_raw_anchor_points / 39 * 5)
+
+Expose:
+
+bottleneck_bonus_points
+bottleneck_anchor_count
+bottleneck_raw_anchor_points
+bottleneck_anchor_names
+bottleneck_reason_codes
+
+==================================================
+V4 TOTAL SCORE
+==================================================
+
+Compute:
+
+v4_core_score = sum core points, max 85
+
+v4_social_bonus = 0 to 15
+
+v4_pre_overlay_score = min(100, v4_core_score + v4_social_bonus)
+
+v4_overlay_bonus = theme_policy + prediction_markets + whale_insider + bottleneck, max 15
+
+caelyn_confluence_v4_total_score = min(115, v4_pre_overlay_score + v4_overlay_bonus)
+
+caelyn_confluence_v4_score can equal total_score for now.
+
+Expose both:
+
+caelyn_confluence_v4_core_score
+caelyn_confluence_v4_bonus_score
+caelyn_confluence_v4_total_score
+
+==================================================
+V4 BUCKETS
+==================================================
+
+Use existing good bucket logic, but driven by V4 score and current gates.
+
+Buckets:
+
+ACTIONABLE
+NEAR_ACTIONABLE
+CONFLUENCE_AT_SUPPORT
+WATCH_FOR_RESET
+INVESTMENT_QUALITY
+SPECULATIVE_TRADE
+RISK_CONFLICT
+NO_CLEAR_CONFLUENCE
+
+Rules:
+
+Do not let bonuses override hard risk.
+
+Confirmed broken support / major lower low / AVOID:
+RISK_CONFLICT
+
+Chase extension:
+WATCH_FOR_RESET
+
+Constructive extension:
+eligible for NEAR_ACTIONABLE / ACTIONABLE / CONFLUENCE_AT_SUPPORT
+
+Theme leader pullback at support:
+CONFLUENCE_AT_SUPPORT or NEAR_ACTIONABLE
+
+High investment quality but not actionable:
+INVESTMENT_QUALITY
+
+Speculative high confluence but weak investment:
+SPECULATIVE_TRADE
+
+==================================================
+ACTIONABILITY V4
+==================================================
+
+Actionability is not a weighted score.
+
+It is the decision layer.
+
+Use:
+
+V4 Confluence
+Entry / pattern quality
+support/risk gates
+extension quality
+major lower low / support loss
+catalyst conflict
+
+Output:
+
+actionability_v4_state:
+READY
+NEAR_ACTIONABLE
+WAIT_FOR_BREAKOUT
+WAIT_FOR_RETEST
+WATCH_FOR_RESET
+AVOID
+WATCH
+
+Actionability should answer:
+
+“What should I do with this ticker now?”
+
+Do not make Actionability a second Confluence score.
+
+Examples:
+
+High V4 + good entry + no risk:
+READY
+
+High V4 + near entry / needs confirmation:
+NEAR_ACTIONABLE / WAIT_FOR_BREAKOUT
+
+High V4 + chase extension:
+WATCH_FOR_RESET
+
+High V4 + confirmed breakdown:
+AVOID / RISK_CONFLICT
+
+Moderate V4 + excellent support entry:
+NEAR_ACTIONABLE
+
+==================================================
+LEGACY TRADE ALIGNMENT HANDLING
+==================================================
+
+Do not leave permanent technical debt.
+
+In Phase 1:
+
+Keep trade_alignment_score for backward compatibility.
+Add:
+
+legacy_trade_alignment_score = current trade_alignment_score
+
+Extract and expose its components as first-class V4 components:
+
+theme_alignment_score
+stage_quality_score
+options_alignment_score
+catalyst_alignment_score
+
+Do not make V4 depend on blended trade_alignment_score.
+
+Do not remove legacy field yet.
+
+Add deprecation reason code:
+
+TRADE_ALIGNMENT_LEGACY_COMPAT_ONLY
+
+==================================================
+VALIDATION
+==================================================
+
+Run over full watchlist alignment universe.
+
+Return:
+
+total rows
+rows with caelyn_confluence_v4_score
+rows with every core component
+rows with social bonus
+rows with each overlay bonus
+rows with component coverage status
+old bucket distribution
+new V4 bucket distribution
+top 50 old CCS
+top 50 V4
+top 25 Actionable V4
+top 25 Confluence at Support V4
+top 25 Watch for Reset V4
+top 25 Risk V4
+top 25 Investment Quality V4
+top 25 bonus-driven names
+
+Validate:
+
+WYFI
+LITE
+OSCR
+CRWD
+FTNT
+AMD
+MU
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+ANET
+TSM
+PLTR
+OKLO
+SOFI
+ALAB
+SNDK
+SIMO
+LSCC
+TER
+BAND
+APH
+AMKR
+ENTG
+KLAC
+ONTO
+ROK
+
+For each return:
+
+symbol
+old caelyn_confluence_score
+new caelyn_confluence_v4_score
+old bucket
+new v4 bucket
+theme points
+stage points
+options points
+entry points
+catalyst points
+investment points
+social bonus
+theme policy bonus
+prediction market bonus
+whale insider bonus
+bottleneck bonus
+v4 total score
+legacy_trade_alignment_score
+actionability_v4_state
+pattern_type
+extension_quality
+active_support_status
+major_lower_low_confirmed
+component coverage
+reason codes
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+PHASE 1 UNIFIED CONFLUENCE V4 ADDITIVE REPORT
+
+FILES CHANGED:
+[list]
+
+WHAT WAS PRESERVED:
+[confirm current fixes preserved]
+
+V4 FORMULA:
+[full formula]
+
+V4 COMPONENTS:
+[explain each]
+
+BONUS MODEL:
+[explain social + overlays]
+
+ACTIONABILITY V4:
+[explain decision layer]
+
+LEGACY TRADE ALIGNMENT HANDLING:
+[explain compatibility and deprecation]
+
+ROW COVERAGE:
+[table]
+
+COMPONENT COVERAGE:
+[table]
+
+OLD VS V4 BUCKET DISTRIBUTION:
+[table]
+
+TOP 50 V4:
+[table]
+
+TOP ACTIONABLE V4:
+[table]
+
+TOP CONFLUENCE AT SUPPORT V4:
+[table]
+
+WATCH FOR RESET V4:
+[table]
+
+RISK CONFLICT V4:
+[table]
+
+INVESTMENT QUALITY V4:
+[table]
+
+BONUS-DRIVEN NAMES:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+PHASE 1 V4 VERDICT
+
+V4 ADDED WITHOUT REPLACING CURRENT CCS:
+[YES/NO]
+
+CURRENT PATTERN/SUPPORT FIXES PRESERVED:
+[YES/NO]
+
+TRADE ALIGNMENT COMPONENTS REUSED CLEANLY:
+[YES/NO]
+
+V4 DOES NOT DEPEND ON BLENDED TRADE_ALIGNMENT_SCORE:
+[YES/NO]
+
+THEME ALIGNMENT FIRST-CLASS:
+[YES/NO]
+
+STAGE QUALITY FIRST-CLASS:
+[YES/NO]
+
+OPTIONS ALIGNMENT FIRST-CLASS:
+[YES/NO]
+
+ENTRY RISK_REWARD FIRST-CLASS:
+[YES/NO]
+
+CATALYST ALIGNMENT FIRST-CLASS:
+[YES/NO]
+
+INVESTMENT ALIGNMENT FIRST-CLASS LOW-WEIGHT:
+[YES/NO]
+
+SOCIAL BONUS MOVED TO OVERALL CONFLUENCE:
+[YES/NO]
+
+THEME POLICY MOVED TO THEME BONUS:
+[YES/NO]
+
+OTHER OVERLAYS WIRED OR SAFELY MARKED UNAVAILABLE:
+[YES/NO]
+
+ACTIONABILITY V4 IS DECISION LAYER, NOT SECOND SCORE:
+[YES/NO]
+
+ALL ROWS HAVE V4 SCORE:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR PHASE 2 PROMOTION:
+[YES/NO]
