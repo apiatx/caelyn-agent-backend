@@ -1428,6 +1428,44 @@ def _compute_confluence(
     soc_fresh    = _safe_float(social_entry.get("freshness_score"), 0.0) if social_entry else 0.0
     soc_top      = bool(social_entry.get("has_top_conviction")) if social_entry else False
 
+    # ── Caelyn Confluence Ranking (zero provider calls) ───────────────────────
+    _cc_fields: dict = {}
+    try:
+        from services.caelyn_confluence import compute_caelyn_confluence
+        _bearish = bool(
+            selected_ta_fields.get("bearish_conflict")
+            or selected_ta_fields.get("catalyst_bearish_conflict")
+        )
+        _cc_fields = compute_caelyn_confluence(
+            trade_alignment_score          = selected_ta_fields.get("trade_alignment_score"),
+            trade_alignment_available      = bool(selected_ta_fields.get("trade_alignment_available")),
+            entry_risk_reward_score        = (entry_result or {}).get("entry_risk_reward_score"),
+            entry_risk_reward_state        = (entry_result or {}).get("entry_risk_reward_state"),
+            catalyst_alignment_score       = selected_ta_fields.get("catalyst_alignment_score"),
+            catalyst_alignment_available   = bool(selected_ta_fields.get("catalyst_alignment_available")),
+            theme_policy_boost             = float(selected_ta_fields.get("theme_policy_boost") or 0.0),
+            options_alignment_score        = selected_ta_fields.get("options_alignment_score"),
+            options_alignment_available    = bool(selected_ta_fields.get("options_alignment_available")),
+            investment_alignment_score     = investment_alignment_fields.get("investment_alignment_score"),
+            investment_alignment_available = bool(investment_alignment_fields.get("investment_alignment_available")),
+            actionability_state            = actionability_fields.get("actionability_state"),
+            active_support_status          = (entry_result or {}).get("active_support_status"),
+            lower_low_confirmed            = (entry_result or {}).get("lower_low_confirmed"),
+            distance_to_active_support_pct = (entry_result or {}).get("distance_to_active_support_pct"),
+            extension_state                = (entry_result or {}).get("extension_state"),
+            bearish_conflict               = _bearish,
+        )
+    except Exception:
+        _cc_fields = {
+            "caelyn_confluence_score":              None,
+            "caelyn_confluence_bucket":             "NO_CLEAR_CONFLUENCE",
+            "caelyn_confluence_reason_codes":       ["CAELYN_CONFLUENCE_ERROR"],
+            "confluence_at_support":                False,
+            "confluence_at_support_score":          0,
+            "confluence_at_support_state":          "NO_SUPPORT_CONFLUENCE",
+            "confluence_at_support_reason_codes":   ["ERROR"],
+        }
+
     return {
         "symbol":                       sym,
         # ── Score hierarchy ──────────────────────────────────────────────────
@@ -1485,6 +1523,11 @@ def _compute_confluence(
         "critical_break_level":           (entry_result or {}).get("critical_break_level"),
         "reclaim_level":                  (entry_result or {}).get("reclaim_level"),
         "next_downside_support":          (entry_result or {}).get("next_downside_support"),
+        # ── Active support hierarchy fields (forwarded for display + ranking) ──
+        "active_support_status":          (entry_result or {}).get("active_support_status"),
+        "lower_low_confirmed":            (entry_result or {}).get("lower_low_confirmed"),
+        "active_support_type":            (entry_result or {}).get("active_support_type"),
+        "active_support_touch_count":     (entry_result or {}).get("active_support_touch_count"),
         # ── Per-signal breakdown ─────────────────────────────────────────────
         "signal_breakdown": {
             "entry_state": {
@@ -1531,6 +1574,8 @@ def _compute_confluence(
         },
         "elapsed_ms":  round((time.time() - t0) * 1000, 1),
         "computed_at": _now_iso(),
+        # ── Caelyn Confluence Ranking (additive-only) ─────────────────────────
+        **_cc_fields,
     }
 
 

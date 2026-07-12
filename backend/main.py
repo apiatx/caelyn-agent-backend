@@ -2517,6 +2517,128 @@ async def debug_confluence_accuracy(
     }
 
 
+@app.get("/api/debug/caelyn-confluence-ranking")
+async def debug_caelyn_confluence_ranking(
+    validate_symbols: str = "BE,NVEC,MARA,INTC,CRWD,FTNT,AMD,MU,MRVL,PLTR,ABCL,SOFI,OKLO,TSM,GLW,NVDA",
+):
+    """
+    Confluence-at-Support + Full Watchlist Ranking validation endpoint.
+    Reads from in-process retained snapshot — zero provider calls.
+    Returns full distribution, top lists, and validated symbol rows.
+    """
+    import time as _time
+    from services.confluence_v2_service import (
+        get_retained_confluence_snapshot as _get_retained,
+        build_confluence_snapshot,
+    )
+
+    # Try retained snapshot first; fall back to fresh build if empty
+    retained_raw = _get_retained()
+    retained: dict = {}
+    if isinstance(retained_raw, dict):
+        for _r in retained_raw.get("results", []):
+            if isinstance(_r, dict) and _r.get("symbol"):
+                retained[_r["symbol"]] = _r
+
+    # If retained has no confluence scores, do a fresh build from LKG
+    has_cc = any(r.get("caelyn_confluence_score") is not None for r in retained.values())
+    if not has_cc or not retained:
+        fresh = build_confluence_snapshot()
+        for _r in fresh.get("results", []):
+            if isinstance(_r, dict) and _r.get("symbol"):
+                retained[_r["symbol"]] = _r
+
+    all_rows = list(retained.values())
+
+    # ── Scoring coverage ──────────────────────────────────────────────────────
+    scored_rows = [r for r in all_rows if r.get("caelyn_confluence_score") is not None]
+
+    # ── Bucket distribution ───────────────────────────────────────────────────
+    bucket_dist: dict[str, int] = {}
+    for r in all_rows:
+        b = r.get("caelyn_confluence_bucket") or "NO_CLEAR_CONFLUENCE"
+        bucket_dist[b] = bucket_dist.get(b, 0) + 1
+
+    # ── CAS state distribution ────────────────────────────────────────────────
+    cas_dist: dict[str, int] = {}
+    for r in all_rows:
+        s = r.get("confluence_at_support_state") or "NO_SUPPORT_CONFLUENCE"
+        cas_dist[s] = cas_dist.get(s, 0) + 1
+
+    def _row_summary(r: dict) -> dict:
+        return {
+            "symbol":                    r.get("symbol"),
+            "caelyn_confluence_score":   r.get("caelyn_confluence_score"),
+            "caelyn_confluence_bucket":  r.get("caelyn_confluence_bucket"),
+            "confluence_at_support":     r.get("confluence_at_support"),
+            "confluence_at_support_state": r.get("confluence_at_support_state"),
+            "confluence_at_support_score": r.get("confluence_at_support_score"),
+            "actionability_state":       r.get("actionability_state"),
+            "entry_state":               r.get("entry_state"),
+            "entry_risk_reward_state":   r.get("entry_risk_reward_state"),
+            "active_support_status":     r.get("active_support_status"),
+            "distance_to_active_support_pct": r.get("distance_to_active_support_pct"),
+            "trade_alignment_score":     r.get("trade_alignment_score"),
+            "catalyst_alignment_score":  r.get("catalyst_alignment_score"),
+            "options_alignment_score":   r.get("options_alignment_score"),
+            "investment_alignment_score": r.get("investment_alignment_score"),
+            "extension_state":           r.get("extension_state"),
+            "lower_low_confirmed":       r.get("lower_low_confirmed"),
+            "caelyn_confluence_reason_codes": r.get("caelyn_confluence_reason_codes"),
+            "confluence_at_support_reason_codes": r.get("confluence_at_support_reason_codes"),
+        }
+
+    # ── Top 50 overall confluence ─────────────────────────────────────────────
+    top50 = sorted(
+        scored_rows,
+        key=lambda r: r.get("caelyn_confluence_score") or 0,
+        reverse=True,
+    )[:50]
+
+    # ── Top 25 confluence at support ─────────────────────────────────────────
+    cas_rows = [r for r in scored_rows if r.get("confluence_at_support")]
+    top25_cas = sorted(
+        cas_rows,
+        key=lambda r: r.get("confluence_at_support_score") or 0,
+        reverse=True,
+    )[:25]
+
+    # ── Top 25 watch for reset ────────────────────────────────────────────────
+    reset_rows = [r for r in all_rows if r.get("caelyn_confluence_bucket") == "WATCH_FOR_RESET"]
+    top25_reset = sorted(
+        reset_rows,
+        key=lambda r: r.get("caelyn_confluence_score") or 0,
+        reverse=True,
+    )[:25]
+
+    # ── Top 25 risk conflict ──────────────────────────────────────────────────
+    risk_rows = [r for r in all_rows if r.get("caelyn_confluence_bucket") == "RISK_CONFLICT"]
+    top25_risk = sorted(
+        risk_rows,
+        key=lambda r: r.get("caelyn_confluence_score") or 0,
+    )[:25]
+
+    # ── Validated symbols ─────────────────────────────────────────────────────
+    val_syms = [s.strip().upper() for s in validate_symbols.split(",") if s.strip()]
+    validated = {sym: _row_summary(retained.get(sym, {})) for sym in val_syms}
+
+    return {
+        "generated_at":       _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "total_watchlist_tickers": len(all_rows),
+        "total_confluence_rows":   len(all_rows),
+        "rows_with_caelyn_confluence_score": len(scored_rows),
+        "bucket_distribution":    dict(sorted(bucket_dist.items())),
+        "cas_state_distribution": dict(sorted(cas_dist.items())),
+        "top_50_overall_confluence": [_row_summary(r) for r in top50],
+        "top_25_confluence_at_support": [_row_summary(r) for r in top25_cas],
+        "top_25_watch_for_reset": [_row_summary(r) for r in top25_reset],
+        "top_25_risk_conflict":   [_row_summary(r) for r in top25_risk],
+        "validated_symbols":      validated,
+        "provider_calls": 0,
+        "data_source": "retained_confluence_snapshot_or_fresh_lkg_build",
+    }
+
+
 @app.get("/api/presets")
 async def list_presets(request: Request):
     """List all available preset_intent values the backend supports.

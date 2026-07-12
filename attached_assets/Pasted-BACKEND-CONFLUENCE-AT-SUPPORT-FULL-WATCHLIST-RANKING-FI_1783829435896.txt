@@ -1,0 +1,347 @@
+BACKEND — CONFLUENCE-AT-SUPPORT + FULL WATCHLIST RANKING FIELDS
+
+Backend only.
+
+Do not touch frontend.
+
+Do not change Catalyst scoring.
+Do not change Theme Policy scoring.
+Do not change Investment Alignment scoring.
+Do not change Options Alignment scoring.
+Do not add provider calls.
+Do not add LLM calls.
+
+Goal:
+
+Add derived Confluence ranking fields so the frontend can show every watchlist ticker ranked by overall confluence, not only great investments or only currently actionable names.
+
+Important product rule:
+
+Investment Alignment is only one input. It should boost confidence, but it must not dominate or exclude tickers when other confluence signals are aligning.
+
+We want to detect:
+
+Confluence at Support:
+defined active support / invalidation nearby
++
+trade/catalyst/options/theme signals aligning
++
+not broken
++
+not extremely extended
+
+This should be separate from pure Investment Quality.
+
+==================================================
+PART 1 — ADD OVERALL CONFLUENCE DISPLAY SCORE
+==================================================
+
+Add new derived fields to Confluence rows:
+
+caelyn_confluence_score
+caelyn_confluence_bucket
+caelyn_confluence_reason_codes
+
+This is a display/ranking score, not a replacement for Trade Alignment.
+
+Suggested formula:
+
+trade_component = trade_alignment_score
+entry_component = entry_risk_reward_score
+catalyst_component = catalyst_alignment_score
+options_component = options_alignment_score
+investment_component = investment_alignment_score if available else neutral 50
+
+Weights:
+
+Trade Alignment: 30%
+Entry Risk/Reward: 25%
+Catalyst / Theme Policy: 20%
+Options Alignment: 15%
+Investment Alignment: 10%
+
+If Investment is unavailable:
+use neutral contribution, not zero.
+
+Reason:
+Actionable / trade confluence should not require complete fundamentals coverage.
+
+==================================================
+PART 2 — ADD CONFLUENCE AT SUPPORT STATE
+==================================================
+
+Add fields:
+
+confluence_at_support
+confluence_at_support_score
+confluence_at_support_state
+confluence_at_support_reason_codes
+
+Possible states:
+
+HIGH_CONFLUENCE_AT_SUPPORT
+SUPPORT_CONFLUENCE_BUILDING
+SPECULATIVE_SUPPORT_SETUP
+QUALITY_ASSET_AT_SUPPORT
+SUPPORT_NEEDS_CONFIRMATION
+EXTENDED_NOT_AT_SUPPORT
+BROKEN_SUPPORT_AVOID
+NO_SUPPORT_CONFLUENCE
+
+HIGH_CONFLUENCE_AT_SUPPORT requires:
+
+active_support_status in above_support / testing_support / bounced_from_support
+distance_to_active_support_pct reasonably close, e.g. <= 12%
+lower_low_confirmed is false
+active_support_status is not lost_confirmed
+extension_state not EXTREME_EXTENSION / VERTICAL / CROWDED_MOVE
+trade_alignment_score >= 60
+at least one of:
+  catalyst_alignment_score >= 50
+  theme_policy_boost > 0
+  options_alignment_score >= 55
+  investment_alignment_score >= 70
+
+QUALITY_ASSET_AT_SUPPORT:
+
+investment_alignment_score >= 70
+active support intact/testing
+distance_to_active_support <= 12%
+but trade/catalyst/options not fully aligned yet
+
+SPECULATIVE_SUPPORT_SETUP:
+
+investment weak/unavailable
+but trade/catalyst/options/support are aligning
+
+SUPPORT_NEEDS_CONFIRMATION:
+
+support nearby
+but trade/catalyst/options are not enough yet
+
+EXTENDED_NOT_AT_SUPPORT:
+
+extension extreme or distance from support too large
+
+BROKEN_SUPPORT_AVOID:
+
+active support lost or lower low confirmed
+
+==================================================
+PART 3 — CAPS / PENALTIES
+==================================================
+
+Do not let overextended or broken names rank as top actionable confluence.
+
+If entry_risk_reward_state = STRONG_ASSET_EXTENDED_WAIT:
+caelyn_confluence_bucket = WAIT_FOR_RESET
+cap caelyn_confluence_score at 65 unless explicitly needed for watchlist awareness
+
+If actionability = TOO_EXTENDED:
+not eligible for Actionable Setups
+
+If active_support_status = lost_confirmed or lower_low_confirmed = true:
+bucket = RISK / BROKEN_SUPPORT
+cap score at 45 unless shown in Risk tab
+
+If bearish conflict exists:
+apply penalty or reason code
+
+==================================================
+PART 4 — BUCKETS FOR FRONTEND
+==================================================
+
+Add:
+
+caelyn_confluence_bucket
+
+Values:
+
+ACTIONABLE
+NEAR_ACTIONABLE
+CONFLUENCE_AT_SUPPORT
+INVESTMENT_QUALITY
+WATCH_FOR_RESET
+SPECULATIVE_TRADE
+RISK_CONFLICT
+NO_CLEAR_CONFLUENCE
+
+This lets frontend show all rows while sorting and filtering cleanly.
+
+Rules:
+
+ACTIONABLE:
+actionability READY / BUY / ADD
+
+NEAR_ACTIONABLE:
+WAIT_FOR_RETEST / WAIT_FOR_BREAKOUT / WATCH with trade >= 65 and entry not broken/extended
+
+CONFLUENCE_AT_SUPPORT:
+confluence_at_support_score strong and active support intact/testing
+
+INVESTMENT_QUALITY:
+investment high but trade/entry not ready
+
+WATCH_FOR_RESET:
+strong trade/investment/catalyst but extended
+
+RISK_CONFLICT:
+broken support, bearish conflict, lower low confirmed, or actionability avoid
+
+SPECULATIVE_TRADE:
+trade/catalyst/options strong but investment weak/unavailable
+
+NO_CLEAR_CONFLUENCE:
+everything else
+
+==================================================
+PART 5 — VALIDATION
+==================================================
+
+Run over full current watchlist/confluence universe.
+
+Return:
+
+total watchlist tickers
+total confluence rows
+rows with caelyn_confluence_score
+bucket distribution
+top 50 by caelyn_confluence_score
+top 25 confluence_at_support
+top 25 watch_for_reset
+top 25 risk_conflict
+
+Validate symbols:
+
+BE
+NVEC
+MARA
+INTC
+CRWD
+FTNT
+AMD
+MU
+MRVL
+PLTR
+ABCL
+SOFI
+OKLO
+TSM
+GLW
+NVDA
+
+Expected behavior:
+
+BE:
+should be Confluence at Support / Support Needs Confirmation / Quality at Support, not support lost.
+
+NVEC:
+should show support confluence if active support intact/testing.
+
+MARA:
+should show low-base/risk-defined support setup if applicable.
+
+CRWD / FTNT:
+should be Watch for Reset / Extended, not Actionable.
+
+PLTR / OKLO:
+if lower low confirmed, Risk / Avoid.
+
+Investment unavailable:
+does not zero out the score; reason remains exposed.
+
+==================================================
+PART 6 — OUTPUT
+==================================================
+
+Forward fields through:
+
+Confluence snapshot rows
+Watchlist alignment compact rows
+
+Fields:
+
+caelyn_confluence_score
+caelyn_confluence_bucket
+caelyn_confluence_reason_codes
+confluence_at_support
+confluence_at_support_score
+confluence_at_support_state
+confluence_at_support_reason_codes
+
+No existing fields removed.
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+CONFLUENCE-AT-SUPPORT RANKING REPORT
+
+FILES CHANGED:
+[list]
+
+SCORING FORMULA:
+[summary]
+
+INVESTMENT WEIGHTING:
+[explain neutral handling / low weight]
+
+CONFLUENCE AT SUPPORT:
+[summary]
+
+BUCKETS:
+[distribution]
+
+TOP 50 OVERALL CONFLUENCE:
+[table]
+
+TOP 25 CONFLUENCE AT SUPPORT:
+[table]
+
+WATCH FOR RESET:
+[table]
+
+RISK / CONFLICT:
+[table]
+
+VALIDATED SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0]
+
+End exactly:
+
+CONFLUENCE AT SUPPORT VERDICT
+
+ALL ROWS GET OVERALL CONFLUENCE SCORE:
+[YES/NO]
+
+INVESTMENT ALIGNMENT DOES NOT DOMINATE ACTIONABLE RANKING:
+[YES/NO]
+
+CONFLUENCE AT SUPPORT DETECTED:
+[YES/NO]
+
+STRONG ASSETS AT SUPPORT REWARDED:
+[YES/NO]
+
+SPECULATIVE SUPPORT SETUPS CAN STILL SURFACE:
+[YES/NO]
+
+EXTENDED NAMES MOVED TO WATCH FOR RESET:
+[YES/NO]
+
+BROKEN SUPPORT NAMES MOVED TO RISK:
+[YES/NO]
+
+FIELDS FORWARDED TO FRONTEND:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND FULL-UNIVERSE DISPLAY:
+[YES/NO]
