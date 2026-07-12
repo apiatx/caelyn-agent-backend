@@ -5105,6 +5105,16 @@ async def v4_report_endpoint(watchlist_id: str):
         if r.get("caelyn_confluence_v4_bucket") in ("ACTIONABLE", "NEAR_ACTIONABLE", "READY")
     ]
 
+    def _opts_status_of(r):
+        return (r.get("caelyn_confluence_v4_components") or {}).get("options_alignment", {}).get("status")
+
+    not_scanned_symbols = sorted(
+        r["symbol"] for r in scored if _opts_status_of(r) == "not_scanned"
+    )
+    confirmed_no_options_symbols = sorted(
+        r["symbol"] for r in scored if _opts_status_of(r) == "confirmed_no_options"
+    )
+
     return {
         "meta": {
             "total":   len(rows),
@@ -5120,4 +5130,6 @@ async def v4_report_endpoint(watchlist_id: str):
         "confidence_distribution":      conf_dist,
         "top_sample":                   top_sample[:30],
         "errors_sample":                errors[:10],
+        "not_scanned_symbols":          not_scanned_symbols,
+        "confirmed_no_options_symbols": confirmed_no_options_symbols,
     }

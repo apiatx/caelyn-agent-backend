@@ -55,6 +55,34 @@ _SUPPLEMENT_CACHE_TTL  = 14400   # 4 h — accumulates across batches within a s
 _SUPPLEMENT_LKG_CACHE_KEY = "options_supplement_lkg_v1"
 _SUPPLEMENT_LKG_CACHE_TTL = 14400   # 4 h — disk data loaded at startup
 
+# ── Confluence extra symbols — watchlist US tickers for supplement scanning ───
+# Populated at startup from the active watchlists so the supplement scanner
+# covers the full confluence universe, not just the theme proxy universe.
+_CONFLUENCE_EXTRA_SYMBOLS: set[str] = set()
+
+def set_confluence_extra_symbols(syms: set[str]) -> None:
+    """Register US-listed watchlist tickers for the supplement scanner universe.
+    Call at startup (or on watchlist change) with the full set of watchlist
+    US tickers.  Foreign-exchange tickers should be excluded by the caller."""
+    global _CONFLUENCE_EXTRA_SYMBOLS
+    _CONFLUENCE_EXTRA_SYMBOLS = {s.upper() for s in syms if isinstance(s, str)}
+    print(
+        f"[SUPP] Confluence extra symbols: {len(_CONFLUENCE_EXTRA_SYMBOLS)} "
+        f"watchlist US tickers registered for supplement scanning"
+    )
+
+# ── Foreign-exchange prefix list (no US options) ─────────────────────────────
+_FOREIGN_PREFIXES: frozenset[str] = frozenset((
+    "AIM:", "ASX:", "CSE:", "EPA:", "ETR:", "FRA:", "KRX:",
+    "LON:", "OSL:", "SHA:", "STO:", "SWX:", "TPE:", "TPEX:",
+    "TSX:", "TSXV:", "TYO:", "WSE:", "XSAT:", "OTC:",
+))
+
+# Age limit for using sectors-LKG confirmed_no_options entries independently —
+# 7 days.  confirmed_no_options is a stable classification; a company rarely
+# gains or loses listed options overnight.
+_SECTORS_LKG_CNO_MAX_AGE = 604800  # 7 days
+
 # ── Loop tracking (updated by main.py loop via update_scan_tracking()) ────────
 _last_scanned_symbols: list[str] = []
 _next_scan_at: float = 0.0
@@ -168,6 +196,10 @@ def get_theme_only_symbols_for_supplement() -> list[str]:
     Return theme proxy symbols NOT in the master screener cache AND NOT
     confirmed as no-options AND NOT already in supplement caches.
 
+    Also includes US-listed watchlist tickers registered via
+    set_confluence_extra_symbols() so the supplement scanner covers the
+    full confluence universe, not just the theme proxy universe.
+
     Sorted alphabetically for a deterministic rolling cursor.
     Prioritises symbols not yet in any supplement layer.
     """
@@ -181,6 +213,12 @@ def get_theme_only_symbols_for_supplement() -> list[str]:
         for meta in ENRICHED_THEME_RS_UNIVERSE.values()
         for sym in (meta.get("proxy_symbols") or [])
     }
+
+    # Also include US-listed watchlist tickers (registered at startup via
+    # set_confluence_extra_symbols) so the supplement scanner covers the
+    # full confluence/watchlist universe on the next market session.
+    if _CONFLUENCE_EXTRA_SYMBOLS:
+        all_syms |= _CONFLUENCE_EXTRA_SYMBOLS
 
     master_syms   = _get_master_tickers()
     no_opts       = get_no_options_symbols()
@@ -337,6 +375,50 @@ def _load_supplement_lkg_from_disk() -> None:
         )
     except Exception as exc:
         print(f"[SUPP_LKG] Disk load failed (non-fatal): {exc}")
+
+
+def _seed_no_options_from_sectors_lkg() -> None:
+    """
+    Inject confirmed_no_options tickers from the sectors universe LKG into the
+    in-memory no-options tracking cache.  Called at startup so the supplement
+    scanner excludes known non-optionable tickers on the very first pass and
+    V4 can classify them correctly (confirmed_no_options earns confidence
+    points; not_scanned does not).
+
+    Uses _SECTORS_LKG_CNO_MAX_AGE (7 days) rather than the general 96 h limit
+    because confirmed_no_options is a stable classification — companies rarely
+    gain or lose listed options overnight.
+    """
+    if not _SECTORS_LKG_DISK_PATH.exists():
+        return
+    try:
+        now = time.time()
+        raw = _json.loads(_SECTORS_LKG_DISK_PATH.read_text(encoding="utf-8"))
+        age_s = now - (raw.get("saved_at") or 0)
+        if age_s > _SECTORS_LKG_CNO_MAX_AGE:
+            print(
+                f"[SUPP_LKG] Sectors LKG confirmed_no_options seed skipped "
+                f"(age={age_s/3600:.1f}h > {_SECTORS_LKG_CNO_MAX_AGE/3600:.0f}h)"
+            )
+            return
+        cno_rows = {
+            sym.upper(): row
+            for sym, row in (raw.get("ticker_data") or {}).items()
+            if isinstance(row, dict) and row.get("scan_result") == "confirmed_no_options"
+        }
+        if not cno_rows:
+            return
+        from data.cache import cache
+        existing = cache.get(_NO_OPTIONS_CACHE_KEY) or {}
+        # existing (live session) entries win; sectors LKG only fills gaps
+        merged = {**cno_rows, **existing}
+        cache.set(_NO_OPTIONS_CACHE_KEY, merged, _NO_OPTIONS_CACHE_TTL)
+        print(
+            f"[SUPP_LKG] Seeded {len(cno_rows)} confirmed_no_options from sectors LKG "
+            f"(age={age_s/3600:.1f}h); {len(merged)} total in no-opts tracking cache"
+        )
+    except Exception as exc:
+        print(f"[SUPP_LKG] confirmed_no_options seed failed (non-fatal): {exc}")
 
 
 # ── No-options tracking ───────────────────────────────────────────────────────
@@ -610,6 +692,40 @@ def get_combined_ticker_data() -> dict[str, dict]:
                             "_source":          "watchlist_cache",
                             "_snapshot_status": "available_cached",
                         }
+        except Exception:
+            pass
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── Sectors-LKG confirmed-no-options layer ────────────────────────────
+        # Inject tickers confirmed as no-options from the sectors universe LKG
+        # so the options-alignment / V4 pipeline classifies them as
+        # confirmed_no_options (KNOWN state, earns confidence) rather than
+        # not_scanned (UNKNOWN state, lowers confidence).
+        # Runs unconditionally — NOT gated on combined being empty.
+        # Uses _SECTORS_LKG_CNO_MAX_AGE (7 days) for stable confirmed_no_options.
+        try:
+            if _SECTORS_LKG_DISK_PATH.exists():
+                import json as _jcno
+                _sec_raw = _jcno.loads(_SECTORS_LKG_DISK_PATH.read_text(encoding="utf-8"))
+                _sec_age = _now_supp - (_sec_raw.get("saved_at") or 0)
+                if _sec_age < _SECTORS_LKG_CNO_MAX_AGE:
+                    _cno_added = 0
+                    for sym, row in (_sec_raw.get("ticker_data") or {}).items():
+                        sym = sym.upper()
+                        if sym in combined:
+                            continue
+                        if isinstance(row, dict) and row.get("scan_result") == "confirmed_no_options":
+                            combined[sym] = {
+                                **row,
+                                "_source":          "sectors_lkg_no_options",
+                                "_snapshot_status": "confirmed_no_options",
+                            }
+                            _cno_added += 1
+                    if _cno_added:
+                        print(
+                            f"[OPTIONS_COMBINED] Sectors-LKG confirmed_no_options layer: "
+                            f"+{_cno_added} tickers (age={_sec_age/3600:.1f}h)"
+                        )
         except Exception:
             pass
         # ─────────────────────────────────────────────────────────────────────

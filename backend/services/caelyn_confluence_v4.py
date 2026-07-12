@@ -237,7 +237,33 @@ def _score_options_alignment(row: dict) -> dict:
     Reads options_alignment_score (0-100) + pressure_state for nuance.
     confirmed_no_options → status=confirmed_no_options, 0 pts (not a failure).
     not_scanned → status=not_scanned, 0 pts, lowers confidence.
+    Foreign-exchange tickers (AIM:, ASX:, LON:, etc.) → confirmed_no_options
+      (no US options market; treated as a known state, not a gap).
     """
+    sym = str(row.get("symbol") or "").upper()
+
+    # ── Foreign-exchange tickers: no US options market ────────────────────────
+    # Detect by exchange prefix.  These are NEVER optionable on US markets so
+    # classify immediately as confirmed_no_options — a KNOWN state that earns
+    # confidence points rather than a gap that lowers them.
+    _FOREIGN_PFX = (
+        "AIM:", "ASX:", "CSE:", "EPA:", "ETR:", "FRA:", "KRX:",
+        "LON:", "OSL:", "SHA:", "STO:", "SWX:", "TPE:", "TPEX:",
+        "TSX:", "TSXV:", "TYO:", "WSE:", "XSAT:", "OTC:",
+    )
+    if any(sym.startswith(p) for p in _FOREIGN_PFX):
+        return {
+            "raw_score":                      None,
+            "points":                         0,
+            "available":                      False,
+            "status":                         "confirmed_no_options",
+            "options_pressure_state":         "confirmed_no_options_non_us_exchange",
+            "net_premium_score":              None,
+            "net_premium_acceleration_score": None,
+            "reason_codes":                   ["NON_US_EXCHANGE", "CONFIRMED_NO_OPTIONS"],
+        }
+    # ─────────────────────────────────────────────────────────────────────────
+
     raw_score  = row.get("options_alignment_score")
     available  = bool(row.get("options_alignment_available")) and raw_score is not None
     pressure   = str(row.get("options_pressure_state") or "").lower()
@@ -312,6 +338,8 @@ def _score_options_alignment(row: dict) -> dict:
     _snap_status = row.get("options_snapshot_status") or ""
     if "lkg_market_closed" in _snap_status or row.get("_options_source") == "disk_lkg":
         _opts_status = "lkg_market_closed"
+    elif "stale" in _snap_status:
+        _opts_status = "stale_but_usable"
     elif "cached" in _snap_status or _snap_status in ("available_cached",):
         _opts_status = "available_cached"
     else:
@@ -1175,6 +1203,7 @@ def _compute_v4_confidence(
         "lkg_market_closed",     # disk LKG present, market is closed (weekend)
         "available_cached",      # supplement/LKG cache hit
         "available_live",        # fresh scan data
+        "stale_but_usable",      # stale LKG data serving as weekend/off-hours fallback
     }
 
     total_possible = sum(comp_weights.values()) + 8  # 8 for social = 92

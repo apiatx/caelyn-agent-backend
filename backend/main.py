@@ -466,6 +466,40 @@ async def lifespan(app):
         _load_sectors_lkg()
     except Exception as _sectors_lkg_err:
         print(f"[STARTUP] Sectors universe LKG load failed (non-fatal): {_sectors_lkg_err}")
+    # Seed confirmed_no_options from sectors LKG into no-options tracking cache.
+    # Runs even when sectors LKG is too old for general use (uses 7-day limit for
+    # stable confirmed_no_options classifications), so V4 correctly classifies
+    # known non-optionable tickers without waiting for the next live scan.
+    try:
+        from data.options_theme_supplement import _seed_no_options_from_sectors_lkg as _seed_cno
+        _seed_cno()
+    except Exception as _cno_seed_err:
+        print(f"[STARTUP] confirmed_no_options seed failed (non-fatal): {_cno_seed_err}")
+    # Register US-listed watchlist tickers as extra symbols for the supplement
+    # scanner so it covers the full confluence universe, not just the theme proxy
+    # universe.  Foreign-exchange tickers are excluded (no US options market).
+    # list_watchlists() returns metadata only; load each watchlist by ID to get tickers.
+    try:
+        from data.options_theme_supplement import set_confluence_extra_symbols as _set_extra
+        from services.watchlist_service import list_watchlists as _list_wl, load_watchlist as _load_wl
+        _foreign_pfx = (
+            "AIM:", "ASX:", "CSE:", "EPA:", "ETR:", "FRA:", "KRX:",
+            "LON:", "OSL:", "SHA:", "STO:", "SWX:", "TPE:", "TPEX:",
+            "TSX:", "TSXV:", "TYO:", "WSE:", "XSAT:", "OTC:",
+        )
+        _all_us: set[str] = set()
+        for _wl_meta in (_list_wl() or []):
+            _wl_id = _wl_meta.get("id")
+            if not _wl_id:
+                continue
+            _wl_full = _load_wl(_wl_id)
+            for _sym in ((_wl_full or {}).get("tickers") or []):
+                _sym_up = _sym.upper()
+                if not any(_sym_up.startswith(_p) for _p in _foreign_pfx):
+                    _all_us.add(_sym_up)
+        _set_extra(_all_us)
+    except Exception as _extra_err:
+        print(f"[STARTUP] Confluence extra symbols load failed (non-fatal): {_extra_err}")
     # Warm options instrument type LKG — three-pass sequence:
     #   1. theme_universe:  classify proxy_symbols=ETF, candidate_symbols=stock (highest authority)
     #   2. screener DB:     upgrade lkg-sourced entries when explicit isEtf=True/False is available
