@@ -1,0 +1,348 @@
+BACKEND — PHASE 2: PROMOTE UNIFIED CONFLUENCE V4 TO CANONICAL
+
+Backend only.
+
+Do not touch frontend.
+Do not call LLMs.
+Do not add provider calls.
+Do not change scoring logic unless required for field aliasing.
+Do not reverse any of the completed fixes.
+
+Completed prerequisite fixes to preserve:
+
+- Unified Confluence V4 added additively.
+- Options weekend LKG fixed.
+- Options Flow no longer blanks on weekend/closed market.
+- V4 options reads cached/LKG options only.
+- Catalyst no_catalyst vs missing_cache fixed.
+- Pattern-aware constructive extension logic preserved.
+- WYFI high-tight continuation fix preserved.
+- LITE minor lower-low/support fix preserved.
+- Retained snapshot rebuild hang fixed.
+- Net premium bulk preload fixed.
+- CNO flag gap fixed.
+- Retained snapshot and /alignment row count reconciled at 379.
+- Provider calls remain 0.
+
+Goal:
+
+Promote V4 from additive validation fields to the canonical Caelyn Confluence score used by backend alignment rows.
+
+This should be a seamless upgrade.
+
+==================================================
+PART 1 — PROMOTE V4 SCORE FIELDS
+==================================================
+
+Set canonical fields from V4:
+
+caelyn_confluence_score = caelyn_confluence_v4_score
+caelyn_confluence_bucket = caelyn_confluence_v4_bucket
+caelyn_confluence_reason_codes = caelyn_confluence_v4_reason_codes
+
+Also expose:
+
+caelyn_confluence_raw_score = caelyn_confluence_v4_raw_score
+caelyn_confluence_normalized_score = caelyn_confluence_v4_normalized_score
+caelyn_confluence_confidence_score = caelyn_confluence_v4_confidence_score
+caelyn_confluence_core_score = caelyn_confluence_v4_core_score
+caelyn_confluence_bonus_score = caelyn_confluence_v4_bonus_score
+caelyn_confluence_total_score = caelyn_confluence_v4_total_score
+
+Keep V4-prefixed fields temporarily for debugging:
+
+caelyn_confluence_v4_score
+caelyn_confluence_v4_raw_score
+caelyn_confluence_v4_normalized_score
+caelyn_confluence_v4_confidence_score
+caelyn_confluence_v4_components
+caelyn_confluence_v4_bonus_breakdown
+caelyn_confluence_v4_reason_codes
+
+==================================================
+PART 2 — COMPONENT BREAKDOWN AS CANONICAL OUTPUT
+==================================================
+
+Every /alignment row should expose first-class component fields:
+
+theme_alignment_score
+theme_alignment_points
+
+stage_quality_score
+stage_quality_points
+
+options_alignment_score
+options_alignment_points
+options_status
+options_snapshot_status
+options_as_of
+
+entry_risk_reward_score
+entry_risk_reward_points
+pattern_type
+extension_quality
+
+catalyst_alignment_score
+catalyst_alignment_points
+catalyst_status
+catalyst_detail_status
+
+investment_alignment_score
+investment_alignment_points
+investment_quality_label
+
+Bonuses:
+
+social_bonus_points
+theme_policy_bonus_points
+prediction_market_bonus_points
+whale_insider_bonus_points
+bottleneck_bonus_points
+
+Do not make frontend derive these.
+
+==================================================
+PART 3 — LEGACY TRADE ALIGNMENT HANDLING
+==================================================
+
+Trade Alignment should no longer be the primary score.
+
+Do not delete it yet if other routes depend on it.
+
+Rename / alias for compatibility:
+
+legacy_trade_alignment_score = existing trade_alignment_score
+legacy_trade_alignment_archetype = existing trade_alignment_archetype
+legacy_trade_alignment_status = "compat_only"
+
+Keep trade_alignment_score if required by existing consumers, but do not use it to compute canonical Caelyn Confluence.
+
+Add reason code:
+
+TRADE_ALIGNMENT_LEGACY_COMPAT_ONLY
+
+The UI should eventually hide Trade Alignment as a main brain.
+
+==================================================
+PART 4 — ACTIONABILITY PROMOTION
+==================================================
+
+Actionability remains a decision layer, not another weighted score.
+
+Promote V4 actionability if available:
+
+actionability.state = actionability_v4_state
+
+Preserve old state as:
+
+legacy_actionability_state
+
+Actionability states:
+
+READY
+NEAR_ACTIONABLE
+WAIT_FOR_BREAKOUT
+WAIT_FOR_RETEST
+WATCH_FOR_RESET
+AVOID
+WATCH
+
+Rules:
+
+Do not let bonuses override hard risk.
+Do not let confirmed breakdown become actionable.
+Do not let chase extension become actionable.
+Constructive extension remains eligible if support/pattern logic says so.
+
+==================================================
+PART 5 — RETAINED SNAPSHOT / ALIGNMENT CONTRACT
+==================================================
+
+After promotion:
+
+retained snapshot row count should equal /alignment row count unless there is an explicit exclusion reason.
+
+Expected:
+
+379 retained rows
+379 alignment rows
+379 rows with canonical caelyn_confluence_score
+379 rows with V4 debug fields
+379 rows with component breakdown
+379 rows with confidence score
+
+Do not let empty or partial rebuild overwrite retained snapshot.
+
+Provider calls must remain 0.
+
+==================================================
+PART 6 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+MSFT
+NVDA
+SMCI
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+AMS:BESI
+APH
+
+For each return:
+
+symbol
+canonical caelyn_confluence_score
+caelyn_confluence_normalized_score
+caelyn_confluence_confidence_score
+caelyn_confluence_bucket
+actionability.state
+legacy_actionability_state
+legacy_trade_alignment_score
+theme_points
+stage_points
+options_points
+entry_points
+catalyst_points
+investment_points
+social_bonus
+theme_policy_bonus
+prediction_market_bonus
+whale_insider_bonus
+bottleneck_bonus
+options_status
+catalyst_status
+pattern_type
+extension_quality
+reason_codes
+
+==================================================
+PART 7 — FINAL VALIDATION
+==================================================
+
+Return:
+
+row_count retained
+row_count alignment
+rows with canonical score
+rows with V4 score
+rows with component breakdown
+bucket distribution
+options status distribution
+catalyst status distribution
+confidence distribution
+top 50 canonical confluence
+top actionable
+top near actionable
+watch for reset
+risk conflict
+investment quality
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+PHASE 2 UNIFIED CONFLUENCE PROMOTION REPORT
+
+FILES CHANGED:
+[list]
+
+PROMOTION SUMMARY:
+[summary]
+
+CANONICAL SCORE CONTRACT:
+[summary]
+
+LEGACY TRADE ALIGNMENT HANDLING:
+[summary]
+
+ACTIONABILITY PROMOTION:
+[summary]
+
+ROW COVERAGE:
+[table]
+
+COMPONENT COVERAGE:
+[table]
+
+OPTIONS STATUS:
+[table]
+
+CATALYST STATUS:
+[table]
+
+BUCKET DISTRIBUTION:
+[table]
+
+TOP 50 CANONICAL CONFLUENCE:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+PHASE 2 PROMOTION VERDICT
+
+V4 PROMOTED TO CANONICAL CAELYN_CONFLUENCE_SCORE:
+[YES/NO]
+
+TRADE ALIGNMENT NO LONGER USED AS MAIN SCORE:
+[YES/NO]
+
+LEGACY_TRADE_ALIGNMENT_PRESERVED FOR COMPATIBILITY:
+[YES/NO]
+
+ACTIONABILITY REMAINS DECISION LAYER:
+[YES/NO]
+
+RETAINED SNAPSHOT AND ALIGNMENT ROW COUNTS MATCH:
+[YES/NO]
+
+ALL ROWS HAVE CANONICAL SCORE:
+[YES/NO]
+
+ALL ROWS HAVE COMPONENT BREAKDOWN:
+[YES/NO]
+
+OPTIONS WEEKEND LKG FIX PRESERVED:
+[YES/NO]
+
+KNOWN NO_OPTIONS SYMBOLS CORRECTLY CLASSIFIED:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR FRONTEND UPDATE:
+[YES/NO]
