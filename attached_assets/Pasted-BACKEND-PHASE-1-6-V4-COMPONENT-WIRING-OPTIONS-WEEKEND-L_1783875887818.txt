@@ -1,0 +1,697 @@
+BACKEND — PHASE 1.6: V4 COMPONENT WIRING, OPTIONS WEEKEND LKG, CATALYST STATUS, AND SHELF PROOF
+
+Backend only.
+
+Do not touch frontend.
+Do not promote V4 to canonical.
+Do not call LLMs.
+Do not add request-time provider calls.
+Do not make fresh options scans from Confluence.
+Do not change the V4 scoring formula unless fixing a proven wiring/status bug.
+Do not reverse the WYFI, LITE, pattern-aware, support-zone, confidence-guard, or V4 additive fixes.
+
+Goal:
+
+Phase 1.5 added useful confidence guards, but validation exposed root-level wiring/status problems that must be fixed before Phase 2 promotion.
+
+Known issues:
+
+1. V4 reports options_status = not_scanned for 375/375 rows.
+   That is not acceptable if the Options Flow page / canonical options LKG already has cached data.
+
+2. It is Sunday and the Options Flow page is blank.
+   That is not acceptable.
+   Options Flow must serve last known good options data through weekends and closed-market periods, normally Friday close, until the next regular options market refresh.
+
+3. V4 reports catalyst_status = missing_cache for many rows.
+   This may be incorrectly treating "no_catalyst" as "missing_cache."
+   No catalyst and missing cache are different.
+
+4. Constructive extension still uses estimated shelf for WYFI / CRWD / FTNT / MU / OSCR.
+   current_shelf_support is None for all five.
+   Need real shelf detection or explicit confidence limitation before Phase 2 promotion.
+
+Use existing caches / LKG / Neon / disk only.
+
+No new provider calls.
+
+==================================================
+PART 0 — OPTIONS FLOW WEEKEND LKG ROOT FIX
+==================================================
+
+Before fixing V4, audit why the Options Flow page is blank on Sunday.
+
+Find:
+
+1. Options Flow page backend endpoint
+2. canonical options cache source
+3. disk LKG path if any
+4. Neon options snapshot table if any
+5. in-memory cache behavior on restart
+6. weekend / market-closed behavior
+7. stale TTL behavior
+8. whether closed-market / stale data is incorrectly treated as empty
+9. whether empty market-closed scans overwrite last known good data
+10. whether the Options Flow endpoint has a fallback to Friday / last completed options session
+
+Required behavior:
+
+If options market is closed:
+- serve last known good options flow snapshot
+- mark it as stale/as_of Friday close if needed
+- do not return blank
+- do not clear cache
+- do not overwrite LKG with empty scan result
+- do not mark all tickers not_scanned if Friday data exists
+- do not make fresh provider calls from Confluence
+
+Expose metadata:
+
+options_snapshot_status:
+  live
+  lkg_market_closed
+  stale_but_usable
+  missing_cache
+  confirmed_no_options
+
+options_as_of
+options_market_session
+options_next_refresh_at
+options_lkg_age_hours
+options_source:
+  neon
+  disk_lkg
+  memory
+  scanner_live
+
+If no LKG exists, explain why and prevent future blanking.
+
+Validation:
+
+Options Flow page endpoint should return non-empty data on Sunday / closed market if Friday LKG exists.
+
+Return:
+
+options rows served
+unique tickers
+as_of
+source
+status
+why it was blank before
+what prevents blank weekend data now
+
+==================================================
+PART 1 — V4 OPTIONS CACHE WIRING AUDIT
+==================================================
+
+Audit how V4 computes:
+
+options_alignment raw score
+options points
+options status
+options reason codes
+options component availability
+
+V4 must read from the same canonical cached Options Alignment / Options Flow LKG source used by the Options Flow page.
+
+Do not scan fresh.
+
+Compare V4 against the canonical options cache/LKG.
+
+Return:
+
+total rows
+rows with cached options data available
+rows with weekend LKG options data available
+rows confirmed_no_options
+rows not_scanned
+rows missing_cache
+rows stale_but_usable
+rows stale_invalid
+rows with options score
+rows with net premium
+rows with net premium acceleration 1D / 7D / 30D
+
+Validation symbols:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+GLW
+VRT
+BE
+NVEC
+MARA
+LITE
+PLTR
+OKLO
+SOFI
+
+For each return:
+
+symbol
+canonical_options_cache_present
+options_snapshot_status
+options_as_of
+actual_options_alignment_available
+actual_options_alignment_score
+actual_options_primary_signal
+net_premium
+net_premium_1d_delta
+net_premium_7d_delta
+net_premium_30d_delta
+V4 options_status
+V4 options_points
+V4 options_reason_codes
+mismatch yes/no
+
+Expected:
+
+V4 should not show 375/375 not_scanned if cached options data exists.
+
+If cached Friday/LKG data exists:
+V4 options_status = available_cached or lkg_market_closed
+
+If ticker is confirmed no-options:
+V4 options_status = confirmed_no_options
+
+If ticker has no scan row and no LKG:
+V4 options_status = not_scanned or missing_cache, with reason
+
+==================================================
+PART 2 — FIX V4 OPTIONS COMPONENT WIRING
+==================================================
+
+Fix V4 so it consumes cached Options Alignment only.
+
+Do not make new provider calls.
+Do not initiate scanner jobs from Confluence.
+Do not patch by fetching fresh data.
+
+Required V4 options component fields:
+
+options_alignment_score
+options_component_status
+options_snapshot_status
+options_as_of
+options_lkg_age_hours
+options_primary_signal
+options_pressure_state
+options_net_premium_score
+options_acceleration_score
+net_premium_1d_available
+net_premium_7d_available
+net_premium_30d_available
+net_premium_1d_delta
+net_premium_7d_delta
+net_premium_30d_delta
+options_reason_codes
+
+Status rules:
+
+available_live:
+fresh market-session data
+
+available_cached:
+cached data available and valid
+
+lkg_market_closed:
+market closed; using last known good options data
+
+confirmed_no_options:
+ticker is non-optionable; not a system failure
+
+not_scanned:
+scanner has not covered this ticker yet
+
+missing_cache:
+expected cached data is missing
+
+stale_but_usable:
+older than ideal but should still be displayed with as_of metadata
+
+stale_invalid:
+too old or corrupt, should not be used
+
+Do not neutral-fill not_scanned silently.
+Do not treat confirmed_no_options as a failure.
+Do not treat weekend LKG as failure.
+Do not return blank Options Flow page during closed markets.
+
+==================================================
+PART 3 — CATALYST STATUS AUDIT
+==================================================
+
+Audit how V4 computes catalyst_status.
+
+Compare V4 against existing alignment fields:
+
+catalyst_detail_status
+catalyst_alignment_score
+catalyst_primary_event
+catalyst_rss_event
+catalyst_scheduled_event
+catalyst_v2_primary_event
+theme_policy_boost
+theme_policy_event
+catalyst_bearish_conflict
+
+Return counts:
+
+V4 catalyst_status = available
+V4 catalyst_status = no_catalyst
+V4 catalyst_status = missing_cache
+V4 catalyst_status = stale
+V4 catalyst_status = theme_policy_overlay
+
+Existing detail statuses:
+
+rss_event
+scheduled_event
+theme_policy_event
+no_catalyst
+score_only_missing_event
+
+Return mismatch count.
+
+Important distinction:
+
+no_catalyst = checked and no current catalyst
+missing_cache = data source unavailable, stale, or not loaded
+
+These must not be collapsed.
+
+Theme policy should remain overlay/theme bonus, not direct company catalyst, unless company-specific.
+
+==================================================
+PART 4 — FIX V4 CATALYST STATUS MAPPING
+==================================================
+
+Correct mapping:
+
+rss_event -> available
+scheduled_event -> available
+company_specific_event -> available
+theme_policy_event -> theme_policy_overlay
+no_catalyst -> no_catalyst
+score_only_missing_event -> available_but_details_missing
+missing/stale source -> missing_cache or stale
+
+Catalyst score should only contribute to the Catalyst 15-point component for company/scheduled/direct catalysts.
+
+Theme policy should contribute to overlay bonus, not catalyst core.
+
+Expose on V4 components:
+
+catalyst_component_status
+catalyst_detail_status
+catalyst_alignment_score
+catalyst_alignment_points
+catalyst_primary_event
+catalyst_rss_event
+catalyst_scheduled_event
+catalyst_v2_primary_event
+catalyst_bearish_conflict
+catalyst_reason_codes
+
+==================================================
+PART 5 — REAL CURRENT SHELF SUPPORT DETECTION
+==================================================
+
+Phase 1.5 still reports current_shelf_support = None for:
+
+WYFI
+CRWD
+FTNT
+MU
+OSCR
+
+while allowing all five to be NEAR_ACTIONABLE via estimated shelf logic.
+
+Add or fix deterministic current shelf detection using existing bars only.
+
+Detect:
+
+current_shelf_support
+current_shelf_lower_bound
+current_shelf_upper_bound
+current_shelf_touch_count
+current_shelf_duration_bars
+current_shelf_range_pct
+current_shelf_source
+shelf_status
+
+Candidate shelf types:
+
+high_tight_flag_support
+breakout_shelf_support
+bull_flag_low
+handle_low
+vcp_pivot_shelf
+recent_range_low
+current_consolidation_shelf
+
+A shelf should require:
+
+- recent consolidation after impulse move
+- multiple touches or tight range
+- shelf close enough to current price
+- lower_low_confirmed false
+- major_lower_low_confirmed false
+- no active support loss
+- no confirmed failed breakout
+
+If no real shelf exists:
+current_shelf_support remains None
+shelf_status = estimated_only or absent
+
+Do not give confirmed-shelf points when no shelf is found.
+
+==================================================
+PART 6 — WYFI VS CRWD / FTNT / MU / OSCR SHELF CASE STUDY
+==================================================
+
+Run detailed traces for:
+
+WYFI
+CRWD
+FTNT
+MU
+OSCR
+
+Return:
+
+symbol
+pattern_type
+pattern_score
+constructive_extension
+chase_extension
+extension_quality
+current_shelf_support
+current_shelf_lower_bound
+current_shelf_upper_bound
+current_shelf_touch_count
+current_shelf_duration_bars
+current_shelf_range_pct
+shelf_status
+estimated_shelf_distance_pct
+distance_to_current_shelf_support_pct
+entry_points
+v4_normalized_score
+v4_confidence_score
+old phase 1.5 bucket
+new bucket
+reason_codes
+
+Expected:
+
+WYFI should remain NEAR_ACTIONABLE only if a real high-tight/current shelf exists or if estimated shelf logic is explicitly allowed but confidence-limited.
+
+CRWD / FTNT / MU / OSCR should only remain NEAR_ACTIONABLE if their shelf evidence is comparable.
+
+Otherwise they should move to WATCH_FOR_RESET or WATCH.
+
+Do not blindly treat all constructive-extension names like WYFI.
+
+==================================================
+PART 7 — CONFIDENCE SCORE RECALIBRATION
+==================================================
+
+After fixing options/catalyst status and shelf detection, recalculate confidence.
+
+Confidence should distinguish:
+
+available
+available_cached
+lkg_market_closed
+no_signal
+no_catalyst
+confirmed_no_options
+not_scanned
+missing_cache
+stale
+stale_but_usable
+estimated_shelf
+confirmed_shelf
+
+Rules:
+
+available / available_cached / lkg_market_closed:
+positive confidence contribution
+
+no_signal / no_catalyst:
+neutral or mild confidence contribution, not a cache failure
+
+confirmed_no_options:
+neutral, not failure
+
+not_scanned:
+confidence penalty
+
+missing_cache:
+stronger confidence penalty
+
+stale:
+confidence penalty
+
+stale_but_usable:
+mild confidence penalty
+
+estimated_shelf:
+confidence penalty
+
+confirmed_shelf:
+confidence boost
+
+Do not let normalized score alone create high conviction if confidence is low.
+
+READY must require sufficient confidence and real component coverage.
+
+NEAR_ACTIONABLE can allow estimated shelf if reason codes clearly say so and confidence is limited.
+
+==================================================
+PART 8 — ACTIONABILITY V4 CALIBRATION
+==================================================
+
+Actionability V4 must remain a decision layer, not another score.
+
+Calibrate:
+
+READY:
+high V4 normalized score
+confidence sufficient
+valid entry pattern
+not chase extension
+not confirmed risk
+options/catalyst coverage status understood
+
+NEAR_ACTIONABLE:
+good V4 score
+valid setup
+may need breakout/retest/confirmation
+can tolerate some missing optional components if confidence reflects that
+
+WATCH_FOR_RESET:
+chase extension
+too far from current shelf
+no real shelf after extension
+
+AVOID:
+confirmed breakdown
+active support lost
+major lower low
+
+WATCH:
+incomplete or insufficient confluence
+
+Return bucket/actionability distribution before and after calibration.
+
+Target:
+
+ACTIONABLE should be selective.
+NEAR_ACTIONABLE should surface good setups.
+WATCH_FOR_RESET should capture true extended/chase names.
+RISK_CONFLICT should stay reserved for confirmed breakdown/risk.
+
+==================================================
+PART 9 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+WYFI
+LITE
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+ANET
+TSM
+PLTR
+OKLO
+SOFI
+ALAB
+SNDK
+SIMO
+LSCC
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+ROK
+
+For each return:
+
+symbol
+v4_raw_score
+v4_normalized_score
+v4_confidence_score
+v4_bucket_before
+v4_bucket_after
+options_status_before
+options_status_after
+options_snapshot_status
+options_as_of
+options_points
+catalyst_status_before
+catalyst_status_after
+catalyst_points
+current_shelf_support
+shelf_status
+pattern_type
+extension_quality
+actionability_v4_state
+reason_codes
+
+==================================================
+PART 10 — PROMOTION READINESS
+==================================================
+
+Do not promote.
+
+Return whether Phase 2 should proceed after this repair.
+
+Phase 2 can proceed only if:
+
+- Options Flow page no longer blanks during closed market/weekend when LKG exists
+- V4 options status reads cached/LKG options data correctly
+- V4 does not require fresh options scans
+- V4 options status no longer says 375/375 not_scanned unless that is truly proven
+- weekend LKG is marked with as_of/source/status metadata
+- catalyst no_signal vs missing_cache is correctly separated
+- theme_policy remains overlay/theme bonus
+- WYFI shelf/continuation classification is proven or confidence-limited
+- CRWD/FTNT/MU/OSCR are not blindly classified the same as WYFI without shelf proof
+- all 375 rows still have V4 fields
+- provider calls = 0
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+PHASE 1.6 V4 COMPONENT WIRING + OPTIONS LKG REPORT
+
+FILES CHANGED:
+[list]
+
+OPTIONS FLOW WEEKEND LKG ROOT FIX:
+[summary]
+
+OPTIONS FLOW WEEKEND VALIDATION:
+[rows served, unique tickers, as_of, source, status]
+
+OPTIONS V4 WIRING AUDIT:
+[counts + mismatches]
+
+OPTIONS V4 WIRING FIX:
+[summary]
+
+CATALYST STATUS AUDIT:
+[counts + mismatches]
+
+CATALYST STATUS FIX:
+[summary]
+
+CURRENT SHELF DETECTION:
+[summary]
+
+WYFI / CRWD / FTNT / MU / OSCR CASE STUDY:
+[table]
+
+CONFIDENCE RECALIBRATION:
+[summary]
+
+BUCKET DISTRIBUTION BEFORE / AFTER:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+PHASE 1.6 VERDICT
+
+V4 STILL ADDITIVE:
+[YES/NO]
+
+OPTIONS FLOW PAGE USES WEEKEND/CLOSED-MARKET LKG:
+[YES/NO]
+
+OPTIONS FLOW NO LONGER BLANKS WHEN LKG EXISTS:
+[YES/NO]
+
+V4 USES CACHED OPTIONS ONLY:
+[YES/NO]
+
+V4 DOES NOT SCAN FRESH OPTIONS:
+[YES/NO]
+
+OPTIONS STATUS MATCHES REAL OPTIONS ALIGNMENT:
+[YES/NO]
+
+OPTIONS NO LONGER 375/375 NOT_SCANNED UNLESS PROVEN TRUE:
+[YES/NO]
+
+CATALYST NO_SIGNAL SEPARATED FROM MISSING_CACHE:
+[YES/NO]
+
+THEME_POLICY KEPT AS OVERLAY:
+[YES/NO]
+
+CURRENT_SHELF_SUPPORT DETECTED OR ABSENCE EXPLAINED:
+[YES/NO]
+
+WYFI CLASSIFICATION PROVEN OR CONFIDENCE-LIMITED:
+[YES/NO]
+
+CRWD/FTNT/MU/OSCR NOT BLINDLY TREATED LIKE WYFI:
+[YES/NO]
+
+CONFIDENCE SCORE REFLECTS TRUE DATA COVERAGE:
+[YES/NO]
+
+ALL ROWS STILL HAVE V4 FIELDS:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY FOR PHASE 2 PROMOTION:
+[YES/NO]

@@ -5011,3 +5011,113 @@ async def delete_by_id_endpoint(watchlist_id: str):
     except Exception as _e:
         print(f"[watchlist-delete-id] earnings invalidation skipped: {_e}")
     return result
+
+
+@router.get("/{watchlist_id}/confluence/v4-report")
+async def v4_report_endpoint(watchlist_id: str):
+    """
+    V4 Confluence validation report — returns status/bucket distributions
+    across the retained confluence snapshot.  Development/diagnostic use only.
+    Pure read: zero provider calls, zero LLM calls.
+    """
+    import json as _json_rep, pathlib as _pl_rep
+    from collections import Counter
+    from services.confluence_v2_service import get_retained_confluence_snapshot
+    from services.caelyn_confluence_v4 import compute_confluence_v4
+
+    snap = await asyncio.to_thread(get_retained_confluence_snapshot)
+    if not snap:
+        raise HTTPException(status_code=503, detail="Retained confluence snapshot not yet built")
+
+    rows = snap.get("results") or []
+    if not rows:
+        raise HTTPException(status_code=503, detail="Retained confluence snapshot has 0 rows")
+
+    # Social map
+    social_map: dict = {}
+    try:
+        sp = _pl_rep.Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
+        if sp.exists():
+            raw = _json_rep.loads(sp.read_text())
+            _items = raw if isinstance(raw, list) else raw.get("tickers", [])
+            social_map = {str(r.get("ticker", "")).upper(): r for r in _items}
+    except Exception:
+        pass
+
+    # Bottleneck map
+    bottleneck_map: dict = {}
+    try:
+        from services.curated_anchor_bottlenecks import get_multi_anchor_screener  # type: ignore
+        bottleneck_map = {r.get("ticker", "").upper(): r for r in get_multi_anchor_screener() if r.get("ticker")}
+    except Exception:
+        pass
+
+    scored: list[dict] = []
+    errors: list[dict] = []
+    for row in rows:
+        sym = str(row.get("symbol", "")).upper()
+        try:
+            v4 = compute_confluence_v4(row, social_map=social_map, bottleneck_map=bottleneck_map)
+            scored.append({"symbol": sym, **v4})
+        except Exception as exc:
+            errors.append({"symbol": sym, "error": str(exc)})
+
+    def _dist(vals):
+        c = Counter(vals)
+        return dict(c.most_common())
+
+    buckets      = _dist(r.get("caelyn_confluence_v4_bucket") for r in scored)
+    act_states   = _dist(r.get("caelyn_confluence_v4_actionability") for r in scored)
+    opts_status  = _dist(
+        (r.get("caelyn_confluence_v4_components") or {}).get("options_alignment", {}).get("status")
+        for r in scored
+    )
+    cat_status   = _dist(
+        (r.get("caelyn_confluence_v4_components") or {}).get("catalyst_alignment", {}).get("status")
+        for r in scored
+    )
+    shelf_status = _dist(
+        (r.get("caelyn_confluence_v4_components") or {}).get("entry_risk_reward", {}).get("shelf_status")
+        for r in scored
+    )
+    conf_vals    = [r.get("caelyn_confluence_v4_confidence_score", 0) for r in scored]
+    conf_dist    = {
+        "<40":  sum(1 for c in conf_vals if c < 40),
+        "40-69": sum(1 for c in conf_vals if 40 <= c < 70),
+        ">=70": sum(1 for c in conf_vals if c >= 70),
+        "avg":  round(sum(conf_vals) / len(conf_vals), 1) if conf_vals else 0,
+    }
+
+    # Top results sample (ACTIONABLE / NEAR_ACTIONABLE / READY)
+    top_sample = [
+        {
+            "symbol":     r["symbol"],
+            "bucket":     r.get("caelyn_confluence_v4_bucket"),
+            "act":        r.get("caelyn_confluence_v4_actionability"),
+            "score":      r.get("caelyn_confluence_v4_normalized_score"),
+            "raw_total":  r.get("caelyn_confluence_v4_total_score"),
+            "confidence": r.get("caelyn_confluence_v4_confidence_score"),
+            "opts_status": (r.get("caelyn_confluence_v4_components") or {}).get("options_alignment", {}).get("status"),
+            "cat_status":  (r.get("caelyn_confluence_v4_components") or {}).get("catalyst_alignment", {}).get("status"),
+            "shelf_status":(r.get("caelyn_confluence_v4_components") or {}).get("entry_risk_reward", {}).get("shelf_status"),
+        }
+        for r in scored
+        if r.get("caelyn_confluence_v4_bucket") in ("ACTIONABLE", "NEAR_ACTIONABLE", "READY")
+    ]
+
+    return {
+        "meta": {
+            "total":   len(rows),
+            "scored":  len(scored),
+            "errors":  len(errors),
+            "snap_built_at": snap.get("built_at"),
+        },
+        "bucket_distribution":          buckets,
+        "actionability_distribution":   act_states,
+        "options_status_distribution":  opts_status,
+        "catalyst_status_distribution": cat_status,
+        "shelf_status_distribution":    shelf_status,
+        "confidence_distribution":      conf_dist,
+        "top_sample":                   top_sample[:30],
+        "errors_sample":                errors[:10],
+    }

@@ -496,6 +496,9 @@ def get_combined_ticker_data() -> dict[str, dict]:
     try:
         from data.cache import cache
 
+        import time as _time_supp
+        _now_supp = _time_supp.time()
+
         master_snap = (
             cache.get("options_master_screener_v1")
             or cache.get("options_master_lkg_v1")
@@ -503,14 +506,28 @@ def get_combined_ticker_data() -> dict[str, dict]:
         combined: dict[str, dict] = {}
 
         if master_snap:
+            _ms_cached_at = master_snap.get("cached_at") or 0
+            _ms_age       = _now_supp - float(_ms_cached_at) if _ms_cached_at else 0
+            _ms_status    = "available_live" if master_snap.get("source") != "disk_lkg" else "lkg_market_closed"
             for row in master_snap.get("tickers", []):
                 sym = (row.get("ticker") or "").upper()
                 if sym:
-                    combined[sym] = {**row, "_source": "live"}
+                    combined[sym] = {
+                        **row,
+                        "_source":           "live",
+                        "_snapshot_status":  _ms_status,
+                        "_cached_at":        _ms_cached_at,
+                        "_lkg_age_s":        round(_ms_age),
+                    }
 
         for sym, row in get_supplement_data_by_ticker().items():
             if sym not in combined:
-                combined[sym] = row   # already tagged by layer
+                _src = row.get("_source") or "supplement"
+                _supp_status = "available_cached" if "lkg" in _src else "available_live"
+                combined[sym] = {
+                    **row,
+                    "_snapshot_status": _supp_status,
+                }
 
         # ── Watchlist-cache bridge ────────────────────────────────────────────
         # For theme-universe symbols still missing from master+supplement, check
@@ -528,9 +545,47 @@ def get_combined_ticker_data() -> dict[str, dict]:
                         continue
                     row = cache.get(_per_ticker_cache_key(sym))
                     if row and isinstance(row, dict) and row.get("data_available"):
-                        combined[sym] = {**row, "_source": "watchlist_cache"}
+                        combined[sym] = {
+                            **row,
+                            "_source":          "watchlist_cache",
+                            "_snapshot_status": "available_cached",
+                        }
         except Exception:
             pass
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── Disk LKG fallback — serves Friday close data on weekend/off-hours ──
+        # When both in-memory caches are empty (e.g. post-restart on weekend
+        # before the master screener has run), fall back to the disk snapshot.
+        # This prevents the Options Flow page from going blank over weekends.
+        if not combined:
+            import pathlib as _pl_supp, json as _js_supp
+            _disk_path = _pl_supp.Path(__file__).parent.parent / "data" / "options_master_lkg_v1.json"
+            if _disk_path.exists():
+                try:
+                    _disk_raw   = _js_supp.loads(_disk_path.read_text())
+                    _disk_ca    = _disk_raw.get("cached_at") or 0
+                    _disk_age   = _now_supp - float(_disk_ca) if _disk_ca else 999999
+                    _disk_st    = "lkg_market_closed" if _disk_age < 86400 else "stale_but_usable"
+                    _disk_as_of = _disk_raw.get("updated_at") or _disk_raw.get("cached_at")
+                    for row in _disk_raw.get("tickers", []):
+                        sym = (row.get("ticker") or "").upper()
+                        if sym:
+                            combined[sym] = {
+                                **row,
+                                "_source":          "disk_lkg",
+                                "_snapshot_status": _disk_st,
+                                "_cached_at":       _disk_ca,
+                                "_lkg_age_s":       round(_disk_age),
+                                "_as_of":           _disk_as_of,
+                            }
+                    if combined:
+                        print(
+                            f"[OPTIONS_COMBINED] Disk LKG fallback: {len(combined)} tickers "
+                            f"(age={round(_disk_age/3600,1)}h, status={_disk_st})"
+                        )
+                except Exception as _disk_exc:
+                    print(f"[OPTIONS_COMBINED] Disk LKG fallback failed (non-fatal): {_disk_exc}")
         # ─────────────────────────────────────────────────────────────────────
 
         return combined

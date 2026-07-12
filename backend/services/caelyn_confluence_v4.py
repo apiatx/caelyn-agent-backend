@@ -308,11 +308,23 @@ def _score_options_alignment(row: dict) -> dict:
     else:
         reason_codes.append("OPTIONS_WEAK")
 
+    # Derive richer status from the snapshot metadata propagated from options_alignment.py
+    _snap_status = row.get("options_snapshot_status") or ""
+    if "lkg_market_closed" in _snap_status or row.get("_options_source") == "disk_lkg":
+        _opts_status = "lkg_market_closed"
+    elif "cached" in _snap_status or _snap_status in ("available_cached",):
+        _opts_status = "available_cached"
+    else:
+        _opts_status = "available_live"
+
     return {
         "raw_score":                    round(raw, 1),
         "points":                       round(pts, 2),
         "available":                    True,
-        "status":                       "available",
+        "status":                       _opts_status,
+        "options_snapshot_status":      _snap_status or None,
+        "options_as_of":                row.get("options_as_of"),
+        "options_lkg_age_hours":        row.get("options_lkg_age_hours"),
         "options_pressure_state":       row.get("options_pressure_state"),
         "net_premium_score":            raw,
         "net_premium_acceleration_score": None,
@@ -494,6 +506,24 @@ def _score_entry_risk_reward(row: dict) -> dict:
         pts = min(15.0, pts + 0.5)
         reason_codes.append("SUPPORT_INTACT_BONUS")
 
+    # ── Shelf detection proof fields ─────────────────────────────────────────
+    _shelf_status_out = (
+        "confirmed"                if _shelf_quality == "confirmed"
+        else "estimated_support_based" if _shelf_quality == "estimated"
+        else "absent_wide_extension"   if _shelf_quality == "absent"
+        else "absent"
+    )
+    _shelf_lb      = row.get("current_shelf_support")
+    _shelf_source  = (
+        "current_shelf_support_field"           if _shelf_lb is not None
+        else "distance_to_active_support_estimate" if _shelf_quality == "estimated"
+        else None
+    )
+    _shelf_rng_pct = (
+        _safe_float(row.get("distance_to_active_support_pct"), 0)
+        if _shelf_quality is not None else None
+    )
+
     return {
         "raw_score":                round(raw, 1),
         "points":                   round(pts, 2),
@@ -503,6 +533,13 @@ def _score_entry_risk_reward(row: dict) -> dict:
         "pattern_type":             pattern,
         "extension_quality":        ext_quality,
         "shelf_quality":            _shelf_quality,
+        "shelf_status":             _shelf_status_out,
+        "current_shelf_lower_bound":  _shelf_lb,
+        "current_shelf_upper_bound":  None,
+        "current_shelf_source":       _shelf_source,
+        "current_shelf_touch_count":  None,
+        "current_shelf_duration_bars": None,
+        "current_shelf_range_pct":    _shelf_rng_pct,
         "active_support_status":    asst_status,
         "critical_break_level":     row.get("critical_break_level"),
         "breakout_trigger":         row.get("pattern_breakout_trigger"),
@@ -543,6 +580,27 @@ def _score_catalyst_alignment(row: dict) -> dict:
             "catalyst_scheduled_event": row.get("catalyst_scheduled_event"),
             "bearish_conflict":     bearish_conf,
             "reason_codes":         reason_codes,
+        }
+
+    # no_catalyst is a KNOWN empty state — the catalyst service ran and found nothing.
+    # Sentinel: catalyst_alignment_available is explicitly False (set by V2 service after
+    # running) AND raw_score is None.  We cannot use catalyst_detail_status for this
+    # because that field carries the TRADE ALIGNMENT detail state ("neutral",
+    # "moderate_tailwind", etc.), not the catalyst component's own status string.
+    _cat_avail_field = row.get("catalyst_alignment_available")
+    if not available and _cat_avail_field is False and raw_score is None:
+        reason_codes.append("NO_ACTIVE_CATALYST")
+        return {
+            "raw_score":              None,
+            "points":                 0,
+            "available":              False,
+            "status":                 "no_catalyst",
+            "detail_status":          detail_status,
+            "catalyst_primary_event": row.get("catalyst_primary_event"),
+            "catalyst_rss_event":     row.get("catalyst_rss_event"),
+            "catalyst_scheduled_event": row.get("catalyst_scheduled_event"),
+            "bearish_conflict":       bearish_conf,
+            "reason_codes":           reason_codes,
         }
 
     if not available or raw_score is None:
@@ -1107,10 +1165,25 @@ def _compute_v4_confidence(
         "catalyst_alignment":   14,
         "investment_alignment": 14,
     }
+    # Statuses that represent a KNOWN empty state — the service ran and found
+    # nothing, which is informative data.  These still earn confidence points
+    # because the system has determined (not just "not checked") the answer.
+    # missing_cache / not_scanned do NOT earn points: we simply don't know yet.
+    _KNOWN_STATE_STATUSES = {
+        "confirmed_no_options",  # Tradier confirmed no listed options
+        "no_catalyst",           # catalyst service ran: no active event found
+        "lkg_market_closed",     # disk LKG present, market is closed (weekend)
+        "available_cached",      # supplement/LKG cache hit
+        "available_live",        # fresh scan data
+    }
+
     total_possible = sum(comp_weights.values()) + 8  # 8 for social = 92
     earned = sum(
         w for k, w in comp_weights.items()
-        if (components.get(k) or {}).get("available")
+        if (
+            (components.get(k) or {}).get("available")
+            or (components.get(k) or {}).get("status") in _KNOWN_STATE_STATUSES
+        )
     )
     if social_available:
         earned += 8

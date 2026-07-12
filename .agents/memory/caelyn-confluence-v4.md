@@ -95,9 +95,40 @@ Confidence computed BEFORE bucket assignment so guards can use it.
 - Frontend should display `normalized_score`; confidence is a context badge
 - `raw_score` = pts earned; `normalized_score` = adjusted for availability; `confidence_score` = completeness
 
-### Current Data Coverage Facts
+### Current Data Coverage Facts (Phase 1.5 baseline)
 - Options: ALL 375 symbols are `not_scanned` (universal gap, no options scoring)
 - Catalyst: 97 available (26%), 238 missing_cache (63%), 40 theme_policy_overlay (11%)
 - All case study symbols have `current_shelf_support=None` (estimated shelf treatment)
 
 **Why:** TIER1 constructive with no shelf confirmation must be visibly lower quality — confidence penalty and 12pt cap make this traceable without blocking correct setups.
+
+## Phase 1.6 Changes (Component Wiring + Status Fixes)
+
+### no_catalyst sentinel fix (critical)
+`catalyst_detail_status` in snapshot rows is a **trade alignment state** ("neutral",
+"moderate_tailwind"), NOT the catalyst component's detail_status.  The original
+`if not available and detail_status == "no_catalyst"` never fired.
+
+Fix: use `row.get("catalyst_alignment_available") is False` as the sentinel:
+```python
+_cat_avail_field = row.get("catalyst_alignment_available")
+if not available and _cat_avail_field is False and raw_score is None:
+    # V2 service ran and found nothing → no_catalyst, not missing_cache
+```
+
+Effect: 240 `missing_cache` → `no_catalyst`; `_KNOWN_STATE_STATUSES` includes `no_catalyst`
+so confidence rose avg 0.0 → 67.7, >=70 count 0 → 233 rows.
+
+### V4 report endpoint output key names
+- Score key: `caelyn_confluence_v4_normalized_score` (NOT `..._normalized_total`)
+- Confidence key: `caelyn_confluence_v4_confidence_score` (NOT `..._confidence`)
+
+### Options status: not_scanned is expected after restart
+On weekend restart the disk LKG may only have a partial scan (~19 tickers).  All 379 show
+`not_scanned` until the options master screener runs a full pass.  The disk LKG fallback
+fix is in place; it fires once the LKG has fresh data.
+
+### Phase 1.6 validated distribution (379-ticker watchlist)
+Buckets: NO_CLEAR=253, NEAR_ACTIONABLE=54, WATCH_FOR_RESET=44, RISK_CONFLICT=17,
+CAS=8, INVESTMENT_QUALITY=3 (Errors: 0)
+Confidence: avg 67.7 | <40: 27 | 40-69: 119 | >=70: 233

@@ -436,6 +436,12 @@ def get_options_alignment_for_ticker(
                     "ticker_state": _ticker_state, "options_alignment_reason_codes": reasons}
 
     source = row.get("_source")
+    _snap_status  = row.get("_snapshot_status") or (
+        "available_live" if source == "live" else "available_cached"
+    )
+    _options_as_of      = row.get("_as_of") or row.get("_cached_at")
+    _lkg_age_s          = row.get("_lkg_age_s")
+    _options_lkg_age_h  = round(_lkg_age_s / 3600, 1) if _lkg_age_s else None
 
     # ── Premium Pressure Score (spec Parts 2-4) — normalized, uniform for
     # every canonical All Stocks row. No composite_score/heat_score reliance.
@@ -561,7 +567,10 @@ def get_options_alignment_for_ticker(
         "net_premium_7d_available": availability["7d"],
         "net_premium_30d_available": availability["30d"],
         "source": source,
-        "options_primary_signal": row.get("primary_signal"),
+        "options_primary_signal":    row.get("primary_signal"),
+        "options_snapshot_status":   _snap_status,
+        "options_as_of":             _options_as_of,
+        "options_lkg_age_hours":     _options_lkg_age_h,
         "options_alignment_reason_codes": reasons,
     }
 
