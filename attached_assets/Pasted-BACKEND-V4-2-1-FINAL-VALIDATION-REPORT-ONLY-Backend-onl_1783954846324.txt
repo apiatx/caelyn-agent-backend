@@ -1,0 +1,464 @@
+BACKEND — V4.2.1 FINAL VALIDATION REPORT ONLY
+
+Backend only.
+
+Do not change code unless you find a clear reporting bug.
+Do not touch frontend.
+Do not call providers.
+Do not rebuild the scoring engine.
+Do not alter formulas.
+
+Goal:
+
+V4.2.1 fixed the major Options and Catalyst wiring bugs. Now produce a final validation report proving the current V4.2.1 engine matches the final spec before frontend wiring.
+
+Required final spec:
+
+Core max = 100
+
+Theme Alignment = 15
+Stage Quality = 15
+Options Alignment = 20
+Setup / Entry Quality = 20
+  - Technical Setup = 8
+  - Entry / Exit = 12
+Catalyst Alignment = 15
+Investment Alignment = 15
+
+Bonuses max = 25
+
+Social Bonus = 15
+Whale / Insider / Politician = 5
+Bottleneck / Supply Chain = 5
+
+Total max = 125
+
+Prediction Markets must not affect score.
+Theme Policy must not exist as a standalone additive bonus.
+
+==================================================
+PART 1 — FORMULA PROOF
+==================================================
+
+Return the exact current formula from code.
+
+Confirm:
+
+theme max
+stage max
+options max
+technical_setup max
+entry_exit max
+catalyst max
+investment max
+social max
+whale_insider max
+bottleneck max
+total max
+
+Confirm:
+
+caelyn_confluence_score is sourced from V4.2.1.
+V4 legacy is debug-only.
+Trade Alignment is legacy/debug-only.
+
+==================================================
+PART 2 — SCORE DISTRIBUTION
+==================================================
+
+Return:
+
+row_count
+error_count
+min
+p25
+median
+p75
+p90
+max
+avg
+scores >= 40
+scores >= 50
+scores >= 60
+scores >= 70
+scores >= 80
+
+Return bucket distribution.
+
+Return top 50 tickers by caelyn_confluence_score.
+
+==================================================
+PART 3 — COMPONENT COVERAGE
+==================================================
+
+Return per component:
+
+available count
+unavailable count
+average points
+max points
+rows with points > 0
+
+Components:
+
+Theme
+Stage
+Options
+Technical Setup
+Entry / Exit
+Catalyst
+Investment
+Social
+Whale / Insider / Politician
+Bottleneck
+
+==================================================
+PART 4 — OPTIONS FINAL AUDIT
+==================================================
+
+Return counts:
+
+available_cached
+available_live
+lkg_market_closed
+stale_but_usable
+confirmed_no_options
+not_scanned
+missing_cache
+stale_invalid
+
+Return:
+
+rows with options_alignment_score non-null
+rows with options_points > 0
+rows with options_status not_scanned
+
+List the 39 remaining not_scanned tickers.
+
+For the not_scanned tickers, classify:
+
+known optionable but absent from scanner LKG
+foreign / OTC / likely no listed options
+insufficient history
+unknown
+
+Do not fix here. Just report.
+
+==================================================
+PART 5 — INVESTMENT FINAL AUDIT
+==================================================
+
+Prove the 3-pillar investment model matches final spec.
+
+Investment fields should use existing FMP Watchlist Fundamental toggle fields only.
+
+Financial Health pillar:
+- Gross Mgn
+- FCF Mgn
+- Free CF
+- Op. Income
+- EBIT
+- D/E
+- ND/EBITDA
+
+Strong if 4 of 7 checks pass.
+
+Current Growth pillar:
+- Rev Grwth Q
+- Rev Grwth Y
+- EPS Grwth
+- EPS Grwth TQ/TY
+- FCF Mgn
+- Op. Income
+- EBIT
+
+Strong if 3 of 5 checks pass.
+
+Forward Growth pillar:
+- Rev Grwth Est
+- Rev Grwth NQ
+- Rev Grwth NY
+- EPS Grwth Est
+- EPS Grwth NQ
+- EPS Grwth NY
+
+Strong if 2 of 4 checks pass.
+Special rule: Rev Grwth Est or Rev Grwth NQ >= 40% can make Forward Growth strong.
+
+Return:
+
+investment pillar distribution:
+0 pillars
+1 pillar
+2 pillars
+3 pillars
+
+For each pillar return:
+strong count
+not strong count
+average checks passed
+top examples
+
+Validate:
+
+AMD
+NVDA
+MSFT
+SOFI
+PLTR
+CRWD
+PENG
+ANET
+SNDK
+MRVL
+BE
+VRT
+
+For each:
+financial_health_checks_passed/total
+current_growth_checks_passed/total
+forward_growth_checks_passed/total
+financial_health_strong
+current_growth_strong
+forward_growth_strong
+investment_points
+investment_quality_label
+
+==================================================
+PART 6 — CATALYST FINAL AUDIT
+==================================================
+
+Return counts:
+
+direct_catalyst_present
+direct_catalyst_absent
+scheduled_event_present
+rss_event_present
+primary_catalyst_present
+nested_catalyst_present
+score_only_catalyst_present
+bearish_catalyst_present
+catalyst_intelligence_available
+catalyst_intelligence_unavailable
+
+Return top catalyst examples.
+
+For each example show:
+
+ticker
+direct_catalyst_present
+direct_catalyst_type
+direct_catalyst_polarity
+direct_catalyst_score
+catalyst_intelligence_score
+catalyst_points
+reason_codes
+
+==================================================
+PART 7 — SOCIAL BONUS FINAL AUDIT
+==================================================
+
+Social should be:
+
+Social Confluence hit = +5
+Social Acceleration hit = +5
+Fresh hit = +5
+
+Return counts:
+
+0 sections hit
+1 section hit
+2 sections hit
+3 sections hit
+
+Return top social bonus tickers.
+
+If all zero, explain exactly why:
+- cache missing
+- section names mismatched
+- no ticker overlap
+- parser bug
+
+==================================================
+PART 8 — BONUS OVERLAYS FINAL AUDIT
+==================================================
+
+Whale / Insider / Politician:
+
+Return:
+available count
+unavailable count
+bonus > 0 count
+top examples
+status if not wired
+
+Bottleneck / Supply Chain:
+
+Return:
+available count
+unavailable count
+bonus > 0 count
+top examples
+status if not wired
+
+No fixes needed unless a one-line field-name bug is found.
+
+==================================================
+PART 9 — VALIDATION SYMBOLS
+==================================================
+
+Validate these:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+MSFT
+NVDA
+SMCI
+KLIC
+SNDK
+ANET
+TXN
+CGNX
+GEV
+PENG
+FSLR
+CRDO
+
+For each return:
+
+symbol
+caelyn_confluence_score
+core_score
+bonus_score
+theme_points
+stage_points
+options_points
+technical_setup_points
+entry_exit_points
+catalyst_points
+investment_points
+social_bonus
+whale_insider_bonus
+bottleneck_bonus
+financial_health_strong
+current_growth_strong
+forward_growth_strong
+investment_pillar_count
+direct_catalyst_present
+catalyst_intelligence_score
+options_status
+confidence_score
+bucket
+actionability_state
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+is_risk_conflict
+is_investment_quality
+reason_codes
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+V4.2.1 FINAL VALIDATION REPORT
+
+FORMULA PROOF:
+[...]
+
+SCORE DISTRIBUTION:
+[...]
+
+COMPONENT COVERAGE:
+[...]
+
+OPTIONS FINAL AUDIT:
+[...]
+
+INVESTMENT FINAL AUDIT:
+[...]
+
+CATALYST FINAL AUDIT:
+[...]
+
+SOCIAL FINAL AUDIT:
+[...]
+
+BONUS OVERLAYS FINAL AUDIT:
+[...]
+
+TOP 50:
+[...]
+
+VALIDATION SYMBOLS:
+[...]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+V4.2.1 FINAL READINESS VERDICT
+
+CORE_MAX_100_CONFIRMED:
+[YES/NO]
+
+TOTAL_MAX_125_CONFIRMED:
+[YES/NO]
+
+CANONICAL_SCORE_USES_V421:
+[YES/NO]
+
+OPTIONS_WIRING_FIXED:
+[YES/NO]
+
+INVESTMENT_3_PILLAR_SPEC_CONFIRMED:
+[YES/NO]
+
+CATALYST_DIRECT_AND_INTELLIGENCE_CONFIRMED:
+[YES/NO]
+
+SOCIAL_SECTION_BONUS_CONFIRMED:
+[YES/NO]
+
+WHALE_INSIDER_STATUS_EXPLAINED:
+[YES/NO]
+
+BOTTLENECK_STATUS_EXPLAINED:
+[YES/NO]
+
+PREDICTION_MARKETS_DISABLED:
+[YES/NO]
+
+THEME_POLICY_NOT_STANDALONE_BONUS:
+[YES/NO]
+
+ALL_ROWS_HAVE_REQUIRED_FIELDS:
+[YES/NO]
+
+PROVIDER_CALLS:
+[0]
+
+READY_FOR_FRONTEND_WIRING:
+[YES/NO]
