@@ -1,0 +1,521 @@
+BACKEND — V4.2.1 SPEC COMPLIANCE + CALIBRATION FIX
+
+Backend only.
+
+Do not touch frontend.
+Do not call LLMs.
+Do not add provider calls.
+Do not rebuild the whole scoring engine.
+Do not reverse V4.2 architecture.
+Do not reverse options LKG, retained snapshot, no-options, V4 promotion, actionability, or display-contract fixes.
+
+Goal:
+
+V4.2 created the right engine shape, but the implementation does not fully match the final scoring spec and appears over-compressed.
+
+Current V4.2 report:
+
+- 379/379 scored
+- 0 errors
+- avg score = 31.5 / 125
+- max score = 70.2 / 125
+- confidence avg = 75.3%
+- investment pillar distribution: 0=149, 1=77, 2=120, 3=33
+- report claims 83% of tickers have no options data
+- V4.2 investment pillars appear overly simplified
+- Catalyst appears to use scheduled events for the 75% Direct Catalyst bucket, but Direct Catalyst should include more than scheduled events
+
+Do a targeted compliance/calibration pass.
+
+==================================================
+PART 1 — V4.2 FORMULA VALIDATION
+==================================================
+
+Return the exact current V4.2 formula from code.
+
+Confirm max points:
+
+Theme = 15
+Stage = 15
+Options = 20
+Technical Setup = 8
+Entry/Exit = 12
+Catalyst = 15
+Investment = 15
+Social = 15
+Whale/Insider = 5
+Bottleneck = 5
+Max = 125
+
+Return:
+
+min / p25 / median / p75 / p90 / max score
+avg score
+bucket distribution
+top 50
+
+If max score is only ~70, explain exactly which components are suppressing scores.
+
+==================================================
+PART 2 — OPTIONS COVERAGE REGRESSION AUDIT
+==================================================
+
+The V4.2 report says 83% of tickers have no options data.
+
+This conflicts with the prior options LKG repairs.
+
+Audit V4.2 options component against existing canonical options status fields.
+
+Return counts:
+
+available_cached
+available_live
+lkg_market_closed
+stale_but_usable
+confirmed_no_options
+not_scanned
+missing_cache
+stale_invalid
+
+Return:
+
+rows with options_alignment_score
+rows with options_alignment_points > 0
+rows confirmed_no_options
+rows not_scanned
+rows V4.2 treats as unavailable
+mismatch count
+
+Validate:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+NVDA
+MSFT
+SMCI
+
+For each:
+
+symbol
+canonical options_status
+options_alignment_score
+options_pressure_score
+options_acceleration_score
+V4.2 options_points
+reason_codes
+
+Expected:
+
+V4.2 must use the existing options LKG/status logic.
+Do not let confirmed_no_options count as missing.
+Do not let stale_but_usable count as missing.
+Do not silently zero out available_cached rows.
+
+==================================================
+PART 3 — INVESTMENT 3-PILLAR SPEC COMPLIANCE
+==================================================
+
+Current V4.2 report says:
+
+Financial Health:
+gross margin >= 40% or FCF margin >= 10% + low debt
+
+Current Growth:
+revenue or EPS growth positive this quarter
+
+Forward Growth:
+next-quarter revenue or EPS estimates positive
+
+This is too shallow.
+
+Rewire Investment to match the exact spec using available FMP cached fields from Watchlist Fundamentals.
+
+Investment Alignment is 15 points:
+
+0 strong pillars = 0
+1 strong pillar = 5
+2 strong pillars = 10
+3 strong pillars = 15
+
+==================================================
+FINANCIAL HEALTH PILLAR
+==================================================
+
+Use:
+
+Gross Mgn
+FCF Mgn
+Free CF
+Op. Income
+EBIT
+D/E
+ND/EBITDA
+
+Strong if 4 of 7 checks pass:
+
+1. Gross Mgn >= 35% or above peer/theme median if available
+2. FCF Mgn > 0
+3. Free CF > 0
+4. Op. Income > 0
+5. EBIT > 0
+6. D/E < 1.5 or unavailable but no obvious debt issue
+7. ND/EBITDA < 3.0 or negative/net cash
+
+Expose:
+
+financial_health_checks_passed
+financial_health_checks_total
+financial_health_strong
+financial_health_reason_codes
+
+==================================================
+CURRENT GROWTH PILLAR
+==================================================
+
+Use:
+
+Revenue
+Rev Grwth (Q)
+Rev Grwth (Y)
+EPS Grwth
+EPS Grwth TQ
+EPS Grwth TY
+FCF Mgn
+Op. Income
+EBIT
+
+Strong if 3 of 5 checks pass:
+
+1. Rev Grwth (Q) >= 20%
+2. Rev Grwth (Y) >= 15%
+3. EPS Grwth >= 15% OR EPS Grwth TQ/TY >= 15%
+4. FCF Mgn > 0
+5. Op. Income > 0 OR EBIT > 0
+
+Expose:
+
+current_growth_checks_passed
+current_growth_checks_total
+current_growth_strong
+current_growth_reason_codes
+
+==================================================
+FORWARD GROWTH PILLAR
+==================================================
+
+Use:
+
+Rev Grwth Est
+Rev Grwth NQ
+Rev Grwth NY
+EPS Grwth Est
+EPS Grwth NQ
+EPS Grwth NY
+EPS Grwth TQ
+EPS Grwth TY
+
+Strong if 2 of 4 checks pass:
+
+1. Rev Grwth Est >= 20%
+2. Rev Grwth NQ >= 20%
+3. Rev Grwth NY >= 15%
+4. EPS Grwth Est/NQ/NY >= 20%
+
+Special speculative growth rule:
+
+If Rev Grwth Est or Rev Grwth NQ >= 40%, forward growth can be strong even if EPS growth is weak/unavailable.
+
+Expose:
+
+forward_growth_checks_passed
+forward_growth_checks_total
+forward_growth_strong
+forward_growth_reason_codes
+
+Do not use:
+
+Insider %
+Earn Date
+P/E, P/S, EV/EBITDA as pillar killers
+
+Valuation fields can be warnings only.
+
+Return investment pillar distribution before/after.
+
+==================================================
+PART 4 — CATALYST 75/25 COMPLIANCE
+==================================================
+
+V4.2 report says Catalyst = 75% scheduled event + 25% intelligence.
+
+That is not the full Direct Catalyst spec.
+
+Direct Catalyst should include:
+
+- earnings
+- FDA / biotech / regulatory event
+- IPO-linked event
+- major contract / customer deal
+- government award
+- product launch
+- technical milestone
+- investor day / conference
+- strategic partnership
+- M&A
+- stock split when relevant
+- company-specific high-impact news
+- fresh government / presidential investment announcement
+
+Use existing Catalyst Alignment / Watchlist RSS / scheduled catalyst fields only.
+
+No new calls.
+
+Direct Catalyst scoring:
+
+Any qualified non-bearish direct catalyst = direct_catalyst_score 100.
+No direct catalyst = 0.
+Bearish catalyst = 0 + bearish flag.
+
+Catalyst Intelligence:
+
+25% from:
+- news volume / market cap over 48h
+- news change increase/decrease % over 48h
+
+If these fields do not exist in cache yet:
+- status = unavailable
+- score = 0
+- do not fabricate
+
+Return counts:
+
+direct_catalyst_present
+scheduled_event_present
+rss_event_present
+theme_policy_fresh_event_present
+bearish_catalyst_present
+catalyst_intelligence_available
+catalyst_intelligence_unavailable
+
+Validate top catalyst names and no-catalyst names.
+
+==================================================
+PART 5 — SOCIAL BONUS DISTRIBUTION
+==================================================
+
+Social bonus should be:
+
+Social Confluence hit = +5
+Social Acceleration hit = +5
+Fresh hit = +5
+
+Return counts:
+
+0 sections hit
+1 section hit
+2 sections hit
+3 sections hit
+
+Return top social bonus tickers.
+
+If all zero, diagnose:
+
+- social cache missing
+- section names mismatched
+- no overlap with confluence universe
+- parser bug
+
+Do not call Grok.
+
+==================================================
+PART 6 — SCORE CALIBRATION
+==================================================
+
+After fixes, return:
+
+score distribution:
+min
+p25
+median
+p75
+p90
+max
+avg
+
+component averages:
+theme avg
+stage avg
+options avg
+technical setup avg
+entry/exit avg
+catalyst avg
+investment avg
+social avg
+whale/insider avg
+bottleneck avg
+
+If max remains below 80/125, explain why.
+
+Do not artificially inflate scores.
+But make sure available signals are not being incorrectly zeroed.
+
+==================================================
+PART 7 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+MSFT
+NVDA
+SMCI
+KLIC
+SNDK
+ANET
+TXN
+CGNX
+GEV
+
+For each return:
+
+symbol
+old_v42_score
+new_v421_score
+theme_points
+stage_points
+options_points
+technical_setup_points
+entry_exit_points
+catalyst_points
+investment_points
+social_bonus
+whale_insider_bonus
+bottleneck_bonus
+financial_health_strong
+current_growth_strong
+forward_growth_strong
+investment_pillar_count
+direct_catalyst_present
+catalyst_intelligence_score
+options_status
+confidence_score
+bucket
+actionability_state
+reason_codes
+
+==================================================
+FINAL RESPONSE
+==================================================
+
+Return:
+
+V4.2.1 SPEC COMPLIANCE REPORT
+
+FILES CHANGED:
+[list]
+
+FORMULA VALIDATION:
+[summary]
+
+OPTIONS COVERAGE AUDIT:
+[summary + counts]
+
+INVESTMENT PILLAR FIX:
+[before/after + distribution]
+
+CATALYST 75/25 FIX:
+[summary + distribution]
+
+SOCIAL BONUS AUDIT:
+[summary + distribution]
+
+SCORE CALIBRATION:
+[summary + distribution]
+
+TOP 50 NEW SCORES:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+V4.2.1 SPEC COMPLIANCE VERDICT
+
+V4.2 ARCHITECTURE PRESERVED:
+[YES/NO]
+
+OPTIONS COVERAGE REGRESSION FIXED_OR_EXPLAINED:
+[YES/NO]
+
+INVESTMENT_3_PILLAR_SPEC_MATCHES_FINAL_RULES:
+[YES/NO]
+
+CATALYST_DIRECT_BUCKET_USES_ALL_DIRECT_CATALYST_TYPES:
+[YES/NO]
+
+CATALYST_INTELLIGENCE_48H_FIELDS_WIRED_OR_SAFELY_UNAVAILABLE:
+[YES/NO]
+
+SOCIAL_BONUS_SECTION_HITS_WORKING_OR_EXPLAINED:
+[YES/NO]
+
+PREDICTION_MARKETS_DISABLED_FROM_SCORE:
+[YES/NO]
+
+THEME_POLICY_NOT_STANDALONE_BONUS:
+[YES/NO]
+
+SCORE_DISTRIBUTION_CALIBRATED_OR_EXPLAINED:
+[YES/NO]
+
+ALL_ROWS_HAVE_V421_FIELDS:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY_FOR_FRONTEND_WIRING:
+[YES/NO]

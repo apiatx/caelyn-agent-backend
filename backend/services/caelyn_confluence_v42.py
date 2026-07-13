@@ -374,9 +374,31 @@ def _score_options_alignment_v42(row: dict) -> dict:
             "reason_codes":           reason_codes,
         }
 
-    np_norm    = row.get("options_current_composite_normalized")
-    dir_score  = row.get("options_direction_score")
-    opts_avail = bool(row.get("options_alignment_available")) and np_norm is not None
+    # V4.2.1: The snapshot row stores options_alignment_score (already-weighted composite
+    # from options_alignment.py) rather than the raw options_current_composite_normalized.
+    # Precedence: options_alignment_score → options_current_composite_normalized → options_current_score
+    _opts_nested   = row.get("options") or {}
+    _align_score   = row.get("options_alignment_score")
+    _np_raw        = (row.get("options_current_composite_normalized")
+                      or row.get("options_current_score"))
+    dir_score      = row.get("options_direction_score")
+    _pressure_flat = row.get("options_pressure_state") or _opts_nested.get("pressure_state")
+
+    _using_align = _align_score is not None
+    if _using_align:
+        np_norm = _align_score          # already-weighted composite (60/40 baked in internally)
+    elif _np_raw is not None:
+        np_norm = _np_raw
+    else:
+        np_norm = None
+
+    # V4.2.1: options_alignment_available is absent from many row sources (mapper, disk LKG).
+    # A non-None options_alignment_score is the definitive indicator that the options
+    # service produced a valid composite — treat it as sufficient for availability.
+    opts_avail = np_norm is not None and (
+        bool(row.get("options_alignment_available"))
+        or _align_score is not None    # score present → definitively available
+    )
 
     if not opts_avail or np_norm is None:
         reason_codes.append("OPTIONS_NOT_SCANNED")
@@ -387,7 +409,7 @@ def _score_options_alignment_v42(row: dict) -> dict:
             "status":                 "not_scanned",
             "options_pressure_score": None,
             "options_acceleration_score": None,
-            "options_pressure_state": row.get("options_pressure_state"),
+            "options_pressure_state": _pressure_flat,
             "net_premium":            None,
             "net_premium_1d_delta":   row.get("net_premium_delta_1d"),
             "net_premium_7d_delta":   row.get("net_premium_delta_7d"),
@@ -395,15 +417,26 @@ def _score_options_alignment_v42(row: dict) -> dict:
             "reason_codes":           reason_codes,
         }
 
-    np_val  = _safe_float(np_norm)
-    dir_val = _safe_float(dir_score, 0.0) if dir_score is not None else 0.0
+    np_val = _safe_float(np_norm)
 
-    # 60 % net premium + 40 % acceleration (0 when direction unavailable)
-    opts_raw = 0.60 * np_val + 0.40 * dir_val
+    if _using_align:
+        # options_alignment_score already incorporates direction weighting internally;
+        # use it as the 0-100 signal directly → scaled to 20 pts max.
+        opts_raw = np_val
+        dir_val  = None
+        reason_codes.append("OPTIONS_USING_ALIGNMENT_SCORE_COMPOSITE")
+    else:
+        # Raw net-premium path: apply 60/40 if direction available, else full NP weight
+        if dir_score is not None:
+            dir_val  = _safe_float(dir_score, 0.0)
+            opts_raw = 0.60 * np_val + 0.40 * dir_val
+        else:
+            dir_val  = None
+            opts_raw = np_val
+            reason_codes.append("OPTIONS_DIRECTION_UNAVAILABLE_FULL_NP_WEIGHT")
+
     opts_pts = round(min(20.0, opts_raw / 100.0 * 20.0), 2)
 
-    if dir_score is None:
-        reason_codes.append("OPTIONS_DIRECTION_UNAVAILABLE_SINGLE_SNAPSHOT")
     if np_val >= 70:
         reason_codes.append("OPTIONS_STRONGLY_BULLISH")
     elif np_val >= 50:
@@ -429,7 +462,7 @@ def _score_options_alignment_v42(row: dict) -> dict:
         "available":               True,
         "status":                  _opts_status,
         "options_pressure_score":  round(np_val, 1),
-        "options_acceleration_score": round(dir_val, 1) if dir_score is not None else None,
+        "options_acceleration_score": round(dir_val, 1) if dir_val is not None else None,
         "options_snapshot_status": _snap_status or None,
         "options_as_of":           row.get("options_as_of"),
         "options_lkg_age_hours":   row.get("options_lkg_age_hours"),
@@ -718,6 +751,37 @@ def _score_entry_exit_v42(row: dict) -> dict:
     }
 
 
+_DIRECT_CATALYST_EVENT_TYPES: frozenset = frozenset({
+    "earnings", "fda", "regulatory", "biotech", "clinical", "trial",
+    "ipo", "contract", "deal", "order", "award", "government",
+    "launch", "product_launch", "investor_day", "conference",
+    "strategic_partnership", "partnership", "merger", "acquisition",
+    "split", "milestone", "technical_milestone", "presidential",
+    "executive_order", "policy_announcement", "analyst_upgrade",
+    "analyst_day", "guidance", "buyback", "restructuring", "spinoff",
+})
+
+
+def _event_is_direct_catalyst(evt: object) -> tuple[bool, str]:
+    """Return (is_direct, event_type) for a catalyst event dict."""
+    if not isinstance(evt, dict):
+        return False, ""
+    direction  = str(evt.get("direction") or "").lower()
+    if direction == "bearish":
+        return False, ""
+    event_type = str(evt.get("event_type") or evt.get("type") or "").lower()
+    for kw in _DIRECT_CATALYST_EVENT_TYPES:
+        if kw in event_type:
+            return True, event_type
+    # High-materiality non-bearish event → also counts
+    try:
+        if float(evt.get("materiality_score") or 0) >= 0.5:
+            return True, event_type or "high_materiality"
+    except (TypeError, ValueError):
+        pass
+    return False, ""
+
+
 def _score_catalyst_alignment_v42(row: dict) -> dict:
     """
     Catalyst Alignment — 15 pts max.
@@ -733,78 +797,125 @@ def _score_catalyst_alignment_v42(row: dict) -> dict:
 
     Catalyst Intelligence (25%):
       Uses news volume / change data. Unavailable in snapshot = 0.
+
+    V4.2.1: extended event detection — checks flat fields AND nested catalyst
+    dict AND primary_catalyst / catalyst_v2_primary_event / catalyst_events.
+    SCORE_ONLY branch uses cat_score directly (no -25 deduction), threshold ≥ 40.
     """
-    cat_score     = row.get("catalyst_alignment_score")
-    cat_available = bool(row.get("catalyst_alignment_available"))
-    detail_status = row.get("catalyst_detail_status") or ""
-    bearish_conf  = bool(row.get("catalyst_bearish_conflict"))
-    has_scheduled = bool(row.get("catalyst_scheduled_event"))
-    has_rss       = bool(row.get("catalyst_rss_event"))
+    # ── Resolve all catalyst fields — flat AND nested dict ─────────────────
+    _cat_nested   = row.get("catalyst") or {}
+    cat_score     = row.get("catalyst_alignment_score") or _cat_nested.get("score")
+    _avail_flat   = row.get("catalyst_alignment_available")
+    cat_available = bool(_avail_flat if _avail_flat is not None else _cat_nested.get("available"))
+
+    detail_status = (row.get("catalyst_detail_status")
+                     or _cat_nested.get("detail_status") or "")
+
+    # Bearish conflict
+    bearish_conf = bool(row.get("catalyst_bearish_conflict")
+                        or _cat_nested.get("bearish_conflict"))
+
+    # Event candidates — priority order for direct detection
+    _ev_scheduled = row.get("catalyst_scheduled_event") or _cat_nested.get("scheduled_event")
+    _ev_rss       = row.get("catalyst_rss_event")       or _cat_nested.get("rss_event")
+    _ev_primary   = (row.get("primary_catalyst")
+                     or _cat_nested.get("primary_event")
+                     or row.get("catalyst_primary_event"))
+    _ev_v2        = (row.get("catalyst_v2_primary_event")
+                     or _cat_nested.get("v2_primary_event"))
+    _ev_list      = row.get("catalyst_events") or _cat_nested.get("events") or []
+
+    has_scheduled  = bool(_ev_scheduled)
+    has_rss        = bool(_ev_rss)
     reason_codes: list[str] = []
 
-    # Determine direct catalyst presence
-    if bearish_conf:
-        direct_score  = 0.0
-        direct_present = False
-        reason_codes.append("BEARISH_CATALYST_CONFLICT")
-    elif has_scheduled:
-        direct_score  = 100.0
-        direct_present = True
-        reason_codes.append("SCHEDULED_CATALYST_DIRECT")
-    elif has_rss:
-        direct_score  = 100.0
-        direct_present = True
-        reason_codes.append("RSS_CATALYST_DIRECT")
-    elif not cat_available and row.get("catalyst_alignment_available") is False and cat_score is None:
-        # Catalyst service ran; no event found (known empty state)
-        direct_score  = 0.0
-        direct_present = False
-        reason_codes.append("NO_ACTIVE_CATALYST")
-    elif cat_available and cat_score is not None:
-        # Score present but no identifiable event type
-        raw_val = _safe_float(cat_score, 0.0)
-        direct_score  = max(0.0, raw_val - 25.0)
-        direct_present = direct_score > 30
-        reason_codes.append("SCORE_ONLY_NO_CLEAR_EVENT")
-    else:
-        direct_score  = 0.0
-        direct_present = False
-        reason_codes.append("CATALYST_CACHE_MISSING")
+    # ── Determine direct catalyst presence ─────────────────────────────────
+    direct_score   = 0.0
+    direct_present = False
+    direct_type    = None
+    detected_event = None
 
-    # Catalyst Intelligence (25 %) — unavailable in current snapshot
+    if bearish_conf:
+        reason_codes.append("BEARISH_CATALYST_CONFLICT")
+
+    elif has_scheduled:
+        is_direct, etype = _event_is_direct_catalyst(_ev_scheduled)
+        if is_direct or True:   # scheduled events are always direct
+            direct_score   = 100.0
+            direct_present = True
+            direct_type    = "scheduled_event"
+            detected_event = _ev_scheduled
+            reason_codes.append("SCHEDULED_CATALYST_DIRECT")
+
+    elif has_rss:
+        is_direct, etype = _event_is_direct_catalyst(_ev_rss)
+        if is_direct or True:   # RSS events already gated at catalyst service
+            direct_score   = 100.0
+            direct_present = True
+            direct_type    = "rss_event"
+            detected_event = _ev_rss
+            reason_codes.append("RSS_CATALYST_DIRECT")
+
+    else:
+        # V4.2.1: scan additional event fields for qualified direct catalysts
+        _candidates = [
+            ("primary_catalyst",  _ev_primary),
+            ("v2_primary_event",  _ev_v2),
+        ]
+        for _evlist_item in (_ev_list[:3] if isinstance(_ev_list, list) else []):
+            _candidates.append(("catalyst_events", _evlist_item))
+
+        for src, evt in _candidates:
+            is_direct, etype = _event_is_direct_catalyst(evt)
+            if is_direct:
+                direct_score   = 100.0
+                direct_present = True
+                direct_type    = etype or src
+                detected_event = evt
+                reason_codes.append(f"DIRECT_CATALYST_FROM_{src.upper()}")
+                break
+
+        if not direct_present:
+            if cat_available and cat_score is not None:
+                # V4.2.1: use score directly (no -25 deduction); threshold ≥ 40
+                raw_val       = _safe_float(cat_score, 0.0)
+                direct_score  = raw_val
+                direct_present = raw_val >= 40.0
+                if direct_present:
+                    direct_type = "score_based"
+                    reason_codes.append("CATALYST_SCORE_BASED_DIRECT")
+                else:
+                    reason_codes.append("CATALYST_SCORE_BELOW_THRESHOLD")
+            elif _avail_flat is False and cat_score is None:
+                reason_codes.append("NO_ACTIVE_CATALYST")
+            else:
+                reason_codes.append("CATALYST_CACHE_MISSING")
+
+    # ── Catalyst Intelligence (25 %) — unavailable in snapshot ─────────────
     intelligence_score  = 0.0
     intelligence_status = "unavailable"
     reason_codes.append("CATALYST_INTELLIGENCE_UNAVAILABLE")
 
-    # Combined
+    # ── Combined ────────────────────────────────────────────────────────────
     catalyst_raw = direct_score * 0.75 + intelligence_score * 0.25
     catalyst_pts = round(min(15.0, catalyst_raw / 100.0 * 15.0), 2)
 
-    # Determine overall status
-    if not cat_available and cat_score is None and not has_scheduled and not has_rss:
-        if row.get("catalyst_alignment_available") is False:
-            cat_status = "no_catalyst"
-        else:
-            cat_status = "missing_cache"
+    # ── Overall status ──────────────────────────────────────────────────────
+    _any_signal = cat_available or has_scheduled or has_rss or bool(detected_event)
+    if not _any_signal and cat_score is None:
+        cat_status = "no_catalyst" if _avail_flat is False else "missing_cache"
     else:
         cat_status = "available"
-
-    direct_type = (
-        "scheduled_event" if has_scheduled
-        else "rss_event" if has_rss
-        else "score_only" if (direct_present)
-        else None
-    )
 
     return {
         "raw_score":                   round(catalyst_raw, 1),
         "points":                      catalyst_pts,
-        "available":                   cat_available or has_scheduled or has_rss,
+        "available":                   _any_signal,
         "status":                      cat_status,
         "direct_catalyst_score":       round(direct_score, 1),
         "direct_catalyst_present":     direct_present,
         "direct_catalyst_type":        direct_type,
-        "direct_catalyst_event":       row.get("catalyst_primary_event"),
+        "direct_catalyst_event":       detected_event or _ev_primary,
         "direct_catalyst_polarity":    "bearish" if bearish_conf else ("bullish" if direct_present else None),
         "catalyst_intelligence_score": intelligence_score,
         "news_volume_market_cap_48h":  None,
@@ -915,19 +1026,46 @@ def _compute_investment_pillars(fields: dict) -> dict:
     # ── Pillar 3: Forward Growth ───────────────────────────────────────────
     fwd_checks: list[tuple[str, bool]] = []
 
-    rev_nq = _pct("Rev Growth Next Quarter")
+    # V4.2.1: field names verified against Neon fundamentals cache.
+    # "Rev Growth Next Quarter" is the primary forward revenue field.
+    # Additional aliases cover alternative FMP naming conventions.
+    rev_nq = (
+        _pct("Rev Growth Next Quarter")
+        or _pct("Revenue Growth Next Quarter")
+        or _pct("Rev Growth NQ")
+        or _pct("Rev Growth (NQ)")
+    )
     if rev_nq is not None:
         fwd_checks.append(("rev_nq_20", rev_nq >= 20.0))
 
-    rev_est = _pct("Revenue Growth Est") or _pct("Rev Growth Est")
+    rev_est = (
+        _pct("Revenue Growth Est")
+        or _pct("Rev Growth Est")
+        or _pct("Revenue Growth (Est)")
+        or _pct("Rev Growth (Est)")
+    )
     if rev_est is not None:
         fwd_checks.append(("rev_est_20", rev_est >= 20.0))
 
-    rev_ny = _pct("Revenue Growth Next Year") or _pct("Rev Growth Next Year")
+    rev_ny = (
+        _pct("Revenue Growth Next Year")
+        or _pct("Rev Growth Next Year")
+        or _pct("Rev Growth NY")
+        or _pct("Revenue Growth (NY)")
+        or _pct("Rev Growth (NY)")
+    )
     if rev_ny is not None:
         fwd_checks.append(("rev_ny_15", rev_ny >= 15.0))
 
-    eps_est = _pct("EPS Growth Est") or _pct("EPS Growth NQ") or _pct("EPS Growth NY")
+    eps_est = (
+        _pct("EPS Growth Est")
+        or _pct("EPS Growth NQ")
+        or _pct("EPS Growth NY")
+        or _pct("EPS Growth Next Year")
+        or _pct("EPS Growth Next Quarter")
+        or _pct("EPS Growth (Est)")
+        or _pct("EPS Growth This Year")
+    )
     if eps_est is not None:
         fwd_checks.append(("eps_fwd_20", eps_est >= 20.0))
 
@@ -938,6 +1076,7 @@ def _compute_investment_pillars(fields: dict) -> dict:
     _fwd_rev_extreme = (
         (rev_nq is not None and rev_nq >= 40.0)
         or (rev_est is not None and rev_est >= 40.0)
+        or (rev_ny is not None and rev_ny >= 40.0)
     )
     fwd_strong = (fwd_total > 0 and fwd_passed >= 2) or _fwd_rev_extreme
     fwd_rcs    = [f"FWD_{c}" for c, p in fwd_checks if p]
