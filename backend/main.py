@@ -130,8 +130,10 @@ def _init_postgres_chat_storage_on_startup(reason: str = "startup"):
 
 
 
-# Eager bootstrap in the actual module entrypoint path (uvicorn imports main:app).
-_init_postgres_chat_storage_on_startup("module_import")
+# NOTE: module-level Neon DB call removed — it blocked gunicorn worker imports
+# for 20-30s and pushed total startup past the autoscale health check timeout.
+# The lifespan now handles initialization via _deferred_sync_startup() in a
+# background thread, so GET / can respond in < 2s after the lifespan yields.
 
 def _jwt_or_key(request: Request, api_key) -> bool:
     """Auth disabled — always allow. Re-enable when login page is ready."""
@@ -408,120 +410,107 @@ async def _investor_intelligence_loop():
 
 @asynccontextmanager
 async def lifespan(app):
-    _init_postgres_chat_storage_on_startup("lifespan")
-
-    # Diagnostic: confirm storage backends
-    try:
-        from data.prompt_history import _use_postgres as _ph_pg, _use_object_storage as _ph_obj, _use_replit_db as _ph_db
-        from data.chat_history import _use_postgres as _ch_pg, _use_object_storage as _ch_obj, _use_replit_db as _ch_db
-        _ph_backend = "PostgreSQL (persistent)" if _ph_pg else ("Object Storage (persistent)" if _ph_obj else ("Replit DB (dev)" if _ph_db else "JSON files (EPHEMERAL!)"))
-        _ch_backend = "PostgreSQL (persistent)" if _ch_pg else ("Object Storage (persistent)" if _ch_obj else ("Replit DB (dev)" if _ch_db else "JSON files (EPHEMERAL!)"))
-        print(f"[STARTUP] prompt_history backend: {_ph_backend}")
-        print(f"[STARTUP] chat_history backend: {_ch_backend}")
-    except Exception as _e:
-        print(f"[STARTUP] Storage diagnostic error: {_e}")
-
-    # Portfolio holdings source-of-truth audit (runs migration if first boot)
-    try:
-        from data.portfolio_store import startup_audit as _portfolio_startup_audit
-        _portfolio_startup_audit()
-    except Exception as _psa_err:
-        print(f"[portfolio-source-audit] startup_audit error: {_psa_err}")
-
-    # Manual anchor bottlenecks overlay table
-    try:
-        from data.manual_anchor_bottlenecks_store import ensure_manual_anchor_table
-        ensure_manual_anchor_table()
-    except Exception as _mab_err:
-        print(f"[MANUAL_ANCHOR] startup ensure error: {_mab_err}")
-
-    # Re-sync the Themes merged universe's live-Watchlist membership layer now
-    # that Postgres is confirmed available (module-import-time _build() runs
-    # before the DB pool is guaranteed ready, so the very first pass can miss
-    # the current saved Watchlist). Cheap, non-blocking, read-only refresh.
-    try:
-        from services.theme_merge_layer import refresh_enriched_universe as _theme_merge_refresh
-        _theme_merge_refresh()
-        print("[THEME_MERGE] Startup re-sync of live Watchlist membership complete")
-    except Exception as _theme_merge_err:
-        print(f"[THEME_MERGE] Startup re-sync error (non-fatal): {_theme_merge_err}")
+    # ── Deferred synchronous startup — background thread ────────────────────
+    # All Neon DB calls and disk reads that previously ran inline here blocked
+    # the lifespan event for ~12s AFTER a ~30s import phase (module-level Neon
+    # call that was removed above).  Combined, the worker couldn't serve GET /
+    # for ~50s, causing the autoscale health check probe to time out.
+    #
+    # Solution: fire all blocking sync work in a daemon thread.  The lifespan
+    # reaches its yield in < 2s, the worker starts serving, and GET / returns
+    # 200 before the health check deadline.  All the loops below have built-in
+    # startup delays (30s–5min) so they handle a briefly uninitialized state.
+    def _deferred_sync_startup() -> None:
+        _init_postgres_chat_storage_on_startup("lifespan")
+        try:
+            from data.prompt_history import _use_postgres as _ph_pg, _use_object_storage as _ph_obj, _use_replit_db as _ph_db
+            from data.chat_history import _use_postgres as _ch_pg, _use_object_storage as _ch_obj, _use_replit_db as _ch_db
+            _ph_backend = "PostgreSQL (persistent)" if _ph_pg else ("Object Storage (persistent)" if _ph_obj else ("Replit DB (dev)" if _ph_db else "JSON files (EPHEMERAL!)"))
+            _ch_backend = "PostgreSQL (persistent)" if _ch_pg else ("Object Storage (persistent)" if _ch_obj else ("Replit DB (dev)" if _ch_db else "JSON files (EPHEMERAL!)"))
+            print(f"[STARTUP] prompt_history backend: {_ph_backend}")
+            print(f"[STARTUP] chat_history backend: {_ch_backend}")
+        except Exception as _e:
+            print(f"[STARTUP] Storage diagnostic error: {_e}")
+        try:
+            from data.portfolio_store import startup_audit as _portfolio_startup_audit
+            _portfolio_startup_audit()
+        except Exception as _psa_err:
+            print(f"[portfolio-source-audit] startup_audit error: {_psa_err}")
+        try:
+            from data.manual_anchor_bottlenecks_store import ensure_manual_anchor_table
+            ensure_manual_anchor_table()
+        except Exception as _mab_err:
+            print(f"[MANUAL_ANCHOR] startup ensure error: {_mab_err}")
+        try:
+            from services.theme_merge_layer import refresh_enriched_universe as _theme_merge_refresh
+            _theme_merge_refresh()
+            print("[THEME_MERGE] Startup re-sync of live Watchlist membership complete")
+        except Exception as _theme_merge_err:
+            print(f"[THEME_MERGE] Startup re-sync error (non-fatal): {_theme_merge_err}")
+        _load_lkg_from_disk()
+        _load_prefilter_from_disk()
+        _load_master_lkg_from_disk()
+        _load_master_prefilter_from_disk()
+        try:
+            from data.options_theme_supplement import _load_supplement_lkg_from_disk as _load_supp_lkg
+            _load_supp_lkg()
+        except Exception as _supp_lkg_err:
+            print(f"[STARTUP] Supplement LKG load failed (non-fatal): {_supp_lkg_err}")
+        try:
+            from data.options_theme_supplement import load_sectors_universe_lkg_from_disk as _load_sectors_lkg
+            _load_sectors_lkg()
+        except Exception as _sectors_lkg_err:
+            print(f"[STARTUP] Sectors universe LKG load failed (non-fatal): {_sectors_lkg_err}")
+        try:
+            from data.options_theme_supplement import _seed_no_options_from_sectors_lkg as _seed_cno
+            _seed_cno()
+        except Exception as _cno_seed_err:
+            print(f"[STARTUP] confirmed_no_options seed failed (non-fatal): {_cno_seed_err}")
+        try:
+            from data.options_theme_supplement import set_confluence_extra_symbols as _set_extra
+            from services.watchlist_service import list_watchlists as _list_wl, load_watchlist as _load_wl
+            _foreign_pfx = (
+                "AIM:", "ASX:", "CSE:", "EPA:", "ETR:", "FRA:", "KRX:",
+                "LON:", "OSL:", "SHA:", "STO:", "SWX:", "TPE:", "TPEX:",
+                "TSX:", "TSXV:", "TYO:", "WSE:", "XSAT:", "OTC:",
+            )
+            _all_us: set = set()
+            for _wl_meta in (_list_wl() or []):
+                _wl_id = _wl_meta.get("id")
+                if not _wl_id:
+                    continue
+                _wl_full = _load_wl(_wl_id)
+                for _sym in ((_wl_full or {}).get("tickers") or []):
+                    _sym_up = _sym.upper()
+                    if not any(_sym_up.startswith(_p) for _p in _foreign_pfx):
+                        _all_us.add(_sym_up)
+            _set_extra(_all_us)
+        except Exception as _extra_err:
+            print(f"[STARTUP] Confluence extra symbols load failed (non-fatal): {_extra_err}")
+        try:
+            from data.options_instrument_type_service import (
+                warm_up_from_theme_universe as _warm_itype_universe,
+                warm_up_from_db             as _warm_itype,
+            )
+            _itype_universe_count = _warm_itype_universe()
+            print(f"[STARTUP] instrument_type theme-universe pass: {_itype_universe_count} symbols")
+            _itype_count = _warm_itype()
+            print(f"[STARTUP] instrument_type DB pass: {_itype_count} symbols upgraded from screener cache")
+        except Exception as _itype_err:
+            print(f"[STARTUP] instrument_type warm-up failed (non-fatal): {_itype_err}")
+        try:
+            from data.options_display_name_service import warm_up_display_names_from_db as _warm_dnames
+            _dname_count = _warm_dnames()
+            print(f"[STARTUP] display_name warm-up: loaded {_dname_count} names from screener cache")
+        except Exception as _dname_err:
+            print(f"[STARTUP] display_name warm-up failed (non-fatal): {_dname_err}")
+        print("[STARTUP] _deferred_sync_startup complete")
 
     import threading
+    threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())
     asyncio.create_task(_edgar_cache_loop())
-    _load_lkg_from_disk()          # Warm per-tab LKG cache from disk (backward compat)
-    _load_prefilter_from_disk()    # Warm per-tab prefilter cache (backward compat)
-    _load_master_lkg_from_disk()       # Warm master screener LKG — serves on first request
-    _load_master_prefilter_from_disk() # Warm master prefilter — skips cold build on restart
-    # Warm supplement LKG — theme-only options data persisted from previous sessions
-    try:
-        from data.options_theme_supplement import _load_supplement_lkg_from_disk as _load_supp_lkg
-        _load_supp_lkg()
-    except Exception as _supp_lkg_err:
-        print(f"[STARTUP] Supplement LKG load failed (non-fatal): {_supp_lkg_err}")
-    # Warm Sectors universe LKG — full theme universe snapshot for immediate post-restart coverage
-    try:
-        from data.options_theme_supplement import load_sectors_universe_lkg_from_disk as _load_sectors_lkg
-        _load_sectors_lkg()
-    except Exception as _sectors_lkg_err:
-        print(f"[STARTUP] Sectors universe LKG load failed (non-fatal): {_sectors_lkg_err}")
-    # Seed confirmed_no_options from sectors LKG into no-options tracking cache.
-    # Runs even when sectors LKG is too old for general use (uses 7-day limit for
-    # stable confirmed_no_options classifications), so V4 correctly classifies
-    # known non-optionable tickers without waiting for the next live scan.
-    try:
-        from data.options_theme_supplement import _seed_no_options_from_sectors_lkg as _seed_cno
-        _seed_cno()
-    except Exception as _cno_seed_err:
-        print(f"[STARTUP] confirmed_no_options seed failed (non-fatal): {_cno_seed_err}")
-    # Register US-listed watchlist tickers as extra symbols for the supplement
-    # scanner so it covers the full confluence universe, not just the theme proxy
-    # universe.  Foreign-exchange tickers are excluded (no US options market).
-    # list_watchlists() returns metadata only; load each watchlist by ID to get tickers.
-    try:
-        from data.options_theme_supplement import set_confluence_extra_symbols as _set_extra
-        from services.watchlist_service import list_watchlists as _list_wl, load_watchlist as _load_wl
-        _foreign_pfx = (
-            "AIM:", "ASX:", "CSE:", "EPA:", "ETR:", "FRA:", "KRX:",
-            "LON:", "OSL:", "SHA:", "STO:", "SWX:", "TPE:", "TPEX:",
-            "TSX:", "TSXV:", "TYO:", "WSE:", "XSAT:", "OTC:",
-        )
-        _all_us: set[str] = set()
-        for _wl_meta in (_list_wl() or []):
-            _wl_id = _wl_meta.get("id")
-            if not _wl_id:
-                continue
-            _wl_full = _load_wl(_wl_id)
-            for _sym in ((_wl_full or {}).get("tickers") or []):
-                _sym_up = _sym.upper()
-                if not any(_sym_up.startswith(_p) for _p in _foreign_pfx):
-                    _all_us.add(_sym_up)
-        _set_extra(_all_us)
-    except Exception as _extra_err:
-        print(f"[STARTUP] Confluence extra symbols load failed (non-fatal): {_extra_err}")
-    # Warm options instrument type LKG — three-pass sequence:
-    #   1. theme_universe:  classify proxy_symbols=ETF, candidate_symbols=stock (highest authority)
-    #   2. screener DB:     upgrade lkg-sourced entries when explicit isEtf=True/False is available
-    # The theme_universe pass runs FIRST so DB sector_inference cannot overwrite ETF proxies.
-    try:
-        from data.options_instrument_type_service import (
-            warm_up_from_theme_universe as _warm_itype_universe,
-            warm_up_from_db             as _warm_itype,
-        )
-        _itype_universe_count = _warm_itype_universe()
-        print(f"[STARTUP] instrument_type theme-universe pass: {_itype_universe_count} symbols")
-        _itype_count = _warm_itype()
-        print(f"[STARTUP] instrument_type DB pass: {_itype_count} symbols upgraded from screener cache")
-    except Exception as _itype_err:
-        print(f"[STARTUP] instrument_type warm-up failed (non-fatal): {_itype_err}")
-    # Warm display names from screener_fundamentals_cache (sync, no API calls)
-    try:
-        from data.options_display_name_service import warm_up_display_names_from_db as _warm_dnames
-        _dname_count = _warm_dnames()
-        print(f"[STARTUP] display_name warm-up: loaded {_dname_count} names from screener cache")
-    except Exception as _dname_err:
-        print(f"[STARTUP] display_name warm-up failed (non-fatal): {_dname_err}")
     # Continuous background classification loop for ETF vs stock resolution.
     # Runs a startup pass after 30 s, then repeats every 30 min to resolve any
     # symbols that were added to the required universe after startup.

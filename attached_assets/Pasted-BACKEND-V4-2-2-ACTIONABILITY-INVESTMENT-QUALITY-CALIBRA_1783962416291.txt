@@ -1,0 +1,352 @@
+BACKEND — V4.2.2 ACTIONABILITY + INVESTMENT QUALITY CALIBRATION
+
+Backend only.
+
+Do not touch frontend.
+Do not change provider calls.
+Do not call LLMs.
+Do not change core V4.2.1 weights.
+Do not change options/catalyst/scanner infrastructure.
+Do not rebuild the scoring engine.
+
+Goal:
+
+Fix the decision semantics exposed by the frontend:
+
+1. Actionable and Near Actionable are currently not distinct enough.
+2. Investment Quality is too binary because it only uses 0/1/2/3 strong pillar count.
+3. Foreign/OTC/prefixed tickers need explicit confluence eligibility fields.
+
+==================================================
+PART 1 — CONFLUENCE ELIGIBILITY
+==================================================
+
+Add fields on every alignment row:
+
+confluence_eligible
+confluence_ineligible_reason
+
+Rule:
+
+If symbol contains ":":
+  confluence_eligible = false
+  confluence_ineligible_reason = "prefixed_foreign_or_otc_symbol"
+
+Else:
+  confluence_eligible = true
+  confluence_ineligible_reason = null
+
+Do not remove these rows from backend response yet.
+Frontend will filter them.
+
+Examples:
+MSFT → eligible
+NVDA → eligible
+TSM → eligible
+OTC:ATEYY → not eligible
+AIM:VLX → not eligible
+AMS:BESI → not eligible
+
+==================================================
+PART 2 — ACTIONABLE VS NEAR ACTIONABLE CLEANUP
+==================================================
+
+Make Actionable and Near Actionable distinct.
+
+Definitions:
+
+Actionable = can act now.
+Near Actionable = good candidate, but needs one more thing.
+
+Update boolean rules:
+
+is_actionable_setup should be true only when:
+- confluence_eligible = true
+- no risk conflict
+- actionability_state in {"READY", "ACTIONABLE"}
+- entry_exit_points >= 8.0 out of 12
+- technical_setup_points >= 5.0 out of 8
+- not WATCH_FOR_RESET
+- not WAIT_FOR_RETEST
+- not WAIT_FOR_BREAKOUT
+- not AVOID
+- not RISK_CONFLICT
+
+is_near_actionable should be true when:
+- confluence_eligible = true
+- no risk conflict
+- is_actionable_setup = false
+- actionability_state in {"NEAR_ACTIONABLE", "WAIT_FOR_RETEST", "WAIT_FOR_BREAKOUT"}
+  OR caelyn_confluence_score >= 55 and entry_exit_points >= 5.5 and technical_setup_points >= 4.0
+
+Make these mutually exclusive:
+
+If is_actionable_setup = true:
+  is_near_actionable = false
+
+Keep:
+is_watch_for_reset
+is_risk_conflict
+is_investment_quality
+
+But ensure prefixed foreign/OTC symbols are false for all decision tabs.
+
+Expose reason codes:
+
+ACTIONABLE_READY_NOW
+NEAR_ACTIONABLE_NEEDS_RETEST
+NEAR_ACTIONABLE_NEEDS_BREAKOUT
+NEAR_ACTIONABLE_ENTRY_NOT_CLEAN
+NOT_ACTIONABLE_ENTRY_TOO_WEAK
+NOT_ACTIONABLE_RISK_CONFLICT
+NOT_ACTIONABLE_INELIGIBLE_SYMBOL
+
+Return before/after counts:
+
+Actionable count
+Near Actionable count
+Overlap count
+
+Expected:
+Overlap count = 0
+
+==================================================
+PART 3 — INVESTMENT QUALITY CONTINUOUS RANKING
+==================================================
+
+Keep the existing 3-pillar model, but add continuous ranking scores.
+
+Current model:
+0 pillars = 0 points
+1 pillar = 5
+2 pillars = 10
+3 pillars = 15
+
+That can remain for investment_alignment_points if needed.
+
+But Investment Quality tab needs ranked scores.
+
+Add:
+
+financial_health_score_0_100
+current_growth_score_0_100
+forward_growth_score_0_100
+investment_quality_score
+investment_quality_rank_label
+investment_quality_reason_codes
+
+Each pillar should be ranked from 0–100 using the existing FMP fields.
+
+Financial Health inputs:
+- Gross Mgn
+- FCF Mgn
+- Free CF
+- Op. Income
+- EBIT
+- D/E
+- ND/EBITDA
+
+Suggested scoring:
+- Gross Mgn strength: up to 20
+- FCF Mgn strength: up to 20
+- Free CF positive: up to 15
+- Op. Income positive: up to 15
+- EBIT positive: up to 10
+- D/E manageable: up to 10
+- ND/EBITDA manageable: up to 10
+
+Current Growth inputs:
+- Rev Grwth Q
+- Rev Grwth Y
+- EPS Grwth
+- EPS Grwth TQ/TY
+- FCF Mgn
+- Op. Income
+- EBIT
+
+Suggested scoring:
+- Rev Grwth Q strength: up to 25
+- Rev Grwth Y strength: up to 20
+- EPS growth strength: up to 20
+- profitability positive: up to 20
+- FCF/margin quality: up to 15
+
+Forward Growth inputs:
+- Rev Grwth Est
+- Rev Grwth NQ
+- Rev Grwth NY
+- EPS Grwth Est
+- EPS Grwth NQ
+- EPS Grwth NY
+
+Suggested scoring:
+- Rev Grwth Est strength: up to 25
+- Rev Grwth NQ strength: up to 25
+- Rev Grwth NY strength: up to 20
+- Forward EPS growth strength: up to 20
+- Hypergrowth/speculative revenue rule: up to 10
+
+Final Investment Quality score:
+
+best_pillar = max(financial_health_score_0_100, current_growth_score_0_100, forward_growth_score_0_100)
+
+breadth_bonus:
+0 strong pillars = 0
+1 strong pillar = 0
+2 strong pillars = +7
+3 strong pillars = +12
+
+investment_quality_score = min(100, best_pillar + breadth_bonus)
+
+Labels:
+90–100 = A+ Investment
+80–89 = Excellent Investment Quality
+70–79 = Strong Investment Quality
+60–69 = Watchlist Quality
+40–59 = Mixed Investment Quality
+0–39 = Weak / No Clear Investment Case
+
+Important:
+Do not punish speculative forward growth names for weak current profitability if forward growth score is high.
+Do not let valuation fields kill the score.
+P/E, P/S, EV/EBITDA remain context/warnings only.
+
+Expose both:
+investment_alignment_points
+investment_quality_score
+
+The Investment Quality tab should sort by investment_quality_score.
+
+==================================================
+PART 4 — VALIDATION
+==================================================
+
+Validate:
+
+ANET
+KLIC
+MU
+OSCR
+NBIS
+ADPT
+SNDK
+LITE
+AMD
+NVDA
+MSFT
+SMCI
+CRWD
+CRDO
+FSLR
+FTNT
+MRVL
+MARA
+TSM
+VRT
+GLW
+AMKR
+KLAC
+PENG
+BE
+PLTR
+SOFI
+OKLO
+
+For each return:
+
+symbol
+confluence_eligible
+confluence_ineligible_reason
+caelyn_confluence_score
+actionability_state
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+is_risk_conflict
+entry_exit_points
+technical_setup_points
+financial_health_score_0_100
+current_growth_score_0_100
+forward_growth_score_0_100
+investment_quality_score
+investment_pillar_count
+investment_alignment_points
+investment_quality_rank_label
+reason_codes
+
+Return tab counts:
+
+All eligible rows
+Actionable
+Near Actionable
+Watch for Reset
+Risk / Conflicts
+Investment Quality
+
+Return overlap counts:
+Actionable ∩ Near Actionable
+Actionable ∩ Watch for Reset
+Near Actionable ∩ Risk
+
+Expected:
+Actionable ∩ Near Actionable = 0
+
+==================================================
+FINAL REPORT
+==================================================
+
+Return:
+
+V4.2.2 ACTIONABILITY + INVESTMENT QUALITY REPORT
+
+FILES CHANGED:
+[list]
+
+CONFLUENCE ELIGIBILITY:
+[summary]
+
+ACTIONABLE VS NEAR ACTIONABLE:
+[before/after counts + overlap]
+
+INVESTMENT QUALITY RANKING:
+[distribution + top examples]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+0 expected
+
+End exactly:
+
+V4.2.2 VERDICT
+
+CONFLUENCE_ELIGIBILITY_FIELD_ADDED:
+[YES/NO]
+
+PREFixed_FOREIGN_OTC_MARKED_INELIGIBLE:
+[YES/NO]
+
+ACTIONABLE_NEAR_ACTIONABLE_MUTUALLY_EXCLUSIVE:
+[YES/NO]
+
+ACTIONABLE_NOW_HAS_STRICTER_GATE:
+[YES/NO]
+
+INVESTMENT_QUALITY_SCORE_ADDED:
+[YES/NO]
+
+INVESTMENT_PILLARS_RANKED_0_100:
+[YES/NO]
+
+INVESTMENT_TAB_CAN_SORT_BY_QUALITY_SCORE:
+[YES/NO]
+
+V421_SCORING_FORMULA_PRESERVED:
+[YES/NO]
+
+PROVIDER_CALLS:
+[0]
+
+READY_FOR_FRONTEND_PATCH:
+[YES/NO]
