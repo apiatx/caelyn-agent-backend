@@ -1965,6 +1965,12 @@ def build_confluence_snapshot(
         r["catalyst_alignment_points"]       = _v42_cat.get("points")
         r["catalyst_status"]                 = _v42_cat.get("status")
         r["investment_alignment_points"]     = _v42_inv.get("points")
+        r["financial_health_score_0_100"]    = _v42_inv.get("financial_health_score_0_100")
+        r["current_growth_score_0_100"]      = _v42_inv.get("current_growth_score_0_100")
+        r["forward_growth_score_0_100"]      = _v42_inv.get("forward_growth_score_0_100")
+        r["investment_quality_score"]        = _v42_inv.get("investment_quality_score")
+        r["investment_quality_rank_label"]   = _v42_inv.get("investment_quality_rank_label")
+        r["investment_quality_reason_codes"] = _v42_inv.get("investment_quality_reason_codes")
         r["social_bonus_points"]             = (_v42_bb.get("social")        or {}).get("points")
         r["theme_policy_bonus_points"]       = 0   # folded into Theme Alignment; not standalone
         r["prediction_market_bonus_points"]  = 0   # disabled from score
@@ -1996,24 +2002,77 @@ def build_confluence_snapshot(
             _p5_rcs.append("BUCKET_DOWNGRADED_ACT_CONSISTENCY")
             r["caelyn_confluence_reason_codes"] = _p5_rcs
 
-        # PART 6 — Boolean filter fields for direct frontend tab filtering.
+        # PART 6 — V4.2.2 Boolean filter fields + confluence eligibility.
         # Frontend should use these booleans rather than deriving them.
+
+        # ── Eligibility: prefixed foreign/OTC symbols are never actionable ───
+        _p6_sym      = str(r.get("symbol") or "")
+        _p6_eligible = ":" not in _p6_sym
+        r["confluence_eligible"]          = _p6_eligible
+        r["confluence_ineligible_reason"] = (
+            None if _p6_eligible else "prefixed_foreign_or_otc_symbol"
+        )
+
         _p6_bucket = r.get("caelyn_confluence_bucket") or ""
         _p6_act    = r.get("actionability_state") or ""
         _p6_rcs    = r.get("caelyn_confluence_reason_codes") or []
         _p6_risk   = _p6_bucket == "RISK_CONFLICT" or _p6_act == "AVOID"
+        _p6_score  = float(r.get("caelyn_confluence_score") or 0.0)
+        _p6_entry  = float(r.get("entry_exit_points") or 0.0)
+        _p6_tech   = float(r.get("technical_setup_points") or 0.0)
 
-        r["is_actionable_setup"]  = (
-            _p6_act in {"READY", "NEAR_ACTIONABLE"}
-            and not _p6_risk
-        )
-        r["is_near_actionable"]   = (
-            _p6_act in {"NEAR_ACTIONABLE", "WAIT_FOR_BREAKOUT"}
-            and not _p6_risk
-        )
-        r["is_watch_for_reset"]   = _p6_act == "WATCH_FOR_RESET"
-        r["is_risk_conflict"]     = bool(_p6_risk)
-        r["is_investment_quality"] = _p6_bucket == "INVESTMENT_QUALITY" and not _p6_risk
+        if not _p6_eligible:
+            r["is_actionable_setup"]           = False
+            r["is_near_actionable"]            = False
+            r["is_watch_for_reset"]            = False
+            r["is_risk_conflict"]              = False
+            r["is_investment_quality"]         = False
+            r["actionability_decision_reason"] = "NOT_ACTIONABLE_INELIGIBLE_SYMBOL"
+        else:
+            # Actionable = can act now (strict gate)
+            _is_act = (
+                not _p6_risk
+                and _p6_act in {"READY", "ACTIONABLE"}
+                and _p6_entry >= 8.0
+                and _p6_tech  >= 5.0
+            )
+
+            # Near Actionable = good candidate, needs one more thing
+            # Mutually exclusive with Actionable
+            if _is_act:
+                _is_near = False
+            else:
+                _state_near = _p6_act in {"NEAR_ACTIONABLE", "WAIT_FOR_RETEST", "WAIT_FOR_BREAKOUT"}
+                _score_near = (
+                    _p6_score >= 55.0
+                    and _p6_entry >= 5.5
+                    and _p6_tech  >= 4.0
+                )
+                _is_near = not _p6_risk and (_state_near or _score_near)
+
+            r["is_actionable_setup"]   = _is_act
+            r["is_near_actionable"]    = _is_near
+            r["is_watch_for_reset"]    = _p6_act == "WATCH_FOR_RESET"
+            r["is_risk_conflict"]      = bool(_p6_risk)
+            r["is_investment_quality"] = _p6_bucket == "INVESTMENT_QUALITY" and not _p6_risk
+
+            # Decision reason code
+            if _is_act:
+                _p6_dr = "ACTIONABLE_READY_NOW"
+            elif _is_near:
+                if _p6_act == "WAIT_FOR_RETEST":
+                    _p6_dr = "NEAR_ACTIONABLE_NEEDS_RETEST"
+                elif _p6_act == "WAIT_FOR_BREAKOUT":
+                    _p6_dr = "NEAR_ACTIONABLE_NEEDS_BREAKOUT"
+                else:
+                    _p6_dr = "NEAR_ACTIONABLE_ENTRY_NOT_CLEAN"
+            elif _p6_risk:
+                _p6_dr = "NOT_ACTIONABLE_RISK_CONFLICT"
+            elif _p6_entry < 8.0 or _p6_tech < 5.0:
+                _p6_dr = "NOT_ACTIONABLE_ENTRY_TOO_WEAK"
+            else:
+                _p6_dr = "NOT_ACTIONABLE_WATCH"
+            r["actionability_decision_reason"] = _p6_dr
 
         results.append(r)
 
@@ -2044,8 +2103,16 @@ def build_confluence_snapshot(
     for i, r in enumerate(results):
         r["confluence_rank"] = i + 1
 
-    # Sort by investment_confluence_score for investment ranking
-    invest_sorted = sorted(results, key=lambda r: r["investment_confluence_score"], reverse=True)
+    # Sort by investment_quality_score (V4.2.2 continuous) for investment ranking,
+    # falling back to investment_confluence_score for rows without the new field.
+    invest_sorted = sorted(
+        results,
+        key=lambda r: (
+            r.get("investment_quality_score") or 0,
+            r.get("investment_confluence_score") or 0,
+        ),
+        reverse=True,
+    )
     for i, r in enumerate(invest_sorted):
         r["investment_rank"] = i + 1
 
@@ -2169,11 +2236,40 @@ def build_confluence_snapshot(
     print(
         f"[CONFLUENCE_SNAP] build_complete symbol_count={len(results)} elapsed_ms={_total_ms}"
     )
+    # ── V4.2.2 tab counts + overlap diagnostics ──────────────────────────────
+    _eligible_results    = [r for r in results if r.get("confluence_eligible")]
+    _act_results         = [r for r in results if r.get("is_actionable_setup")]
+    _near_results        = [r for r in results if r.get("is_near_actionable")]
+    _watch_results       = [r for r in results if r.get("is_watch_for_reset")]
+    _risk_results        = [r for r in results if r.get("is_risk_conflict")]
+    _iq_results          = [r for r in results if r.get("is_investment_quality")]
+    _act_syms            = {r["symbol"] for r in _act_results}
+    _near_syms           = {r["symbol"] for r in _near_results}
+    _watch_syms          = {r["symbol"] for r in _watch_results}
+    _risk_syms           = {r["symbol"] for r in _risk_results}
+
+    v422_tab_counts = {
+        "all_eligible":          len(_eligible_results),
+        "actionable":            len(_act_results),
+        "near_actionable":       len(_near_results),
+        "watch_for_reset":       len(_watch_results),
+        "risk_conflicts":        len(_risk_results),
+        "investment_quality":    len(_iq_results),
+        "ineligible":            len(results) - len(_eligible_results),
+    }
+    v422_overlap_counts = {
+        "actionable_and_near_actionable":  len(_act_syms & _near_syms),
+        "actionable_and_watch_for_reset":  len(_act_syms & _watch_syms),
+        "near_actionable_and_risk":        len(_near_syms & _risk_syms),
+    }
+
     return {
         "ok":               True,
         "generated_at":     _now_iso(),
         "symbol_count":     len(results),
         "verdict_summary":  verdict_dist,
+        "v422_tab_counts":  v422_tab_counts,
+        "v422_overlap_counts": v422_overlap_counts,
         "base_weights": {
             "entry_state":    _W_ENTRY,
             "theme_rotation": _W_THEME,

@@ -1083,6 +1083,95 @@ def _compute_investment_pillars(fields: dict) -> dict:
     if _fwd_rev_extreme:
         fwd_rcs.append("FWD_SPECULATIVE_EXTREME_REVENUE")
 
+    # ── Continuous 0–100 pillar scores (V4.2.2) ───────────────────────────────
+
+    # Financial Health (max 100)
+    _fh_pts = 0.0
+    if gm is not None:
+        if gm >= 60:      _fh_pts += 20
+        elif gm >= 40:    _fh_pts += 14
+        elif gm >= 25:    _fh_pts += 8
+        elif gm >= 10:    _fh_pts += 3
+    if fcf_m is not None:
+        if fcf_m >= 20:   _fh_pts += 20
+        elif fcf_m >= 10: _fh_pts += 14
+        elif fcf_m >= 5:  _fh_pts += 8
+        elif fcf_m > 0:   _fh_pts += 4
+    if fcf_abs is not None and fcf_abs > 0:
+        _fh_pts += 15
+    if op_inc is not None and op_inc > 0:
+        _fh_pts += 15
+    if ebit is not None and ebit > 0:
+        _fh_pts += 10
+    if de is not None:
+        if de < 0.5:      _fh_pts += 10
+        elif de < 1.0:    _fh_pts += 7
+        elif de < 1.5:    _fh_pts += 4
+    else:
+        _fh_pts += 5  # unavailable = neutral
+    if nd_ebitda is not None:
+        if nd_ebitda < 1.0:   _fh_pts += 10
+        elif nd_ebitda < 2.0: _fh_pts += 7
+        elif nd_ebitda < 3.0: _fh_pts += 4
+    else:
+        _fh_pts += 5  # unavailable = neutral
+    fh_score_0_100 = int(min(100, round(_fh_pts)))
+
+    # Current Growth (max 100)
+    _cg_pts = 0.0
+    if rev_q is not None:
+        if rev_q >= 40:   _cg_pts += 25
+        elif rev_q >= 20: _cg_pts += 18
+        elif rev_q >= 10: _cg_pts += 12
+        elif rev_q > 0:   _cg_pts += 6
+    if rev_y is not None:
+        if rev_y >= 30:   _cg_pts += 20
+        elif rev_y >= 15: _cg_pts += 14
+        elif rev_y >= 5:  _cg_pts += 8
+        elif rev_y > 0:   _cg_pts += 3
+    _eps_cg: Optional[float] = None
+    if eps_g is not None or eps_tq is not None:
+        _eps_cg = max(v for v in [eps_g, eps_tq] if v is not None)
+    if _eps_cg is not None:
+        if _eps_cg >= 40:   _cg_pts += 20
+        elif _eps_cg >= 15: _cg_pts += 14
+        elif _eps_cg >= 0:  _cg_pts += 6
+    _op_pos  = op_inc is not None and op_inc > 0
+    _ebt_pos = ebit   is not None and ebit   > 0
+    if _op_pos and _ebt_pos:  _cg_pts += 20
+    elif _op_pos or _ebt_pos: _cg_pts += 12
+    if fcf_m is not None:
+        if fcf_m >= 10:   _cg_pts += 15
+        elif fcf_m > 0:   _cg_pts += 8
+    cg_score_0_100 = int(min(100, round(_cg_pts)))
+
+    # Forward Growth (max 100)
+    _fwd_pts = 0.0
+    if rev_est is not None:
+        if rev_est >= 40:   _fwd_pts += 25
+        elif rev_est >= 20: _fwd_pts += 18
+        elif rev_est >= 10: _fwd_pts += 12
+        elif rev_est > 0:   _fwd_pts += 6
+    if rev_nq is not None:
+        if rev_nq >= 40:    _fwd_pts += 25
+        elif rev_nq >= 20:  _fwd_pts += 18
+        elif rev_nq >= 10:  _fwd_pts += 12
+        elif rev_nq > 0:    _fwd_pts += 6
+    if rev_ny is not None:
+        if rev_ny >= 30:    _fwd_pts += 20
+        elif rev_ny >= 15:  _fwd_pts += 14
+        elif rev_ny >= 5:   _fwd_pts += 8
+        elif rev_ny > 0:    _fwd_pts += 3
+    if eps_est is not None:
+        if eps_est >= 40:   _fwd_pts += 20
+        elif eps_est >= 20: _fwd_pts += 14
+        elif eps_est >= 0:  _fwd_pts += 6
+    _fwd_hyper = any(v is not None and v >= 60 for v in [rev_nq, rev_est, rev_ny])
+    _fwd_ext   = any(v is not None and v >= 40 for v in [rev_nq, rev_est, rev_ny])
+    if _fwd_hyper:     _fwd_pts += 10
+    elif _fwd_ext:     _fwd_pts += 6
+    fwd_score_0_100 = int(min(100, round(_fwd_pts)))
+
     return {
         "financial_health_strong":        fh_strong,
         "financial_health_checks_passed": fh_passed,
@@ -1096,6 +1185,9 @@ def _compute_investment_pillars(fields: dict) -> dict:
         "forward_growth_checks_passed":   fwd_passed,
         "forward_growth_checks_total":    fwd_total,
         "forward_growth_reason_codes":    fwd_rcs,
+        "financial_health_score_0_100":   fh_score_0_100,
+        "current_growth_score_0_100":     cg_score_0_100,
+        "forward_growth_score_0_100":     fwd_score_0_100,
     }
 
 
@@ -1130,6 +1222,15 @@ def _score_investment_alignment_v42(
         except Exception:
             pass
 
+    _NO_FUND_DEFAULTS = {
+        "financial_health_score_0_100":   0,
+        "current_growth_score_0_100":     0,
+        "forward_growth_score_0_100":     0,
+        "investment_quality_score":       0,
+        "investment_quality_rank_label":  "Weak / No Clear Investment Case",
+        "investment_quality_reason_codes": [],
+    }
+
     if not fund_snap:
         reason_codes.append("INVESTMENT_NO_FUNDAMENTALS_SNAPSHOT")
         return {
@@ -1155,6 +1256,7 @@ def _score_investment_alignment_v42(
             "investment_alignment_points":    0,
             "investment_reason_codes":        reason_codes,
             "reason_codes":                   reason_codes,
+            **_NO_FUND_DEFAULTS,
         }
 
     fields = fund_snap.get("fields") or {}
@@ -1183,6 +1285,7 @@ def _score_investment_alignment_v42(
             "investment_alignment_points":    0,
             "investment_reason_codes":        reason_codes,
             "reason_codes":                   reason_codes,
+            **_NO_FUND_DEFAULTS,
         }
 
     pillars = _compute_investment_pillars(fields)
@@ -1226,6 +1329,28 @@ def _score_investment_alignment_v42(
     reason_codes.extend(pillars["current_growth_reason_codes"])
     reason_codes.extend(pillars["forward_growth_reason_codes"])
 
+    # ── Continuous Investment Quality Score (V4.2.2) ──────────────────────────
+    fh_score_0_100  = pillars.get("financial_health_score_0_100",  0)
+    cg_score_0_100  = pillars.get("current_growth_score_0_100",    0)
+    fwd_score_0_100 = pillars.get("forward_growth_score_0_100",    0)
+
+    _best_pillar   = max(fh_score_0_100, cg_score_0_100, fwd_score_0_100)
+    _strong_scored = sum(1 for s in [fh_score_0_100, cg_score_0_100, fwd_score_0_100] if s >= 50)
+    _breadth_bonus = {0: 0, 1: 0, 2: 7, 3: 12}.get(_strong_scored, 0)
+    inv_quality_score = int(min(100, round(_best_pillar + _breadth_bonus)))
+
+    if inv_quality_score >= 90:   iq_rank_label = "A+ Investment"
+    elif inv_quality_score >= 80: iq_rank_label = "Excellent Investment Quality"
+    elif inv_quality_score >= 70: iq_rank_label = "Strong Investment Quality"
+    elif inv_quality_score >= 60: iq_rank_label = "Watchlist Quality"
+    elif inv_quality_score >= 40: iq_rank_label = "Mixed Investment Quality"
+    else:                          iq_rank_label = "Weak / No Clear Investment Case"
+
+    iq_reason_codes: list[str] = [f"IQ_SCORE_{inv_quality_score}"]
+    if inv_quality_score >= 70:   iq_reason_codes.append("IQ_STRONG")
+    elif inv_quality_score >= 40: iq_reason_codes.append("IQ_MIXED")
+    else:                          iq_reason_codes.append("IQ_WEAK")
+
     return {
         "raw_score":                      inv_raw,
         "points":                         inv_pts,
@@ -1249,6 +1374,12 @@ def _score_investment_alignment_v42(
         "investment_alignment_points":    inv_pts,
         "investment_reason_codes":        reason_codes,
         "reason_codes":                   reason_codes,
+        "financial_health_score_0_100":   fh_score_0_100,
+        "current_growth_score_0_100":     cg_score_0_100,
+        "forward_growth_score_0_100":     fwd_score_0_100,
+        "investment_quality_score":       inv_quality_score,
+        "investment_quality_rank_label":  iq_rank_label,
+        "investment_quality_reason_codes": iq_reason_codes,
     }
 
 
@@ -1734,12 +1865,18 @@ def compute_confluence_v42(
         "direct_catalyst_present":      cat_comp.get("direct_catalyst_present"),
         "direct_catalyst_type":         cat_comp.get("direct_catalyst_type"),
         "catalyst_intelligence_score":  cat_comp.get("catalyst_intelligence_score"),
-        "investment_alignment_points":  invest_comp["points"],
-        "investment_pillar_count":      invest_comp.get("investment_pillar_count"),
-        "investment_quality_label":     invest_comp.get("investment_quality_label"),
-        "financial_health_strong":      invest_comp.get("financial_health_strong"),
-        "current_growth_strong":        invest_comp.get("current_growth_strong"),
-        "forward_growth_strong":        invest_comp.get("forward_growth_strong"),
+        "investment_alignment_points":    invest_comp["points"],
+        "investment_pillar_count":        invest_comp.get("investment_pillar_count"),
+        "investment_quality_label":       invest_comp.get("investment_quality_label"),
+        "financial_health_strong":        invest_comp.get("financial_health_strong"),
+        "current_growth_strong":          invest_comp.get("current_growth_strong"),
+        "forward_growth_strong":          invest_comp.get("forward_growth_strong"),
+        "financial_health_score_0_100":   invest_comp.get("financial_health_score_0_100"),
+        "current_growth_score_0_100":     invest_comp.get("current_growth_score_0_100"),
+        "forward_growth_score_0_100":     invest_comp.get("forward_growth_score_0_100"),
+        "investment_quality_score":       invest_comp.get("investment_quality_score"),
+        "investment_quality_rank_label":  invest_comp.get("investment_quality_rank_label"),
+        "investment_quality_reason_codes": invest_comp.get("investment_quality_reason_codes"),
         "social_bonus_points":          soc_bonus["points"],
         "social_sections_hit":          soc_bonus.get("social_sections_hit"),
         "social_confluence_hit":        soc_bonus.get("social_confluence_hit"),
