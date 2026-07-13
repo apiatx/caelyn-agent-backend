@@ -4322,7 +4322,7 @@ async def get_watchlist_alignment(watchlist_id: str):
             "theme_leader_reason_codes":        [],
             "leadership_theme":                 None,
 
-            # ── V4: unified confluence (additive alongside current CCS) ────────
+            # ── V4: unified confluence debug (preserved for comparison) ─────
             "caelyn_confluence_v4_score":               row.get("caelyn_confluence_v4_score"),
             "caelyn_confluence_v4_raw_score":           row.get("caelyn_confluence_v4_raw_score"),
             "caelyn_confluence_v4_core_score":          row.get("caelyn_confluence_v4_core_score"),
@@ -4338,7 +4338,21 @@ async def get_watchlist_alignment(watchlist_id: str):
             "caelyn_confluence_v4_actionability":       row.get("caelyn_confluence_v4_actionability"),
             "legacy_trade_alignment_score":             row.get("legacy_trade_alignment_score") or row.get("trade_alignment_score"),
 
-            # ── PHASE 2: Canonical extended score fields ──────────────────────
+            # ── V4.2: core scoring semantics cleanup (Core=100, Bonus=25, Max=125) ─
+            "caelyn_confluence_v42_score":              row.get("caelyn_confluence_v42_score"),
+            "caelyn_confluence_v42_core_score":         row.get("caelyn_confluence_v42_core_score"),
+            "caelyn_confluence_v42_bonus_score":        row.get("caelyn_confluence_v42_bonus_score"),
+            "caelyn_confluence_v42_max_score":          row.get("caelyn_confluence_v42_max_score") or 125,
+            "caelyn_confluence_v42_normalized_score":   row.get("caelyn_confluence_v42_normalized_score"),
+            "caelyn_confluence_v42_available_max_pts":  row.get("caelyn_confluence_v42_available_max_pts"),
+            "caelyn_confluence_v42_bucket":             row.get("caelyn_confluence_v42_bucket") or "NO_CLEAR_CONFLUENCE",
+            "caelyn_confluence_v42_components":         row.get("caelyn_confluence_v42_components") or {},
+            "caelyn_confluence_v42_bonus_breakdown":    row.get("caelyn_confluence_v42_bonus_breakdown") or {},
+            "caelyn_confluence_v42_reason_codes":       row.get("caelyn_confluence_v42_reason_codes") or [],
+            "caelyn_confluence_v42_confidence_score":   row.get("caelyn_confluence_v42_confidence_score"),
+            "caelyn_confluence_v42_actionability":      row.get("caelyn_confluence_v42_actionability"),
+
+            # ── Canonical extended score fields (promoted from V4.2) ──────────
             "caelyn_confluence_normalized_score":       row.get("caelyn_confluence_normalized_score"),
             "caelyn_confluence_confidence_score":       row.get("caelyn_confluence_confidence_score"),
             "caelyn_confluence_raw_score":              row.get("caelyn_confluence_raw_score"),
@@ -4346,7 +4360,7 @@ async def get_watchlist_alignment(watchlist_id: str):
             "caelyn_confluence_bonus_score":            row.get("caelyn_confluence_bonus_score"),
             "caelyn_confluence_total_score":            row.get("caelyn_confluence_total_score"),
 
-            # ── PHASE 2: Component breakdown (first-class, no frontend derivation) ──
+            # ── Component breakdown (first-class, no frontend derivation) ─────
             "theme_alignment_points":                   row.get("theme_alignment_points"),
             "stage_quality_score":                      row.get("stage_quality_score"),
             "stage_quality_points":                     row.get("stage_quality_points"),
@@ -4354,17 +4368,34 @@ async def get_watchlist_alignment(watchlist_id: str):
             "options_status":                           row.get("options_status"),
             "options_snapshot_status":                  row.get("options_snapshot_status"),
             "options_as_of":                            row.get("options_as_of"),
+            "technical_setup_points":                   row.get("technical_setup_points"),
+            "technical_setup_label":                    row.get("technical_setup_label"),
+            "entry_exit_points":                        row.get("entry_exit_points"),
+            "entry_exit_status":                        row.get("entry_exit_status"),
             "entry_risk_reward_points":                 row.get("entry_risk_reward_points"),
             "catalyst_alignment_points":                row.get("catalyst_alignment_points"),
             "catalyst_status":                          row.get("catalyst_status"),
+            "direct_catalyst_present":                  row.get("direct_catalyst_present"),
+            "direct_catalyst_type":                     row.get("direct_catalyst_type"),
+            "catalyst_intelligence_score":              row.get("catalyst_intelligence_score"),
             "investment_alignment_points":              row.get("investment_alignment_points"),
+            "investment_pillar_count":                  row.get("investment_pillar_count"),
+            "investment_quality_label":                 row.get("investment_quality_label"),
+            "financial_health_strong":                  row.get("financial_health_strong"),
+            "current_growth_strong":                    row.get("current_growth_strong"),
+            "forward_growth_strong":                    row.get("forward_growth_strong"),
 
-            # ── PHASE 2: Bonus point breakdown ───────────────────────────────
+            # ── Bonus point breakdown ─────────────────────────────────────────
             "social_bonus_points":                      row.get("social_bonus_points"),
+            "social_sections_hit":                      row.get("social_sections_hit"),
+            "social_confluence_hit":                    row.get("social_confluence_hit"),
+            "social_acceleration_hit":                  row.get("social_acceleration_hit"),
+            "social_fresh_hit":                         row.get("social_fresh_hit"),
             "theme_policy_bonus_points":                row.get("theme_policy_bonus_points"),
             "prediction_market_bonus_points":           row.get("prediction_market_bonus_points"),
             "whale_insider_bonus_points":               row.get("whale_insider_bonus_points"),
             "bottleneck_bonus_points":                  row.get("bottleneck_bonus_points"),
+            "bottleneck_anchor_count":                  row.get("bottleneck_anchor_count"),
 
             # ── PHASE 2: Legacy trade alignment compat fields ─────────────────
             "legacy_trade_alignment_archetype":         row.get("legacy_trade_alignment_archetype"),
@@ -5139,14 +5170,18 @@ async def delete_by_id_endpoint(watchlist_id: str):
 @router.get("/{watchlist_id}/confluence/v4-report")
 async def v4_report_endpoint(watchlist_id: str):
     """
-    V4 Confluence validation report — returns status/bucket distributions
+    V4.2 Confluence validation report — returns status/bucket distributions
     across the retained confluence snapshot.  Development/diagnostic use only.
     Pure read: zero provider calls, zero LLM calls.
+    V4.2 is re-computed live here so results reflect the latest engine even
+    before the retained snapshot is rebuilt.
     """
-    import json as _json_rep, pathlib as _pl_rep
     from collections import Counter
     from services.confluence_v2_service import get_retained_confluence_snapshot
-    from services.caelyn_confluence_v4 import compute_confluence_v4
+    from services.caelyn_confluence_v42 import (
+        compute_confluence_v42,
+        build_social_sections_map as _build_ssm,
+    )
 
     snap = await asyncio.to_thread(get_retained_confluence_snapshot)
     if not snap:
@@ -5156,22 +5191,19 @@ async def v4_report_endpoint(watchlist_id: str):
     if not rows:
         raise HTTPException(status_code=503, detail="Retained confluence snapshot has 0 rows")
 
-    # Social map
-    social_map: dict = {}
+    # Social sections map (3 sections × 5 pts)
+    social_sections_map: dict = {}
     try:
-        sp = _pl_rep.Path(__file__).parent.parent / "data" / "x_consensus_weekly.json"
-        if sp.exists():
-            raw = _json_rep.loads(sp.read_text())
-            _items = raw if isinstance(raw, list) else raw.get("tickers", [])
-            social_map = {str(r.get("ticker", "")).upper(): r for r in _items}
+        social_sections_map = _build_ssm()
     except Exception:
         pass
 
-    # Bottleneck map
-    bottleneck_map: dict = {}
+    # Fundamentals map (3-pillar investment model)
+    fundamentals_map: dict = {}
     try:
-        from services.curated_anchor_bottlenecks import get_multi_anchor_screener  # type: ignore
-        bottleneck_map = {r.get("ticker", "").upper(): r for r in get_multi_anchor_screener() if r.get("ticker")}
+        from data.watchlist_fundamentals_store import get_snapshots_bulk as _gfb
+        universe = [str(r.get("symbol", "")).upper() for r in rows if r.get("symbol")]
+        fundamentals_map = await asyncio.to_thread(_gfb, universe) or {}
     except Exception:
         pass
 
@@ -5180,8 +5212,13 @@ async def v4_report_endpoint(watchlist_id: str):
     for row in rows:
         sym = str(row.get("symbol", "")).upper()
         try:
-            v4 = compute_confluence_v4(row, social_map=social_map, bottleneck_map=bottleneck_map)
-            scored.append({"symbol": sym, **v4})
+            v42 = compute_confluence_v42(
+                row,
+                social_sections_map=social_sections_map,
+                bottleneck_map=None,
+                fundamentals_map=fundamentals_map,
+            )
+            scored.append({"symbol": sym, **v42})
         except Exception as exc:
             errors.append({"symbol": sym, "error": str(exc)})
 
@@ -5189,47 +5226,67 @@ async def v4_report_endpoint(watchlist_id: str):
         c = Counter(vals)
         return dict(c.most_common())
 
-    buckets      = _dist(r.get("caelyn_confluence_v4_bucket") for r in scored)
-    act_states   = _dist(r.get("caelyn_confluence_v4_actionability") for r in scored)
-    opts_status  = _dist(
-        (r.get("caelyn_confluence_v4_components") or {}).get("options_alignment", {}).get("status")
+    buckets    = _dist(r.get("caelyn_confluence_v42_bucket") for r in scored)
+    act_states = _dist(r.get("caelyn_confluence_v42_actionability") for r in scored)
+    opts_status = _dist(
+        (r.get("caelyn_confluence_v42_components") or {}).get("options_alignment", {}).get("status")
         for r in scored
     )
-    cat_status   = _dist(
-        (r.get("caelyn_confluence_v4_components") or {}).get("catalyst_alignment", {}).get("status")
+    cat_status = _dist(
+        (r.get("caelyn_confluence_v42_components") or {}).get("catalyst_alignment", {}).get("status")
         for r in scored
     )
-    shelf_status = _dist(
-        (r.get("caelyn_confluence_v4_components") or {}).get("entry_risk_reward", {}).get("shelf_status")
-        for r in scored
+    invest_dist = _dist(
+        r.get("investment_pillar_count") for r in scored
     )
-    conf_vals    = [r.get("caelyn_confluence_v4_confidence_score", 0) for r in scored]
-    conf_dist    = {
-        "<40":  sum(1 for c in conf_vals if c < 40),
+    conf_vals  = [r.get("caelyn_confluence_v42_confidence_score") or 0 for r in scored]
+    conf_dist  = {
+        "<40":   sum(1 for c in conf_vals if c < 40),
         "40-69": sum(1 for c in conf_vals if 40 <= c < 70),
-        ">=70": sum(1 for c in conf_vals if c >= 70),
-        "avg":  round(sum(conf_vals) / len(conf_vals), 1) if conf_vals else 0,
+        ">=70":  sum(1 for c in conf_vals if c >= 70),
+        "avg":   round(sum(conf_vals) / len(conf_vals), 1) if conf_vals else 0,
+    }
+    score_vals = [r.get("caelyn_confluence_v42_score") or 0 for r in scored]
+    score_dist = {
+        "<40":    sum(1 for s in score_vals if s < 40),
+        "40-59":  sum(1 for s in score_vals if 40 <= s < 60),
+        "60-79":  sum(1 for s in score_vals if 60 <= s < 80),
+        "80-99":  sum(1 for s in score_vals if 80 <= s < 100),
+        ">=100":  sum(1 for s in score_vals if s >= 100),
+        "avg":    round(sum(score_vals) / len(score_vals), 1) if score_vals else 0,
+        "max":    round(max(score_vals), 1) if score_vals else 0,
+        "median": round(sorted(score_vals)[len(score_vals)//2], 1) if score_vals else 0,
     }
 
-    # Top results sample (ACTIONABLE / NEAR_ACTIONABLE / READY)
+    # Top results sample (ACTIONABLE / NEAR_ACTIONABLE)
+    top_scored = sorted(
+        scored,
+        key=lambda r: r.get("caelyn_confluence_v42_score") or 0,
+        reverse=True,
+    )
     top_sample = [
         {
-            "symbol":     r["symbol"],
-            "bucket":     r.get("caelyn_confluence_v4_bucket"),
-            "act":        r.get("caelyn_confluence_v4_actionability"),
-            "score":      r.get("caelyn_confluence_v4_normalized_score"),
-            "raw_total":  r.get("caelyn_confluence_v4_total_score"),
-            "confidence": r.get("caelyn_confluence_v4_confidence_score"),
-            "opts_status": (r.get("caelyn_confluence_v4_components") or {}).get("options_alignment", {}).get("status"),
-            "cat_status":  (r.get("caelyn_confluence_v4_components") or {}).get("catalyst_alignment", {}).get("status"),
-            "shelf_status":(r.get("caelyn_confluence_v4_components") or {}).get("entry_risk_reward", {}).get("shelf_status"),
+            "symbol":         r["symbol"],
+            "bucket":         r.get("caelyn_confluence_v42_bucket"),
+            "act":            r.get("caelyn_confluence_v42_actionability"),
+            "score":          r.get("caelyn_confluence_v42_score"),
+            "core":           r.get("caelyn_confluence_v42_core_score"),
+            "bonus":          r.get("caelyn_confluence_v42_bonus_score"),
+            "confidence":     r.get("caelyn_confluence_v42_confidence_score"),
+            "invest_pillars": r.get("investment_pillar_count"),
+            "soc_sections":   r.get("social_sections_hit"),
+            "opts_status":    (r.get("caelyn_confluence_v42_components") or {}).get("options_alignment", {}).get("status"),
+            "cat_status":     (r.get("caelyn_confluence_v42_components") or {}).get("catalyst_alignment", {}).get("status"),
+            "comp_pts": {
+                k: round((v or {}).get("points") or 0, 1)
+                for k, v in (r.get("caelyn_confluence_v42_components") or {}).items()
+            },
         }
-        for r in scored
-        if r.get("caelyn_confluence_v4_bucket") in ("ACTIONABLE", "NEAR_ACTIONABLE", "READY")
+        for r in top_scored[:30]
     ]
 
     def _opts_status_of(r):
-        return (r.get("caelyn_confluence_v4_components") or {}).get("options_alignment", {}).get("status")
+        return (r.get("caelyn_confluence_v42_components") or {}).get("options_alignment", {}).get("status")
 
     not_scanned_symbols = sorted(
         r["symbol"] for r in scored if _opts_status_of(r) == "not_scanned"
@@ -5240,19 +5297,23 @@ async def v4_report_endpoint(watchlist_id: str):
 
     return {
         "meta": {
+            "engine":  "v4.2",
             "total":   len(rows),
             "scored":  len(scored),
             "errors":  len(errors),
             "snap_built_at": snap.get("generated_at") or snap.get("built_at"),
+            "social_sections_coverage": len(social_sections_map),
+            "fundamentals_coverage": len(fundamentals_map),
         },
-        "bucket_distribution":          buckets,
-        "actionability_distribution":   act_states,
-        "options_status_distribution":  opts_status,
-        "catalyst_status_distribution": cat_status,
-        "shelf_status_distribution":    shelf_status,
-        "confidence_distribution":      conf_dist,
-        "top_sample":                   top_sample[:30],
-        "errors_sample":                errors[:10],
-        "not_scanned_symbols":          not_scanned_symbols,
-        "confirmed_no_options_symbols": confirmed_no_options_symbols,
+        "bucket_distribution":            buckets,
+        "actionability_distribution":     act_states,
+        "options_status_distribution":    opts_status,
+        "catalyst_status_distribution":   cat_status,
+        "investment_pillar_distribution": invest_dist,
+        "confidence_distribution":        conf_dist,
+        "score_distribution":             score_dist,
+        "top_sample":                     top_sample,
+        "errors_sample":                  errors[:10],
+        "not_scanned_symbols":            not_scanned_symbols,
+        "confirmed_no_options_symbols":   confirmed_no_options_symbols,
     }

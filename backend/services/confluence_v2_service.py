@@ -1682,6 +1682,13 @@ def build_confluence_snapshot(
     options_map = _load_options_map()
     social_map  = _load_social_map()
 
+    # V4.2 Social Bonus: 3-section membership map (consensus_picks / hype_radar / fresh_trades)
+    try:
+        from services.caelyn_confluence_v42 import build_social_sections_map as _build_ssm
+        social_sections_map: dict = _build_ssm()
+    except Exception:
+        social_sections_map = {}
+
     # Theme Bridge: canonical ticker→Theme membership + EXISTING Theme
     # Rotation result, built ONCE per snapshot (not per ticker).
     from services.theme_bridge import build_ticker_theme_index, get_theme_rotation_index
@@ -1872,55 +1879,82 @@ def build_confluence_snapshot(
             r["caelyn_confluence_v4_actionability"]    = "WATCH"
             r["legacy_trade_alignment_score"]          = r.get("trade_alignment_score")
 
-        # ── PHASE 2: Promote V4 to canonical Caelyn Confluence ─────────────────
-        # These promotion steps are applied after V4 (or its error fallback) so the
-        # canonical fields are always present regardless of whether V4 succeeded.
-        _v4_comps = r.get("caelyn_confluence_v4_components") or {}
-        _v4_bb    = r.get("caelyn_confluence_v4_bonus_breakdown") or {}
-        _theme_c  = _v4_comps.get("theme_alignment")      or {}
-        _stage_c  = _v4_comps.get("stage_quality")        or {}
-        _opts_c   = _v4_comps.get("options_alignment")    or {}
-        _entry_c  = _v4_comps.get("entry_risk_reward")    or {}
-        _cat_c    = _v4_comps.get("catalyst_alignment")   or {}
-        _inv_c    = _v4_comps.get("investment_alignment") or {}
+        # ── Caelyn Confluence V4.2 (Core Scoring Semantics Cleanup) ─────────
+        # Core=100, Bonus=25, Total=125. Theme policy folded into Theme.
+        # Prediction Markets removed. Social split into 3 sections x 5 pts.
+        try:
+            from services.caelyn_confluence_v42 import compute_confluence_v42
+            v42 = compute_confluence_v42(
+                r,
+                social_sections_map=social_sections_map,
+                bottleneck_map=None,
+                fundamentals_map=fundamentals_map,
+            )
+            r.update(v42)
+        except Exception as _v42_exc:
+            r["caelyn_confluence_v42_score"]           = None
+            r["caelyn_confluence_v42_core_score"]      = None
+            r["caelyn_confluence_v42_bonus_score"]     = None
+            r["caelyn_confluence_v42_max_score"]       = 125
+            r["caelyn_confluence_v42_components"]      = {}
+            r["caelyn_confluence_v42_bonus_breakdown"] = {}
+            r["caelyn_confluence_v42_reason_codes"]    = [f"V42_ERROR:{_v42_exc}"]
+            r["caelyn_confluence_v42_confidence_score"] = 0
+            r["caelyn_confluence_v42_bucket"]          = "NO_CLEAR_CONFLUENCE"
+            r["caelyn_confluence_v42_actionability"]   = "WATCH"
 
-        # PART 1 — Canonical score fields (sourced from V4)
-        r["caelyn_confluence_score"]            = r.get("caelyn_confluence_v4_score")
-        r["caelyn_confluence_raw_score"]        = r.get("caelyn_confluence_v4_raw_score")
-        r["caelyn_confluence_normalized_score"] = r.get("caelyn_confluence_v4_normalized_score")
-        r["caelyn_confluence_confidence_score"] = r.get("caelyn_confluence_v4_confidence_score")
-        r["caelyn_confluence_core_score"]       = r.get("caelyn_confluence_v4_core_score")
-        r["caelyn_confluence_bonus_score"]      = r.get("caelyn_confluence_v4_bonus_score")
-        r["caelyn_confluence_total_score"]      = r.get("caelyn_confluence_v4_total_score")
-        r["caelyn_confluence_bucket"]           = r.get("caelyn_confluence_v4_bucket")
-        r["caelyn_confluence_reason_codes"]     = r.get("caelyn_confluence_v4_reason_codes") or []
+        # ── PHASE 2: Promote V4.2 to canonical Caelyn Confluence ────────────
+        # V4.2 r.update() already merged canonical fields; this block reinforces
+        # the promotion and applies consistency fixes. V4 debug fields remain.
+        _v42_comps = r.get("caelyn_confluence_v42_components") or {}
+        _v42_bb    = r.get("caelyn_confluence_v42_bonus_breakdown") or {}
+        _v42_theme = _v42_comps.get("theme_alignment")     or {}
+        _v42_stage = _v42_comps.get("stage_quality")       or {}
+        _v42_opts  = _v42_comps.get("options_alignment")   or {}
+        _v42_tech  = _v42_comps.get("technical_setup")     or {}
+        _v42_entry = _v42_comps.get("entry_exit")          or {}
+        _v42_cat   = _v42_comps.get("catalyst_alignment")  or {}
+        _v42_inv   = _v42_comps.get("investment_alignment") or {}
 
-        # PART 2 — Component breakdown as first-class fields
-        r["theme_alignment_points"]             = _theme_c.get("points")
-        r["stage_quality_score"]               = _stage_c.get("raw_score")
-        r["stage_quality_points"]              = _stage_c.get("points")
-        r["options_alignment_points"]          = _opts_c.get("points")
-        r["options_status"]                    = _opts_c.get("status")
-        r["entry_risk_reward_points"]          = _entry_c.get("points")
-        r["catalyst_alignment_points"]         = _cat_c.get("points")
-        r["catalyst_status"]                   = _cat_c.get("status")
-        r["investment_alignment_points"]       = _inv_c.get("points")
-        r["social_bonus_points"]               = (_v4_bb.get("social")             or {}).get("points")
-        r["theme_policy_bonus_points"]         = (_v4_bb.get("theme_policy")       or {}).get("points")
-        r["prediction_market_bonus_points"]    = (_v4_bb.get("prediction_markets") or {}).get("points")
-        r["whale_insider_bonus_points"]        = (_v4_bb.get("whale_insider")      or {}).get("points")
-        r["bottleneck_bonus_points"]           = (_v4_bb.get("bottleneck")         or {}).get("points")
+        # PART 1 — Canonical score fields (sourced from V4.2)
+        r["caelyn_confluence_score"]            = r.get("caelyn_confluence_v42_score")
+        r["caelyn_confluence_raw_score"]        = r.get("caelyn_confluence_v42_score")
+        r["caelyn_confluence_normalized_score"] = r.get("caelyn_confluence_v42_normalized_score")
+        r["caelyn_confluence_confidence_score"] = r.get("caelyn_confluence_v42_confidence_score")
+        r["caelyn_confluence_core_score"]       = r.get("caelyn_confluence_v42_core_score")
+        r["caelyn_confluence_bonus_score"]      = r.get("caelyn_confluence_v42_bonus_score")
+        r["caelyn_confluence_total_score"]      = r.get("caelyn_confluence_v42_score")
+        r["caelyn_confluence_bucket"]           = r.get("caelyn_confluence_v42_bucket")
+        r["caelyn_confluence_reason_codes"]     = r.get("caelyn_confluence_v42_reason_codes") or []
+
+        # PART 2 — Component breakdown as first-class fields (V4.2)
+        r["theme_alignment_points"]          = _v42_theme.get("points")
+        r["stage_quality_score"]             = _v42_stage.get("raw_score")
+        r["stage_quality_points"]            = _v42_stage.get("points")
+        r["options_alignment_points"]        = _v42_opts.get("points")
+        r["options_status"]                  = _v42_opts.get("status")
+        r["technical_setup_points"]          = _v42_tech.get("points")
+        r["entry_exit_points"]               = _v42_entry.get("points")
+        r["entry_risk_reward_points"]        = _v42_entry.get("points")  # compat alias
+        r["catalyst_alignment_points"]       = _v42_cat.get("points")
+        r["catalyst_status"]                 = _v42_cat.get("status")
+        r["investment_alignment_points"]     = _v42_inv.get("points")
+        r["social_bonus_points"]             = (_v42_bb.get("social")        or {}).get("points")
+        r["theme_policy_bonus_points"]       = 0   # folded into Theme Alignment; not standalone
+        r["prediction_market_bonus_points"]  = 0   # disabled from score
+        r["whale_insider_bonus_points"]      = (_v42_bb.get("whale_insider") or {}).get("points")
+        r["bottleneck_bonus_points"]         = (_v42_bb.get("bottleneck")    or {}).get("points")
 
         # PART 3 — Legacy trade alignment aliases (for compat-only consumers)
         r["legacy_trade_alignment_archetype"]  = r.get("trade_alignment_archetype")
         r["legacy_trade_alignment_status"]     = "compat_only"
 
-        # PART 4 — Promote V4 actionability to canonical actionability_state.
-        # The legacy state is preserved as legacy_actionability_state before overwrite.
-        _v4_act = r.get("caelyn_confluence_v4_actionability")
+        # PART 4 — Promote V4.2 actionability to canonical actionability_state.
+        # V4.2 takes precedence; V4 is kept as debug. Legacy preserved before overwrite.
+        _v42_act = r.get("caelyn_confluence_v42_actionability") or r.get("caelyn_confluence_v4_actionability")
         r["legacy_actionability_state"] = r.get("actionability_state")
-        if _v4_act:
-            r["actionability_state"] = _v4_act
+        if _v42_act:
+            r["actionability_state"] = _v42_act
 
         # PART 5 — Bucket / actionability consistency correction.
         # ACTIONABLE bucket must only appear when the decision layer is also

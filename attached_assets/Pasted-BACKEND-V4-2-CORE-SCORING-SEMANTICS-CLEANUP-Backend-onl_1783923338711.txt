@@ -1,0 +1,1117 @@
+BACKEND — V4.2 CORE SCORING SEMANTICS CLEANUP
+
+Backend only.
+
+Do not touch frontend.
+Do not call LLMs.
+Do not add provider calls.
+Do not add request-time API calls.
+Do not reverse any of the completed fixes:
+- options weekend LKG
+- confirmed no-options handling
+- retained snapshot rebuild fix
+- V4 canonical score promotion
+- Phase 2.1 display contract cleanup
+- actionability boolean fields
+- pattern-aware WYFI/LITE fixes
+- catalyst no_catalyst vs missing_cache fix
+- provider_calls = 0
+
+Goal:
+
+Update the canonical Caelyn Confluence scoring semantics to match the final target model.
+
+Do not rebuild the whole scoring engine.
+Reuse existing services, caches, LKGs, Neon snapshots, and row fields.
+If a data source does not exist yet, expose status = unavailable and score contribution = 0. Do not invent data.
+
+==================================================
+TARGET SCORING MODEL
+==================================================
+
+Core Confluence should equal 100 before bonuses:
+
+Theme Alignment — 15
+Stage Quality — 15
+Options Alignment — 20
+Setup / Entry Quality — 20
+  - Technical Setup — 8
+  - Entry / Exit Quality — 12
+Catalyst Alignment — 15
+Investment Alignment — 15
+
+Core max = 100
+
+Bonuses:
+
+Social Bonus — up to +15
+Whale / Insider / Politician Buy Pressure — up to +5
+Bottleneck / Supply Chain — up to +5
+
+Maximum possible score = 125.
+
+Remove from score:
+
+Prediction Markets
+Standalone Theme Policy bonus
+
+Theme Policy should be folded into Theme Alignment, and only count as Catalyst if it is fresh/recent/material.
+
+==================================================
+PART 1 — PRESERVE CONTRACT
+==================================================
+
+Keep all existing canonical fields:
+
+caelyn_confluence_score
+caelyn_confluence_normalized_score
+caelyn_confluence_confidence_score
+caelyn_confluence_bucket
+caelyn_confluence_reason_codes
+actionability_state
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+is_risk_conflict
+is_investment_quality
+
+Add V4.2 debug fields:
+
+caelyn_confluence_v42_score
+caelyn_confluence_v42_core_score
+caelyn_confluence_v42_bonus_score
+caelyn_confluence_v42_max_score
+caelyn_confluence_v42_components
+caelyn_confluence_v42_bonus_breakdown
+caelyn_confluence_v42_reason_codes
+
+If validation passes, promote V4.2 to canonical:
+
+caelyn_confluence_score = caelyn_confluence_v42_score
+caelyn_confluence_core_score = caelyn_confluence_v42_core_score
+caelyn_confluence_bonus_score = caelyn_confluence_v42_bonus_score
+
+Preserve prior V4 fields for debugging.
+
+Do not remove legacy_trade_alignment_score yet.
+
+==================================================
+PART 2 — THEME ALIGNMENT — 15 POINTS
+==================================================
+
+Theme Alignment should answer:
+
+“Is this ticker aligned with a leading or emerging investible theme?”
+
+It should not require the single #1 theme. Top 5–6 tradable themes should still score well.
+
+Target formula:
+
+Theme Alignment raw score =
+40% Theme Relative Strength
+25% Theme Stage
+25% Theme Performance Acceleration
+10% Theme Policy Alignment
+
+Then:
+
+theme_alignment_points = theme_alignment_raw_score / 100 * 15
+
+Inputs should come from existing Themes page / Theme Rotation / theme resolver data only.
+
+Theme Relative Strength:
+- Top 1–2 theme = excellent
+- Top 3–6 theme = strong
+- Top 7–10 theme = decent
+- Neutral = low/moderate
+- Lagging = weak
+
+Theme Performance Acceleration should consider existing theme:
+- 30D performance
+- 7D performance
+- 1D performance
+- whether theme performance is improving or fading
+
+Theme Policy handling:
+
+- Ongoing/stale/structural policy support boosts Theme Alignment only.
+- Fresh/recent/material government or presidential announcement can also count as Catalyst.
+- Remove standalone theme_policy_bonus_points from score.
+- Keep theme_policy_bonus_points only as debug/display if needed, but it must not add extra points beyond the Theme/Catalyst logic.
+
+Expose:
+
+theme_alignment_raw_score
+theme_alignment_points
+theme_name
+theme_rank
+theme_rotation_label
+theme_rs_score
+theme_stage_score
+theme_acceleration_score
+theme_policy_alignment_score
+theme_alignment_reason_codes
+
+==================================================
+PART 3 — STAGE QUALITY — 15 POINTS
+==================================================
+
+Preserve existing Stage logic unless there is a clear bug.
+
+Stage Quality should answer:
+
+“Where is this stock in its technical lifecycle?”
+
+Target mapping:
+
+S1-2 = 95–100 raw
+Early S2 = 95–100 raw
+S2 = 85–100 raw
+S1 = 65–85 raw
+S2-3 constructive = 65–85 raw
+S3 = 35–70 raw
+S4 = 0–25 raw
+
+Then:
+
+stage_quality_points = stage_quality_raw_score / 100 * 15
+
+Expose:
+
+stage_quality_raw_score
+stage_quality_points
+stage_label
+stage_reason_codes
+
+Do not rebuild Stage Quality right now.
+
+==================================================
+PART 4 — OPTIONS ALIGNMENT — 20 POINTS
+==================================================
+
+Options Alignment should answer:
+
+“Is bullish options money supporting this move, and is that pressure accelerating?”
+
+Use existing cached/LKG Options Alignment only.
+
+Do not scan fresh options.
+Do not make provider calls.
+Do not alter options LKG architecture.
+
+Target formula:
+
+Options raw score =
+60% Net Premium Pressure
+40% Net Premium Acceleration
+
+Acceleration weighting:
+1D = 20%
+7D = 35%
+30D = 45%
+
+Then:
+
+options_alignment_points = options_raw_score / 100 * 20
+
+Best state:
+
+Bullish net premium + positive 7D/30D acceleration.
+
+Bad state:
+
+Bearish net premium + worsening acceleration.
+
+No-options handling:
+
+confirmed_no_options = neutral / no boost, not a system failure
+not_scanned = confidence penalty
+missing_cache = confidence penalty
+
+Expose:
+
+options_alignment_raw_score
+options_alignment_points
+options_pressure_score
+options_acceleration_score
+options_status
+options_snapshot_status
+options_as_of
+net_premium
+net_premium_1d_delta
+net_premium_7d_delta
+net_premium_30d_delta
+options_reason_codes
+
+Do not add GEX yet.
+
+==================================================
+PART 5 — SETUP / ENTRY QUALITY — 20 POINTS
+==================================================
+
+This is one core bucket split into:
+
+Technical Setup — 8 points
+Entry / Exit Quality — 12 points
+
+Do not make Technical Setup a separate top-level core bucket.
+Do not make Technical Setup a bonus.
+
+==================================================
+PART 5A — TECHNICAL SETUP — 8 POINTS
+==================================================
+
+Technical Setup answers:
+
+“What pattern is this chart forming?”
+
+It should be a best-pattern-wins detector, not an average of every pattern.
+
+Use existing pattern engine fields first.
+
+Known existing patterns:
+
+HIGH_TIGHT_FLAG
+BULL_FLAG
+BREAKOUT_SHELF
+LOW_BASE_REVERSAL
+active support / support bounce
+constructive extension
+chase extension
+
+If other pattern fields already exist, use them.
+Do not build a massive new pattern engine in this phase.
+
+Target technical setup raw scoring:
+
+High-tight continuation = 85–100
+Bull flag = 80–95
+Breakout shelf = 80–95
+Cup and handle = 80–95 if already detectable
+VCP = 80–95 if already detectable
+EMA pullback = 70–90 if already detectable
+Support bounce = 70–90
+Low-base reversal = 60–85
+No clear setup = 20–50
+Bearish setup = 0–30
+
+Modifiers:
+
++ volume confirmation if already available
++ constructive consolidation
++ active support intact
+- chase extension
+- failed breakout
+- lower low
+- support lost
+
+technical_setup_points = technical_setup_raw_score / 100 * 8
+
+Expose:
+
+technical_setup_raw_score
+technical_setup_points
+technical_setup_label
+technical_setup_direction
+technical_setup_reason_codes
+
+Examples of labels:
+
+High-Tight Continuation
+Bull Flag
+Breakout Shelf
+Support Bounce
+Low-Base Reversal
+Chase Extension
+Confirmed Breakdown
+No Clear Setup
+
+==================================================
+PART 5B — ENTRY / EXIT QUALITY — 12 POINTS
+==================================================
+
+Entry / Exit answers:
+
+“Where do I enter, where am I wrong, and where are the next levels?”
+
+Use existing support/resistance/active support logic.
+Do not rebuild support/resistance.
+The UI already shows useful existing fields such as:
+- active support intact
+- testing active support
+- critical break below
+- reclaim level
+- next downside support
+
+Build on that logic.
+
+Target formula:
+
+Entry / Exit raw score =
+35% Support proximity / support quality
+25% Upside to resistance or target
+20% Invalidation clarity
+20% Extension / risk condition
+
+entry_exit_points = entry_exit_raw_score / 100 * 12
+
+Great entry:
+- near active support
+- clear invalidation nearby
+- meaningful upside to resistance/target
+- not chase-extended
+
+Near entry:
+- setup is good but needs breakout trigger or retest
+
+Bad entry:
+- too extended from support
+- poor risk/reward
+- support lost
+- no clear invalidation
+
+Expose:
+
+entry_exit_raw_score
+entry_exit_points
+entry_exit_status
+nearest_support
+nearest_resistance
+entry_zone
+breakout_trigger
+reclaim_level
+critical_break_level
+invalidation_level
+target_1
+target_2
+risk_reward_ratio
+entry_exit_reason_codes
+
+If target_1 / target_2 cannot be reliably calculated yet:
+- leave them null
+- add reason code TARGET_LEVEL_UNAVAILABLE
+- do not fabricate levels
+
+For now, Risk/Reward lives inside Entry / Exit.
+Do not create a separate Risk/Reward core bucket.
+
+==================================================
+PART 6 — CATALYST ALIGNMENT — 15 POINTS
+==================================================
+
+Catalyst Alignment should answer:
+
+“Is there a current, recent, or upcoming event that can move the stock?”
+
+Split Catalyst into two sub-buckets:
+
+Direct Catalyst — 75%
+Catalyst Intelligence — 25%
+
+Catalyst raw score =
+direct_catalyst_score * 0.75
++ catalyst_intelligence_score * 0.25
+
+catalyst_alignment_points = catalyst_raw_score / 100 * 15
+
+==================================================
+PART 6A — DIRECT CATALYST — 75%
+==================================================
+
+Direct Catalyst answers:
+
+“Is there a real upcoming/recent event that can move the stock?”
+
+Qualified direct catalysts:
+
+Earnings
+FDA / biotech / regulatory event
+IPO-linked event
+Major contract / customer deal
+Government award
+Product launch
+Technical milestone
+Investor day / conference
+Strategic partnership
+M&A
+Stock split when relevant
+Company-specific high-impact news
+Fresh government / presidential investment announcement
+
+Current simplified scoring:
+
+Any qualified non-bearish direct catalyst = full Direct Catalyst bucket.
+
+So:
+
+direct_catalyst_score = 100 if qualified direct catalyst exists
+direct_catalyst_score = 0 if no direct catalyst
+
+Bullish / bearish simplification:
+
+bullish direct catalyst = counts
+neutral/event direct catalyst = counts
+bearish direct catalyst = does not boost, sets bearish catalyst flag
+
+Do not overbuild event ranking yet.
+
+Expose:
+
+direct_catalyst_score
+direct_catalyst_present
+direct_catalyst_type
+direct_catalyst_event
+direct_catalyst_polarity
+direct_catalyst_reason_codes
+
+==================================================
+PART 6B — CATALYST INTELLIGENCE — 25%
+==================================================
+
+Catalyst Intelligence answers:
+
+“Is news attention increasing meaningfully relative to company size?”
+
+Use only existing Live News / Watchlist News cached data.
+
+No new calls.
+
+Inputs:
+
+news volume / market cap over 48h
+news change increase/decrease % over 48h
+
+Do not use vague news significance in this phase.
+
+Formula:
+
+catalyst_intelligence_score =
+average(news_volume_market_cap_score, news_change_48h_score)
+
+If one input is missing, use the available input and reduce confidence.
+If both are missing, score 0 and status unavailable.
+
+Expose:
+
+catalyst_intelligence_score
+news_volume_market_cap_48h
+news_volume_market_cap_score
+news_change_48h_pct
+news_change_48h_score
+catalyst_intelligence_status
+catalyst_intelligence_reason_codes
+
+Catalyst final fields:
+
+catalyst_alignment_raw_score
+catalyst_alignment_points
+catalyst_status
+catalyst_detail_status
+catalyst_bearish_conflict
+catalyst_reason_codes
+
+==================================================
+PART 7 — INVESTMENT ALIGNMENT — 15 POINTS
+==================================================
+
+Investment Alignment must use the actual FMP fields already collected by the Watchlist Fundamental toggle.
+
+Do not call FMP.
+Do not add new fields.
+Use existing cached fundamentals only.
+
+Investment Alignment answers:
+
+“Is this a good asset because it is financially strong, currently growing, or has strong forward/future growth?”
+
+Investment is a 15-point pillar-count score:
+
+0 strong pillars = 0 points
+1 strong pillar = 5 points
+2 strong pillars = 10 points
+3 strong pillars = 15 points
+
+Three pillars:
+
+1. Financial Health
+2. Current Growth / Profitability Growth
+3. Forward / Future Growth
+
+Available fields:
+
+Mkt Cap
+Revenue
+Rev Grwth (Q)
+Rev Grwth (Y)
+Gross Mgn
+FCF Mgn
+Free CF
+Op. Income
+EBIT
+P/E
+P/S
+EV/EBITDA
+EPS Grwth
+D/E
+ND/EBITDA
+Insider %
+Earn. Date
+Rev Grwth Est
+Rev Grwth NQ
+Rev Grwth NY
+EPS Grwth Est
+EPS Grwth TQ
+EPS Grwth NQ
+EPS Grwth TY
+EPS Grwth NY
+
+Do not use Insider % for Investment Alignment right now.
+Do not use Earn. Date for Investment Alignment.
+Earn. Date belongs in Catalyst.
+Insider/whale activity belongs in bonus overlays.
+
+==================================================
+PART 7A — FINANCIAL HEALTH PILLAR
+==================================================
+
+Use:
+
+Gross Mgn
+FCF Mgn
+Free CF
+Op. Income
+EBIT
+D/E
+ND/EBITDA
+
+Strong if 4 of 7 checks pass:
+
+1. Gross Mgn is strong or above peer/theme median if available
+2. FCF Mgn > 0
+3. Free CF > 0
+4. Op. Income > 0
+5. EBIT > 0
+6. D/E < 1.5 or unavailable but no obvious debt issue
+7. ND/EBITDA < 3.0 or negative/net cash
+
+If peer/theme median is unavailable, use absolute fallback for Gross Mgn:
+Gross Mgn >= 35% = pass
+
+Expose:
+
+financial_health_score
+financial_health_strong
+financial_health_checks_passed
+financial_health_checks_total
+financial_health_reason_codes
+
+==================================================
+PART 7B — CURRENT GROWTH / PROFITABILITY GROWTH PILLAR
+==================================================
+
+Use:
+
+Revenue
+Rev Grwth (Q)
+Rev Grwth (Y)
+EPS Grwth
+EPS Grwth TQ
+EPS Grwth TY
+Gross Mgn
+FCF Mgn
+Op. Income
+EBIT
+
+Strong if 3 of 5 checks pass:
+
+1. Rev Grwth (Q) >= 20%
+2. Rev Grwth (Y) >= 15%
+3. EPS Grwth >= 15% OR EPS Grwth TQ/TY >= 15%
+4. FCF Mgn > 0 OR improving profitability proxy if already available
+5. Op. Income > 0 OR EBIT > 0
+
+Expose:
+
+current_growth_score
+current_growth_strong
+current_growth_checks_passed
+current_growth_checks_total
+current_growth_reason_codes
+
+==================================================
+PART 7C — FORWARD / FUTURE GROWTH PILLAR
+==================================================
+
+Use:
+
+Rev Grwth Est
+Rev Grwth NQ
+Rev Grwth NY
+EPS Grwth Est
+EPS Grwth NQ
+EPS Grwth NY
+EPS Grwth TQ
+EPS Grwth TY
+
+Strong if 2 of 4 forward checks pass:
+
+1. Rev Grwth Est >= 20%
+2. Rev Grwth NQ >= 20%
+3. Rev Grwth NY >= 15%
+4. EPS Grwth Est/NQ/NY >= 20%
+
+Special speculative growth rule:
+
+If forward revenue growth is extremely strong, e.g. Rev Grwth Est or Rev Grwth NQ >= 40%, then the Forward Growth pillar can be strong even if EPS growth is weak or unavailable.
+
+Expose:
+
+forward_growth_score
+forward_growth_strong
+forward_growth_checks_passed
+forward_growth_checks_total
+forward_growth_reason_codes
+
+==================================================
+PART 7D — INVESTMENT POINTS AND LABELS
+==================================================
+
+strong_pillar_count =
+financial_health_strong
++ current_growth_strong
++ forward_growth_strong
+
+investment_alignment_points = strong_pillar_count * 5
+
+Labels:
+
+0 pillars = No Clear Investment Case
+1 pillar = Single-Pillar Investment
+2 pillars = Strong Investment
+3 pillars = A+ Investment
+
+More specific labels:
+
+Financially Strong
+Current Growth Leader
+Forward Growth
+Speculative Growth
+Quality Compounder
+High Growth Compounder
+A+ Investment
+
+Expose:
+
+investment_alignment_raw_score
+investment_alignment_points
+investment_pillar_count
+investment_quality_label
+financial_health_strong
+current_growth_strong
+forward_growth_strong
+investment_reason_codes
+
+Important:
+
+Do not over-penalize high-growth stocks for high P/S.
+Do not require profitability for speculative forward growth.
+Do not require all three pillars.
+P/E, P/S, EV/EBITDA are valuation context/warnings, not core pillar killers.
+
+==================================================
+PART 8 — SOCIAL BONUS — UP TO +15
+==================================================
+
+Social Bonus uses existing Social page cache only.
+
+No Grok calls.
+No new API calls.
+
+Sections:
+
+Social Confluence
+Social Acceleration
+Fresh
+
+Scoring:
+
+Ticker appears in 1 section = +5
+Ticker appears in 2 sections = +10
+Ticker appears in 3 sections = +15
+
+Expose:
+
+social_bonus_points
+social_sections_hit
+social_confluence_hit
+social_acceleration_hit
+social_fresh_hit
+social_bonus_status
+social_reason_codes
+
+If Social cache is unavailable:
+social_bonus_points = 0
+social_bonus_status = unavailable
+
+==================================================
+PART 9 — REMOVE PREDICTION MARKETS FROM SCORE
+==================================================
+
+Prediction Markets should not affect Confluence.
+
+Set:
+
+prediction_market_bonus_points = 0
+prediction_market_bonus_status = disabled
+
+Keep debug/display fields only if already present.
+
+Add reason code:
+
+PREDICTION_MARKETS_DISABLED_FROM_SCORE
+
+==================================================
+PART 10 — WHALE / INSIDER / POLITICIAN BONUS — UP TO +5
+==================================================
+
+Use existing Whale Watch / Insider / Politician cached data only.
+
+No provider calls.
+
+If available:
+
+buy_pressure = buy_value / (buy_value + sell_value)
+
+Fallback:
+
+buy_pressure = buy_count / (buy_count + sell_count)
+
+Scoring:
+
+80–100% buys = +5
+65–79% buys = +4
+55–64% buys = +3
+45–54% buys = +1
+<45% buys = 0
+Heavy net selling = 0 + warning
+
+Cap at +5.
+
+Expose:
+
+whale_insider_bonus_points
+whale_insider_buy_pressure
+whale_buy_value
+whale_sell_value
+insider_buy_value
+insider_sell_value
+politician_buy_value
+politician_sell_value
+whale_insider_status
+whale_insider_reason_codes
+
+If cache/source unavailable:
+bonus = 0
+status = unavailable
+Do not block scoring.
+
+==================================================
+PART 11 — BOTTLENECK / SUPPLY CHAIN BOOST — UP TO +5
+==================================================
+
+Use existing Bottleneck / Supply Chain cache only.
+
+No provider calls.
+
+Formula:
+
+bottleneck_bonus_points =
+min(5, anchor_count / total_anchor_count * 5)
+
+If total_anchor_count unavailable, default to 13 based on current saved anchors.
+
+Expose:
+
+bottleneck_bonus_points
+bottleneck_anchor_count
+bottleneck_total_anchor_count
+bottleneck_anchor_names
+bottleneck_status
+bottleneck_reason_codes
+
+If cache unavailable:
+bonus = 0
+status = unavailable
+
+==================================================
+PART 12 — FINAL SCORE CALCULATION
+==================================================
+
+Core score:
+
+core_score =
+theme_alignment_points
++ stage_quality_points
++ options_alignment_points
++ technical_setup_points
++ entry_exit_points
++ catalyst_alignment_points
++ investment_alignment_points
+
+Expected max = 100.
+
+Bonus score:
+
+bonus_score =
+social_bonus_points
++ whale_insider_bonus_points
++ bottleneck_bonus_points
+
+Expected max = 25.
+
+Final score:
+
+caelyn_confluence_v42_score = min(125, core_score + bonus_score)
+
+Also expose:
+
+caelyn_confluence_v42_core_score = core_score
+caelyn_confluence_v42_bonus_score = bonus_score
+caelyn_confluence_v42_max_score = 125
+
+If validation passes:
+
+caelyn_confluence_score = caelyn_confluence_v42_score
+caelyn_confluence_core_score = core_score
+caelyn_confluence_bonus_score = bonus_score
+caelyn_confluence_max_score = 125
+
+==================================================
+PART 13 — CONFIDENCE
+==================================================
+
+Confidence is not Confluence.
+
+Confluence = signal strength.
+Confidence = data completeness / trustworthiness.
+
+Update confidence if needed to reflect new components:
+
+- missing options = confidence penalty
+- confirmed_no_options = neutral, not failure
+- missing catalyst intelligence = mild confidence penalty
+- missing social cache = mild confidence penalty
+- missing whale/bottleneck cache = mild confidence penalty, not severe
+- missing investment fundamentals = confidence penalty
+
+Do not let confidence change the Confluence score directly unless existing logic already does.
+
+==================================================
+PART 14 — ACTIONABILITY
+==================================================
+
+Actionability remains a decision layer.
+
+Do not turn Actionability into another score.
+
+Actionability should continue answering:
+
+“What should I do now?”
+
+Bonuses must not override hard risk.
+
+High Confluence + bad entry = Watch / Watch for Reset.
+High Confluence + good entry = Ready / Near Actionable.
+High Confluence + broken support = Avoid / Risk.
+Medium Confluence + great entry = Near Actionable.
+
+Preserve existing actionability booleans:
+
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+is_risk_conflict
+is_investment_quality
+
+==================================================
+PART 15 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+WYFI
+OSCR
+CRWD
+FTNT
+MU
+AMD
+MRVL
+BE
+NVEC
+MARA
+GLW
+VRT
+LITE
+PLTR
+OKLO
+SOFI
+TER
+AMKR
+ENTG
+KLAC
+ONTO
+MSFT
+NVDA
+SMCI
+CODA
+OCC
+SLNH
+SVCO
+TRT
+TYGO
+AMS:BESI
+APH
+KLIC
+SNDK
+ANET
+TXN
+CGNX
+GEV
+
+For each return:
+
+symbol
+old caelyn_confluence_score
+new caelyn_confluence_v42_score
+core_score
+bonus_score
+theme_points
+stage_points
+options_points
+technical_setup_points
+entry_exit_points
+catalyst_points
+investment_points
+social_bonus
+whale_insider_bonus
+bottleneck_bonus
+investment_pillar_count
+financial_health_strong
+current_growth_strong
+forward_growth_strong
+direct_catalyst_present
+direct_catalyst_type
+catalyst_intelligence_score
+options_status
+confidence_score
+bucket
+actionability_state
+reason_codes
+
+==================================================
+PART 16 — FINAL REPORT
+==================================================
+
+Return:
+
+V4.2 CORE SCORING SEMANTICS REPORT
+
+FILES CHANGED:
+[list]
+
+FORMULA CHANGE:
+[old vs new]
+
+CORE SCORE COVERAGE:
+[table]
+
+COMPONENT COVERAGE:
+[table]
+
+INVESTMENT PILLAR MODEL:
+[summary + distribution]
+
+SOCIAL BONUS:
+[summary + distribution]
+
+CATALYST 75/25 MODEL:
+[summary + distribution]
+
+THEME POLICY / PREDICTION MARKETS CLEANUP:
+[summary]
+
+TECHNICAL SETUP / ENTRY EXIT SPLIT:
+[summary]
+
+BONUS OVERLAYS:
+[summary]
+
+BUCKET DISTRIBUTION:
+[table]
+
+TOP 50 NEW CONFLUENCE:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+PROVIDER CALLS:
+[0 expected]
+
+End exactly:
+
+V4.2 SCORING SEMANTICS VERDICT
+
+CORE MAX SCORE IS 100:
+[YES/NO]
+
+TOTAL MAX SCORE IS 125:
+[YES/NO]
+
+THEME POLICY REMOVED AS STANDALONE BONUS:
+[YES/NO]
+
+PREDICTION MARKETS DISABLED FROM SCORE:
+[YES/NO]
+
+OPTIONS ALIGNMENT WEIGHTED AT 20:
+[YES/NO]
+
+SETUP_ENTRY_COMBINED_WEIGHTED_AT_20:
+[YES/NO]
+
+TECHNICAL_SETUP_SPLIT_EXPOSED:
+[YES/NO]
+
+ENTRY_EXIT_SPLIT_EXPOSED:
+[YES/NO]
+
+INVESTMENT_ALIGNMENT_WEIGHTED_AT_15:
+[YES/NO]
+
+INVESTMENT_3_PILLAR_MODEL_IMPLEMENTED:
+[YES/NO]
+
+SOCIAL_BONUS_FROM_3_SECTIONS:
+[YES/NO]
+
+CATALYST_75_DIRECT_25_INTELLIGENCE:
+[YES/NO]
+
+WHALE_INSIDER_BONUS_WIRED_OR_SAFELY_UNAVAILABLE:
+[YES/NO]
+
+BOTTLENECK_BONUS_WIRED_OR_SAFELY_UNAVAILABLE:
+[YES/NO]
+
+ACTIONABILITY_REMAINS_DECISION_LAYER:
+[YES/NO]
+
+ALL_ROWS_HAVE_V42_FIELDS:
+[YES/NO]
+
+PROVIDER CALLS:
+[0]
+
+READY_FOR_FRONTEND_WIRING:
+[YES/NO]
