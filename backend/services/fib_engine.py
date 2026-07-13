@@ -37,6 +37,43 @@ from datetime import datetime as _DT
 from typing import Optional
 
 
+# ── V4.2.5.2 depth-confidence helpers (no external imports) ───────────────────
+
+def _hist_status_fib(bar_count: int, is_actual_limit: bool = False) -> str:
+    if is_actual_limit:   return "actual_ticker_history_limit"
+    if bar_count >= 1100: return "available_5y"
+    if bar_count >= 700:  return "available_3y"
+    if bar_count >= 504:  return "partial_history"
+    if bar_count >= 252:  return "intermediate_only"
+    if bar_count >= 40:   return "recent_only"
+    return "insufficient_history"
+
+def _depth_conf_fib(bar_count: int, is_actual_limit: bool = False) -> float:
+    if is_actual_limit:
+        return round(min(1.0, bar_count / 252 * 0.75), 2) if bar_count else 0.25
+    if bar_count >= 1300: return 1.00
+    if bar_count >= 756:  return 0.85
+    if bar_count >= 504:  return 0.70
+    if bar_count >= 252:  return 0.50
+    return 0.25
+
+def _fib_scope_str(bar_count: int, weekly: int = 0, monthly: int = 0) -> str:
+    if bar_count >= 756:  return "multi_year"
+    if bar_count >= 504:  return "long"
+    if bar_count >= 252:  return "intermediate"
+    if bar_count >= 40:   return "recent"
+    return "insufficient"
+
+def _depth_reason_fib(bar_count: int, source: str, is_actual_limit: bool) -> Optional[str]:
+    if is_actual_limit:   return "actual_ticker_history_limit"
+    if bar_count >= 1100: return None
+    if bar_count >= 756:  return "below_5y_target"
+    if bar_count >= 504:  return "partial_2_3y_range"
+    if bar_count >= 252:  return "intermediate_only_1y"
+    if bar_count >= 40:   return f"recent_only_{source}"
+    return "insufficient_bars"
+
+
 # ── Level ratios ───────────────────────────────────────────────────────────────
 
 _FIB_RETRACE: list[tuple[str, float]] = [
@@ -540,15 +577,27 @@ def _null_result(reason_codes: Optional[list[str]] = None) -> dict:
         "fib_monthly_bar_count":         None,
         "fib_years_available":           None,
         "fib_long_term_available":       False,
+        # V4.2.5.2 depth fields
+        "fib_history_status":            "insufficient_history",
+        "fib_history_source":            "unknown",
+        "fib_long_history_used":         False,
+        "fib_data_depth_confidence":     0.25,
+        "fib_data_limitation_reason":    "insufficient_bars",
+        "fib_multi_year_available":      False,
+        "fib_weekly_available":          False,
+        "fib_monthly_available":         False,
+        "fib_timeframe_scope":           "insufficient",
     }
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def compute_fib_levels(
-    bars:          list[dict],
-    current_price: Optional[float] = None,
-    ticker_type:   str             = "standard",
+    bars:                    list[dict],
+    current_price:           Optional[float] = None,
+    ticker_type:             str             = "standard",
+    history_source:          str             = "unknown",
+    is_actual_history_limit: bool            = False,
 ) -> dict:
     """
     Multi-timeframe Fibonacci level computation.
@@ -602,11 +651,20 @@ def compute_fib_levels(
 
         if not candidates:
             r = null(["NO_VALID_ANCHOR_FOUND"])
-            r["fib_daily_bar_count"]   = n_daily
-            r["fib_weekly_bar_count"]  = n_weekly
-            r["fib_monthly_bar_count"] = n_monthly
-            r["fib_years_available"]   = years_avail
-            r["fib_long_term_available"] = long_avail
+            r["fib_daily_bar_count"]        = n_daily
+            r["fib_weekly_bar_count"]       = n_weekly
+            r["fib_monthly_bar_count"]      = n_monthly
+            r["fib_years_available"]        = years_avail
+            r["fib_long_term_available"]    = long_avail
+            r["fib_history_status"]         = _hist_status_fib(n_daily, is_actual_history_limit)
+            r["fib_history_source"]         = history_source
+            r["fib_long_history_used"]      = n_daily >= 756
+            r["fib_data_depth_confidence"]  = _depth_conf_fib(n_daily, is_actual_history_limit)
+            r["fib_data_limitation_reason"] = _depth_reason_fib(n_daily, history_source, is_actual_history_limit)
+            r["fib_multi_year_available"]   = n_daily >= 756
+            r["fib_weekly_available"]       = n_weekly >= 26
+            r["fib_monthly_available"]      = n_monthly >= 12
+            r["fib_timeframe_scope"]        = _fib_scope_str(n_daily, n_weekly, n_monthly)
             if n_daily < 252:
                 r["fib_reason_codes"].append("FIB_LONG_TERM_DATA_UNAVAILABLE")
             return r
@@ -712,6 +770,16 @@ def compute_fib_levels(
             "fib_monthly_bar_count":         n_monthly,
             "fib_years_available":           years_avail,
             "fib_long_term_available":       long_avail,
+            # ── V4.2.5.2 depth fields ─────────────────────────────────────────
+            "fib_history_status":            _hist_status_fib(n_daily, is_actual_history_limit),
+            "fib_history_source":            history_source,
+            "fib_long_history_used":         n_daily >= 756,
+            "fib_data_depth_confidence":     _depth_conf_fib(n_daily, is_actual_history_limit),
+            "fib_data_limitation_reason":    _depth_reason_fib(n_daily, history_source, is_actual_history_limit),
+            "fib_multi_year_available":      n_daily >= 756,
+            "fib_weekly_available":          n_weekly >= 26,
+            "fib_monthly_available":         n_monthly >= 12,
+            "fib_timeframe_scope":           _fib_scope_str(n_daily, n_weekly, n_monthly),
         }
 
     except Exception as exc:

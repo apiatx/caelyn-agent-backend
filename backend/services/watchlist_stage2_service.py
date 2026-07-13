@@ -69,6 +69,24 @@ _CONCURRENCY = 4
 # Days of history to fetch (same as theme_rs_service)
 _HIST_DAYS = 400
 
+
+# ── V4.2.5.2 depth helpers ────────────────────────────────────────────────────
+
+def _stage_depth_status(bar_count: int) -> str:
+    if bar_count >= 1100: return "available_5y"
+    if bar_count >= 700:  return "available_3y"
+    if bar_count >= 504:  return "partial_history"
+    if bar_count >= 252:  return "intermediate_only"
+    if bar_count >= 40:   return "recent_only"
+    return "insufficient_history"
+
+def _stage_depth_conf(bar_count: int) -> float:
+    if bar_count >= 1300: return 1.00
+    if bar_count >= 756:  return 0.85
+    if bar_count >= 504:  return 0.70
+    if bar_count >= 252:  return 0.50
+    return 0.25
+
 # Cache TTL for bar entries (1h, same as tdier_hist)
 _BAR_TTL = 3600
 
@@ -210,9 +228,10 @@ async def _fetch_bars(sym: str) -> tuple[list[dict], str, str]:
     Return (daily_bars, fetch_status, history_source) for *sym*.
 
     fetch_status   : "ok" | "no_bars" | "fetch_failed"
-    history_source : "fmp" | "tradier" | "unknown"
+    history_source : "fmp" | "tradier" | "canonical_fmp" | "canonical_tradier" | "unknown"
 
     Probe order:
+      0. Canonical 5-year disk cache (canonical_history_service) — survives restarts
       1. In-memory cache: fmp_hist:{sym}  (FMP bars, ~4h TTL, set by theme_rs)
       2. In-memory cache: tdier_hist:{sym}:400  (Tradier bars, 1h TTL)
       3. Live FMP /stable/historical-price-eod via theme_rs_service._fetch_fmp_daily_history
@@ -222,6 +241,17 @@ async def _fetch_bars(sym: str) -> tuple[list[dict], str, str]:
     Returns ([], "fetch_failed", "unknown") on any unexpected exception.
     """
     s = sym.upper()
+
+    # ── Step 0: Canonical disk cache (V4.2.5.2 — persists across restarts) ──
+    try:
+        from services.canonical_history_service import get_bars as _get_canon
+        canon = _get_canon(s, require_fresh=True)
+        if canon and canon.get("bars") and len(canon["bars"]) >= 40:
+            src = f"canonical_{canon.get('provider', 'fmp')}"
+            return canon["bars"], "ok", src
+    except Exception:
+        pass
+
     try:
         from data.cache import cache as _cache
         fmp_cached = _cache.get(f"fmp_hist:{s}")
@@ -513,6 +543,14 @@ async def warmup_stage2(
                     "has_ohlcv":          has_ohlcv,
                     "has_200d":           bar_count >= 200,
                     "has_252d":           bar_count >= 252,
+                    # ── V4.2.5.2 history depth diagnostics ────────────────────
+                    "stage_bar_count":             bar_count,
+                    "stage_years_available":       round(bar_count / 252, 1),
+                    "stage_history_status":        _stage_depth_status(bar_count),
+                    "stage_history_source":        hist_source,
+                    "stage_long_history_used":     bar_count >= 756,
+                    "stage_data_depth_confidence": _stage_depth_conf(bar_count),
+                    "stage_data_limitation_reason": conf_reason,
                     "status":             "ok",
                     "computed_at":        now_ts,
                 }

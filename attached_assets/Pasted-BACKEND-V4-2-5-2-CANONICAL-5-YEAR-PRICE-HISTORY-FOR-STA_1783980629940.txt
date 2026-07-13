@@ -1,0 +1,576 @@
+BACKEND — V4.2.5.2 CANONICAL 5-YEAR PRICE HISTORY FOR STAGE + ENTRY + FIB
+
+Backend only.
+
+Do not touch frontend.
+Do not change Confluence weights.
+Do not hardcode ticker symbols.
+Do not call LLMs.
+Do not add request-time provider calls.
+Do not change Options, Catalyst, Investment, Social, or Actionability formulas.
+Do not rewrite the V4.2.5.1 Fib engine unless necessary to consume the new canonical history source.
+Do not break retained snapshot rebuild speed.
+
+Goal:
+
+The system currently has inconsistent bar depth:
+
+ABCL / ALGM / VRT: ~1300 bars / ~5.2 years
+CRDO / MARA: ~400 bars / ~1.6 years
+WYFI: ~200 bars / ~0.8 years
+
+Some of this may be legitimate if the ticker is new.
+But if a ticker has more than 400 bars available and the backend only sees 400, that is a cache/code-path problem.
+
+The user’s technical system depends heavily on 1–5 year structures:
+- Stage analysis
+- 200DMA / 30-week SMA context
+- multi-year bases
+- Stage 1 → Stage 2 transitions
+- Fibonacci anchors
+- extension/reset logic
+- right-side cup / accumulation structures
+
+Therefore, Stage, Entry/Exit, Extension Reset, Fib, and Wave Structure should all consume a canonical long-history price source when available.
+
+FMP Starter supports up to 5 years of historical daily price data.
+400 bars is not the provider max. It is a current code/cache choice.
+
+==================================================
+PART 1 — BAR DEPTH SOURCE AUDIT
+==================================================
+
+Audit every path that currently fetches, caches, or passes daily bars.
+
+Inspect:
+
+stage_analysis.py
+entry_state_service.py
+fib_engine.py
+continuation_pattern_engine.py
+wave_structure_engine.py
+confluence_v2_service.py
+watchlist_stage2_lkg.json or equivalent stage LKG
+any price/bar cache files
+any Neon price history tables if present
+any historical provider helper functions
+
+For each source/path return:
+
+source_name
+file/function
+requested_bars
+actual_bars_returned
+provider
+cache_location
+cache_ttl
+is_persisted
+is_request_time
+consumer_services
+symbols_covered
+fallback_behavior
+
+Specifically explain:
+
+Why ABCL / ALGM / VRT have ~1300 bars.
+Why CRDO / MARA have only ~400 bars.
+Why WYFI has only ~200 bars.
+
+Classify each difference as:
+
+ACTUAL_TICKER_HISTORY_LIMIT
+CACHE_NOT_BACKFILLED
+CODE_REQUESTS_ONLY_400
+PROVIDER_RETURNED_PARTIAL
+LKG_STALE_OR_TRUNCATED
+UNKNOWN
+
+Do not guess. Trace the actual source.
+
+==================================================
+PART 2 — ADD CANONICAL 5-YEAR PRICE HISTORY CACHE
+==================================================
+
+Create or wire a canonical long-history daily bar cache.
+
+This should become the preferred input for:
+
+Stage analysis
+Entry/Exit
+Extension reset
+Fibonacci
+Wave structure
+Technical setup detection
+
+Target:
+
+target_bars = 1260
+preferred_bars = 1300
+target_years = 5
+minimum_multi_year_bars = 756
+minimum_intermediate_bars = 504
+minimum_recent_bars = 252
+
+Eligible symbols:
+
+- confluence_eligible = true
+- simple tickers without ":"
+- current watchlist symbols
+- portfolio underlyings
+- high-priority optionable simple tickers
+- exclude prefixed foreign/OTC symbols
+- exclude symbols confirmed provider-no-data
+
+Do not fetch on Confluence request.
+
+Allowed refresh modes:
+
+- scheduled/off-hours background refresh
+- admin/manual backfill endpoint
+- maintenance job
+- startup should only read existing cache, not fetch providers
+
+Storage fields:
+
+symbol
+provider
+bars_json or compact OHLCV
+bar_count
+oldest_bar_date
+newest_bar_date
+years_available
+fetched_at
+stale_after
+history_status
+error_reason
+source_priority
+last_attempt_at
+next_retry_at
+
+Statuses:
+
+available_5y
+available_3y
+partial_history
+intermediate_only
+recent_only
+actual_ticker_history_limit
+insufficient_history
+excluded_prefixed_symbol
+provider_unavailable
+fetch_failed
+not_yet_backfilled
+
+==================================================
+PART 3 — PROVIDER STRATEGY
+==================================================
+
+Provider order:
+
+1. Existing canonical 5-year cache if fresh.
+2. Tradier only if it can return the requested 5-year daily range reliably.
+3. FMP fallback for up to 5 years.
+4. Existing 400-bar Stage cache as last fallback.
+
+Important:
+
+Do not assume Tradier can return 5 years until audited.
+If Tradier returns partial history:
+- mark partial_history
+- fall back to FMP if budget allows
+
+FMP rules:
+
+- Use existing FMP budget governor if available.
+- No request-time FMP calls.
+- No frontend-triggered FMP calls.
+- No duplicate call if cache is fresh.
+- Respect monthly usage/budget constraints.
+- Space calls safely.
+- Make the job resumable.
+
+Backfill cadence:
+
+- weekly off-hours refresh for eligible universe
+- max symbols per run
+- delay between provider calls
+- persistent progress
+- skip fresh 5-year cache rows
+- prioritize symbols with stale/partial/no long-history cache
+
+==================================================
+PART 4 — STAGE MUST USE CANONICAL LONG HISTORY
+==================================================
+
+Current Stage behavior uses ~400 daily bars.
+That is not enough for the final system.
+
+Update Stage analysis to prefer canonical 5-year bars when available.
+
+Stage may still calculate:
+
+- 30-week SMA
+- 4-week slope
+- 26-week prior trend
+- 8-week RS
+- 20/50/200DMA
+
+But it should calculate them using a full long-history input when available.
+
+Why:
+
+A 400-bar window can misclassify:
+- multi-year Stage 1 accumulation
+- Stage 1→2 transitions
+- late Stage 2 vs early Stage 2
+- multi-year bases
+- long-term 200DMA reclaim structures
+- major cycle lows/highs
+
+Do not change Stage formula unnecessarily.
+Change the data depth feeding Stage.
+
+Expose Stage history diagnostics:
+
+stage_bar_count
+stage_years_available
+stage_history_status
+stage_history_source
+stage_long_history_used
+stage_data_limitation_reason
+
+If only 400 bars exist:
+- Stage can still run
+- but stage_history_status should not pretend 5-year context exists
+
+==================================================
+PART 5 — ENTRY / EXIT MUST USE CANONICAL LONG HISTORY
+==================================================
+
+Entry/Exit should use canonical long-history bars when available.
+
+This matters for:
+
+- prior high retest
+- breakout shelf retest
+- 20DMA / 30DMA / 50DMA / 200DMA pullbacks
+- multi-year base levels
+- 200DMA reclaim / support
+- previous major resistance becoming support
+- invalidation levels
+- target levels
+
+Expose:
+
+entry_bar_count
+entry_years_available
+entry_history_status
+entry_long_history_used
+entry_data_limitation_reason
+
+Do not fabricate levels if long-history data is unavailable.
+
+==================================================
+PART 6 — FIB ENGINE MUST USE CANONICAL LONG HISTORY
+==================================================
+
+V4.2.5.1 Fib engine is architecturally correct:
+- recent daily candidates
+- intermediate daily candidates
+- long daily candidates
+- weekly resampled candidates
+- monthly resampled candidates
+
+But it must consistently receive the canonical long-history bars.
+
+Update Fib so:
+
+If canonical 5-year bars exist:
+- use them
+- generate multi-year candidates
+- allow weekly/monthly Fib contexts
+
+If only 400 bars exist:
+- allow recent/intermediate Fib only
+- mark multi-year unavailable
+
+If only ~200 bars exist:
+- allow recent Fib only
+- mark intermediate/long/multi-year unavailable unless ticker is genuinely new
+
+Expose:
+
+fib_bar_count
+fib_years_available
+fib_history_status
+fib_history_source
+fib_long_history_used
+fib_data_limitation_reason
+fib_multi_year_available
+fib_weekly_available
+fib_monthly_available
+fib_timeframe_scope
+
+Allowed fib_timeframe_scope:
+
+recent
+intermediate
+long
+multi_year
+actual_ticker_history_limited
+insufficient
+
+==================================================
+PART 7 — CONFIDENCE MUST ACCOUNT FOR DATA DEPTH
+==================================================
+
+Do not let a 400-bar Fib or Stage result have the same long-term confidence as a 1300-bar result.
+
+Add separate confidence fields:
+
+history_data_depth_confidence
+stage_data_depth_confidence
+fib_data_depth_confidence
+entry_data_depth_confidence
+
+Suggested data depth confidence:
+
+1300+ bars / ~5y = 1.00
+756–1299 bars / ~3–5y = 0.85
+504–755 bars / ~2–3y = 0.70
+252–503 bars / ~1–2y = 0.50
+<252 bars = 0.25 max unless ACTUAL_TICKER_HISTORY_LIMIT
+
+If ticker is genuinely new:
+- use actual_ticker_history_limit
+- do not penalize as provider failure
+- but do not label it multi-year
+
+==================================================
+PART 8 — LONG-HISTORY BACKFILL QUEUE
+==================================================
+
+Add or wire a backfill queue for symbols missing canonical 5-year history.
+
+Priority:
+
+Tier 0:
+- Actionable / Near Actionable symbols
+- symbols with fib_data_depth_confidence < 0.85
+- symbols with stage_data_depth_confidence < 0.85
+- user watchlist symbols
+
+Tier 1:
+- portfolio underlyings
+- high-priority optionable simple tickers
+- tickers with Options/Catalyst/Theme alignment
+
+Tier 2:
+- remaining eligible watchlist symbols
+
+Exclude:
+- symbols containing ":"
+- provider no-data confirmed
+- fresh available_5y cache rows
+
+Expose diagnostics:
+
+long_history_queue_status
+long_history_backfill_priority
+long_history_last_attempt_at
+long_history_next_retry_at
+long_history_provider
+long_history_error_reason
+
+==================================================
+PART 9 — DO NOT BREAK RETAINED SNAPSHOT PERFORMANCE
+==================================================
+
+Confluence snapshot rebuild must remain cache-read only.
+
+Rules:
+
+- No provider calls during retained snapshot build.
+- No provider calls during alignment endpoint request.
+- If long-history cache missing, use fallback cached bars and mark limitation.
+- Provider fetch happens only in scheduled/admin backfill job.
+
+Validate retained snapshot rebuild time before/after.
+
+Expected:
+No major regression.
+
+==================================================
+PART 10 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+ABCL
+ALGM
+VRT
+SOFI
+ANET
+AMD
+CRDO
+CGNX
+OUST
+MARA
+HIVE
+HOOD
+HIMS
+WYFI
+ENTG
+ONTO
+MSFT
+NVDA
+SMCI
+TSM
+
+For each return:
+
+symbol
+confluence_eligible
+first_trade_date_if_available
+old_bar_count
+new_canonical_bar_count
+years_available
+history_status
+history_source
+actual_ticker_history_limit
+long_history_queue_status
+long_history_backfill_priority
+stage_bar_count
+stage_years_available
+stage_long_history_used
+stage_history_status
+fib_bar_count
+fib_years_available
+fib_long_history_used
+fib_timeframe_scope
+fib_multi_year_available
+fib_weekly_available
+fib_monthly_available
+primary_fib_context
+primary_fib_timeframe
+primary_fib_window
+primary_fib_confidence
+primary_fib_anchor_low
+primary_fib_anchor_high
+primary_fib_anchor_low_date
+primary_fib_anchor_high_date
+primary_nearest_fib_label
+primary_distance_to_fib_pct
+primary_fib_retest_detected
+primary_fib_target_1
+primary_fib_target_2
+actionable_tier
+actionable_path
+plain_english_explanation
+
+Expected:
+
+ABCL / ALGM / VRT:
+Should use ~5-year canonical bars if available.
+
+CRDO / MARA:
+Should either be upgraded to 5-year bars if available, or explicitly marked actual_ticker_history_limit / partial_history / not_yet_backfilled with queue status.
+
+WYFI:
+If genuinely only ~1 year old, mark actual_ticker_history_limit and do not penalize as provider failure.
+
+MSFT / NVDA / SMCI / TSM:
+Should be eligible for canonical 5-year backfill if not already available.
+
+==================================================
+PART 11 — FINAL REPORT
+==================================================
+
+Return:
+
+V4.2.5.2 CANONICAL 5-YEAR PRICE HISTORY REPORT
+
+FILES CHANGED:
+[list]
+
+BAR DEPTH SOURCE AUDIT:
+[summary]
+
+WHY 1300 VS 400 VS 200 BARS:
+[explain exact causes]
+
+CANONICAL LONG-HISTORY CACHE:
+[summary]
+
+STAGE LONG-HISTORY UPDATE:
+[summary]
+
+ENTRY/EXIT LONG-HISTORY UPDATE:
+[summary]
+
+FIB LONG-HISTORY UPDATE:
+[summary]
+
+DATA DEPTH CONFIDENCE:
+[summary]
+
+BACKFILL QUEUE:
+[summary]
+
+RETAINED SNAPSHOT PERFORMANCE:
+[before/after]
+
+VALIDATION SYMBOLS:
+[table]
+
+FMP CALLS USED:
+[count]
+
+PROVIDER CALLS DURING CONFLUENCE REQUEST:
+[0 expected]
+
+DATA LIMITATIONS:
+[summary]
+
+End exactly:
+
+V4.2.5.2 VERDICT
+
+FMP_5Y_HISTORY_CONFIRMED:
+[YES/NO]
+
+CURRENT_400_BAR_STAGE_LIMIT_IS_CODE_OR_CACHE_CHOICE:
+[YES/NO]
+
+WHY_1300_VS_400_VS_200_BAR_DIFF_EXPLAINED:
+[YES/NO]
+
+CANONICAL_5Y_PRICE_HISTORY_CACHE_ADDED_OR_WIRED:
+[YES/NO]
+
+STAGE_USES_LONG_HISTORY_WHEN_AVAILABLE:
+[YES/NO]
+
+ENTRY_EXIT_USES_LONG_HISTORY_WHEN_AVAILABLE:
+[YES/NO]
+
+FIB_USES_LONG_HISTORY_WHEN_AVAILABLE:
+[YES/NO]
+
+NEW_TICKERS_MARKED_ACTUAL_HISTORY_LIMIT_INSTEAD_OF_FAILURE:
+[YES/NO]
+
+400_BAR_RESULTS_NOT_MISLABELED_MULTI_YEAR:
+[YES/NO]
+
+LONG_HISTORY_BACKFILL_QUEUE_ADDED:
+[YES/NO]
+
+NO_REQUEST_TIME_PROVIDER_CALLS:
+[YES/NO]
+
+RETAINED_SNAPSHOT_PERFORMANCE_PRESERVED:
+[YES/NO]
+
+READY_FOR_FRONTEND_PATCH:
+[YES/NO]

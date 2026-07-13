@@ -183,6 +183,29 @@ _STATE_TO_FAMILY: dict[str, str] = {
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+def _entry_depth_status(bar_count: int) -> str:
+    if bar_count >= 1100: return "available_5y"
+    if bar_count >= 700:  return "available_3y"
+    if bar_count >= 504:  return "partial_history"
+    if bar_count >= 252:  return "intermediate_only"
+    if bar_count >= 40:   return "recent_only"
+    return "insufficient_history"
+
+def _entry_depth_conf(bar_count: int) -> float:
+    if bar_count >= 1300: return 1.00
+    if bar_count >= 756:  return 0.85
+    if bar_count >= 504:  return 0.70
+    if bar_count >= 252:  return 0.50
+    return 0.25
+
+def _entry_depth_reason(bar_count: int, provider: str) -> Optional[str]:
+    if bar_count >= 1100: return None
+    if bar_count >= 756:  return "below_5y_target"
+    if bar_count >= 504:  return "partial_2_3y_range"
+    if bar_count >= 252:  return "intermediate_only_1y"
+    if bar_count >= 40:   return f"recent_only_{provider}"
+    return "insufficient_bars"
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -1249,7 +1272,11 @@ def analyze_entry_state_from_bars(
     if sorted_bars and price is not None and price > 0:
         try:
             from backend.services.fib_engine import compute_fib_levels as _fib_fn
-            _fib_fields = _fib_fn(sorted_bars, current_price=price)
+            _fib_fields = _fib_fn(
+                sorted_bars,
+                current_price=price,
+                history_source=bars_provider,
+            )
         except Exception:
             _fib_fields = {}
 
@@ -1693,6 +1720,13 @@ def analyze_entry_state_from_bars(
         "price_as_of":     price_as_of,
         "bars_last_date":  bars_last_date,
         "bars_provider":   bars_provider,
+        # ── V4.2.5.2 entry depth diagnostics ─────────────────────────────────
+        "entry_bar_count":              len(sorted_bars),
+        "entry_years_available":        round(len(sorted_bars) / 252, 1),
+        "entry_history_status":         _entry_depth_status(len(sorted_bars)),
+        "entry_long_history_used":      len(sorted_bars) >= 756,
+        "entry_data_depth_confidence":  _entry_depth_conf(len(sorted_bars)),
+        "entry_data_limitation_reason": _entry_depth_reason(len(sorted_bars), bars_provider),
         "structure_state": _structure_state_raw,
         "extension_risk_modifier": _extension_risk_modifier,
         "extension_reason_codes":  _extension_reason_codes,

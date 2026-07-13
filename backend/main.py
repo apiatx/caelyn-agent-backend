@@ -954,6 +954,13 @@ async def lifespan(app):
         asyncio.create_task(_theme_rs_warmup())
     except Exception as _e:
         print(f"[STARTUP] Theme RS warmup error: {_e}")
+    # Canonical 5-year price history cache — read-only index preload (V4.2.5.2).
+    # Disk bars are written by admin backfill only; startup just reads the index.
+    try:
+        from services.canonical_history_service import preload_index as _canon_preload
+        _canon_preload()   # synchronous, reads _index.json only
+    except Exception as _e:
+        print(f"[STARTUP] Canonical history index preload error: {_e}")
     # Watchlist Stage 2 — load disk LKG into memory then kick a gentle
     # background warmup that fetches bars for any stale/missing symbols.
     try:
@@ -17806,6 +17813,91 @@ async def admin_stage2_force_warmup(
         "message": f"Force warmup running in background for {null_count} null entries.",
         "poll": "GET /api/admin/stage2/status",
     }
+
+
+@app.post("/api/admin/canonical-history/backfill")
+async def admin_canonical_history_backfill(
+    request:      Request,
+    api_key:      str   = Header(None, alias="X-API-Key"),
+    max_syms:     int   = Query(80, ge=1, le=500),
+    delay_s:      float = Query(0.25, ge=0.0, le=5.0),
+    priority_only: bool = Query(False, description="skip already available_5y symbols"),
+    symbols_csv:   str  = Query("", description="comma-separated override list"),
+):
+    """
+    Trigger one canonical 5-year price history backfill batch (background task).
+
+    Fetches FMP EOD history (1900 cal days) for watchlist symbols and persists to
+    backend/data/canonical_history/.  Surviving across restarts eliminates the
+    400-bar Tradier fallback for all symbols that have been backfilled.
+
+    Fires in background — returns immediately.
+    Poll GET /api/admin/canonical-history/status for progress.
+    """
+    import asyncio as _asyncio
+    from services.canonical_history_backfill import (
+        run_backfill_batch  as _run,
+        get_backfill_status as _bstatus,
+    )
+
+    if _bstatus()["running"]:
+        return JSONResponse(
+            {"error": "backfill_already_running", "job": _bstatus()}, status_code=409
+        )
+
+    symbols = None
+    if symbols_csv:
+        symbols = [s.strip().upper() for s in symbols_csv.split(",") if s.strip()]
+
+    async def _bg():
+        try:
+            result = await _run(
+                symbols=symbols, max_symbols=max_syms,
+                delay_s=delay_s, priority_only=priority_only,
+            )
+            print(f"[CANON_BACKFILL] batch complete: {result}")
+        except Exception as _exc:
+            print(f"[CANON_BACKFILL] batch error: {_exc}")
+
+    _asyncio.create_task(_bg())
+    return JSONResponse({
+        "started":        True,
+        "max_symbols":    max_syms,
+        "delay_s":        delay_s,
+        "priority_only":  priority_only,
+        "symbols_given":  symbols,
+        "poll":           "GET /api/admin/canonical-history/status",
+    })
+
+
+@app.get("/api/admin/canonical-history/status")
+async def admin_canonical_history_status(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    Return canonical history backfill job progress + full symbol index.
+
+    cache_summary.by_status shows counts per history_status value.
+    symbols dict provides per-symbol metadata (no bar payload).
+    """
+    from services.canonical_history_backfill import get_backfill_status as _bstatus
+    from services.canonical_history_service  import get_all_status      as _all_status
+
+    all_meta: dict = _all_status()
+    by_status: dict[str, int] = {}
+    for meta in all_meta.values():
+        s = meta.get("history_status", "unknown")
+        by_status[s] = by_status.get(s, 0) + 1
+
+    return JSONResponse({
+        "backfill_job": _bstatus(),
+        "cache_summary": {
+            "total_symbols": len(all_meta),
+            "by_status":     by_status,
+        },
+        "symbols": all_meta,
+    })
 
 
 @app.get("/api/admin/stage2/status")
