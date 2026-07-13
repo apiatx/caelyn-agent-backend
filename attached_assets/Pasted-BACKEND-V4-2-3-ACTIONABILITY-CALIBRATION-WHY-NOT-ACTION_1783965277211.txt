@@ -1,0 +1,414 @@
+BACKEND — V4.2.3 ACTIONABILITY CALIBRATION + “WHY NOT ACTIONABLE?” AUDIT
+
+Backend only.
+
+Do not touch frontend.
+Do not change V4.2.1/V4.2.2 scoring weights.
+Do not change Confluence score formula.
+Do not change provider calls.
+Do not call LLMs.
+Do not rebuild options/catalyst/investment engines.
+
+Goal:
+
+V4.2.2 made Actionable and Near Actionable mutually exclusive, but it overcorrected. Actionable count is now 0 even though many watchlist names are clearly actionable setups.
+
+We need to recalibrate the decision layer.
+
+Confluence score = evidence strength.
+Actionability = whether the current setup/entry is tradable now.
+
+Do not require actionability_state to literally be READY/ACTIONABLE. That is too strict because the engine often emits NEAR_ACTIONABLE / WAIT_FOR_RETEST for setups that are actually buyable.
+
+==================================================
+PART 1 — ADD “WHY NOT ACTIONABLE” DIAGNOSTICS
+==================================================
+
+For every alignment row, expose:
+
+actionable_tier
+actionable_path
+actionability_positive_reasons
+actionability_blockers
+actionability_decision_score
+actionability_decision_reason
+
+Allowed actionable_tier values:
+
+ACTIONABLE_NOW
+AGGRESSIVE_ACTIONABLE
+NEAR_ACTIONABLE
+WATCH_FOR_RESET
+NOT_ACTIONABLE
+RISK_CONFLICT
+INELIGIBLE
+
+Allowed actionable_path values:
+
+support_entry
+retest_entry
+breakout_entry
+bull_flag_entry
+high_tight_continuation
+ema_pullback
+reversal_entry
+low_base_entry
+investment_quality_watch
+not_applicable
+
+The frontend needs to understand why something is not actionable.
+
+Examples of blockers:
+
+INELIGIBLE_SYMBOL
+RISK_CONFLICT
+SUPPORT_LOST
+CONFIRMED_LOWER_LOW
+ENTRY_TOO_EXTENDED
+ENTRY_NOT_CLEAN
+SETUP_TOO_WEAK
+STAGE_TOO_WEAK
+NEEDS_BREAKOUT_TRIGGER
+NEEDS_RECLAIM
+NEEDS_RETEST
+OPTIONS_PENDING_NOT_BLOCKING
+CATALYST_MISSING_NOT_BLOCKING
+
+Important:
+Missing options or missing catalyst should not automatically block Actionable.
+They can reduce confidence or Confluence, but a clean technical entry can still be actionable.
+
+==================================================
+PART 2 — ACTIONABLE SHOULD NOT REQUIRE READY STATE ONLY
+==================================================
+
+Current bad rule:
+
+is_actionable_setup requires actionability_state in {READY, ACTIONABLE}
+
+Replace with a setup/entry driven rule.
+
+Hard exclusions:
+
+If confluence_eligible = false:
+  actionable_tier = INELIGIBLE
+  is_actionable_setup = false
+  is_near_actionable = false
+
+If is_risk_conflict = true OR actionability_state in {AVOID, RISK_CONFLICT}:
+  actionable_tier = RISK_CONFLICT
+  is_actionable_setup = false
+  is_near_actionable = false
+
+If active support is confirmed lost / support_lost / major lower low confirmed:
+  actionable_tier = NOT_ACTIONABLE
+  blocker = SUPPORT_LOST or CONFIRMED_LOWER_LOW
+
+Do not hard-block merely because:
+- options_status = not_scanned
+- catalyst_points = 0
+- actionability_state = NEAR_ACTIONABLE
+- actionability_state = WAIT_FOR_RETEST
+- actionability_state = WAIT_FOR_BREAKOUT
+
+==================================================
+PART 3 — ACTIONABLE NOW RULES
+==================================================
+
+Set is_actionable_setup = true when any of these paths pass.
+
+PATH A — SUPPORT / PULLBACK ENTRY
+
+Conditions:
+- eligible
+- no risk conflict
+- stage_quality_points >= 9 / 15
+- entry_exit_points >= 6.5 / 12
+- technical_setup_points >= 3.5 / 8
+- support intact OR testing active support OR near active support OR reclaim level nearby
+- not confirmed support lost
+- not chase extension with poor entry
+
+Then:
+actionable_tier = ACTIONABLE_NOW
+actionable_path = support_entry or ema_pullback
+positive reason = ACTIONABLE_SUPPORT_ENTRY
+
+PATH B — RETEST ENTRY
+
+Conditions:
+- eligible
+- no risk conflict
+- actionability_state in {WAIT_FOR_RETEST, NEAR_ACTIONABLE}
+- entry_exit_points >= 6.0 / 12
+- technical_setup_points >= 4.0 / 8
+- stage_quality_points >= 9 / 15
+- support/retest level exists or breakout shelf/retest pattern exists
+
+Then:
+actionable_tier = ACTIONABLE_NOW
+actionable_path = retest_entry
+positive reason = ACTIONABLE_RETEST_ENTRY
+
+Important:
+WAIT_FOR_RETEST should not automatically mean not actionable.
+If price is currently at or near retest/support, it can be actionable.
+
+PATH C — BREAKOUT / CONTINUATION ENTRY
+
+Conditions:
+- eligible
+- no risk conflict
+- stage_quality_points >= 10.5 / 15
+- technical_setup_points >= 5.5 / 8
+- entry_exit_points >= 5.0 / 12
+- setup label indicates:
+  HIGH_TIGHT_FLAG
+  BULL_FLAG
+  BREAKOUT_SHELF
+  VCP
+  high-tight continuation
+  bull flag
+  breakout shelf
+- not extreme/chase extension with poor R/R
+
+Then:
+actionable_tier = AGGRESSIVE_ACTIONABLE
+actionable_path = breakout_entry or high_tight_continuation
+positive reason = ACTIONABLE_CONTINUATION_SETUP
+
+PATH D — LOW BASE / REVERSAL ENTRY
+
+Conditions:
+- eligible
+- no risk conflict
+- technical_setup_label indicates LOW_BASE_REVERSAL, support bounce, double-touch low, reversal watch
+- entry_exit_points >= 6.5 / 12
+- support intact
+- no confirmed lower low
+- no confirmed support lost
+
+Then:
+actionable_tier = ACTIONABLE_NOW
+actionable_path = reversal_entry
+positive reason = ACTIONABLE_REVERSAL_AT_SUPPORT
+
+PATH E — HIGH CONFLUENCE EXCEPTION
+
+Conditions:
+- eligible
+- no risk conflict
+- caelyn_confluence_score >= 60
+- entry_exit_points >= 5.5
+- technical_setup_points >= 4.0
+- stage_quality_points >= 9
+- not support lost
+- not extreme chase extension
+
+Then:
+actionable_tier = AGGRESSIVE_ACTIONABLE
+positive reason = ACTIONABLE_HIGH_CONFLUENCE_ACCEPTABLE_ENTRY
+
+==================================================
+PART 4 — NEAR ACTIONABLE RULES
+==================================================
+
+Set is_near_actionable = true only when is_actionable_setup = false.
+
+Near Actionable means:
+good candidate, but needs one more thing.
+
+Conditions:
+- eligible
+- no risk conflict
+- not support lost
+- score/setup quality is decent
+- but one of:
+  entry_exit_points between 4.5 and 6.5
+  technical_setup_points between 3.0 and 5.0
+  needs breakout trigger
+  needs reclaim
+  needs cleaner retest
+  slightly extended from support
+
+Then:
+actionable_tier = NEAR_ACTIONABLE
+
+Reason codes:
+NEAR_ACTIONABLE_NEEDS_BREAKOUT
+NEAR_ACTIONABLE_NEEDS_RECLAIM
+NEAR_ACTIONABLE_NEEDS_RETEST
+NEAR_ACTIONABLE_ENTRY_NOT_CLEAN
+NEAR_ACTIONABLE_SETUP_GOOD_ENTRY_PENDING
+
+==================================================
+PART 5 — WATCH FOR RESET RULES
+==================================================
+
+Watch for Reset means:
+good stock or theme, but current entry is not good.
+
+Use when:
+- eligible
+- no hard risk conflict
+- setup/confluence may be good
+- but entry is too extended, support too far below, or R/R poor
+
+Reason codes:
+WATCH_FOR_RESET_EXTENDED
+WATCH_FOR_RESET_SUPPORT_TOO_FAR
+WATCH_FOR_RESET_RR_POOR
+WATCH_FOR_RESET_CHASE_EXTENSION
+
+Do not put clean support/EMA pullbacks here.
+
+==================================================
+PART 6 — VALIDATE USER’S “SHOULD BE ACTIONABLE” LIST
+==================================================
+
+Audit these exact symbols:
+
+ANET
+VRT
+ABCL
+WYFI
+NUAI
+ALGM
+SOFI
+HOOD
+HIMS
+ZVRA
+ENTG
+CGNX
+AEVA
+OUST
+TE
+FCEL
+SHLS
+ENPH
+ONTO
+MCHP
+HIVE
+ADUR
+
+For each return:
+
+symbol
+in_universe
+confluence_eligible
+caelyn_confluence_score
+actionability_state
+old_is_actionable_setup
+new_is_actionable_setup
+new_is_near_actionable
+actionable_tier
+actionable_path
+entry_exit_points
+technical_setup_points
+stage_quality_points
+options_points
+catalyst_points
+investment_points
+support_status
+active_support_status
+extension_state
+technical_setup_label
+entry_exit_status
+actionability_positive_reasons
+actionability_blockers
+final_explanation
+
+If a ticker remains not actionable, explain exactly why in plain English.
+
+Example explanations:
+- “Not actionable because entry is extended 14% above support and no breakout trigger exists.”
+- “Near actionable because setup is strong but needs reclaim above $X.”
+- “Actionable now because it is testing active support with Stage 2 structure and defined invalidation.”
+
+==================================================
+PART 7 — TAB COUNTS AFTER CALIBRATION
+==================================================
+
+Return:
+
+eligible rows
+ineligible rows
+Actionable count
+Aggressive Actionable count
+Near Actionable count
+Watch for Reset count
+Risk count
+Investment Quality count
+
+Return overlaps:
+Actionable ∩ Near Actionable
+Actionable ∩ Watch for Reset
+Near Actionable ∩ Risk
+
+Expected:
+Actionable ∩ Near Actionable = 0
+
+But Actionable count should not be 0.
+
+Do not force any specific count.
+But if Actionable count remains 0, the calibration failed unless every validation symbol has a clear hard blocker.
+
+==================================================
+FINAL REPORT
+==================================================
+
+Return:
+
+V4.2.3 ACTIONABILITY CALIBRATION REPORT
+
+FILES CHANGED:
+[list]
+
+OLD ACTIONABLE RULE:
+[summary]
+
+NEW ACTIONABLE RULE:
+[summary]
+
+TAB COUNTS BEFORE / AFTER:
+[table]
+
+USER WATCHLIST ACTIONABILITY AUDIT:
+[table for all requested symbols]
+
+WHY SYMBOLS ARE NOT ACTIONABLE:
+[plain English summary grouped by reason]
+
+PROVIDER CALLS:
+0 expected
+
+End exactly:
+
+V4.2.3 ACTIONABILITY VERDICT
+
+ACTIONABLE_NO_LONGER_REQUIRES_READY_ONLY:
+[YES/NO]
+
+WAIT_FOR_RETEST_CAN_BE_ACTIONABLE_IF_AT_RETEST:
+[YES/NO]
+
+ACTIONABLE_NEAR_ACTIONABLE_MUTUALLY_EXCLUSIVE:
+[YES/NO]
+
+ACTIONABLE_COUNT_NONZERO:
+[YES/NO]
+
+USER_ACTIONABLE_LIST_AUDITED:
+[YES/NO]
+
+EACH_NON_ACTIONABLE_SYMBOL_HAS_BLOCKER_EXPLANATION:
+[YES/NO]
+
+SCORING_FORMULA_UNCHANGED:
+[YES/NO]
+
+PROVIDER_CALLS:
+[0]
+
+READY_FOR_FRONTEND_PATCH:
+[YES/NO]

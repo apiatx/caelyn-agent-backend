@@ -1854,6 +1854,21 @@ def build_confluence_snapshot(
     results: list[dict] = []
     social_bonus_counts = {"0": 0, "2_4": 0, "5_7": 0, "8_10": 0, "eligible": 0, "applied": 0}
 
+    # V4.2.3 pattern sets — defined once outside the per-row loop
+    _P6_BREAKOUT_PATTERNS = {
+        "HIGH_TIGHT_FLAG", "BULL_FLAG", "BREAKOUT_SHELF", "VCP",
+        "CUP_HANDLE", "CUP_AND_HANDLE", "STAGE2_BREAKOUT",
+    }
+    _P6_REVERSAL_PATTERNS = {
+        "LOW_BASE_REVERSAL", "BASE_BOTTOM", "200DMA_RECLAIM", "SUPPORT_BOUNCE",
+    }
+    _P6_RETEST_PATTERNS = {
+        "EMA_PULLBACK", "20DMA_PULLBACK", "30DMA_PULLBACK", "50DMA_PULLBACK",
+        "LEADER_PULLBACK", "BREAKOUT_RETEST",
+    }
+    _P6_SUPPORT_INTACT = {"above_support", "at_support", "near_support"}
+    _P6_SUPPORT_LOST   = {"support_lost", "breakdown", "major_breakdown"}
+
     for sym in universe:
         # Normalize Entry: apply canonical current-version check before any
         # consumer sees the result.  A row that exists but carries a stale
@@ -2002,10 +2017,11 @@ def build_confluence_snapshot(
             _p5_rcs.append("BUCKET_DOWNGRADED_ACT_CONSISTENCY")
             r["caelyn_confluence_reason_codes"] = _p5_rcs
 
-        # PART 6 — V4.2.2 Boolean filter fields + confluence eligibility.
-        # Frontend should use these booleans rather than deriving them.
+        # PART 6 — V4.2.3 Actionability Calibration. Multi-path setup/entry
+        # driven decision layer. No longer requires actionability_state == READY.
+        # Mutual exclusivity: is_actionable_setup XOR is_near_actionable.
 
-        # ── Eligibility: prefixed foreign/OTC symbols are never actionable ───
+        # ── Eligibility ──────────────────────────────────────────────────────
         _p6_sym      = str(r.get("symbol") or "")
         _p6_eligible = ":" not in _p6_sym
         r["confluence_eligible"]          = _p6_eligible
@@ -2013,66 +2029,199 @@ def build_confluence_snapshot(
             None if _p6_eligible else "prefixed_foreign_or_otc_symbol"
         )
 
-        _p6_bucket = r.get("caelyn_confluence_bucket") or ""
-        _p6_act    = r.get("actionability_state") or ""
-        _p6_rcs    = r.get("caelyn_confluence_reason_codes") or []
-        _p6_risk   = _p6_bucket == "RISK_CONFLICT" or _p6_act == "AVOID"
-        _p6_score  = float(r.get("caelyn_confluence_score") or 0.0)
-        _p6_entry  = float(r.get("entry_exit_points") or 0.0)
-        _p6_tech   = float(r.get("technical_setup_points") or 0.0)
+        # ── Raw signal values ─────────────────────────────────────────────────
+        _p6_bucket       = r.get("caelyn_confluence_bucket") or ""
+        _p6_act          = r.get("actionability_state") or ""
+        _p6_risk         = _p6_bucket == "RISK_CONFLICT" or _p6_act == "AVOID"
+        _p6_score        = float(r.get("caelyn_confluence_score") or 0.0)
+        _p6_entry        = float(r.get("entry_exit_points") or 0.0)
+        _p6_tech         = float(r.get("technical_setup_points") or 0.0)
+        _p6_stage        = float(r.get("stage_quality_points") or 0.0)
+        _p6_asst         = str(r.get("active_support_status") or "").lower()
+        _p6_major_llc    = bool(r.get("major_lower_low_confirmed"))
+        _p6_chase        = bool(r.get("chase_extension"))
+        _p6_constructive = bool(r.get("constructive_extension"))
+        _p6_pattern      = str(r.get("pattern_type") or "")
+
+        # ── Derived flags ─────────────────────────────────────────────────────
+        _p6_support_intact   = _p6_asst in _P6_SUPPORT_INTACT
+        _p6_support_lost     = _p6_asst in _P6_SUPPORT_LOST or _p6_major_llc
+        _p6_chase_bad        = _p6_chase and not _p6_constructive
+        _p6_retest_state     = _p6_act in {"WAIT_FOR_RETEST", "NEAR_ACTIONABLE"}
+        _p6_breakout_state   = _p6_act == "WAIT_FOR_BREAKOUT"
+        _p6_is_breakout_pat  = _p6_pattern in _P6_BREAKOUT_PATTERNS
+        _p6_is_reversal_pat  = _p6_pattern in _P6_REVERSAL_PATTERNS
+        _p6_is_retest_pat    = _p6_pattern in _P6_RETEST_PATTERNS
+
+        # ── Multi-path decision ───────────────────────────────────────────────
+        _p6_pos: list[str]  = []
+        _p6_blk: list[str]  = []
+        _p6_tier  = "NOT_ACTIONABLE"
+        _p6_path  = "not_applicable"
+        _p6_is_act  = False
+        _p6_is_near = False
 
         if not _p6_eligible:
-            r["is_actionable_setup"]           = False
-            r["is_near_actionable"]            = False
-            r["is_watch_for_reset"]            = False
-            r["is_risk_conflict"]              = False
-            r["is_investment_quality"]         = False
-            r["actionability_decision_reason"] = "NOT_ACTIONABLE_INELIGIBLE_SYMBOL"
+            _p6_tier = "INELIGIBLE"
+            _p6_blk.append("INELIGIBLE_SYMBOL")
+
+        elif _p6_risk or _p6_major_llc:
+            _p6_tier = "RISK_CONFLICT"
+            _p6_blk.append("RISK_CONFLICT")
+            if _p6_major_llc:
+                _p6_blk.append("CONFIRMED_LOWER_LOW")
+
+        elif _p6_support_lost:
+            _p6_tier = "NOT_ACTIONABLE"
+            _p6_blk.append("SUPPORT_LOST")
+
         else:
-            # Actionable = can act now (strict gate)
-            _is_act = (
-                not _p6_risk
-                and _p6_act in {"READY", "ACTIONABLE"}
-                and _p6_entry >= 8.0
-                and _p6_tech  >= 5.0
-            )
+            # PATH A — Support / Pullback Entry
+            if (
+                _p6_stage >= 9.0
+                and _p6_entry >= 6.5
+                and _p6_tech  >= 3.5
+                and _p6_support_intact
+                and not _p6_chase_bad
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "ACTIONABLE_NOW"
+                _p6_path    = "ema_pullback" if _p6_is_retest_pat else "support_entry"
+                _p6_pos.append("ACTIONABLE_SUPPORT_ENTRY")
 
-            # Near Actionable = good candidate, needs one more thing
-            # Mutually exclusive with Actionable
-            if _is_act:
-                _is_near = False
-            else:
-                _state_near = _p6_act in {"NEAR_ACTIONABLE", "WAIT_FOR_RETEST", "WAIT_FOR_BREAKOUT"}
-                _score_near = (
-                    _p6_score >= 55.0
-                    and _p6_entry >= 5.5
-                    and _p6_tech  >= 4.0
-                )
-                _is_near = not _p6_risk and (_state_near or _score_near)
+            # PATH B — Retest Entry
+            elif (
+                _p6_retest_state
+                and _p6_entry >= 6.0
+                and _p6_tech  >= 4.0
+                and _p6_stage >= 9.0
+                and not _p6_chase_bad
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "ACTIONABLE_NOW"
+                _p6_path    = "retest_entry"
+                _p6_pos.append("ACTIONABLE_RETEST_ENTRY")
 
-            r["is_actionable_setup"]   = _is_act
-            r["is_near_actionable"]    = _is_near
-            r["is_watch_for_reset"]    = _p6_act == "WATCH_FOR_RESET"
-            r["is_risk_conflict"]      = bool(_p6_risk)
-            r["is_investment_quality"] = _p6_bucket == "INVESTMENT_QUALITY" and not _p6_risk
+            # PATH C — Breakout / Continuation Entry
+            elif (
+                _p6_is_breakout_pat
+                and _p6_stage >= 10.5
+                and _p6_tech  >= 5.5
+                and _p6_entry >= 5.0
+                and not _p6_chase_bad
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "AGGRESSIVE_ACTIONABLE"
+                _p6_path    = ("high_tight_continuation"
+                               if _p6_pattern == "HIGH_TIGHT_FLAG"
+                               else "breakout_entry")
+                _p6_pos.append("ACTIONABLE_CONTINUATION_SETUP")
 
-            # Decision reason code
-            if _is_act:
-                _p6_dr = "ACTIONABLE_READY_NOW"
-            elif _is_near:
-                if _p6_act == "WAIT_FOR_RETEST":
-                    _p6_dr = "NEAR_ACTIONABLE_NEEDS_RETEST"
-                elif _p6_act == "WAIT_FOR_BREAKOUT":
-                    _p6_dr = "NEAR_ACTIONABLE_NEEDS_BREAKOUT"
+            # PATH D — Low Base / Reversal Entry
+            elif (
+                _p6_is_reversal_pat
+                and _p6_entry >= 6.5
+                and _p6_support_intact
+                and not _p6_major_llc
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "ACTIONABLE_NOW"
+                _p6_path    = "reversal_entry"
+                _p6_pos.append("ACTIONABLE_REVERSAL_AT_SUPPORT")
+
+            # PATH E — High Confluence Exception
+            elif (
+                _p6_score >= 60.0
+                and _p6_entry >= 5.5
+                and _p6_tech  >= 4.0
+                and _p6_stage >= 9.0
+                and not _p6_chase_bad
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "AGGRESSIVE_ACTIONABLE"
+                _p6_path    = ("high_tight_continuation" if _p6_is_breakout_pat
+                               else "bull_flag_entry" if _p6_breakout_state
+                               else "support_entry")
+                _p6_pos.append("ACTIONABLE_HIGH_CONFLUENCE_ACCEPTABLE_ENTRY")
+
+            if not _p6_is_act:
+                # Near Actionable — good candidate, one more thing needed
+                _p6_near_entry    = 4.5 <= _p6_entry < 6.5
+                _p6_needs_trigger = _p6_act in {"WAIT_FOR_BREAKOUT", "WAIT_FOR_RETEST"}
+                _p6_decent_stage  = _p6_stage >= 7.0
+                _p6_decent_entry  = _p6_entry >= 4.5
+
+                if (
+                    _p6_decent_entry
+                    and _p6_decent_stage
+                    and not _p6_chase_bad
+                    and (_p6_near_entry or _p6_needs_trigger or _p6_tech >= 3.0)
+                ):
+                    _p6_is_near = True
+                    _p6_tier    = "NEAR_ACTIONABLE"
+                    if _p6_breakout_state or _p6_act == "WAIT_FOR_BREAKOUT":
+                        _p6_blk.append("NEEDS_BREAKOUT_TRIGGER")
+                    elif _p6_act == "WAIT_FOR_RETEST":
+                        _p6_blk.append("NEEDS_RETEST")
+                    elif _p6_near_entry:
+                        _p6_blk.append("ENTRY_NOT_CLEAN")
+                    else:
+                        _p6_blk.append("SETUP_TOO_WEAK")
+
+                # Watch for Reset — good candidate, entry/R-R not there yet
+                elif _p6_chase_bad or _p6_act == "WATCH_FOR_RESET":
+                    _p6_tier = "WATCH_FOR_RESET"
+                    if _p6_chase_bad:
+                        _p6_blk.append("ENTRY_TOO_EXTENDED")
+                        _p6_blk.append("WATCH_FOR_RESET_CHASE_EXTENSION")
+                    elif not _p6_support_intact:
+                        _p6_blk.append("WATCH_FOR_RESET_SUPPORT_TOO_FAR")
+                    else:
+                        _p6_blk.append("WATCH_FOR_RESET_RR_POOR")
+
+                # Not Actionable fallback
                 else:
-                    _p6_dr = "NEAR_ACTIONABLE_ENTRY_NOT_CLEAN"
-            elif _p6_risk:
-                _p6_dr = "NOT_ACTIONABLE_RISK_CONFLICT"
-            elif _p6_entry < 8.0 or _p6_tech < 5.0:
-                _p6_dr = "NOT_ACTIONABLE_ENTRY_TOO_WEAK"
-            else:
-                _p6_dr = "NOT_ACTIONABLE_WATCH"
-            r["actionability_decision_reason"] = _p6_dr
+                    _p6_tier = "NOT_ACTIONABLE"
+                    if _p6_entry < 4.5:
+                        _p6_blk.append("ENTRY_NOT_CLEAN")
+                    if _p6_tech < 3.0:
+                        _p6_blk.append("SETUP_TOO_WEAK")
+                    if _p6_stage < 7.0:
+                        _p6_blk.append("STAGE_TOO_WEAK")
+                    if not _p6_blk:
+                        _p6_blk.append("SETUP_TOO_WEAK")
+
+        # Soft non-blocking notes (never block actionable)
+        if r.get("options_status") in ("not_scanned", "pending", "missing_cache", None):
+            _p6_pos.append("OPTIONS_PENDING_NOT_BLOCKING")
+        if not (r.get("catalyst_alignment_points") or 0):
+            _p6_pos.append("CATALYST_MISSING_NOT_BLOCKING")
+
+        # Decision reason = first blocker if any, else first positive reason
+        _p6_dr = _p6_blk[0] if _p6_blk else (_p6_pos[0] if _p6_pos else "NOT_ACTIONABLE_WATCH")
+
+        r["is_actionable_setup"]             = _p6_is_act
+        r["is_near_actionable"]              = _p6_is_near
+        r["is_watch_for_reset"]              = (
+            _p6_tier == "WATCH_FOR_RESET"
+            or (_p6_act == "WATCH_FOR_RESET"
+                and _p6_tier not in {"ACTIONABLE_NOW", "AGGRESSIVE_ACTIONABLE", "NEAR_ACTIONABLE"})
+        )
+        r["is_risk_conflict"]                = _p6_tier == "RISK_CONFLICT" or bool(_p6_risk)
+        r["is_investment_quality"]           = (
+            _p6_bucket == "INVESTMENT_QUALITY" and not _p6_risk and _p6_eligible
+        )
+        r["actionable_tier"]                 = _p6_tier
+        r["actionable_path"]                 = _p6_path
+        r["actionability_positive_reasons"]  = _p6_pos
+        r["actionability_blockers"]          = _p6_blk
+        r["actionability_decision_score"]    = round(
+            _p6_entry * 0.40
+            + _p6_tech  * 0.35
+            + min(_p6_stage / 15.0 * 8.0, 8.0) * 0.25,
+            2,
+        )
+        r["actionability_decision_reason"]   = _p6_dr
 
         results.append(r)
 
@@ -2236,26 +2385,31 @@ def build_confluence_snapshot(
     print(
         f"[CONFLUENCE_SNAP] build_complete symbol_count={len(results)} elapsed_ms={_total_ms}"
     )
-    # ── V4.2.2 tab counts + overlap diagnostics ──────────────────────────────
+    # ── V4.2.3 tab counts + overlap diagnostics ──────────────────────────────
     _eligible_results    = [r for r in results if r.get("confluence_eligible")]
     _act_results         = [r for r in results if r.get("is_actionable_setup")]
     _near_results        = [r for r in results if r.get("is_near_actionable")]
     _watch_results       = [r for r in results if r.get("is_watch_for_reset")]
     _risk_results        = [r for r in results if r.get("is_risk_conflict")]
     _iq_results          = [r for r in results if r.get("is_investment_quality")]
+    # Tier split within is_actionable_setup = True
+    _act_now_results     = [r for r in _act_results if r.get("actionable_tier") == "ACTIONABLE_NOW"]
+    _act_agg_results     = [r for r in _act_results if r.get("actionable_tier") == "AGGRESSIVE_ACTIONABLE"]
     _act_syms            = {r["symbol"] for r in _act_results}
     _near_syms           = {r["symbol"] for r in _near_results}
     _watch_syms          = {r["symbol"] for r in _watch_results}
     _risk_syms           = {r["symbol"] for r in _risk_results}
 
     v422_tab_counts = {
-        "all_eligible":          len(_eligible_results),
-        "actionable":            len(_act_results),
-        "near_actionable":       len(_near_results),
-        "watch_for_reset":       len(_watch_results),
-        "risk_conflicts":        len(_risk_results),
-        "investment_quality":    len(_iq_results),
-        "ineligible":            len(results) - len(_eligible_results),
+        "all_eligible":            len(_eligible_results),
+        "actionable":              len(_act_results),
+        "actionable_now":          len(_act_now_results),
+        "aggressive_actionable":   len(_act_agg_results),
+        "near_actionable":         len(_near_results),
+        "watch_for_reset":         len(_watch_results),
+        "risk_conflicts":          len(_risk_results),
+        "investment_quality":      len(_iq_results),
+        "ineligible":              len(results) - len(_eligible_results),
     }
     v422_overlap_counts = {
         "actionable_and_near_actionable":  len(_act_syms & _near_syms),
