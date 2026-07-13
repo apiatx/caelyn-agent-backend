@@ -680,6 +680,10 @@ def _score_entry_exit_v42(row: dict) -> dict:
     dist_20dma   = row.get("dist_from_20dma_pct")
     dist_50dma   = row.get("dist_from_50dma_pct")
     dist_200dma  = row.get("dist_from_200dma_pct")
+    # V4.2.5.1 — Multi-timeframe Fib confidence gate
+    primary_fib_conf = float(row.get("primary_fib_confidence") or 0.0)
+    fib_trusted      = fib_retest and primary_fib_conf >= 0.25
+    fib_mtf_selected = primary_fib_conf >= 0.50 and bool(row.get("fib_candidates_count", 0) or 0) > 1
     reason_codes: list[str] = []
 
     # Hard gate: structural break
@@ -769,20 +773,32 @@ def _score_entry_exit_v42(row: dict) -> dict:
             reason_codes.append("CHASE_EXTENSION_ENTRY_PENALTY")
 
     # Fib retest bonus (additive, not a gate)
-    if fib_retest and not major_llc:
+    # V4.2.5.1: gated by primary_fib_confidence >= 0.25
+    if fib_trusted and not major_llc:
         _fib_bonus = 0.0
-        if fib_retest_t == "SHALLOW_RETRACEMENT_RETEST":
+        _fib_lbl   = nearest_fib.replace("FIB_", "").replace(".", "")
+        if fib_retest_t == "PRIOR_RESISTANCE_RETEST":
+            _fib_bonus = 5.0
+            reason_codes.append("FIB_1000_RETEST_ENTRY")
+            reason_codes.append("FIB_RETEST_ENTRY")
+        elif fib_retest_t == "SHALLOW_RETRACEMENT_RETEST":
             _fib_bonus = 6.0
-            reason_codes.append(f"FIB_SHALLOW_RETEST_{nearest_fib}")
+            reason_codes.append(f"FIB_{_fib_lbl}_RETEST_ENTRY")
+            reason_codes.append("FIB_RETEST_ENTRY")
         elif fib_retest_t == "DEEP_RETRACEMENT_RETEST":
             _fib_bonus = 4.0
-            reason_codes.append(f"FIB_DEEP_RETEST_{nearest_fib}")
-        elif fib_retest_t == "PRIOR_RESISTANCE_RETEST":
-            _fib_bonus = 5.0
-            reason_codes.append(f"FIB_PRIOR_RESISTANCE_RETEST_{nearest_fib}")
+            reason_codes.append(f"FIB_{_fib_lbl}_RETEST_ENTRY")
+            reason_codes.append("FIB_RETEST_ENTRY")
         elif fib_retest_t == "EXTENSION_TARGET_RETEST":
+            _ext_lbl = nearest_fib.replace("FIB_", "").replace(".", "")
             _fib_bonus = 3.0
-            reason_codes.append(f"FIB_EXTENSION_TARGET_{nearest_fib}")
+            reason_codes.append(f"FIB_EXTENSION_TARGET_{_ext_lbl}")
+        elif fib_retest_t == "FAR_EXTENSION_TARGET":
+            _ext_lbl = nearest_fib.replace("FIB_", "").replace(".", "")
+            _fib_bonus = 2.0
+            reason_codes.append(f"FIB_EXTENSION_TARGET_{_ext_lbl}")
+        if fib_mtf_selected:
+            reason_codes.append("FIB_MULTI_TIMEFRAME_PRIMARY_SELECTED")
         rr_val = min(rr_val + _fib_bonus, 100.0)
 
     # MA proximity bonus (additive, max once)

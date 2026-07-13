@@ -1705,6 +1705,8 @@ def analyze_entry_state_from_bars(
         "entry_risk_reward_score":        _rr.get("entry_risk_reward_score"),
         "entry_risk_reward_reason_codes": _rr.get("entry_risk_reward_reason_codes"),
         "distance_to_active_support_pct": _rr.get("distance_to_active_support_pct"),
+        # ── Bar depth ────────────────────────────────────────────────────────
+        "daily_bar_count":             len(sorted_bars),
         # ── V4.2.5 — Extended MA fields ──────────────────────────────────────
         "sma_30":                      _sma30,
         "pct_vs_sma_30":               _pct30,

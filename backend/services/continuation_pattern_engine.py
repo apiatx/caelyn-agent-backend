@@ -110,6 +110,7 @@ def _classify_extension_reset(
     lower_low_confirmed:           bool,
     has_cont_state:                bool,
     is_extended_state:             bool,
+    primary_fib_confidence:        Optional[float] = None,
 ) -> tuple[str, float, list[str]]:
     """
     Classify the current extension reset state.
@@ -139,8 +140,10 @@ def _classify_extension_reset(
     near_20dma  = dist_from_20dma_pct is not None and abs(dist_from_20dma_pct) <= 4.0
     near_50dma  = dist_from_50dma_pct is not None and abs(dist_from_50dma_pct) <= 5.0
     near_200dma = dist_from_200dma_pct is not None and abs(dist_from_200dma_pct) <= 5.0
-    near_any_ma = near_20dma or near_50dma or near_200dma
-    fib_hit     = bool(fib_retest_detected)
+    near_any_ma   = near_20dma or near_50dma or near_200dma
+    # V4.2.5.1: gate fib_hit by primary_fib_confidence (require >= 0.25)
+    _fib_conf_ok  = (primary_fib_confidence is None or primary_fib_confidence >= 0.25)
+    fib_hit       = bool(fib_retest_detected) and _fib_conf_ok
 
     # ── HIGH_BASE_RESET ───────────────────────────────────────────────────────
     # Extended but has continuation structure at elevated levels
@@ -236,6 +239,8 @@ def detect_continuation_pattern(
     fib_retest_detected:            Optional[bool]  = None,
     fib_retest_type:                Optional[str]   = None,
     nearest_fib_label:              Optional[str]   = None,
+    # V4.2.5.1 — Multi-timeframe Fib confidence gate
+    primary_fib_confidence:         Optional[float] = None,
 ) -> dict:
     """
     Classify continuation pattern and extension quality from existing LKG fields.
@@ -352,6 +357,7 @@ def detect_continuation_pattern(
         lower_low_confirmed           = llc,
         has_cont_state                = has_cont_state,
         is_extended_state             = is_extended_state,
+        primary_fib_confidence        = primary_fib_confidence,
     )
 
     def _ers(d: dict) -> dict:

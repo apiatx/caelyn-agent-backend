@@ -1482,6 +1482,8 @@ def _compute_confluence(
             fib_retest_detected            = (entry_result or {}).get("fib_retest_detected"),
             fib_retest_type                = (entry_result or {}).get("fib_retest_type"),
             nearest_fib_label              = (entry_result or {}).get("nearest_fib_label"),
+            # V4.2.5.1 — Multi-timeframe Fib confidence gate
+            primary_fib_confidence         = (entry_result or {}).get("primary_fib_confidence"),
         )
         _constructive_ext = bool(_pattern_fields.get("constructive_extension"))
         _chase_ext        = bool(_pattern_fields.get("chase_extension"))
@@ -1630,6 +1632,26 @@ def _compute_confluence(
         "fib_impulse_pct":                (entry_result or {}).get("fib_impulse_pct"),
         "fib_target_1":                   (entry_result or {}).get("fib_target_1"),
         "fib_target_2":                   (entry_result or {}).get("fib_target_2"),
+        # V4.2.5.1 — Primary Fib context fields
+        "primary_fib_context":            (entry_result or {}).get("primary_fib_context"),
+        "primary_fib_timeframe":          (entry_result or {}).get("primary_fib_timeframe"),
+        "primary_fib_window":             (entry_result or {}).get("primary_fib_window"),
+        "primary_fib_confidence":         (entry_result or {}).get("primary_fib_confidence"),
+        "primary_fib_anchor_low":         (entry_result or {}).get("primary_fib_anchor_low"),
+        "primary_fib_anchor_high":        (entry_result or {}).get("primary_fib_anchor_high"),
+        "primary_fib_anchor_low_date":    (entry_result or {}).get("primary_fib_anchor_low_date"),
+        "primary_fib_anchor_high_date":   (entry_result or {}).get("primary_fib_anchor_high_date"),
+        "primary_nearest_fib_label":      (entry_result or {}).get("primary_nearest_fib_label"),
+        "primary_nearest_fib_level":      (entry_result or {}).get("primary_nearest_fib_level"),
+        "primary_distance_to_fib_pct":    (entry_result or {}).get("primary_distance_to_fib_pct"),
+        "primary_fib_retest_detected":    (entry_result or {}).get("primary_fib_retest_detected"),
+        "primary_fib_retest_type":        (entry_result or {}).get("primary_fib_retest_type"),
+        "primary_fib_target_1":           (entry_result or {}).get("primary_fib_target_1"),
+        "primary_fib_target_2":           (entry_result or {}).get("primary_fib_target_2"),
+        "fib_candidates_count":           (entry_result or {}).get("fib_candidates_count"),
+        "fib_daily_bar_count":            (entry_result or {}).get("fib_daily_bar_count"),
+        "fib_years_available":            (entry_result or {}).get("fib_years_available"),
+        "fib_long_term_available":        (entry_result or {}).get("fib_long_term_available"),
         "wave_structure_label":           (entry_result or {}).get("wave_structure_label"),
         "wave_structure_score":           (entry_result or {}).get("wave_structure_score"),
         # ── Per-signal breakdown ─────────────────────────────────────────────

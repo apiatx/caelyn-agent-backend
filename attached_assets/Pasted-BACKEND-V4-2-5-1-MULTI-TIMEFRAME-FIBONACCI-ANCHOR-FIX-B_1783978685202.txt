@@ -1,0 +1,472 @@
+BACKEND — V4.2.5.1 MULTI-TIMEFRAME FIBONACCI ANCHOR FIX
+
+Backend only.
+
+Do not touch frontend.
+Do not change Confluence weights.
+Do not hardcode ticker symbols.
+Do not add provider calls.
+Do not call LLMs.
+Do not change options/catalyst/investment formulas.
+Do not overclaim Fibonacci precision.
+
+Goal:
+
+The first Fib engine uses a single fixed anchor window:
+- highest high in last 120 bars
+- lowest low in 90 bars before that peak
+
+That is too narrow.
+
+120 bars means roughly 120 daily candles, about 6 trading months, so the current engine only captures one near/intermediate daily impulse. It will miss charts where the meaningful Fib structure is weekly, monthly, multi-year, or anchored from a major cycle low/high.
+
+Build a multi-timeframe Fibonacci candidate engine that selects the most relevant active Fib context instead of relying on one fixed daily window.
+
+==================================================
+PART 1 — AUDIT CURRENT BAR DEPTH
+==================================================
+
+For the current watchlist universe, audit the available historical bar depth used by entry_state_service / stage analysis.
+
+Return:
+
+symbol
+daily_bar_count
+oldest_bar_date
+newest_bar_date
+years_of_history_available
+
+For these symbols:
+
+ABCL
+ALGM
+VRT
+SOFI
+ANET
+AMD
+CRDO
+CGNX
+OUST
+MARA
+HIVE
+HOOD
+HIMS
+WYFI
+
+Determine whether the backend currently has enough bars to compute:
+
+- short-term daily Fib
+- intermediate daily Fib
+- 1-year weekly Fib
+- 2-year weekly Fib
+- 3-year weekly Fib
+- monthly Fib
+
+If insufficient data exists, expose a status field. Do not fabricate long-term Fibs.
+
+==================================================
+PART 2 — REPLACE SINGLE-ANCHOR FIB WITH MULTI-CANDIDATE FIB
+==================================================
+
+Modify fib_engine.py so it generates multiple Fib candidates.
+
+Candidate types:
+
+1. recent_daily_impulse
+   window: 40–120 daily bars
+
+2. intermediate_daily_impulse
+   window: 120–252 daily bars
+
+3. long_daily_impulse
+   window: 252–756 daily bars if available
+
+4. weekly_impulse
+   resample daily bars to weekly bars if enough daily history exists
+   windows: 52, 104, 156 weeks if available
+
+5. monthly_impulse
+   resample daily bars to monthly bars if enough history exists
+   windows: 24, 36, 60 months if available
+
+No provider calls.
+
+Use only existing cached bars.
+
+If longer-term bars are unavailable:
+- do not calculate fake weekly/monthly Fibs
+- expose FIB_LONG_TERM_DATA_UNAVAILABLE
+
+==================================================
+PART 3 — BETTER ANCHOR SELECTION
+==================================================
+
+Do not simply use highest high / lowest low blindly.
+
+For each candidate, identify a relevant impulse using:
+
+- pivot low before impulse
+- pivot high after impulse
+- swing magnitude
+- recency
+- anchor prominence
+- whether the move represents a real impulse rather than noise
+- whether current price is still related to that structure
+
+Use existing pivot/swing helpers if available.
+
+If not available, implement a simple deterministic pivot helper:
+- local pivot high = high greater than N bars before/after
+- local pivot low = low lower than N bars before/after
+- use N=3 to 5 depending window
+
+Candidate must include:
+
+fib_timeframe
+fib_window
+fib_anchor_low
+fib_anchor_high
+fib_anchor_low_date
+fib_anchor_high_date
+fib_impulse_return_pct
+fib_anchor_confidence
+
+Anchor confidence should consider:
+
+- size of impulse
+- clean low-to-high structure
+- recency
+- pivot quality
+- current price still within relevant range or near extension/retest
+- overlap with known support/resistance if available
+
+==================================================
+PART 4 — FIB LEVELS PER CANDIDATE
+==================================================
+
+For each candidate calculate:
+
+Retracements:
+0.236
+0.382
+0.5
+0.618
+0.786
+
+Retest / extension levels:
+1.0
+1.272
+1.618
+2.0
+2.618
+
+For each candidate return:
+
+fib_0236
+fib_0382
+fib_0500
+fib_0618
+fib_0786
+fib_1000
+fib_1272
+fib_1618
+fib_2000
+fib_2618
+
+Detect nearest level:
+
+nearest_fib_level
+nearest_fib_label
+distance_to_nearest_fib_pct
+
+Retest detection:
+
+fib_retest_detected = true when current price is near a Fib level and the level is relevant.
+
+Near threshold:
+- 2.5% for liquid/large-cap names
+- 4.0% for volatile/small-cap names
+- if ATR is available, also allow within 0.5 ATR
+
+Important:
+Fib 1.0 is valid as prior high / prior resistance retest.
+This matters for ABCL / ALGM style setups.
+
+==================================================
+PART 5 — SELECT PRIMARY FIB CONTEXT
+==================================================
+
+Score all candidates and select one primary Fib context.
+
+Candidate relevance score should reward:
+
+- current price proximity to a Fib level
+- Fib 1.0 retest of prior high / prior resistance
+- overlap with active support
+- overlap with breakout shelf
+- overlap with reclaim level
+- overlap with 20DMA / 30DMA / 50DMA / 200DMA
+- no confirmed breakdown
+- no support loss
+- clear upside target available
+
+Expose:
+
+primary_fib_timeframe
+primary_fib_window
+primary_fib_context
+primary_fib_confidence
+primary_fib_anchor_low
+primary_fib_anchor_high
+primary_fib_anchor_low_date
+primary_fib_anchor_high_date
+primary_nearest_fib_label
+primary_nearest_fib_level
+primary_distance_to_fib_pct
+primary_fib_retest_detected
+primary_fib_retest_type
+primary_fib_target_1
+primary_fib_target_2
+fib_candidates_count
+fib_candidates_summary
+
+Allowed primary_fib_context values:
+
+recent_daily_impulse
+intermediate_daily_impulse
+long_daily_impulse
+weekly_impulse
+monthly_impulse
+unavailable
+
+If no valid Fib exists:
+primary_fib_context = unavailable
+primary_fib_confidence = 0
+fib_retest_detected = false
+
+==================================================
+PART 6 — UPDATE ENTRY / EXIT INTEGRATION
+==================================================
+
+Entry/Exit should use the selected primary Fib context.
+
+A Fib retest should help entry score only when:
+
+- primary_fib_confidence is adequate
+- current price is near the Fib level
+- support has not failed
+- no confirmed lower low
+- level overlaps with prior high / shelf / MA / active support OR confidence is high enough
+
+Add or preserve reason codes:
+
+FIB_RETEST_ENTRY
+FIB_1000_RETEST_ENTRY
+FIB_0786_RETEST_ENTRY
+FIB_0618_RETEST_ENTRY
+FIB_0500_RETEST_ENTRY
+FIB_0382_RETEST_ENTRY
+FIB_EXTENSION_TARGET_1272
+FIB_EXTENSION_TARGET_1618
+FIB_EXTENSION_TARGET_2000
+FIB_EXTENSION_TARGET_2618
+FIB_ANCHOR_LOW_CONFIDENCE
+FIB_LONG_TERM_DATA_UNAVAILABLE
+FIB_MULTI_TIMEFRAME_PRIMARY_SELECTED
+
+Fib should not by itself override:
+- support lost
+- confirmed lower low
+- true chase extension with no reset
+- risk conflict
+
+==================================================
+PART 7 — UPDATE EXTENSION RESET LOGIC
+==================================================
+
+Use primary Fib context to distinguish:
+
+TRUE_CHASE_EXTENSION
+vs
+CONSTRUCTIVE_RETEST_AFTER_EXTENSION
+
+If a stock was extended but now:
+
+- pulled back from recent high
+- current price is near primary Fib 1.0 / retracement / prior high / MA support
+- active support is intact or bounced_from_support
+- no confirmed support loss
+- no confirmed lower low
+- invalidation level is definable
+
+then allow:
+
+extension_reset_state = CONSTRUCTIVE_RETEST_AFTER_EXTENSION
+
+Do not classify as constructive if:
+- price is still at local high
+- no pullback
+- no retest level
+- no support
+- no valid Fib or MA context
+- entry risk/reward is still poor
+
+==================================================
+PART 8 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+ABCL
+ALGM
+VRT
+SOFI
+ANET
+AMD
+CRDO
+CGNX
+OUST
+MARA
+HIVE
+HOOD
+HIMS
+WYFI
+ENTG
+ONTO
+
+For each return:
+
+symbol
+daily_bar_count
+years_of_history_available
+old_fib_anchor_low
+old_fib_anchor_high
+old_fib_context
+primary_fib_context
+primary_fib_timeframe
+primary_fib_window
+primary_fib_anchor_low
+primary_fib_anchor_high
+primary_fib_anchor_low_date
+primary_fib_anchor_high_date
+primary_nearest_fib_label
+primary_distance_to_fib_pct
+primary_fib_retest_detected
+primary_fib_retest_type
+primary_fib_target_1
+primary_fib_target_2
+primary_fib_confidence
+fib_candidates_count
+extension_state
+old_extension_reset_state
+new_extension_reset_state
+actionable_tier
+actionable_path
+entry_exit_points
+technical_setup_points
+stage_quality_points
+actionability_positive_reasons
+actionability_blockers
+plain_english_explanation
+
+Special expectations:
+
+ABCL:
+Should not rely only on the 120-bar anchor.
+If current price is truly retesting Fib 1.0 / prior resistance, the engine should identify that candidate or explain why it cannot.
+
+ALGM:
+Should identify whether current retest is prior high / Fib 1.0 / extension context and expose target levels if confidence is adequate.
+
+SOFI:
+Should use longer-term or right-side base context if available, not force a short-term Fib.
+
+If data is insufficient for weekly/monthly:
+Return that explicitly.
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+V4.2.5.1 MULTI-TIMEFRAME FIBONACCI REPORT
+
+FILES CHANGED:
+[list]
+
+BAR DEPTH AUDIT:
+[summary]
+
+OLD SINGLE-ANCHOR LIMITATION:
+[explain]
+
+MULTI-TIMEFRAME CANDIDATES:
+[summary]
+
+PRIMARY FIB SELECTION:
+[summary]
+
+ENTRY/EXIT INTEGRATION:
+[summary]
+
+EXTENSION RESET INTEGRATION:
+[summary]
+
+VALIDATION SYMBOLS:
+[table]
+
+ABCL SPECIAL AUDIT:
+[plain English]
+
+ALGM SPECIAL AUDIT:
+[plain English]
+
+DATA LIMITATIONS:
+[weekly/monthly availability]
+
+PROVIDER CALLS:
+0 expected
+
+End exactly:
+
+V4.2.5.1 VERDICT
+
+SINGLE_120_BAR_ANCHOR_REPLACED:
+[YES/NO]
+
+MULTI_TIMEFRAME_FIB_CANDIDATES_ADDED:
+[YES/NO]
+
+DAILY_RECENT_FIB_HANDLED:
+[YES/NO]
+
+DAILY_INTERMEDIATE_FIB_HANDLED:
+[YES/NO]
+
+LONG_DAILY_FIB_HANDLED_IF_DATA_AVAILABLE:
+[YES/NO]
+
+WEEKLY_FIB_HANDLED_IF_DATA_AVAILABLE:
+[YES/NO]
+
+MONTHLY_FIB_HANDLED_IF_DATA_AVAILABLE:
+[YES/NO]
+
+PRIMARY_FIB_CONTEXT_SELECTED_BY_RELEVANCE:
+[YES/NO]
+
+FIB_1000_PRIOR_HIGH_RETEST_HANDLED:
+[YES/NO]
+
+FIB_TARGETS_EXPOSED:
+[YES/NO]
+
+INSUFFICIENT_LONG_TERM_DATA_EXPLICITLY_FLAGGED:
+[YES/NO]
+
+NO_PROVIDER_CALLS:
+[YES/NO]
+
+READY_FOR_FRONTEND_PATCH:
+[YES/NO]
