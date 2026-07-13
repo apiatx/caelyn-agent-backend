@@ -1,0 +1,472 @@
+BACKEND — V4.2.4 SETUP + ENTRY CALIBRATION
+
+Backend only.
+
+Do not touch frontend.
+Do not change Confluence score weights.
+Do not hardcode ticker symbols.
+Do not add provider calls.
+Do not call LLMs.
+Do not change options/catalyst/investment formulas.
+Do not loosen every threshold blindly.
+
+Goal:
+
+V4.2.3 fixed the decision layer, but the audit shows remaining false negatives are mostly caused by:
+
+1. Missing setup labels / pattern variants.
+2. Entry/Exit scoring being too narrow for real-world pullbacks, prior-high retests, high-base consolidations, right-side cup structures, and moving-average pullbacks.
+
+This is a generic setup/entry calibration, not a ticker allowlist.
+
+The engine should recognize more valid bullish setup families without simply making everything actionable.
+
+==================================================
+PART 1 — REGISTER MISSING PATTERN VARIANTS
+==================================================
+
+Audit all pattern_type values emitted by the upstream pattern engine over the current eligible universe.
+
+Return:
+
+pattern_type
+count
+average technical_setup_points
+current recognized/unrecognized status
+
+Add emitted bullish/constructive variants to _VALID_PATTERNS and _PATTERN_BASE_SCORES.
+
+Known required add:
+
+BREAKOUT_SHELF_CONSOLIDATION
+
+Map it to the BREAKOUT_SHELF family.
+
+Suggested label:
+
+Breakout Shelf Consolidation
+
+Do not allow valid emitted pattern variants to fall into NO_PATTERN just because the exact string is missing from the map.
+
+Validation:
+
+ENTG and ONTO should no longer be treated as No Clear Setup if their pattern_type is BREAKOUT_SHELF_CONSOLIDATION.
+
+==================================================
+PART 2 — ADD HIGH-BASE / MOMENTUM CONSOLIDATION SETUP
+==================================================
+
+Add generic setup detection/mapping for high-base consolidation and momentum consolidation.
+
+This should catch tickers like VRT conceptually, but do not hardcode VRT.
+
+Definition:
+
+HIGH_BASE_CONSOLIDATION / MOMENTUM_CONSOLIDATION can be inferred when:
+
+- stage_quality_points >= 10.5
+- price/support status is above_support or bounced_from_support
+- active support is not lost
+- extension is not chase_bad
+- stock is consolidating near highs or has strong relative structure if those fields exist
+- entry_exit_points >= 6.0
+- no confirmed lower low
+- no support_lost
+
+If exact near-high/range-contraction fields exist, use them.
+
+If they do not exist, use existing support/status/stage/entry fields as fallback.
+
+Assign:
+
+technical_setup_label = High-Base Consolidation
+technical_setup_direction = bullish
+technical_setup_raw_score = 65–85 depending quality
+technical_setup_points should usually land >= 4.5/8 when entry/stage are strong.
+
+Do not turn every above_support stock into high-base consolidation.
+
+Require:
+
+stage quality
+entry quality
+intact support
+no chase_bad
+no confirmed breakdown
+
+==================================================
+PART 3 — ADD MOMENTUM PULLBACK / PRIOR-HIGH / MA RETEST ENTRY
+==================================================
+
+Entry/Exit currently misses clean pullbacks that are not sitting exactly on the one active support level.
+
+Add generic entry detection for:
+
+MOMENTUM_PULLBACK_ENTRY
+PRIOR_HIGH_RETEST_ENTRY
+BREAKOUT_SHELF_RETEST_ENTRY
+MOVING_AVERAGE_PULLBACK_ENTRY
+
+Valid pullback/retest entry levels include:
+
+- prior high
+- breakout shelf
+- reclaim level
+- active support
+- rising 20-day moving average
+- rising 30-day moving average
+- rising 50-day moving average
+- rising 200-day moving average
+- Fib / prior-high retest level if already available
+
+Important:
+
+The 200-day moving average should be treated as a major valid entry/retest level when price is reclaiming it, holding it, or pulling back into it constructively.
+
+Do not only reward short/intermediate MA pullbacks. 20/30/50/200 MA pullbacks can all be valid entries depending on context.
+
+General conditions:
+
+- eligible
+- no risk conflict
+- stage_quality_points >= 8.5
+- active support not lost
+- not confirmed lower low
+- not failed breakdown
+- price has pulled back/retested into a recognized level:
+  prior high
+  breakout shelf
+  reclaim level
+  active support
+  20DMA / 30DMA / 50DMA / 200DMA if available
+  Fib/prior-high level if available
+- entry_exit_points >= 4.25 initially OR entry score can be upgraded by this detection
+- technical_setup_points >= 4.0 OR setup label is high-tight / bull flag / breakout shelf / high-base / momentum pullback / MA pullback
+
+If exact Fib data is unavailable, do not fabricate it.
+
+If exact MA fields exist, use them.
+
+If MA fields do not exist, do not add provider calls. Use already-available technical/support fields only and expose MOVING_AVERAGE_DATA_UNAVAILABLE as a reason code.
+
+Reason codes:
+
+MOMENTUM_PULLBACK_ENTRY
+PRIOR_HIGH_RETEST_ENTRY
+BREAKOUT_SHELF_RETEST_ENTRY
+MOVING_AVERAGE_PULLBACK_ENTRY
+DMA20_PULLBACK_ENTRY
+DMA30_PULLBACK_ENTRY
+DMA50_PULLBACK_ENTRY
+DMA200_PULLBACK_ENTRY
+DEFINED_RISK_PULLBACK
+
+This should help cases like ALGM generically:
+
+strong setup, stage 15, high-tight continuation, bounced_from_support, entry=4.44 just below the old hard floor.
+
+Do not make weak-stage/no-setup names actionable just because they dipped.
+
+==================================================
+PART 4 — DISTINGUISH CHASE EXTENSION FROM CONSTRUCTIVE PULLBACK
+==================================================
+
+Current issue:
+
+Some tickers are being treated as Chase Extension even if they have already pulled back constructively.
+
+A ticker can be extended historically and still become buyable after a constructive reset.
+
+Add logic:
+
+If chase_extension=True but:
+
+- support_status is bounced_from_support or above_support
+- active support not lost
+- entry has improved from extreme/poor to at least moderate
+- stage_quality_points >= 9
+- technical structure suggests low-base continuation / momentum pullback / reversal continuation / MA pullback
+- price is holding or reclaiming a valid support/retest level
+
+then downgrade blocker from hard WATCH_FOR_RESET_CHASE_EXTENSION to:
+
+CONSTRUCTIVE_PULLBACK_AFTER_EXTENSION
+
+This should allow:
+
+- NEAR_ACTIONABLE or ACTIONABLE_NOW if entry/setup thresholds pass
+- not automatic Actionable
+
+Keep true chase blocked when:
+
+- price remains far above support
+- no reset
+- no support/retest
+- no MA/pullback/reclaim evidence
+- extension_state is EXTREME_EXTENSION and entry_exit_points remains very low
+- support is not nearby
+
+Do not blindly flip all chase_extension names.
+
+==================================================
+PART 5 — ADD RIGHT-SIDE CUP / STAGE 1 ACCUMULATION PATH
+==================================================
+
+SOFI-like setups should not be treated like dead setups just because Stage score is low.
+
+Add a separate early setup tier:
+
+EARLY_ACTIONABLE
+EARLY_ACCUMULATION
+RIGHT_SIDE_CUP_ENTRY
+
+This is not the same as ACTIONABLE_NOW.
+
+Conditions:
+
+- eligible
+- no risk conflict
+- investment_quality_score >= 70 OR investment_alignment_points >= 10
+- entry_exit_points >= 4.5
+- no support_lost
+- no confirmed lower low
+- no Stage 4 / major breakdown
+- technical setup suggests right-side cup, accumulation, rounded base, reclaim, or strong rebound from lows if available
+- if 200DMA reclaim / 200DMA support is available, this should be treated as especially meaningful for Stage 1 to Stage 2 transition setups
+
+Possible labels:
+
+RIGHT_SIDE_CUP
+STAGE1_ACCUMULATION
+EARLY_BASE_BUILDING
+RIGHT_SIDE_MOMENTUM
+DMA200_RECLAIM_BASE
+
+Decision:
+
+- if these pass, set actionable_tier = EARLY_ACTIONABLE or NEAR_ACTIONABLE
+- do not call it ACTIONABLE_NOW unless entry/setup evidence is much stronger
+
+This should let SOFI-type setups surface as early opportunities without pretending they are mature Stage 2 breakouts.
+
+==================================================
+PART 6 — UPDATE ACTIONABILITY PATHS USING NEW SETUPS
+==================================================
+
+Add new actionable_path values:
+
+momentum_pullback_entry
+prior_high_retest_entry
+breakout_shelf_retest_entry
+moving_average_pullback_entry
+dma20_pullback_entry
+dma30_pullback_entry
+dma50_pullback_entry
+dma200_pullback_entry
+high_base_consolidation_entry
+stage1_accumulation_entry
+right_side_cup_entry
+
+Actionable Now can include:
+
+- support_entry
+- retest_entry
+- momentum_pullback_entry
+- prior_high_retest_entry
+- breakout_shelf_retest_entry
+- moving_average_pullback_entry
+- high_base_consolidation_entry
+- reversal_entry
+
+Aggressive Actionable can include:
+
+- breakout_entry
+- high_tight_continuation
+- high_base_continuation
+
+Near Actionable can include:
+
+- stage1_accumulation_entry
+- right_side_cup_entry
+- setup good but entry needs confirmation
+- MA pullback forming but not confirmed
+
+Keep hard exclusions:
+
+- ineligible symbol
+- risk conflict
+- confirmed lower low
+- support lost
+- true chase extension without reset
+- failed breakout with no reclaim
+- major breakdown
+
+==================================================
+PART 7 — VALIDATION SYMBOLS
+==================================================
+
+Audit these:
+
+VRT
+ABCL
+ALGM
+SOFI
+ENTG
+ONTO
+CGNX
+AEVA
+OUST
+ENPH
+FCEL
+NUAI
+MCHP
+TE
+HIVE
+ANET
+WYFI
+HOOD
+HIMS
+ZVRA
+
+For each return before/after:
+
+symbol
+old_actionable_tier
+new_actionable_tier
+old_actionable_path
+new_actionable_path
+old_technical_setup_label
+new_technical_setup_label
+pattern_type
+pattern_score
+technical_setup_points
+entry_exit_points
+stage_quality_points
+support_status
+active_support_status
+extension_state
+chase_extension
+constructive_extension
+investment_quality_score
+moving_average_entry_detected
+moving_average_entry_type
+dma20_status
+dma30_status
+dma50_status
+dma200_status
+actionability_positive_reasons
+actionability_blockers
+plain_english_explanation
+
+Important expected behaviors:
+
+VRT:
+Should not remain No Clear Setup if it satisfies high-base/momentum consolidation conditions.
+
+ENTG / ONTO:
+Should not remain No Clear Setup if pattern_type=BREAKOUT_SHELF_CONSOLIDATION.
+
+ALGM:
+Should not be blocked solely because entry=4.44 is barely below 4.5 if it is a valid momentum pullback / prior-high retest / MA pullback.
+
+ABCL:
+Should remain blocked only if it is truly chase extension with no reset. If it is a constructive pullback after extension, it should move to Near or Actionable depending evidence.
+
+SOFI:
+Should not be called mature Stage 2 Actionable, but should be allowed into Early Actionable / Near Actionable if right-side cup / accumulation / 200DMA reclaim logic is present.
+
+Do not force any ticker to be actionable.
+If it remains not actionable, provide exact blocker.
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+V4.2.4 SETUP + ENTRY CALIBRATION REPORT
+
+FILES CHANGED:
+[list]
+
+PATTERN VARIANT AUDIT:
+[table]
+
+SETUP DETECTION CHANGES:
+[summary]
+
+ENTRY/EXIT CHANGES:
+[summary]
+
+MOVING AVERAGE PULLBACK HANDLING:
+[20DMA / 30DMA / 50DMA / 200DMA summary]
+
+CHASE VS CONSTRUCTIVE PULLBACK:
+[summary]
+
+STAGE1 / RIGHT-SIDE CUP HANDLING:
+[summary]
+
+TAB COUNTS BEFORE / AFTER:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+STILL NOT ACTIONABLE:
+[grouped reasons]
+
+PROVIDER CALLS:
+0 expected
+
+End exactly:
+
+V4.2.4 VERDICT
+
+NO_TICKER_HARDCODING:
+[YES/NO]
+
+BREAKOUT_SHELF_CONSOLIDATION_REGISTERED:
+[YES/NO]
+
+HIGH_BASE_CONSOLIDATION_DETECTION_ADDED:
+[YES/NO]
+
+MOMENTUM_PULLBACK_ENTRY_ADDED:
+[YES/NO]
+
+PRIOR_HIGH_RETEST_ENTRY_ADDED:
+[YES/NO]
+
+MOVING_AVERAGE_PULLBACK_ENTRY_ADDED:
+[YES/NO]
+
+DMA20_PULLBACK_HANDLED:
+[YES/NO]
+
+DMA30_PULLBACK_HANDLED:
+[YES/NO]
+
+DMA50_PULLBACK_HANDLED:
+[YES/NO]
+
+DMA200_PULLBACK_HANDLED:
+[YES/NO]
+
+CONSTRUCTIVE_PULLBACK_AFTER_EXTENSION_HANDLED:
+[YES/NO]
+
+STAGE1_RIGHT_SIDE_CUP_HANDLED:
+[YES/NO]
+
+ACTIONABILITY_REMAINS_RULE_BASED:
+[YES/NO]
+
+SCORING_WEIGHTS_UNCHANGED:
+[YES/NO]
+
+PROVIDER_CALLS:
+[0]
+
+READY_FOR_FRONTEND_PATCH:
+[YES/NO]

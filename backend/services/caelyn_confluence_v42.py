@@ -477,24 +477,26 @@ def _score_options_alignment_v42(row: dict) -> dict:
 
 # ── Pattern registry for Technical Setup ─────────────────────────────────────
 _PATTERN_BASE_SCORES: dict[str, float] = {
-    "HIGH_TIGHT_FLAG":         95.0,
-    "BULL_FLAG":               88.0,
-    "BREAKOUT_SHELF":          85.0,
-    "VCP":                     85.0,
-    "CUP_HANDLE":              85.0,
-    "CUP_AND_HANDLE":          85.0,
-    "STAGE2_BREAKOUT":         83.0,
-    "EMA_PULLBACK":            78.0,
-    "20DMA_PULLBACK":          75.0,
-    "30DMA_PULLBACK":          75.0,
-    "50DMA_PULLBACK":          72.0,
-    "SUPPORT_BOUNCE":          75.0,
-    "LEADER_PULLBACK":         72.0,
-    "BREAKOUT_RETEST":         70.0,
-    "LOW_BASE_REVERSAL":       68.0,
-    "WAVE_CONTINUATION_PROXY": 65.0,
-    "BASE_BOTTOM":             65.0,
-    "200DMA_RECLAIM":          60.0,
+    "HIGH_TIGHT_FLAG":              95.0,
+    "BULL_FLAG":                    88.0,
+    "BREAKOUT_SHELF":               85.0,
+    "VCP":                          85.0,
+    "CUP_HANDLE":                   85.0,
+    "CUP_AND_HANDLE":               85.0,
+    "VCP_CONTRACTION":              83.0,
+    "STAGE2_BREAKOUT":              83.0,
+    "BREAKOUT_SHELF_CONSOLIDATION": 80.0,
+    "EMA_PULLBACK":                 78.0,
+    "20DMA_PULLBACK":               75.0,
+    "30DMA_PULLBACK":               75.0,
+    "SUPPORT_BOUNCE":               75.0,
+    "50DMA_PULLBACK":               72.0,
+    "LEADER_PULLBACK":              72.0,
+    "BREAKOUT_RETEST":              70.0,
+    "LOW_BASE_REVERSAL":            68.0,
+    "WAVE_CONTINUATION_PROXY":      65.0,
+    "BASE_BOTTOM":                  65.0,
+    "200DMA_RECLAIM":               60.0,
 }
 _VALID_PATTERNS       = set(_PATTERN_BASE_SCORES.keys())
 _TIER1_CONSTRUCTIVE   = {"HIGH_TIGHT_FLAG", "BULL_FLAG", "BREAKOUT_SHELF", "VCP"}
@@ -565,29 +567,65 @@ def _score_technical_setup_v42(row: dict) -> dict:
     quality = _clamp(quality, 0.0, 100.0)
     pts     = round(quality / 100.0 * 8.0, 2)
 
+    # ── HIGH_BASE_CONSOLIDATION synthetic detection ───────────────────────────
+    # Fires when pattern engine returned NO_PATTERN but structural evidence
+    # indicates a high-base consolidation (base_archetype=HIGH_BASE + strong stage).
+    # Uses stage_quality_points from the raw snapshot row (pre-computed upstream).
+    if not has_valid and not major_llc and not (chase and not constructive):
+        _hb_arch   = str(row.get("base_archetype") or "").upper()
+        _hb_entry  = str(row.get("entry_state") or "").upper()
+        # stage_quality_points is computed later in the V42 pipeline and is not yet
+        # populated in snapshot_row at this stage.  Fall back to stage_alignment_score
+        # which is always present in the raw row (same formula: score/100*15).
+        _hb_stage_raw = _safe_float(row.get("stage_quality_points"), None)
+        if _hb_stage_raw is None or _hb_stage_raw == 0.0:
+            _stage_align  = _safe_float(row.get("stage_alignment_score"), 0.0)
+            _hb_stage     = round(_stage_align / 100.0 * 15.0, 2)
+        else:
+            _hb_stage = _hb_stage_raw
+        if _hb_arch == "HIGH_BASE" and _hb_stage >= 10.5 and asst_status not in ("support_lost", "breakdown", "major_breakdown"):
+            _hb_q = 65.0
+            if _hb_entry in ("HIGH_BASE_READY", "BREAKOUT_PULLBACK", "CONTINUATION"):
+                _hb_q += 10.0
+            if constructive:
+                _hb_q += 5.0
+            if asst_status in _SUPPORT_INTACT_STATUSES:
+                _hb_q += 5.0
+            if minor_llc:
+                _hb_q -= 5.0
+            _hb_q = _clamp(_hb_q, 0.0, 100.0)
+            if _hb_q > quality:
+                quality = _hb_q
+                pts     = round(quality / 100.0 * 8.0, 2)
+                reason_codes.append("HIGH_BASE_CONSOLIDATION_DETECTED")
+
     # Label
-    if pattern in _PATTERN_BASE_SCORES:
-        label_map = {
-            "HIGH_TIGHT_FLAG":   "High-Tight Continuation",
-            "BULL_FLAG":         "Bull Flag",
-            "BREAKOUT_SHELF":    "Breakout Shelf",
-            "VCP":               "VCP",
-            "CUP_HANDLE":        "Cup & Handle",
-            "CUP_AND_HANDLE":    "Cup & Handle",
-            "STAGE2_BREAKOUT":   "Stage 2 Breakout",
-            "EMA_PULLBACK":      "EMA Pullback",
-            "20DMA_PULLBACK":    "20D MA Pullback",
-            "30DMA_PULLBACK":    "30D MA Pullback",
-            "50DMA_PULLBACK":    "50D MA Pullback",
-            "SUPPORT_BOUNCE":    "Support Bounce",
-            "LEADER_PULLBACK":   "Leader Pullback",
-            "BREAKOUT_RETEST":   "Breakout Retest",
-            "LOW_BASE_REVERSAL": "Low-Base Reversal",
-            "BASE_BOTTOM":       "Base Bottom",
-            "200DMA_RECLAIM":    "200D MA Reclaim",
-            "WAVE_CONTINUATION_PROXY": "Wave Continuation",
-        }
-        setup_label = label_map.get(pattern, pattern)
+    _LABEL_MAP = {
+        "HIGH_TIGHT_FLAG":              "High-Tight Continuation",
+        "BULL_FLAG":                    "Bull Flag",
+        "BREAKOUT_SHELF":               "Breakout Shelf",
+        "VCP":                          "VCP",
+        "VCP_CONTRACTION":              "VCP Contraction",
+        "CUP_HANDLE":                   "Cup & Handle",
+        "CUP_AND_HANDLE":               "Cup & Handle",
+        "STAGE2_BREAKOUT":              "Stage 2 Breakout",
+        "BREAKOUT_SHELF_CONSOLIDATION": "Breakout Shelf Consolidation",
+        "EMA_PULLBACK":                 "EMA Pullback",
+        "20DMA_PULLBACK":               "20D MA Pullback",
+        "30DMA_PULLBACK":               "30D MA Pullback",
+        "50DMA_PULLBACK":               "50D MA Pullback",
+        "SUPPORT_BOUNCE":               "Support Bounce",
+        "LEADER_PULLBACK":              "Leader Pullback",
+        "BREAKOUT_RETEST":              "Breakout Retest",
+        "LOW_BASE_REVERSAL":            "Low-Base Reversal",
+        "BASE_BOTTOM":                  "Base Bottom",
+        "200DMA_RECLAIM":               "200D MA Reclaim",
+        "WAVE_CONTINUATION_PROXY":      "Wave Continuation",
+    }
+    if pattern in _LABEL_MAP:
+        setup_label = _LABEL_MAP[pattern]
+    elif "HIGH_BASE_CONSOLIDATION_DETECTED" in reason_codes:
+        setup_label = "High-Base Consolidation"
     elif chase and not constructive:
         setup_label = "Chase Extension"
     else:
@@ -728,6 +766,38 @@ def _score_entry_exit_v42(row: dict) -> dict:
     else:
         entry_status = "poor_entry"
 
+    # ── Momentum / MA pullback detection (reason codes only, no score change) ──
+    _asst_type  = str(row.get("active_support_type") or "").lower()
+    _entry_st   = str(row.get("entry_state") or "").upper()
+    _ma_entry_type: Optional[str] = None
+
+    if _asst_type == "moving_average_zone":
+        _ma_entry_type = "MOVING_AVERAGE_PULLBACK_ENTRY"
+        reason_codes.append("MOVING_AVERAGE_PULLBACK_ENTRY")
+    elif _asst_type in ("prior_high_level", "prior_high", "prior_high_zone"):
+        _ma_entry_type = "PRIOR_HIGH_RETEST_ENTRY"
+        reason_codes.append("PRIOR_HIGH_RETEST_ENTRY")
+    elif _asst_type in ("breakout_shelf", "shelf", "shelf_support"):
+        _ma_entry_type = "BREAKOUT_SHELF_RETEST_ENTRY"
+        reason_codes.append("BREAKOUT_SHELF_RETEST_ENTRY")
+    elif _entry_st in ("BREAKOUT_PULLBACK", "CONTINUATION_PULLBACK", "CONTINUATION"):
+        _ma_entry_type = "MOMENTUM_PULLBACK_ENTRY"
+        reason_codes.append("MOMENTUM_PULLBACK_ENTRY")
+
+    # Distinguish DMA tier from moving_average_zone label when entry_state is specific
+    if _ma_entry_type == "MOVING_AVERAGE_PULLBACK_ENTRY":
+        if _entry_st in ("20DMA_PULLBACK", "EMA_20_PULLBACK"):
+            _ma_entry_type = "DMA20_PULLBACK_ENTRY"; reason_codes.append("DMA20_PULLBACK_ENTRY")
+        elif _entry_st in ("30DMA_PULLBACK", "EMA_30_PULLBACK"):
+            _ma_entry_type = "DMA30_PULLBACK_ENTRY"; reason_codes.append("DMA30_PULLBACK_ENTRY")
+        elif _entry_st in ("50DMA_PULLBACK", "EMA_50_PULLBACK"):
+            _ma_entry_type = "DMA50_PULLBACK_ENTRY"; reason_codes.append("DMA50_PULLBACK_ENTRY")
+        elif _entry_st in ("200DMA_PULLBACK", "EMA_200_PULLBACK", "200DMA_RECLAIM"):
+            _ma_entry_type = "DMA200_PULLBACK_ENTRY"; reason_codes.append("DMA200_PULLBACK_ENTRY")
+
+    if _ma_entry_type is None and _asst_type:
+        reason_codes.append("MOVING_AVERAGE_DATA_UNAVAILABLE")
+
     return {
         "raw_score":           round(entry_raw, 1),
         "points":              pts,
@@ -746,6 +816,8 @@ def _score_entry_exit_v42(row: dict) -> dict:
         "target_1":            None,
         "target_2":            None,
         "risk_reward_ratio":   None,
+        "moving_average_entry_detected": _ma_entry_type is not None,
+        "moving_average_entry_type":     _ma_entry_type,
         "entry_exit_reason_codes": reason_codes,
         "reason_codes":        reason_codes,
     }

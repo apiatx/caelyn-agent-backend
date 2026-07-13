@@ -1854,10 +1854,11 @@ def build_confluence_snapshot(
     results: list[dict] = []
     social_bonus_counts = {"0": 0, "2_4": 0, "5_7": 0, "8_10": 0, "eligible": 0, "applied": 0}
 
-    # V4.2.3 pattern sets — defined once outside the per-row loop
+    # V4.2.4 pattern sets — defined once outside the per-row loop
     _P6_BREAKOUT_PATTERNS = {
         "HIGH_TIGHT_FLAG", "BULL_FLAG", "BREAKOUT_SHELF", "VCP",
-        "CUP_HANDLE", "CUP_AND_HANDLE", "STAGE2_BREAKOUT",
+        "VCP_CONTRACTION", "CUP_HANDLE", "CUP_AND_HANDLE", "STAGE2_BREAKOUT",
+        "BREAKOUT_SHELF_CONSOLIDATION",
     }
     _P6_REVERSAL_PATTERNS = {
         "LOW_BASE_REVERSAL", "BASE_BOTTOM", "200DMA_RECLAIM", "SUPPORT_BOUNCE",
@@ -1868,6 +1869,8 @@ def build_confluence_snapshot(
     }
     _P6_SUPPORT_INTACT = {"above_support", "at_support", "near_support"}
     _P6_SUPPORT_LOST   = {"support_lost", "breakdown", "major_breakdown"}
+    # Entry states that are hard blockers for early-accumulation paths
+    _P6_HARD_ENTRY_BLOCK = {"FAILED_BREAKOUT", "SUPPORT_LOST", "STRUCTURAL_BREAK"}
 
     for sym in universe:
         # Normalize Entry: apply canonical current-version check before any
@@ -2042,16 +2045,32 @@ def build_confluence_snapshot(
         _p6_chase        = bool(r.get("chase_extension"))
         _p6_constructive = bool(r.get("constructive_extension"))
         _p6_pattern      = str(r.get("pattern_type") or "")
+        # V4.2.4 — additional raw snapshot fields for new paths
+        _p6_ext_quality  = str(r.get("extension_quality") or "").upper()
+        _p6_base_arch    = str(r.get("base_archetype") or "").upper()
+        _p6_entry_state  = str(r.get("entry_state") or "").upper()
+        _p6_asst_type    = str(r.get("active_support_type") or "").lower()
+        _p6_setup_label  = str(r.get("technical_setup_label") or "")
+        _p6_iq_score     = float(r.get("investment_quality_score") or 0.0)
+        _p6_ma_entry     = r.get("moving_average_entry_type")
 
         # ── Derived flags ─────────────────────────────────────────────────────
         _p6_support_intact   = _p6_asst in _P6_SUPPORT_INTACT
         _p6_support_lost     = _p6_asst in _P6_SUPPORT_LOST or _p6_major_llc
-        _p6_chase_bad        = _p6_chase and not _p6_constructive
+        # V4.2.4: chase_bad only when extension_quality is CHASE or no constructive signal
+        # A stock with extension_quality=CONSTRUCTIVE has already pulled back, not a hard chase.
+        _p6_chase_bad        = (
+            _p6_chase
+            and not _p6_constructive
+            and _p6_ext_quality != "CONSTRUCTIVE"
+        )
         _p6_retest_state     = _p6_act in {"WAIT_FOR_RETEST", "NEAR_ACTIONABLE"}
         _p6_breakout_state   = _p6_act == "WAIT_FOR_BREAKOUT"
         _p6_is_breakout_pat  = _p6_pattern in _P6_BREAKOUT_PATTERNS
         _p6_is_reversal_pat  = _p6_pattern in _P6_REVERSAL_PATTERNS
         _p6_is_retest_pat    = _p6_pattern in _P6_RETEST_PATTERNS
+        _p6_is_highbase      = _p6_setup_label == "High-Base Consolidation"
+        _p6_is_ma_support    = _p6_asst_type == "moving_average_zone"
 
         # ── Multi-path decision ───────────────────────────────────────────────
         _p6_pos: list[str]  = []
@@ -2102,7 +2121,23 @@ def build_confluence_snapshot(
                 _p6_path    = "retest_entry"
                 _p6_pos.append("ACTIONABLE_RETEST_ENTRY")
 
-            # PATH C — Breakout / Continuation Entry
+            # PATH B2 — High-Base Consolidation Entry
+            # Requires HIGH_BASE_CONSOLIDATION label from tech scorer (stage >= 10.5
+            # + base_archetype=HIGH_BASE gate is enforced there).
+            elif (
+                _p6_is_highbase
+                and _p6_stage >= 11.0
+                and _p6_tech  >= 4.0
+                and _p6_entry >= 4.25
+                and not _p6_chase_bad
+                and not _p6_support_lost
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "ACTIONABLE_NOW"
+                _p6_path    = "high_base_consolidation_entry"
+                _p6_pos.append("ACTIONABLE_HIGH_BASE_CONSOLIDATION")
+
+            # PATH C — Breakout / Continuation Entry (standard floor)
             elif (
                 _p6_is_breakout_pat
                 and _p6_stage >= 10.5
@@ -2116,6 +2151,23 @@ def build_confluence_snapshot(
                                if _p6_pattern == "HIGH_TIGHT_FLAG"
                                else "breakout_entry")
                 _p6_pos.append("ACTIONABLE_CONTINUATION_SETUP")
+
+            # PATH C2 — Momentum Pullback Entry (lower entry floor for strong patterns)
+            # Strong breakout/momentum pattern + very high stage + tech, relaxed entry floor.
+            elif (
+                _p6_is_breakout_pat
+                and _p6_stage >= 12.0
+                and _p6_tech  >= 5.5
+                and _p6_entry >= 4.25
+                and not _p6_chase_bad
+                and not _p6_support_lost
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "ACTIONABLE_NOW"
+                _p6_path    = "momentum_pullback_entry"
+                _p6_pos.append("ACTIONABLE_MOMENTUM_PULLBACK")
+                if _p6_chase and _p6_ext_quality == "CONSTRUCTIVE":
+                    _p6_pos.append("CONSTRUCTIVE_PULLBACK_AFTER_EXTENSION")
 
             # PATH D — Low Base / Reversal Entry
             elif (
@@ -2143,6 +2195,23 @@ def build_confluence_snapshot(
                                else "bull_flag_entry" if _p6_breakout_state
                                else "support_entry")
                 _p6_pos.append("ACTIONABLE_HIGH_CONFLUENCE_ACCEPTABLE_ENTRY")
+
+            # PATH G — Moving Average / Prior-High Pullback Entry
+            # Price resting at a recognized MA level with decent entry and stage.
+            elif (
+                _p6_is_ma_support
+                and _p6_stage >= 9.0
+                and _p6_tech  >= 3.5
+                and _p6_entry >= 5.0
+                and not _p6_chase_bad
+                and not _p6_support_lost
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "ACTIONABLE_NOW"
+                _p6_path    = (
+                    _p6_ma_entry.lower() if _p6_ma_entry else "moving_average_pullback_entry"
+                )
+                _p6_pos.append("MOVING_AVERAGE_PULLBACK_ENTRY")
 
             if not _p6_is_act:
                 # Near Actionable — good candidate, one more thing needed
@@ -2191,6 +2260,35 @@ def build_confluence_snapshot(
                     if not _p6_blk:
                         _p6_blk.append("SETUP_TOO_WEAK")
 
+            # PATH F — Stage 1 Accumulation / Right-Side Cup
+            # For high investment-quality names that are accumulating / building a
+            # base even if stage score is low.  Surfaces as NEAR_ACTIONABLE only;
+            # never ACTIONABLE_NOW.  Blocked by FAILED_BREAKOUT / SUPPORT_LOST
+            # entry states.
+            if (
+                not _p6_is_act
+                and not _p6_is_near
+                and _p6_tier not in {"RISK_CONFLICT", "INELIGIBLE", "WATCH_FOR_RESET"}
+                and _p6_eligible
+                and not _p6_risk
+                and not _p6_support_lost
+                and not _p6_major_llc
+                and not _p6_chase_bad
+                and _p6_entry_state not in _P6_HARD_ENTRY_BLOCK
+                and _p6_iq_score >= 70.0
+                and _p6_entry >= 4.5
+            ):
+                _p6_is_near = True
+                _p6_tier    = "NEAR_ACTIONABLE"
+                _p6_blk.clear()
+                if _p6_pattern == "200DMA_RECLAIM" or _p6_base_arch == "STAGE1_ACCUMULATION":
+                    _p6_path = "stage1_accumulation_entry"
+                    _p6_pos.append("STAGE1_ACCUMULATION_CANDIDATE")
+                else:
+                    _p6_path = "right_side_cup_entry"
+                    _p6_pos.append("STAGE1_ACCUMULATION_CANDIDATE")
+                _p6_blk.append("NEAR_ACTIONABLE_SETUP_GOOD_ENTRY_PENDING")
+
         # Soft non-blocking notes (never block actionable)
         if r.get("options_status") in ("not_scanned", "pending", "missing_cache", None):
             _p6_pos.append("OPTIONS_PENDING_NOT_BLOCKING")
@@ -2222,6 +2320,8 @@ def build_confluence_snapshot(
             2,
         )
         r["actionability_decision_reason"]   = _p6_dr
+        r["moving_average_entry_detected"]   = bool(_p6_ma_entry)
+        r["moving_average_entry_type"]       = _p6_ma_entry
 
         results.append(r)
 
