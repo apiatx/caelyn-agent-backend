@@ -47,9 +47,51 @@ THEME_ALIGNMENT weights unchanged.  Options/Entry/Actionability unchanged.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import time as _cat_time
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
+
+# ── Catalyst Alignment disk LKG ───────────────────────────────────────────────
+# Persists the last-good bulk result so cold restarts / sparse RSS windows
+# don't collapse catalyst coverage to near-zero.
+# Empty-overwrite guard: if fresh avail < 50 % of disk-LKG avail *and* disk
+# LKG has ≥ 10 available tickers, disk LKG fills gaps per-ticker.
+_CATALYST_LKG_PATH  = Path(__file__).resolve().parent.parent / "data" / "catalyst_alignment_lkg.json"
+_CAT_LKG_MIN_RATIO  = 0.50   # fresh must be ≥ 50 % of LKG avail to skip merge
+_CAT_LKG_MIN_COUNT  = 10     # ignore LKG if it has fewer than 10 available rows
+_CAT_LKG_MAX_AGE_S  = 7 * 86400  # 7 days — LKG beyond this is stale enough to discard
+
+
+def _load_catalyst_lkg() -> tuple[dict[str, dict], int, float]:
+    """Return (data_dict, avail_count, saved_at).  Silent on any error."""
+    try:
+        if _CATALYST_LKG_PATH.exists():
+            raw = json.loads(_CATALYST_LKG_PATH.read_text(encoding="utf-8"))
+            age = _cat_time.time() - float(raw.get("saved_at") or 0)
+            if age < _CAT_LKG_MAX_AGE_S:
+                return raw.get("data") or {}, int(raw.get("avail_count") or 0), float(raw.get("saved_at") or 0)
+    except Exception:
+        pass
+    return {}, 0, 0.0
+
+
+def _save_catalyst_lkg(data: dict[str, dict], avail_count: int) -> None:
+    """Atomic write of catalyst alignment LKG to disk.  Silent on any error."""
+    try:
+        payload = {
+            "data":        data,
+            "avail_count": avail_count,
+            "saved_at":    _cat_time.time(),
+        }
+        tmp = str(_CATALYST_LKG_PATH) + ".tmp"
+        Path(tmp).write_text(json.dumps(payload, default=str), encoding="utf-8")
+        os.replace(tmp, str(_CATALYST_LKG_PATH))
+    except Exception:
+        pass
 
 # ── V1 base scores (0-100) ────────────────────────────────────────────────────
 _SCORE_EARNINGS_THIS_WEEK      = 65.0
@@ -1256,6 +1298,68 @@ def get_catalyst_alignment_bulk(
                 out[sym]["catalyst_alignment_score"]     = round(_boost, 1)
                 out[sym]["catalyst_alignment_available"] = True
                 out[sym]["catalyst_primary_source"]      = "theme_policy"
+
+    # ── Disk LKG save / merge (empty-overwrite guard) ─────────────────────────
+    # After computing fresh results, merge with disk LKG to protect against
+    # sparse RSS windows collapsing catalyst coverage post-restart.
+    # Guard: if fresh available count is < 50 % of disk-LKG available count AND
+    # disk LKG has ≥ _CAT_LKG_MIN_COUNT available tickers, merge disk LKG in for
+    # any ticker that fresh returned unavailable — disk data fills the gap.
+    _fresh_avail = sum(1 for r in out.values() if r.get("catalyst_alignment_available"))
+    _lkg_data, _lkg_avail, _lkg_ts = _load_catalyst_lkg()
+    _lkg_fallback_used = False
+    _lkg_age_minutes: Optional[float] = None
+    if _lkg_ts:
+        _lkg_age_minutes = round((_cat_time.time() - _lkg_ts) / 60, 1)
+
+    if (
+        _lkg_avail >= _CAT_LKG_MIN_COUNT
+        and _fresh_avail < _lkg_avail * _CAT_LKG_MIN_RATIO
+    ):
+        _lkg_fallback_used = True
+        _merged_in = 0
+        for _sym, _lkg_row in _lkg_data.items():
+            if not isinstance(_lkg_row, dict):
+                continue
+            _fresh_row = out.get(_sym)
+            if _fresh_row is None:
+                continue
+            if not _fresh_row.get("catalyst_alignment_available") and _lkg_row.get("catalyst_alignment_available"):
+                out[_sym] = {
+                    **_lkg_row,
+                    "catalyst_lkg_source":        "disk_lkg_merge",
+                    "catalyst_lkg_fallback_used": True,
+                    "catalyst_lkg_age_minutes":   _lkg_age_minutes,
+                    "catalyst_lkg_warm":          True,
+                }
+                _merged_in += 1
+        if _merged_in:
+            print(
+                f"[CATALYST_LKG] Sparse RSS window detected "
+                f"(fresh_avail={_fresh_avail} < lkg_avail={_lkg_avail}×0.5). "
+                f"Merged {_merged_in} disk-LKG rows."
+            )
+
+    # Tag fresh rows with LKG provenance
+    for _sym in out:
+        _row = out[_sym]
+        if "catalyst_lkg_source" not in _row:
+            _row["catalyst_lkg_source"]        = "fresh"
+            _row["catalyst_lkg_fallback_used"] = _lkg_fallback_used
+            _row["catalyst_lkg_age_minutes"]   = _lkg_age_minutes
+            _row["catalyst_lkg_warm"]          = _lkg_avail > 0
+
+    # Save updated result to disk (only when richer than existing LKG)
+    _combined_avail = sum(1 for r in out.values() if r.get("catalyst_alignment_available"))
+    if _combined_avail >= _lkg_avail or _combined_avail >= _CAT_LKG_MIN_COUNT:
+        _lkg_safe = {
+            sym: {k: v for k, v in row.items()
+                  if k not in ("catalyst_lkg_source", "catalyst_lkg_fallback_used",
+                                "catalyst_lkg_age_minutes", "catalyst_lkg_warm")}
+            for sym, row in out.items()
+            if row.get("catalyst_alignment_available")
+        }
+        _save_catalyst_lkg(_lkg_safe, _combined_avail)
 
     return out
 

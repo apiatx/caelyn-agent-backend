@@ -5281,6 +5281,16 @@ async def v4_report_endpoint(watchlist_id: str):
                 k: round((v or {}).get("points") or 0, 1)
                 for k, v in (r.get("caelyn_confluence_v42_components") or {}).items()
             },
+            "bonus_breakdown": {
+                k: round((v or {}).get("points") or 0, 1)
+                for k, v in (r.get("caelyn_confluence_v42_bonus_breakdown") or {}).items()
+            },
+            "bottleneck_bonus_pts": round(
+                ((r.get("caelyn_confluence_v42_bonus_breakdown") or {}).get("bottleneck") or {}).get("points") or 0, 1
+            ),
+            "bottleneck_anchors": (
+                (r.get("caelyn_confluence_v42_bonus_breakdown") or {}).get("bottleneck") or {}
+            ).get("bottleneck_anchor_count"),
         }
         for r in top_scored[:30]
     ]

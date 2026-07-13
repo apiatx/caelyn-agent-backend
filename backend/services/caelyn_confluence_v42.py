@@ -1325,12 +1325,12 @@ def _score_whale_insider_bonus_v42(row: dict) -> dict:
       45-54%  → +1 pt
       <45%    → 0 pts
 
-    Phase 1: no sync LKG available → 0 pts, status=unavailable.
+    Phase 1: sync buy/sell pipeline not wired → 0 pts, status=not_wired.
     """
     return {
         "points":                    0,
         "available":                 False,
-        "status":                    "unavailable",
+        "status":                    "not_wired",
         "whale_insider_buy_pressure": None,
         "whale_buy_value":           None,
         "whale_sell_value":          None,
@@ -1338,9 +1338,9 @@ def _score_whale_insider_bonus_v42(row: dict) -> dict:
         "insider_sell_value":        None,
         "politician_buy_value":      None,
         "politician_sell_value":     None,
-        "whale_insider_status":      "unavailable",
-        "whale_insider_reason_codes": ["WHALE_INSIDER_NO_SYNC_CACHE"],
-        "reason_codes":              ["WHALE_INSIDER_NO_SYNC_CACHE"],
+        "whale_insider_status":      "not_wired",
+        "whale_insider_reason_codes": ["WHALE_INSIDER_SYNC_NOT_WIRED"],
+        "reason_codes":              ["WHALE_INSIDER_SYNC_NOT_WIRED"],
     }
 
 

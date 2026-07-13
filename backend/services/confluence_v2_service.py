@@ -1813,6 +1813,32 @@ def build_confluence_snapshot(
         _snap_log("options_alignment_bulk", int((time.time() - _t_opts) * 1000),
                   status=f"error:{_oe}")
 
+    # ── Options priority-queue injection ──────────────────────────────────────
+    # After computing options alignment, identify watchlist tickers that are
+    # not yet scanned (no options data, not confirmed_no_options) and add them
+    # to the supplement backfill priority queue so the next scan pass covers
+    # them before alphabetically-lower theme-universe symbols.
+    # Zero provider calls — pure in-memory write that persists to disk.
+    try:
+        from data.options_theme_supplement import add_high_priority_symbols as _add_opts_priority
+        _not_scanned_syms = [
+            _sym for _sym, _orow in options_align_map.items()
+            if not (_orow or {}).get("options_alignment_available")
+            and (_orow or {}).get("options_pressure_state") not in ("confirmed_no_options",)
+            and "confirmed_no" not in str((_orow or {}).get("options_pressure_state") or "")
+            and "confirmed_no" not in str((_orow or {}).get("options_snapshot_status") or "")
+            and ":" not in _sym
+        ]
+        if _not_scanned_syms:
+            _add_opts_priority(_not_scanned_syms)
+            print(
+                f"[CONFLUENCE_SNAP] options priority queue: "
+                f"+{len(_not_scanned_syms)} not-scanned symbols queued "
+                f"({_not_scanned_syms[:5]}{'...' if len(_not_scanned_syms) > 5 else ''})"
+            )
+    except Exception as _pq_exc:
+        print(f"[CONFLUENCE_SNAP] options priority queue injection skipped: {_pq_exc}")
+
     # ── Catalyst Alignment — zero-provider-call ────────────────────────────────
     catalyst_align_map: dict[str, dict] = {}
     _t_cat = time.time()

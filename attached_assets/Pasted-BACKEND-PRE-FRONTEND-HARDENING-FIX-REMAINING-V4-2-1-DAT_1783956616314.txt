@@ -1,0 +1,402 @@
+BACKEND — PRE-FRONTEND HARDENING: FIX REMAINING V4.2.1 DATA RELIABILITY BUGS
+
+Backend only.
+
+Do not touch frontend.
+Do not change the V4.2.1 scoring formula.
+Do not change scoring weights.
+Do not add provider calls.
+Do not call LLMs.
+Do not rebuild the Confluence engine.
+Do not reverse any completed fixes:
+- V4.2.1 canonical score
+- options_alignment_score field fix
+- options availability gate fix
+- catalyst extended detection fix
+- investment 3-pillar model
+- social section-hit bonus
+- prediction markets disabled
+- theme policy folded into theme alignment
+- retained snapshot rebuild fixes
+- actionability display contract
+
+Goal:
+
+Before frontend wiring, fix the remaining backend reliability/data-coverage bugs that can make the UI misleading.
+
+The V4.2.1 final validation report showed:
+
+- Core max = 100 confirmed
+- Total max = 125 confirmed
+- 379 rows scored
+- Provider calls = 0
+- Options available_cached = 276
+- confirmed_no_options = 64
+- not_scanned = 39
+- Catalyst code correct, but live catalyst data dropped to 2 rows after restart because catalyst LKG was cold
+- Whale/Insider/Politician bonus is a stub
+- Bottleneck bonus is present in alignment rows but v4-report/debug context passes bottleneck_map=None
+
+Fix only the reliability issues below.
+
+==================================================
+PART 1 — CATALYST LKG COLD-START FIX
+==================================================
+
+Problem:
+
+Catalyst V4.2.1 code is correct, but after server restart the retained snapshot can rebuild while catalyst in-memory LKG is cold. In the final report, catalyst detection dropped to 2 tickers even though previous warm state had ~90+ catalyst signals.
+
+This makes Confluence scores artificially low after restart.
+
+Required behavior:
+
+Confluence snapshot rebuild must not lose catalyst intelligence just because the background catalyst scanner has not warmed yet.
+
+Implement durable catalyst LKG fallback:
+
+1. Identify the current canonical catalyst source used by:
+   - catalyst_alignment.py
+   - watchlist RSS catalyst alignment
+   - scheduled catalyst fields
+   - nested catalyst dicts
+   - primary_catalyst / catalyst_v2_primary_event / catalyst_events
+
+2. Find whether there is already a persisted catalyst LKG file or Neon snapshot.
+   Prefer existing storage. Do not invent a new unrelated store if one exists.
+
+3. On startup and/or retained snapshot rebuild:
+   - If in-memory catalyst map is warm, use it.
+   - If in-memory catalyst map is empty/cold, load the last persisted catalyst LKG.
+   - If both are unavailable, mark catalyst_status="unavailable_cold_lkg" and keep score 0.
+   - Do not rebuild a retained snapshot that silently downgrades all catalyst rows without a reason code.
+
+4. Add reason/status fields:
+   - catalyst_lkg_source: "memory" | "disk_lkg" | "neon_lkg" | "unavailable"
+   - catalyst_lkg_warm: true/false
+   - catalyst_lkg_age_minutes
+   - catalyst_lkg_fallback_used: true/false
+   - CATALYST_LKG_COLD_FALLBACK_USED reason code when fallback is used
+   - CATALYST_LKG_UNAVAILABLE_COLD_START when no fallback exists
+
+5. Add empty-overwrite guard:
+   - If current catalyst scan returns near-empty data due to cold start, do not overwrite a richer previous LKG.
+   - Treat a sudden collapse from ~90+ catalyst rows to <10 as suspicious unless explicitly caused by expiry.
+   - Keep previous LKG until the new scan is complete and valid.
+
+6. Validation:
+   Restart server.
+   Immediately trigger or read retained confluence snapshot.
+   Confirm catalyst count does not collapse to 2.
+   Confirm catalyst count after restart is either:
+   - same as previous persisted LKG, or
+   - explicitly marked unavailable_cold_lkg without silently suppressing.
+
+Return counts:
+   before restart catalyst rows
+   after restart immediate catalyst rows
+   after warmup catalyst rows
+   catalyst_lkg_source distribution
+   fallback_used count
+
+==================================================
+PART 2 — OPTIONS SCANNER / LKG COVERAGE GAP
+==================================================
+
+Problem:
+
+V4.2.1 options scoring is fixed, but 39 tickers remain not_scanned. Some are known optionable names:
+
+CRDO, CRWD, FSLR, FTNT, INTC, IONQ, MARA, MRVL, MSFT, MU, NVDA, NVEC, ON, QRVO, RBRK, RMBS, SMCI, TSM
+
+This is not a Confluence scoring bug anymore. It is an options scanner/LKG coverage gap.
+
+Goal:
+
+Do not change Confluence options scoring.
+Fix coverage so known optionable watchlist tickers are not stuck not_scanned indefinitely.
+
+Tasks:
+
+1. Audit why those known optionable tickers are absent from the current options scanner/LKG window.
+   Check:
+   - scanner universe
+   - queue eligibility
+   - stale LKG handling
+   - market-closed LKG handling
+   - symbol normalization
+   - watchlist inclusion
+   - any filtering rules excluding large-cap/common tickers
+
+2. Add a safe backfill/priority queue rule:
+   - Known optionable watchlist tickers with options_status=not_scanned should be queued ahead of lower-priority refreshes.
+   - Do not scan on every Confluence request.
+   - Do not add request-time provider calls.
+   - Use existing scanner/backfill job only.
+
+3. Preserve confirmed_no_options logic:
+   - Do not turn confirmed_no_options into not_scanned.
+   - Do not repeatedly scan tickers already confirmed no-options unless stale window requires it.
+
+4. Add diagnostics:
+   - options_not_scanned_reason
+   - options_scanner_queue_status
+   - options_last_scan_at
+   - options_backfill_priority
+
+5. Validation:
+   Return the 39 not_scanned tickers with classification:
+   - known optionable queued
+   - known optionable blocked, with reason
+   - likely no listed options
+   - foreign/OTC
+   - insufficient history
+   - unknown
+
+6. After scanner/backfill runs or queue is updated:
+   Confirm known optionable list is no longer silently missing from scanner universe.
+
+Important:
+
+This phase does not need to complete a live Tradier scan immediately if market/session timing prevents it.
+But it must prove the missing optionable tickers are queued and will populate through the existing scanner.
+
+==================================================
+PART 3 — BOTTLENECK DEBUG ENDPOINT CONSISTENCY
+==================================================
+
+Problem:
+
+Alignment endpoint rows store bottleneck bonus correctly for 79 tickers.
+But v4-report/debug context passes bottleneck_map=None, so the same tickers show 0 bonus in that endpoint.
+
+This creates confusing validation/debug output.
+
+Fix:
+
+1. Use the same bottleneck_map source in v4-report/debug recompute that retained snapshot uses.
+2. Do not change bottleneck formula:
+   bottleneck_bonus = min(5, anchor_count / 13 * 5)
+3. If bottleneck_map is unavailable in debug context:
+   - expose bottleneck_status="debug_map_unavailable"
+   - do not silently show 0 as if the ticker has no bottleneck exposure.
+
+Validation:
+
+Compare alignment endpoint vs v4-report for:
+AMAT
+AMKR
+KLAC
+DELL
+MU
+TSM
+ETN
+GLW
+VRT
+AMD
+LITE
+
+For each:
+alignment bottleneck_bonus
+v4-report bottleneck_bonus
+bottleneck_anchor_count
+bottleneck_status
+
+Expected:
+Values match, or mismatch is explicitly explained by status.
+
+==================================================
+PART 4 — WHALE / INSIDER / POLITICIAN STATUS
+==================================================
+
+Problem:
+
+Whale/Insider/Politician bonus is still a stub:
+available = 0 / 379
+reason = WHALE_INSIDER_NO_SYNC_CACHE
+
+This is acceptable if we are not ready to wire it, but the frontend must not treat it as active.
+
+Choose one of two approaches:
+
+APPROACH A — Wire if cached data already exists
+
+If Whale Watch / Insider / Politician pages already have cached sync data available with buy/sell values or counts:
+
+1. Reuse existing cache only.
+2. No provider calls.
+3. Compute:
+   buy_pressure = buy_value / (buy_value + sell_value)
+   fallback = buy_count / (buy_count + sell_count)
+
+4. Score:
+   80–100% buys = +5
+   65–79% buys = +4
+   55–64% buys = +3
+   45–54% buys = +1
+   <45% buys = 0
+   heavy net selling = 0 + bearish warning
+
+5. Cap total at +5.
+
+Expose:
+   whale_insider_bonus_points
+   whale_insider_buy_pressure
+   whale_buy_value
+   whale_sell_value
+   insider_buy_value
+   insider_sell_value
+   politician_buy_value
+   politician_sell_value
+   whale_insider_status
+   whale_insider_reason_codes
+
+APPROACH B — Keep safely unavailable
+
+If cached data is not available or would require new work/provider calls:
+
+1. Keep bonus = 0.
+2. Status must clearly say:
+   whale_insider_status="not_wired"
+3. Reason code:
+   WHALE_INSIDER_SYNC_NOT_WIRED
+4. Do not call this “available.”
+5. Frontend can hide or grey out this bonus until wired.
+
+Do not build a large new sync pipeline in this phase unless the cached data already exists.
+
+==================================================
+PART 5 — FINAL VALIDATION
+==================================================
+
+After fixes, return:
+
+PRE-FRONTEND HARDENING REPORT
+
+FILES CHANGED:
+[list]
+
+CATALYST LKG COLD-START FIX:
+- before restart catalyst count
+- immediate after restart catalyst count
+- fallback source
+- fallback used count
+- empty overwrite guard status
+- validation tickers
+
+OPTIONS SCANNER COVERAGE FIX:
+- total not_scanned before
+- total not_scanned after or queued
+- known optionable not_scanned count
+- known optionable queued count
+- known optionable blocked count with reasons
+- confirmed_no_options count preserved
+
+BOTTLENECK DEBUG CONSISTENCY:
+- alignment vs v4-report comparison
+- mismatch count
+- status fields
+
+WHALE / INSIDER / POLITICIAN:
+- wired or safely unavailable
+- available count
+- bonus > 0 count
+- status explanation
+
+SCORE DISTRIBUTION AFTER HARDENING:
+- row_count
+- min
+- p25
+- median
+- p75
+- p90
+- max
+- avg
+- scores >= 40
+- scores >= 50
+- scores >= 60
+- scores >= 70
+
+TOP 50 AFTER HARDENING:
+[table]
+
+VALIDATION SYMBOLS:
+Validate:
+ANET
+KLIC
+MU
+OSCR
+NBIS
+ADPT
+SNDK
+LITE
+AMD
+ON
+NVDA
+MSFT
+SMCI
+CRWD
+CRDO
+FSLR
+FTNT
+MRVL
+MARA
+TSM
+VRT
+GLW
+AMKR
+KLAC
+PENG
+
+For each:
+symbol
+score
+core
+bonus
+options_status
+options_points
+options_not_scanned_reason
+catalyst_points
+catalyst_lkg_source
+direct_catalyst_present
+bottleneck_bonus
+whale_insider_bonus
+whale_insider_status
+bucket
+actionability_state
+confidence
+reason_codes
+
+PROVIDER CALLS:
+0 expected
+
+End exactly:
+
+PRE-FRONTEND HARDENING VERDICT
+
+CATALYST_LKG_COLD_START_FIXED:
+[YES/NO]
+
+CATALYST_EMPTY_OVERWRITE_GUARD_ADDED:
+[YES/NO]
+
+OPTIONS_KNOWN_OPTIONABLE_GAPS_QUEUED_OR_FIXED:
+[YES/NO]
+
+CONFIRMED_NO_OPTIONS_PRESERVED:
+[YES/NO]
+
+BOTTLENECK_DEBUG_ENDPOINT_CONSISTENT_OR_EXPLAINED:
+[YES/NO]
+
+WHALE_INSIDER_WIRED_OR_SAFELY_UNAVAILABLE:
+[YES/NO]
+
+V421_SCORING_FORMULA_UNCHANGED:
+[YES/NO]
+
+PROVIDER_CALLS:
+[0]
+
+READY_FOR_FRONTEND_WIRING:
+[YES/NO]
