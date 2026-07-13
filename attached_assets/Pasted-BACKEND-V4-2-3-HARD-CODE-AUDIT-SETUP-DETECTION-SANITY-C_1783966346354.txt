@@ -1,0 +1,107 @@
+BACKEND — V4.2.3 HARD-CODE AUDIT + SETUP DETECTION SANITY CHECK
+
+Backend only.
+
+Do not change code unless you find hardcoded ticker logic.
+Do not change scoring weights.
+Do not change actionability thresholds yet.
+No provider calls.
+
+Goal:
+
+Confirm V4.2.3 actionability is generic and repeatable, not hardcoded to the user’s manually named ticker list. Then audit why some visually actionable names are still blocked by “No Clear Setup.”
+
+PART 1 — HARDCODE AUDIT
+
+Search backend/services/confluence_v2_service.py and related V4.2.3 actionability code for any ticker-specific logic involving:
+
+ANET, VRT, ABCL, WYFI, NUAI, ALGM, SOFI, HOOD, HIMS, ZVRA, ENTG, CGNX, AEVA, OUST, TE, FCEL, SHLS, ENPH, ONTO, MCHP, HIVE, ADUR
+
+Return:
+- any matching code snippets
+- whether these symbols are used only in validation/reporting
+- whether any symbol is used in the decision logic
+
+Expected:
+No ticker-specific allowlist or denylist in actionability logic.
+
+PART 2 — GENERIC PATH AUDIT
+
+For every actionable row, return:
+
+symbol
+actionable_tier
+actionable_path
+entry_exit_points
+technical_setup_points
+stage_quality_points
+support_status
+technical_setup_label
+positive_reasons
+blockers
+
+Group by actionable_path:
+
+support_entry
+retest_entry
+breakout_entry
+high_tight_continuation
+ema_pullback
+reversal_entry
+
+Confirm no path depends on ticker symbol.
+
+PART 3 — NON-ACTIONABLE SETUP-DETECTION AUDIT
+
+Audit these specifically:
+
+VRT
+ENTG
+ONTO
+CGNX
+AEVA
+OUST
+SOFI
+ALGM
+ABCL
+ENPH
+FCEL
+NUAI
+
+For each return:
+
+symbol
+technical_setup_label
+technical_setup_points
+pattern_type
+pattern_quality_score
+extension_state
+support_status
+active_support_status
+entry_exit_points
+stage_quality_points
+why setup engine returned No Clear Setup or Chase Extension
+what existing fields prevented a bullish setup label
+
+Do not fix yet. Just explain.
+
+PART 4 — VERDICT
+
+End with:
+
+V4.2.3 HARDCODE / REPEATABILITY VERDICT
+
+TICKER_HARDCODE_FOUND:
+[YES/NO]
+
+USER_LIST_USED_ONLY_FOR_VALIDATION:
+[YES/NO]
+
+ACTIONABILITY_PATHS_ARE_GENERIC:
+[YES/NO]
+
+REMAINING_ISSUE_IS_SETUP_DETECTION_NOT_ACTIONABILITY:
+[YES/NO/PARTIAL]
+
+NEXT_FIX_NEEDED:
+[none / setup detection calibration / entry-exit calibration]
