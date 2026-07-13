@@ -1,0 +1,524 @@
+BACKEND — V4.2.5 EXTENSION RESET + FIB RETEST CALIBRATION
+
+Backend only.
+
+Do not touch frontend.
+Do not change Confluence weights.
+Do not hardcode ticker symbols.
+Do not add provider calls.
+Do not call LLMs.
+Do not change options/catalyst/investment formulas.
+Do not loosen all extension rules blindly.
+
+Goal:
+
+The current engine is still too binary on over-extension.
+
+It correctly blocks true vertical chase entries, but it can incorrectly block stocks that were extended, then pulled back into a valid retest / prior-high / moving-average / Fibonacci support level.
+
+We need to distinguish:
+
+1. TRUE_CHASE_EXTENSION
+   - price shot straight up
+   - no meaningful pullback
+   - sitting at or near local high
+   - no defined support/retest level
+   - poor R/R
+
+2. CONSTRUCTIVE_RETEST_AFTER_EXTENSION
+   - stock had a strong impulse move
+   - has now pulled back or consolidated
+   - is retesting prior resistance / breakout shelf / Fib 1.0 / moving average / active support
+   - support has not failed
+   - invalidation is definable
+
+3. HEALTHY_TREND_PULLBACK
+   - slow or stair-step climb
+   - regular pullbacks along the way
+   - currently pulling into 20/30/50/200DMA or prior support
+   - not a vertical chase
+
+This must be generic and repeatable.
+
+==================================================
+PART 1 — AUDIT CURRENT EXTENSION LOGIC
+==================================================
+
+Find the current logic that sets:
+
+extension_state
+extension_quality
+chase_extension
+constructive_extension
+entry_state
+entry_score
+entry_risk_reward_state
+technical_setup_label = Chase Extension
+WATCH_FOR_RESET_CHASE_EXTENSION
+
+Return the exact fields and conditions used.
+
+Audit these tickers:
+
+ABCL
+ALGM
+VRT
+ANET
+AMD
+CRDO
+OUST
+CGNX
+MARA
+HIVE
+WYFI
+HOOD
+HIMS
+
+For each return:
+
+symbol
+extension_state
+extension_quality
+chase_extension
+constructive_extension
+current_price
+recent_high
+recent_low
+drawdown_from_recent_high_pct
+distance_from_20dma_pct
+distance_from_30dma_pct
+distance_from_50dma_pct
+distance_from_200dma_pct
+support_status
+active_support_status
+entry_exit_points
+technical_setup_points
+entry_state
+entry_score
+blockers
+
+==================================================
+PART 2 — ADD EXTENSION RESET CLASSIFICATION
+==================================================
+
+Add a new derived field:
+
+extension_reset_state
+
+Allowed values:
+
+TRUE_CHASE_EXTENSION
+EXTENDED_NO_RESET
+CONSTRUCTIVE_RETEST_AFTER_EXTENSION
+HEALTHY_TREND_PULLBACK
+HIGH_BASE_RESET
+EARLY_RESET_FORMING
+NOT_EXTENDED
+UNKNOWN
+
+Add:
+
+extension_reset_score
+extension_reset_reason_codes
+
+Rules:
+
+TRUE_CHASE_EXTENSION:
+- extension_state in {EXTREME_EXTENSION, EXTENDED}
+- extension_quality = CHASE
+- current price is near recent high
+- drawdown from recent high is shallow
+- no support/retest level nearby
+- entry_exit_points very weak
+- no moving-average/fib/prior-high retest
+
+CONSTRUCTIVE_RETEST_AFTER_EXTENSION:
+- extension_state in {EXTREME_EXTENSION, EXTENDED}
+- prior impulse move exists
+- current price has pulled back from recent high
+- active support is intact OR bounced_from_support OR above_support
+- current price is near one or more valid retest levels:
+  prior high
+  breakout shelf
+  reclaim level
+  active support
+  20DMA
+  30DMA
+  50DMA
+  200DMA
+  Fib 1.0
+  Fib 0.786 / 0.618 / 0.5 / 0.382
+- no confirmed support loss
+- no confirmed lower low
+
+HEALTHY_TREND_PULLBACK:
+- extension_state can be MODERATELY_EXTENDED, EXTENDED, or HEALTHY
+- price trend is stair-step / not vertical if detectable
+- pullbacks have occurred along the way
+- current price is near 20/30/50/200DMA or prior support
+- support intact
+- no major breakdown
+
+HIGH_BASE_RESET:
+- high-base / shelf / VCP / consolidation pattern
+- near highs but not at blowoff high
+- range contraction or shelf support if available
+- not support_lost
+- no chase_bad
+
+Do not classify as TRUE_CHASE_EXTENSION just because price is far above a long-term MA.
+A stock can remain extended above the 200DMA while still presenting a valid pullback entry.
+
+==================================================
+PART 3 — ADD FIBONACCI LEVEL ENGINE
+==================================================
+
+Add a deterministic Fibonacci level helper using existing cached daily bars only.
+
+No provider calls.
+
+Function goal:
+
+Given recent OHLC bars, detect the most relevant swing low and swing high for the current impulse.
+
+Then calculate:
+
+Retracement levels:
+0.382
+0.5
+0.618
+0.786
+
+Extension / retest levels:
+1.0
+1.272
+1.618
+2.0
+2.618
+
+Expose:
+
+fib_anchor_low
+fib_anchor_high
+fib_anchor_low_date
+fib_anchor_high_date
+fib_0382
+fib_0500
+fib_0618
+fib_0786
+fib_1000
+fib_1272
+fib_1618
+fib_2000
+fib_2618
+nearest_fib_level
+nearest_fib_label
+distance_to_nearest_fib_pct
+fib_retest_detected
+fib_retest_type
+fib_target_1
+fib_target_2
+fib_reason_codes
+
+Anchor selection rules:
+
+Prefer recent major impulse:
+- swing low before the strongest recent advance
+- swing high at recent impulse peak
+- use pivot highs/lows already available if possible
+- otherwise derive from recent 60–120 daily bars
+
+Do not fabricate Fib levels if bars are unavailable.
+
+If multiple anchors are possible:
+- prefer the impulse that aligns with current price action and recent breakout/retest
+- expose FIB_ANCHOR_LOW_CONFIDENCE if anchor confidence is low
+
+Fib retest detection:
+
+Current price is near a Fib level if within:
+- 2.5% for large/liquid stocks
+- 4.0% for volatile small caps
+- or within 0.5 ATR if ATR is available
+
+Important:
+Fib 1.0 is valid as a prior impulse high / prior resistance retest.
+This is especially important for ABCL and ALGM-type setups.
+
+==================================================
+PART 4 — INTEGRATE FIB + MA RETEST INTO ENTRY/EXIT
+==================================================
+
+Entry/Exit should reward clean retests of:
+
+- prior high
+- breakout shelf
+- reclaim level
+- active support
+- 20DMA
+- 30DMA
+- 50DMA
+- 200DMA
+- Fib 1.0
+- Fib 0.786 / 0.618 / 0.5 / 0.382
+
+The 200DMA is a valid and important entry/retest level.
+Do not exclude it because it is long-term.
+
+Add reason codes:
+
+FIB_1000_RETEST_ENTRY
+FIB_0786_RETEST_ENTRY
+FIB_0618_RETEST_ENTRY
+FIB_0500_RETEST_ENTRY
+FIB_0382_RETEST_ENTRY
+FIB_EXTENSION_TARGET_1618
+FIB_EXTENSION_TARGET_2000
+FIB_EXTENSION_TARGET_2618
+DMA20_PULLBACK_ENTRY
+DMA30_PULLBACK_ENTRY
+DMA50_PULLBACK_ENTRY
+DMA200_PULLBACK_ENTRY
+PRIOR_HIGH_RETEST_ENTRY
+BREAKOUT_SHELF_RETEST_ENTRY
+DEFINED_RISK_RETEST
+
+If a ticker is labeled CHASE but also has a valid Fib/MA/prior-high retest:
+- do not automatically call it ACTIONABLE
+- but do downgrade the blocker from hard chase to CONSTRUCTIVE_RETEST_AFTER_EXTENSION if other support/risk conditions pass
+
+==================================================
+PART 5 — UPDATE ACTIONABILITY PATHS
+==================================================
+
+Add/adjust paths:
+
+fib_retest_entry
+fib_1000_retest_entry
+moving_average_pullback_entry
+dma200_reclaim_entry
+constructive_retest_after_extension
+healthy_trend_pullback_entry
+
+Actionable Now can include:
+
+- support_entry
+- retest_entry
+- prior_high_retest_entry
+- fib_1000_retest_entry
+- moving_average_pullback_entry
+- dma200_reclaim_entry
+- constructive_retest_after_extension
+- high_base_consolidation_entry
+
+Near Actionable can include:
+
+- early_reset_forming
+- right_side_cup_entry
+- fib_retest_not_confirmed
+- MA retest forming but not confirmed
+
+Keep hard exclusions:
+
+- confirmed support lost
+- confirmed lower low
+- failed breakout with no reclaim
+- true chase extension with no reset
+- risk conflict
+- ineligible symbol
+
+==================================================
+PART 6 — WAVE STRUCTURE, NOT FORMAL ELLIOTT WAVES
+==================================================
+
+Do not build a formal Elliott Wave engine.
+
+Instead add a lightweight deterministic wave-structure classifier if existing bars are available.
+
+Allowed labels:
+
+IMPULSE_LEG
+FIRST_PULLBACK
+SECOND_LEG_CONTINUATION
+RIGHT_SIDE_BASE
+MOMENTUM_WAVE_PULLBACK
+FAILED_WAVE
+NO_CLEAR_WAVE
+
+Expose:
+
+wave_structure_label
+wave_structure_score
+wave_structure_reason_codes
+
+Use this only as supporting evidence for setup/entry.
+Do not make it a standalone core score.
+
+Goal:
+Capture useful “wave structure” without pretending to have subjective Elliott Wave certainty.
+
+==================================================
+PART 7 — VALIDATION SYMBOLS
+==================================================
+
+Audit:
+
+ABCL
+ALGM
+VRT
+SOFI
+HOOD
+HIMS
+WYFI
+ANET
+AMD
+CRDO
+OUST
+CGNX
+MARA
+HIVE
+ENTG
+ONTO
+
+For each return before/after:
+
+symbol
+old_actionable_tier
+new_actionable_tier
+old_actionable_path
+new_actionable_path
+extension_state
+old_extension_quality
+new_extension_reset_state
+chase_extension
+constructive_extension
+fib_retest_detected
+fib_retest_type
+nearest_fib_label
+distance_to_nearest_fib_pct
+fib_target_1
+fib_target_2
+moving_average_entry_detected
+moving_average_entry_type
+distance_from_20dma_pct
+distance_from_30dma_pct
+distance_from_50dma_pct
+distance_from_200dma_pct
+wave_structure_label
+technical_setup_label
+entry_exit_points
+technical_setup_points
+stage_quality_points
+support_status
+active_support_status
+actionability_positive_reasons
+actionability_blockers
+plain_english_explanation
+
+Expected conceptual behavior:
+
+ABCL:
+Should not remain hard-blocked solely because prior extension was CHASE if it is currently retesting Fib 1.0 / prior resistance with intact support.
+It can become NEAR_ACTIONABLE or ACTIONABLE_NOW depending entry evidence.
+
+ALGM:
+Should remain ACTIONABLE_NOW or improve explanation as Fib/prior-high/moving-average retest.
+
+VRT:
+Should remain ACTIONABLE_NOW if high-base / shelf retest remains valid.
+
+SOFI:
+Should remain NEAR_ACTIONABLE / early actionable if right-side cup logic remains valid.
+
+Do not force any ticker to pass.
+If ABCL remains WATCH_FOR_RESET, explain exactly which reset condition failed.
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+V4.2.5 EXTENSION RESET + FIB RETEST REPORT
+
+FILES CHANGED:
+[list]
+
+EXTENSION LOGIC AUDIT:
+[summary]
+
+EXTENSION RESET CLASSIFICATION:
+[summary + distribution]
+
+FIBONACCI ENGINE:
+[summary + validation]
+
+MOVING AVERAGE RETEST HANDLING:
+[20/30/50/200DMA summary]
+
+WAVE STRUCTURE:
+[summary]
+
+ACTIONABILITY CHANGES:
+[before/after tab counts]
+
+VALIDATION SYMBOLS:
+[table]
+
+ABCL SPECIAL AUDIT:
+[plain English]
+
+ALGM SPECIAL AUDIT:
+[plain English]
+
+PROVIDER CALLS:
+0 expected
+
+End exactly:
+
+V4.2.5 VERDICT
+
+NO_TICKER_HARDCODING:
+[YES/NO]
+
+TRUE_CHASE_VS_CONSTRUCTIVE_RETEST_SEPARATED:
+[YES/NO]
+
+FIBONACCI_LEVELS_BUILT_FROM_EXISTING_BARS:
+[YES/NO]
+
+FIB_1000_RETEST_HANDLED:
+[YES/NO]
+
+FIB_EXTENSION_TARGETS_EXPOSED:
+[YES/NO]
+
+DMA20_PULLBACK_HANDLED:
+[YES/NO]
+
+DMA30_PULLBACK_HANDLED:
+[YES/NO]
+
+DMA50_PULLBACK_HANDLED:
+[YES/NO]
+
+DMA200_PULLBACK_HANDLED:
+[YES/NO]
+
+WAVE_STRUCTURE_ADDED_WITHOUT_FORMAL_ELLIOTT_OVERCLAIM:
+[YES/NO]
+
+ABCL_RETEST_LOGIC_EXPLAINED:
+[YES/NO]
+
+ALGM_RETEST_LOGIC_EXPLAINED:
+[YES/NO]
+
+SCORING_WEIGHTS_UNCHANGED:
+[YES/NO]
+
+PROVIDER_CALLS:
+[0]
+
+READY_FOR_FRONTEND_PATCH:
+[YES/NO]

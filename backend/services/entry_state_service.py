@@ -82,7 +82,7 @@ _LKG_LOADED = False
 #   1 = pre-LOW_BASE (legacy HIGH_BASE-only Entry Structure V2)
 #   2 = LOW_BASE taxonomy added (LOW_BASE_FORMING/COILING/READY + base_archetype,
 #       base_location, low_base_floor diagnostics)
-ENTRY_ANALYSIS_VERSION = 3
+ENTRY_ANALYSIS_VERSION = 4
 
 # ── Entry family / state / grade constants ─────────────────────────────────────
 FAMILY_PRE_MOVE       = "PRE_MOVE"
@@ -1203,6 +1203,7 @@ def analyze_entry_state_from_bars(
     sma200     = tech.get("sma_200")
     pct20      = tech.get("pct_vs_sma_20")
     pct50      = tech.get("pct_vs_sma_50")
+    pct200     = tech.get("pct_vs_sma_200")
 
     # ── Price resolution: cached quote (read-only) → last bar close ───────────
     # cached_quote is obtained via cache.get() — no fetch on miss.
@@ -1234,6 +1235,58 @@ def analyze_entry_state_from_bars(
         price = float(sorted_bars[-1]["close"])
         price_basis = "LAST_DAILY_CLOSE"
         price_as_of = bars_last_date
+
+    # ── V4.2.5 — SMA30, drawdown_from_recent_high_pct, Fib, Wave ─────────────
+    _fib_fields:  dict = {}
+    _wave_fields: dict = {}
+    _sma30:                       Optional[float] = None
+    _pct30:                       Optional[float] = None
+    _drawdown_30d_pct:            Optional[float] = None
+    _dist_20dma_pct:              Optional[float] = None
+    _dist_50dma_pct:              Optional[float] = None
+    _dist_200dma_pct:             Optional[float] = None
+
+    if sorted_bars and price is not None and price > 0:
+        try:
+            from backend.services.fib_engine import compute_fib_levels as _fib_fn
+            _fib_fields = _fib_fn(sorted_bars, current_price=price)
+        except Exception:
+            _fib_fields = {}
+
+        try:
+            from backend.services.wave_structure_engine import classify_wave_structure as _wave_fn
+            _wave_fields = _wave_fn(
+                bars                  = sorted_bars,
+                entry_state           = None,   # final entry_state not yet computed here
+                entry_family          = None,
+                extension_state       = ext_state,
+                stage_alignment_score = None,
+                prior_26w_trend_pct   = stage_result.get("prior_26w_trend_pct"),
+            )
+        except Exception:
+            _wave_fields = {}
+
+        # SMA-30
+        _c30 = [float(b["close"]) for b in sorted_bars[-30:] if b.get("close")]
+        if len(_c30) >= 25:
+            _sma30 = round(sum(_c30) / len(_c30), 4)
+            _pct30 = round((price - _sma30) / _sma30 * 100, 2)
+
+        # Drawdown from recent 30-bar high
+        _h30 = [float(b.get("high") or b.get("close") or 0) for b in sorted_bars[-30:]]
+        _h30 = [v for v in _h30 if v > 0]
+        if _h30:
+            _peak30 = max(_h30)
+            if _peak30 > 0:
+                _drawdown_30d_pct = round((price - _peak30) / _peak30 * 100, 2)
+
+        # Distance from key DMA levels in %
+        if sma20 and sma20 > 0:
+            _dist_20dma_pct  = round((price - sma20)  / sma20  * 100, 2)
+        if sma50 and sma50 > 0:
+            _dist_50dma_pct  = round((price - sma50)  / sma50  * 100, 2)
+        if sma200 and sma200 > 0:
+            _dist_200dma_pct = round((price - sma200) / sma200 * 100, 2)
 
     # 30w MA in price units (back-calculate from ext_pct if available)
     ma30w_price: Optional[float] = None
@@ -1652,6 +1705,18 @@ def analyze_entry_state_from_bars(
         "entry_risk_reward_score":        _rr.get("entry_risk_reward_score"),
         "entry_risk_reward_reason_codes": _rr.get("entry_risk_reward_reason_codes"),
         "distance_to_active_support_pct": _rr.get("distance_to_active_support_pct"),
+        # ── V4.2.5 — Extended MA fields ──────────────────────────────────────
+        "sma_30":                      _sma30,
+        "pct_vs_sma_30":               _pct30,
+        "pct_vs_sma_200":              pct200,
+        "drawdown_from_recent_high_pct": _drawdown_30d_pct,
+        "dist_from_20dma_pct":         _dist_20dma_pct,
+        "dist_from_50dma_pct":         _dist_50dma_pct,
+        "dist_from_200dma_pct":        _dist_200dma_pct,
+        # ── V4.2.5 — Fibonacci levels ────────────────────────────────────────
+        **_fib_fields,
+        # ── V4.2.5 — Wave structure ──────────────────────────────────────────
+        **_wave_fields,
     }
 
     # ── Entry Structure V2 diagnostics (present whenever computed) ───────────

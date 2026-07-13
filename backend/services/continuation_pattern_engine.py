@@ -82,9 +82,133 @@ _EXHAUSTION_ONLY_STATES = {"VERTICAL", "VOLUME_CLIMAX", "CROWDED_MOVE"}
 _SUPPORT_INTACT = {"above_support", "testing_support", "bounced_from_support"}
 _SEVERE_EXT = {"EXTREME_EXTENSION", "EXTENDED", "VERTICAL", "VOLUME_CLIMAX", "CROWDED_MOVE"}
 
+# Extension reset state constants
+ERS_NOT_EXTENDED           = "NOT_EXTENDED"
+ERS_CONSTRUCTIVE_RETEST    = "CONSTRUCTIVE_RETEST_AFTER_EXTENSION"
+ERS_HEALTHY_PULLBACK       = "HEALTHY_TREND_PULLBACK"
+ERS_HIGH_BASE_RESET        = "HIGH_BASE_RESET"
+ERS_EARLY_RESET_FORMING    = "EARLY_RESET_FORMING"
+ERS_EXTENDED_NO_RESET      = "EXTENDED_NO_RESET"
+ERS_TRUE_CHASE             = "TRUE_CHASE_EXTENSION"
+ERS_UNKNOWN                = "UNKNOWN"
+
 
 def _sf(v: Optional[float], default: float = 0.0) -> float:
     return float(v) if v is not None else default
+
+
+def _classify_extension_reset(
+    extension_state:               str,
+    extension_quality:             str,
+    drawdown_from_recent_high_pct: Optional[float],
+    dist_from_20dma_pct:           Optional[float],
+    dist_from_50dma_pct:           Optional[float],
+    dist_from_200dma_pct:          Optional[float],
+    fib_retest_detected:           Optional[bool],
+    fib_retest_type:               Optional[str],
+    active_support_status:         str,
+    lower_low_confirmed:           bool,
+    has_cont_state:                bool,
+    is_extended_state:             bool,
+) -> tuple[str, float, list[str]]:
+    """
+    Classify the current extension reset state.
+
+    Returns (extension_reset_state, extension_reset_score, reason_codes).
+    Score is 0–100 indicating reset quality (higher = better opportunity).
+    """
+    reasons: list[str] = []
+    support_ok = active_support_status in _SUPPORT_INTACT
+
+    # ── NOT_EXTENDED ──────────────────────────────────────────────────────────
+    if not is_extended_state:
+        reasons.append(f"STATE_{extension_state}_NOT_SEVERE")
+        return ERS_NOT_EXTENDED, 80.0, reasons
+
+    # Hard fail: lower low with no support
+    if lower_low_confirmed and not support_ok:
+        reasons.append("LOWER_LOW_WITH_LOST_SUPPORT")
+        return ERS_TRUE_CHASE, 0.0, reasons
+
+    draw = drawdown_from_recent_high_pct  # negative = below high
+    meaningful_pullback  = draw is not None and draw <= -8.0
+    shallow_pullback     = draw is not None and -8.0 < draw <= -3.0
+    still_near_high      = draw is None or draw > -3.0
+
+    # Near MA checks
+    near_20dma  = dist_from_20dma_pct is not None and abs(dist_from_20dma_pct) <= 4.0
+    near_50dma  = dist_from_50dma_pct is not None and abs(dist_from_50dma_pct) <= 5.0
+    near_200dma = dist_from_200dma_pct is not None and abs(dist_from_200dma_pct) <= 5.0
+    near_any_ma = near_20dma or near_50dma or near_200dma
+    fib_hit     = bool(fib_retest_detected)
+
+    # ── HIGH_BASE_RESET ───────────────────────────────────────────────────────
+    # Extended but has continuation structure at elevated levels
+    if has_cont_state and extension_quality == "CONSTRUCTIVE":
+        score = 72.0 + (5.0 if fib_hit else 0.0)
+        reasons.append("CONSTRUCTIVE_HIGH_BASE")
+        if fib_hit:
+            reasons.append(f"FIB_RETEST_{fib_retest_type}")
+        return ERS_HIGH_BASE_RESET, score, reasons
+
+    # ── CONSTRUCTIVE_RETEST_AFTER_EXTENSION ───────────────────────────────────
+    # Extended, pulled back meaningfully, support intact, near a key level
+    if (
+        meaningful_pullback and
+        support_ok and
+        not lower_low_confirmed and
+        (fib_hit or near_any_ma)
+    ):
+        score = 65.0
+        if fib_hit:
+            score += 10.0
+            reasons.append(f"FIB_RETEST_{fib_retest_type}")
+        if near_20dma:
+            score += 5.0
+            reasons.append(f"NEAR_20DMA_{dist_from_20dma_pct:.1f}PCT")
+        elif near_50dma:
+            score += 4.0
+            reasons.append(f"NEAR_50DMA_{dist_from_50dma_pct:.1f}PCT")
+        elif near_200dma:
+            score += 3.0
+            reasons.append(f"NEAR_200DMA_{dist_from_200dma_pct:.1f}PCT")
+        reasons.append(f"DRAWDOWN_{draw:.1f}PCT")
+        reasons.append("SUPPORT_INTACT")
+        return ERS_CONSTRUCTIVE_RETEST, min(score, 90.0), reasons
+
+    # ── HEALTHY_TREND_PULLBACK ────────────────────────────────────────────────
+    # Not severely extended but pulling back constructively
+    if meaningful_pullback and support_ok and not lower_low_confirmed:
+        score = 70.0 + (5.0 if near_any_ma else 0.0)
+        reasons.append(f"HEALTHY_PULLBACK_{draw:.1f}PCT")
+        reasons.append("SUPPORT_INTACT")
+        return ERS_HEALTHY_PULLBACK, score, reasons
+
+    # ── EARLY_RESET_FORMING ───────────────────────────────────────────────────
+    # Some pullback started but not at a key level yet
+    if shallow_pullback and support_ok and not lower_low_confirmed:
+        score = 50.0 + (10.0 if near_any_ma else 0.0)
+        reasons.append(f"SHALLOW_PULLBACK_{draw:.1f}PCT")
+        return ERS_EARLY_RESET_FORMING, score, reasons
+
+    # ── TRUE_CHASE_EXTENSION ─────────────────────────────────────────────────
+    # Still near high with no pullback, no Fib/MA proximity, pure chase
+    if still_near_high and not fib_hit and not near_any_ma:
+        score = 10.0
+        reasons.append("NEAR_HIGH_NO_RESET")
+        reasons.append(f"EXT_{extension_state}")
+        if draw is not None:
+            reasons.append(f"DRAWDOWN_ONLY_{draw:.1f}PCT")
+        return ERS_TRUE_CHASE, score, reasons
+
+    # ── EXTENDED_NO_RESET ────────────────────────────────────────────────────
+    # Extended, some pullback, but not near a key level and no Fib retest
+    score = 30.0
+    reasons.append(f"EXT_{extension_state}")
+    if draw is not None:
+        reasons.append(f"DRAWDOWN_{draw:.1f}PCT")
+    reasons.append("NO_KEY_LEVEL_PROXIMITY")
+    return ERS_EXTENDED_NO_RESET, score, reasons
 
 
 def detect_continuation_pattern(
@@ -104,6 +228,14 @@ def detect_continuation_pattern(
     prior_26w_trend_pct:            Optional[float] = None,
     squeeze_signal:                 Optional[str]   = None,
     pct_from_52w_high:              Optional[float] = None,
+    # V4.2.5 — Extension Reset + Fib Retest fields
+    drawdown_from_recent_high_pct:  Optional[float] = None,
+    dist_from_20dma_pct:            Optional[float] = None,
+    dist_from_50dma_pct:            Optional[float] = None,
+    dist_from_200dma_pct:           Optional[float] = None,
+    fib_retest_detected:            Optional[bool]  = None,
+    fib_retest_type:                Optional[str]   = None,
+    nearest_fib_label:              Optional[str]   = None,
 ) -> dict:
     """
     Classify continuation pattern and extension quality from existing LKG fields.
@@ -148,8 +280,11 @@ def detect_continuation_pattern(
 
     # ── Early exit: support structurally lost ────────────────────────────────
     if support_lost:
-        return _no_pattern(["SUPPORT_LOST_CONFIRMED"], EXT_BROKEN,
-                           ["MAJOR_SUPPORT_LOST"])
+        _d = _no_pattern(["SUPPORT_LOST_CONFIRMED"], EXT_BROKEN, ["MAJOR_SUPPORT_LOST"])
+        _d["extension_reset_state"]        = ERS_TRUE_CHASE
+        _d["extension_reset_score"]        = 0.0
+        _d["extension_reset_reason_codes"] = ["SUPPORT_LOST_CONFIRMED"]
+        return _d
 
     # ═══════════════════════════════════════════════════════════════════════
     # EXTENSION QUALITY — classify before pattern detection so patterns can
@@ -197,6 +332,33 @@ def detect_continuation_pattern(
 
     constructive = (ext_quality == EXT_CONSTRUCTIVE)
     chase        = (ext_quality == EXT_CHASE)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # EXTENSION RESET STATE — V4.2.5
+    # Computed from new bar-derived fields passed in from entry_state_service.
+    # Independent of extension_quality; captures what the price is doing NOW
+    # relative to Fibonacci levels, MAs, and recent high drawdown.
+    # ═══════════════════════════════════════════════════════════════════════
+    _ext_reset_state, _ext_reset_score, _ext_reset_reasons = _classify_extension_reset(
+        extension_state               = ext,
+        extension_quality             = ext_quality,
+        drawdown_from_recent_high_pct = drawdown_from_recent_high_pct,
+        dist_from_20dma_pct           = dist_from_20dma_pct,
+        dist_from_50dma_pct           = dist_from_50dma_pct,
+        dist_from_200dma_pct          = dist_from_200dma_pct,
+        fib_retest_detected           = fib_retest_detected,
+        fib_retest_type               = fib_retest_type,
+        active_support_status         = asst,
+        lower_low_confirmed           = llc,
+        has_cont_state                = has_cont_state,
+        is_extended_state             = is_extended_state,
+    )
+
+    def _ers(d: dict) -> dict:
+        d["extension_reset_state"]        = _ext_reset_state
+        d["extension_reset_score"]        = round(_ext_reset_score, 1)
+        d["extension_reset_reason_codes"] = _ext_reset_reasons
+        return d
 
     # ═══════════════════════════════════════════════════════════════════════
     # ESTIMATED SHELF DISTANCE — proxy for actual shelf support proximity
@@ -263,12 +425,12 @@ def detect_continuation_pattern(
         else:
             p_state = PSTATE_FORMING
 
-        return _pattern(
+        return _ers(_pattern(
             PATTERN_HIGH_TIGHT_FLAG, p_state, min(score, 100), reasons,
             constructive, chase, ext_quality, ext_reasons,
             "ABOVE_FLAG_RESISTANCE", "BELOW_FLAG_LOW",
             estimated_shelf_distance_pct,
-        )
+        ))
 
     # ── 2. BREAKOUT_SHELF_CONSOLIDATION ────────────────────────────────────
     # Recent breakout now forming a shelf / flat base at highs
@@ -293,12 +455,12 @@ def detect_continuation_pattern(
         reasons.append(f"SHELF_{e_state}")
         reasons.append(f"SUPPORT_{asst}")
         p_state = PSTATE_READY if (tight_consol or touches >= 2) else PSTATE_FORMING
-        return _pattern(
+        return _ers(_pattern(
             PATTERN_BREAKOUT_SHELF, p_state, min(score, 100), reasons,
             constructive, chase, ext_quality, ext_reasons,
             "ABOVE_SHELF_HIGH", "BELOW_SHELF_SUPPORT",
             estimated_shelf_distance_pct,
-        )
+        ))
 
     # ── 3. VCP_CONTRACTION ─────────────────────────────────────────────────
     # Volatility contracting; multiple touches defining the support zone
@@ -324,12 +486,12 @@ def detect_continuation_pattern(
             reasons.append(f"VCP_VERY_TIGHT_{range_20d_pct:.1f}PCT")
         reasons.append(f"VCP_{e_state}")
         p_state = PSTATE_NEAR_TRIGGER if score >= 82 else PSTATE_READY
-        return _pattern(
+        return _ers(_pattern(
             PATTERN_VCP, p_state, min(score, 100), reasons,
             False, False, ext_quality, ext_reasons,
             "ABOVE_CONTRACTION_HIGH", "BELOW_LAST_LOW",
             None,
-        )
+        ))
 
     # ── 4. BULL_FLAG ───────────────────────────────────────────────────────
     # Clean healthy pullback in an uptrend; defined support/flag low
@@ -354,12 +516,12 @@ def detect_continuation_pattern(
         else:
             reasons.append("PULLBACK_IN_UPTREND")
         reasons.append(f"SUPPORT_{asst}")
-        return _pattern(
+        return _ers(_pattern(
             PATTERN_BULL_FLAG, PSTATE_CONTINUATION_READY, min(score, 100), reasons,
             False, False, ext_quality, ext_reasons,
             "ABOVE_FLAG_HIGH", "BELOW_FLAG_LOW",
             None,
-        )
+        ))
 
     # ── 5. BREAKOUT_RETEST ─────────────────────────────────────────────────
     if e_state == "BREAKOUT_RETEST" and support_ok and not llc:
@@ -369,12 +531,12 @@ def detect_continuation_pattern(
         if touches >= 2:
             score += 5
             reasons.append(f"PIVOT_TOUCHES_{touches}")
-        return _pattern(
+        return _ers(_pattern(
             PATTERN_BREAKOUT_RETEST, PSTATE_CONTINUATION_READY, min(score, 100), reasons,
             False, False, ext_quality, ext_reasons,
             "RECLAIM_ABOVE_PIVOT", "CLOSE_BELOW_PIVOT",
             None,
-        )
+        ))
 
     # ── 6. WAVE_CONTINUATION_PROXY ─────────────────────────────────────────
     # Stage-2 continuation with healthy support — proxy for wave 3/5 in uptrend
@@ -397,12 +559,12 @@ def detect_continuation_pattern(
             reasons.append(f"WAVE_CONTINUATION_{e_state}")
         reasons.append(f"STAGE_{stage_s:.0f}")
         reasons.append(f"SUPPORT_{asst}")
-        return _pattern(
+        return _ers(_pattern(
             PATTERN_WAVE_CONTINUATION, PSTATE_CONTINUATION_READY, min(score, 100), reasons,
             False, False, ext_quality, ext_reasons,
             "PRIOR_HIGH_RECLAIM", "BELOW_ACTIVE_SUPPORT",
             None,
-        )
+        ))
 
     # ── 7. LOW_BASE_REVERSAL ───────────────────────────────────────────────
     if fam_pre and e_state in _LOW_BASE_STATES and not llc:
@@ -413,19 +575,19 @@ def detect_continuation_pattern(
             reasons.append(f"SUPPORT_{asst}")
         reasons.append(f"LOW_BASE_{e_state}")
         p_state = PSTATE_READY if score >= 60 else PSTATE_FORMING
-        return _pattern(
+        return _ers(_pattern(
             PATTERN_LOW_BASE_REVERSAL, p_state, score, reasons,
             False, False, ext_quality, ext_reasons,
             "RECLAIM_BASE_CEILING", "BELOW_BASE_FLOOR",
             None,
-        )
+        ))
 
     # ── No pattern detected ───────────────────────────────────────────────
-    return _no_pattern(
+    return _ers(_no_pattern(
         [f"NO_STRUCTURAL_PATTERN_{fam}_{e_state}_{ext}"],
         ext_quality,
         ext_reasons,
-    )
+    ))
 
 
 def _pattern(

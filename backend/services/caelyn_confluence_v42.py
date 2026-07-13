@@ -671,6 +671,15 @@ def _score_entry_exit_v42(row: dict) -> dict:
     constructive = bool(row.get("constructive_extension"))
     major_llc    = bool(row.get("major_lower_low_confirmed"))
     entry_state  = row.get("entry_state") or ""
+    # V4.2.5 — Extension Reset + Fib Retest
+    ext_reset    = str(row.get("extension_reset_state") or "").upper()
+    is_constr_retest = (ext_reset == "CONSTRUCTIVE_RETEST_AFTER_EXTENSION")
+    fib_retest   = bool(row.get("fib_retest_detected"))
+    fib_retest_t = str(row.get("fib_retest_type") or "")
+    nearest_fib  = str(row.get("nearest_fib_label") or "")
+    dist_20dma   = row.get("dist_from_20dma_pct")
+    dist_50dma   = row.get("dist_from_50dma_pct")
+    dist_200dma  = row.get("dist_from_200dma_pct")
     reason_codes: list[str] = []
 
     # Hard gate: structural break
@@ -747,11 +756,48 @@ def _score_entry_exit_v42(row: dict) -> dict:
     else:
         support_score = 50.0  # neutral / unknown
 
-    # Chase extension penalty
+    # Chase extension penalty — reduced for CONSTRUCTIVE_RETEST_AFTER_EXTENSION
     if chase and not constructive:
-        rr_val        = min(rr_val, 40.0)
-        support_score = min(support_score, 40.0)
-        reason_codes.append("CHASE_EXTENSION_ENTRY_PENALTY")
+        if is_constr_retest:
+            # V4.2.5: pulled back to Fib/MA after extension — use softer cap
+            rr_val        = min(rr_val, 60.0)
+            support_score = min(support_score, 55.0)
+            reason_codes.append("CHASE_EXTENSION_REDUCED_PENALTY_CONSTRUCTIVE_RETEST")
+        else:
+            rr_val        = min(rr_val, 40.0)
+            support_score = min(support_score, 40.0)
+            reason_codes.append("CHASE_EXTENSION_ENTRY_PENALTY")
+
+    # Fib retest bonus (additive, not a gate)
+    if fib_retest and not major_llc:
+        _fib_bonus = 0.0
+        if fib_retest_t == "SHALLOW_RETRACEMENT_RETEST":
+            _fib_bonus = 6.0
+            reason_codes.append(f"FIB_SHALLOW_RETEST_{nearest_fib}")
+        elif fib_retest_t == "DEEP_RETRACEMENT_RETEST":
+            _fib_bonus = 4.0
+            reason_codes.append(f"FIB_DEEP_RETEST_{nearest_fib}")
+        elif fib_retest_t == "PRIOR_RESISTANCE_RETEST":
+            _fib_bonus = 5.0
+            reason_codes.append(f"FIB_PRIOR_RESISTANCE_RETEST_{nearest_fib}")
+        elif fib_retest_t == "EXTENSION_TARGET_RETEST":
+            _fib_bonus = 3.0
+            reason_codes.append(f"FIB_EXTENSION_TARGET_{nearest_fib}")
+        rr_val = min(rr_val + _fib_bonus, 100.0)
+
+    # MA proximity bonus (additive, max once)
+    if not fib_retest and not major_llc:
+        _near_ma_bonus = 0.0
+        if dist_20dma is not None and abs(dist_20dma) <= 3.0:
+            _near_ma_bonus = 4.0
+            reason_codes.append(f"NEAR_20DMA_{dist_20dma:.1f}PCT")
+        elif dist_50dma is not None and abs(dist_50dma) <= 4.0:
+            _near_ma_bonus = 3.0
+            reason_codes.append(f"NEAR_50DMA_{dist_50dma:.1f}PCT")
+        elif dist_200dma is not None and abs(dist_200dma) <= 4.0:
+            _near_ma_bonus = 2.0
+            reason_codes.append(f"NEAR_200DMA_{dist_200dma:.1f}PCT")
+        rr_val = min(rr_val + _near_ma_bonus, 100.0)
 
     entry_raw = 0.35 * support_score + 0.65 * rr_val
     entry_raw = _clamp(entry_raw, 0.0, 100.0)

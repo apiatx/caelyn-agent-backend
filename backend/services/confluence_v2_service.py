@@ -1474,6 +1474,14 @@ def _compute_confluence(
             prior_26w_trend_pct            = _ssig.get("prior_26w_trend_pct"),
             squeeze_signal                 = _tm.get("squeeze_signal"),
             pct_from_52w_high              = _tm.get("pct_from_52w_high"),
+            # V4.2.5 — Extension Reset + Fib Retest
+            drawdown_from_recent_high_pct  = (entry_result or {}).get("drawdown_from_recent_high_pct"),
+            dist_from_20dma_pct            = (entry_result or {}).get("dist_from_20dma_pct"),
+            dist_from_50dma_pct            = (entry_result or {}).get("dist_from_50dma_pct"),
+            dist_from_200dma_pct           = (entry_result or {}).get("dist_from_200dma_pct"),
+            fib_retest_detected            = (entry_result or {}).get("fib_retest_detected"),
+            fib_retest_type                = (entry_result or {}).get("fib_retest_type"),
+            nearest_fib_label              = (entry_result or {}).get("nearest_fib_label"),
         )
         _constructive_ext = bool(_pattern_fields.get("constructive_extension"))
         _chase_ext        = bool(_pattern_fields.get("chase_extension"))
@@ -1492,6 +1500,9 @@ def _compute_confluence(
             "pattern_breakout_trigger":      None,
             "pattern_invalidation_level":    None,
             "estimated_shelf_distance_pct":  None,
+            "extension_reset_state":         "UNKNOWN",
+            "extension_reset_score":         0.0,
+            "extension_reset_reason_codes":  ["PATTERN_ENGINE_ERROR"],
         }
 
     # ── Caelyn Confluence Ranking (zero provider calls) ───────────────────────
@@ -1606,6 +1617,21 @@ def _compute_confluence(
         "lower_low_confirmed":            (entry_result or {}).get("lower_low_confirmed"),
         "active_support_type":            (entry_result or {}).get("active_support_type"),
         "active_support_touch_count":     (entry_result or {}).get("active_support_touch_count"),
+        # ── V4.2.5 — Extension Reset + Fib fields ───────────────────────────
+        "drawdown_from_recent_high_pct":  (entry_result or {}).get("drawdown_from_recent_high_pct"),
+        "dist_from_20dma_pct":            (entry_result or {}).get("dist_from_20dma_pct"),
+        "dist_from_50dma_pct":            (entry_result or {}).get("dist_from_50dma_pct"),
+        "dist_from_200dma_pct":           (entry_result or {}).get("dist_from_200dma_pct"),
+        "fib_retest_detected":            (entry_result or {}).get("fib_retest_detected"),
+        "fib_retest_type":                (entry_result or {}).get("fib_retest_type"),
+        "nearest_fib_label":              (entry_result or {}).get("nearest_fib_label"),
+        "nearest_fib_level":              (entry_result or {}).get("nearest_fib_level"),
+        "fib_computed":                   (entry_result or {}).get("fib_computed"),
+        "fib_impulse_pct":                (entry_result or {}).get("fib_impulse_pct"),
+        "fib_target_1":                   (entry_result or {}).get("fib_target_1"),
+        "fib_target_2":                   (entry_result or {}).get("fib_target_2"),
+        "wave_structure_label":           (entry_result or {}).get("wave_structure_label"),
+        "wave_structure_score":           (entry_result or {}).get("wave_structure_score"),
         # ── Per-signal breakdown ─────────────────────────────────────────────
         "signal_breakdown": {
             "entry_state": {
@@ -2058,11 +2084,15 @@ def build_confluence_snapshot(
         _p6_support_intact   = _p6_asst in _P6_SUPPORT_INTACT
         _p6_support_lost     = _p6_asst in _P6_SUPPORT_LOST or _p6_major_llc
         # V4.2.4: chase_bad only when extension_quality is CHASE or no constructive signal
-        # A stock with extension_quality=CONSTRUCTIVE has already pulled back, not a hard chase.
+        # V4.2.5: also not chase_bad when extension_reset_state=CONSTRUCTIVE_RETEST_AFTER_EXTENSION
+        _p6_ext_reset        = str(r.get("extension_reset_state") or "").upper()
+        _p6_fib_retest       = bool(r.get("fib_retest_detected"))
+        _p6_is_constr_retest = (_p6_ext_reset == "CONSTRUCTIVE_RETEST_AFTER_EXTENSION")
         _p6_chase_bad        = (
             _p6_chase
             and not _p6_constructive
             and _p6_ext_quality != "CONSTRUCTIVE"
+            and not _p6_is_constr_retest
         )
         _p6_retest_state     = _p6_act in {"WAIT_FOR_RETEST", "NEAR_ACTIONABLE"}
         _p6_breakout_state   = _p6_act == "WAIT_FOR_BREAKOUT"
@@ -2212,6 +2242,39 @@ def build_confluence_snapshot(
                     _p6_ma_entry.lower() if _p6_ma_entry else "moving_average_pullback_entry"
                 )
                 _p6_pos.append("MOVING_AVERAGE_PULLBACK_ENTRY")
+
+            # PATH H — Constructive Retest After Extension
+            # Extended stock that pulled back ≥8% to a Fib/MA level with support intact.
+            # Chase penalty is waived because a genuine reset has occurred.
+            elif (
+                _p6_is_constr_retest
+                and _p6_tech  >= 4.5
+                and _p6_entry >= 4.5
+                and _p6_stage >= 9.0
+                and not _p6_support_lost
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "ACTIONABLE_NOW"
+                _p6_path    = "constructive_retest_after_extension"
+                _p6_pos.append("CONSTRUCTIVE_RETEST_AFTER_EXTENSION")
+                if _p6_fib_retest:
+                    _p6_pos.append(f"FIB_RETEST_{r.get('fib_retest_type') or 'LEVEL'}")
+
+            # PATH I — Fibonacci Retest Entry
+            # Clean Fib level proximity (≤2.5%) with solid tech and entry signals.
+            # Does not require constructive_retest — Fib alone is sufficient anchor.
+            elif (
+                _p6_fib_retest
+                and _p6_tech  >= 5.0
+                and _p6_entry >= 4.5
+                and _p6_stage >= 9.0
+                and not _p6_support_lost
+                and not _p6_major_llc
+            ):
+                _p6_is_act  = True
+                _p6_tier    = "ACTIONABLE_NOW"
+                _p6_path    = "fib_retest_entry"
+                _p6_pos.append(f"FIB_RETEST_ENTRY_{r.get('nearest_fib_label') or 'LEVEL'}")
 
             if not _p6_is_act:
                 # Near Actionable — good candidate, one more thing needed
