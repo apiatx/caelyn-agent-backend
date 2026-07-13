@@ -365,6 +365,13 @@ def get_options_alignment_for_ticker(
     sym = (ticker or "").upper().strip()
     reasons: list[str] = []
 
+    # Symbol classification: ":" prefix = foreign/OTC exchange code.
+    # Simple tickers (MSFT, NVDA, TSM) are always simple_watchlist_symbol
+    # regardless of company domicile — the colon rule is the sole classifier.
+    _sym_classification = (
+        "prefixed_foreign_or_otc_symbol" if ":" in sym else "simple_watchlist_symbol"
+    )
+
     if combined_ticker_data is None:
         try:
             from data.options_theme_supplement import get_combined_ticker_data
@@ -410,7 +417,14 @@ def get_options_alignment_for_ticker(
 
     if not row:
         reasons.append("NO_OPTIONS_DATA_FOR_TICKER")
-        return {"ticker": sym, **_UNAVAILABLE_BASE, "source": None, "options_alignment_reason_codes": reasons}
+        return {
+            "ticker": sym,
+            **_UNAVAILABLE_BASE,
+            "source":                        None,
+            "options_alignment_reason_codes": reasons,
+            "options_symbol_classification":  _sym_classification,
+            "options_not_scanned_reason":     "scanner_lkg_gap",
+        }
 
     # ── UNSUPPORTED / UNAVAILABLE STATES (spec Part 8) ──────────────────────
     # ticker_state / scan_status are the canonical Sectors -> All Stocks
@@ -429,24 +443,40 @@ def get_options_alignment_for_ticker(
             # _UNAVAILABLE_BASE sets options_pressure_state="INSUFFICIENT_HISTORY",
             # but V4 checks `"confirmed_no" in pressure` — that string must be present
             # or V4 falls through to status="not_scanned" instead of confirmed_no_options.
-            "options_pressure_state":  "confirmed_no_options",
-            "options_snapshot_status": "confirmed_no_options",
-            "source": row.get("_source"),
-            "ticker_state": _ticker_state,
+            "options_pressure_state":        "confirmed_no_options",
+            "options_snapshot_status":       "confirmed_no_options",
+            "source":                        row.get("_source"),
+            "ticker_state":                  _ticker_state,
             "options_alignment_reason_codes": reasons,
+            "options_symbol_classification":  "confirmed_no_options",
+            "options_not_scanned_reason":     "confirmed_no_options",
         }
     if ":" in sym:
         reasons.append("FOREIGN_EXCHANGE_TICKER_UNSUPPORTED")
-        return {"ticker": sym, **_UNAVAILABLE_BASE, "source": row.get("_source"),
-                "ticker_state": _ticker_state, "options_alignment_reason_codes": reasons}
+        return {
+            "ticker": sym,
+            **_UNAVAILABLE_BASE,
+            "source":                        row.get("_source"),
+            "ticker_state":                  _ticker_state,
+            "options_alignment_reason_codes": reasons,
+            "options_symbol_classification":  "prefixed_foreign_or_otc_symbol",
+            "options_not_scanned_reason":     "foreign_or_otc_excluded",
+        }
     if _ticker_state in ("generic_pending", "optionable_pending_chain", "deferred_retry") or _scan_status in ("pending", "missing_data"):
         _row_net_premium = row.get("net_premium")
         _row_call, _row_put = row.get("call_premium"), row.get("put_premium")
         _has_real_scan = _row_net_premium is not None or ((_row_call or 0) + (_row_put or 0) > 0)
         if not _has_real_scan:
             reasons.append("PENDING_BACKFILL")
-            return {"ticker": sym, **_UNAVAILABLE_BASE, "source": row.get("_source"),
-                    "ticker_state": _ticker_state, "options_alignment_reason_codes": reasons}
+            return {
+                "ticker": sym,
+                **_UNAVAILABLE_BASE,
+                "source":                        row.get("_source"),
+                "ticker_state":                  _ticker_state,
+                "options_alignment_reason_codes": reasons,
+                "options_symbol_classification":  _sym_classification,
+                "options_not_scanned_reason":     "pending_backfill",
+            }
 
     source = row.get("_source")
     _snap_status  = row.get("_snapshot_status") or (
@@ -590,6 +620,8 @@ def get_options_alignment_for_ticker(
         "options_as_of":             _options_as_of,
         "options_lkg_age_hours":     _options_lkg_age_h,
         "options_alignment_reason_codes": reasons,
+        "options_symbol_classification":  _sym_classification,
+        "options_not_scanned_reason":     None,
     }
 
 
@@ -675,7 +707,7 @@ def get_options_alignment_bulk(
         print(f"[OPTIONS_ALIGNMENT_BULK] net_premium_bulk setup ERROR: {_setup_e}")
     # ───────────────────────────────────────────────────────────────────────
 
-    return {
+    results = {
         t: get_options_alignment_for_ticker(
             t,
             combined_ticker_data=combined,
@@ -684,3 +716,65 @@ def get_options_alignment_bulk(
         )
         for t in upper_tickers
     }
+
+    # ── Scanner diagnostic fields post-processing ────────────────────────────
+    # Add options_scanner_queue_status / options_backfill_priority /
+    # options_scanner_scope_reason in one pass (theme-set built once).
+    # Zero provider calls — reads _HIGH_PRIORITY_SYMBOLS (in-memory dict) and
+    # ENRICHED_THEME_RS_UNIVERSE (module-level, already imported).
+    try:
+        from data.options_theme_supplement import _HIGH_PRIORITY_SYMBOLS as _hi_prio
+        _theme_syms: set = set()
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _etru
+            _theme_syms = {
+                s.upper()
+                for _m in _etru.values()
+                for s in (_m.get("proxy_symbols") or [])
+            }
+        except Exception:
+            pass
+
+        for _t, _row in results.items():
+            if not isinstance(_row, dict):
+                continue
+            _cls      = _row.get("options_symbol_classification") or "unknown"
+            _in_prio  = _t in _hi_prio
+            _in_theme = _t in _theme_syms
+
+            if _cls == "prefixed_foreign_or_otc_symbol":
+                _q_status = "not_eligible"
+                _priority = "none"
+                _scope    = "foreign_or_otc_excluded"
+            elif _cls == "confirmed_no_options":
+                _q_status = "not_eligible"
+                _priority = "none"
+                _scope    = "confirmed_no_options"
+            elif _in_prio:
+                _q_status = "queued_high_priority"
+                _priority = "high"
+                _scope    = (
+                    "queued_outside_theme_universe"
+                    if not _in_theme
+                    else "queued_in_theme_universe"
+                )
+            elif _in_theme:
+                _q_status = "already_pending"
+                _priority = "normal"
+                _scope    = "in_theme_pending_queue"
+            elif _row.get("options_alignment_available"):
+                _q_status = "not_needed"
+                _priority = "none"
+                _scope    = "data_available"
+            else:
+                _q_status = "not_queued"
+                _priority = "none"
+                _scope    = "not_in_theme_supplement_universe"
+
+            _row["options_scanner_queue_status"] = _q_status
+            _row["options_backfill_priority"]    = _priority
+            _row["options_scanner_scope_reason"] = _scope
+    except Exception as _diag_exc:
+        print(f"[OPTIONS_BULK_DIAG] scanner diagnostic post-process skipped: {_diag_exc}")
+
+    return results

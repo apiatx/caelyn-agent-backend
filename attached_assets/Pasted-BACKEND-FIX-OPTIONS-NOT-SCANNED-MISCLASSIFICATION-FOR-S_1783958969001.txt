@@ -1,0 +1,269 @@
+BACKEND — FIX OPTIONS NOT_SCANNED MISCLASSIFICATION FOR SIMPLE US-TRADABLE TICKERS
+
+Backend only.
+
+Do not touch frontend.
+Do not change V4.2.1 scoring formula.
+Do not change score weights.
+Do not add request-time provider calls.
+Do not call LLMs.
+Do not reverse any recent fixes:
+- Catalyst LKG persistence
+- Options V4.2.1 field fix
+- Options availability gate fix
+- confirmed_no_options handling
+- retained snapshot rebuild fixes
+- bottleneck debug visibility
+- whale/insider not_wired status
+
+Problem:
+
+The post-fix report incorrectly stated that remaining not_scanned tickers like TSM, MSFT, and NVDA are “foreign-listed tickers outside the theme supplement universe.”
+
+That is wrong.
+
+MSFT and NVDA are obviously US-listed optionable tickers.
+TSM is a US-listed ADR ticker with options and should be treated as scanner-eligible for this app.
+
+The existing project convention is:
+
+- Symbols with ":" prefixes are foreign / OTC / non-standard symbols.
+  Examples:
+  OTC:ATEYY
+  AIM:VLX
+  AMS:BESI
+  ASX:...
+- Simple symbols without ":" should not be classified as foreign/OTC just because the company domicile is foreign.
+- Simple US-tradable ADR tickers like TSM should be treated as normal scanner-eligible symbols unless explicitly confirmed no-options.
+
+Goal:
+
+Fix the options not_scanned classification and queue logic so simple optionable watchlist tickers are not mislabeled as foreign/OTC or ignored because they are outside a theme supplement universe.
+
+==================================================
+PART 1 — CLASSIFICATION FIX
+==================================================
+
+Find the logic used in the post-fix report / diagnostics that classified:
+
+TSM
+MSFT
+NVDA
+
+as foreign-listed or outside scanner scope.
+
+Replace it with this rule:
+
+foreign_or_otc = ":" in symbol
+
+Examples:
+
+MSFT → not foreign_or_otc
+NVDA → not foreign_or_otc
+TSM → not foreign_or_otc
+CRWD → not foreign_or_otc
+OTC:ATEYY → foreign_or_otc
+AIM:VLX → foreign_or_otc
+AMS:BESI → foreign_or_otc
+
+Do not use company domicile to exclude simple tickers from the options scanner.
+
+Expose diagnostic field:
+
+options_symbol_classification
+
+Allowed values:
+- simple_watchlist_symbol
+- prefixed_foreign_or_otc_symbol
+- confirmed_no_options
+- unknown
+
+==================================================
+PART 2 — KNOWN OPTIONABLE SIMPLE TICKER QUEUE FIX
+==================================================
+
+For remaining not_scanned tickers, if symbol does not contain ":" and is not confirmed_no_options:
+
+- classify as simple_watchlist_symbol
+- add to options high-priority backfill queue
+- do not call provider at request time
+- do not scan inside Confluence request
+- use existing options scanner/backfill job only
+
+Add diagnostic fields:
+
+options_not_scanned_reason
+options_scanner_queue_status
+options_backfill_priority
+options_scanner_scope_reason
+
+Expected values for MSFT / NVDA / TSM / CRWD / CRDO / FSLR / FTNT / MRVL / MARA / IONQ / SMCI:
+
+options_symbol_classification = simple_watchlist_symbol
+options_not_scanned_reason = scanner_lkg_gap or queued_for_backfill
+options_scanner_queue_status = queued_high_priority or already_pending
+options_backfill_priority = high
+
+They must not be classified as foreign_or_otc.
+
+==================================================
+PART 3 — THEME SUPPLEMENT UNIVERSE FIX
+==================================================
+
+The report mentioned “outside the theme supplement universe.”
+
+That may be true as a source explanation, but it must not be a final exclusion reason for options scanning.
+
+Rule:
+
+Theme supplement universe can help seed options coverage, but it cannot be the only source for options scanner eligibility.
+
+Options scanner/backfill eligibility should include:
+
+1. Current watchlist symbols
+2. Portfolio underlyings
+3. Known optionable simple symbols
+4. Symbols with previous options LKG
+5. Theme supplement symbols
+
+If a simple watchlist ticker is missing from theme supplement universe, it should still be queued through watchlist/backfill coverage.
+
+Do not let “outside theme supplement universe” become a permanent not_scanned state.
+
+==================================================
+PART 4 — CONFIRMED_NO_OPTIONS PRESERVATION
+==================================================
+
+Do not break confirmed_no_options.
+
+Symbols already classified as confirmed_no_options should stay confirmed_no_options.
+
+Do not repeatedly queue confirmed_no_options tickers unless their stale policy explicitly requires a retry.
+
+The 64 confirmed_no_options count should remain stable unless the existing logic proves otherwise.
+
+==================================================
+PART 5 — VALIDATION
+==================================================
+
+Return the full remaining not_scanned list after the fix.
+
+For each not_scanned ticker, return:
+
+symbol
+has_colon
+options_symbol_classification
+options_status
+options_snapshot_status
+options_not_scanned_reason
+options_scanner_queue_status
+options_backfill_priority
+options_scanner_scope_reason
+confirmed_no_options
+previous_options_lkg_exists
+queued_for_backfill
+
+Specifically validate:
+
+MSFT
+NVDA
+TSM
+CRWD
+CRDO
+FSLR
+FTNT
+MRVL
+MARA
+IONQ
+SMCI
+MU
+INTC
+ON
+QRVO
+RBRK
+RMBS
+
+Expected:
+
+None of these simple symbols should be labeled foreign_or_otc.
+MSFT/NVDA/TSM must be classified as simple_watchlist_symbol and queued/resolved through scanner coverage.
+
+Also validate prefixed examples if present:
+
+OTC:*
+AIM:*
+AMS:BESI
+ASX:*
+
+Expected:
+
+These should be classified as prefixed_foreign_or_otc_symbol.
+
+==================================================
+FINAL REPORT
+==================================================
+
+Return:
+
+OPTIONS NOT_SCANNED CLASSIFICATION FIX REPORT
+
+FILES CHANGED:
+[list]
+
+BUG FOUND:
+[explain where MSFT/NVDA/TSM were misclassified]
+
+CLASSIFICATION RULE:
+[confirm ":" rule]
+
+NOT_SCANNED BEFORE:
+[count + list]
+
+NOT_SCANNED AFTER:
+[count + list]
+
+KNOWN OPTIONABLE SIMPLE SYMBOLS:
+[table]
+
+PREFixed FOREIGN/OTC SYMBOLS:
+[table]
+
+QUEUE STATUS:
+[table]
+
+CONFIRMED_NO_OPTIONS PRESERVED:
+[count before/after]
+
+PROVIDER CALLS:
+0 expected
+
+End exactly:
+
+OPTIONS CLASSIFICATION VERDICT
+
+MSFT_CLASSIFIED_AS_SIMPLE_OPTIONABLE:
+[YES/NO]
+
+NVDA_CLASSIFIED_AS_SIMPLE_OPTIONABLE:
+[YES/NO]
+
+TSM_CLASSIFIED_AS_SIMPLE_OPTIONABLE_ADR:
+[YES/NO]
+
+COLON_PREFIX_RULE_ENFORCED:
+[YES/NO]
+
+KNOWN_OPTIONABLE_NOT_SCANNED_QUEUED:
+[YES/NO]
+
+THEME_SUPPLEMENT_NOT_FINAL_EXCLUSION:
+[YES/NO]
+
+CONFIRMED_NO_OPTIONS_PRESERVED:
+[YES/NO]
+
+PROVIDER_CALLS:
+[0]
+
+READY_FOR_FRONTEND_WIRING_AFTER_THIS:
+[YES/NO]

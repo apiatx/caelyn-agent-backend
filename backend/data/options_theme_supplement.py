@@ -1278,17 +1278,36 @@ def get_sectors_pending_symbols() -> list[str]:
                 missing_syms.append(sym)           # needs canonical net-flow scan — FIRST
         # supplement / watchlist_cache = current good data → skip
 
-    # ── Priority queue: newly required symbols go to the very front ───────────
-    # Symbols explicitly marked via add_high_priority_symbols() that are also
-    # generic_pending get hoisted to the front of the batch queue so the backfill
-    # loop reaches them on the next pass, not after a full alphabetical sweep.
+    # ── Priority queue ordering ────────────────────────────────────────────────
+    # Tier 0 (very front): high-priority symbols OUTSIDE the theme universe.
+    #   These are simple watchlist tickers (no ":" prefix) that were queued via
+    #   add_high_priority_symbols() but are not in ENRICHED_THEME_RS_UNIVERSE.
+    #   Without this tier they are silently invisible to the backfill loop
+    #   because the loop only iterates over all_theme_syms.
+    #   Examples: MSFT, NVDA, SMCI when not yet registered in any theme.
+    #
+    # Tier 1 (front of theme missing): high-priority inside theme universe.
+    # Tier 2: other generic_pending theme symbols.
+    # Tier 3: stale_lkg theme symbols.
+    extra_hi: list[str] = []
     if _HIGH_PRIORITY_SYMBOLS:
         hi_set = set(_HIGH_PRIORITY_SYMBOLS.keys())
+
+        # Tier 0 — high-priority outside theme universe (alphabetical for determinism)
+        extra_hi = [
+            s for s in sorted(hi_set)
+            if s not in all_theme_syms
+            and s not in no_opts
+            and combined.get(s) is None
+            and ":" not in s          # never queue prefixed foreign/OTC symbols
+        ]
+
+        # Tier 1 — high-priority inside theme universe, hoisted to front
         hi_missing    = [s for s in missing_syms if s in hi_set]
         other_missing = [s for s in missing_syms if s not in hi_set]
         missing_syms  = hi_missing + other_missing
 
-    return missing_syms + stale_lkg_syms
+    return extra_hi + missing_syms + stale_lkg_syms
 
 
 def _lkg_has_real_data(row: dict) -> bool:
