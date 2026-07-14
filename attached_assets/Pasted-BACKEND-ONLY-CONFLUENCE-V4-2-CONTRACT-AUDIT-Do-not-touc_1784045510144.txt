@@ -1,0 +1,343 @@
+BACKEND ONLY — CONFLUENCE V4.2 CONTRACT AUDIT
+
+Do not touch frontend.
+Do not change Confluence scoring.
+Do not change canonical history.
+Do not touch provider logic.
+Do not touch Options Flow.
+Do not run full backfill.
+Do not run provider-calling validations.
+Do not make frontend assumptions.
+
+Goal:
+
+Audit the backend Confluence V4.2 response contract so the separate frontend repo can later be aligned correctly.
+
+Backend has evolved to canonical Caelyn Confluence V4.2.x. We need to know the exact endpoint, retained snapshot source, row shape, canonical fields, deprecated fields, and missing fields.
+
+This is audit/report only unless a trivial schema exposure bug is found.
+
+==================================================
+PART 1 — FIND CANONICAL CONFLUENCE ENDPOINTS
+==================================================
+
+Find every backend endpoint that serves Confluence / Trade Alignment / Watchlist score data.
+
+Search for:
+
+confluence
+caelyn_confluence
+trade_alignment
+tradeAlignment
+score
+actionability
+retained snapshot
+watchlist score
+
+Return:
+
+endpoint_path
+method
+handler_function
+service_function
+data_source
+retained_snapshot_file_or_table
+is_canonical_v42
+is_legacy
+frontend_likely_uses_it
+notes
+
+Clearly identify the ONE backend endpoint the frontend should use for canonical Confluence V4.2.
+
+==================================================
+PART 2 — CANONICAL ROW SCHEMA
+==================================================
+
+Using cached/retained data only, inspect the canonical Confluence row schema.
+
+Return the exact fields present per symbol.
+
+Group fields into:
+
+score_fields
+component_score_fields
+actionability_fields
+technical_fields
+entry_exit_fields
+fib_wave_fields
+risk_fields
+investment_fields
+bonus_fields
+debug_fields
+deprecated_fields
+
+Include whether each field is:
+
+- frontend-facing
+- backend-debug only
+- deprecated
+- missing but recommended
+
+==================================================
+PART 3 — REQUIRED FRONTEND-FACING CONTRACT
+==================================================
+
+Confirm whether backend currently exposes these fields:
+
+symbol
+caelyn_confluence_score
+core_score
+bonus_score
+score_max
+core_score_max
+bonus_score_max
+
+component scores:
+theme_alignment_score
+stage_quality_score
+options_alignment_score
+technical_setup_score
+entry_exit_score
+catalyst_alignment_score
+investment_alignment_score
+social_bonus
+whale_insider_bonus
+bottleneck_bonus
+
+action:
+action_label
+actionability_bucket
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+is_risk_conflict
+is_investment_quality
+
+technical:
+stage_label
+stage_score
+technical_setup_label
+entry_state
+extension_state
+entry_score
+fib_context
+wave_structure
+risk_flags
+
+explanation:
+why_now
+why_wait
+invalidation_level
+target_zone
+
+For each field return:
+
+field_name
+present
+type
+example_value
+frontend_safe
+notes
+
+==================================================
+PART 4 — DEPRECATED BACKEND FIELDS
+==================================================
+
+Find any old backend fields still returned that could confuse frontend.
+
+Specifically look for:
+
+trade_alignment
+tradeAlignment
+old_confluence_score
+legacy_score
+score_125
+prediction_market fields
+theme_policy standalone bonus
+old action labels
+old setup labels
+
+Return:
+
+field
+where_returned
+still_used_in_backend
+deprecated_reason
+recommended_frontend_handling
+
+==================================================
+PART 5 — NORMALIZED BACKEND CONTRACT RECOMMENDATION
+==================================================
+
+If backend fields are messy or inconsistent, propose a clean frontend-facing object.
+
+Do not implement unless trivial.
+
+Recommended shape:
+
+confluence_v42: {
+  score: {
+    core: number,
+    bonus: number,
+    total: number,
+    core_max: 100,
+    bonus_max: 25
+  },
+  action: {
+    label: string,
+    bucket: string,
+    why_now: string[],
+    why_wait: string[],
+    invalidation_level: number | null,
+    target_zone: object | null
+  },
+  components: {
+    theme: object,
+    stage: object,
+    options: object,
+    technical_setup: object,
+    entry_exit: object,
+    catalyst: object,
+    investment: object,
+    social_bonus: object,
+    whale_insider_bonus: object,
+    bottleneck_bonus: object
+  },
+  technical: {
+    stage_label: string,
+    entry_state: string,
+    technical_setup_label: string,
+    extension_state: string,
+    fib_context: object,
+    wave_structure: string,
+    risk_flags: string[]
+  },
+  booleans: {
+    is_actionable_setup: boolean,
+    is_near_actionable: boolean,
+    is_watch_for_reset: boolean,
+    is_risk_conflict: boolean,
+    is_investment_quality: boolean
+  }
+}
+
+Return:
+
+already_matches
+missing_fields
+renames_needed
+backend_normalization_needed
+recommended_schema
+
+==================================================
+PART 6 — SAMPLE SYMBOL AUDIT
+==================================================
+
+Use cached/retained data only.
+
+Sample:
+
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+OUST
+SOFI
+HOOD
+HIMS
+NVDA
+MSFT
+TSM
+
+For each return:
+
+symbol
+canonical_row_found
+score_fields_present
+component_fields_present
+action_fields_present
+technical_fields_present
+fib_wave_fields_present
+risk_fields_present
+deprecated_fields_present
+missing_frontend_required_fields
+plain_english_explanation
+
+Do not call providers.
+
+==================================================
+PART 7 — BACKEND READINESS FOR FRONTEND
+==================================================
+
+Return what the frontend agent needs to know:
+
+canonical_endpoint_to_use
+fields_frontend_should_use
+fields_frontend_should_ignore
+score_display_rule
+action_label_rule
+component_breakdown_rule
+technical_detail_rule
+known_backend_gaps
+backend_changes_needed_before_frontend
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+BACKEND CONFLUENCE V4.2 CONTRACT AUDIT REPORT
+
+CANONICAL ENDPOINT:
+[summary]
+
+CANONICAL ROW SCHEMA:
+[summary/table]
+
+FRONTEND-FACING FIELDS:
+[table]
+
+DEPRECATED FIELDS:
+[table]
+
+NORMALIZED CONTRACT RECOMMENDATION:
+[summary]
+
+SAMPLE SYMBOL AUDIT:
+[table]
+
+FRONTEND HANDOFF NOTES:
+[clear instructions for frontend repo]
+
+BACKEND FIXES NEEDED:
+[list, or none]
+
+End exactly:
+
+BACKEND CONFLUENCE CONTRACT VERDICT
+
+CANONICAL_CONFLUENCE_ENDPOINT_IDENTIFIED:
+[YES/NO]
+
+BACKEND_CONFLUENCE_V42_CONTRACT_CLEAR:
+[YES/NO]
+
+CORE_100_PLUS_BONUS_25_FIELDS_PRESENT:
+[YES/NO]
+
+ACTIONABILITY_FIELDS_PRESENT:
+[YES/NO]
+
+TECHNICAL_ENTRY_FIB_FIELDS_PRESENT:
+[YES/NO]
+
+DEPRECATED_TRADE_ALIGNMENT_FIELDS_STILL_RETURNED:
+[YES/NO]
+
+BACKEND_SCHEMA_READY_FOR_FRONTEND:
+[YES/NO]
+
+BACKEND_SCORE_CALIBRATION_SHOULD_WAIT_FOR_10Y_BACKFILL:
+[YES]
