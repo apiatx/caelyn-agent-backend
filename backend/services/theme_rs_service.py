@@ -1800,14 +1800,38 @@ async def _compute(tf: str) -> list[dict]:
         # 5Y needs ~5 years of per-stock history for leader/laggard ranking;
         # all other historical timeframes need ~400 days (covers 30D/YTD/1Y easily).
         yf_days = 1350 if tf == "5Y" else 400
-        print(f"[THEME_RS] {tf}: yfinance history ({yf_days}d) for {len(all_dynamic_stocks_list)} dynamic stocks …")
-        yf_tasks = [fetch_etf_history(s, days=yf_days) for s in all_dynamic_stocks_list]
-        yf_results = await asyncio.gather(*yf_tasks, return_exceptions=True)
-        for sym, result in zip(all_dynamic_stocks_list, yf_results):
-            if isinstance(result, list) and result:
-                histories[sym] = (result, "yfinance")
-            else:
-                histories[sym] = ([], "unavailable")
+
+        # ── Step 0: Canonical disk cache — no provider call for backfilled stocks ──
+        # _pct_change(bars, n) reads bars[-(n+1)] and bars[-1], so having 10Y of
+        # bars is identical to 400 bars for 7D/30D/1Y scoring.
+        canonical_stock_hits: dict[str, list[dict]] = {}
+        yf_needed: list[str] = []
+        try:
+            from services.canonical_history_service import get_bars as _get_canon_stk
+            for _s in all_dynamic_stocks_list:
+                _c = _get_canon_stk(_s, require_fresh=False)
+                if _c and _c.get("bars") and len(_c["bars"]) >= 40:
+                    canonical_stock_hits[_s] = _c["bars"]
+                else:
+                    yf_needed.append(_s)
+        except Exception:
+            yf_needed = list(all_dynamic_stocks_list)
+
+        for _s, _bars in canonical_stock_hits.items():
+            histories[_s] = (_bars, "canonical")
+
+        print(
+            f"[THEME_RS] {tf}: stock history — canonical_hits={len(canonical_stock_hits)} "
+            f"yf_needed={len(yf_needed)} (yf_days={yf_days})"
+        )
+        if yf_needed:
+            yf_tasks = [fetch_etf_history(s, days=yf_days) for s in yf_needed]
+            yf_results = await asyncio.gather(*yf_tasks, return_exceptions=True)
+            for sym, result in zip(yf_needed, yf_results):
+                if isinstance(result, list) and result:
+                    histories[sym] = (result, "yfinance")
+                else:
+                    histories[sym] = ([], "unavailable")
 
     # Fetch quotes for dynamic stocks not yet covered
     missing_quotes = [s for s in all_dynamic_stocks_list if s not in quotes]

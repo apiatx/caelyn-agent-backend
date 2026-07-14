@@ -1,0 +1,238 @@
+BACKEND — THEMES PRICE HISTORY PARITY + FINAL DEDUPE CHECK
+
+Backend only.
+
+Do not touch frontend.
+Do not change Theme Rotation formulas.
+Do not change Confluence scoring.
+Do not rewrite the Tradier limiter.
+Do not run full backfill automatically.
+Do not add new provider calls except controlled validation if explicitly needed.
+Do not break existing Themes page output.
+
+Goal:
+
+V4.2.5.6 patched the Themes ETF proxy history path to read canonical history first. Before we trust this fully, verify the Themes page scores do not change incorrectly and finish auditing the remaining constituent-stock leader/laggard path.
+
+==================================================
+PART 1 — THEME SCORE PARITY AUDIT
+==================================================
+
+For the Themes ETF proxy path, compare old historical source vs canonical source for a representative set of theme proxy ETFs / symbols.
+
+Validate these timeframes:
+
+7D
+1M
+3M
+6M
+1Y
+YTD if used
+longer RS window if used
+
+For each test symbol return:
+
+symbol
+timeframe
+old_source
+new_source
+old_bar_count
+new_bar_count
+old_return_pct
+new_return_pct
+delta_pct
+old_rs_score
+new_rs_score
+score_delta
+acceptable_delta
+explanation
+
+Important:
+
+Canonical history may contain 10Y bars, but the Theme score must still slice to the exact requested timeframe. More bars should not alter a 7D/1M/3M score except by fixing stale/missing data.
+
+Expected:
+
+- score_delta should be near zero for symbols where old data was valid
+- differences should be explained by stale/missing old data, not formula drift
+
+==================================================
+PART 2 — CONFIRM THEMES PAGE PRICE SOURCE
+==================================================
+
+Return exact call path after patch:
+
+GET /api/themes
+→ function
+→ function
+→ history source
+
+Show:
+
+ETF proxy history source
+constituent-stock leader/laggard history source
+fallback order
+whether each path uses canonical cache
+whether each path can call provider
+whether each path can bypass scheduler
+
+==================================================
+PART 3 — PATCH CONSTITUENT-STOCK LEADER/LAGGARD PATH IF SAFE
+==================================================
+
+The report says this path remains:
+
+_compute(tf) for 7D+
+→ fetch_etf_history(stock, days=yf_days) [yfinance, directly — no canonical]
+
+Patch this path to use canonical cache first when the stock symbol exists in canonical history.
+
+Desired order:
+
+1. canonical_history_service.get_bars(stock, require_fresh=False)
+2. existing fetch_etf_history(stock, days=yf_days) fallback only if canonical missing
+3. no Tradier unmanaged call
+4. no request-time provider call if this path runs in a request handler
+
+Important:
+
+Use canonical bars only for the needed timeframe slice. Do not let 10Y history change short-window leader/laggard math.
+
+If this path cannot be safely patched yet, explain exactly why and leave it as known technical debt.
+
+==================================================
+PART 4 — BACKFILL UNIVERSE CHECK
+==================================================
+
+Confirm the one-time canonical 10Y backfill universe includes:
+
+- watchlist tickers
+- portfolio underlyings
+- theme proxy ETFs used by the Themes page
+- simple US symbols used in Theme Rotation / Themes page
+- excludes ":" prefixed foreign/OTC symbols
+- excludes unsupported/no-data symbols
+
+Return:
+
+watchlist_count
+portfolio_underlying_count
+theme_proxy_count
+theme_constituent_count
+total_unique_backfill_symbols
+symbols_missing_from_backfill_universe
+reason_missing
+
+Important:
+
+If the Themes page uses extra ETFs not in the watchlist, they must be included in canonical backfill. Otherwise Themes will keep falling back to FMP/yfinance.
+
+==================================================
+PART 5 — UNMANAGED TRADIER FINAL CHECK
+==================================================
+
+Audit _fetch_tradier_daily_history().
+
+Return:
+
+function_exists
+callers
+can_it_run_after_full_backfill
+can_it_run_request_time
+is_it behind scheduler
+recommend_delete_or_keep_last_resort
+
+Expected:
+
+After full backfill, it should almost never run.
+If it remains, it should be last-resort only and never request-time.
+
+==================================================
+PART 6 — VALIDATION
+==================================================
+
+Validate:
+
+ABCL
+ALGM
+VRT
+OUST
+CRDO
+WYFI
+MSFT
+NVDA
+TSM
+SOFI
+HOOD
+HIMS
+ENTG
+ONTO
+CGNX
+
+For each return:
+
+symbol
+watchlist_stage_history_source
+entry_history_source
+fib_history_source
+theme_rs_history_source
+themes_page_history_source
+uses_canonical_cache
+would_call_provider_request_time
+would_use_400bar_fallback
+theme_score_changed_after_canonical
+plain_english_explanation
+
+==================================================
+PART 7 — FINAL REPORT
+==================================================
+
+Return:
+
+THEMES PRICE HISTORY PARITY + DEDUPE REPORT
+
+FILES CHANGED:
+[list]
+
+THEME SCORE PARITY:
+[table]
+
+THEMES PAGE SOURCE PATH:
+[before/after]
+
+CONSTITUENT LEADER/LAGGARD PATH:
+[summary]
+
+BACKFILL UNIVERSE COVERAGE:
+[summary]
+
+UNMANAGED TRADIER STATUS:
+[summary]
+
+VALIDATION:
+[table]
+
+End exactly:
+
+THEMES HISTORY DEDUPE VERDICT
+
+THEME_PROXY_SCORES_PRESERVED:
+[YES/NO]
+
+THEME_PROXY_PATH_USES_CANONICAL:
+[YES/NO]
+
+THEME_CONSTITUENT_PATH_USES_CANONICAL_WHEN_AVAILABLE:
+[YES/NO]
+
+THEME_EXTRA_ETFS_INCLUDED_IN_BACKFILL_UNIVERSE:
+[YES/NO]
+
+UNMANAGED_TRADIER_NOT_PRIMARY_ANYWHERE:
+[YES/NO]
+
+NO_REQUEST_TIME_HISTORICAL_PROVIDER_CALLS:
+[YES/NO]
+
+THEMES_PAGE_SAFE_AFTER_10Y_BACKFILL:
+[YES/NO]

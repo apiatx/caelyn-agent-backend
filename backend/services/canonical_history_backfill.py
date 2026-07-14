@@ -697,6 +697,22 @@ async def _build_symbol_list_tiered(
     except Exception:
         pass
 
+    # Theme proxy ETFs + candidate constituent stocks → Tier 1
+    # Required so _fetch_proxy_history() and the constituent-stock path both have
+    # canonical history after the one-time 10Y backfill.  Without this, the
+    # canonical Step 0 patches in theme_rs_service.py always miss on a cold cache.
+    try:
+        from services.theme_merge_layer import (
+            ENRICHED_ALL_PROXY_SYMBOLS as _all_proxy,
+            ENRICHED_ALL_CANDIDATE_SYMBOLS as _all_cands,
+        )
+        _theme_symbols = set(s.upper() for s in list(_all_proxy) + list(_all_cands))
+        for s in sorted(_theme_symbols):
+            if _is_eligible(s):
+                _classify(s)
+    except Exception as _exc:
+        print(f"[CANON_BACKFILL] theme proxy/cand read error (non-fatal): {_exc}")
+
     ordered: list[str] = []
     seen:    set[str]  = set()
     for group in (tier0, tier1 - tier0, tier2 - tier0 - tier1):
