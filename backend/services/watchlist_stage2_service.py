@@ -231,11 +231,13 @@ async def _fetch_bars(sym: str) -> tuple[list[dict], str, str]:
     history_source : "fmp" | "tradier" | "canonical_fmp" | "canonical_tradier" | "unknown"
 
     Probe order:
-      0. Canonical 5-year disk cache (canonical_history_service) — survives restarts
+      0. Canonical 10Y disk cache (canonical_history_service) — survives restarts,
+         up to 2510 bars; require_fresh=True so stale cache falls through to live fetch
       1. In-memory cache: fmp_hist:{sym}  (FMP bars, ~4h TTL, set by theme_rs)
       2. In-memory cache: tdier_hist:{sym}:400  (Tradier bars, 1h TTL)
       3. Live FMP /stable/historical-price-eod via theme_rs_service._fetch_fmp_daily_history
       4. Tradier daily history via theme_rs_service._fetch_tradier_daily_history
+         [TRADIER_UNMANAGED] — only reached if canonical + FMP both fail
 
     Reuses theme_rs_service providers so rate-limiting and caching are shared.
     Returns ([], "fetch_failed", "unknown") on any unexpected exception.

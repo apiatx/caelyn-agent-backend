@@ -734,7 +734,13 @@ async def _fetch_tradier_daily_history(symbol: str, days: int = 400) -> list[dic
 
     [TRADIER_UNMANAGED] This function uses a raw httpx call and does NOT go
     through TRADIER_LIMITER.  Calls are visible in /api/rate-status under
-    unmanaged_tradier_paths.  Phase 2 will route this through the limiter.
+    unmanaged_tradier_paths.  Routing through the limiter is future work.
+
+    Current call sites (V4.2.5.6):
+      - _fetch_proxy_history() Step 2 — only reached when canonical AND FMP both fail
+      - watchlist_stage2_service._fetch_bars() Step 4 — only if canonical+FMP both fail
+    This function is kept as a valid last-resort fallback for symbols not yet in the
+    canonical cache.  It must NOT be added as a new primary call site.
     """
     sym = symbol.upper()
     cache_key = f"tdier_hist:{sym}:{days}"
@@ -868,12 +874,35 @@ async def _fetch_intraday_bars(sym: str) -> list[dict]:
 
 async def _fetch_proxy_history(symbol: str, days: int = 400) -> tuple[list[dict], str]:
     """
-    FMP (primary) → Tradier daily (fallback) → yfinance (emergency).
+    Canonical disk cache (primary) → FMP → Tradier daily (unmanaged) → yfinance (emergency).
     Returns (bars, source_name).
+
+    Step 0: canonical_history_service — 10Y disk-persistent cache; no provider call;
+            require_fresh=False so bars are returned even if stale (append scheduler
+            keeps the cache current).  Returns None when symbol not yet backfilled.
+    Step 1: FMP /stable/historical-price-eod — 1900 calendar days.
+    Step 2: [TRADIER_UNMANAGED] Tradier /markets/history — reached only when canonical
+            AND FMP both fail (symbol not backfilled AND no FMP key / FMP error).
+    Step 3: yfinance — emergency fallback.
 
     days: lookback in calendar days passed to Tradier / yfinance fallbacks.
     FMP uses _FMP_HIST_RANGE_DAYS regardless (already long enough for 5Y).
+
+    Note: constituent-stock bars for 7D+ leader/laggard lists are fetched directly
+    via fetch_etf_history() in _compute() — not through this function.  That path
+    is flagged as remaining technical debt for a future canonical-adoption pass.
     """
+    sym = symbol.upper()
+
+    # ── Step 0: Canonical 10Y disk cache (V4.2.5.5 — no provider call) ──────
+    try:
+        from services.canonical_history_service import get_bars as _get_canon
+        canon = _get_canon(sym, require_fresh=False)
+        if canon and canon.get("bars") and len(canon["bars"]) >= 40:
+            return canon["bars"], "canonical"
+    except Exception:
+        pass
+
     bars = await _fetch_fmp_daily_history(symbol)
     if bars:
         return bars, "fmp"

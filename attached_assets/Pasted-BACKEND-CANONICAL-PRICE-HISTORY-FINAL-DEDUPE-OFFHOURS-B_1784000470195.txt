@@ -1,0 +1,355 @@
+BACKEND — CANONICAL PRICE HISTORY FINAL DEDUPE + OFFHOURS BACKFILL PLAN
+
+Backend only.
+
+Do not touch frontend.
+Do not change Confluence scoring.
+Do not rewrite the Tradier limiter.
+Do not touch Options Flow logic.
+Do not add new provider calls.
+Do not run a full backfill automatically.
+Do not add a complex identity/discontinuity system right now.
+
+Goal:
+
+V4.2.5.5 confirmed Tradier 10Y works when actually requested with a 3650-day window. The “Tradier 5Y cap” was a false conclusion caused by the older 1825-day request window.
+
+Now we need to make sure the new canonical history cache becomes the single shared price-history source across the backend, so we do not duplicate historical price calls on Watchlist, Themes, Stage, Entry, Fib, Wave, or Theme Rotation.
+
+Important operating model:
+
+1. Run one manual/off-hours full 10Y backfill once.
+2. Cache all bars.
+3. Stage / Entry / Fib / Wave / Themes / Theme Rotation read canonical cache first.
+4. Full backfill remains disabled by default after completion.
+5. Daily maintenance is incremental append only.
+6. No request-time provider calls.
+7. No full-history jobs during market hours.
+8. OUST should not be blocked or treated as inactive. Ouster is active; only expose any long-history caveat as metadata if detected.
+
+==================================================
+PART 1 — AUDIT ALL HISTORICAL PRICE CONSUMERS
+==================================================
+
+Search the backend for every historical daily price fetch/candle fetch path.
+
+Include at minimum:
+
+watchlist_stage2_service.py
+stage_analysis.py
+entry_state_service.py
+fib_engine.py
+wave_structure_engine.py
+continuation_pattern_engine.py
+theme_rs_service.py
+theme_rs_universe.py
+theme rotation services
+ta_signal_engine.py
+watchlist_analysis.py
+strategy report / Golden Zone / HC Trade paths
+screener technical paths
+calendar/returns calendar paths if relevant
+any function named get_history, _fetch_bars, _fetch_tradier_daily_history, historical, candles, bars, OHLC
+
+Return a table:
+
+file
+function
+page/feature using it
+provider used today
+request-time or scheduled
+cache used today
+does it already read canonical_history_service.get_bars()
+does it bypass Tradier scheduler
+does it duplicate another call
+recommended action
+
+Important:
+
+The Themes page / Theme Rotation price-history path must be audited specifically.
+
+Question to answer clearly:
+
+How is the Themes page currently getting its 5Y price data?
+- FMP?
+- Tradier?
+- old 400-bar Tradier cache?
+- theme_rs_service raw function?
+- canonical history cache?
+- some mix?
+
+Do not guess. Trace the exact call path.
+
+==================================================
+PART 2 — PATCH DUPLICATE PRICE-HISTORY PATHS TO USE CANONICAL CACHE FIRST
+==================================================
+
+For every deterministic technical/history consumer, enforce this rule:
+
+1. canonical_history_service.get_bars(symbol)
+2. existing local/LKG/cache fallback
+3. provider call only in scheduled/admin jobs
+4. no provider call during page/request-time path
+
+Patch only where needed.
+
+Must include:
+
+- Watchlist Stage
+- Entry State
+- Fib
+- Wave
+- Theme Rotation / Themes page RS
+- any technical signal path that computes from historical daily bars
+
+If a path intentionally cannot use canonical cache yet, explain why and mark it as remaining technical debt.
+
+Do not change Options Flow.
+
+Do not change live quote refresh behavior.
+
+Do not change real-time quote paths.
+
+This is only historical daily bars.
+
+==================================================
+PART 3 — REMOVE OR QUARANTINE UNMANAGED TRADIER HISTORY CALLS
+==================================================
+
+Previous reports identified:
+
+_fetch_tradier_daily_history() in theme_rs_service.py tagged [TRADIER_UNMANAGED]
+
+Audit whether this function still exists and whether any live path calls it.
+
+Required behavior:
+
+- No unmanaged raw Tradier historical calls in request-time paths.
+- If function remains for legacy compatibility, it must not be called by active services.
+- Preferred replacement: canonical cache read.
+- If provider fetch is needed, it must go through scheduled/admin canonical backfill or existing TradierProvider scheduler.
+
+Return:
+
+function_exists
+callers
+still_active
+patched_or_quarantined
+provider_calls_removed
+
+==================================================
+PART 4 — CONFIRM SAFE BACKFILL EXECUTION MODEL
+==================================================
+
+Do not run the full backfill yet unless explicitly asked after this audit.
+
+Confirm the exact manual execution plan:
+
+Step 1:
+Temporarily set:
+CANONICAL_HISTORY_BACKFILL_ENABLED=true
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=true
+CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false
+
+Step 2:
+Run manually off-hours:
+POST /api/admin/canonical-history/backfill?mode=initial_full_backfill&max_syms=<safe cap>
+
+Step 3:
+Monitor:
+GET /api/admin/canonical-history/status
+GET /api/rate-status
+
+Step 4:
+After complete:
+Set:
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=false
+CANONICAL_HISTORY_BACKFILL_ENABLED=false, unless only incremental append scheduler needs it
+Keep:
+CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED=true
+
+Step 5:
+Use only incremental append after market close.
+
+Return the exact endpoint and env sequence.
+
+==================================================
+PART 5 — FULL BACKFILL SHOULD BE ONE-TIME ONLY
+==================================================
+
+Confirm code behavior:
+
+- If symbol has available_10y, skip full backfill.
+- If symbol has available_lifetime_under_10y, skip full backfill.
+- If symbol is actual_ticker_history_limit, skip full backfill.
+- If cache is stale but usable, do not full-refetch.
+- If cache only needs recent bars, use incremental append.
+- Full refetch only for cache_corrupt_needs_rebuild or manual_rebuild&confirm=true.
+
+Return proof from code.
+
+==================================================
+PART 6 — INCREMENTAL APPEND SHOULD BE THE ONLY RECURRING HISTORY CALL
+==================================================
+
+Confirm recurring behavior:
+
+- incremental append fetches from newest_bar_date - 2d to today
+- one request per symbol per run
+- off-hours only
+- no 3650-day window in incremental mode
+- skip if already current
+- merge by date
+- write after each symbol
+
+Return proof from code.
+
+==================================================
+PART 7 — OUST HANDLING
+==================================================
+
+Do not block OUST.
+
+Ouster is active and should remain eligible if it has valid current bars.
+
+For OUST specifically, return:
+
+symbol
+canonical_bar_count
+oldest_date
+newest_date
+status
+stage_history_source
+fib_history_source
+active_current_data
+any_discontinuity_warning
+does_warning_block_analysis
+
+Expected:
+
+- OUST remains active.
+- Any “mixed/recycled ticker” note should be diagnostic only.
+- It must not block Watchlist, Stage, Fib, Confluence, or Theme calculations unless actual bad bars are detected.
+
+==================================================
+PART 8 — VALIDATION
+==================================================
+
+Validate:
+
+ABCL
+ALGM
+VRT
+OUST
+CRDO
+WYFI
+MSFT
+NVDA
+TSM
+SOFI
+HOOD
+HIMS
+ENTG
+ONTO
+CGNX
+
+For each return:
+
+symbol
+canonical_bar_count
+oldest_date
+newest_date
+history_status
+stage_history_source
+entry_history_source
+fib_history_source
+theme_rs_history_source
+themes_page_history_source
+uses_canonical_cache
+would_call_provider_request_time
+would_use_400bar_fallback
+needs_full_backfill
+needs_incremental_append
+plain_english_explanation
+
+Also return:
+
+Total historical provider call sites before patch
+Total historical provider call sites after patch
+Total unmanaged Tradier history call sites before patch
+Total unmanaged Tradier history call sites after patch
+Themes page historical provider after patch
+Watchlist historical provider after patch
+Stage/Fib historical provider after patch
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+CANONICAL PRICE HISTORY DEDUPE + BACKFILL READINESS REPORT
+
+FILES CHANGED:
+[list]
+
+HISTORICAL PRICE CONSUMER AUDIT:
+[table]
+
+THEMES PAGE HISTORY SOURCE:
+[exact call path before/after]
+
+DUPLICATE CALLS REMOVED:
+[summary]
+
+UNMANAGED TRADIER HISTORY CALLS:
+[summary]
+
+CANONICAL CACHE ADOPTION:
+[summary]
+
+OFFHOURS FULL BACKFILL PLAN:
+[exact env + endpoint sequence]
+
+ONE-TIME FULL BACKFILL PROOF:
+[summary]
+
+INCREMENTAL APPEND PROOF:
+[summary]
+
+OUST STATUS:
+[summary]
+
+VALIDATION:
+[table]
+
+End exactly:
+
+CANONICAL PRICE HISTORY DEDUPE VERDICT
+
+THEMES_PAGE_USES_CANONICAL_HISTORY:
+[YES/NO]
+
+WATCHLIST_STAGE_USES_CANONICAL_HISTORY:
+[YES/NO]
+
+ENTRY_FIB_WAVE_USE_CANONICAL_HISTORY:
+[YES/NO]
+
+UNMANAGED_TRADIER_HISTORY_CALLS_REMOVED_OR_QUARANTINED:
+[YES/NO]
+
+NO_REQUEST_TIME_HISTORICAL_PROVIDER_CALLS:
+[YES/NO]
+
+FULL_10Y_BACKFILL_IS_ONE_TIME_ONLY:
+[YES/NO]
+
+RECURRING_HISTORY_CALLS_ARE_INCREMENTAL_ONLY:
+[YES/NO]
+
+OUST_REMAINS_ACTIVE_AND_UNBLOCKED:
+[YES/NO]
+
+READY_FOR_ONE_TIME_OFFHOURS_10Y_BACKFILL:
+[YES/NO]

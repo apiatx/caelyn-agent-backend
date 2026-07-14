@@ -1,107 +1,299 @@
 {
   "macro_regime": "inflationary",
-  "active_themes": [],
-  "emerging_themes": [
+  "active_themes": [
     {
-      "name": "Semiconductors",
-      "score": 4.5,
-      "source": "x_consensus",
+      "name": "Insurance",
+      "score": 79.5,
+      "source": "theme_rs_service",
       "evidence": [
-        "X consensus: 3 tickers \u2014 NVDA, TSM, AMD"
+        "Top-percentile RS (80/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +1.0%, QQQ -17"
       ],
       "related_etfs": [
-        "SMH",
-        "SOXX",
-        "XSD"
+        "IAK",
+        "KIE",
+        "OSCR"
       ],
       "related_tickers": [
-        "NVDA",
-        "TSM",
-        "AMD"
+        "ACGL",
+        "PGR",
+        "CB"
       ]
     },
     {
-      "name": "Technology",
-      "score": 3.0,
-      "source": "x_consensus",
+      "name": "Biotech",
+      "score": 74.2,
+      "source": "theme_rs_service",
       "evidence": [
-        "X consensus: 2 tickers \u2014 NVDA, AMD"
+        "Top-percentile RS (74/100) vs theme universe with broad participation (67% advancing). Outperforming SPY -78.3%, QQQ -96"
       ],
       "related_etfs": [
-        "XLK",
-        "VGT"
+        "ABCL",
+        "ADPT",
+        "ARKG",
+        "HALO"
       ],
       "related_tickers": [
-        "NVDA",
-        "AMD"
+        "VRTX",
+        "GILD",
+        "ALNY"
       ]
     },
     {
-      "name": "Data Center Infrastructure",
-      "score": 3.0,
-      "source": "x_consensus",
+      "name": "Cloud Software",
+      "score": 72.9,
+      "source": "theme_rs_service",
       "evidence": [
-        "X consensus: 2 tickers \u2014 NBIS, IREN"
+        "Top-percentile RS (73/100) vs theme universe with broad participation (100% advancing). Outperforming SPY -27.8%, QQQ -4"
       ],
       "related_etfs": [
-        "SRVR",
-        "VPN",
-        "DTCR"
+        "CLOU",
+        "MDB",
+        "SKYY",
+        "SNOW"
       ],
       "related_tickers": [
-        "NBIS",
-        "IREN"
+        "GOOGL",
+        "DDOG",
+        "MSFT"
       ]
     },
     {
-      "name": "AI Networking",
-      "score": 3.0,
-      "source": "x_consensus",
+      "name": "Cybersecurity",
+      "score": 72.4,
+      "source": "theme_rs_service",
       "evidence": [
-        "X consensus: 2 tickers \u2014 AAOI, LITE"
+        "Top-percentile RS (72/100) vs theme universe. Outperforming SPY +32.5%, QQQ +14.0%. Breadth 0%."
       ],
       "related_etfs": [
-        "ANET",
-        "AVGO",
-        "MRVL"
+        "AKAM",
+        "BUG",
+        "CIBR",
+        "CRWD"
       ],
       "related_tickers": [
-        "AAOI",
-        "LITE"
-      ]
-    },
-    {
-      "name": "Photonics / Lasers",
-      "score": 3.0,
-      "source": "x_consensus",
-      "evidence": [
-        "X consensus: 2 tickers \u2014 AAOI, LITE"
-      ],
-      "related_etfs": [
-        "IPGP",
-        "COHR",
-        "LITE"
-      ],
-      "related_tickers": [
-        "AAOI",
-        "LITE"
+        "ZS"
       ]
     }
   ],
-  "dead_zones": [],
-  "sector_leaders": [],
+  "emerging_themes": [
+    {
+      "name": "Substrates / Packaging",
+      "score": 69.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "AMAT",
+        "AMCR",
+        "AMKR",
+        "ASX"
+      ],
+      "related_tickers": [
+        "ASMVF",
+        "UMICF"
+      ]
+    },
+    {
+      "name": "Regional Banks",
+      "score": 66.3,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "KRE",
+        "KBE",
+        "IAT"
+      ],
+      "related_tickers": [
+        "ZION",
+        "KEY",
+        "WAL"
+      ]
+    },
+    {
+      "name": "Travel & Transportation",
+      "score": 65.4,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "IYT",
+        "JETS"
+      ],
+      "related_tickers": [
+        "UAL",
+        "DAL",
+        "FDX"
+      ]
+    },
+    {
+      "name": "Financials",
+      "score": 65.2,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "XLF",
+        "VFH"
+      ],
+      "related_tickers": [
+        "GS",
+        "MS",
+        "JPM"
+      ]
+    },
+    {
+      "name": "Banks",
+      "score": 65.2,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+      ],
+      "related_etfs": [
+        "KBE",
+        "XLF"
+      ],
+      "related_tickers": [
+        "GS",
+        "MS",
+        "JPM"
+      ]
+    }
+  ],
+  "dead_zones": [
+    {
+      "name": "Space Economy",
+      "score": 14.0,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (14/100) vs 51-theme universe. SPY delta -8.0%, QQQ delta -26.5%. Breadth N/A \u2014 minimal buying pressu"
+      ],
+      "related_etfs": [
+        "ARKX",
+        "ASTS",
+        "BKSY",
+        "MNTS"
+      ],
+      "related_tickers": []
+    },
+    {
+      "name": "Lithium & Battery Tech",
+      "score": 15.4,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (15/100) vs 51-theme universe. SPY delta -127.0%, QQQ delta -145.5%. Breadth 50% \u2014 minimal buying pre"
+      ],
+      "related_etfs": [
+        "BATT",
+        "ENVX",
+        "LIT",
+        "QS"
+      ],
+      "related_tickers": [
+        "SQM",
+        "ALB"
+      ]
+    },
+    {
+      "name": "Quantum Computing",
+      "score": 16.6,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (17/100) vs 51-theme universe. SPY delta -0.6%, QQQ delta -19.1%. Breadth N/A \u2014 minimal buying pressu"
+      ],
+      "related_etfs": [
+        "ARQQ",
+        "IBM",
+        "IONQ",
+        "QBTS"
+      ],
+      "related_tickers": []
+    },
+    {
+      "name": "Uranium & Nuclear Energy",
+      "score": 20.9,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (21/100) vs 51-theme universe. SPY delta +192.1%, QQQ delta +173.6%. Breadth 100% \u2014 minimal buying pr"
+      ],
+      "related_etfs": [
+        "DNN",
+        "LEU",
+        "NLR",
+        "OKLO"
+      ],
+      "related_tickers": [
+        "CCJ",
+        "BWXT"
+      ]
+    },
+    {
+      "name": "Drones",
+      "score": 23.1,
+      "source": "theme_rs_service",
+      "evidence": [
+        "Bottom-quartile RS (23/100) vs 51-theme universe. SPY delta -23.7%, QQQ delta -42.2%. Breadth 0% \u2014 minimal buying pressu"
+      ],
+      "related_etfs": [
+        "AVAV",
+        "ITA",
+        "JOBY",
+        "ONDS"
+      ],
+      "related_tickers": [
+        "ACHR",
+        "EH"
+      ]
+    }
+  ],
+  "sector_leaders": [
+    {
+      "sector": "Financials",
+      "ticker": "XLF",
+      "score": 65.2,
+      "posture": "improving"
+    },
+    {
+      "sector": "Health Care",
+      "ticker": "XLV",
+      "score": 65.1,
+      "posture": "improving"
+    },
+    {
+      "sector": "Utilities",
+      "ticker": "XLU",
+      "score": 64.6,
+      "posture": "improving"
+    },
+    {
+      "sector": "Technology",
+      "ticker": "XLK",
+      "score": 63.1,
+      "posture": "improving"
+    },
+    {
+      "sector": "Energy",
+      "ticker": "XLE",
+      "score": 62.2,
+      "posture": "improving"
+    }
+  ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-07-14T03:22:16.270845+00:00",
+  "last_updated": "2026-07-14T03:42:17.413975+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
     "regime": "fallback",
-    "sector_rotation": "fallback",
+    "sector_rotation": "ok",
     "theme_rs_service": "ok",
     "theme_rotation": "ok",
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1783999336.271068
+  "_saved_at": 1784000537.4140394
 }
