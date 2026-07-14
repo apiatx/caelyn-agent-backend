@@ -1,0 +1,273 @@
+BACKEND ONLY — READY ROW QUALITY / SEMANTIC QA
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math yet.
+Do not change provider logic.
+Do not run provider calls.
+Do not run 10Y backfill.
+Use retained/cached Confluence data only.
+
+Goal:
+
+The P6 → V4.2 promotion fix worked and Ready now has 61 rows. We need a quality QA pass to make sure the Ready rows are semantically clean and not over-promoted.
+
+Specifically audit:
+
+1. Ready rows with EXTREME_EXTENSION.
+2. Ready rows with setup label "No Clear Setup".
+3. Ready rows with entry_state WAIT_FOR_RETEST.
+4. Ready rows with low entry_exit_points.
+5. Ready rows with low stage_quality_points.
+6. The drop in RISK_CONFLICT count from 8 to 3.
+
+Do not implement changes yet unless a bug is obvious and trivial. Report first.
+
+==================================================
+PART 1 — READY DISTRIBUTION
+==================================================
+
+Return:
+
+total_rows
+ready_count
+ready_percent_of_universe
+near_actionable_count
+watch_for_reset_count
+risk_conflict_count
+avoid_count
+
+Also return Ready counts by:
+
+p6_actionable_tier
+technical_setup_label
+entry_state
+extension_state
+extension_quality
+risk_flags
+
+==================================================
+PART 2 — EXTREME_EXTENSION IN READY
+==================================================
+
+List all READY rows with EXTREME_EXTENSION.
+
+For each return:
+
+symbol
+score_total
+technical_setup_label
+entry_state
+extension_state
+extension_quality
+chase_extension
+constructive_extension
+risk_flags
+entry_exit_points
+technical_setup_points
+stage_quality_points
+invalidation_level
+why_now
+why_wait
+p6_path_or_reason
+
+Classify each as:
+
+- ACCEPTABLE_CONSTRUCTIVE_RESET
+- QUESTIONABLE_TOO_EXTENDED
+- SHOULD_NOT_BE_READY
+
+Rule of thumb:
+
+EXTREME_EXTENSION + CHASE_EXTENSION should not be Ready.
+EXTREME_EXTENSION + CONSTRUCTIVE reset may be Ready, but should be amber caution.
+
+==================================================
+PART 3 — NO CLEAR SETUP IN READY
+==================================================
+
+List all READY rows where:
+
+technical_setup_label contains "No Clear"
+or pattern_type == "NO_PATTERN"
+
+For each return:
+
+symbol
+technical_setup_label
+entry_state
+active_support_status
+active_support_type
+entry_exit_points
+technical_setup_points
+p6_path_or_reason
+plain_english_explanation
+
+Determine:
+
+- Is this actually a support/retest setup with bad label precedence?
+- Or is it truly no clear setup and should not be Ready?
+
+Recommended fix if needed:
+
+If Ready path is support/retest-based, label should become:
+"Trendline Support Test"
+"Support Retest"
+"Constructive Pullback"
+or equivalent.
+
+==================================================
+PART 4 — WAIT_FOR_RETEST IN READY
+==================================================
+
+List READY rows with entry_state == "WAIT_FOR_RETEST".
+
+For each return:
+
+symbol
+price_if_available
+entry_state
+active_support_status
+distance_to_active_support_pct
+entry_zone
+breakout_trigger
+invalidation_level
+entry_exit_points
+p6_path_or_reason
+plain_english_explanation
+
+Classify:
+
+- RETEST_ALREADY_IN_PROGRESS
+- WAITING_NOT_READY
+- LABEL_MISMATCH
+
+If it is literally still waiting for retest, it should not be Ready.
+
+==================================================
+PART 5 — LOW ENTRY / LOW STAGE EXCEPTIONS
+==================================================
+
+List READY rows with:
+
+entry_exit_points < 4.5
+stage_quality_points < 9.0
+technical_setup_points < 3.0
+
+For each return:
+
+symbol
+entry_exit_points
+stage_quality_points
+technical_setup_points
+p6_path_or_reason
+why_allowed
+should_keep_ready
+
+==================================================
+PART 6 — RISK_CONFLICT DROP EXPLANATION
+==================================================
+
+Before promotion report showed RISK_CONFLICT count dropped from 8 to 3 after promotion.
+
+Identify the 5 rows that moved out of RISK_CONFLICT.
+
+For each return:
+
+symbol
+previous_bucket_if_available
+new_bucket
+p6_tier
+risk_flags
+reason_codes
+is_risk_conflict
+why_moved
+is_move_valid
+
+If previous bucket not available in current snapshot, explain how to reconstruct or why not possible.
+
+==================================================
+PART 7 — RECOMMENDED SEMANTIC FIXES
+==================================================
+
+Return recommended fixes but do not implement unless trivial.
+
+Possible fixes:
+
+A. Split extension severity:
+- EXTREME_EXTENSION_UNRESET
+- EXTREME_EXTENSION_CONSTRUCTIVE_RESET
+
+B. Move constructive extension warning out of red risk badge into amber caution.
+
+C. Fix setup label precedence for support/retest Ready paths.
+
+D. Prevent WAIT_FOR_RETEST from being Ready unless active retest is confirmed.
+
+E. Keep Ready count but add caution badges.
+
+F. Tighten P6 only if false positives are found.
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+READY ROW QUALITY QA REPORT
+
+READY DISTRIBUTION:
+[summary/table]
+
+EXTREME_EXTENSION READY ROWS:
+[table]
+
+NO_CLEAR_SETUP READY ROWS:
+[table]
+
+WAIT_FOR_RETEST READY ROWS:
+[table]
+
+LOW ENTRY/STAGE EXCEPTIONS:
+[table]
+
+RISK_CONFLICT DROP:
+[summary/table]
+
+RECOMMENDED FIXES:
+[list]
+
+End exactly:
+
+READY QUALITY QA VERDICT
+
+READY_COUNT:
+[number]
+
+READY_COUNT_REASONABLE:
+[YES/NO/NEEDS_REVIEW]
+
+EXTREME_EXTENSION_READY_ACCEPTABLE:
+[YES/NO/PARTIAL]
+
+NO_CLEAR_SETUP_READY_ACCEPTABLE:
+[YES/NO/PARTIAL]
+
+WAIT_FOR_RETEST_READY_ACCEPTABLE:
+[YES/NO/PARTIAL]
+
+RISK_CONFLICT_DROP_EXPLAINED:
+[YES/NO]
+
+SCORING_MATH_CHANGE_NEEDED:
+[YES/NO]
+
+LABEL_SEMANTIC_FIX_NEEDED:
+[YES/NO]
+
+READY_FOR_FRONTEND_DISPLAY:
+[YES/NO]
+
+WAIT_FOR_10Y_BACKFILL_BEFORE_FINAL_CALIBRATION:
+YES
