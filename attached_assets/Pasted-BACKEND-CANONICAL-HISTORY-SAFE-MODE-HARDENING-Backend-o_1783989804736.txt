@@ -1,0 +1,414 @@
+BACKEND — CANONICAL HISTORY SAFE-MODE HARDENING
+
+Backend only.
+
+Do not revert the canonical history cache.
+Do not remove Stage / Entry / Fib integration with canonical cache.
+Do not rewrite the Tradier limiter.
+Do not touch options flow.
+Do not touch frontend.
+Do not change Confluence scoring.
+
+Goal:
+
+The canonical history implementation is acceptable, but it must be locked down so it cannot accidentally consume Tradier capacity during market hours or repeatedly refetch full historical data.
+
+Important correction:
+
+The canonical history target should be up to 10 years of daily candles, not 5 years.
+
+If a stock has less than 10 years of trading history, fetch as far back as the provider has candles, effectively back to IPO/listing date.
+
+If a stock has more than 10 years of history, cap canonical history at 10 years because older data is not useful for the current Stage / Fib / Entry / Extension system and wastes calls/cache.
+
+We want:
+
+1. One-time full 10Y backfill allowed manually/off-hours.
+2. Cached bars always used instantly after backfill.
+3. No request-time provider calls.
+4. No automatic full-watchlist Tradier history jobs during market hours.
+5. No recurring full 10Y refetches just because TTL is stale.
+6. Incremental daily append only after the initial cache is built.
+
+==================================================
+PART 1 — CONFIRM NO AUTO-RUN
+==================================================
+
+Audit and confirm:
+
+- canonical_history_backfill does not auto-run at startup
+- canonical_history_backfill does not auto-run during retained snapshot rebuild
+- canonical_history_backfill does not auto-run from frontend/page requests
+- canonical_history_backfill only runs from explicit admin endpoint or scheduled off-hours job
+
+Return exact file/function evidence.
+
+If any auto-run exists, disable it.
+
+==================================================
+PART 2 — ADD SAFE ENABLE FLAGS
+==================================================
+
+Add/confirm these env/config flags with safe defaults:
+
+CANONICAL_HISTORY_BACKFILL_ENABLED=false
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=false
+CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED=true
+CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false
+
+Behavior:
+
+If CANONICAL_HISTORY_BACKFILL_ENABLED=false:
+- admin/status endpoints still work
+- cache reads still work
+- no provider calls are made
+
+If CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=false:
+- no full-history fetch is allowed
+- except manual force endpoint with explicit mode=manual_rebuild and confirm=true
+
+If CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false:
+- full backfill and append jobs do not run during market hours
+- return paused_market_hours instead of calling provider
+
+==================================================
+PART 3 — ONE-TIME FULL 10Y BACKFILL MODE
+==================================================
+
+Full historical fetch should only happen when:
+
+- admin endpoint explicitly requests mode=initial_full_backfill or manual_rebuild
+- CANONICAL_HISTORY_BACKFILL_ENABLED=true
+- CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=true
+- market is closed unless explicitly forced
+- symbol does not already have available_10y or actual_ticker_history_limit
+- provider call goes through scheduler
+- no raw httpx bypass
+
+Target:
+
+canonical_history_target_years = 10
+canonical_history_requested_days = 3650
+preferred_bars = approximately 2520 trading bars
+minimum_5y_bars = 1100
+minimum_10y_bars = 2200
+
+After a symbol reaches available_10y:
+- do not full-refetch on normal runs
+- do not full-refetch because TTL is stale
+- mark it complete
+
+If symbol has fewer than 10 years of public trading history:
+- classify as actual_ticker_history_limit
+- cache all available history
+- do not treat it as provider failure
+- do not keep trying to fetch older nonexistent bars
+
+==================================================
+PART 4 — CHANGE TTL SEMANTICS
+==================================================
+
+Current report used available_5y → 20h TTL.
+
+Update this for 10Y history.
+
+TTL/staleness should mean “needs append check,” not “cache invalid.”
+
+Change semantics:
+
+available_10y cache remains valid even if older than 20h.
+Stale means:
+- needs incremental append check
+- not unusable
+- not full refetch required
+
+Add statuses:
+
+available_10y_fresh
+available_10y_needs_append
+available_10y_stale_but_usable
+available_5y_partial_long_history
+available_3y_partial_history
+actual_ticker_history_limit
+cache_corrupt_needs_rebuild
+
+Rules:
+
+- Stage/Entry/Fib can use available_10y_stale_but_usable.
+- Stage/Entry/Fib can use actual_ticker_history_limit when the ticker is genuinely newer than 10 years.
+- Only cache_corrupt_needs_rebuild should trigger manual full rebuild.
+- Missing 1–3 recent bars should trigger incremental append, not full fetch.
+
+==================================================
+PART 5 — INCREMENTAL DAILY APPEND ONLY
+==================================================
+
+After initial full backfill:
+
+Daily maintenance should:
+
+- run off-hours only
+- fetch only from newest_bar_date - 2d to today
+- one request per symbol max
+- skip if newest_bar_date is already current
+- merge by date
+- write after each symbol
+- never fetch 3650 days in incremental mode
+
+If the report currently says “≈2 Tradier calls/symbol/day,” clarify/fix:
+- target should be 1 history request per symbol per append run
+- with 2-day overlap inside that one request
+
+==================================================
+PART 6 — WEEKLY / MONTHLY JOB SAFETY
+==================================================
+
+Do not let weekly_health_check perform full 10Y refetch by default.
+
+Set:
+
+weekly_health_check:
+- check metadata/index/file existence
+- optionally sample 1 symbol
+- do not full-refetch all symbols
+
+monthly_full_refresh:
+- disabled by default
+- manual/admin only
+- require confirm=true
+- max_syms cap
+
+==================================================
+PART 7 — RATE LIMIT / OPTIONS SAFETY
+==================================================
+
+Keep the canonical_history_backfill lane, but make it safe.
+
+During market hours:
+- lane should effectively be paused unless CANONICAL_HISTORY_ALLOW_MARKET_HOURS=true
+- options flow always wins
+
+Off-hours:
+- full initial 10Y backfill can run at low RPM
+- recommend 5–10 RPM default
+- never exceed global limiter
+- expose rate status
+
+Validation must show:
+
+canonical_history_backfill_budget_used
+canonical_history_backfill_budget_cap
+canonical_history_backfill_saturated
+tradier_global_available_tokens
+options_flow_queue_depth
+history_lane_paused_reason
+
+==================================================
+PART 8 — PROVIDER ORDER
+==================================================
+
+For now, accept Tradier as the primary initial history provider only if validation confirms it can return up to 10 years of daily bars through the scheduler path.
+
+Retain FMP as fallback/verification.
+
+Do not spend FMP unless:
+- Tradier fails
+- Tradier returns insufficient bars and symbol is not genuinely new
+- manual verification is requested
+
+Expose:
+
+canonical_history_provider
+canonical_history_quality
+canonical_history_adjusted_status
+
+Keep canonical_history_adjusted_status = unknown unless verified.
+
+Allowed quality values:
+
+full_10y_tradier_unverified
+full_10y_tradier_verified
+full_10y_fmp
+available_5y_partial_long_history
+available_3y_partial_history
+actual_ticker_history_limit
+partial_tradier
+partial_fmp
+stage_cache_fallback
+provider_failed
+not_yet_backfilled
+
+==================================================
+PART 9 — STAGE / ENTRY / FIB HISTORY USAGE
+==================================================
+
+Stage, Entry/Exit, Extension Reset, Fib, and Wave Structure should all prefer canonical history.
+
+Target behavior:
+
+- If available_10y exists, use it.
+- If ticker is under 10 years old, use actual_ticker_history_limit bars.
+- If only 5 years exists, use it but label it partial long history.
+- If only 400 bars exists, use it only as fallback and enqueue backfill.
+
+Expose:
+
+stage_history_source
+entry_history_source
+fib_history_source
+wave_history_source
+stage_bar_count
+entry_bar_count
+fib_bar_count
+wave_bar_count
+history_years_available
+history_status
+history_data_depth_confidence
+
+Suggested depth confidence:
+
+~10y / 2200+ bars = 1.00
+~5y / 1100–2199 bars = 0.85
+~3y / 756–1099 bars = 0.75
+~2y / 504–755 bars = 0.65
+~1y / 252–503 bars = 0.50
+<252 bars = 0.25 unless actual_ticker_history_limit
+
+If actual_ticker_history_limit:
+- do not mark provider failure
+- confidence should reflect complete available public history
+- but timeframe scope should not claim 10Y structure
+
+==================================================
+PART 10 — VALIDATION
+==================================================
+
+Validate:
+
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+WYFI
+MSFT
+NVDA
+TSM
+SOFI
+HOOD
+HIMS
+
+For each return:
+
+symbol
+bar_count
+oldest_date
+newest_date
+history_years_available
+history_status
+cache_usable
+actual_ticker_history_limit
+needs_append
+needs_full_rebuild
+provider_call_allowed_now
+full_backfill_allowed_now
+incremental_append_allowed_now
+history_lane_paused_reason
+stage_history_source
+fib_history_source
+fib_timeframe_scope
+request_time_provider_calls
+plain_english_explanation
+
+Also return:
+
+Does full backfill auto-run at startup? YES/NO
+Does full backfill run during retained snapshot rebuild? YES/NO
+Does full backfill run from frontend request? YES/NO
+Does stale available_10y trigger full refetch? YES/NO
+Does stale available_10y remain usable? YES/NO
+Does daily append fetch only a short range? YES/NO
+Does weekly health check avoid full refetch? YES/NO
+Can Tradier return 10Y bars for symbols older than 10 years? YES/NO/PARTIAL
+Are tickers younger than 10Y classified as actual_ticker_history_limit? YES/NO
+
+==================================================
+PART 11 — FINAL REPORT
+==================================================
+
+Return:
+
+CANONICAL HISTORY SAFE-MODE HARDENING REPORT
+
+FILES CHANGED:
+[list]
+
+AUTO-RUN AUDIT:
+[summary]
+
+SAFE FLAGS:
+[summary]
+
+10Y FULL BACKFILL POLICY:
+[summary]
+
+TTL SEMANTICS:
+[summary]
+
+INCREMENTAL APPEND POLICY:
+[summary]
+
+WEEKLY/MONTHLY SAFETY:
+[summary]
+
+RATE LIMIT / OPTIONS SAFETY:
+[summary]
+
+PROVIDER ORDER:
+[summary]
+
+STAGE / ENTRY / FIB HISTORY USAGE:
+[summary]
+
+VALIDATION:
+[table]
+
+End exactly:
+
+CANONICAL HISTORY SAFE-MODE VERDICT
+
+NO_AUTO_FULL_BACKFILL:
+[YES/NO]
+
+NO_REQUEST_TIME_PROVIDER_CALLS:
+[YES/NO]
+
+FULL_10Y_BACKFILL_MANUAL_OR_OFFHOURS_ONLY:
+[YES/NO]
+
+AVAILABLE_10Y_CACHE_STALE_BUT_USABLE:
+[YES/NO]
+
+STALE_10Y_DOES_NOT_TRIGGER_FULL_REFETCH:
+[YES/NO]
+
+DAILY_APPEND_IS_INCREMENTAL_ONLY:
+[YES/NO]
+
+WEEKLY_HEALTH_CHECK_DOES_NOT_FULL_REFETCH:
+[YES/NO]
+
+MARKET_HOURS_BACKFILL_PAUSED_BY_DEFAULT:
+[YES/NO]
+
+OPTIONS_FLOW_PROTECTED:
+[YES/NO]
+
+TICKERS_UNDER_10Y_CLASSIFIED_ACTUAL_HISTORY_LIMIT:
+[YES/NO]
+
+STAGE_ENTRY_FIB_USE_10Y_HISTORY_WHEN_AVAILABLE:
+[YES/NO]
+
+READY_FOR_ONE_TIME_OFFHOURS_10Y_BACKFILL:
+[YES/NO]

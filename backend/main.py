@@ -17817,19 +17817,42 @@ async def admin_stage2_force_warmup(
 
 @app.post("/api/admin/canonical-history/backfill")
 async def admin_canonical_history_backfill(
-    request:      Request,
-    api_key:      str   = Header(None, alias="X-API-Key"),
-    max_syms:     int   = Query(80, ge=1, le=500),
-    delay_s:      float = Query(0.25, ge=0.0, le=5.0),
-    priority_only: bool = Query(False, description="skip already available_5y symbols"),
-    symbols_csv:   str  = Query("", description="comma-separated override list"),
+    request:       Request,
+    api_key:       str   = Header(None, alias="X-API-Key"),
+    max_syms:      int   = Query(80, ge=1, le=500),
+    delay_s:       float = Query(0.25, ge=0.0, le=5.0),
+    priority_only: bool  = Query(False, description="skip available_5y_partial symbols already in cache"),
+    symbols_csv:   str   = Query("", description="comma-separated override list"),
+    mode:          str   = Query(
+        "initial_full_backfill",
+        description=(
+            "initial_full_backfill | incremental_daily_append | manual_rebuild | "
+            "cache_read_only | weekly_health_check | monthly_full_refresh"
+        ),
+    ),
+    confirm:       bool  = Query(
+        False,
+        description="Required for manual_rebuild and monthly_full_refresh to prevent accidental full-refetch",
+    ),
 ):
     """
-    Trigger one canonical 5-year price history backfill batch (background task).
+    Trigger one canonical 10-year price history backfill batch (background task).
 
-    Fetches FMP EOD history (1900 cal days) for watchlist symbols and persists to
-    backend/data/canonical_history/.  Surviving across restarts eliminates the
-    400-bar Tradier fallback for all symbols that have been backfilled.
+    Target: up to 3650 calendar days (~2520 trading bars) per symbol via Tradier
+    (scheduler-safe, canonical_history_backfill lane) with FMP as fallback.
+
+    Results persist to backend/data/canonical_history/.
+    Surviving across restarts eliminates the 400-bar Tradier fallback for all
+    symbols that have been backfilled.
+
+    Safe-mode flags (all default to conservative/off):
+      CANONICAL_HISTORY_BACKFILL_ENABLED        — master switch (default: false)
+      CANONICAL_HISTORY_FULL_BACKFILL_ENABLED   — allow full 10Y fetch (default: false)
+      CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED — allow append runs (default: true)
+      CANONICAL_HISTORY_ALLOW_MARKET_HOURS      — allow during active session (default: false)
+
+    mode=manual_rebuild or monthly_full_refresh require confirm=true to prevent
+    accidental full-refetch of already-cached 10Y symbols.
 
     Fires in background — returns immediately.
     Poll GET /api/admin/canonical-history/status for progress.
@@ -17845,6 +17868,27 @@ async def admin_canonical_history_backfill(
             {"error": "backfill_already_running", "job": _bstatus()}, status_code=409
         )
 
+    # Validate mode
+    _valid_modes = {
+        "initial_full_backfill", "incremental_daily_append", "manual_rebuild",
+        "cache_read_only", "weekly_health_check", "monthly_full_refresh",
+    }
+    if mode not in _valid_modes:
+        return JSONResponse(
+            {"error": "invalid_mode", "valid_modes": sorted(_valid_modes)},
+            status_code=400,
+        )
+
+    # For destructive modes, require confirm=true before even queuing
+    if mode in ("manual_rebuild", "monthly_full_refresh") and not confirm:
+        return JSONResponse(
+            {
+                "error": f"{mode}_requires_confirm",
+                "hint":  f"Add ?confirm=true&mode={mode} to proceed with full re-fetch",
+            },
+            status_code=400,
+        )
+
     symbols = None
     if symbols_csv:
         symbols = [s.strip().upper() for s in symbols_csv.split(",") if s.strip()]
@@ -17854,6 +17898,7 @@ async def admin_canonical_history_backfill(
             result = await _run(
                 symbols=symbols, max_symbols=max_syms,
                 delay_s=delay_s, priority_only=priority_only,
+                mode=mode, confirm=confirm,
             )
             print(f"[CANON_BACKFILL] batch complete: {result}")
         except Exception as _exc:
@@ -17862,6 +17907,8 @@ async def admin_canonical_history_backfill(
     _asyncio.create_task(_bg())
     return JSONResponse({
         "started":        True,
+        "mode":           mode,
+        "confirm":        confirm,
         "max_symbols":    max_syms,
         "delay_s":        delay_s,
         "priority_only":  priority_only,
