@@ -1,0 +1,343 @@
+BACKEND ONLY — READY SEMANTIC PRECISION PATCH
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math.
+Do not change provider logic.
+Do not run provider calls.
+Do not run 10Y backfill.
+Use retained/cached Confluence data only.
+
+Goal:
+
+The P6 → V4.2 promotion fix worked. Ready now has 61 rows. Quality QA shows the structure is mostly sound, but READY currently includes some rows with entry_state = WAIT_FOR_RETEST that are not actually near the retest/entry zone.
+
+We need to distinguish:
+
+- ready to enter now
+- retest in progress
+- high-quality setup but wait/set alert
+- far from entry
+
+This is a semantic/actionability cleanup, not a scoring change.
+
+==================================================
+PART 1 — ADD ENTRY EXECUTION STATE
+==================================================
+
+Add normalized fields to confluence_v42:
+
+confluence_v42.action.execution_state
+confluence_v42.action.execution_label
+
+Also add top-level flat aliases:
+
+entry_execution_state
+entry_execution_label
+
+Allowed states:
+
+READY_AT_ENTRY
+RETEST_IN_PROGRESS
+BREAKOUT_TRIGGER_READY
+SET_ALERT_FOR_RETEST
+WAIT_FOR_RETEST
+WAIT_FOR_BREAKOUT
+NOT_ACTIONABLE
+
+Suggested display labels:
+
+READY_AT_ENTRY → "Ready at Entry"
+RETEST_IN_PROGRESS → "Retest in Progress"
+BREAKOUT_TRIGGER_READY → "Breakout Trigger Ready"
+SET_ALERT_FOR_RETEST → "Set Retest Alert"
+WAIT_FOR_RETEST → "Wait for Retest"
+WAIT_FOR_BREAKOUT → "Wait for Breakout"
+NOT_ACTIONABLE → "Not Actionable"
+
+==================================================
+PART 2 — REFINE READY PROMOTION FOR WAIT_FOR_RETEST
+==================================================
+
+Do not automatically promote every P6 ACTIONABLE_NOW row to READY.
+
+Before promoting to READY, check whether it is actually executable now.
+
+For rows with entry_state == "WAIT_FOR_RETEST":
+
+Use active_support_status and distance_to_active_support_pct.
+
+Rules:
+
+A. If active_support_status in:
+- bounced_from_support
+- testing_support
+- near_major_support
+- retest_in_progress
+
+OR distance_to_active_support_pct <= 5:
+
+Then:
+- keep/promote READY
+- execution_state = RETEST_IN_PROGRESS
+- is_actionable_setup = true
+
+B. If distance_to_active_support_pct > 5 and <= 15:
+
+Then:
+- do NOT mark is_actionable_setup true
+- actionability should be WAIT_FOR_RETEST
+- bucket can remain NEAR_ACTIONABLE or WAIT_FOR_RETEST if supported
+- execution_state = SET_ALERT_FOR_RETEST
+- why_wait should include "Entry trigger not reached yet"
+
+C. If distance_to_active_support_pct > 15:
+
+Then:
+- do NOT mark READY
+- actionability = WAIT_FOR_RETEST
+- is_actionable_setup = false
+- execution_state = WAIT_FOR_RETEST
+- why_wait should include "Price is still far above retest/support zone"
+
+D. If distance is missing:
+
+Be conservative:
+- only allow READY if support status clearly says bounced/testing/near support
+- otherwise SET_ALERT_FOR_RETEST
+
+Important:
+
+A high-quality setup that is 20–50% above its retest level is not Ready Now. It belongs in Wait for Retest / Set Alert.
+
+==================================================
+PART 3 — KEEP NON-RETEST READY PATHS WORKING
+==================================================
+
+Do not demote clean Ready paths such as:
+
+BREAKOUT_PULLBACK
+TRENDLINE_SUPPORT_TEST
+BREAKOUT_RETEST
+HIGH_BASE_READY
+HIGH_BASE_COILING
+BREAKOUT_CONFIRMED
+LOW_BASE_FORMING
+
+unless they fail existing risk gates.
+
+For these, set execution_state based on the pattern:
+
+BREAKOUT_PULLBACK → READY_AT_ENTRY or RETEST_IN_PROGRESS
+TRENDLINE_SUPPORT_TEST → RETEST_IN_PROGRESS
+BREAKOUT_RETEST → RETEST_IN_PROGRESS
+HIGH_BASE_READY → BREAKOUT_TRIGGER_READY
+HIGH_BASE_COILING → BREAKOUT_TRIGGER_READY
+BREAKOUT_CONFIRMED → BREAKOUT_TRIGGER_READY
+LOW_BASE_FORMING → READY_AT_ENTRY only if invalidation exists and no major risk
+
+==================================================
+PART 4 — EXTREME EXTENSION SEVERITY CLEANUP
+==================================================
+
+Current READY rows can have EXTREME_EXTENSION when extension_quality = CONSTRUCTIVE.
+
+That is acceptable, but it should not be treated the same as runaway chase extension.
+
+Add:
+
+confluence_v42.risk.caution_flags
+caution_flags
+
+Rules:
+
+If extension_state == "EXTREME_EXTENSION" and extension_quality == "CONSTRUCTIVE" and chase_extension == false:
+- remove EXTREME_EXTENSION from red risk_flags if currently present
+- add EXTREME_EXTENSION_CONSTRUCTIVE_RESET to caution_flags
+
+If extension_state == "EXTREME_EXTENSION" and extension_quality != "CONSTRUCTIVE":
+- keep EXTREME_EXTENSION in risk_flags
+
+If chase_extension == true:
+- keep CHASE_EXTENSION in risk_flags
+
+Frontend can render caution_flags as amber.
+
+==================================================
+PART 5 — SUPPORT ENTRY LABEL FIX
+==================================================
+
+If:
+
+p6_actionable_tier == "ACTIONABLE_NOW"
+and p6/actionable path is support_entry
+and entry_state == "NO_CLEAR_ENTRY"
+and entry_exit_points >= 8.0
+
+Then add display-only normalized field:
+
+confluence_v42.technical.entry_state_display = "SUPPORT_ZONE_ENTRY"
+
+Do not necessarily overwrite raw entry_state.
+
+Also add top-level:
+
+entry_state_display
+
+This prevents a Ready row from visually saying "No Clear Entry" when the support-entry path is actually valid.
+
+==================================================
+PART 6 — VALIDATION
+==================================================
+
+Rebuild retained snapshot using cached data only.
+
+Return before/after:
+
+ready_count
+wait_for_retest_count
+set_alert_for_retest_count
+near_actionable_count
+watch_for_reset_count
+
+Specifically validate previous WAIT_FOR_RETEST Ready rows:
+
+AIR
+TGTX
+NNBR
+SIMO
+HIMS
+ADUR
+FTNT
+XYZ
+PANW
+OSCR
+RDDT
+CRWD
+SNOW
+ADPT
+NET
+MEI
+
+For each return:
+
+symbol
+old_action
+new_action
+old_ready
+new_ready
+entry_state
+execution_state
+distance_to_active_support_pct
+active_support_status
+invalidation_level
+reason_for_classification
+
+Expected:
+
+AIR / TGTX / NNBR should likely remain Ready / Retest In Progress.
+
+ADPT / NET / MEI should not remain Ready if still 26–50% above support.
+
+Rows 5–15% above support should become SET_ALERT_FOR_RETEST unless support status clearly says retest is active.
+
+==================================================
+PART 7 — READY SAFETY AFTER PATCH
+==================================================
+
+For all READY rows after patch, return count with:
+
+entry_state == WAIT_FOR_RETEST and distance_to_active_support_pct > 15
+entry_state == WAIT_FOR_RETEST and active_support_status == above_support
+CHASE_EXTENSION
+RISK_CONFLICT
+MAJOR_LOWER_LOW_CONFIRMED
+missing invalidation_level
+NO_CLEAR_ENTRY display label
+
+Expected:
+
+- 0 Ready rows more than 15% above retest/support
+- 0 chase/risk conflict/major lower-low
+- 0 Ready rows displaying "No Clear Entry"
+
+==================================================
+PART 8 — FRONTEND HANDOFF
+==================================================
+
+Return the updated frontend guidance:
+
+- Use confluence_v42.action.label_display as primary action.
+- Use confluence_v42.action.execution_label as secondary timing label.
+- Use risk_flags as red warnings.
+- Use caution_flags as amber warnings.
+- Use data_status_flags as neutral coverage badges.
+- Ready tab should filter is_actionable_setup true.
+- Set Alert / Wait for Retest rows should not appear in Ready tab.
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+READY SEMANTIC PRECISION PATCH REPORT
+
+FILES CHANGED:
+[list]
+
+WHAT CHANGED:
+[summary]
+
+READY COUNT BEFORE / AFTER:
+[table]
+
+WAIT_FOR_RETEST RECLASSIFICATION:
+[table]
+
+EXTREME EXTENSION CAUTION FLAGS:
+[summary]
+
+SUPPORT ENTRY LABEL FIX:
+[summary]
+
+READY SAFETY CHECK:
+[table]
+
+FRONTEND HANDOFF:
+[summary]
+
+End exactly:
+
+READY SEMANTIC PRECISION VERDICT
+
+SCORING_MATH_UNCHANGED:
+[YES/NO]
+
+READY_PROMOTION_NOW_REQUIRES_ENTRY_PROXIMITY:
+[YES/NO]
+
+WAIT_FOR_RETEST_FAR_FROM_SUPPORT_NOT_READY:
+[YES/NO]
+
+ENTRY_EXECUTION_STATE_ADDED:
+[YES/NO]
+
+CAUTION_FLAGS_ADDED:
+[YES/NO]
+
+CONSTRUCTIVE_EXTREME_EXTENSION_NOT_RED_RISK:
+[YES/NO]
+
+NO_CLEAR_ENTRY_DISPLAY_FIXED_FOR_SUPPORT_ENTRY:
+[YES/NO]
+
+READY_ROWS_PASS_SAFETY_CHECK:
+[YES/NO]
+
+READY_FOR_FRONTEND_DISPLAY:
+[YES/NO]
+
+WAIT_FOR_10Y_BACKFILL_BEFORE_FINAL_CALIBRATION:
+YES

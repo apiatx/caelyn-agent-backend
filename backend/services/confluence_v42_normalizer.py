@@ -22,6 +22,35 @@ _LABEL_DISPLAY_MAP: dict[str, str] = {
     "INSUFFICIENT_DATA": "Insufficient Data",
 }
 
+_EXECUTION_STATE_LABELS: dict[str, str] = {
+    "READY_AT_ENTRY":         "Ready at Entry",
+    "RETEST_IN_PROGRESS":     "Retest in Progress",
+    "BREAKOUT_TRIGGER_READY": "Breakout Trigger Ready",
+    "SET_ALERT_FOR_RETEST":   "Set Retest Alert",
+    "WAIT_FOR_RETEST":        "Wait for Retest",
+    "WAIT_FOR_BREAKOUT":      "Wait for Breakout",
+    "NOT_ACTIONABLE":         "Not Actionable",
+}
+
+_ACTIVE_RETEST_STATUSES: frozenset[str] = frozenset({
+    "bounced_from_support",
+    "testing_support",
+    "near_major_support",
+    "retest_in_progress",
+})
+
+_ENTRY_STATE_EXECUTION_MAP: dict[str, str] = {
+    "BREAKOUT_PULLBACK":      "READY_AT_ENTRY",
+    "TRENDLINE_SUPPORT_TEST": "RETEST_IN_PROGRESS",
+    "BREAKOUT_RETEST":        "RETEST_IN_PROGRESS",
+    "HIGH_BASE_READY":        "BREAKOUT_TRIGGER_READY",
+    "HIGH_BASE_COILING":      "BREAKOUT_TRIGGER_READY",
+    "BREAKOUT_CONFIRMED":     "BREAKOUT_TRIGGER_READY",
+    "HIGH_BASE_FORMING":      "BREAKOUT_TRIGGER_READY",
+    "LOW_BASE_FORMING":       "READY_AT_ENTRY",
+    "NO_CLEAR_ENTRY":         "READY_AT_ENTRY",
+}
+
 _DEPRECATED_FIELDS: list[str] = [
     "caelyn_confluence_v4_score",
     "caelyn_confluence_v4_bucket",
@@ -98,19 +127,26 @@ def build_fib_wave_status(row: dict) -> str:
 def build_risk_flags(row: dict) -> list[str]:
     """
     TRUE trade/risk-quality blockers only.
-    Data/coverage/pending flags go in build_data_status_flags() instead.
+    EXTREME_EXTENSION is only included when NOT constructively reset
+    (i.e. extension_quality != CONSTRUCTIVE or chase_extension == True).
+    Constructive extreme extension goes to caution_flags instead.
+    Data/coverage/pending flags go in build_data_status_flags().
     """
     flags: list[str] = []
     bucket      = str(row.get("caelyn_confluence_bucket") or "")
     act         = str(row.get("caelyn_confluence_v42_actionability") or "")
     ext_state   = str(row.get("extension_state") or "").upper()
+    ext_quality = str(row.get("extension_quality") or "").upper()
     entry_st    = str(row.get("entry_state") or "").upper()
     entry_pts   = _fvf(row, "entry_exit_points")
     entry_ex_st = str(row.get("entry_exit_status") or "").lower()
+    chase       = _fvb(row, "chase_extension")
 
     if ext_state == "EXTREME_EXTENSION":
-        flags.append("EXTREME_EXTENSION")
-    if _fvb(row, "chase_extension"):
+        # Only red if NOT a constructive reset — chase or non-constructive quality
+        if chase or ext_quality != "CONSTRUCTIVE":
+            flags.append("EXTREME_EXTENSION")
+    if chase:
         flags.append("CHASE_EXTENSION")
     if _fvb(row, "major_lower_low_confirmed"):
         flags.append("MAJOR_LOWER_LOW_CONFIRMED")
@@ -137,6 +173,80 @@ def build_risk_flags(row: dict) -> list[str]:
         if rc not in flags:
             flags.append(rc)
     return list(dict.fromkeys(flags))
+
+
+def build_caution_flags(row: dict) -> list[str]:
+    """
+    Amber-level caution signals — not trade blockers.
+    Frontend renders these as amber badges, never red.
+    """
+    flags: list[str] = []
+    ext_state   = str(row.get("extension_state") or "").upper()
+    ext_quality = str(row.get("extension_quality") or "").upper()
+    chase       = _fvb(row, "chase_extension")
+
+    if ext_state == "EXTREME_EXTENSION" and ext_quality == "CONSTRUCTIVE" and not chase:
+        flags.append("EXTREME_EXTENSION_CONSTRUCTIVE_RESET")
+    return flags
+
+
+def build_execution_state(row: dict) -> tuple[str, str]:
+    """
+    Derives the precise execution timing state for ACTIONABLE / NEAR_ACTIONABLE rows.
+    Returns (execution_state, execution_label).
+    """
+    entry_st    = str(row.get("entry_state") or "").upper()
+    supp_status = str(row.get("active_support_status") or "").lower()
+    dist        = row.get("distance_to_active_support_pct")
+    bucket      = str(row.get("caelyn_confluence_bucket") or "")
+    act         = str(row.get("caelyn_confluence_v42_actionability") or "")
+
+    if bucket not in {"ACTIONABLE", "NEAR_ACTIONABLE"} and act not in {"READY", "NEAR_ACTIONABLE"}:
+        return "NOT_ACTIONABLE", _EXECUTION_STATE_LABELS["NOT_ACTIONABLE"]
+
+    # WAIT_FOR_RETEST entry state: use support proximity to classify precisely
+    if entry_st == "WAIT_FOR_RETEST":
+        if supp_status in _ACTIVE_RETEST_STATUSES or (dist is not None and float(dist) <= 5.0):
+            state = "RETEST_IN_PROGRESS"
+        elif dist is not None and float(dist) <= 15.0:
+            state = "SET_ALERT_FOR_RETEST"
+        elif dist is not None and float(dist) > 15.0:
+            state = "WAIT_FOR_RETEST"
+        else:
+            # dist is None — conservative
+            state = "RETEST_IN_PROGRESS" if supp_status in _ACTIVE_RETEST_STATUSES else "SET_ALERT_FOR_RETEST"
+        return state, _EXECUTION_STATE_LABELS[state]
+
+    # All other entry states — map directly
+    state = _ENTRY_STATE_EXECUTION_MAP.get(entry_st, "READY_AT_ENTRY")
+
+    # LOW_BASE_FORMING: only READY_AT_ENTRY when invalidation is present and no major risk
+    if entry_st == "LOW_BASE_FORMING":
+        inv = build_invalidation_level(row)
+        if inv is None or _fvb(row, "major_lower_low_confirmed"):
+            state = "WAIT_FOR_BREAKOUT"
+
+    return state, _EXECUTION_STATE_LABELS.get(state, state)
+
+
+def build_entry_state_display(row: dict) -> str | None:
+    """
+    Display-only entry state label override.
+    When P6 qualifies via support_entry path but entry_state=NO_CLEAR_ENTRY
+    and entry score is high, show SUPPORT_ZONE_ENTRY instead.
+    Raw entry_state field is NOT overwritten.
+    """
+    raw_state   = row.get("entry_state") or ""
+    path        = str(row.get("actionable_path") or "").lower()
+    entry_pts   = _fvf(row, "entry_exit_points")
+
+    if (
+        raw_state.upper() == "NO_CLEAR_ENTRY"
+        and "support_entry" in path
+        and entry_pts >= 8.0
+    ):
+        return "SUPPORT_ZONE_ENTRY"
+    return raw_state if raw_state else None
 
 
 def build_data_status_flags(row: dict) -> list[str]:
@@ -227,6 +337,7 @@ def build_why_wait(row: dict) -> list[str]:
     is_risk     = _fvb(row, "is_risk_conflict") or bucket == "RISK_CONFLICT"
     major_llc   = _fvb(row, "major_lower_low_confirmed")
     conf_score  = _fvf(row, "caelyn_confluence_score")
+    dist        = row.get("distance_to_active_support_pct")
 
     if is_risk:
         reasons.append("Risk conflict detected")
@@ -238,7 +349,10 @@ def build_why_wait(row: dict) -> list[str]:
         else:
             reasons.append("Waiting for a cleaner reset before entry")
     if act in {"WAIT_FOR_RETEST"}:
-        reasons.append("Waiting for retest")
+        if dist is not None and float(dist) > 15.0:
+            reasons.append("Price is still far above retest/support zone")
+        else:
+            reasons.append("Entry trigger not reached yet — set limit/alert at support")
     if act in {"WAIT_FOR_BREAKOUT"}:
         reasons.append("Entry is not clean yet")
     elif act in {"NEAR_ACTIONABLE"} and entry_pts < 6.0:
@@ -333,13 +447,16 @@ def build_confluence_v42_object(row: dict) -> dict:
     bucket_raw  = str(row.get("caelyn_confluence_bucket") or "NO_CLEAR_CONFLUENCE")
     label_disp  = _LABEL_DISPLAY_MAP.get(act_raw, act_raw.replace("_", " ").title())
 
-    inv_level   = build_invalidation_level(row)
-    target_zone = build_target_zone(row)
-    why_now     = build_why_now(row)
-    why_wait    = build_why_wait(row)
+    inv_level         = build_invalidation_level(row)
+    target_zone       = build_target_zone(row)
+    why_now           = build_why_now(row)
+    why_wait          = build_why_wait(row)
     risk_flags        = build_risk_flags(row)
+    caution_flags     = build_caution_flags(row)
     data_status_flags = build_data_status_flags(row)
     fib_status        = build_fib_wave_status(row)
+    exec_state, exec_label = build_execution_state(row)
+    entry_state_disp  = build_entry_state_display(row)
 
     is_act  = row.get("is_actionable_setup", False)
     is_near = row.get("is_near_actionable", False)
@@ -374,6 +491,8 @@ def build_confluence_v42_object(row: dict) -> dict:
             "label":              act_raw,
             "bucket":             bucket_raw,
             "label_display":      label_disp,
+            "execution_state":    exec_state,
+            "execution_label":    exec_label,
             "invalidation_level": inv_level,
             "target_zone":        target_zone,
             "why_now":            why_now,
@@ -427,27 +546,29 @@ def build_confluence_v42_object(row: dict) -> dict:
             },
         },
         "technical": {
-            "stage_label":          _stage.get("stage_label") or row.get("stage_label"),
-            "stage_score":          _stage.get("raw_score") or row.get("stage_quality_score") or row.get("stage_alignment_score"),
+            "stage_label":           _stage.get("stage_label") or row.get("stage_label"),
+            "stage_score":           _stage.get("raw_score") or row.get("stage_quality_score") or row.get("stage_alignment_score"),
             "technical_setup_label": row.get("technical_setup_label"),
-            "entry_state":          row.get("entry_state"),
-            "entry_score":          row.get("entry_score"),
-            "extension_state":      row.get("extension_state"),
-            "extension_quality":    row.get("extension_quality"),
-            "fib_context":          row.get("primary_fib_context"),
-            "fib_timeframe":        row.get("primary_fib_timeframe"),
-            "nearest_fib_label":    row.get("primary_nearest_fib_label"),
-            "nearest_fib_level":    row.get("primary_nearest_fib_level"),
-            "distance_to_fib_pct":  row.get("primary_distance_to_fib_pct"),
-            "fib_confidence":       row.get("primary_fib_confidence"),
-            "fib_computed":         bool(row.get("fib_computed")),
-            "fib_years_available":  row.get("fib_years_available"),
-            "wave_structure":       row.get("wave_structure_label"),
-            "wave_score":           row.get("wave_structure_score"),
-            "fib_wave_status":      fib_status,
+            "entry_state":           row.get("entry_state"),
+            "entry_state_display":   entry_state_disp,
+            "entry_score":           row.get("entry_score"),
+            "extension_state":       row.get("extension_state"),
+            "extension_quality":     row.get("extension_quality"),
+            "fib_context":           row.get("primary_fib_context"),
+            "fib_timeframe":         row.get("primary_fib_timeframe"),
+            "nearest_fib_label":     row.get("primary_nearest_fib_label"),
+            "nearest_fib_level":     row.get("primary_nearest_fib_level"),
+            "distance_to_fib_pct":   row.get("primary_distance_to_fib_pct"),
+            "fib_confidence":        row.get("primary_fib_confidence"),
+            "fib_computed":          bool(row.get("fib_computed")),
+            "fib_years_available":   row.get("fib_years_available"),
+            "wave_structure":        row.get("wave_structure_label"),
+            "wave_score":            row.get("wave_structure_score"),
+            "fib_wave_status":       fib_status,
         },
         "risk": {
             "risk_flags":                    risk_flags,
+            "caution_flags":                 caution_flags,
             "major_lower_low_confirmed":     bool(row.get("major_lower_low_confirmed")),
             "lower_low_confirmed":           bool(row.get("lower_low_confirmed")),
             "chase_extension":               bool(row.get("chase_extension")),
@@ -458,10 +579,10 @@ def build_confluence_v42_object(row: dict) -> dict:
             "distance_to_active_support_pct": row.get("distance_to_active_support_pct"),
         },
         "booleans": {
-            "is_actionable_setup":  bool(is_act),
-            "is_near_actionable":   bool(is_near),
-            "is_watch_for_reset":   bool(is_wfr),
-            "is_risk_conflict":     bool(is_risk),
+            "is_actionable_setup":   bool(is_act),
+            "is_near_actionable":    bool(is_near),
+            "is_watch_for_reset":    bool(is_wfr),
+            "is_risk_conflict":      bool(is_risk),
             "is_investment_quality": bool(is_iq),
         },
         "metadata": {

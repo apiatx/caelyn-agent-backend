@@ -2410,18 +2410,71 @@ def build_confluence_snapshot(
 
         # ── P6 → V4.2 PROMOTION ──────────────────────────────────────────────
         # P6 computes the definitive actionability tier from entry/tech/stage signals.
-        # Without this block, ACTIONABLE_NOW is written only to r["actionable_tier"]
-        # and is silently discarded — caelyn_confluence_bucket stays at whatever the
-        # upstream V4.2 engine set (NEAR_ACTIONABLE, WATCH, etc.), and the normalizer
-        # derives is_actionable_setup = False for every row.
-        # This block closes that gap: ACTIONABLE_NOW → READY / ACTIONABLE canonical fields.
+        # For ACTIONABLE_NOW rows with WAIT_FOR_RETEST entry state, we gate READY
+        # on support proximity: only rows at or near the support/retest zone are
+        # truly executable now; rows with price still far above support are demoted
+        # to WAIT_FOR_RETEST / SET_ALERT_FOR_RETEST.
         r["p6_actionable_tier"] = _p6_tier  # diagnostic — always written for debugging
+
+        _P6_ACTIVE_RETEST_STATUSES = frozenset({
+            "bounced_from_support", "testing_support",
+            "near_major_support", "retest_in_progress",
+        })
+
         if _p6_tier == "ACTIONABLE_NOW":
-            r["caelyn_confluence_v42_actionability"] = "READY"
-            r["caelyn_confluence_bucket"]            = "ACTIONABLE"
-            r["is_actionable_setup"]                 = True
-            r["is_near_actionable"]                  = False
-            r["is_watch_for_reset"]                  = False
+            _p6_entry_st    = str(r.get("entry_state") or "").upper()
+            _p6_supp_status = str(r.get("active_support_status") or "").lower()
+            _p6_dist        = r.get("distance_to_active_support_pct")
+
+            if _p6_entry_st == "WAIT_FOR_RETEST":
+                # Determine if price is actually at/near the retest zone
+                _at_entry = (
+                    _p6_supp_status in _P6_ACTIVE_RETEST_STATUSES
+                    or (_p6_dist is not None and float(_p6_dist) <= 5.0)
+                )
+                if _at_entry:
+                    # At or very near support — executable now
+                    r["caelyn_confluence_v42_actionability"] = "READY"
+                    r["caelyn_confluence_bucket"]            = "ACTIONABLE"
+                    r["is_actionable_setup"]                 = True
+                    r["is_near_actionable"]                  = False
+                    r["is_watch_for_reset"]                  = False
+                elif _p6_dist is not None and float(_p6_dist) <= 15.0:
+                    # 5–15% above support — set alert / watch closely
+                    r["caelyn_confluence_v42_actionability"] = "WAIT_FOR_RETEST"
+                    r["caelyn_confluence_bucket"]            = "NEAR_ACTIONABLE"
+                    r["is_actionable_setup"]                 = False
+                    r["is_near_actionable"]                  = True
+                    r["is_watch_for_reset"]                  = False
+                elif _p6_dist is not None and float(_p6_dist) > 15.0:
+                    # >15% above support — still far from entry trigger
+                    r["caelyn_confluence_v42_actionability"] = "WAIT_FOR_RETEST"
+                    r["caelyn_confluence_bucket"]            = "NEAR_ACTIONABLE"
+                    r["is_actionable_setup"]                 = False
+                    r["is_near_actionable"]                  = True
+                    r["is_watch_for_reset"]                  = False
+                else:
+                    # dist is None — conservative: only READY if support status confirms
+                    if _p6_supp_status in _P6_ACTIVE_RETEST_STATUSES:
+                        r["caelyn_confluence_v42_actionability"] = "READY"
+                        r["caelyn_confluence_bucket"]            = "ACTIONABLE"
+                        r["is_actionable_setup"]                 = True
+                        r["is_near_actionable"]                  = False
+                        r["is_watch_for_reset"]                  = False
+                    else:
+                        r["caelyn_confluence_v42_actionability"] = "WAIT_FOR_RETEST"
+                        r["caelyn_confluence_bucket"]            = "NEAR_ACTIONABLE"
+                        r["is_actionable_setup"]                 = False
+                        r["is_near_actionable"]                  = True
+                        r["is_watch_for_reset"]                  = False
+            else:
+                # Non-WAIT_FOR_RETEST entry states — promote to READY unconditionally
+                r["caelyn_confluence_v42_actionability"] = "READY"
+                r["caelyn_confluence_bucket"]            = "ACTIONABLE"
+                r["is_actionable_setup"]                 = True
+                r["is_near_actionable"]                  = False
+                r["is_watch_for_reset"]                  = False
+
         # AGGRESSIVE_ACTIONABLE: good setup, not yet at clean entry — keep NEAR_ACTIONABLE.
         # NEAR_ACTIONABLE / WATCH_FOR_RESET / RISK_CONFLICT: leave canonical fields as-is.
 
@@ -2431,8 +2484,11 @@ def build_confluence_snapshot(
         # No scoring math changes. All inputs from already-assembled row.
         try:
             from services.confluence_v42_normalizer import (
+                build_caution_flags,
                 build_confluence_v42_object,
                 build_data_status_flags,
+                build_entry_state_display,
+                build_execution_state,
                 build_invalidation_level,
                 build_risk_flags,
                 build_target_zone,
@@ -2489,6 +2545,13 @@ def build_confluence_snapshot(
 
             # Step 7 — Normalized confluence_v42 object (clean frontend contract)
             r["confluence_v42"] = build_confluence_v42_object(r)
+
+            # Step 8 — Flat aliases for new semantic precision fields
+            _exec_state, _exec_label = build_execution_state(r)
+            r["entry_execution_state"] = _exec_state
+            r["entry_execution_label"] = _exec_label
+            r["caution_flags"]         = build_caution_flags(r)
+            r["entry_state_display"]   = build_entry_state_display(r)
 
         except Exception as _norm_exc:
             import logging as _logging
