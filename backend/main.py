@@ -17947,6 +17947,176 @@ async def admin_canonical_history_status(
     })
 
 
+# ── In-memory store for capability-test results ───────────────────────────────
+_CAPTEST_STATE: dict = {"running": False, "started_at": None, "rows": [], "done": False, "error": None}
+
+
+@app.post("/api/admin/canonical-history/capability-test")
+async def admin_canonical_history_capability_test_start(
+    request:     Request,
+    api_key:     str = Header(None, alias="X-API-Key"),
+    symbols_csv: str = "SPY,AAPL,MSFT,NVDA,TSM",
+    test_days:   int = 3650,
+):
+    """
+    Part 2+3 diagnostic (background job): prove what Tradier returns with a 3650-day window.
+    Fires background task; poll GET /api/admin/canonical-history/capability-test for results.
+    Each probe uses TradierProvider._get() via canonical_history_backfill lane — no raw httpx.
+    """
+    import asyncio as _asyncio
+    from datetime import date as _date, timedelta as _td
+    from data.tradier_budget import lane as _lane, BUDGETS as _BUDGETS
+    import time as _time
+
+    if _CAPTEST_STATE["running"]:
+        return JSONResponse({"started": False, "reason": "already_running",
+                             "poll": "GET /api/admin/canonical-history/capability-test"})
+
+    symbols_list = [s.strip().upper() for s in symbols_csv.split(",") if s.strip()][:10]
+
+    try:
+        from data.tradier_provider import TradierProvider as _TP
+        import os as _os
+        _key = _os.environ.get("TRADIER_API_KEY", "")
+        if not _key:
+            return JSONResponse({"error": "TRADIER_API_KEY not set"}, status_code=500)
+        _prov = _TP(api_key=_key)
+    except Exception as exc:
+        return JSONResponse({"error": f"TradierProvider init failed: {exc}"}, status_code=500)
+
+    async def _probe(symbol: str, start: str, end: str, label: str, td: int) -> dict:
+        t0 = _time.monotonic()
+        try:
+            with _lane("canonical_history_backfill"):
+                raw = await _prov.get_history(symbol=symbol, interval="daily",
+                                              start=start, end=end)
+        except Exception as exc:
+            return {
+                "symbol": symbol, "test_type": label,
+                "requested_start": start, "requested_end": end,
+                "params_sent": {"symbol": symbol, "interval": "daily", "start": start, "end": end},
+                "endpoint": "/v1/markets/history", "lane": "canonical_history_backfill",
+                "bars_returned": 0, "oldest_bar_date": None, "newest_bar_date": None,
+                "years_returned": 0.0, "oldest_gap_days": None,
+                "elapsed_ms": round((_time.monotonic() - t0) * 1000),
+                "result": "TRADIER_PROVIDER_ERROR", "error": str(exc),
+            }
+
+        bars = raw or []
+        bc   = len(bars)
+        if bc > 0:
+            dates      = sorted(str(b.get("date", ""))[:10] for b in bars if b.get("date"))
+            oldest, newest = dates[0], dates[-1]
+            years      = round(bc / 252, 2)
+            req_start  = _date.fromisoformat(start)
+            try:
+                gap = (_date.fromisoformat(oldest[:10]) - req_start).days
+            except Exception:
+                gap = None
+            result = (
+                "TRADIER_10Y_OK"       if bc >= 2200 else
+                "TRADIER_LIFETIME_OK"  if gap is not None and gap <= 180 else
+                "TRADIER_5Y_ONLY"      if bc >= 1100 and td >= 3000 else
+                "TRADIER_REQUEST_CAPPED_BY_CODE" if td < 3000 else
+                "TRADIER_PARTIAL"
+            )
+        else:
+            oldest = newest = None
+            years = 0.0
+            gap = None
+            result = "TRADIER_PROVIDER_ERROR"
+
+        return {
+            "symbol": symbol, "test_type": label,
+            "requested_start": start, "requested_end": end,
+            "requested_days": (_date.fromisoformat(end) - _date.fromisoformat(start)).days,
+            "params_sent": {"symbol": symbol, "interval": "daily", "start": start, "end": end},
+            "endpoint": "/v1/markets/history", "lane": "canonical_history_backfill",
+            "lane_budget_rpm": _BUDGETS.get("canonical_history_backfill", 5),
+            "bars_returned": bc, "oldest_bar_date": oldest, "newest_bar_date": newest,
+            "years_returned": years, "oldest_gap_days": gap,
+            "elapsed_ms": round((_time.monotonic() - t0) * 1000),
+            "result": result,
+        }
+
+    async def _run_bg():
+        _CAPTEST_STATE.update({"running": True, "done": False, "rows": [],
+                                "error": None, "started_at": _time.time()})
+        try:
+            today      = _date.today().isoformat()
+            start_10y  = (_date.today() - _td(days=test_days)).isoformat()
+            start_deep = "2010-01-01"
+            rows: list[dict] = []
+            for sym in symbols_list:
+                r1 = await _probe(sym, start_10y,  today, f"{test_days}d_window",    test_days)
+                rows.append(r1)
+                _CAPTEST_STATE["rows"] = list(rows)
+                await _asyncio.sleep(0.6)
+                r2 = await _probe(sym, start_deep, today, "explicit_2010-01-01", 5840)
+                rows.append(r2)
+                _CAPTEST_STATE["rows"] = list(rows)
+                await _asyncio.sleep(0.6)
+            _CAPTEST_STATE["done"] = True
+        except Exception as exc:
+            _CAPTEST_STATE["error"] = str(exc)
+            _CAPTEST_STATE["done"]  = True
+        finally:
+            _CAPTEST_STATE["running"] = False
+
+    _asyncio.create_task(_run_bg())
+    return JSONResponse({
+        "started":      True,
+        "symbols":      symbols_list,
+        "test_days":    test_days,
+        "total_probes": len(symbols_list) * 2,
+        "poll":         "GET /api/admin/canonical-history/capability-test",
+    })
+
+
+@app.get("/api/admin/canonical-history/capability-test")
+async def admin_canonical_history_capability_test_results(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Poll results of the capability test started by POST."""
+    rows      = _CAPTEST_STATE.get("rows", [])
+    done      = _CAPTEST_STATE.get("done", False)
+    ok_10y    = sum(1 for r in rows if r["result"] in ("TRADIER_10Y_OK", "TRADIER_LIFETIME_OK"))
+    capped    = sum(1 for r in rows if r["result"] == "TRADIER_5Y_ONLY")
+    errors    = sum(1 for r in rows if r["result"] == "TRADIER_PROVIDER_ERROR")
+    max_bars  = max((r["bars_returned"] for r in rows), default=0)
+    max_years = max((r["years_returned"] for r in rows), default=0.0)
+    elapsed   = round((__import__("time").time() - _CAPTEST_STATE["started_at"]), 1) \
+                if _CAPTEST_STATE.get("started_at") else None
+
+    verdict = (
+        "TRADIER_10Y_WORKS_AS_PRIMARY" if done and ok_10y > 0 and max_bars >= 2200
+        else "TRADIER_CAPPED_BELOW_10Y"  if done and capped > 0
+        else "PENDING"                   if not done
+        else "TRADIER_NEEDS_MORE_TESTING"
+    )
+
+    return JSONResponse({
+        "running":              _CAPTEST_STATE.get("running", False),
+        "done":                 done,
+        "elapsed_s":            elapsed,
+        "probes_completed":     len(rows),
+        "audit_note":           (
+            "ROOT CAUSE CONFIRMED: V4.2.5.3 used _LONG_HIST_DAYS=1825 (5Y window). "
+            "~1253 bars returned was correct for 1825 calendar days. "
+            "The false '5Y cap' claim was never tested with a 3650-day window."
+        ),
+        "ok_10y_or_lifetime":   ok_10y,
+        "capped_at_5y":         capped,
+        "errors":               errors,
+        "max_bars_across_all":  max_bars,
+        "max_years_across_all": max_years,
+        "verdict":              verdict,
+        "error":                _CAPTEST_STATE.get("error"),
+        "rows":                 rows,
+    })
+
+
 @app.get("/api/admin/stage2/status")
 async def admin_stage2_status(
     request: Request,

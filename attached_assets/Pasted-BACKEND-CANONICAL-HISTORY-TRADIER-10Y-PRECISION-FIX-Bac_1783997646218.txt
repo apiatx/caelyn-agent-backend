@@ -1,0 +1,452 @@
+BACKEND — CANONICAL HISTORY TRADIER 10Y PRECISION FIX
+
+Backend only.
+
+Do not touch frontend.
+Do not change Confluence scoring.
+Do not rewrite the Tradier limiter.
+Do not touch Options Flow.
+Do not remove the canonical history cache.
+Do not remove safe-mode flags.
+Do not run a full watchlist backfill yet.
+
+Goal:
+
+We need to align canonical history with the correct provider strategy.
+
+Correct architecture:
+
+- Tradier should be the primary candidate for 10Y / lifetime daily historical candles.
+- FMP is secondary/fallback and should not be treated as the required 10Y upgrade path.
+- Canonical history target is 10 years max.
+- If ticker is younger than 10 years, cache all available history back to IPO/listing date.
+- If ticker is older than 10 years, cap at 10 years because older data is not useful for the current Stage/Fib/Entry system.
+
+Important:
+
+The previous V4.2.5.4 report claimed Tradier caps at ~1,253 bars / ~5 years and that FMP is needed for 10Y.
+
+Do not assume that is true.
+
+Tradier documentation says historical daily pricing usually covers the entire lifetime of the company when reasonable start/end dates are supplied.
+
+Therefore, first prove why the current implementation only returned ~5Y.
+
+==================================================
+PART 1 — PRESERVE SAFE MODE
+==================================================
+
+Keep all safety defaults:
+
+CANONICAL_HISTORY_BACKFILL_ENABLED=false
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=false
+CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED=true
+CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false
+
+Preserve:
+
+- no auto full backfill at startup
+- no retained snapshot backfill
+- no frontend/page-triggered backfill
+- no request-time provider calls
+- stale-but-usable cache semantics
+- incremental daily append only
+- weekly health check = metadata only
+- market-hours pause by default
+- all Tradier calls through existing TradierProvider / TRADIER_LIMITER
+- no raw httpx Tradier calls
+
+Do not loosen any safety gate.
+
+==================================================
+PART 2 — AUDIT WHY TRADIER RETURNED ONLY ~5Y
+==================================================
+
+Audit the entire Tradier historical request path.
+
+Inspect:
+
+tradier_provider.py
+canonical_history_backfill.py
+canonical_history_service.py
+tradier_budget.py
+any helper used by TradierProvider.get_history()
+any date parsing / start/end generation code
+
+For these test symbols:
+
+SPY
+AAPL
+MSFT
+NVDA
+TSM
+MARA
+ABCL
+ALGM
+VRT
+CRDO
+WYFI
+SOFI
+HOOD
+HIMS
+
+Return for each:
+
+symbol
+requested_start_date
+requested_end_date
+requested_days
+actual_request_params_sent_to_tradier
+actual_endpoint_called
+scheduler_lane_used
+provider_used
+raw_bar_count_returned
+saved_bar_count
+oldest_bar_date
+newest_bar_date
+years_available
+response_truncated_detected
+provider_error
+rate_limit_error
+pagination_or_limit_field_if_any
+plain_english_explanation
+
+Important:
+
+Log the exact start/end values sent into TradierProvider.get_history().
+
+If the code says it requested 3650 days but the actual request sent 1825 days, fix it.
+
+If TradierProvider.get_history() silently caps the request range, fix it.
+
+If the wrapper uses an internal default like 5Y/1825 days, fix it.
+
+If Tradier truly returns only ~5Y despite correct 10Y start/end, prove it with exact request evidence.
+
+==================================================
+PART 3 — TRADIER 10Y TEST THROUGH SCHEDULER ONLY
+==================================================
+
+Run a small admin-only capability test through the existing scheduler path.
+
+No raw HTTP calls.
+
+For each symbol:
+
+SPY
+AAPL
+MSFT
+NVDA
+TSM
+
+Request daily bars:
+
+start = today - 3650 calendar days
+end = today
+
+Also test one older explicit start if supported:
+
+start = 2010-01-01
+end = today
+
+Return:
+
+symbol
+test_type
+requested_start
+requested_end
+bars_returned
+oldest_bar_date
+newest_bar_date
+years_returned
+result
+
+Allowed result:
+
+TRADIER_10Y_OK
+TRADIER_LIFETIME_OK
+TRADIER_5Y_ONLY
+TRADIER_REQUEST_CAPPED_BY_CODE
+TRADIER_PROVIDER_ERROR
+TRADIER_UNVERIFIED
+
+Do not infer.
+Prove with raw request params and returned oldest date.
+
+==================================================
+PART 4 — FIX PROVIDER STRATEGY
+==================================================
+
+Provider order should be:
+
+1. Fresh canonical cache
+2. Tradier historical daily bars for up to 10Y/lifetime
+3. FMP fallback only if Tradier fails, returns unusable data, or a symbol-specific issue is detected
+4. Existing 400-bar Stage cache as emergency fallback only
+
+Do not use FMP as the default “10Y upgrade” path if Tradier can return 10Y.
+
+If Tradier returns only 5Y for a symbol despite correct 10Y request:
+
+- mark provider result precisely
+- do not call it available_10y
+- do not call it actual_ticker_history_limit unless ticker is genuinely younger than 10Y
+- optionally mark needs_provider_verification or needs_fmp_fallback
+
+==================================================
+PART 5 — FIX STATUS TAXONOMY
+==================================================
+
+Canonical history statuses should represent the truth:
+
+available_10y
+available_lifetime_under_10y
+available_5y_partial_long_history
+available_3y_partial_history
+partial_history
+intermediate_only
+recent_only
+actual_ticker_history_limit
+provider_cap_detected
+provider_failed
+not_yet_backfilled
+cache_corrupt_needs_rebuild
+
+Rules:
+
+available_10y:
+- >= 2200 bars OR clearly covers ~10 calendar years
+
+available_lifetime_under_10y:
+- ticker is younger than 10Y
+- cached bars cover actual public trading history
+- examples may include CRDO, WYFI, SOFI, HOOD depending listing history
+
+available_5y_partial_long_history:
+- ~1100–2199 bars
+- symbol appears older than 5Y
+- this is not complete for 10Y target
+
+provider_cap_detected:
+- correct 10Y request was sent
+- provider returned only capped range
+- symbol is known older than returned range
+
+actual_ticker_history_limit:
+- no older bars exist because ticker is genuinely newer
+
+Do not classify a known older ticker as actual_ticker_history_limit just because Tradier returned 5Y.
+
+==================================================
+PART 6 — PARTIAL HISTORY MUST STILL BE USED
+==================================================
+
+Do not discard usable canonical history.
+
+Rules:
+
+- available_10y: use always
+- available_lifetime_under_10y: use always
+- actual_ticker_history_limit: use always
+- available_5y_partial_long_history: use always
+- available_3y_partial_history: use always
+- partial_history >=504 bars: use always, but mark limitation
+- intermediate_only >=252 bars: use always for recent/intermediate analysis, but mark limitation
+- only return None if cache is corrupt, empty, or below minimum usable bars
+
+Stage/Entry/Fib should use the best available canonical bars, not fall back to 400 when a better partial cache exists.
+
+==================================================
+PART 7 — 10Y BACKFILL POLICY
+==================================================
+
+Full 10Y historical fetch should only happen when:
+
+- admin endpoint explicitly requests mode=initial_full_backfill or manual_rebuild
+- CANONICAL_HISTORY_BACKFILL_ENABLED=true
+- CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=true
+- market is closed unless explicitly forced
+- provider call goes through scheduler
+- no raw httpx bypass
+
+Target:
+
+canonical_history_target_years = 10
+canonical_history_requested_days = 3650
+preferred_bars = approximately 2520 trading bars
+minimum_10y_bars = 2200
+
+After a symbol reaches available_10y or available_lifetime_under_10y:
+- do not full-refetch on normal runs
+- do not full-refetch because TTL is stale
+- mark it complete
+
+==================================================
+PART 8 — RATE LIMIT / OPTIONS SAFETY
+==================================================
+
+Keep canonical history backfill low-priority.
+
+During market hours:
+- lane paused unless CANONICAL_HISTORY_ALLOW_MARKET_HOURS=true
+- options flow always wins
+
+Off-hours:
+- 10Y backfill can run manually
+- recommend 5 RPM default
+- never exceed global limiter
+- expose rate status
+
+Validation must show:
+
+canonical_history_backfill_budget_used
+canonical_history_backfill_budget_cap
+canonical_history_backfill_saturated
+tradier_global_available_tokens
+options_flow_queue_depth
+history_lane_paused_reason
+request_time_provider_calls
+
+==================================================
+PART 9 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+SPY
+AAPL
+MSFT
+NVDA
+TSM
+MARA
+ABCL
+ALGM
+VRT
+CRDO
+WYFI
+SOFI
+HOOD
+HIMS
+SMCI
+ENTG
+ONTO
+OUST
+CGNX
+
+For each return:
+
+symbol
+requested_start_date
+requested_end_date
+bar_count
+oldest_date
+newest_date
+years_available
+provider
+history_status
+canonical_history_quality
+actual_ticker_history_limit
+actual_history_start_date
+history_limit_reason
+provider_cap_detected
+needs_fmp_fallback
+stage_history_source
+fib_history_source
+cache_usable_for_stage
+cache_usable_for_fib
+would_use_400bar_fallback
+plain_english_explanation
+
+Expected:
+
+SPY / AAPL / MSFT / NVDA / TSM:
+Should get true 10Y from Tradier if Tradier works as documented.
+If not, status should be provider_cap_detected, not actual_ticker_history_limit.
+
+ABCL / ALGM / VRT:
+Should request 10Y from Tradier.
+If ticker has less than 10Y public history, classify available_lifetime_under_10y.
+If ticker has more than 10Y history and Tradier only returns 5Y, classify provider_cap_detected or available_5y_partial_long_history.
+
+CRDO / WYFI / SOFI / HOOD:
+If public history is genuinely under 10Y, classify available_lifetime_under_10y or actual_ticker_history_limit.
+
+No symbol with 700+ canonical bars should fall back to 400-bar unless cache is corrupt.
+
+==================================================
+PART 10 — FINAL REPORT
+==================================================
+
+Return:
+
+CANONICAL HISTORY TRADIER 10Y PRECISION REPORT
+
+FILES CHANGED:
+[list]
+
+WHAT WAS ALREADY GOOD:
+[safe-mode summary]
+
+WHAT WAS WRONG:
+[explain any false 5Y cap assumption, bad fallback logic, status issues]
+
+TRADIER 10Y CAPABILITY TEST:
+[table]
+
+PROVIDER STRATEGY AFTER FIX:
+[summary]
+
+STATUS TAXONOMY AFTER FIX:
+[summary]
+
+PARTIAL HISTORY USAGE:
+[summary]
+
+RATE LIMIT / OPTIONS SAFETY:
+[summary]
+
+VALIDATION:
+[table]
+
+PROVIDER CALLS USED:
+[count]
+
+REQUEST_TIME_PROVIDER_CALLS:
+[0 expected]
+
+End exactly:
+
+CANONICAL HISTORY TRADIER 10Y VERDICT
+
+SAFE_MODE_PRESERVED:
+[YES/NO]
+
+TRADIER_10Y_TESTED_WITH_EXACT_START_END:
+[YES/NO]
+
+TRADIER_10Y_WORKS_AS_PRIMARY:
+[YES/NO/PARTIAL]
+
+FALSE_5Y_CAP_ASSUMPTION_FIXED:
+[YES/NO]
+
+FMP_RETAINED_ONLY_AS_FALLBACK:
+[YES/NO]
+
+TRADIER_5Y_NOT_MISLABELED_AS_10Y:
+[YES/NO]
+
+TICKERS_UNDER_10Y_CLASSIFIED_AS_LIFETIME_UNDER_10Y:
+[YES/NO]
+
+PARTIAL_CANONICAL_HISTORY_USED_INSTEAD_OF_400BAR_FALLBACK:
+[YES/NO]
+
+NO_REQUEST_TIME_PROVIDER_CALLS:
+[YES/NO]
+
+OPTIONS_FLOW_PROTECTED:
+[YES/NO]
+
+READY_FOR_ONE_TIME_OFFHOURS_10Y_TRADIER_BACKFILL:
+[YES/NO]
