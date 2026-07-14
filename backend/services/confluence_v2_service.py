@@ -2408,6 +2408,75 @@ def build_confluence_snapshot(
         r["moving_average_entry_detected"]   = bool(_p6_ma_entry)
         r["moving_average_entry_type"]       = _p6_ma_entry
 
+        # ── NORMALIZATION PASS — V4.2 contract normalization ─────────────────
+        # Injects the clean confluence_v42 frontend object and fixes boolean
+        # inconsistencies between caelyn_confluence_bucket and the p6 tier.
+        # No scoring math changes. All inputs from already-assembled row.
+        try:
+            from services.confluence_v42_normalizer import (
+                build_confluence_v42_object,
+                build_invalidation_level,
+                build_risk_flags,
+                build_target_zone,
+                build_why_now,
+                build_why_wait,
+                derive_boolean_flags,
+            )
+
+            # Step 1 — Fix boolean flags (V4.2 bucket is canonical source of truth)
+            _fixed_bools = derive_boolean_flags(r)
+            r["is_actionable_setup"]  = _fixed_bools["is_actionable_setup"]
+            r["is_near_actionable"]   = _fixed_bools["is_near_actionable"]
+            r["is_watch_for_reset"]   = _fixed_bools["is_watch_for_reset"]
+            r["is_risk_conflict"]     = _fixed_bools["is_risk_conflict"]
+            r["is_investment_quality"] = _fixed_bools["is_investment_quality"]
+
+            # Step 2 — Flat convenience fields (max/display mode)
+            r["caelyn_confluence_core_max"]   = 100
+            r["caelyn_confluence_bonus_max"]  = 25
+            r["caelyn_confluence_total_max"]  = 125
+            r["caelyn_confluence_display_mode"] = "CORE_100_PLUS_BONUS_25"
+
+            # Step 3 — Promote invalidation_level and target_zone to top-level
+            _inv_level   = build_invalidation_level(r)
+            _target_zone = build_target_zone(r)
+            r["invalidation_level"] = _inv_level
+            r["target_zone"]        = _target_zone
+
+            # Step 4 — First-class risk flags
+            r["risk_flags"] = build_risk_flags(r)
+
+            # Step 5 — Deterministic why_now / why_wait
+            r["why_now"]  = build_why_now(r)
+            r["why_wait"] = build_why_wait(r)
+
+            # Step 6 — Deprecated field list (informational)
+            r["deprecated_confluence_fields"] = [
+                "caelyn_confluence_v4_*",
+                "trade_alignment_score",
+                "legacy_trade_alignment_score",
+                "legacy_trade_alignment_archetype",
+                "legacy_actionability_state",
+                "social_bonus_score",
+                "base_trade_alignment_score",
+                "confluence_verdict",
+                "confluence_grade",
+                "signal_breakdown",
+                "prediction_market_bonus_points",
+                "theme_policy_bonus_points",
+            ]
+
+            # Step 7 — Normalized confluence_v42 object (clean frontend contract)
+            r["confluence_v42"] = build_confluence_v42_object(r)
+
+        except Exception as _norm_exc:
+            import logging as _logging
+            _logging.getLogger("confluence_v42_normalizer").warning(
+                "confluence_v42 normalization failed for %s: %s",
+                r.get("symbol", "?"), _norm_exc,
+            )
+            r["confluence_v42"] = None
+
         results.append(r)
 
         # Tally social bonus distribution (LEGACY bonus, unchanged behavior).

@@ -1,0 +1,727 @@
+BACKEND ONLY — CONFLUENCE V4.2 CONTRACT NORMALIZATION PASS
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change Confluence scoring math.
+Do not recalibrate actionability.
+Do not change canonical history.
+Do not run the 10Y backfill.
+Do not touch provider logic.
+Do not touch Options Flow.
+Do not run provider-calling validations.
+Do not remove existing legacy fields yet.
+Do not break existing endpoints.
+
+Goal:
+
+The backend Confluence V4.2 engine exists and is mostly working, but the API response is noisy and internally contradictory.
+
+The audit found:
+
+- 278 keys per row.
+- V4.2 canonical fields are mixed with V4.2 debug copies, V4.0 debug copies, V2 Trade Alignment fields, legacy verdict/grade fields, and disabled prediction/theme-policy fields.
+- is_watch_for_reset is unreliable and contradicts caelyn_confluence_bucket on symbols like ABCL.
+- Score display guidance is inconsistent: backend exposes total score out of 125, but product UI should emphasize Core /100 + Bonus +X /25, not make /125 the main denominator.
+- core_score_max, bonus_score_max, and total_score_max are not cleanly exposed.
+- invalidation_level and target fields are nested/inconsistent.
+- risk_flags are not returned as a first-class field.
+- why_now / why_wait are not implemented.
+- fib/wave fields exist but are currently null pending 10Y backfill.
+- whale/insider is not wired and should be marked as not_wired.
+- frontend needs one clean V4.2 object so it does not accidentally consume legacy Trade Alignment fields.
+
+This pass should normalize the backend contract without changing score math.
+
+==================================================
+PART 1 — PRESERVE CANONICAL ENDPOINTS
+==================================================
+
+Keep these endpoints working:
+
+GET /api/alpha/confluence
+GET /api/alpha/confluence/{symbol}
+GET /api/watchlist/{watchlist_id}/alignment
+
+Do not remove existing flat fields yet.
+
+Add a clean frontend-facing object to each canonical row:
+
+confluence_v42
+
+Existing legacy/debug fields can remain for backward compatibility, but the new object should be the preferred frontend contract.
+
+Do not make frontend changes in this repo.
+
+==================================================
+PART 2 — ADD NORMALIZED confluence_v42 OBJECT
+==================================================
+
+For every row returned by canonical Confluence endpoints, add:
+
+confluence_v42: {
+  score: {
+    total: number,
+    core: number,
+    bonus: number,
+    core_max: 100,
+    bonus_max: 25,
+    total_max: 125,
+    display_mode: "CORE_100_PLUS_BONUS_25",
+    percent_of_total_max: number
+  },
+  action: {
+    label: string,
+    bucket: string,
+    label_display: string,
+    invalidation_level: number | null,
+    target_zone: {
+      target_1: number | null,
+      target_2: number | null,
+      breakout_trigger: number | null,
+      risk_reward_ratio: number | null
+    } | null,
+    why_now: string[],
+    why_wait: string[]
+  },
+  components: {
+    theme: {
+      raw_score: number | null,
+      points: number | null,
+      max_points: 15,
+      status: string | null,
+      reason_codes: string[]
+    },
+    stage: {
+      raw_score: number | null,
+      points: number | null,
+      max_points: 15,
+      status: string | null,
+      reason_codes: string[]
+    },
+    options: {
+      raw_score: number | null,
+      points: number | null,
+      max_points: 20,
+      status: string | null,
+      available: boolean,
+      reason_codes: string[]
+    },
+    technical_setup: {
+      raw_score: number | null,
+      points: number | null,
+      max_points: 8,
+      label: string | null,
+      status: string | null,
+      reason_codes: string[]
+    },
+    entry_exit: {
+      raw_score: number | null,
+      points: number | null,
+      max_points: 12,
+      status: string | null,
+      reason_codes: string[]
+    },
+    catalyst: {
+      raw_score: number | null,
+      points: number | null,
+      max_points: 15,
+      status: string | null,
+      reason_codes: string[]
+    },
+    investment: {
+      raw_score: number | null,
+      points: number | null,
+      max_points: 15,
+      status: string | null,
+      reason_codes: string[]
+    }
+  },
+  bonuses: {
+    social: {
+      points: number,
+      max_points: 15,
+      sections_hit: number,
+      confluence_hit: boolean,
+      acceleration_hit: boolean,
+      fresh_hit: boolean,
+      status: string
+    },
+    whale_insider: {
+      points: number,
+      max_points: 5,
+      status: "not_wired" | "available"
+    },
+    bottleneck: {
+      points: number,
+      max_points: 5,
+      anchor_count: number,
+      status: string
+    }
+  },
+  technical: {
+    stage_label: string | null,
+    stage_score: number | null,
+    technical_setup_label: string | null,
+    entry_state: string | null,
+    entry_score: number | null,
+    extension_state: string | null,
+    extension_quality: string | null,
+    fib_context: string | null,
+    fib_timeframe: string | null,
+    nearest_fib_label: string | null,
+    nearest_fib_level: number | null,
+    distance_to_fib_pct: number | null,
+    fib_confidence: number | null,
+    fib_computed: boolean,
+    fib_years_available: number | null,
+    wave_structure: string | null,
+    wave_score: number | null,
+    fib_wave_status: "pending_10y_backfill" | "available" | "unavailable"
+  },
+  risk: {
+    risk_flags: string[],
+    major_lower_low_confirmed: boolean,
+    lower_low_confirmed: boolean,
+    chase_extension: boolean,
+    constructive_extension: boolean,
+    critical_break_level: number | null,
+    active_support_status: string | null,
+    active_support_type: string | null,
+    distance_to_active_support_pct: number | null
+  },
+  booleans: {
+    is_actionable_setup: boolean,
+    is_near_actionable: boolean,
+    is_watch_for_reset: boolean,
+    is_risk_conflict: boolean,
+    is_investment_quality: boolean
+  },
+  metadata: {
+    schema_version: "v4.2",
+    confidence_score: number | null,
+    reason_codes: string[],
+    deprecated_fields_present: boolean
+  }
+}
+
+Important:
+
+This new object should be a clean frontend contract.
+Do not require frontend to parse 278 flat keys.
+Do not require frontend to inspect legacy Trade Alignment fields.
+
+==================================================
+PART 3 — SCORE FIELD NORMALIZATION
+==================================================
+
+Use existing score math.
+
+Map:
+
+score.total = caelyn_confluence_score
+score.core = caelyn_confluence_core_score
+score.bonus = caelyn_confluence_bonus_score
+score.core_max = 100
+score.bonus_max = 25
+score.total_max = 125
+score.display_mode = "CORE_100_PLUS_BONUS_25"
+score.percent_of_total_max = caelyn_confluence_score / 125 * 100
+
+Also add flat aliases for frontend convenience:
+
+caelyn_confluence_core_max = 100
+caelyn_confluence_bonus_max = 25
+caelyn_confluence_total_max = 125
+caelyn_confluence_display_mode = "CORE_100_PLUS_BONUS_25"
+
+Do not tell frontend to make /125 the main visual denominator.
+The main display should be total score with Core /100 and Bonus +X /25 shown separately.
+
+==================================================
+PART 4 — FIX ACTIONABILITY BOOLEAN CONTRADICTIONS
+==================================================
+
+Fix the backend boolean bug.
+
+Current audit found:
+
+ABCL:
+caelyn_confluence_bucket = WATCH_FOR_RESET
+caelyn_confluence_v42_actionability = WATCH_FOR_RESET
+is_watch_for_reset = false
+is_near_actionable = true
+
+That is invalid.
+
+Required canonical derivation:
+
+bucket = caelyn_confluence_bucket
+actionability = caelyn_confluence_v42_actionability
+
+is_watch_for_reset = bucket == "WATCH_FOR_RESET" OR actionability == "WATCH_FOR_RESET"
+is_near_actionable = bucket == "NEAR_ACTIONABLE" OR actionability == "NEAR_ACTIONABLE"
+is_actionable_setup = bucket == "ACTIONABLE" OR actionability == "READY"
+is_risk_conflict = bucket == "RISK_CONFLICT" OR existing risk conflict logic
+is_investment_quality = bucket == "INVESTMENT_QUALITY" OR existing investment quality logic
+
+Make sure these booleans are mutually sensible.
+
+Do not let one row say WATCH_FOR_RESET and near_actionable at the same time unless there is a clearly documented reason.
+
+Return before/after validation for ABCL.
+
+==================================================
+PART 5 — ACTION LABEL NORMALIZATION
+==================================================
+
+Use backend action field:
+
+caelyn_confluence_v42_actionability
+
+Map to display labels:
+
+READY → "Ready to Enter"
+NEAR_ACTIONABLE → "Near Entry"
+WAIT_FOR_BREAKOUT → "Wait for Breakout"
+WAIT_FOR_RETEST → "Wait for Retest"
+WATCH_FOR_RESET → "Watch for Reset"
+WATCH → "Watch"
+AVOID → "Avoid"
+INSUFFICIENT_DATA → "Insufficient Data"
+
+Add to normalized object:
+
+confluence_v42.action.label
+confluence_v42.action.label_display
+confluence_v42.action.bucket
+
+Do not use:
+
+actionability_state
+legacy_actionability_state
+confluence_verdict
+confluence_grade
+
+==================================================
+PART 6 — COMPONENT NORMALIZATION
+==================================================
+
+For each component, expose both:
+
+raw_score: 0–100 style score
+points: actual points contributed to V4.2 score
+max_points: component max
+
+Map:
+
+Theme:
+raw_score = theme_alignment_score
+points = theme_alignment_points
+max_points = 15
+
+Stage:
+raw_score = stage_quality_score or stage_alignment_score
+points = stage_quality_points
+max_points = 15
+
+Options:
+raw_score = options_alignment_score
+points = options_alignment_points
+max_points = 20
+available = options_alignment_score is not null or options_status indicates available
+status = options_status
+
+Technical Setup:
+raw_score = technical_setup_raw_score
+points = technical_setup_points
+max_points = 8
+label = technical_setup_label
+
+Entry / Exit:
+raw_score = entry_exit_raw_score
+points = entry_exit_points
+max_points = 12
+status = entry_exit_status
+
+Catalyst:
+raw_score = catalyst_alignment_score
+points = catalyst_alignment_points
+max_points = 15
+status = catalyst_status
+
+Investment:
+raw_score = investment_alignment_score
+points = investment_alignment_points
+max_points = 15
+status = investment_quality_label or investment_quality_rank_label
+
+Do not make frontend guess raw score vs contributed points.
+
+==================================================
+PART 7 — RISK FLAGS
+==================================================
+
+Add first-class risk flags.
+
+Create:
+
+confluence_v42.risk.risk_flags
+risk_flags
+
+Use deterministic logic from existing fields and reason codes.
+
+Examples:
+
+EXTREME_EXTENSION if extension_state == "EXTREME_EXTENSION"
+CHASE_EXTENSION if chase_extension == true
+MAJOR_LOWER_LOW_CONFIRMED if major_lower_low_confirmed == true
+LOWER_LOW_CONFIRMED if lower_low_confirmed == true
+RISK_CONFLICT if is_risk_conflict == true or bucket == "RISK_CONFLICT"
+NO_CLEAR_ENTRY if entry_state / entry_exit_status indicates no clear entry
+OPTIONS_UNAVAILABLE if options_alignment_score is null and options required/unavailable
+FIB_PENDING if fib fields are null pre-10Y backfill
+CATALYST_UNAVAILABLE if catalyst_status indicates unavailable
+
+Also include any existing reason_codes with RISK_ prefix.
+
+Deduplicate flags.
+Keep them stable strings.
+
+==================================================
+PART 8 — INVALIDATION + TARGET ZONE
+==================================================
+
+Promote invalidation and targets.
+
+Current state:
+critical_break_level exists top-level.
+invalidation_level exists nested in caelyn_confluence_v42_components.entry_exit.
+target_1 / target_2 exist nested.
+No target_zone object exists.
+
+Add top-level fields:
+
+invalidation_level
+target_zone
+
+Mapping:
+
+invalidation_level =
+  caelyn_confluence_v42_components.entry_exit.invalidation_level
+  or critical_break_level
+  or null
+
+target_zone = {
+  target_1,
+  target_2,
+  breakout_trigger,
+  risk_reward_ratio
+}
+
+If all target fields are null, target_zone can be null.
+
+Also add these into:
+
+confluence_v42.action.invalidation_level
+confluence_v42.action.target_zone
+
+==================================================
+PART 9 — FIB / WAVE PENDING STATE
+==================================================
+
+Do not fake Fib/Wave.
+
+Fib and wave fields are expected to be null until 10Y canonical history backfill completes and snapshot is rebuilt.
+
+Set:
+
+confluence_v42.technical.fib_wave_status =
+  "available" if fib_computed == true or primary_fib_context / wave_structure_label present
+  "pending_10y_backfill" if fields are null and canonical history coverage is not yet complete
+  "unavailable" only if explicitly unavailable
+
+Do not let frontend interpret null Fib/Wave as bearish.
+
+==================================================
+PART 10 — WHY_NOW / WHY_WAIT
+==================================================
+
+Implement lightweight deterministic arrays if safe.
+
+Do not use LLM.
+
+Create:
+
+why_now: string[]
+why_wait: string[]
+
+Generate from existing fields:
+
+why_now examples:
+- "Theme alignment is positive"
+- "Stage quality is strong"
+- "Options flow is supportive"
+- "Technical setup is constructive"
+- "Catalyst support is present"
+- "Investment quality is strong"
+- "Social momentum is active"
+- "Bottleneck exposure adds bonus support"
+
+why_wait examples:
+- "Entry is not clean yet"
+- "Waiting for retest"
+- "Extension risk is elevated"
+- "Fib/Wave context pending 10Y history"
+- "Options data unavailable"
+- "Risk conflict detected"
+- "Major lower low risk present"
+- "No clear confluence yet"
+
+Rules:
+- Keep short.
+- Deterministic.
+- Based on component points/statuses/reason codes/actionability.
+- Return empty array if no reason found.
+- Do not overstate confidence.
+
+Add:
+
+confluence_v42.action.why_now
+confluence_v42.action.why_wait
+why_now
+why_wait
+
+If this becomes too much for this pass, add empty arrays and list deterministic why_now/why_wait as P2 follow-up. But prefer implementing simple deterministic arrays now.
+
+==================================================
+PART 11 — DEPRECATED FIELD MARKING
+==================================================
+
+Do not remove legacy fields yet.
+
+Add metadata:
+
+confluence_v42.metadata.deprecated_fields_present = true
+
+Optionally add:
+
+deprecated_confluence_fields: [
+  "caelyn_confluence_v4_*",
+  "trade_alignment_score",
+  "legacy_trade_alignment_score",
+  "legacy_trade_alignment_archetype",
+  "legacy_actionability_state",
+  "social_bonus_score",
+  "base_trade_alignment_score",
+  "confluence_verdict",
+  "confluence_grade",
+  "signal_breakdown",
+  "prediction_market_bonus_points",
+  "theme_policy_bonus_points"
+]
+
+Do not let these fields feed normalized confluence_v42.
+
+==================================================
+PART 12 — ENDPOINT / API KEY CLARIFICATION
+==================================================
+
+Audit and report, do not change unless trivial:
+
+- Does GET /api/alpha/confluence require X-API-Key?
+- Is this endpoint intended to be called directly from browser frontend?
+- Is there a backend proxy route intended for browser frontend?
+- Should Watchlist page use /api/watchlist/{watchlist_id}/alignment instead?
+- Which endpoint should the frontend repo consume for each page?
+
+Return exact answer.
+
+Important:
+
+Do not recommend exposing X-API-Key in browser.
+
+==================================================
+PART 13 — RETAINED SNAPSHOT LKG RECOMMENDATION
+==================================================
+
+Audit only.
+
+Current report says retained snapshot is in-memory only and cold build is ~129s.
+
+Return recommendation:
+
+- Should we add confluence_retained_lkg.json.gz later?
+- What exact fields should be persisted?
+- How would startup load work?
+- What would stale-while-revalidate do?
+
+Do not implement unless it is trivial and zero-risk.
+
+==================================================
+PART 14 — VALIDATION
+==================================================
+
+Use cached/retained data only.
+Do not call providers.
+
+Validate these symbols:
+
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+OUST
+SOFI
+HOOD
+HIMS
+NVDA
+MSFT
+TSM
+
+For each return:
+
+symbol
+row_found
+confluence_v42_present
+score_total
+score_core
+score_bonus
+core_max
+bonus_max
+total_max
+action_label
+action_label_display
+bucket
+is_watch_for_reset
+is_near_actionable
+boolean_consistent
+components_present
+risk_flags
+invalidation_level
+target_zone_present
+fib_wave_status
+why_now_count
+why_wait_count
+deprecated_fields_present
+plain_english_explanation
+
+Special expected checks:
+
+ABCL:
+Before fix it had bucket=WATCH_FOR_RESET but is_watch_for_reset=false and is_near_actionable=true.
+After fix:
+is_watch_for_reset should be true.
+is_near_actionable should be false unless justified by separate explicit condition.
+
+MSFT:
+If not in retained snapshot, report not_found and explain it is not currently in watchlist universe.
+
+Fib/Wave:
+Should show pending_10y_backfill, not bearish/unavailable.
+
+==================================================
+PART 15 — FINAL REPORT
+==================================================
+
+Return:
+
+BACKEND CONFLUENCE V4.2 NORMALIZATION REPORT
+
+FILES CHANGED:
+[list]
+
+WHAT WAS FIXED:
+[summary]
+
+NORMALIZED confluence_v42 OBJECT:
+[example object for one symbol]
+
+SCORE DISPLAY CONTRACT:
+[summary]
+
+ACTION / BOOLEAN CONSISTENCY:
+[summary]
+
+COMPONENT NORMALIZATION:
+[summary]
+
+RISK FLAGS:
+[summary]
+
+INVALIDATION / TARGET ZONE:
+[summary]
+
+WHY_NOW / WHY_WAIT:
+[summary]
+
+FIB / WAVE PENDING STATE:
+[summary]
+
+DEPRECATED FIELD HANDLING:
+[summary]
+
+ENDPOINT / API KEY CLARIFICATION:
+[summary]
+
+RETAINED SNAPSHOT LKG RECOMMENDATION:
+[summary]
+
+VALIDATION:
+[table]
+
+FRONTEND HANDOFF:
+[clear bullet list of what frontend should use/ignore]
+
+BACKEND FOLLOW-UPS:
+[list]
+
+End exactly:
+
+BACKEND CONFLUENCE NORMALIZATION VERDICT
+
+SCORING_MATH_UNCHANGED:
+[YES/NO]
+
+NORMALIZED_CONFLUENCE_V42_OBJECT_ADDED:
+[YES/NO]
+
+CORE_100_PLUS_BONUS_25_CONTRACT_EXPOSED:
+[YES/NO]
+
+IS_WATCH_FOR_RESET_FIXED:
+[YES/NO]
+
+ACTION_LABELS_NORMALIZED:
+[YES/NO]
+
+COMPONENTS_EXPOSE_RAW_AND_POINTS:
+[YES/NO]
+
+RISK_FLAGS_ADDED:
+[YES/NO]
+
+INVALIDATION_LEVEL_PROMOTED:
+[YES/NO]
+
+TARGET_ZONE_ADDED:
+[YES/NO]
+
+WHY_NOW_WHY_WAIT_ADDED:
+[YES/NO/PARTIAL]
+
+FIB_WAVE_PENDING_STATE_ADDED:
+[YES/NO]
+
+LEGACY_FIELDS_PRESERVED_BUT_EXCLUDED_FROM_NORMALIZED_OBJECT:
+[YES/NO]
+
+NO_PROVIDER_CALLS_USED:
+[YES/NO]
+
+READY_FOR_FRONTEND_CONTRACT_HANDOFF:
+[YES/NO]
+
+BACKEND_SCORE_CALIBRATION_SHOULD_WAIT_FOR_10Y_BACKFILL:
+YES
