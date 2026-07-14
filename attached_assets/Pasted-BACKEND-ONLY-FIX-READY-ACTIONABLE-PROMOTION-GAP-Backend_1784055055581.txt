@@ -1,0 +1,283 @@
+BACKEND ONLY — FIX READY / ACTIONABLE PROMOTION GAP
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math.
+Do not change provider logic.
+Do not run provider calls.
+Do not run 10Y backfill.
+Do not recalibrate thresholds yet.
+Do not broaden frontend filters.
+Use cached/retained data only.
+
+Goal:
+
+The Ready / Actionable tab is empty because P6 ACTIONABLE_NOW decisions are not being promoted into canonical V4.2 fields.
+
+Audit showed:
+
+- P6 ACTIONABLE_NOW fires for 61 rows.
+- But caelyn_confluence_v42_actionability remains NEAR_ACTIONABLE / WATCH / etc.
+- caelyn_confluence_bucket remains NEAR_ACTIONABLE / other buckets.
+- The confluence_v42 normalizer derives booleans from V4.2 bucket/actionability.
+- Therefore is_actionable_setup becomes false for every row.
+- Frontend correctly reads confluence_v42.booleans.is_actionable_setup, so the Ready tab is empty.
+
+This is a backend promotion gap.
+
+==================================================
+PART 1 — LOCATE P6 DECISION BLOCK
+==================================================
+
+Open:
+
+backend/services/confluence_v2_service.py
+
+Find the P6 decision block in build_confluence_snapshot(), around the area where:
+
+_p6_tier
+actionable_tier
+is_actionable_setup
+NEAR_ACTIONABLE
+ACTIONABLE_NOW
+AGGRESSIVE_ACTIONABLE
+
+are assigned.
+
+Find the exact location after the P6 block and before the normalization pass / before results.append(r).
+
+==================================================
+PART 2 — ADD P6 → V4.2 PROMOTION
+==================================================
+
+Add a targeted promotion step after P6 tier is final and before confluence_v42 normalization runs.
+
+Required behavior:
+
+if _p6_tier == "ACTIONABLE_NOW":
+    r["caelyn_confluence_v42_actionability"] = "READY"
+    r["caelyn_confluence_bucket"] = "ACTIONABLE"
+    r["caelyn_confluence_v42_bucket"] = "ACTIONABLE" if this field exists / is used
+    r["is_actionable_setup"] = True
+    r["is_near_actionable"] = False
+    r["is_watch_for_reset"] = False
+
+elif _p6_tier == "AGGRESSIVE_ACTIONABLE":
+    Do NOT promote to READY yet.
+    Keep as NEAR_ACTIONABLE unless existing logic already does otherwise.
+    Add/keep a diagnostic field such as:
+    r["p6_actionable_tier"] = "AGGRESSIVE_ACTIONABLE"
+
+elif _p6_tier == "NEAR_ACTIONABLE":
+    Keep NEAR_ACTIONABLE.
+
+Important:
+
+Do not promote WATCH_FOR_RESET names to READY.
+Do not promote RISK_CONFLICT names to READY.
+Do not promote EXTREME_EXTENSION / CHASE_BAD names to READY unless P6 already explicitly allowed them through constructive-reset logic.
+
+The V4.2 bucket/actionability must be the canonical frontend source.
+
+==================================================
+PART 3 — NORMALIZER ORDER CHECK
+==================================================
+
+Confirm order:
+
+1. V4.2 base score computed.
+2. P6 actionability decision computed.
+3. P6 promotion updates caelyn_confluence_v42_actionability and caelyn_confluence_bucket.
+4. confluence_v42 normalizer runs.
+5. derive_boolean_flags reads the promoted canonical bucket/actionability.
+6. results.append(r).
+
+Return exact line/order evidence.
+
+==================================================
+PART 4 — VALIDATE DISTRIBUTION
+==================================================
+
+Rebuild retained snapshot.
+
+Return before/after counts:
+
+Before:
+READY count
+ACTIONABLE bucket count
+is_actionable_setup true count
+NEAR_ACTIONABLE count
+WATCH_FOR_RESET count
+
+After:
+READY count
+ACTIONABLE bucket count
+is_actionable_setup true count
+NEAR_ACTIONABLE count
+WATCH_FOR_RESET count
+
+Expected:
+
+READY count should be close to prior P6 ACTIONABLE_NOW count: about 61.
+ACTIONABLE bucket count should match.
+is_actionable_setup true count should match.
+Near Actionable should decrease accordingly.
+
+==================================================
+PART 5 — FALSE POSITIVE SAFETY CHECK
+==================================================
+
+Validate that Ready rows do not include obvious unsafe names.
+
+For all READY rows, return count of rows with:
+
+EXTREME_EXTENSION
+CHASE_EXTENSION
+RISK_CONFLICT
+MAJOR_LOWER_LOW_CONFIRMED
+NO_CLEAR_ENTRY
+WATCH_FOR_RESET bucket
+missing invalidation_level
+entry_exit_points < 4.5
+technical_setup_points < 3.0
+stage_quality_points < 9.0
+
+Return top 25 READY rows:
+
+symbol
+score_total
+score_core
+score_bonus
+action_label
+bucket
+technical_setup_label
+entry_state
+extension_state
+extension_quality
+entry_exit_points
+technical_setup_points
+stage_quality_points
+risk_flags
+data_status_flags
+invalidation_level
+why_now
+why_wait
+
+==================================================
+PART 6 — SPECIFIC SYMBOL CHECKS
+==================================================
+
+Validate these:
+
+VRT
+ETN
+AMKR
+KLIC
+ANET
+ALGM
+ABCL
+CRDO
+MARA
+NVDA
+TSM
+
+For each:
+
+symbol
+p6_tier
+action_label_before
+bucket_before
+action_label_after
+bucket_after
+is_actionable_setup_after
+is_near_actionable_after
+is_watch_for_reset_after
+risk_flags
+data_status_flags
+plain_english_explanation
+
+Expected:
+
+Symbols with P6 ACTIONABLE_NOW should become READY / ACTIONABLE.
+ABCL should remain WATCH_FOR_RESET if P6 does not qualify it.
+CRDO should not become READY if blocked by EXTREME_EXTENSION or investment-quality/watch logic.
+MARA should not become READY unless it truly qualifies.
+NVDA should remain investment-quality/watch if no clean entry.
+
+==================================================
+PART 7 — FRONTEND IMPACT NOTE
+==================================================
+
+Return what frontend should see after this backend fix:
+
+- Ready / Actionability tab should no longer be empty.
+- Frontend should continue using confluence_v42.booleans.is_actionable_setup.
+- Frontend should not broaden filter to NEAR_ACTIONABLE.
+- Tab can be labeled "Ready Now" or "Actionable", but the data source is now correct.
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+READY ACTIONABILITY PROMOTION FIX REPORT
+
+FILES CHANGED:
+[list]
+
+PROMOTION LOGIC:
+[summary]
+
+ORDER OF OPERATIONS:
+[summary]
+
+DISTRIBUTION BEFORE / AFTER:
+[table]
+
+READY ROW SAFETY CHECK:
+[table]
+
+SPECIFIC SYMBOL VALIDATION:
+[table]
+
+FRONTEND IMPACT:
+[summary]
+
+End exactly:
+
+READY PROMOTION FIX VERDICT
+
+SCORING_MATH_UNCHANGED:
+[YES/NO]
+
+P6_ACTIONABLE_NOW_PROMOTED_TO_READY:
+[YES/NO]
+
+CANONICAL_BUCKET_PROMOTED_TO_ACTIONABLE:
+[YES/NO]
+
+CONFLUENCE_V42_NORMALIZER_READS_PROMOTED_FIELDS:
+[YES/NO]
+
+READY_COUNT_AFTER_FIX:
+[number]
+
+IS_ACTIONABLE_SETUP_COUNT_AFTER_FIX:
+[number]
+
+WATCH_FOR_RESET_NOT_PROMOTED:
+[YES/NO]
+
+RISK_CONFLICT_NOT_PROMOTED:
+[YES/NO]
+
+FRONTEND_SHOULD_NOT_FAKE_READY:
+YES
+
+READY_TAB_SHOULD_NOW_POPULATE:
+[YES/NO]
+
+WAIT_FOR_10Y_BACKFILL_BEFORE_FINAL_CALIBRATION:
+YES

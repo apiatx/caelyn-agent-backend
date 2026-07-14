@@ -2408,6 +2408,23 @@ def build_confluence_snapshot(
         r["moving_average_entry_detected"]   = bool(_p6_ma_entry)
         r["moving_average_entry_type"]       = _p6_ma_entry
 
+        # ── P6 → V4.2 PROMOTION ──────────────────────────────────────────────
+        # P6 computes the definitive actionability tier from entry/tech/stage signals.
+        # Without this block, ACTIONABLE_NOW is written only to r["actionable_tier"]
+        # and is silently discarded — caelyn_confluence_bucket stays at whatever the
+        # upstream V4.2 engine set (NEAR_ACTIONABLE, WATCH, etc.), and the normalizer
+        # derives is_actionable_setup = False for every row.
+        # This block closes that gap: ACTIONABLE_NOW → READY / ACTIONABLE canonical fields.
+        r["p6_actionable_tier"] = _p6_tier  # diagnostic — always written for debugging
+        if _p6_tier == "ACTIONABLE_NOW":
+            r["caelyn_confluence_v42_actionability"] = "READY"
+            r["caelyn_confluence_bucket"]            = "ACTIONABLE"
+            r["is_actionable_setup"]                 = True
+            r["is_near_actionable"]                  = False
+            r["is_watch_for_reset"]                  = False
+        # AGGRESSIVE_ACTIONABLE: good setup, not yet at clean entry — keep NEAR_ACTIONABLE.
+        # NEAR_ACTIONABLE / WATCH_FOR_RESET / RISK_CONFLICT: leave canonical fields as-is.
+
         # ── NORMALIZATION PASS — V4.2 contract normalization ─────────────────
         # Injects the clean confluence_v42 frontend object and fixes boolean
         # inconsistencies between caelyn_confluence_bucket and the p6 tier.
