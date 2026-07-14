@@ -4,7 +4,7 @@
     {
       "name": "Insurance",
       "score": 79.5,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Top-percentile RS (80/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +1.0%, QQQ -17"
       ],
@@ -22,7 +22,7 @@
     {
       "name": "Biotech",
       "score": 74.2,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Top-percentile RS (74/100) vs theme universe with broad participation (67% advancing). Outperforming SPY -78.3%, QQQ -96"
       ],
@@ -41,7 +41,7 @@
     {
       "name": "Cloud Software",
       "score": 72.9,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Top-percentile RS (73/100) vs theme universe with broad participation (100% advancing). Outperforming SPY -27.8%, QQQ -4"
       ],
@@ -60,7 +60,7 @@
     {
       "name": "Cybersecurity",
       "score": 72.4,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Top-percentile RS (72/100) vs theme universe. Outperforming SPY +32.5%, QQQ +14.0%. Breadth 0%."
       ],
@@ -79,7 +79,7 @@
     {
       "name": "Substrates / Packaging",
       "score": 69.9,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (70/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
@@ -97,7 +97,7 @@
     {
       "name": "Regional Banks",
       "score": 66.3,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (66/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
@@ -115,7 +115,7 @@
     {
       "name": "Travel & Transportation",
       "score": 65.4,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
@@ -132,7 +132,7 @@
     {
       "name": "Financials",
       "score": 65.2,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
@@ -149,7 +149,7 @@
     {
       "name": "Banks",
       "score": 65.2,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (65/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
@@ -168,7 +168,7 @@
     {
       "name": "Space Economy",
       "score": 14.0,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (14/100) vs 51-theme universe. SPY delta -8.0%, QQQ delta -26.5%. Breadth N/A \u2014 minimal buying pressu"
       ],
@@ -183,7 +183,7 @@
     {
       "name": "Lithium & Battery Tech",
       "score": 15.4,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (15/100) vs 51-theme universe. SPY delta -127.0%, QQQ delta -145.5%. Breadth 50% \u2014 minimal buying pre"
       ],
@@ -201,7 +201,7 @@
     {
       "name": "Quantum Computing",
       "score": 16.6,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (17/100) vs 51-theme universe. SPY delta -0.6%, QQQ delta -19.1%. Breadth N/A \u2014 minimal buying pressu"
       ],
@@ -216,7 +216,7 @@
     {
       "name": "Uranium & Nuclear Energy",
       "score": 20.9,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (21/100) vs 51-theme universe. SPY delta +192.1%, QQQ delta +173.6%. Breadth 100% \u2014 minimal buying pr"
       ],
@@ -234,7 +234,7 @@
     {
       "name": "Drones",
       "score": 23.1,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (23/100) vs 51-theme universe. SPY delta -23.7%, QQQ delta -42.2%. Breadth 0% \u2014 minimal buying pressu"
       ],
@@ -250,50 +250,19 @@
       ]
     }
   ],
-  "sector_leaders": [
-    {
-      "sector": "Financials",
-      "ticker": "XLF",
-      "score": 65.2,
-      "posture": "improving"
-    },
-    {
-      "sector": "Health Care",
-      "ticker": "XLV",
-      "score": 65.1,
-      "posture": "improving"
-    },
-    {
-      "sector": "Utilities",
-      "ticker": "XLU",
-      "score": 64.6,
-      "posture": "improving"
-    },
-    {
-      "sector": "Technology",
-      "ticker": "XLK",
-      "score": 63.1,
-      "posture": "improving"
-    },
-    {
-      "sector": "Energy",
-      "ticker": "XLE",
-      "score": 62.2,
-      "posture": "improving"
-    }
-  ],
+  "sector_leaders": [],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-07-14T16:11:50.969418+00:00",
-  "snapshot_status": "fresh",
-  "snapshot_age_minutes": 0,
+  "last_updated": "2026-07-14T16:22:18.593968+00:00",
+  "snapshot_status": "stale_lkg",
+  "snapshot_age_minutes": 10,
   "source_health": {
     "regime": "fallback",
-    "sector_rotation": "ok",
+    "sector_rotation": "fallback",
     "theme_rs_service": "ok",
-    "theme_rotation": "ok",
+    "theme_rotation": "fallback",
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1784045510.9748518
+  "_saved_at": 1784046138.5941267
 }
