@@ -4079,6 +4079,14 @@ async def get_watchlist_alignment(watchlist_id: str):
                 "is_watch_for_reset":                   False,
                 "is_risk_conflict":                     False,
                 "is_investment_quality":                False,
+                # ── V4.2 semantic precision fields ────────────────────────────
+                "entry_execution_state":                None,
+                "entry_execution_label":                None,
+                "caution_flags":                        [],
+                "entry_state_display":                  None,
+                "risk_flags":                           [],
+                "data_status_flags":                    [],
+                "confluence_v42":                       None,
                 # ── Legacy nested ────────────────────────────────────────────
                 "actionability": {
                     "available": False, "state": None, "legacy_state": None, "score": None,
@@ -4410,6 +4418,19 @@ async def get_watchlist_alignment(watchlist_id: str):
             "is_watch_for_reset":                       row.get("is_watch_for_reset", False),
             "is_risk_conflict":                         row.get("is_risk_conflict", False),
             "is_investment_quality":                    row.get("is_investment_quality", False),
+
+            # ── V4.2 semantic precision fields (pass-through from snapshot) ──────
+            # Flat aliases — frontend should use these for alignment rows since
+            # the nested confluence_v42 object was not historically present here.
+            "entry_execution_state":                    row.get("entry_execution_state"),
+            "entry_execution_label":                    row.get("entry_execution_label"),
+            "caution_flags":                            row.get("caution_flags") or [],
+            "entry_state_display":                      row.get("entry_state_display"),
+            "risk_flags":                               row.get("risk_flags") or [],
+            "data_status_flags":                        row.get("data_status_flags") or [],
+
+            # ── Nested V4.2 object (consistent with /api/alpha/confluence shape) ─
+            "confluence_v42":                           row.get("confluence_v42"),
         })
 
     # ── v3: theme leadership (cross-symbol ranking, computed after all rows) ──

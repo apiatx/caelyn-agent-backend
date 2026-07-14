@@ -1,0 +1,354 @@
+BACKEND ONLY — CONFLUENCE SEMANTIC PRECISION CONSISTENCY AUDIT
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math.
+Do not change provider logic.
+Do not run provider calls.
+Do not run 10Y backfill.
+Do not recalibrate thresholds.
+Use retained/cached Confluence data only.
+
+Goal:
+
+The Ready semantic precision patch appears successful, but the implementation log initially said "three files need changing" while the final report says only two files changed.
+
+Before frontend finishes, verify there was no missed third file and confirm all new fields/actions are consistent across every production Confluence endpoint.
+
+This is primarily an audit. Only implement a fix if a simple mismatch is found.
+
+==================================================
+PART 1 — 2 FILES VS 3 FILES CLARIFICATION
+==================================================
+
+Explain why the implementation initially said three files needed changing but the final report says only two files changed.
+
+Return:
+
+initial_expected_files
+actual_files_changed
+why_third_file_was_not_needed
+whether_any_planned_change_was_skipped
+whether_any_import/type/export file was missed
+whether frontend contract still receives all fields
+
+Expected actual changed files from report:
+
+- backend/services/confluence_v42_normalizer.py
+- backend/services/confluence_v2_service.py
+
+Confirm whether a third file was ever actually required.
+
+==================================================
+PART 2 — ENDPOINT FIELD CONSISTENCY
+==================================================
+
+Verify the new semantic fields are present and correctly shaped on every production Confluence endpoint:
+
+GET /api/alpha/confluence
+GET /api/alpha/confluence/{symbol}
+GET /api/watchlist/{watchlist_id}/alignment
+
+For each endpoint, sample at least:
+
+VRT
+ALGM
+ABCL
+CRDO
+TSM
+
+Return whether each endpoint includes:
+
+confluence_v42
+confluence_v42.action.execution_state
+confluence_v42.action.execution_label
+confluence_v42.risk.caution_flags
+confluence_v42.risk.risk_flags
+confluence_v42.metadata.data_status_flags
+confluence_v42.technical.entry_state_display
+
+Flat aliases:
+
+entry_execution_state
+entry_execution_label
+caution_flags
+entry_state_display
+risk_flags
+data_status_flags
+
+Important:
+
+Earlier frontend saw two shapes:
+- /api/alpha/confluence/{symbol} had the full nested confluence_v42 object
+- /api/watchlist/{watchlist_id}/alignment had more flat caelyn_confluence_v42_* fields
+
+Confirm whether alignment now includes the nested confluence_v42 object too.
+If not, state clearly whether frontend should rely on flat aliases for alignment rows.
+
+==================================================
+PART 3 — WAIT_FOR_RETEST DEMOTION CONSISTENCY
+==================================================
+
+Audit the 12 demoted rows from the semantic precision patch:
+
+HIMS
+ADUR
+FTNT
+XYZ
+PANW
+OSCR
+RDDT
+CRWD
+SNOW
+ADPT
+NET
+MEI
+
+For each return:
+
+symbol
+action_label
+action_label_display
+bucket
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+entry_execution_state
+entry_execution_label
+entry_state
+distance_to_active_support_pct
+active_support_status
+why_wait
+plain_english_explanation
+
+Expected:
+
+- far/not-yet-at-entry names should not have is_actionable_setup=true
+- action should be WAIT_FOR_RETEST or equivalent, not READY
+- execution_state should be SET_ALERT_FOR_RETEST or WAIT_FOR_RETEST
+- why_wait should mention entry trigger not reached / price far above support where applicable
+
+==================================================
+PART 4 — READY ROW SAFETY CONSISTENCY
+==================================================
+
+For all READY rows after the semantic precision patch, verify:
+
+- no CHASE_EXTENSION in risk_flags
+- no RISK_CONFLICT in risk_flags
+- no MAJOR_LOWER_LOW_CONFIRMED
+- no WATCH_FOR_RESET bucket
+- no missing invalidation_level
+- no WAIT_FOR_RETEST rows more than 15% above support
+- no row displays raw NO_CLEAR_ENTRY when entry_state_display should say SUPPORT_ZONE_ENTRY
+
+Return summary counts and list any exceptions.
+
+Expected:
+
+All counts should be 0.
+
+==================================================
+PART 5 — FLAG SEPARATION CONSISTENCY
+==================================================
+
+Verify flag taxonomy is clean:
+
+risk_flags:
+- true red setup/trade risks only
+
+caution_flags:
+- amber warnings, especially EXTREME_EXTENSION_CONSTRUCTIVE_RESET
+
+data_status_flags:
+- neutral coverage/pending/not-wired states
+
+Return top observed values for each:
+
+risk_flags
+caution_flags
+data_status_flags
+
+Confirm:
+
+FIB_PENDING is not in risk_flags
+WHALE_INSIDER_NOT_WIRED is not in risk_flags
+EXTREME_EXTENSION_CONSTRUCTIVE_RESET is not in risk_flags
+EXTREME_EXTENSION_CONSTRUCTIVE_RESET is in caution_flags
+CHASE_EXTENSION remains in risk_flags
+unconstructive EXTREME_EXTENSION remains in risk_flags
+
+==================================================
+PART 6 — WHY_NOW / WHY_WAIT CONSISTENCY
+==================================================
+
+Check whether why_now / why_wait reflect the new execution states.
+
+For rows with:
+
+execution_state = SET_ALERT_FOR_RETEST
+execution_state = WAIT_FOR_RETEST
+execution_state = RETEST_IN_PROGRESS
+execution_state = READY_AT_ENTRY
+execution_state = BREAKOUT_TRIGGER_READY
+
+Return examples and confirm:
+
+- SET_ALERT_FOR_RETEST includes a why_wait reason about entry trigger not reached
+- WAIT_FOR_RETEST includes price far above support when applicable
+- RETEST_IN_PROGRESS does not misleadingly say "wait" unless there is a separate caution
+- READY rows still have useful why_now / why_wait
+
+If missing, recommend a small deterministic reason-code improvement.
+
+==================================================
+PART 7 — ENTRY STATE DISPLAY CONSISTENCY
+==================================================
+
+Validate the SHLS fix and any similar rows.
+
+Return all rows where:
+
+entry_state == "NO_CLEAR_ENTRY"
+and entry_state_display != entry_state
+
+For each:
+
+symbol
+entry_state
+entry_state_display
+p6_actionable_tier
+entry_exit_points
+active_support_status
+action_label
+bucket
+
+Expected:
+
+SHLS should display SUPPORT_ZONE_ENTRY.
+No Ready row should visibly display "NO_CLEAR_ENTRY" if support-entry logic found a valid entry.
+
+==================================================
+PART 8 — NORMALIZER ORDER / SOURCE OF TRUTH CHECK
+==================================================
+
+Confirm order of operations after all patches:
+
+1. V4.2 base score computed.
+2. P6 path and actionable tier computed.
+3. P6 promotion/demotion logic applies action/bucket/execution semantics.
+4. confluence_v42 normalizer runs.
+5. flat aliases are written.
+6. results.append(r).
+
+Return exact file/function/line evidence.
+
+Also confirm:
+
+- confluence_v42 is built from the final promoted/demoted fields
+- derive_boolean_flags reads final bucket/actionability
+- frontend should not derive Ready itself
+
+==================================================
+PART 9 — ANYTHING ELSE NOTICED
+==================================================
+
+During this audit, report any additional backend issues that could make the Confluence UI less accurate or less consistent.
+
+Specifically look for:
+
+- duplicate/conflicting fields still likely to confuse frontend
+- action.label vs action.bucket contradictions
+- execution_state contradictions
+- stale flat aliases that do not match nested confluence_v42
+- endpoints with different shapes
+- retained snapshot rebuild issues
+- missing admin rebuild endpoint
+- 10Y backfill dependency still blocking Fib/Wave
+- catalyst/whale/insider not wired
+- options coverage assumptions
+- frontend-facing fields that should be hidden until wired
+
+Do not implement major changes. Just report.
+
+==================================================
+PART 10 — FINAL REPORT
+==================================================
+
+Return:
+
+CONFLUENCE SEMANTIC PRECISION CONSISTENCY AUDIT REPORT
+
+2 VS 3 FILES CLARIFICATION:
+[summary]
+
+ENDPOINT FIELD CONSISTENCY:
+[table]
+
+WAIT_FOR_RETEST DEMOTION CONSISTENCY:
+[table]
+
+READY ROW SAFETY:
+[table]
+
+FLAG SEPARATION:
+[summary/table]
+
+WHY_NOW / WHY_WAIT:
+[summary]
+
+ENTRY STATE DISPLAY:
+[summary]
+
+ORDER OF OPERATIONS:
+[summary]
+
+OTHER ISSUES NOTICED:
+[list]
+
+FIXES MADE:
+[list, or none]
+
+End exactly:
+
+SEMANTIC PRECISION CONSISTENCY VERDICT
+
+THIRD_FILE_NEEDED:
+[YES/NO]
+
+ANY_PLANNED_CHANGE_SKIPPED:
+[YES/NO]
+
+ALL_ENDPOINTS_HAVE_REQUIRED_FIELDS:
+[YES/NO]
+
+ALIGNMENT_ENDPOINT_HAS_NESTED_CONFLUENCE_V42:
+[YES/NO]
+
+FLAT_ALIASES_MATCH_NESTED_OBJECT:
+[YES/NO]
+
+WAIT_FOR_RETEST_DEMOTIONS_CONSISTENT:
+[YES/NO]
+
+READY_ROWS_PASS_SAFETY_CHECK:
+[YES/NO]
+
+RISK_CAUTION_DATA_FLAGS_SEPARATED:
+[YES/NO]
+
+WHY_WAIT_MATCHES_EXECUTION_STATE:
+[YES/NO]
+
+ENTRY_STATE_DISPLAY_CONSISTENT:
+[YES/NO]
+
+NO_PROVIDER_CALLS_USED:
+[YES/NO]
+
+READY_FOR_FRONTEND_COMPLETION:
+[YES/NO]
+
+WAIT_FOR_10Y_BACKFILL_BEFORE_FINAL_CALIBRATION:
+YES
