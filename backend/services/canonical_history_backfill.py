@@ -51,6 +51,7 @@ def _flag(env: str, default: str) -> bool:
 _BACKFILL_ENABLED           = lambda: _flag("CANONICAL_HISTORY_BACKFILL_ENABLED",           "false")
 _FULL_BACKFILL_ENABLED      = lambda: _flag("CANONICAL_HISTORY_FULL_BACKFILL_ENABLED",      "false")
 _INCREMENTAL_APPEND_ENABLED = lambda: _flag("CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED", "true")
+_MISSING_CATCHUP_ENABLED    = lambda: _flag("CANONICAL_HISTORY_MISSING_CATCHUP_ENABLED",    "true")
 _ALLOW_MARKET_HOURS         = lambda: _flag("CANONICAL_HISTORY_ALLOW_MARKET_HOURS",         "false")
 # Universe expansion flags (both default false — require explicit opt-in)
 # false → only primary proxy per theme (~50) included by default
@@ -92,6 +93,27 @@ _STATE: dict = {
     "_backlog_count":             0,
 }
 
+# ── Per-mode maintenance run history (survives between job runs) ──────────────
+_MAINTENANCE_STATE: dict = {
+    "scheduler_running":          False,
+    "last_cycle_started_at":      None,
+    "last_cycle_finished_at":     None,
+    "missing_catchup": {
+        "last_started_at":  None,
+        "last_finished_at": None,
+        "last_completed":   0,
+        "last_skipped":     0,
+        "last_paused_reason": None,
+    },
+    "incremental_append": {
+        "last_started_at":  None,
+        "last_finished_at": None,
+        "last_completed":   0,
+        "last_skipped":     0,
+        "last_paused_reason": None,
+    },
+}
+
 
 def get_backfill_status() -> dict:
     snap = dict(_STATE)
@@ -99,10 +121,29 @@ def get_backfill_status() -> dict:
         "CANONICAL_HISTORY_BACKFILL_ENABLED":           _BACKFILL_ENABLED(),
         "CANONICAL_HISTORY_FULL_BACKFILL_ENABLED":      _FULL_BACKFILL_ENABLED(),
         "CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED": _INCREMENTAL_APPEND_ENABLED(),
+        "CANONICAL_HISTORY_MISSING_CATCHUP_ENABLED":    _MISSING_CATCHUP_ENABLED(),
         "CANONICAL_HISTORY_ALLOW_MARKET_HOURS":         _ALLOW_MARKET_HOURS(),
         "CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES":    _INCLUDE_ALL_THEME_PROXIES(),
         "CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES": _INCLUDE_ALL_THEME_CANDIDATES(),
     }
+    snap["maintenance"] = {
+        "scheduler_running":      _MAINTENANCE_STATE["scheduler_running"],
+        "last_cycle_started_at":  _MAINTENANCE_STATE["last_cycle_started_at"],
+        "last_cycle_finished_at": _MAINTENANCE_STATE["last_cycle_finished_at"],
+        "last_missing_catchup_started_at":      _MAINTENANCE_STATE["missing_catchup"]["last_started_at"],
+        "last_missing_catchup_finished_at":     _MAINTENANCE_STATE["missing_catchup"]["last_finished_at"],
+        "last_missing_catchup_symbols_processed": _MAINTENANCE_STATE["missing_catchup"]["last_completed"],
+        "last_missing_catchup_symbols_skipped":   _MAINTENANCE_STATE["missing_catchup"]["last_skipped"],
+        "last_missing_catchup_paused_reason":     _MAINTENANCE_STATE["missing_catchup"]["last_paused_reason"],
+        "last_incremental_append_started_at":      _MAINTENANCE_STATE["incremental_append"]["last_started_at"],
+        "last_incremental_append_finished_at":     _MAINTENANCE_STATE["incremental_append"]["last_finished_at"],
+        "last_incremental_append_symbols_processed": _MAINTENANCE_STATE["incremental_append"]["last_completed"],
+        "last_incremental_append_symbols_skipped":   _MAINTENANCE_STATE["incremental_append"]["last_skipped"],
+        "last_incremental_append_paused_reason":     _MAINTENANCE_STATE["incremental_append"]["last_paused_reason"],
+    }
+    # Market-hours gate summary
+    snap["market_hours_gate_active"] = _is_active_session() and not _ALLOW_MARKET_HOURS()
+    snap["weekly_health_check_provider_calls_allowed_now"] = False  # always disk-only
     snap["universe_scope"] = (
         "full_research_universe"   if _INCLUDE_ALL_THEME_PROXIES() and _INCLUDE_ALL_THEME_CANDIDATES() else
         "all_theme_candidates"     if _INCLUDE_ALL_THEME_CANDIDATES() else
@@ -316,10 +357,8 @@ def _check_full_backfill_allowed(mode: str, confirm: bool = False) -> Optional[s
             return "monthly_full_refresh_disabled_by_flag"
     if mode == "initial_full_backfill" and not _FULL_BACKFILL_ENABLED():
         return "full_backfill_disabled_by_flag"
-    # missing_symbols_catchup: only requires BACKFILL_ENABLED (already checked above).
-    # Designed for ongoing nightly use after new watchlist/theme symbols are added.
-    # Does NOT require FULL_BACKFILL_ENABLED — that flag is for the one-time 410-symbol
-    # initial fill only.  missing_symbols_catchup naturally skips already-complete symbols.
+    if mode == "missing_symbols_catchup" and not _MISSING_CATCHUP_ENABLED():
+        return "missing_catchup_disabled_by_flag"
     return None
 
 
@@ -1005,6 +1044,18 @@ async def run_backfill_batch(
         raise
     finally:
         _STATE["running"] = False
+        # Record per-mode maintenance history
+        _now_iso = datetime.now(timezone.utc).isoformat()
+        if mode == "missing_symbols_catchup":
+            _MAINTENANCE_STATE["missing_catchup"]["last_finished_at"] = _now_iso
+            _MAINTENANCE_STATE["missing_catchup"]["last_completed"]   = _STATE["completed"]
+            _MAINTENANCE_STATE["missing_catchup"]["last_skipped"]     = _STATE["skipped"]
+            _MAINTENANCE_STATE["missing_catchup"]["last_paused_reason"] = _STATE.get("error")
+        elif mode == "incremental_daily_append":
+            _MAINTENANCE_STATE["incremental_append"]["last_finished_at"] = _now_iso
+            _MAINTENANCE_STATE["incremental_append"]["last_completed"]   = _STATE["completed"]
+            _MAINTENANCE_STATE["incremental_append"]["last_skipped"]     = _STATE["skipped"]
+            _MAINTENANCE_STATE["incremental_append"]["last_paused_reason"] = _STATE.get("error")
 
 
 # ── Incremental daily append runner ───────────────────────────────────────────
@@ -1062,3 +1113,92 @@ async def run_missing_symbols_catchup(
         allow_fmp_fallback=True, priority_only=False,
         mode="missing_symbols_catchup", confirm=False,
     )
+
+
+# ── Nightly maintenance scheduler ────────────────────────────────────────────
+
+async def _canon_maintenance_loop() -> None:
+    """
+    Off-hours maintenance loop: runs missing_symbols_catchup then
+    incremental_daily_append each check cycle.
+
+    Safety:
+      - Only fires when _is_active_session() is False (market closed / weekend).
+      - Checks every 30 minutes; does nothing if market is open.
+      - Respects CANONICAL_HISTORY_MISSING_CATCHUP_ENABLED and
+        CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED flags.
+      - Requires CANONICAL_HISTORY_BACKFILL_ENABLED=true for catchup step.
+      - Never runs full backfill, manual_rebuild, or monthly_full_refresh.
+      - Pauses voluntarily if options_flow lane is saturated.
+      - Zero provider calls during market hours.
+    """
+    global _MAINTENANCE_STATE
+    _MAINTENANCE_STATE["scheduler_running"] = True
+    _CHECK_INTERVAL_S = 1800  # 30-minute check cadence
+
+    while True:
+        try:
+            await asyncio.sleep(_CHECK_INTERVAL_S)
+
+            # Gate: market hours — do nothing if session is active
+            if _is_active_session():
+                continue
+
+            _now = datetime.now(timezone.utc).isoformat()
+            _MAINTENANCE_STATE["last_cycle_started_at"] = _now
+            print(f"[CANON_MAINT] off-hours maintenance cycle starting at {_now}")
+
+            # Step 1 — missing_symbols_catchup (small batch for new additions)
+            if _MISSING_CATCHUP_ENABLED() and _BACKFILL_ENABLED():
+                _MAINTENANCE_STATE["missing_catchup"]["last_started_at"] = datetime.now(timezone.utc).isoformat()
+                try:
+                    result = await run_backfill_batch(
+                        max_symbols=25, delay_s=_OFFHOURS_DELAY_S,
+                        allow_fmp_fallback=True, priority_only=False,
+                        mode="missing_symbols_catchup", confirm=False,
+                    )
+                    print(f"[CANON_MAINT] catchup done: completed={result.get('completed')} skipped={result.get('skipped')}")
+                except Exception as _exc:
+                    print(f"[CANON_MAINT] catchup error: {_exc}")
+                    _MAINTENANCE_STATE["missing_catchup"]["last_paused_reason"] = str(_exc)
+
+                # Brief pause between steps
+                await asyncio.sleep(30)
+
+            # Step 2 — incremental_daily_append (one new bar per already-cached symbol)
+            if _INCREMENTAL_APPEND_ENABLED():
+                _MAINTENANCE_STATE["incremental_append"]["last_started_at"] = datetime.now(timezone.utc).isoformat()
+                try:
+                    result = await run_backfill_batch(
+                        max_symbols=400, delay_s=_OFFHOURS_DELAY_S,
+                        allow_fmp_fallback=False, priority_only=False,
+                        mode="incremental_daily_append", confirm=False,
+                    )
+                    print(f"[CANON_MAINT] append done: completed={result.get('completed')} skipped={result.get('skipped')}")
+                except Exception as _exc:
+                    print(f"[CANON_MAINT] append error: {_exc}")
+                    _MAINTENANCE_STATE["incremental_append"]["last_paused_reason"] = str(_exc)
+
+            _MAINTENANCE_STATE["last_cycle_finished_at"] = datetime.now(timezone.utc).isoformat()
+            print(f"[CANON_MAINT] cycle finished at {_MAINTENANCE_STATE['last_cycle_finished_at']}")
+
+        except asyncio.CancelledError:
+            _MAINTENANCE_STATE["scheduler_running"] = False
+            break
+        except Exception as exc:
+            print(f"[CANON_MAINT] loop error: {exc}")
+            await asyncio.sleep(300)  # back-off 5 min on unexpected error
+
+
+def start_maintenance_scheduler() -> None:
+    """
+    Wire the nightly canonical-history maintenance loop into the running event loop.
+    Call once from the FastAPI lifespan after yield.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_canon_maintenance_loop())
+            print("[CANON_MAINT] Nightly maintenance scheduler started (30-min check interval, off-hours only)")
+    except Exception as exc:
+        print(f"[CANON_MAINT] Scheduler start failed: {exc}")

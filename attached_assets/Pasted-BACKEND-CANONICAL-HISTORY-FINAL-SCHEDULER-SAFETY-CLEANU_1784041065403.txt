@@ -1,0 +1,306 @@
+BACKEND — CANONICAL HISTORY FINAL SCHEDULER + SAFETY CLEANUP
+
+Backend only.
+
+Do not touch frontend.
+Do not change Watchlist / Stage / Entry / Fib logic.
+Do not change Confluence scoring.
+Do not rewrite the Tradier limiter.
+Do not touch Options Flow.
+Do not run the full backfill now.
+Do not expand the backfill universe.
+Do not re-include broad Theme baskets or Theme candidates.
+
+Goal:
+
+The dynamic canonical history catch-up work is mostly aligned, but three safety/automation issues remain:
+
+1. weekly_health_check currently bypasses market-hours gates and can call Tradier during market hours.
+2. missing_symbols_catchup exists, but no nightly scheduler exists yet.
+3. Watchlist catch-up flow is unclear: universe builder reads Neon watchlists, but report says new tickers require Stage2 LKG warmup first.
+
+Fix these without changing the broader architecture.
+
+==================================================
+PART 1 — FIX WEEKLY_HEALTH_CHECK SAFETY
+==================================================
+
+Current report says:
+
+weekly_health_check:
+- Provider calls: YES
+- Market hours allowed: YES
+- Bypasses gate
+- Auto-scheduled
+
+This is not acceptable.
+
+Change weekly_health_check to one of these safe behaviors:
+
+Preferred:
+- cache/index/metadata/readability check only
+- zero provider calls
+- allowed any time because it is disk-only
+
+Acceptable:
+- provider probe only off-hours
+- obeys CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false
+- requires explicit admin force=true to run provider probes during market hours
+
+Required:
+
+weekly_health_check must not call Tradier during market hours by default.
+
+Return proof:
+
+weekly_health_check_provider_calls_default
+weekly_health_check_market_hours_allowed
+weekly_health_check_force_required_for_provider_probe
+weekly_health_check_request_time_calls
+
+Expected:
+
+provider_calls_default = 0
+market_hours_provider_calls = NO
+
+==================================================
+PART 2 — ADD NIGHTLY MAINTENANCE SCHEDULER OR CONFIRM MANUAL-ONLY
+==================================================
+
+The report says no automated nightly scheduler exists for canonical history.
+
+We need one of two clear outcomes:
+
+Option A — Implement scheduler:
+Add an off-hours maintenance job that runs after market close:
+
+1. missing_symbols_catchup
+2. incremental_daily_append
+
+Rules:
+
+- off-hours only
+- never during market hours
+- missing_symbols_catchup max_syms small, default 25–50
+- incremental_daily_append max_syms enough for current canonical index
+- no full backfill
+- no manual_rebuild
+- no monthly_full_refresh
+- no broad theme universe flags
+- obey Tradier canonical_history_backfill lane
+- stop if options_flow busy
+- expose last run status
+
+Option B — Manual-only:
+Do not add scheduler, but explicitly report:
+
+AUTOMATIC_NEW_TICKER_CATCHUP = NO
+
+If manual-only, do not imply future tickers are automatically handled.
+
+Preferred outcome: Option A.
+
+==================================================
+PART 3 — ADD SEPARATE ENABLE FLAGS
+==================================================
+
+Do not use CANONICAL_HISTORY_FULL_BACKFILL_ENABLED for maintenance.
+
+Add or confirm:
+
+CANONICAL_HISTORY_MISSING_CATCHUP_ENABLED=true
+CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED=true
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=false by default
+
+Behavior:
+
+initial_full_backfill:
+requires BACKFILL_ENABLED=true + FULL_BACKFILL_ENABLED=true + admin POST
+
+missing_symbols_catchup:
+requires MISSING_CATCHUP_ENABLED=true
+does not require FULL_BACKFILL_ENABLED
+off-hours only
+
+incremental_daily_append:
+requires INCREMENTAL_APPEND_ENABLED=true
+off-hours only
+
+==================================================
+PART 4 — CLARIFY WATCHLIST ADDITION FLOW
+==================================================
+
+Resolve this contradiction:
+
+- _build_symbol_list_tiered() reads active watchlists from Neon at job start.
+- Report says new ticker appears after Stage2 LKG warmup.
+
+Preferred behavior:
+
+New watchlist ticker saved to Neon should be eligible for missing_symbols_catchup directly, even before Stage2 LKG refresh.
+
+Stage2 LKG can still populate Stage/Fib/Entry later, but canonical history should not wait for Stage2 LKG if Neon watchlist already contains the symbol.
+
+Return:
+
+new_ticker_saved_to_neon
+picked_up_by_missing_catchup_before_stage2_lkg
+picked_up_by_missing_catchup_after_stage2_lkg
+provider_call_during_add_request
+final_behavior
+
+Expected:
+
+provider_call_during_add_request = NO
+picked_up_by_missing_catchup_before_stage2_lkg = YES, if active Neon watchlist source is working
+
+==================================================
+PART 5 — MARKET-HOURS START BEHAVIOR
+==================================================
+
+Earlier validation showed:
+
+POST /api/admin/canonical-history/backfill?mode=missing_symbols_catchup&max_syms=1
+returned {"started": true}
+
+during market hours.
+
+Confirm this did not make provider calls.
+
+Preferred behavior:
+
+During market hours, history-fetching modes should return:
+
+started=false
+paused_reason=market_hours
+provider_calls=0
+
+rather than started=true.
+
+Apply to:
+
+initial_full_backfill
+missing_symbols_catchup
+incremental_daily_append
+manual_rebuild
+monthly_full_refresh
+
+cache_read_only can run anytime.
+weekly_health_check can run anytime only if disk-only.
+
+==================================================
+PART 6 — STATUS ENDPOINTS
+==================================================
+
+Expose:
+
+last_missing_catchup_started_at
+last_missing_catchup_finished_at
+last_missing_catchup_symbols_processed
+last_missing_catchup_symbols_skipped
+last_missing_catchup_paused_reason
+
+last_incremental_append_started_at
+last_incremental_append_finished_at
+last_incremental_append_symbols_processed
+last_incremental_append_symbols_skipped
+last_incremental_append_paused_reason
+
+weekly_health_check_provider_calls_allowed_now
+market_hours_gate_active
+next_maintenance_allowed_after
+
+==================================================
+PART 7 — VALIDATION
+==================================================
+
+Validate:
+
+1. Market-hours behavior:
+- missing_symbols_catchup returns paused/no provider calls
+- incremental_daily_append returns paused/no provider calls
+- weekly_health_check does not call Tradier by default
+
+2. Off-hours dry-run behavior:
+- missing_symbols_catchup would process missing symbols
+- incremental_daily_append would process existing cached symbols
+- neither includes broad Theme basket or Theme candidates
+
+3. New ticker simulation:
+- ticker added to Neon watchlist would be picked up by missing_symbols_catchup
+- no request-time provider call
+
+Return:
+
+case
+mode
+market_open
+started
+paused_reason
+provider_calls
+symbols_selected
+symbols_skipped
+plain_english_explanation
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+CANONICAL HISTORY FINAL SCHEDULER + SAFETY REPORT
+
+FILES CHANGED:
+[list]
+
+WEEKLY_HEALTH_CHECK SAFETY:
+[summary]
+
+NIGHTLY MAINTENANCE SCHEDULER:
+[implemented/manual-only]
+
+WATCHLIST ADDITION FLOW:
+[summary]
+
+MARKET-HOURS START BEHAVIOR:
+[summary]
+
+STATUS ENDPOINTS:
+[summary]
+
+VALIDATION:
+[table]
+
+End exactly:
+
+CANONICAL HISTORY FINAL SAFETY VERDICT
+
+WEEKLY_HEALTH_CHECK_NO_MARKET_HOURS_PROVIDER_CALLS:
+[YES/NO]
+
+MISSING_SYMBOLS_CATCHUP_AUTOMATED_OFFHOURS:
+[YES/NO]
+
+INCREMENTAL_APPEND_AUTOMATED_OFFHOURS:
+[YES/NO]
+
+FULL_BACKFILL_STILL_MANUAL_ONLY:
+[YES/NO]
+
+NEW_WATCHLIST_TICKERS_PICKED_UP_FROM_NEON:
+[YES/NO]
+
+NEW_TICKERS_DO_NOT_REQUIRE_REQUEST_TIME_PROVIDER_CALLS:
+[YES/NO]
+
+MARKET_HOURS_HISTORY_MODES_RETURN_PAUSED_NOT_STARTED:
+[YES/NO]
+
+BROAD_THEME_BASKET_STILL_EXCLUDED:
+[YES/NO]
+
+THEME_CANDIDATES_STILL_EXCLUDED:
+[YES/NO]
+
+READY_FOR_TONIGHT_INITIAL_10Y_BACKFILL:
+[YES/NO]

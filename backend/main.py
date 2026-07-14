@@ -612,6 +612,11 @@ async def lifespan(app):
     # asyncio.create_task(_sector_rotation_precompute_loop())
     asyncio.create_task(_insider_bg_loop())
     asyncio.create_task(_cong_bg_loop())
+    try:
+        from services.canonical_history_backfill import start_maintenance_scheduler as _canon_maint_start
+        _canon_maint_start()
+    except Exception as _canon_maint_err:
+        print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_canon_maint_err}")
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     try:
         _whale_create_tables()
@@ -17902,6 +17907,24 @@ async def admin_canonical_history_backfill(
     symbols = None
     if symbols_csv:
         symbols = [s.strip().upper() for s in symbols_csv.split(",") if s.strip()]
+
+    # Pre-check market hours BEFORE queuing background task.
+    # Modes that only read disk are allowed any time; history-fetching modes are not.
+    _DISK_ONLY_MODES = {"cache_read_only", "weekly_health_check"}
+    if mode not in _DISK_ONLY_MODES:
+        from services.canonical_history_backfill import _check_market_hours_gate as _mhg
+        _mh = _mhg()
+        if _mh:
+            return JSONResponse({
+                "started":               False,
+                "mode":                  mode,
+                "paused_reason":         _mh,
+                "market_hours_gate_active": True,
+                "provider_calls":        0,
+                "hint": "History-fetching modes are off-hours only (ALLOW_MARKET_HOURS=false). "
+                        "Retry after market close (~4 PM ET) or set "
+                        "CANONICAL_HISTORY_ALLOW_MARKET_HOURS=true to override.",
+            }, status_code=503)
 
     async def _bg():
         try:
