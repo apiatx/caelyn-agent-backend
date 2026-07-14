@@ -1,0 +1,263 @@
+BACKEND ONLY — CONFLUENCE READY / ACTIONABLE CALIBRATION AUDIT
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change provider logic.
+Do not run provider calls.
+Do not change scoring math yet.
+Do not change canonical history.
+Do not run 10Y backfill.
+Use cached/retained Confluence snapshot only.
+
+Goal:
+
+Frontend is now correctly reading confluence_v42.booleans.is_actionable_setup and the Actionability/Ready tab is empty while Near Actionable has many rows.
+
+We need to determine whether this is expected market state or whether V4.2 actionability is too conservative.
+
+==================================================
+PART 1 — DISTRIBUTION AUDIT
+==================================================
+
+From the retained snapshot, return counts by:
+
+confluence_v42.action.label
+confluence_v42.action.bucket
+confluence_v42.booleans.is_actionable_setup
+confluence_v42.booleans.is_near_actionable
+confluence_v42.booleans.is_watch_for_reset
+confluence_v42.booleans.is_risk_conflict
+confluence_v42.booleans.is_investment_quality
+
+Return:
+
+total_rows
+ready_count
+actionable_bucket_count
+near_actionable_count
+wait_for_retest_count
+wait_for_breakout_count
+watch_for_reset_count
+watch_count
+avoid_count
+risk_conflict_count
+
+==================================================
+PART 2 — WHY IS READY EMPTY?
+==================================================
+
+If ready_count = 0, diagnose why.
+
+For the top 50 rows by confluence_v42.score.total, return:
+
+symbol
+score_total
+score_core
+score_bonus
+action_label
+bucket
+technical_setup_label
+entry_state
+extension_state
+extension_quality
+entry_score
+entry_exit_points
+technical_setup_points
+risk_flags
+data_status_flags
+invalidation_level
+why_now
+why_wait
+ready_blockers
+
+ready_blockers should identify exact reasons, such as:
+
+- EXTREME_EXTENSION
+- CHASE_EXTENSION
+- NO_CLEAR_ENTRY
+- entry_exit_points_below_threshold
+- technical_setup_points_below_threshold
+- missing_invalidation_level
+- no_target_zone
+- fib_wave_pending
+- options_unavailable
+- risk_conflict
+- support_too_far
+- not_near_retest
+- no_breakout_trigger
+
+==================================================
+PART 3 — FALSE NEGATIVE CANDIDATES
+==================================================
+
+Identify symbols that are not READY but might reasonably be actionable.
+
+Criteria examples:
+
+- score_core >= 55
+- stage component strong
+- technical setup reasonable
+- entry_exit not terrible
+- no major lower low
+- no risk conflict
+- not extreme extension
+- has invalidation_level
+- action is NEAR_ACTIONABLE / WAIT_FOR_RETEST / WAIT_FOR_BREAKOUT
+
+Return top 25 possible false negatives:
+
+symbol
+current_action
+current_bucket
+score_total
+technical_setup_label
+entry_state
+extension_state
+entry_exit_points
+risk_flags
+invalidation_level
+why_not_ready
+suggested_candidate_ready_path
+
+Do not hardcode outcomes.
+
+==================================================
+PART 4 — READY PATH AUDIT
+==================================================
+
+Find all backend code paths that can produce:
+
+action.label = READY
+bucket = ACTIONABLE
+is_actionable_setup = true
+
+Return:
+
+file
+function
+condition
+thresholds
+required fields
+why current rows are failing
+
+We need to know whether READY is unreachable or just rare.
+
+==================================================
+PART 5 — PROPOSE CALIBRATION ONLY
+==================================================
+
+Do not implement scoring changes yet.
+
+Propose rule changes that would allow legitimate READY setups without making chase entries actionable.
+
+Examples to evaluate:
+
+READY_RETEST_ENTRY:
+- stage strong enough
+- entry_state indicates retest / support / pullback
+- no EXTREME_EXTENSION
+- no MAJOR_LOWER_LOW_CONFIRMED
+- invalidation_level present
+- entry_exit_points above reasonable threshold
+
+READY_BREAKOUT_ENTRY:
+- breakout/high-base pattern
+- not too extended
+- clear breakout trigger
+- risk/reward acceptable
+
+READY_SUPPORT_ENTRY:
+- near active support
+- constructive extension or no extension
+- clear invalidation
+- no broken support
+
+READY_FIB_RETEST_ENTRY:
+- only after 10Y backfill
+- near primary Fib/support
+- constructive pullback
+- invalidation present
+
+Return proposed thresholds, but do not implement.
+
+==================================================
+PART 6 — FRONTEND TAB NAMING RECOMMENDATION
+==================================================
+
+Recommend whether frontend tab should be renamed from:
+
+Actionability
+
+to:
+
+Ready Now
+
+or whether Actionability should include READY + NEAR_ACTIONABLE + WAIT_FOR_RETEST.
+
+Return:
+
+current_frontend_filter
+recommended_tab_name
+recommended_filter
+reason
+
+==================================================
+PART 7 — FINAL REPORT
+==================================================
+
+Return:
+
+CONFLUENCE READY / ACTIONABLE CALIBRATION AUDIT REPORT
+
+DISTRIBUTION:
+[table]
+
+WHY_READY_IS_EMPTY:
+[summary]
+
+TOP_READY_BLOCKERS:
+[table]
+
+FALSE_NEGATIVE_CANDIDATES:
+[table]
+
+READY_PATHS_IN_CODE:
+[summary]
+
+CALIBRATION_RECOMMENDATIONS:
+[summary]
+
+FRONTEND_TAB_RECOMMENDATION:
+[summary]
+
+End exactly:
+
+READY ACTIONABILITY VERDICT
+
+READY_COUNT:
+[number]
+
+READY_EMPTY_EXPECTED:
+[YES/NO]
+
+READY_LOGIC_TOO_STRICT:
+[YES/NO]
+
+READY_PATHS_REACHABLE:
+[YES/NO]
+
+FALSE_NEGATIVES_FOUND:
+[YES/NO]
+
+FRONTEND_SHOULD_FAKE_ACTIONABLE:
+NO
+
+FRONTEND_TAB_SHOULD_BE_RENAMED:
+[YES/NO]
+
+BACKEND_CALIBRATION_NEEDED:
+[YES/NO]
+
+WAIT_FOR_10Y_BACKFILL_BEFORE_FINAL_CALIBRATION:
+YES
