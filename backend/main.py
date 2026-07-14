@@ -17826,7 +17826,8 @@ async def admin_canonical_history_backfill(
     mode:          str   = Query(
         "initial_full_backfill",
         description=(
-            "initial_full_backfill | incremental_daily_append | manual_rebuild | "
+            "initial_full_backfill | missing_symbols_catchup | "
+            "incremental_daily_append | manual_rebuild | "
             "cache_read_only | weekly_health_check | monthly_full_refresh"
         ),
     ),
@@ -17851,6 +17852,14 @@ async def admin_canonical_history_backfill(
       CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED — allow append runs (default: true)
       CANONICAL_HISTORY_ALLOW_MARKET_HOURS      — allow during active session (default: false)
 
+    Mode summary:
+      initial_full_backfill    — one-time 410-symbol fill; requires FULL_BACKFILL_ENABLED=true
+      missing_symbols_catchup  — ongoing nightly catch-up for new watchlist/theme additions;
+                                  only requires BACKFILL_ENABLED=true; skips complete symbols
+      incremental_daily_append — 1-bar append for already-backfilled symbols; nightly off-hours
+      manual_rebuild           — force re-fetch complete symbols; requires confirm=true
+      monthly_full_refresh     — full re-fetch for all; requires FULL_BACKFILL_ENABLED + confirm=true
+
     mode=manual_rebuild or monthly_full_refresh require confirm=true to prevent
     accidental full-refetch of already-cached 10Y symbols.
 
@@ -17870,7 +17879,8 @@ async def admin_canonical_history_backfill(
 
     # Validate mode
     _valid_modes = {
-        "initial_full_backfill", "incremental_daily_append", "manual_rebuild",
+        "initial_full_backfill", "missing_symbols_catchup",
+        "incremental_daily_append", "manual_rebuild",
         "cache_read_only", "weekly_health_check", "monthly_full_refresh",
     }
     if mode not in _valid_modes:

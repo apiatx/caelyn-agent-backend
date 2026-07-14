@@ -1,0 +1,364 @@
+BACKEND — DYNAMIC CANONICAL HISTORY MISSING-SYMBOL CATCH-UP
+
+Backend only.
+
+Do not touch frontend.
+Do not change Watchlist / Stage / Entry / Fib logic.
+Do not change Confluence scoring.
+Do not rewrite the Tradier limiter.
+Do not touch Options Flow.
+Do not run the full backfill now.
+Do not make request-time provider calls.
+
+Goal:
+
+The morning report confirmed the one-time 10Y backfill did not run overnight and canonical index currently contains only 3 symbols.
+
+Before running tonight's backfill, confirm and/or implement dynamic missing-symbol handling.
+
+The canonical history system must not be a one-time fixed scan of the current ticker universe.
+
+It must support:
+
+1. One-time full 10Y/lifetime backfill for the current eligible universe.
+2. Future watchlist additions.
+3. Future portfolio additions.
+4. Future active Theme primary proxy additions.
+5. Small off-hours catch-up backfills for only newly missing symbols.
+6. No request-time provider calls.
+7. No market-hours 10Y history calls.
+
+==================================================
+PART 1 — CONFIRM CURRENT STATE
+==================================================
+
+Check current canonical status.
+
+Return:
+
+canonical_index_symbol_count
+target_default_universe_count
+not_yet_backfilled_count
+available_10y_count
+available_lifetime_under_10y_count
+available_5y_count
+backfill_job_running
+history_lane_current_usage
+options_flow_usage
+market_open_now
+canonical_history_backfill_enabled
+canonical_history_full_backfill_enabled
+canonical_history_incremental_append_enabled
+canonical_history_allow_market_hours
+
+Expected right now:
+
+- index count likely 3
+- target universe around 410
+- no job running
+- history lane idle
+- market-hours gate active
+
+==================================================
+PART 2 — AUDIT WHETHER BACKFILL UNIVERSE IS DYNAMIC
+==================================================
+
+Audit _build_symbol_list_tiered() and any caller.
+
+Answer:
+
+- Does it rebuild the eligible universe fresh each time a backfill job starts?
+- Does it read current Stage2 LKG / watchlist-derived symbols at job time?
+- Does it read current portfolio underlyings at job time?
+- Does it read current active Theme primary proxies at job time?
+- Or does it use a stale/static snapshot from server startup?
+
+Return exact file/function evidence.
+
+Expected:
+
+The universe should be rebuilt fresh at job start, not frozen.
+
+==================================================
+PART 3 — AUDIT WATCHLIST ADDITION FLOW
+==================================================
+
+Trace what happens when a new ticker is added to the watchlist.
+
+Return:
+
+watchlist add endpoint
+where the ticker is persisted
+when Stage2 LKG sees the new ticker
+when canonical_history_backfill sees the new ticker
+whether the ticker gets marked not_yet_backfilled
+whether any provider call happens during the add request
+whether the new ticker is picked up by the next off-hours missing-symbol catch-up
+
+Important:
+
+Adding a ticker to watchlist must not trigger a 10Y Tradier call during the page request.
+
+It should only mark/implicitly discover it as missing canonical history.
+
+==================================================
+PART 4 — AUDIT THEME PROXY ADDITION FLOW
+==================================================
+
+Trace what happens if a new active Theme primary proxy is added later.
+
+Return:
+
+source file / config for active primary theme proxies
+whether _build_symbol_list_tiered() reads it dynamically
+whether new proxies are picked up without code changes
+whether broad 431 proxy basket remains excluded by default
+whether candidate stocks remain excluded by default
+
+Important:
+
+Only active primary Theme proxies should be included by default.
+Broad proxy basket and candidate stocks must remain optional only.
+
+==================================================
+PART 5 — IMPLEMENT MISSING-SYMBOL CATCH-UP IF NOT ALREADY PRESENT
+==================================================
+
+If not already present, implement a safe off-hours missing-symbol catch-up mode.
+
+Required behavior:
+
+mode=missing_symbols_catchup
+
+This mode should:
+
+- rebuild the current eligible universe fresh
+- compare it against canonical history index
+- select only symbols missing canonical history or stuck at insufficient/failed status
+- skip available_10y
+- skip available_lifetime_under_10y
+- skip actual_ticker_history_limit
+- skip stale-but-usable symbols; those belong to incremental append
+- fetch 10Y/lifetime bars only for missing symbols
+- run off-hours only
+- use canonical_history_backfill Tradier lane
+- obey market-hours gate
+- obey same safe flags
+- write after each symbol
+- support max_syms
+- expose backlog count
+
+No request-time provider calls.
+
+==================================================
+PART 6 — DIFFERENTIATE THREE JOB TYPES
+==================================================
+
+Make sure these are distinct:
+
+1. initial_full_backfill
+   Use for tonight's first 410-symbol fill.
+   Fetches missing/incomplete current eligible universe.
+   Skips complete symbols.
+
+2. missing_symbols_catchup
+   Use later when new watchlist/theme symbols are added.
+   Fetches only newly missing/incomplete symbols.
+   Small groups only.
+
+3. incremental_daily_append
+   Runs after symbols already have canonical history.
+   Fetches only newest_bar_date - 2d to today.
+   Does not fetch 3650 days.
+
+Return behavior table:
+
+mode
+eligible symbols
+fetch window
+when used
+provider calls
+market-hours allowed
+skips complete
+example
+
+==================================================
+PART 7 — SCHEDULE / TRIGGER MODEL
+==================================================
+
+Confirm or implement:
+
+- initial_full_backfill remains manual/admin only
+- missing_symbols_catchup can run nightly off-hours
+- incremental_daily_append can run nightly off-hours
+- neither catch-up nor append can run during market hours
+- if a new watchlist ticker is added intraday, it waits until off-hours catch-up
+- if user wants immediate fill for 1 ticker, there should be an admin/manual endpoint, still market-hours gated unless forced
+
+Do not force immediate history fetches from UI/page requests.
+
+==================================================
+PART 8 — STATUS ENDPOINTS
+==================================================
+
+Update /api/admin/canonical-history/status if needed to expose:
+
+default_universe_count
+canonical_index_count
+missing_symbols_count
+missing_symbols_sample
+missing_stage2_symbols_count
+missing_portfolio_symbols_count
+missing_active_theme_proxy_symbols_count
+complete_symbols_count
+append_due_count
+next_missing_catchup_allowed
+next_incremental_append_allowed
+market_hours_gate_active
+
+==================================================
+PART 9 — VALIDATION
+==================================================
+
+Validate with simulated or real examples without adding provider calls during market hours.
+
+Use these cases:
+
+A. Existing universe symbol not yet backfilled:
+MSFT or NVDA
+
+Expected:
+- in eligible universe
+- missing canonical history
+- queued for initial_full_backfill / missing_symbols_catchup
+- no request-time provider call
+
+B. Existing completed symbol:
+SPY / AAPL / MARA
+
+Expected:
+- currently available_5y, needs upgrade to 10Y during initial full backfill
+- after upgrade, future runs skip full fetch and only append
+
+C. New watchlist ticker simulation:
+Use a dry-run symbol or existing known symbol not currently in Stage2 if safe.
+
+Expected:
+- appears in eligible universe after watchlist/LKG update
+- missing_symbols_catchup picks it up
+- no immediate provider call during add request
+
+D. New Theme primary proxy simulation:
+
+Expected:
+- picked up if it is primary active proxy
+- not picked up if only broad basket/candidate symbol
+
+Return:
+
+symbol
+case
+in_current_eligible_universe
+in_canonical_index
+history_status
+would_initial_full_backfill
+would_missing_symbols_catchup
+would_incremental_append
+would_call_provider_request_time
+plain_english_explanation
+
+==================================================
+PART 10 — TONIGHT RUN PLAN
+==================================================
+
+Return the exact recommended sequence for tonight.
+
+Must include:
+
+1. Preflight status check.
+2. Enable flags.
+3. Run initial_full_backfill in batches.
+4. Verify total index approaches default universe count.
+5. Verify statuses available_10y / available_lifetime_under_10y.
+6. Disable full backfill flags.
+7. Leave missing_symbols_catchup / incremental append safe for future off-hours only.
+
+Do not recommend running anything during market hours.
+
+==================================================
+PART 11 — FINAL REPORT
+==================================================
+
+Return:
+
+DYNAMIC CANONICAL HISTORY CATCH-UP REPORT
+
+FILES CHANGED:
+[list]
+
+CURRENT STATE:
+[summary]
+
+BACKFILL UNIVERSE DYNAMIC AUDIT:
+[summary]
+
+WATCHLIST ADDITION FLOW:
+[summary]
+
+THEME PROXY ADDITION FLOW:
+[summary]
+
+MISSING-SYMBOL CATCH-UP:
+[summary]
+
+JOB TYPE MATRIX:
+[table]
+
+STATUS ENDPOINTS:
+[summary]
+
+VALIDATION:
+[table]
+
+TONIGHT RUN PLAN:
+[steps]
+
+End exactly:
+
+DYNAMIC CANONICAL HISTORY VERDICT
+
+CURRENT_BACKFILL_NOT_RUNNING:
+[YES/NO]
+
+MARKET_HOURS_HISTORY_CALLS_BLOCKED:
+[YES/NO]
+
+BACKFILL_UNIVERSE_REBUILT_DYNAMICALLY:
+[YES/NO]
+
+NEW_WATCHLIST_TICKERS_PICKED_UP_LATER:
+[YES/NO]
+
+NEW_THEME_PRIMARY_PROXIES_PICKED_UP_LATER:
+[YES/NO]
+
+BROAD_THEME_BASKET_EXCLUDED_BY_DEFAULT:
+[YES/NO]
+
+THEME_CANDIDATES_EXCLUDED_BY_DEFAULT:
+[YES/NO]
+
+MISSING_SYMBOLS_CATCHUP_EXISTS:
+[YES/NO]
+
+MISSING_SYMBOLS_CATCHUP_OFFHOURS_ONLY:
+[YES/NO]
+
+INCREMENTAL_APPEND_ONLY_FOR_EXISTING_CACHED_SYMBOLS:
+[YES/NO]
+
+NO_REQUEST_TIME_PROVIDER_CALLS:
+[YES/NO]
+
+READY_FOR_TONIGHT_INITIAL_10Y_BACKFILL:
+[YES/NO]

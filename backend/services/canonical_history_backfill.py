@@ -138,6 +138,49 @@ def get_backfill_status() -> dict:
         snap["tradier_global_calls_last_60s"]   = st.get("calls_last_60s", 0)
     except Exception:
         pass
+    # ── Universe awareness (sync, no provider calls) ──────────────────────────
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        from services.canonical_history_service import get_metadata as _gmeta, is_10y_complete as _is_complete, needs_append as _needs_append
+        _COMPLETE = {"available_10y", "available_lifetime_under_10y", "actual_ticker_history_limit"}
+
+        # Stage2 LKG — synchronous file read
+        _stage2: set = set()
+        _lkg_path = _Path(__file__).resolve().parent.parent / "data" / "watchlist_stage2_lkg.json"
+        if _lkg_path.exists():
+            _stage2 = {k.upper() for k in (_json.loads(_lkg_path.read_text()).get("results") or {})}
+
+        # Primary theme proxies — first symbol per theme (no broad basket)
+        _primary: set = set()
+        try:
+            from services.theme_merge_layer import ENRICHED_THEME_RS_UNIVERSE as _TRS
+            for _tm in _TRS.values():
+                _ps = _tm.get("proxy_symbols", [])
+                if _ps and _is_eligible(_ps[0].upper()):
+                    _primary.add(_ps[0].upper())
+        except Exception:
+            pass
+
+        # Default eligible universe (mirrors _build_symbol_list_tiered default scope)
+        _default_universe = {s for s in (_stage2 | _primary) if _is_eligible(s)}
+        _default_count    = len(_default_universe)
+
+        # Compare against canonical index
+        _complete_syms  = {s for s in _default_universe if _is_complete((_gmeta(s) or {}).get("history_status", "not_yet_backfilled"))}
+        _missing_syms   = _default_universe - _complete_syms
+        _append_due     = {s for s in _complete_syms if _needs_append(s)}
+        _missing_sample = sorted(_missing_syms)[:15]
+
+        snap["default_universe_count"]             = _default_count
+        snap["missing_symbols_count"]              = len(_missing_syms)
+        snap["missing_symbols_sample"]             = _missing_sample
+        snap["complete_symbols_count"]             = len(_complete_syms)
+        snap["append_due_count"]                   = len(_append_due)
+        snap["missing_stage2_symbols_count"]       = len({s for s in _stage2   if _is_eligible(s) and s in _missing_syms})
+        snap["missing_primary_proxy_symbols_count"]= len({s for s in _primary  if s in _missing_syms})
+    except Exception:
+        pass
     return snap
 
 
@@ -273,6 +316,10 @@ def _check_full_backfill_allowed(mode: str, confirm: bool = False) -> Optional[s
             return "monthly_full_refresh_disabled_by_flag"
     if mode == "initial_full_backfill" and not _FULL_BACKFILL_ENABLED():
         return "full_backfill_disabled_by_flag"
+    # missing_symbols_catchup: only requires BACKFILL_ENABLED (already checked above).
+    # Designed for ongoing nightly use after new watchlist/theme symbols are added.
+    # Does NOT require FULL_BACKFILL_ENABLED — that flag is for the one-time 410-symbol
+    # initial fill only.  missing_symbols_catchup naturally skips already-complete symbols.
     return None
 
 
@@ -975,4 +1022,43 @@ async def run_incremental_append(
         symbols=symbols, max_symbols=max_symbols, delay_s=delay_s,
         allow_fmp_fallback=False, priority_only=False,
         mode="incremental_daily_append", confirm=False,
+    )
+
+
+# ── Missing-symbol catch-up runner ────────────────────────────────────────────
+
+async def run_missing_symbols_catchup(
+    symbols:     Optional[list[str]] = None,
+    max_symbols: int                 = 50,
+    delay_s:     float               = _OFFHOURS_DELAY_S,
+) -> dict:
+    """
+    Targeted off-hours catch-up for newly added watchlist/portfolio/theme symbols.
+
+    Behaviour:
+      - Rebuilds eligible universe fresh at call time (reads Stage2 LKG + theme
+        proxies from disk — no provider calls).
+      - Automatically skips symbols already at available_10y,
+        available_lifetime_under_10y, or actual_ticker_history_limit.
+      - Fetches full 10Y/lifetime bars only for missing/failed/insufficient symbols.
+      - Requires CANONICAL_HISTORY_BACKFILL_ENABLED=true.
+      - Does NOT require CANONICAL_HISTORY_FULL_BACKFILL_ENABLED (that flag is for
+        the one-time initial 410-symbol fill; this mode is for ongoing additions).
+      - Obeys market-hours gate (CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false blocks it).
+      - Safe to run nightly alongside incremental_daily_append.
+
+    When to use:
+      - Nightly, after incremental_daily_append, to cover any new additions.
+      - Manually, when a new watchlist ticker was just added and you want to backfill
+        it on the next off-hours window rather than wait for the next full run.
+
+    When NOT to use:
+      - During market hours (market-hours gate blocks it).
+      - For the initial 410-symbol fill (use initial_full_backfill for that).
+      - To re-fetch already-complete symbols (use manual_rebuild + confirm=true).
+    """
+    return await run_backfill_batch(
+        symbols=symbols, max_symbols=max_symbols, delay_s=delay_s,
+        allow_fmp_fallback=True, priority_only=False,
+        mode="missing_symbols_catchup", confirm=False,
     )
