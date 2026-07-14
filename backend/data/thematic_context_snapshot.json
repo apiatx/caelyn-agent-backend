@@ -4,7 +4,7 @@
     {
       "name": "Substrates / Packaging",
       "score": 84.5,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Top-percentile RS (84/100) vs theme universe. Outperforming SPY +4.4%, QQQ +2.7%. Breadth 0%."
       ],
@@ -23,7 +23,7 @@
     {
       "name": "Cybersecurity",
       "score": 83.8,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Top-percentile RS (84/100) vs theme universe with broad participation (100% advancing). Outperforming SPY +4.4%, QQQ +2."
       ],
@@ -40,7 +40,7 @@
     {
       "name": "Memory & Storage",
       "score": 76.8,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Top-percentile RS (76/100) vs theme universe. Outperforming SPY +4.5%, QQQ +2.8%. Breadth N/A.",
         "X consensus: 1 ticker mentioned"
@@ -56,7 +56,7 @@
     {
       "name": "Cloud Software",
       "score": 72.0,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Top-percentile RS (72/100) vs theme universe. Outperforming SPY +1.7%, QQQ +0.0%. Breadth 25%."
       ],
@@ -77,7 +77,7 @@
     {
       "name": "Semiconductor Equipment",
       "score": 69.0,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
         "X consensus: 1 ticker mentioned"
@@ -97,7 +97,7 @@
     {
       "name": "Technology",
       "score": 67.8,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
@@ -114,7 +114,7 @@
     {
       "name": "Insurance",
       "score": 67.0,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (67/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
@@ -132,7 +132,7 @@
     {
       "name": "Biotech",
       "score": 66.6,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (67/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
       ],
@@ -151,7 +151,7 @@
     {
       "name": "AI Networking",
       "score": 64.5,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Rising RS (64/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
         "X consensus: 1 ticker mentioned"
@@ -173,7 +173,7 @@
     {
       "name": "Quantum Computing",
       "score": 12.8,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (13/100) vs 51-theme universe. SPY delta -9.6%, QQQ delta -11.3%. Breadth N/A \u2014 minimal buying pressu"
       ],
@@ -188,7 +188,7 @@
     {
       "name": "Space Economy",
       "score": 14.9,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (15/100) vs 51-theme universe. SPY delta -5.7%, QQQ delta -7.4%. Breadth N/A \u2014 minimal buying pressur"
       ],
@@ -203,7 +203,7 @@
     {
       "name": "Lithium & Battery Tech",
       "score": 17.7,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (18/100) vs 51-theme universe. SPY delta -3.3%, QQQ delta -5.0%. Breadth 0% \u2014 minimal buying pressure"
       ],
@@ -221,7 +221,7 @@
     {
       "name": "LNG & Natural Gas",
       "score": 18.3,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (18/100) vs 51-theme universe. SPY delta -4.4%, QQQ delta -6.1%. Breadth 80% \u2014 minimal buying pressur"
       ],
@@ -238,7 +238,7 @@
     {
       "name": "Defense",
       "score": 20.6,
-      "source": "theme_rs_service",
+      "source": "lkg",
       "evidence": [
         "Bottom-quartile RS (21/100) vs 51-theme universe. SPY delta -4.5%, QQQ delta -6.2%. Breadth 0% \u2014 minimal buying pressure"
       ],
@@ -255,38 +255,19 @@
       ]
     }
   ],
-  "sector_leaders": [
-    {
-      "sector": "Technology",
-      "ticker": "XLK",
-      "score": 67.8,
-      "posture": "improving"
-    },
-    {
-      "sector": "Financials",
-      "ticker": "XLF",
-      "score": 61.4,
-      "posture": "improving"
-    },
-    {
-      "sector": "Utilities",
-      "ticker": "XLU",
-      "score": 55.8,
-      "posture": "improving"
-    }
-  ],
+  "sector_leaders": [],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-07-14T19:24:02.016640+00:00",
-  "snapshot_status": "fresh",
-  "snapshot_age_minutes": 0,
+  "last_updated": "2026-07-14T19:34:14.651669+00:00",
+  "snapshot_status": "stale_lkg",
+  "snapshot_age_minutes": 10,
   "source_health": {
     "regime": "fallback",
-    "sector_rotation": "ok",
+    "sector_rotation": "fallback",
     "theme_rs_service": "ok",
-    "theme_rotation": "ok",
+    "theme_rotation": "fallback",
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1784057042.0181015
+  "_saved_at": 1784057654.6518164
 }
