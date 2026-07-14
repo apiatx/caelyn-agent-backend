@@ -2415,6 +2415,7 @@ def build_confluence_snapshot(
         try:
             from services.confluence_v42_normalizer import (
                 build_confluence_v42_object,
+                build_data_status_flags,
                 build_invalidation_level,
                 build_risk_flags,
                 build_target_zone,
@@ -2443,8 +2444,11 @@ def build_confluence_snapshot(
             r["invalidation_level"] = _inv_level
             r["target_zone"]        = _target_zone
 
-            # Step 4 — First-class risk flags
+            # Step 4 — First-class risk flags (true trade-quality blockers only)
             r["risk_flags"] = build_risk_flags(r)
+
+            # Step 4b — Data/coverage/pending status flags (neutral, not bearish)
+            r["data_status_flags"] = build_data_status_flags(r)
 
             # Step 5 — Deterministic why_now / why_wait
             r["why_now"]  = build_why_now(r)

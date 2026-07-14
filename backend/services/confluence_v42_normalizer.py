@@ -96,14 +96,15 @@ def build_fib_wave_status(row: dict) -> str:
 
 
 def build_risk_flags(row: dict) -> list[str]:
+    """
+    TRUE trade/risk-quality blockers only.
+    Data/coverage/pending flags go in build_data_status_flags() instead.
+    """
     flags: list[str] = []
     bucket      = str(row.get("caelyn_confluence_bucket") or "")
     act         = str(row.get("caelyn_confluence_v42_actionability") or "")
     ext_state   = str(row.get("extension_state") or "").upper()
     entry_st    = str(row.get("entry_state") or "").upper()
-    opts_score  = row.get("options_alignment_score")
-    opts_status = str(row.get("options_status") or "").lower()
-    cat_status  = str(row.get("catalyst_status") or "").lower()
     entry_pts   = _fvf(row, "entry_exit_points")
     entry_ex_st = str(row.get("entry_exit_status") or "").lower()
 
@@ -128,15 +129,6 @@ def build_risk_flags(row: dict) -> list[str]:
     ):
         if entry_pts < 2.0:
             flags.append("NO_CLEAR_ENTRY")
-    if opts_score is None or opts_status in _OPTIONS_UNAVAILABLE_STATUSES:
-        if opts_status in {"confirmed_no_options", "no_options"}:
-            flags.append("OPTIONS_UNAVAILABLE")
-        elif opts_score is None and opts_status not in {"not_scanned", "pending", ""}:
-            flags.append("OPTIONS_UNAVAILABLE")
-    if cat_status in _CATALYST_UNAVAILABLE_STATUSES:
-        flags.append("CATALYST_UNAVAILABLE")
-    if build_fib_wave_status(row) == "pending_10y_backfill":
-        flags.append("FIB_PENDING")
     existing_risk_codes = [
         rc for rc in (row.get("caelyn_confluence_reason_codes") or [])
         if str(rc).startswith("RISK_")
@@ -144,6 +136,34 @@ def build_risk_flags(row: dict) -> list[str]:
     for rc in existing_risk_codes:
         if rc not in flags:
             flags.append(rc)
+    return list(dict.fromkeys(flags))
+
+
+def build_data_status_flags(row: dict) -> list[str]:
+    """
+    Data/coverage/pending status flags — NOT bearish trade signals.
+    Frontend should display these as neutral informational badges,
+    never as red risk warnings.
+    """
+    flags: list[str] = []
+    opts_score   = row.get("options_alignment_score")
+    opts_status  = str(row.get("options_status") or "").lower()
+    cat_status   = str(row.get("catalyst_status") or "").lower()
+    v42_bb       = row.get("caelyn_confluence_v42_bonus_breakdown") or {}
+    whale_bb     = v42_bb.get("whale_insider") or {}
+    whale_status = str(whale_bb.get("status") or "").lower()
+
+    if build_fib_wave_status(row) == "pending_10y_backfill":
+        flags.append("FIB_PENDING")
+    if opts_status in {"confirmed_no_options", "no_options"}:
+        flags.append("OPTIONS_UNAVAILABLE")
+    elif opts_score is None and opts_status not in {"not_scanned", "pending", ""}:
+        if opts_status in _OPTIONS_UNAVAILABLE_STATUSES:
+            flags.append("OPTIONS_UNAVAILABLE")
+    if cat_status in _CATALYST_UNAVAILABLE_STATUSES:
+        flags.append("CATALYST_UNAVAILABLE")
+    if whale_status in {"not_wired", ""}:
+        flags.append("WHALE_INSIDER_NOT_WIRED")
     return list(dict.fromkeys(flags))
 
 
@@ -317,8 +337,9 @@ def build_confluence_v42_object(row: dict) -> dict:
     target_zone = build_target_zone(row)
     why_now     = build_why_now(row)
     why_wait    = build_why_wait(row)
-    risk_flags  = build_risk_flags(row)
-    fib_status  = build_fib_wave_status(row)
+    risk_flags        = build_risk_flags(row)
+    data_status_flags = build_data_status_flags(row)
+    fib_status        = build_fib_wave_status(row)
 
     is_act  = row.get("is_actionable_setup", False)
     is_near = row.get("is_near_actionable", False)
@@ -444,9 +465,10 @@ def build_confluence_v42_object(row: dict) -> dict:
             "is_investment_quality": bool(is_iq),
         },
         "metadata": {
-            "schema_version":          "v4.2",
-            "confidence_score":        row.get("caelyn_confluence_confidence_score"),
-            "reason_codes":            list(row.get("caelyn_confluence_reason_codes") or []),
+            "schema_version":           "v4.2",
+            "confidence_score":         row.get("caelyn_confluence_confidence_score"),
+            "reason_codes":             list(row.get("caelyn_confluence_reason_codes") or []),
+            "data_status_flags":        data_status_flags,
             "deprecated_fields_present": deprecated_present,
             "deprecated_confluence_fields": _DEPRECATED_FIELDS,
         },
