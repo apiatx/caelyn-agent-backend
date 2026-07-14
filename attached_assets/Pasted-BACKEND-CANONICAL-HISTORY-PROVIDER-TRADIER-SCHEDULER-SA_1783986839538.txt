@@ -1,0 +1,469 @@
+BACKEND — CANONICAL HISTORY PROVIDER + TRADIER SCHEDULER SAFETY AUDIT
+
+Backend only.
+
+Do not touch frontend.
+Do not change Confluence weights.
+Do not hardcode ticker symbols.
+Do not call LLMs.
+Do not add request-time provider calls.
+Do not bypass the existing Tradier scheduler / limiter.
+Do not break Options Flow.
+Do not break retained snapshot rebuilds.
+
+Goal:
+
+Tradier may now support full historical daily candles through /v1/markets/history using start/end dates. If true, Tradier can be the primary canonical historical price provider, with FMP as fallback/verification.
+
+But Tradier is also heavily used for:
+- options flow
+- quotes
+- rel volume
+- options chains
+- watchlist/portfolio market data
+
+The risk is not a one-time cached historical backfill. The risk is the new historical job bypassing the existing Tradier pacing/scheduler or starving options flow.
+
+We need to verify provider capability and make canonical history a low-priority scheduled/backfill lane that respects the existing Tradier rate-limit system.
+
+==================================================
+PART 1 — AUDIT CURRENT TRADIER SCHEDULER / LIMITER
+==================================================
+
+Audit the existing Tradier scheduler / limiter.
+
+Inspect:
+
+backend/data/tradier_provider.py
+options flow services
+stage warmup services
+quote services
+theme options supplement jobs
+master screener jobs
+any global semaphores / token buckets / lane queues
+
+Return:
+
+file/function
+current global RPM limit
+current effective safety limit
+current lanes
+lane priorities
+current retry/backoff behavior
+whether X-Ratelimit headers are read
+whether jobs can bypass the scheduler
+known startup saturation sources
+whether canonical_history_backfill currently uses scheduler or raw HTTP
+
+Important:
+
+The canonical history backfill must not make direct httpx/requests calls to Tradier outside the scheduler.
+
+==================================================
+PART 2 — AUDIT TRADIER HISTORICAL CAPABILITY
+==================================================
+
+Test Tradier historical daily candles through the existing backend provider path only.
+
+Do not bypass the scheduler.
+
+For these symbols:
+
+SPY
+AAPL
+MARA
+ABCL
+ALGM
+VRT
+CRDO
+WYFI
+MSFT
+NVDA
+SMCI
+TSM
+
+Request historical daily bars with a 5-year start/end range.
+
+Return:
+
+symbol
+requested_start_date
+requested_end_date
+provider_used
+endpoint_used
+bars_returned
+oldest_bar_date
+newest_bar_date
+years_available
+has_daily_interval
+has_weekly_interval
+has_monthly_interval
+missing_sessions_estimate
+provider_status
+error_code
+rate_limit_headers_if_available
+
+Classify:
+
+TRADIER_FULL_HISTORY_OK
+TRADIER_PARTIAL_HISTORY
+TRADIER_SYMBOL_TOO_NEW
+TRADIER_PROVIDER_FAILED
+TRADIER_UNVERIFIED
+
+Important:
+
+If WYFI only has ~1 year of public history, classify it as ACTUAL_TICKER_HISTORY_LIMIT, not provider failure.
+
+==================================================
+PART 3 — VERIFY BAR QUALITY
+==================================================
+
+For historical bars used by Stage/Fib, quality matters.
+
+Audit whether Tradier historical bars are:
+
+- adjusted or unadjusted
+- split-adjusted
+- dividend-adjusted
+- consistent across splits
+- safe for Fibonacci anchors
+- safe for 200DMA / 30-week SMA
+- safe for Stage analysis
+
+If Tradier does not clearly expose adjustment status, add:
+
+canonical_history_adjusted_status = unknown
+
+Do not pretend unknown adjustment is perfect.
+
+If FMP can provide adjusted bars from the paid plan, compare a small sample:
+
+AAPL
+TSM
+MARA
+
+Compare:
+
+bar_count
+oldest_date
+newest_date
+close series around split dates if applicable
+adjustment behavior
+large discrepancies
+
+Use FMP only inside admin audit/backfill with budget guard.
+No request-time FMP calls.
+
+==================================================
+PART 4 — PROVIDER ORDER
+==================================================
+
+Set canonical history provider order as:
+
+1. Fresh canonical cache
+2. Tradier historical, if verified complete and scheduler-safe
+3. FMP 5-year historical fallback / verification
+4. Existing 400-bar stage cache as emergency fallback only
+
+Do not use FMP request-time.
+Do not use Tradier request-time for history.
+
+Expose:
+
+canonical_history_provider
+canonical_history_provider_rank
+canonical_history_quality
+canonical_history_adjusted_status
+
+Allowed canonical_history_quality:
+
+full_history_tradier_verified
+full_history_tradier_unverified
+full_5y_fmp
+partial_tradier
+partial_fmp
+actual_ticker_history_limit
+stage_cache_fallback
+provider_failed
+not_yet_backfilled
+
+==================================================
+PART 5 — INTEGRATE HISTORY BACKFILL INTO TRADIER SCHEDULER
+==================================================
+
+Canonical history backfill must be a low-priority lane inside the existing Tradier scheduler.
+
+Add lane:
+
+canonical_history_backfill
+
+Rules:
+
+- lowest priority
+- never bypass global Tradier limiter
+- no direct raw HTTP calls
+- pause or throttle if options_flow queue is active
+- pause or throttle if market is open and options jobs are behind
+- prefer off-hours / weekend
+- resumable
+- cache-first
+- skip fresh symbols
+- retry with backoff
+- save progress after every symbol
+- safe to stop/restart
+
+Suggested safe lane behavior:
+
+During market hours:
+- canonical_history_backfill RPM = 0–5 max
+- only run if options queue is idle
+
+Off-hours:
+- canonical_history_backfill RPM = 10–30 max
+- still respect global limiter
+- leave reserved headroom for quotes/options maintenance
+
+Weekend:
+- canonical_history_backfill can run more aggressively but still below global limiter
+
+Do not hardcode exact RPM if the existing scheduler already has config.
+Use scheduler config/env where possible.
+
+Expose diagnostics:
+
+history_lane_rpm_config
+history_lane_current_usage
+history_lane_paused_reason
+history_lane_backlog_count
+history_lane_last_symbol
+history_lane_last_success_at
+history_lane_last_error
+tradier_global_available_tokens
+options_flow_queue_depth
+quotes_queue_depth
+
+==================================================
+PART 6 — ONE-TIME BACKFILL VS DAILY MAINTENANCE
+==================================================
+
+The initial 5-year backfill should happen once per eligible symbol.
+
+After that:
+
+- do not refetch 5 years every day
+- append only missing daily bars after market close
+- skip weekends/holidays when no new bar exists
+- full 5-year refresh only monthly or manual/admin
+- if cache corrupt/missing, re-backfill that symbol
+
+Add:
+
+canonical_history_refresh_mode
+
+Allowed values:
+
+initial_full_backfill
+incremental_daily_append
+weekly_health_check
+monthly_full_refresh
+manual_rebuild
+cache_read_only
+
+==================================================
+PART 7 — CANONICAL HISTORY USED BY STAGE / ENTRY / FIB
+==================================================
+
+Stage, Entry/Exit, Extension Reset, Fib, and Wave Structure should all prefer the canonical history cache.
+
+No provider calls during these calculations.
+
+Expose:
+
+stage_history_source
+entry_history_source
+fib_history_source
+wave_history_source
+stage_bar_count
+entry_bar_count
+fib_bar_count
+wave_bar_count
+history_years_available
+history_status
+history_data_depth_confidence
+
+If canonical history missing:
+- use fallback cache
+- mark limitation
+- enqueue symbol for backfill
+- do not fetch provider request-time
+
+==================================================
+PART 8 — BACKFILL PRIORITY
+==================================================
+
+Backfill priority:
+
+Tier 0:
+- Actionable / Near Actionable symbols
+- watchlist symbols with < 756 bars
+- symbols where Stage/Fib are using fallback 400 bars
+- current validation symbols
+
+Tier 1:
+- portfolio underlyings
+- options-flow active universe
+- high-priority simple US tickers
+
+Tier 2:
+- remaining eligible watchlist / theme universe symbols
+
+Exclude:
+- tickers with ":"
+- confirmed provider no-data
+- actual ticker history limit already satisfied
+- fresh full-history cache
+
+==================================================
+PART 9 — VALIDATION
+==================================================
+
+Validate:
+
+SPY
+AAPL
+MARA
+ABCL
+ALGM
+VRT
+CRDO
+WYFI
+MSFT
+NVDA
+SMCI
+TSM
+HOOD
+HIMS
+SOFI
+ENTG
+ONTO
+OUST
+CGNX
+
+For each return:
+
+symbol
+confluence_eligible
+provider_used
+canonical_history_provider
+canonical_history_quality
+canonical_history_adjusted_status
+bar_count
+oldest_bar_date
+newest_bar_date
+years_available
+actual_ticker_history_limit
+stage_history_source
+fib_history_source
+history_data_depth_confidence
+fib_timeframe_scope
+fib_multi_year_available
+primary_fib_context
+primary_fib_timeframe
+primary_nearest_fib_label
+primary_distance_to_fib_pct
+actionable_tier
+actionable_path
+history_lane_calls_used
+scheduler_lane_used
+request_time_provider_calls
+plain_english_explanation
+
+Expected:
+
+- Tradier historical can be primary only if it returns complete usable history through the scheduler.
+- FMP remains fallback/verification.
+- No request-time provider calls.
+- Options flow remains protected.
+- WYFI should be classified as actual ticker history limit if it is genuinely new.
+
+==================================================
+PART 10 — FINAL REPORT
+==================================================
+
+Return:
+
+CANONICAL HISTORY PROVIDER + SCHEDULER SAFETY REPORT
+
+FILES CHANGED:
+[list]
+
+TRADIER SCHEDULER AUDIT:
+[summary]
+
+TRADIER HISTORICAL CAPABILITY:
+[summary]
+
+BAR QUALITY / ADJUSTMENT STATUS:
+[summary]
+
+PROVIDER ORDER:
+[summary]
+
+HISTORY BACKFILL LANE:
+[summary]
+
+ONE-TIME VS DAILY MAINTENANCE:
+[summary]
+
+STAGE / ENTRY / FIB INTEGRATION:
+[summary]
+
+VALIDATION SYMBOLS:
+[table]
+
+TRADIER CALLS USED:
+[count]
+
+FMP CALLS USED:
+[count]
+
+REQUEST_TIME_PROVIDER_CALLS:
+[0 expected]
+
+OPTIONS_FLOW_IMPACT:
+[none / low / medium / high, explain]
+
+End exactly:
+
+CANONICAL HISTORY VERDICT
+
+TRADIER_FULL_HISTORY_CONFIRMED:
+[YES/NO/PARTIAL]
+
+TRADIER_HISTORY_GOES_THROUGH_EXISTING_SCHEDULER:
+[YES/NO]
+
+TRADIER_HISTORY_DOES_NOT_STARVE_OPTIONS_FLOW:
+[YES/NO]
+
+FMP_RETAINED_AS_FALLBACK_OR_VERIFICATION:
+[YES/NO]
+
+BAR_ADJUSTMENT_STATUS_EXPOSED:
+[YES/NO]
+
+CANONICAL_CACHE_PREVENTS_REPEAT_HISTORY_CALLS:
+[YES/NO]
+
+DAILY_REFRESH_IS_INCREMENTAL_NOT_FULL_REFETCH:
+[YES/NO]
+
+STAGE_ENTRY_FIB_USE_CANONICAL_CACHE:
+[YES/NO]
+
+NO_REQUEST_TIME_PROVIDER_CALLS:
+[YES/NO]
+
+READY_FOR_FULL_WATCHLIST_BACKFILL:
+[YES/NO]

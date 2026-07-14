@@ -310,17 +310,68 @@ def get_bars(symbol: str, require_fresh: bool = True) -> Optional[dict]:
         return None
 
 
+def _compute_quality(
+    bar_count: int,
+    provider: str,
+    is_actual_limit: bool,
+    tradier_capability: Optional[str] = None,
+) -> str:
+    """
+    canonical_history_quality — describes the confidence and provenance of bars.
+
+    full_history_tradier_verified   Tradier returned ≥1100 bars, capability confirmed
+    full_history_tradier_unverified Tradier returned ≥1100 bars, not yet cross-verified
+    full_5y_fmp                     FMP returned ≥1100 bars
+    partial_tradier                 Tradier returned <1100 bars
+    partial_fmp                     FMP returned <1100 bars
+    actual_ticker_history_limit     Genuinely new ticker (not a data gap)
+    stage_cache_fallback            Served from 400-bar stage cache (last resort)
+    provider_failed                 All providers returned empty
+    not_yet_backfilled              No attempt made
+    """
+    if is_actual_limit:
+        return "actual_ticker_history_limit"
+    if bar_count == 0:
+        return "provider_failed"
+    if provider == "tradier":
+        if bar_count >= 1100:
+            return ("full_history_tradier_verified"
+                    if tradier_capability == "TRADIER_FULL_HISTORY_OK"
+                    else "full_history_tradier_unverified")
+        return "partial_tradier"
+    if provider == "fmp":
+        return "full_5y_fmp" if bar_count >= 1100 else "partial_fmp"
+    if provider == "stage_cache":
+        return "stage_cache_fallback"
+    return "full_history_tradier_unverified"  # canonical_tradier or unknown
+
+
+def _provider_rank(provider: str) -> int:
+    """Lower rank = higher-quality provider (Tradier is now primary)."""
+    return {"tradier": 1, "fmp": 2, "stage_cache": 4}.get(provider, 3)
+
+
 def save_bars(
-    symbol:           str,
-    bars:             list[dict],
-    provider:         str,
-    is_actual_limit:  bool          = False,
-    error_reason:     Optional[str] = None,
+    symbol:             str,
+    bars:               list[dict],
+    provider:           str,
+    is_actual_limit:    bool          = False,
+    error_reason:       Optional[str] = None,
+    refresh_mode:       str           = "initial_full_backfill",
+    tradier_capability: Optional[str] = None,
 ) -> dict:
     """
     Persist canonical history to disk and update _INDEX.
     Returns the metadata entry (without bars).
     Called by the backfill job only — never at request time.
+
+    refresh_mode values:
+      initial_full_backfill   first-ever 5Y fetch
+      incremental_daily_append  appended new bars to existing full history
+      manual_rebuild           forced full re-fetch
+      cache_read_only          no provider call made (should not reach save_bars)
+      weekly_health_check      periodic re-verification
+      monthly_full_refresh     monthly re-fetch
     """
     sym = symbol.upper()
     _ensure_dir()
@@ -345,27 +396,38 @@ def save_bars(
         (datetime.now(timezone.utc) + timedelta(hours=stale_h)).isoformat()
         if stale_h > 0 else None
     )
-    # Approximate weekly/monthly bar counts from bar_count
     wk_approx = round(bar_count / 5)
     mo_approx = round(bar_count / 21)
 
+    # Adjustment status — Tradier does not expose this; FMP EOD endpoint
+    # historically returns split-adjusted prices but docs are not explicit.
+    # We conservatively mark both as unknown to avoid misleading Fib anchors.
+    adjusted_status = "unknown"
+
     meta: dict = {
-        "symbol":            sym,
-        "provider":          provider,
-        "bar_count":         bar_count,
-        "oldest_bar_date":   oldest,
-        "newest_bar_date":   newest,
-        "years_available":   years_avail,
-        "fetched_at":        now,
-        "stale_after":       stale_after,
-        "history_status":    status,
-        "error_reason":      error_reason,
-        "source_priority":   1 if provider == "fmp" else 2,
-        "is_actual_limit":   is_actual_limit,
-        "depth_confidence":  dep_conf,
-        "fib_scope":         fib_timeframe_scope(bar_count, wk_approx, mo_approx),
-        "last_attempt_at":   now,
-        "next_retry_at":     stale_after,
+        "symbol":                         sym,
+        "provider":                       provider,
+        "canonical_history_provider":     provider,
+        "canonical_history_provider_rank": _provider_rank(provider),
+        "canonical_history_quality":      _compute_quality(
+                                              bar_count, provider,
+                                              is_actual_limit, tradier_capability),
+        "canonical_history_adjusted_status": adjusted_status,
+        "canonical_history_refresh_mode": refresh_mode,
+        "bar_count":                      bar_count,
+        "oldest_bar_date":                oldest,
+        "newest_bar_date":                newest,
+        "years_available":                years_avail,
+        "fetched_at":                     now,
+        "stale_after":                    stale_after,
+        "history_status":                 status,
+        "error_reason":                   error_reason,
+        "source_priority":                _provider_rank(provider),
+        "is_actual_limit":                is_actual_limit,
+        "depth_confidence":               dep_conf,
+        "fib_scope":                      fib_timeframe_scope(bar_count, wk_approx, mo_approx),
+        "last_attempt_at":                now,
+        "next_retry_at":                  stale_after,
     }
 
     if bars:
@@ -380,6 +442,44 @@ def save_bars(
     _INDEX[sym] = meta
     _write_index()
     return meta
+
+
+def append_bars(
+    symbol:   str,
+    new_bars: list[dict],
+    provider: str,
+) -> Optional[dict]:
+    """
+    Incremental daily append — merge *new_bars* into the existing cached bars.
+
+    Strategy:
+      1. Load existing bars from disk (stale OK for append).
+      2. Merge by date — new_bars overwrite on date collision.
+      3. Save the merged set via save_bars() with refresh_mode='incremental_daily_append'.
+
+    Returns updated metadata, or None if the existing cache is missing.
+    """
+    sym = symbol.upper()
+    existing = get_bars(sym, require_fresh=False)
+    if not existing:
+        return None
+    old_bars: list[dict] = existing.get("bars") or []
+
+    by_date: dict[str, dict] = {
+        str(b.get("date", ""))[:10]: b
+        for b in old_bars if b.get("date")
+    }
+    for b in new_bars:
+        d = str(b.get("date", ""))[:10]
+        if d:
+            by_date[d] = b
+
+    merged = sorted(by_date.values(), key=lambda x: x.get("date", ""))
+    return save_bars(
+        sym, merged, provider,
+        is_actual_limit=existing.get("is_actual_limit", False),
+        refresh_mode="incremental_daily_append",
+    )
 
 
 def mark_failed(symbol: str, error_reason: str, provider: str = "unknown") -> None:

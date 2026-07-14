@@ -39,6 +39,7 @@ LANE_NAMES: tuple[str, ...] = (
     "maintenance",
     "sectors",
     "reserved",
+    "canonical_history_backfill",  # lowest priority — off-hours preferred, never starves options
 )
 WINDOW_S: float = 60.0  # sliding window duration (seconds)
 
@@ -87,12 +88,18 @@ def _env_int(key: str, default: int) -> int:
 
 
 BUDGETS: dict[str, int] = {
-    "quotes":        _env_int("TRADIER_QUOTE_RPM_BUDGET",         30),
-    "options_flow":  _env_int("TRADIER_OPTIONS_FLOW_RPM_BUDGET",  40),
-    "saved_options": _env_int("TRADIER_SAVED_OPTIONS_RPM_BUDGET", 25),
-    "maintenance":   _env_int("TRADIER_MAINTENANCE_RPM_BUDGET",   20),
-    "sectors":       _env_int("TRADIER_SECTORS_RPM_BUDGET",       60),
-    "reserved":      _env_int("TRADIER_RESERVED_RPM_BUDGET",       5),
+    "quotes":                      _env_int("TRADIER_QUOTE_RPM_BUDGET",         30),
+    "options_flow":                _env_int("TRADIER_OPTIONS_FLOW_RPM_BUDGET",  40),
+    "saved_options":               _env_int("TRADIER_SAVED_OPTIONS_RPM_BUDGET", 25),
+    "maintenance":                 _env_int("TRADIER_MAINTENANCE_RPM_BUDGET",   20),
+    "sectors":                     _env_int("TRADIER_SECTORS_RPM_BUDGET",       60),
+    "reserved":                    _env_int("TRADIER_RESERVED_RPM_BUDGET",       5),
+    # Canonical history backfill — lowest priority; off-hours/weekend preferred.
+    # Market-hours budget is intentionally low (5); the backfill job itself
+    # applies an additional options-flow-busy gate before each call.
+    # Off-hours: the job raises effective RPM via shorter sleep delays
+    # (up to TRADIER_CANON_HIST_OFFHOURS_RPM_BUDGET, default 15).
+    "canonical_history_backfill":  _env_int("TRADIER_CANON_HIST_RPM_BUDGET",    5),
 }
 
 # ── Per-lane sliding-window state ─────────────────────────────────────────────
@@ -165,19 +172,22 @@ def diagnostics() -> dict:
     except Exception:
         _enforcing = True
     return {
-        "tradier_budget_enabled":          True,
-        "budget_enforcement_active":       _enforcing,
-        "budget_by_lane":                  dict(BUDGETS),
-        "calls_last_60s_by_lane":          calls_60s,
-        "deferred_by_lane":                dict(_deferred),
-        "lane_saturation":                 saturation,
-        "options_flow_budget_used":        calls_60s["options_flow"],
-        "quote_budget_used":               calls_60s["quotes"],
-        "saved_options_budget_used":       calls_60s["saved_options"],
-        "maintenance_budget_used":         calls_60s["maintenance"],
-        "sectors_budget_used":             calls_60s["sectors"],
-        "reserved_budget_used":            calls_60s["reserved"],
-        "budget_rejections_or_deferrals":  sum(_deferred.values()),
-        "oldest_deferred_by_lane":         dict(_oldest_deferred),
-        "last_budget_reset_at":            None,
+        "tradier_budget_enabled":                     True,
+        "budget_enforcement_active":                  _enforcing,
+        "budget_by_lane":                             dict(BUDGETS),
+        "calls_last_60s_by_lane":                     calls_60s,
+        "deferred_by_lane":                           dict(_deferred),
+        "lane_saturation":                            saturation,
+        "options_flow_budget_used":                   calls_60s["options_flow"],
+        "quote_budget_used":                          calls_60s["quotes"],
+        "saved_options_budget_used":                  calls_60s["saved_options"],
+        "maintenance_budget_used":                    calls_60s["maintenance"],
+        "sectors_budget_used":                        calls_60s["sectors"],
+        "reserved_budget_used":                       calls_60s["reserved"],
+        "canonical_history_backfill_budget_used":     calls_60s["canonical_history_backfill"],
+        "canonical_history_backfill_budget_cap":      BUDGETS["canonical_history_backfill"],
+        "canonical_history_backfill_saturated":       saturation["canonical_history_backfill"],
+        "budget_rejections_or_deferrals":             sum(_deferred.values()),
+        "oldest_deferred_by_lane":                    dict(_oldest_deferred),
+        "last_budget_reset_at":                       None,
     }

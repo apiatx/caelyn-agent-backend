@@ -9,6 +9,14 @@ description: Architecture and gotchas for the disk-persistent canonical bar cach
 
 **Why:** `FMP_BLOCK_FULL_HISTORICAL=true` is set in env; without canonical cache all analysis falls back to 400-bar Tradier window which breaks Fib weekly/monthly and long-term stage detection.
 
+## V4.2.5.3 changes (scheduler-safe Tradier primary)
+- `canonical_history_backfill` lane added to `tradier_budget.py` (default 5 RPM, env `TRADIER_CANON_HIST_RPM_BUDGET`)
+- All Tradier history calls now route through `TradierProvider.get_history()` → `_get()` → `TRADIER_LIMITER` + lane budget. **Zero raw httpx calls.**
+- `_fetch_tradier_daily_history` from `theme_rs_service.py` (tagged `[TRADIER_UNMANAGED]`) is NO LONGER used by backfill.
+- Tradier is now PRIMARY; FMP is fallback only (when Tradier returns <504 bars).
+- Session-aware throttling: active-session gate (5 RPM hard cap) + options-flow-busy soft gate (skip if >80% saturated); off-hours shortens sleep to approach `TRADIER_CANON_HIST_OFFHOURS_MAX_RPM` (default 15).
+- `canonical_history_backfill` lane visible in `/api/rate-status` `budget_by_lane`.
+
 ## Key design points
 
 - Storage: `backend/data/canonical_history/{SYM}.json.gz` per symbol; `_index.json` metadata index (no bars inline).
@@ -27,6 +35,19 @@ description: Architecture and gotchas for the disk-persistent canonical bar cach
 
 ## History status tags
 `available_5y` ≥1100 bars; `available_3y` ≥700; `partial_history` ≥504; `intermediate_only` ≥252; `recent_only` ≥40; `actual_ticker_history_limit`; `insufficient_history`; `fetch_failed`; `not_yet_backfilled`.
+
+## New metadata fields (V4.2.5.3)
+- `canonical_history_provider` — same as `provider`
+- `canonical_history_provider_rank` — 1=Tradier (primary), 2=FMP
+- `canonical_history_quality` — `full_history_tradier_verified/unverified`, `full_5y_fmp`, `partial_tradier`, `partial_fmp`, `actual_ticker_history_limit`, `stage_cache_fallback`, `provider_failed`
+- `canonical_history_adjusted_status` — always `"unknown"` (Tradier docs don't specify; conservative)
+- `canonical_history_refresh_mode` — `initial_full_backfill`, `incremental_daily_append`, `manual_rebuild`
+- `append_bars(symbol, new_bars, provider)` — incremental daily merge by date, dedup, saves with `incremental_daily_append` mode
+
+## Tradier capability (confirmed 2026-07-13)
+- 10/12 test symbols: TRADIER_FULL_HISTORY_OK (1253 bars, 5.0Y)
+- CRDO: 1117 bars (4.4Y) — IPO Jan 2022
+- WYFI: 233 bars — ACTUAL_TICKER_HISTORY_LIMIT (IPO Aug 2025)
 
 ## New diagnostic fields
 - Stage2 LKG: `stage_bar_count`, `stage_years_available`, `stage_history_status`, `stage_history_source`, `stage_long_history_used`, `stage_data_depth_confidence`, `stage_data_limitation_reason`.
