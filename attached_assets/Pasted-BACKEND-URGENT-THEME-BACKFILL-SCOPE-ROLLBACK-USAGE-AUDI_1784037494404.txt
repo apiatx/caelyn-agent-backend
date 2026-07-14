@@ -1,0 +1,324 @@
+BACKEND — URGENT THEME BACKFILL SCOPE ROLLBACK + USAGE AUDIT
+
+Backend only.
+
+Do not touch frontend.
+Do not change Watchlist canonical history.
+Do not change Stage / Entry / Fib / Wave canonical history.
+Do not change Confluence scoring.
+Do not rewrite the Tradier limiter.
+Do not touch Options Flow.
+Do not run full backfill.
+Do not add provider calls.
+
+Goal:
+
+The V4.2.5.7 patch over-expanded the canonical history backfill universe from 379 to 661 by adding:
+
+- 431 Theme proxy ETFs
+- 497 Theme candidate stocks
+- +282 net-new symbols
+
+This is not intended.
+
+The user does not want the entire broad Theme research universe backfilled or maintained. The user only wants canonical history for:
+
+1. Watchlist / Stage2 / Portfolio universe.
+2. Actual Theme ETFs currently used/displayed on the website.
+3. No broad Theme candidate stocks unless explicitly enabled.
+
+We need to preserve canonical read support but rollback/default-disable the broad Theme backfill expansion.
+
+==================================================
+PART 1 — FREEZE BROAD BACKFILL EXPANSION
+==================================================
+
+Immediately ensure the default canonical backfill universe does NOT include:
+
+ENRICHED_ALL_PROXY_SYMBOLS
+ENRICHED_ALL_CANDIDATE_SYMBOLS
+
+by default.
+
+Add or confirm safe flags:
+
+CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES=false
+CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES=false
+
+Defaults must be false.
+
+If these flags are false:
+- do not add all 431 Theme proxy ETFs
+- do not add all 497 Theme candidate stocks
+- do not let total default universe become 661
+
+Do not remove the ability to read canonical history if a symbol already exists in cache.
+
+This is only about default backfill/maintenance scope.
+
+==================================================
+PART 2 — KEEP CANONICAL READ PATHS
+==================================================
+
+Keep these good changes:
+
+Theme proxy path:
+1. canonical cache
+2. FMP fallback
+3. Tradier fallback
+4. yfinance fallback
+
+Theme constituent path:
+1. canonical cache if available
+2. existing fallback
+
+Important:
+
+A Theme symbol may read canonical cache if it already exists.
+But the default backfill job should not proactively fetch hundreds of broad Theme symbols.
+
+==================================================
+PART 3 — AUDIT ACTIVE VS BROAD THEME SYMBOLS
+==================================================
+
+We need to know which Theme symbols are actually used on the website.
+
+Audit:
+
+- /api/themes output
+- get_theme_rs_data()
+- theme_merge_layer
+- frontend Themes page if accessible
+- any active theme config
+- any primary proxy ETF map
+- any displayed proxy ETF list
+- any displayed Theme candidate stock list
+
+Return this table:
+
+category
+count
+source_file
+source_variable
+used_in_ui
+used_in_score
+included_in_default_backfill_after_fix
+requires_explicit_flag
+example_symbols
+
+Required categories:
+
+stage2_lkg_core_universe
+portfolio_underlyings
+active_theme_proxy_etfs_displayed
+active_theme_proxy_etfs_used_in_score
+all_theme_proxy_etfs_broad
+active_theme_candidate_stocks_displayed
+all_theme_candidate_stocks_broad
+total_default_backfill_universe
+total_full_research_universe
+
+Specifically answer:
+
+Why are there 431 proxy ETFs?
+How many proxy ETFs are actually used/displayed on the Themes page?
+How many Theme candidate stocks are actually displayed on the website?
+Are Theme candidate stocks used anywhere user-visible today?
+Are these 661 symbols related to Options Flow Screener, or only Themes?
+
+==================================================
+PART 4 — DEFINE DEFAULT BACKFILL UNIVERSE
+==================================================
+
+Default canonical backfill universe should include only:
+
+1. Watchlist / Stage2 LKG symbols.
+2. Portfolio underlyings.
+3. Active Theme proxy ETFs actually used/displayed/scored today.
+4. Required benchmark/index ETFs directly used by visible pages.
+
+Do not include by default:
+
+- all 431 possible Theme proxy ETFs
+- all 497 Theme candidate stocks
+- ETF holdings
+- broad discovery candidates
+- future expansion symbols
+- unused fallback proxies
+
+Expected default count should be close to:
+
+379 core universe
++ small number of actual Theme proxy ETFs, likely ~15–30
++ any required benchmark ETFs
+
+It should not be 661.
+
+==================================================
+PART 5 — OPTIONAL EXPANSION MODES
+==================================================
+
+Add or confirm admin-only expansion modes:
+
+mode=core
+  Stage2/watchlist/portfolio only
+
+mode=core_plus_active_themes
+  Core + active Theme proxy ETFs used/displayed today
+  This should be default.
+
+mode=all_theme_proxies
+  Includes broad 431 proxy ETFs.
+  Requires:
+  CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES=true
+  confirm=true
+
+mode=all_theme_candidates
+  Includes broad 497 candidate stocks.
+  Requires:
+  CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES=true
+  confirm=true
+
+mode=full_research_universe
+  Includes everything.
+  Requires both flags and confirm=true.
+
+==================================================
+PART 6 — QUEUE / REFRESH IMPACT AUDIT
+==================================================
+
+Return exactly how often canonical history currently runs or would run.
+
+Answer:
+
+- Does full 10Y backfill auto-run? YES/NO
+- Does incremental append auto-run? YES/NO
+- If yes, when?
+- How many symbols would incremental append cover before this fix?
+- How many symbols would incremental append cover after this fix?
+- Does canonical history use the same Tradier limiter as Options Flow?
+- What is its lane RPM?
+- Can it run during market hours?
+- Can it starve options flow?
+- Are Options Flow scanner tickers affected by this Theme expansion?
+
+Return:
+
+before_default_universe_count
+after_default_universe_count
+before_incremental_append_count
+after_incremental_append_count
+tradier_history_lane_rpm
+options_flow_lane_rpm
+market_hours_backfill_allowed
+plain_english_risk_summary
+
+==================================================
+PART 7 — VALIDATION SYMBOLS
+==================================================
+
+Validate:
+
+ABCL
+ALGM
+VRT
+OUST
+CRDO
+WYFI
+MSFT
+NVDA
+TSM
+SOFI
+HOOD
+HIMS
+ENTG
+ONTO
+CGNX
+
+For each return:
+
+symbol
+in_stage2_lkg
+in_watchlist
+in_portfolio
+in_active_theme_proxy_set
+in_all_theme_proxy_set
+in_active_theme_candidate_set
+in_all_theme_candidate_set
+included_in_default_backfill_after_fix
+included_only_with_optional_expansion
+would_incrementally_append_after_fix
+history_source_after_backfill
+plain_english_explanation
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+THEME BACKFILL SCOPE ROLLBACK + USAGE AUDIT REPORT
+
+FILES CHANGED:
+[list]
+
+WHAT WAS WRONG:
+[explain 431 proxy ETFs / 497 candidate stocks / 661 total]
+
+WHAT WAS PRESERVED:
+[canonical read paths, watchlist canonical history, stage/fib]
+
+ACTIVE VS BROAD THEME UNIVERSE:
+[table]
+
+DEFAULT BACKFILL UNIVERSE AFTER FIX:
+[summary]
+
+OPTIONAL EXPANSION MODES:
+[summary]
+
+QUEUE / REFRESH IMPACT:
+[summary]
+
+OPTIONS FLOW IMPACT:
+[summary]
+
+VALIDATION COUNTS:
+[table]
+
+VALIDATION SYMBOLS:
+[table]
+
+End exactly:
+
+THEME BACKFILL SCOPE VERDICT
+
+BROAD_431_PROXY_ETFS_REMOVED_FROM_DEFAULT_BACKFILL:
+[YES/NO]
+
+BROAD_497_CANDIDATE_STOCKS_REMOVED_FROM_DEFAULT_BACKFILL:
+[YES/NO]
+
+DEFAULT_BACKFILL_UNIVERSE_NO_LONGER_661:
+[YES/NO]
+
+ACTIVE_THEME_PROXIES_INCLUDED_ONLY:
+[YES/NO]
+
+THEME_CANDIDATE_STOCKS_EXCLUDED_BY_DEFAULT:
+[YES/NO]
+
+OPTIONAL_FULL_THEME_UNIVERSE_REQUIRES_EXPLICIT_FLAGS:
+[YES/NO]
+
+WATCHLIST_STAGE_ENTRY_FIB_UNCHANGED:
+[YES/NO]
+
+THEMES_STILL_READ_CANONICAL_WHEN_AVAILABLE:
+[YES/NO]
+
+OPTIONS_FLOW_UNAFFECTED:
+[YES/NO]
+
+READY_FOR_ONE_TIME_OFFHOURS_10Y_BACKFILL:
+[YES/NO]

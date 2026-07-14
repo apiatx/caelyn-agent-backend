@@ -52,6 +52,11 @@ _BACKFILL_ENABLED           = lambda: _flag("CANONICAL_HISTORY_BACKFILL_ENABLED"
 _FULL_BACKFILL_ENABLED      = lambda: _flag("CANONICAL_HISTORY_FULL_BACKFILL_ENABLED",      "false")
 _INCREMENTAL_APPEND_ENABLED = lambda: _flag("CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED", "true")
 _ALLOW_MARKET_HOURS         = lambda: _flag("CANONICAL_HISTORY_ALLOW_MARKET_HOURS",         "false")
+# Universe expansion flags (both default false — require explicit opt-in)
+# false → only primary proxy per theme (~50) included by default
+# true  → all basket proxy symbols (431) or all candidate stocks (497) included
+_INCLUDE_ALL_THEME_PROXIES    = lambda: _flag("CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES",    "false")
+_INCLUDE_ALL_THEME_CANDIDATES = lambda: _flag("CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES", "false")
 
 # ── History window ────────────────────────────────────────────────────────────
 
@@ -95,7 +100,15 @@ def get_backfill_status() -> dict:
         "CANONICAL_HISTORY_FULL_BACKFILL_ENABLED":      _FULL_BACKFILL_ENABLED(),
         "CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED": _INCREMENTAL_APPEND_ENABLED(),
         "CANONICAL_HISTORY_ALLOW_MARKET_HOURS":         _ALLOW_MARKET_HOURS(),
+        "CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES":    _INCLUDE_ALL_THEME_PROXIES(),
+        "CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES": _INCLUDE_ALL_THEME_CANDIDATES(),
     }
+    snap["universe_scope"] = (
+        "full_research_universe"   if _INCLUDE_ALL_THEME_PROXIES() and _INCLUDE_ALL_THEME_CANDIDATES() else
+        "all_theme_candidates"     if _INCLUDE_ALL_THEME_CANDIDATES() else
+        "all_theme_proxies"        if _INCLUDE_ALL_THEME_PROXIES() else
+        "core_plus_active_themes"  # default: stage2/watchlist/portfolio + primary proxy per theme
+    )
     try:
         import time as _t
         from data.tradier_budget import BUDGETS, _timestamps, WINDOW_S
@@ -697,19 +710,50 @@ async def _build_symbol_list_tiered(
     except Exception:
         pass
 
-    # Theme proxy ETFs + candidate constituent stocks → Tier 1
-    # Required so _fetch_proxy_history() and the constituent-stock path both have
-    # canonical history after the one-time 10Y backfill.  Without this, the
-    # canonical Step 0 patches in theme_rs_service.py always miss on a cold cache.
+    # ── Themes page canonical coverage ───────────────────────────────────────
+    # Default (core_plus_active_themes): only the primary proxy per theme (~50).
+    # These are the most-critical symbols for Themes page score quality.
+    #
+    # Broader expansions require explicit env flags:
+    #   CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES=true    → all 431 basket symbols
+    #   CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES=true → all 497 candidate stocks
+    #
+    # The canonical READ paths in theme_rs_service.py always check the cache first
+    # regardless of these flags — a symbol not in the backfill universe will simply
+    # fall through to FMP/yfinance as before, with no regression.
     try:
         from services.theme_merge_layer import (
+            ENRICHED_THEME_RS_UNIVERSE as _trs,
             ENRICHED_ALL_PROXY_SYMBOLS as _all_proxy,
             ENRICHED_ALL_CANDIDATE_SYMBOLS as _all_cands,
         )
-        _theme_symbols = set(s.upper() for s in list(_all_proxy) + list(_all_cands))
-        for s in sorted(_theme_symbols):
-            if _is_eligible(s):
-                _classify(s)
+        # Primary proxy per theme (first symbol in proxy_symbols) — always included
+        _primary_proxies = set()
+        for _meta in _trs.values():
+            _ps = _meta.get("proxy_symbols", [])
+            if _ps:
+                _primary_proxies.add(_ps[0].upper())
+        for _s in sorted(_primary_proxies):
+            if _is_eligible(_s):
+                _classify(_s)
+        print(f"[CANON_BACKFILL] theme primary proxies: {len(_primary_proxies)} added to universe")
+
+        # Full basket expansion (431 symbols) — requires explicit flag
+        if _INCLUDE_ALL_THEME_PROXIES():
+            _proxy_set = set(s.upper() for s in _all_proxy)
+            for _s in sorted(_proxy_set):
+                if _is_eligible(_s):
+                    _classify(_s)
+            print(f"[CANON_BACKFILL] INCLUDE_ALL_THEME_PROXIES=true: {len(_proxy_set)} proxy symbols")
+
+        # Candidate stock expansion (497 symbols) — requires explicit flag
+        if _INCLUDE_ALL_THEME_CANDIDATES():
+            _cand_set = set(s.upper() for s in _all_cands)
+            for _s in sorted(_cand_set):
+                if _is_eligible(_s):
+                    _classify(_s)
+            print(f"[CANON_BACKFILL] INCLUDE_ALL_THEME_CANDIDATES=true: {len(_cand_set)} candidate stocks")
+
     except Exception as _exc:
         print(f"[CANON_BACKFILL] theme proxy/cand read error (non-fatal): {_exc}")
 
