@@ -1,0 +1,222 @@
+BACKEND — MORNING CANONICAL HISTORY BACKFILL STATUS / STOP CHECK
+
+Urgent.
+
+Do not run any new backfill.
+Do not run Confluence.
+Do not run validation that calls providers.
+Do not call Tradier or FMP unless explicitly required to inspect status endpoints.
+Do not touch frontend.
+Do not touch Options Flow.
+
+Goal:
+
+It is now morning. The user believed the scoped one-time 10Y backfill was supposed to run overnight. We need to confirm whether it actually ran, whether it is still running, and guarantee it is not consuming Tradier API calls during market hours.
+
+==================================================
+PART 1 — IMMEDIATELY CHECK CURRENT JOB STATUS
+==================================================
+
+Check:
+
+GET /api/admin/canonical-history/status
+GET /api/rate-status
+
+Return:
+
+canonical_history_job_running
+current_mode
+history_lane_backlog_count
+history_lane_last_symbol
+history_lane_last_success_at
+history_lane_last_error
+canonical_index_symbol_count
+available_10y_count
+available_lifetime_under_10y_count
+not_yet_backfilled_count
+history_lane_current_usage
+canonical_history_backfill_budget_used
+canonical_history_backfill_budget_cap
+tradier_global_available_tokens
+options_flow_budget_used
+options_flow_budget_cap
+options_flow_saturated
+history_lane_paused_reason
+
+Do not start any job while checking this.
+
+==================================================
+PART 2 — STOP / PAUSE ANY RUNNING CANONICAL HISTORY JOB
+==================================================
+
+If any canonical history backfill or incremental append job is currently running:
+
+- stop/cancel it if a cancellation mechanism exists
+- if no cancellation mechanism exists, set all relevant env/config flags false and restart backend if needed to kill the in-memory task
+- confirm no further symbols are being processed
+- confirm history_lane_current_usage stops increasing
+- confirm history_lane_last_symbol stops changing
+
+Set/confirm:
+
+CANONICAL_HISTORY_BACKFILL_ENABLED=false
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=false
+CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false
+
+For today only, also disable incremental append if needed:
+
+CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED=false
+
+Important:
+
+Do not leave a background task running just because flags are now false if the task already started and does not re-check flags per symbol. Confirm actual task cancellation or restart.
+
+==================================================
+PART 3 — CONFIRM WHETHER OVERNIGHT BACKFILL COMPLETED
+==================================================
+
+Determine which state we are in:
+
+A. Backfill completed overnight
+B. Backfill partially completed overnight and stopped
+C. Backfill never ran
+D. Backfill is still running
+
+Return exact answer.
+
+Evidence:
+
+canonical_index_symbol_count
+symbols_completed
+symbols_remaining
+oldest/newest bars sample
+last_success_at
+last_error
+job logs if available
+
+Sample-check:
+
+SPY
+AAPL
+MARA
+MSFT
+NVDA
+TSM
+ABCL
+ALGM
+VRT
+CRDO
+OUST
+SOFI
+HOOD
+WYFI
+
+For each:
+
+symbol
+exists_in_canonical_index
+bar_count
+history_status
+oldest_date
+newest_date
+provider
+needs_full_backfill
+needs_incremental_append
+
+==================================================
+PART 4 — MARKET-HOURS SAFETY
+==================================================
+
+Confirm:
+
+- no full 10Y backfill can run during market hours
+- no incremental append can run during market hours
+- canonical_history_backfill lane is currently idle
+- options_flow lane is not impacted
+- no request-time historical provider calls exist
+
+Return:
+
+market_open_now
+canonical_history_allow_market_hours
+would_full_backfill_run_now
+would_incremental_append_run_now
+history_lane_idle
+options_flow_unaffected
+
+==================================================
+PART 5 — IF BACKFILL DID NOT COMPLETE
+==================================================
+
+If the one-time 10Y backfill did not complete overnight:
+
+Do not run it now.
+
+Return a safe plan for tonight:
+
+- exact flags
+- exact endpoint
+- batch size
+- expected symbol count
+- expected duration at 5 RPM
+- how to monitor
+- how to stop
+- how to verify complete
+- how to disable flags afterward
+
+==================================================
+PART 6 — FINAL REPORT
+==================================================
+
+Return:
+
+MORNING CANONICAL HISTORY BACKFILL STATUS REPORT
+
+CURRENT STATE:
+[completed / partial / never_ran / still_running]
+
+ACTIONS TAKEN:
+[stopped / paused / no-op]
+
+API SAFETY:
+[summary]
+
+CANONICAL INDEX SUMMARY:
+[table]
+
+SAMPLE SYMBOL STATUS:
+[table]
+
+OPTIONS FLOW IMPACT:
+[summary]
+
+TONIGHT PLAN IF NEEDED:
+[summary]
+
+End exactly:
+
+MORNING BACKFILL VERDICT
+
+BACKFILL_COMPLETED_OVERNIGHT:
+[YES/NO/PARTIAL]
+
+BACKFILL_CURRENTLY_RUNNING:
+[YES/NO]
+
+BACKFILL_STOPPED_IF_RUNNING:
+[YES/NO/NOT_NEEDED]
+
+CANONICAL_HISTORY_FLAGS_DISABLED_FOR_MARKET_HOURS:
+[YES/NO]
+
+TRADIER_HISTORY_LANE_IDLE_NOW:
+[YES/NO]
+
+OPTIONS_FLOW_UNAFFECTED_NOW:
+[YES/NO]
+
+SAFE_TO_PROCEED_WITH_MARKET_HOURS_OPERATIONS:
+[YES/NO]
+
+CONFLUENCE_VALIDATION_SHOULD_WAIT_UNTIL_BACKFILL_CONFIRMED:
+[YES/NO]
