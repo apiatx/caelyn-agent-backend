@@ -12,3 +12,9 @@ id = "VYwpNf40op-X9kxNapvGI"
 uri = "file://reports/elite_asset_rebound_v1_full_universe_validation.md"
 type = "text"
 title = "ELITE_ASSET_REBOUND V1 Full-Universe Validation Report"
+
+[[outputs]]
+id = "UJPrScLrEYELw66Q6offv"
+uri = "file://backend/data/confluence_v42_normalization_report.md"
+type = "text"
+title = "Confluence V4.2 Contract Normalization Report"
