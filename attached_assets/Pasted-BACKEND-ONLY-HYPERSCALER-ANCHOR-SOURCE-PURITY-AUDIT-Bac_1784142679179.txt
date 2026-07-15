@@ -1,0 +1,181 @@
+BACKEND ONLY — HYPERSCALER_ANCHOR SOURCE PURITY AUDIT
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring yet.
+Do not run provider calls.
+Do not use LLM calls.
+Use cached catalyst_alignment_lkg, retained Confluence snapshot, bottleneck/supply-chain cache, and existing files only.
+
+Goal:
+
+Clarify exactly what Catalyst event_type = HYPERSCALER_ANCHOR means.
+
+Important rule:
+
+Catalyst should only score recent company-specific news/events.
+Static bottleneck / supply-chain anchor status should NOT count as Catalyst.
+Known supplier / bottleneck status belongs only in Bottleneck bonus, Theme alignment, or strategic/investment context — not Catalyst.
+
+==================================================
+PART 1 — SOURCE TRACE FOR HYPERSCALER_ANCHOR
+==================================================
+
+Find every symbol with:
+
+catalyst_event_type = HYPERSCALER_ANCHOR
+
+For each return:
+
+symbol
+catalyst_points
+catalyst_event_type
+catalyst_event_tier
+catalyst_primary_source
+source
+published_at
+catalyst_date
+days_until
+headline/title if cached
+url/source if cached
+materiality_score
+confidence_score
+ticker_relevance_score
+article_count
+reason_codes
+catalyst_explanation
+
+Answer:
+
+Is HYPERSCALER_ANCHOR coming from rss_v2/news/event data?
+Or is any of it coming from static bottleneck/supply-chain/anchor maps?
+
+==================================================
+PART 2 — STATIC BOTTLENECK LEAKAGE CHECK
+==================================================
+
+Search code/data paths for any connection between:
+
+- bottleneck
+- supply_chain
+- anchor_supplier
+- hyperscaler_supplier
+- bottleneck_bonus
+- supply_chain_bonus
+- anchor_count
+- known_supplier
+
+and Catalyst fields:
+
+- catalyst_primary_event
+- catalyst_event_type
+- HYPERSCALER_ANCHOR
+- catalyst_alignment_points
+- catalyst_direct_score
+
+Return exact file/function references.
+
+Expected:
+
+Static bottleneck/supply-chain data must not create HYPERSCALER_ANCHOR catalyst events.
+
+==================================================
+PART 3 — EVENT RECENCY CHECK
+==================================================
+
+For each HYPERSCALER_ANCHOR catalyst, calculate event age:
+
+now - published_at
+or now - catalyst_date
+
+Return:
+
+symbol
+published_at
+event_age_hours
+event_age_days
+freshness_modifier_applied
+whether it qualifies as:
+- last 48h
+- last 3d
+- last 14d
+- stale/unknown
+
+Answer:
+
+Does HYPERSCALER_ANCHOR currently mean last 48 hours?
+Or does it mean cached recent news within the Phase B freshness window?
+
+Expected:
+
+It should not imply exactly 48 hours unless the data proves it.
+
+==================================================
+PART 4 — PURITY RULE RECOMMENDATION
+==================================================
+
+If not already enforced, recommend a hard rule:
+
+Catalyst HYPERSCALER_ANCHOR requires:
+- source in rss_v2 / news / scheduled_event / catalyst event cache
+- company-specific headline or cached event
+- published_at or catalyst_date present, unless manually curated as dated event
+- ticker_relevance_score above threshold
+- should never be derived from static bottleneck membership alone
+
+Static bottleneck membership should produce only:
+- bottleneck_bonus
+- supply_chain_bonus
+- bottleneck reason code
+- maybe investment strategic context
+
+but not Catalyst points.
+
+==================================================
+PART 5 — FINAL REPORT
+==================================================
+
+Return:
+
+HYPERSCALER_ANCHOR CATALYST SOURCE PURITY REPORT
+
+HYPERSCALER_ANCHOR SYMBOLS:
+[table]
+
+SOURCE TRACE:
+[summary]
+
+BOTTLENECK LEAKAGE CHECK:
+[summary]
+
+EVENT RECENCY:
+[table]
+
+RECOMMENDED RULE:
+[summary]
+
+End exactly:
+
+HYPERSCALER ANCHOR PURITY VERDICT
+
+HYPERSCALER_ANCHOR_IS_NEWS_BASED:
+[YES/NO/PARTIAL]
+
+STATIC_BOTTLENECK_DATA_USED_IN_CATALYST:
+[YES/NO]
+
+ANY_LEAKAGE_FOUND:
+[YES/NO]
+
+MEANS_LAST_48_HOURS:
+[YES/NO/PARTIAL]
+
+MEANS_RECENT_CACHED_EVENT:
+[YES/NO]
+
+CATALYST_AND_BOTTLENECK_PROPERLY_SEPARATED:
+[YES/NO]
+
+PATCH_NEEDED:
+[YES/NO]
