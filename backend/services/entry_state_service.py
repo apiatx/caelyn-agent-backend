@@ -282,6 +282,35 @@ def flush_entry_state_lkg() -> None:
     except Exception:
         pass
 
+    # ── Fib/Wave health assertion ────────────────────────────────────────────
+    # If a large warmup run produced >90% missing primary_fib_context it almost
+    # certainly means fib_engine or wave_structure_engine failed to import
+    # (e.g. wrong path prefix).  Surface a high-severity warning immediately so
+    # the failure cannot go undetected again.
+    try:
+        eligible = [
+            v for v in _ENTRY_STATE_LKG.values()
+            if isinstance(v, dict) and v.get("entry_state")
+        ]
+        if len(eligible) > 50:
+            missing_fib = sum(
+                1 for v in eligible
+                if not v.get("primary_fib_context")
+                or v["primary_fib_context"] == "unavailable"
+            )
+            missing_pct = missing_fib / len(eligible) * 100
+            if missing_pct > 90:
+                print(
+                    f"[ENTRY_STATE][CRITICAL] FIB/WAVE HEALTH CHECK FAILED — "
+                    f"{missing_fib}/{len(eligible)} rows ({missing_pct:.0f}%) are missing "
+                    f"primary_fib_context after flush. "
+                    f"This almost always means 'from services.fib_engine' or "
+                    f"'from services.wave_structure_engine' raised ImportError silently. "
+                    f"Check server working directory and import paths immediately."
+                )
+    except Exception:
+        pass
+
 
 # ── Support level extraction ────────────────────────────────────────────────────
 
@@ -1277,7 +1306,16 @@ def analyze_entry_state_from_bars(
                 current_price=price,
                 history_source=bars_provider,
             )
-        except Exception:
+        except ImportError as _e:
+            print(
+                f"[ENTRY_STATE][ERROR] fib_engine import failed for {symbol!r} — "
+                f"primary_fib_context will be None. "
+                f"Check that 'from services.fib_engine' resolves from backend/. "
+                f"Exception: {_e}"
+            )
+            _fib_fields = {}
+        except Exception as _e:
+            print(f"[ENTRY_STATE][WARN] fib_engine compute error for {symbol!r}: {_e}")
             _fib_fields = {}
 
         try:
@@ -1290,7 +1328,16 @@ def analyze_entry_state_from_bars(
                 stage_alignment_score = None,
                 prior_26w_trend_pct   = stage_result.get("prior_26w_trend_pct"),
             )
-        except Exception:
+        except ImportError as _e:
+            print(
+                f"[ENTRY_STATE][ERROR] wave_structure_engine import failed for {symbol!r} — "
+                f"wave_structure_label will be None. "
+                f"Check that 'from services.wave_structure_engine' resolves from backend/. "
+                f"Exception: {_e}"
+            )
+            _wave_fields = {}
+        except Exception as _e:
+            print(f"[ENTRY_STATE][WARN] wave_structure_engine compute error for {symbol!r}: {_e}")
             _wave_fields = {}
 
         # SMA-30

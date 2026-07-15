@@ -1,0 +1,327 @@
+BACKEND ONLY — POST FIB/WAVE FIX CONSISTENCY AUDIT BEFORE CALIBRATION
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math.
+Do not recalibrate yet.
+Do not run broad history backfill.
+Do not call providers unless a symbol is missing canonical history.
+Use cached canonical history, entry_state_lkg, Stage2 LKG, and retained Confluence snapshot only.
+
+Goal:
+
+Fib/Wave are now populated after fixing bad imports in entry_state_service.py. Before post-10Y calibration, verify the pipeline is consistent end-to-end and that no coverage or labeling issue remains hidden.
+
+Context:
+
+Root cause fixed:
+- entry_state_service.py used wrong imports:
+  from backend.services.fib_engine
+  from backend.services.wave_structure_engine
+- Corrected to:
+  from services.fib_engine
+  from services.wave_structure_engine
+
+Post-fix report:
+- Force-warmup: 413 symbols
+- Entry LKG rows: 347
+- primary_fib_context populated: 344/347
+- wave_structure_label populated: 344/347
+- Confluence snapshot rebuilt: 413 rows
+- Confluence endpoint sample: 199/200 rows with Fib/Wave
+- 11/11 validation symbols have Fib/Wave
+
+Now audit the remaining consistency gaps.
+
+==================================================
+PART 1 — FILES CHANGED / IMPORT GUARD
+==================================================
+
+Return exact files changed in the Fib/Wave fix.
+
+For entry_state_service.py:
+
+- show the fixed import lines
+- identify the try/except block that previously swallowed ModuleNotFoundError
+- confirm whether exceptions are still silently swallowed
+- recommend or implement a tiny logging improvement if safe
+
+Required safety improvement:
+
+If fib_engine or wave_structure_engine import fails, log a clear warning/error with symbol and exception.
+
+Also add a health assertion/log:
+
+If a force-warmup run processes >50 symbols and primary_fib_context is missing on >90%, log a high-severity warning.
+
+Do not break runtime if a single symbol fails. But do not allow global import failure to silently zero out Fib/Wave again.
+
+==================================================
+PART 2 — UNIVERSE RECONCILIATION
+==================================================
+
+Explain the count mismatch:
+
+- 413 symbols in force-warmup / Confluence snapshot
+- 347 rows in entry_state_lkg
+- 344 rows with Fib/Wave
+
+Return:
+
+total_symbols_attempted
+symbols_persisted_to_entry_lkg
+symbols_not_persisted_count
+symbols_not_persisted_list
+reason for each not persisted:
+- foreign/ineligible
+- ETF/fund excluded
+- no canonical history
+- no bars
+- stale alias
+- provider guard
+- analysis failed
+- other
+
+Important:
+
+Identify whether any eligible domestic equity with canonical history failed to persist.
+
+Expected:
+
+No important eligible domestic equity should be missing.
+
+==================================================
+PART 3 — FULL CONFLUENCE SNAPSHOT FIB/WAVE COVERAGE
+==================================================
+
+Do not just query limit=200.
+
+Inspect the full retained Confluence snapshot of 413 rows.
+
+Return:
+
+snapshot_rows
+rows_with_confluence_v42
+rows_with_primary_fib_context
+rows_with_wave_structure_label
+rows_with_fib_wave_status_ready
+rows_with_fib_pending
+rows_with_wave_pending
+
+List all rows missing Fib/Wave, with reason.
+
+Expected:
+
+Fib/Wave should be populated for nearly all eligible rows.
+Pending should be only insufficient-history / ineligible / no-bars rows.
+
+==================================================
+PART 4 — BAR COUNT CONSISTENCY
+==================================================
+
+For these symbols:
+
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+NVDA
+TSM
+SOFI
+WYFI
+OUST
+ECHO
+
+Return:
+
+symbol
+canonical_bar_count
+entry_analysis_bar_count
+fib_daily_bar_count
+selected_fib_window
+selected_fib_bar_count if available
+years_available
+history_status
+primary_fib_context
+primary_fib_timeframe
+
+Clarify what the report's "Bars" column represented.
+
+Specifically investigate CRDO:
+
+Earlier canonical history expected ~1,781 bars.
+Latest Fib/Wave report showed 1,118 bars.
+Explain the discrepancy.
+
+==================================================
+PART 5 — CANONICAL ACTION VS LEGACY VERDICT
+==================================================
+
+For the same validation symbols, return both legacy and canonical action fields:
+
+symbol
+legacy_verdict if present
+confluence_verdict if present
+caelyn_confluence_v42_actionability
+caelyn_confluence_bucket
+confluence_v42.action.label
+confluence_v42.action.label_display
+confluence_v42.action.execution_state
+confluence_v42.action.execution_label
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+risk_flags
+caution_flags
+data_status_flags
+
+Clarify whether table values like BUY / WATCH / NEUTRAL / AVOID are legacy labels or canonical V4.2 labels.
+
+Frontend should use canonical V4.2 fields only.
+
+==================================================
+PART 6 — FIB/WAVE SAMPLE VALIDATION
+==================================================
+
+Validate these symbols again:
+
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+NVDA
+TSM
+SOFI
+WYFI
+OUST
+ECHO
+
+For each return:
+
+symbol
+stage_label
+entry_state
+entry_state_display
+extension_state
+extension_quality
+primary_fib_context
+primary_fib_confidence
+primary_fib_timeframe
+nearest_fib_level
+fib_distance_pct
+wave_structure_label
+wave_confidence if available
+plain_english_summary
+
+Specifically explain:
+
+- Why ABCL remains NO_CLEAR_ENTRY despite weekly Fib/Wave
+- Why VRT is high score but labeled WATCH in the latest report
+- Whether TSM/ALGM BUY labels are canonical or legacy
+
+==================================================
+PART 7 — SATS/ECHO CLEAN STATUS
+==================================================
+
+Verify one more time:
+
+SATS:
+- stale_alias_of = ECHO
+- excluded_from_missing = true
+- not treated as active missing history
+- not included in Confluence as active symbol unless explicitly in a watchlist
+
+ECHO:
+- active
+- canonical history available_10y_fresh
+- entry_state_lkg present
+- Fib/Wave populated
+- Confluence row available if included in universe
+
+Return final status.
+
+==================================================
+PART 8 — READINESS FOR POST-10Y CALIBRATION
+==================================================
+
+Based on this audit, return whether we can now run the post-10Y calibration audit for:
+
+- Ready / Near / Watch / Reset distribution
+- Fib retest path activation
+- ABCL / ALGM / VRT / CRDO / MARA / TSM / SOFI sanity checks
+- extension/chase severity after Fib/Wave
+- action.label vs execution_state consistency
+
+Do not run calibration yet.
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+POST FIB/WAVE FIX CONSISTENCY AUDIT REPORT
+
+FILES / IMPORT GUARD:
+[summary]
+
+UNIVERSE RECONCILIATION:
+[summary/table]
+
+FULL SNAPSHOT FIB/WAVE COVERAGE:
+[summary/table]
+
+BAR COUNT CONSISTENCY:
+[table]
+
+CANONICAL ACTION VS LEGACY VERDICT:
+[table]
+
+FIB/WAVE SAMPLE VALIDATION:
+[table]
+
+SATS/ECHO CLEAN STATUS:
+[summary]
+
+READINESS FOR CALIBRATION:
+[summary]
+
+End exactly:
+
+POST FIB/WAVE CONSISTENCY VERDICT
+
+BAD_IMPORT_ROOT_CAUSE_FIXED:
+[YES/NO]
+
+SILENT_GLOBAL_FIB_FAILURE_GUARD_ADDED:
+[YES/NO]
+
+ENTRY_LKG_COUNT_EXPLAINED:
+[YES/NO]
+
+ELIGIBLE_DOMESTIC_SYMBOLS_MISSING_ENTRY_LKG:
+[number]
+
+FULL_CONFLUENCE_SNAPSHOT_FIB_WAVE_COVERAGE:
+[percent]
+
+BAR_COUNT_DISCREPANCIES_EXPLAINED:
+[YES/NO]
+
+CANONICAL_ACTION_FIELDS_CONFIRMED:
+[YES/NO]
+
+LEGACY_BUY_WATCH_LABELS_SHOULD_BE_IGNORED_BY_FRONTEND:
+[YES/NO]
+
+SATS_EXCLUDED_AS_STALE_ALIAS:
+[YES/NO]
+
+ECHO_FIB_WAVE_POPULATED:
+[YES/NO]
+
+READY_FOR_POST_10Y_CALIBRATION_AUDIT:
+[YES/NO]

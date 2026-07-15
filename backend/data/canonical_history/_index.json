@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-07-15T03:01:29.199193+00:00",
+  "updated_at": "2026-07-15T03:33:24.700136+00:00",
   "symbols": {
     "TEST_MARA": {
       "symbol": "TEST_MARA",
@@ -6377,7 +6377,7 @@
       "years_available": 0.1,
       "fetched_at": "2026-07-15T02:35:11.970839+00:00",
       "stale_after": "2026-07-19T02:35:11.970880+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
@@ -6881,7 +6881,7 @@
       "years_available": 0.1,
       "fetched_at": "2026-07-15T02:35:18.132154+00:00",
       "stale_after": "2026-07-19T02:35:18.132165+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
@@ -7430,8 +7430,8 @@
     "SATS": {
       "history_status": "fetch_failed",
       "error_reason": "no_bars_from_providers",
-      "last_attempt_at": "2026-07-15T02:03:47.188061+00:00",
-      "next_retry_at": "2026-07-15T06:03:47.188072+00:00",
+      "last_attempt_at": "2026-07-15T03:33:24.697145+00:00",
+      "next_retry_at": "2026-07-15T07:33:24.697159+00:00",
       "provider": "tradier"
     },
     "SDRL": {
@@ -8036,7 +8036,7 @@
       "years_available": 0.1,
       "fetched_at": "2026-07-15T02:35:24.812322+00:00",
       "stale_after": "2026-07-19T02:35:24.812333+00:00",
-      "history_status": "actual_ticker_history_limit",
+      "history_status": "cache_corrupt_needs_rebuild",
       "base_history_status": "actual_ticker_history_limit",
       "error_reason": null,
       "source_priority": 1,
