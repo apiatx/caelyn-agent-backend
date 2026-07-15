@@ -2,7 +2,7 @@
 CAELYN CONFLUENCE V4.2 — Core Scoring Semantics Cleanup
 
 Formula:
-  core_score    = Theme + Stage + Options + TechSetup + EntryExit + Catalyst + Investment
+  core_score    = Theme + Stage + Options + TechSetup + EntryExit + Catalyst + Investment + Valuation
                   max = 100
   bonus_score   = Social + WhaleInsider + Bottleneck
                   max = 25
@@ -11,11 +11,12 @@ Formula:
 Core Components (max 100 pts):
   Theme Alignment     15 pts  (theme_policy folded in; no standalone bonus)
   Stage Quality       15 pts  (unchanged from V4)
-  Options Alignment   20 pts  (60 net premium + 40 acceleration)
+  Options Alignment   18 pts  (60 net premium + 40 acceleration)
   Technical Setup      8 pts  (pattern quality)
   Entry/Exit Quality  12 pts  (support/RR quality)
-  Catalyst Alignment  15 pts  (75 direct + 25 intelligence)
-  Investment Align    15 pts  (3-pillar: financial health + current + forward growth)
+  Catalyst Alignment  12 pts  (75 direct + 25 intelligence)
+  Investment Align    12 pts  (3-pillar: financial health + current + forward growth)
+  Valuation            8 pts  (P/E + P/S + Forward P/E equally weighted)
 
 Bonuses (max 25 pts):
   Social Bonus        up to +15  (3 sections x 5 pts each)
@@ -435,7 +436,7 @@ def _score_options_alignment_v42(row: dict) -> dict:
             opts_raw = np_val
             reason_codes.append("OPTIONS_DIRECTION_UNAVAILABLE_FULL_NP_WEIGHT")
 
-    opts_pts = round(min(20.0, opts_raw / 100.0 * 20.0), 2)
+    opts_pts = round(min(18.0, opts_raw / 100.0 * 18.0), 2)
 
     if np_val >= 70:
         reason_codes.append("OPTIONS_STRONGLY_BULLISH")
@@ -1217,7 +1218,7 @@ def _score_catalyst_alignment_v42(row: dict) -> dict:
     # When intelligence_score is implemented, restore blended formula:
     #   catalyst_raw = direct_score * 0.75 + intelligence_score * 0.25
     catalyst_raw = direct_score
-    catalyst_pts = round(min(15.0, catalyst_raw / 100.0 * 15.0), 2)
+    catalyst_pts = round(min(12.0, catalyst_raw / 100.0 * 12.0), 2)
 
     # ── Explainability ───────────────────────────────────────────────────────
     _age_days_for_expl = phb_detail.get("age_days")
@@ -1530,9 +1531,9 @@ def _score_investment_alignment_v42(
     fundamentals_map: Optional[dict] = None,
 ) -> dict:
     """
-    Investment Alignment — 15 pts max.  3-pillar model.
+    Investment Alignment — 12 pts max.  3-pillar model.
 
-    investment_alignment_points = strong_pillar_count * 5
+    investment_alignment_points = strong_pillar_count * 4
 
     Pillars:
       1. Financial Health  (4/7 checks)
@@ -1645,7 +1646,7 @@ def _score_investment_alignment_v42(
     # Replaces the prior 4-bucket formula (strong_pillar_count × 5) which
     # produced only {0, 5, 10, 15} and caused ordering inversions where a
     # symbol with 1 pillar but IQ=88 scored below one with 3 pillars but IQ=63.
-    inv_pts = round(inv_quality_score / 100.0 * 15.0, 2)
+    inv_pts = round(inv_quality_score / 100.0 * 12.0, 2)
     inv_raw = float(inv_quality_score)
 
     # Quality label
@@ -1721,6 +1722,428 @@ def _score_investment_alignment_v42(
         "investment_quality_score":       inv_quality_score,
         "investment_quality_rank_label":  iq_rank_label,
         "investment_quality_reason_codes": iq_reason_codes,
+    }
+
+
+# ── Valuation scorer ──────────────────────────────────────────────────────────
+
+def _pe_value_score(pe: float, rev_growth: Optional[float], eps_growth: Optional[float]) -> float:
+    """
+    P/E value score 0–100.  Lower positive P/E = higher score.
+    Negative P/E treated as unavailable (returns neutral_missing handled by caller).
+
+    Bands (absolute):
+      0 < pe <=15  → 90 + (15-pe)/15*10      → 90–100
+      15 < pe <=25 → 75 + (25-pe)/10*15      → 75–90
+      25 < pe <=40 → 50 + (40-pe)/15*25      → 50–75
+      40 < pe <=70 → 25 + (70-pe)/30*25      → 25–50
+      pe > 70      → max(0, 25*(1-(pe-70)/80))→  0–25
+
+    Growth adjustment (±10):
+      strong (rev≥20% AND eps≥20%): +8
+      good   (rev≥15% OR  eps≥15%): +4
+      weak   (rev<5%  AND eps<5%):  −8  (only if pe>20)
+      very weak (rev<0%):            −5  (additional, only if pe>15)
+    """
+    if pe <= 0:
+        return -1.0  # sentinel = unavailable/negative
+
+    if pe <= 15:
+        base = 90.0 + (15.0 - pe) / 15.0 * 10.0
+    elif pe <= 25:
+        base = 75.0 + (25.0 - pe) / 10.0 * 15.0
+    elif pe <= 40:
+        base = 50.0 + (40.0 - pe) / 15.0 * 25.0
+    elif pe <= 70:
+        base = 25.0 + (70.0 - pe) / 30.0 * 25.0
+    else:
+        base = max(0.0, 25.0 * (1.0 - (pe - 70.0) / 80.0))
+
+    adj = 0.0
+    rg = rev_growth if rev_growth is not None else 0.0
+    eg = eps_growth if eps_growth is not None else 0.0
+    both_available = rev_growth is not None or eps_growth is not None
+
+    if both_available:
+        if rg >= 20.0 and eg >= 20.0:
+            adj += 8.0
+        elif rg >= 15.0 or eg >= 15.0:
+            adj += 4.0
+        if pe > 20.0 and rg < 5.0 and eg < 5.0:
+            adj -= 8.0
+        if pe > 15.0 and rg < 0.0:
+            adj -= 5.0
+
+    return _clamp(base + adj, 0.0, 100.0)
+
+
+def _ps_value_score(ps: float, rev_growth: Optional[float], gross_margin: Optional[float]) -> float:
+    """
+    P/S value score 0–100.  Lower P/S = higher score.
+
+    Bands:
+      ps <= 1      → 90–100  (95 base)
+      1 < ps <= 3  → 75–90   (lerp)
+      3 < ps <= 6  → 55–75   (lerp)
+      6 < ps <= 10 → 35–55   (lerp)
+      10 < ps <=20 → 15–35   (lerp)
+      ps > 20      → 0–15    (lerp, floor 0)
+
+    Growth/margin adjustment (±10):
+      strong growth (rev≥30%) + strong margin (gm≥50%): +10
+      good growth   (rev≥20%) + ok margin    (gm≥35%):  +6
+      good growth alone (rev≥20%):                       +4
+      ok margin alone   (gm≥50%):                        +3
+      weak growth (rev<5%) + high PS (ps>6):             −8
+      very weak  (rev<0%):                               −5  (additional)
+    """
+    if ps is None or ps <= 0:
+        return -1.0  # sentinel = unavailable
+
+    if ps <= 1.0:
+        base = 95.0
+    elif ps <= 3.0:
+        base = 75.0 + (3.0 - ps) / 2.0 * 15.0
+    elif ps <= 6.0:
+        base = 55.0 + (6.0 - ps) / 3.0 * 20.0
+    elif ps <= 10.0:
+        base = 35.0 + (10.0 - ps) / 4.0 * 20.0
+    elif ps <= 20.0:
+        base = 15.0 + (20.0 - ps) / 10.0 * 20.0
+    else:
+        base = max(0.0, 15.0 * (1.0 - (ps - 20.0) / 30.0))
+
+    adj = 0.0
+    rg = rev_growth   if rev_growth   is not None else 0.0
+    gm = gross_margin if gross_margin is not None else 0.0
+    rg_avail = rev_growth   is not None
+    gm_avail = gross_margin is not None
+
+    if rg_avail and gm_avail:
+        if rg >= 30.0 and gm >= 50.0:
+            adj += 10.0
+        elif rg >= 20.0 and gm >= 35.0:
+            adj += 6.0
+        elif rg >= 20.0:
+            adj += 4.0
+        elif gm >= 50.0:
+            adj += 3.0
+    elif rg_avail:
+        if rg >= 30.0: adj += 6.0
+        elif rg >= 20.0: adj += 3.0
+    elif gm_avail:
+        if gm >= 50.0: adj += 3.0
+
+    if ps > 6.0 and rg_avail and rg < 5.0:
+        adj -= 8.0
+    if rg_avail and rg < 0.0:
+        adj -= 5.0
+
+    return _clamp(base + adj, 0.0, 100.0)
+
+
+def _fpe_value_score(fpe: float, eps_fwd: Optional[float], rev_fwd: Optional[float]) -> float:
+    """
+    Forward P/E value score 0–100.  Lower positive Forward P/E = higher score.
+
+    Bands:
+      0 < fpe <= 20 → 85–100  (lerp)
+      20 < fpe <=35 → 65–85   (lerp)
+      35 < fpe <=50 → 40–65   (lerp)
+      50 < fpe <=80 → 20–40   (lerp)
+      fpe > 80      → 0–20    (lerp, floor 0)
+
+    Forward growth adjustment (±10):
+      strong fwd eps (≥30%) OR strong fwd rev (≥30%): +8
+      good fwd eps (≥20%) OR good fwd rev (≥20%):    +4
+      weak fwd eps (<5%) AND weak fwd rev (<5%):      −8  (only if fpe>25)
+      negative fwd:                                   −5  (additional)
+    """
+    if fpe <= 0:
+        return -1.0  # sentinel = unavailable/negative
+
+    if fpe <= 20.0:
+        base = 85.0 + (20.0 - fpe) / 20.0 * 15.0
+    elif fpe <= 35.0:
+        base = 65.0 + (35.0 - fpe) / 15.0 * 20.0
+    elif fpe <= 50.0:
+        base = 40.0 + (50.0 - fpe) / 15.0 * 25.0
+    elif fpe <= 80.0:
+        base = 20.0 + (80.0 - fpe) / 30.0 * 20.0
+    else:
+        base = max(0.0, 20.0 * (1.0 - (fpe - 80.0) / 80.0))
+
+    adj = 0.0
+    ef = eps_fwd if eps_fwd is not None else 0.0
+    rf = rev_fwd if rev_fwd is not None else 0.0
+    ef_avail = eps_fwd is not None
+    rf_avail = rev_fwd is not None
+
+    if ef_avail or rf_avail:
+        if ef >= 30.0 or rf >= 30.0:
+            adj += 8.0
+        elif ef >= 20.0 or rf >= 20.0:
+            adj += 4.0
+        if fpe > 25.0 and ef < 5.0 and rf < 5.0:
+            adj -= 8.0
+        if (ef_avail and ef < 0.0) or (rf_avail and rf < 0.0):
+            adj -= 5.0
+
+    return _clamp(base + adj, 0.0, 100.0)
+
+
+def _score_valuation_v42(
+    row: dict,
+    fundamentals_map: Optional[dict] = None,
+) -> dict:
+    """
+    Valuation — 8 pts max.
+
+    Inputs (all from watchlist_fundamentals_cache, zero provider calls):
+      PE Ratio       → pe_value_score  (0–100)
+      PS Ratio       → ps_value_score  (0–100)
+      Forward P/E    → forward_pe_value_score (0–100)
+
+    valuation_quality_score = pe_w*pe_score + ps_w*ps_score + fpe_w*fpe_score
+    valuation_alignment_points = valuation_quality_score / 100 * 8
+
+    Missing data:
+      All 3 missing  → points=0, coverage=unavailable
+      2 missing      → use available score * 0.70 confidence haircut
+      1 missing      → average of 2 available * 0.85 confidence haircut
+
+    Negative P/E or Negative Forward P/E treated as unavailable (unprofitable).
+    P/S is most useful when P/E is negative/missing.
+    """
+    sym = str(row.get("symbol") or "").upper()
+    reason_codes: list[str] = []
+
+    # ── Locate fundamentals snapshot ──────────────────────────────────────────
+    fund_snap: Optional[dict] = None
+    if fundamentals_map:
+        fund_snap = fundamentals_map.get(sym)
+    if fund_snap is None:
+        try:
+            from data.watchlist_fundamentals_store import get_snapshot as _get_snap
+            fund_snap = _get_snap(sym)
+        except Exception:
+            pass
+
+    _UNAVAIL = {
+        "raw_score":                    None,
+        "points":                       0,
+        "available":                    False,
+        "status":                       "missing_cache",
+        "valuation_alignment_points":   0,
+        "valuation_quality_score":      0,
+        "valuation_label":              "Valuation Unavailable",
+        "valuation_coverage_status":    "unavailable",
+        "valuation_missing_fields":     ["pe_ratio", "ps_ratio", "forward_pe"],
+        "pe_ratio":                     None,
+        "ps_ratio":                     None,
+        "forward_pe":                   None,
+        "pe_value_score":               None,
+        "ps_value_score":               None,
+        "forward_pe_value_score":       None,
+        "valuation_reason_codes":       ["VALUATION_UNAVAILABLE"],
+        "valuation_explanation":        "No fundamentals cache available.",
+        "reason_codes":                 ["VALUATION_UNAVAILABLE"],
+    }
+
+    if not fund_snap:
+        reason_codes.append("VALUATION_NO_FUNDAMENTALS_SNAPSHOT")
+        return {**_UNAVAIL, "reason_codes": reason_codes, "valuation_reason_codes": reason_codes}
+
+    fields = fund_snap.get("fields") or {}
+    if not fields:
+        reason_codes.append("VALUATION_EMPTY_FUNDAMENTALS")
+        return {**_UNAVAIL, "status": "empty_fundamentals",
+                "reason_codes": reason_codes, "valuation_reason_codes": reason_codes}
+
+    def _num(key: str) -> Optional[float]:
+        v = fields.get(key)
+        if v is None:
+            return None
+        try:
+            return float(str(v).replace("%", "").replace(",", "").strip())
+        except (ValueError, TypeError):
+            return None
+
+    def _pct(key: str) -> Optional[float]:
+        return _parse_pct(fields.get(key))
+
+    # ── Read raw valuation inputs ─────────────────────────────────────────────
+    pe_raw  = _num("PE Ratio")
+    ps_raw  = _num("PS Ratio")
+    # Forward P/E: try multiple stored key variants
+    fpe_raw = (
+        _num("Forward P/E")
+        or _num("Forward PE")
+        or _num("Forward P/E Ratio")
+        or _num("forwardPE")
+    )
+
+    # ── Read growth/quality context for adjustments ───────────────────────────
+    rev_growth_q = _pct("Revenue Growth (Q)")
+    rev_growth_y = _pct("Revenue Growth (YoY)")
+    eps_growth   = _pct("EPS Growth") or _pct("EPS Growth This Quarter")
+    gross_margin = _pct("Gross Margin")
+    rev_fwd      = (
+        _pct("Rev Growth Next Quarter")
+        or _pct("Revenue Growth Next Quarter")
+        or _pct("Revenue Growth Est")
+    )
+    eps_fwd      = (
+        _pct("EPS Growth Est")
+        or _pct("EPS Growth Next Quarter")
+        or _pct("EPS Growth Next Year")
+    )
+
+    # Use best available growth proxy for adjustments
+    rev_growth_best = max(
+        (v for v in [rev_growth_q, rev_growth_y] if v is not None),
+        default=None,
+    )
+
+    # ── Compute sub-scores ────────────────────────────────────────────────────
+    missing_fields: list[str] = []
+
+    pe_score:  Optional[float] = None
+    ps_score:  Optional[float] = None
+    fpe_score: Optional[float] = None
+
+    if pe_raw is not None:
+        raw_pe = _pe_value_score(pe_raw, rev_growth_best, eps_growth)
+        if raw_pe < 0:
+            # Negative P/E → unprofitable; treat as unavailable
+            missing_fields.append("pe_ratio")
+            reason_codes.append("PE_NEGATIVE_TREATED_AS_UNAVAILABLE")
+        else:
+            pe_score = raw_pe
+            if pe_raw <= 15:
+                reason_codes.append("PE_DEEP_VALUE")
+            elif pe_raw <= 25:
+                reason_codes.append("PE_REASONABLE")
+            elif pe_raw <= 40:
+                reason_codes.append("PE_ELEVATED")
+            elif pe_raw <= 70:
+                reason_codes.append("PE_HIGH")
+            else:
+                reason_codes.append("PE_VERY_HIGH")
+    else:
+        missing_fields.append("pe_ratio")
+        reason_codes.append("PE_MISSING")
+
+    if ps_raw is not None and ps_raw > 0:
+        raw_ps = _ps_value_score(ps_raw, rev_growth_best, gross_margin)
+        if raw_ps < 0:
+            missing_fields.append("ps_ratio")
+            reason_codes.append("PS_UNAVAILABLE")
+        else:
+            ps_score = raw_ps
+            if ps_raw <= 3:
+                reason_codes.append("PS_LOW")
+            elif ps_raw <= 6:
+                reason_codes.append("PS_MODERATE")
+            elif ps_raw <= 10:
+                reason_codes.append("PS_ELEVATED")
+            else:
+                reason_codes.append("PS_HIGH")
+    else:
+        missing_fields.append("ps_ratio")
+        reason_codes.append("PS_MISSING")
+
+    if fpe_raw is not None:
+        raw_fpe = _fpe_value_score(fpe_raw, eps_fwd, rev_fwd)
+        if raw_fpe < 0:
+            missing_fields.append("forward_pe")
+            reason_codes.append("FORWARD_PE_NEGATIVE_TREATED_AS_UNAVAILABLE")
+        else:
+            fpe_score = raw_fpe
+            if fpe_raw <= 20:
+                reason_codes.append("FORWARD_PE_REASONABLE")
+            elif fpe_raw <= 35:
+                reason_codes.append("FORWARD_PE_ELEVATED")
+            elif fpe_raw <= 50:
+                reason_codes.append("FORWARD_PE_HIGH")
+            else:
+                reason_codes.append("FORWARD_PE_VERY_HIGH")
+    else:
+        missing_fields.append("forward_pe")
+        reason_codes.append("FORWARD_PE_MISSING")
+
+    # ── Combine scores with confidence haircut for missing data ───────────────
+    available_scores = [s for s in [pe_score, ps_score, fpe_score] if s is not None]
+    available_count  = len(available_scores)
+
+    if available_count == 0:
+        # All three missing
+        valuation_quality = 0.0
+        coverage_status   = "unavailable"
+        reason_codes.append("VALUATION_ALL_METRICS_MISSING")
+        val_pts = 0.0
+        val_label = "Valuation Unavailable"
+        val_explanation = "No P/E, P/S, or Forward P/E data available."
+    else:
+        raw_avg = sum(available_scores) / available_count
+        # Confidence haircut: 2 missing = ×0.70; 1 missing = ×0.85; 0 missing = ×1.00
+        confidence = {3: 1.00, 2: 0.85, 1: 0.70}[available_count]
+        valuation_quality = _clamp(raw_avg * confidence, 0.0, 100.0)
+
+        if available_count == 3:
+            coverage_status = "available"
+        else:
+            coverage_status = "partial"
+            reason_codes.append(f"VALUATION_PARTIAL_{3 - available_count}_MISSING")
+
+        val_pts = round(valuation_quality / 100.0 * 8.0, 2)
+
+        # Label
+        if valuation_quality >= 80:
+            val_label = "Deep Value"
+            reason_codes.append("VALUATION_DEEP_VALUE")
+        elif valuation_quality >= 65:
+            val_label = "Attractively Valued"
+            reason_codes.append("VALUATION_ATTRACTIVE")
+        elif valuation_quality >= 45:
+            val_label = "Fair Value"
+            reason_codes.append("VALUATION_FAIR")
+        elif valuation_quality >= 25:
+            val_label = "Elevated Valuation"
+            reason_codes.append("VALUATION_ELEVATED")
+        else:
+            val_label = "Expensive"
+            reason_codes.append("VALUATION_EXPENSIVE")
+
+        # Explanation
+        metric_parts = []
+        if pe_score  is not None: metric_parts.append(f"P/E={pe_raw:.1f}(score={pe_score:.0f})")
+        if ps_score  is not None: metric_parts.append(f"P/S={ps_raw:.1f}(score={ps_score:.0f})")
+        if fpe_score is not None: metric_parts.append(f"FwdPE={fpe_raw:.1f}(score={fpe_score:.0f})")
+        conf_str = "" if confidence == 1.0 else f" conf={confidence:.0%}"
+        val_explanation = f"{val_label}: {', '.join(metric_parts)}{conf_str} → quality={valuation_quality:.0f}/100 pts={val_pts}"
+
+    val_pts = round(valuation_quality / 100.0 * 8.0, 2) if available_count > 0 else 0.0
+
+    return {
+        "raw_score":                    round(valuation_quality, 1),
+        "points":                       val_pts,
+        "available":                    available_count > 0,
+        "status":                       coverage_status if available_count > 0 else "unavailable",
+        "valuation_alignment_points":   val_pts,
+        "valuation_quality_score":      round(valuation_quality, 1),
+        "valuation_label":              val_label,
+        "valuation_coverage_status":    coverage_status if available_count > 0 else "unavailable",
+        "valuation_missing_fields":     missing_fields,
+        "pe_ratio":                     pe_raw,
+        "ps_ratio":                     ps_raw,
+        "forward_pe":                   fpe_raw,
+        "pe_value_score":               round(pe_score,  1) if pe_score  is not None else None,
+        "ps_value_score":               round(ps_score,  1) if ps_score  is not None else None,
+        "forward_pe_value_score":       round(fpe_score, 1) if fpe_score is not None else None,
+        "valuation_reason_codes":       reason_codes,
+        "valuation_explanation":        val_explanation,
+        "reason_codes":                 reason_codes,
     }
 
 
@@ -1966,17 +2389,18 @@ def _compute_v42_confidence(
     """
     V4.2 confidence: % of components available, with structural penalties.
 
-    7 core components x 12 pts = 84, social = 8 → total possible = 92.
+    8 core components x 12 pts = 96, social = 8 → total possible = 104.
     Normalise to 100.
     """
     comp_weights = {
-        "theme_alignment":    12,
-        "stage_quality":      12,
-        "options_alignment":  12,
-        "technical_setup":    12,
-        "entry_exit":         12,
-        "catalyst_alignment": 12,
+        "theme_alignment":      12,
+        "stage_quality":        12,
+        "options_alignment":    12,
+        "technical_setup":      12,
+        "entry_exit":           12,
+        "catalyst_alignment":   12,
         "investment_alignment": 12,
+        "valuation":            12,
     }
     _KNOWN_STATE_STATUSES = {
         "confirmed_no_options",
@@ -1986,9 +2410,10 @@ def _compute_v42_confidence(
         "available_live",
         "stale_but_usable",
         "available",
+        "partial",          # valuation: 1 or 2 of 3 metrics present
     }
 
-    total_possible = sum(comp_weights.values()) + 8  # 92
+    total_possible = sum(comp_weights.values()) + 8  # 104
     earned = sum(
         w for k, w in comp_weights.items()
         if (
@@ -2042,6 +2467,7 @@ def compute_confluence_v42(
     entry_comp  = _score_entry_exit_v42(snapshot_row)
     cat_comp    = _score_catalyst_alignment_v42(snapshot_row)
     invest_comp = _score_investment_alignment_v42(snapshot_row, fundamentals_map)
+    val_comp    = _score_valuation_v42(snapshot_row, fundamentals_map)
 
     core_score = round(min(100.0, sum([
         theme_comp["points"],
@@ -2051,6 +2477,7 @@ def compute_confluence_v42(
         entry_comp["points"],
         cat_comp["points"],
         invest_comp["points"],
+        val_comp["points"],
     ])), 1)
 
     # ── Bonus scorers ─────────────────────────────────────────────────────────
@@ -2085,17 +2512,19 @@ def compute_confluence_v42(
         "entry_exit":         entry_comp,
         "catalyst_alignment": cat_comp,
         "investment_alignment": invest_comp,
+        "valuation":          val_comp,
     }
 
     # ── Normalized core score for bucket assignment ────────────────────────────
     _COMP_MAX_PTS = {
-        "theme_alignment":    15.0,
-        "stage_quality":      15.0,
-        "options_alignment":  20.0,
-        "technical_setup":     8.0,
-        "entry_exit":         12.0,
-        "catalyst_alignment": 15.0,
-        "investment_alignment": 15.0,
+        "theme_alignment":      15.0,
+        "stage_quality":        15.0,
+        "options_alignment":    18.0,
+        "technical_setup":       8.0,
+        "entry_exit":           12.0,
+        "catalyst_alignment":   12.0,
+        "investment_alignment": 12.0,
+        "valuation":             8.0,
     }
     available_max = sum(
         _COMP_MAX_PTS[k] for k, c in components.items() if c.get("available")
@@ -2226,6 +2655,19 @@ def compute_confluence_v42(
         "investment_quality_score":       invest_comp.get("investment_quality_score"),
         "investment_quality_rank_label":  invest_comp.get("investment_quality_rank_label"),
         "investment_quality_reason_codes": invest_comp.get("investment_quality_reason_codes"),
+        "valuation_alignment_points":     val_comp["points"],
+        "valuation_quality_score":        val_comp.get("valuation_quality_score"),
+        "valuation_label":                val_comp.get("valuation_label"),
+        "valuation_coverage_status":      val_comp.get("valuation_coverage_status"),
+        "valuation_missing_fields":       val_comp.get("valuation_missing_fields"),
+        "valuation_pe_ratio":             val_comp.get("pe_ratio"),
+        "valuation_ps_ratio":             val_comp.get("ps_ratio"),
+        "valuation_forward_pe":           val_comp.get("forward_pe"),
+        "valuation_pe_value_score":       val_comp.get("pe_value_score"),
+        "valuation_ps_value_score":       val_comp.get("ps_value_score"),
+        "valuation_forward_pe_value_score": val_comp.get("forward_pe_value_score"),
+        "valuation_reason_codes":         val_comp.get("valuation_reason_codes"),
+        "valuation_explanation":          val_comp.get("valuation_explanation"),
         "social_bonus_points":          soc_bonus["points"],
         "social_sections_hit":          soc_bonus.get("social_sections_hit"),
         "social_confluence_hit":        soc_bonus.get("social_confluence_hit"),

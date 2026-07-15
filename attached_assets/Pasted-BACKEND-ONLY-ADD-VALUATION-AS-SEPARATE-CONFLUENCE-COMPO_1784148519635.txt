@@ -1,0 +1,495 @@
+BACKEND ONLY — ADD VALUATION AS SEPARATE CONFLUENCE COMPONENT
+
+Backend repo only.
+
+Do not touch frontend.
+Do not run provider calls.
+Do not add LLM calls.
+Do not change actionability labels directly.
+Do not change bonuses.
+Do not create a new data provider path.
+Use cached fundamentals only.
+
+Goal:
+
+Add Valuation as its own visible Confluence V4.2 core component instead of blending valuation into Investment Quality.
+
+Important conceptual split:
+
+Investment Quality = business strength / growth / financial quality.
+Valuation = price paid for that business.
+
+Valuation should use:
+- P/E
+- P/S
+- Forward P/E
+
+These should be weighted evenly inside Valuation.
+
+Do not increase the core max above 100.
+
+==================================================
+PART 1 — CURRENT SCORE CONTRACT AUDIT
+==================================================
+
+Before editing, audit current Confluence V4.2 core score weights.
+
+Return current max weights for:
+
+- Theme
+- Stage
+- Options
+- Technical Setup
+- Entry / Exit
+- Catalyst
+- Investment
+- Bonus components
+
+Confirm current core max = 100 and bonus max = 25.
+
+Find all places where component max points are hardcoded, displayed, normalized, or summed.
+
+Return files/functions.
+
+==================================================
+PART 2 — NEW CORE SCORE WEIGHTS
+==================================================
+
+Implement the new core structure:
+
+Theme Alignment:        15
+Stage Quality:          15
+Options Alignment:      18
+Technical Setup:         8
+Entry / Exit:           12
+Catalyst Alignment:     12
+Investment Quality:     12
+Valuation:               8
+--------------------------
+Core Score:            100
+
+Bonus remains unchanged:
+
+Social:                 15
+Whale / Insider:         5
+Bottleneck:              5
+--------------------------
+Bonus Score:            25
+
+Rules:
+
+- Core max must remain 100.
+- Bonus max must remain 25.
+- Total max remains 125.
+- Do not change actionability thresholds unless the audit proves they directly depend on component max assumptions.
+- If thresholds are based on total/core score, report whether reweighting changes behavior.
+
+==================================================
+PART 3 — VALUATION COMPONENT MODEL
+==================================================
+
+Add:
+
+valuation_alignment_points out of 8
+valuation_quality_score_0_100
+valuation_label
+valuation_reason_codes
+valuation_explanation
+
+Valuation inputs:
+
+1. P/E
+2. P/S
+3. Forward P/E
+
+Each gets one-third of valuation_quality_score.
+
+valuation_quality_score_0_100 =
+  pe_value_score * 0.3333
++ ps_value_score * 0.3333
++ forward_pe_value_score * 0.3333
+
+valuation_alignment_points =
+  valuation_quality_score_0_100 / 100 * 8
+
+==================================================
+PART 4 — P/E SCORE
+==================================================
+
+Create a P/E value score out of 100.
+
+Rules:
+
+- Lower positive P/E is better.
+- Negative P/E or missing P/E should not auto-zero the whole valuation score.
+- Very low P/E should not get max score if growth/financial quality is weak.
+- Extremely high P/E should score low.
+- Use cached field pe_ratio.
+
+Suggested absolute fallback bands:
+
+P/E <= 0 or missing: neutral_missing = 45 unless P/S and Forward P/E exist
+P/E 0–15: 90–100
+P/E 15–25: 75–90
+P/E 25–40: 50–75
+P/E 40–70: 25–50
+P/E >70: 0–25
+
+Apply quality adjustment:
+- If revenue growth and EPS growth are strong, allow modest premium.
+- If growth is weak and P/E is high, penalize harder.
+
+Return exact formula used.
+
+==================================================
+PART 5 — P/S SCORE
+==================================================
+
+Create a P/S value score out of 100.
+
+Rules:
+
+- Lower P/S is better.
+- P/S is especially useful for growth companies with low/negative earnings.
+- Higher growth and gross margin should allow a higher reasonable P/S.
+- Use cached field ps_ratio.
+
+Suggested absolute fallback bands:
+
+P/S <= 1: 90–100
+P/S 1–3: 75–90
+P/S 3–6: 55–75
+P/S 6–10: 35–55
+P/S 10–20: 15–35
+P/S >20: 0–15
+
+Growth/margin adjustment:
+- Strong revenue growth and strong gross margin can add modest premium.
+- Weak growth with high P/S should be penalized.
+
+Return exact formula used.
+
+==================================================
+PART 6 — FORWARD P/E SCORE
+==================================================
+
+Create a Forward P/E value score out of 100.
+
+Rules:
+
+- Lower positive Forward P/E is better.
+- Forward P/E is most useful when forward EPS/revenue growth is strong.
+- Missing Forward P/E should not auto-zero the whole valuation score.
+- Use cached field forward_pe if available.
+
+Suggested absolute fallback bands:
+
+Forward P/E <= 0 or missing: neutral_missing = 45 unless P/E and P/S exist
+Forward P/E 0–20: 85–100
+Forward P/E 20–35: 65–85
+Forward P/E 35–50: 40–65
+Forward P/E 50–80: 20–40
+Forward P/E >80: 0–20
+
+Forward growth adjustment:
+- Strong EPS next year / revenue next year can add modest premium.
+- Weak forward growth with high Forward P/E should penalize harder.
+
+Return exact formula used.
+
+==================================================
+PART 7 — MISSING DATA BEHAVIOR
+==================================================
+
+Do not punish missing data too harshly.
+
+Rules:
+
+- If one of P/E, P/S, Forward P/E is missing, average available scores and apply a small confidence haircut.
+- If two are missing, use available score with larger confidence haircut.
+- If all three are missing, valuation points = 0 and coverage flag = VALUATION_UNAVAILABLE.
+- Negative P/E should be treated as unavailable/low-confidence, not as attractive.
+- P/S can carry more weight when P/E is unavailable due unprofitability.
+
+Return:
+
+valuation_coverage_status:
+- available
+- partial
+- unavailable
+
+valuation_missing_fields array
+
+==================================================
+PART 8 — INVESTMENT QUALITY CLEANUP
+==================================================
+
+Do not remove Investment Quality.
+
+Reweight it to 12 points.
+
+Investment should remain business-quality focused:
+
+- financial health
+- current growth
+- forward growth
+- profitability
+- balance sheet
+- cash flow
+
+Do not include P/E, P/S, or Forward P/E inside Investment after Valuation is added.
+
+If those valuation metrics are currently used in Investment, remove or de-duplicate them.
+
+Return whether they were previously used.
+
+==================================================
+PART 9 — DATA CONTRACT FIELDS
+==================================================
+
+Expose in Confluence V4.2 output:
+
+valuation:
+- valuation_alignment_points
+- valuation_quality_score
+- valuation_label
+- valuation_coverage_status
+- valuation_missing_fields
+- pe_ratio
+- ps_ratio
+- forward_pe
+- pe_value_score
+- ps_value_score
+- forward_pe_value_score
+- valuation_reason_codes
+- valuation_explanation
+
+Also expose in component breakdown alongside other components:
+
+components.valuation.points
+components.valuation.max_points = 8
+components.valuation.quality
+components.valuation.label
+components.valuation.explanation
+
+Update component max metadata:
+
+options max = 18
+catalyst max = 12
+investment max = 12
+valuation max = 8
+
+==================================================
+PART 10 — VALIDATION SAMPLE
+==================================================
+
+Validate before/after for:
+
+TSM
+NVDA
+CRWD
+VRT
+ALGM
+ABCL
+SOFI
+MARA
+IONQ
+BB
+ADEA
+MU
+HIMS
+PANW
+ENTG
+ALAB
+SMCI
+ACLS
+
+For each return:
+
+symbol
+old_core_score
+new_core_score
+old_total_score
+new_total_score
+old_investment_points
+new_investment_points
+valuation_points
+valuation_quality_score
+pe_ratio
+ps_ratio
+forward_pe
+pe_score
+ps_score
+forward_pe_score
+valuation_label
+reason_codes
+action_label before/after
+execution_state before/after
+plain_english_change
+
+Flag:
+
+- great company but expensive valuation
+- cheap but weak business
+- expensive high-growth name
+- unprofitable growth where P/S carries valuation
+- missing valuation data
+
+==================================================
+PART 11 — DISTRIBUTION VALIDATION
+==================================================
+
+Rebuild retained Confluence snapshot from cache only.
+
+Return distributions:
+
+Core score before/after:
+- min
+- max
+- mean
+- median
+- std dev
+
+Component distributions:
+- options /18
+- catalyst /12
+- investment /12
+- valuation /8
+
+Valuation distribution:
+- unique values
+- % at 0
+- % at max
+- 0–2 bucket
+- 2–4 bucket
+- 4–6 bucket
+- 6–8 bucket
+
+Actionability counts before/after:
+
+READY
+NEAR_ACTIONABLE
+WAIT_FOR_RETEST
+WATCH_FOR_RESET
+WATCH
+AVOID
+RISK_CONFLICT
+
+Confirm:
+
+- actionability did not shift unexpectedly
+- no READY with LOWER_LOW_CONFIRMED
+- no READY with CHASE_EXTENSION
+- no READY missing invalidation
+- ABCL remains NEAR_ACTIONABLE, not READY
+- VRT / ALGM / TSM remain READY unless clearly changed by score threshold
+- LITE / LASR / VECO remain not READY
+
+==================================================
+PART 12 — RANKING IMPACT
+==================================================
+
+Return top 30 before/after by total score.
+
+Flag any suspicious ranking changes caused by valuation:
+
+- cheap junk rising too much
+- expensive elite growth falling too much
+- no-data symbols punished too hard
+- valuation overpowering technical/actionability
+
+Expected:
+Valuation should adjust rankings, not dominate them.
+
+==================================================
+PART 13 — FINAL REPORT
+==================================================
+
+Return:
+
+VALUATION COMPONENT IMPLEMENTATION REPORT
+
+CURRENT SCORE CONTRACT AUDIT:
+[summary]
+
+NEW SCORE WEIGHTS:
+[table]
+
+VALUATION FORMULA:
+[summary]
+
+MISSING DATA BEHAVIOR:
+[summary]
+
+INVESTMENT QUALITY DE-DUPLICATION:
+[summary]
+
+DATA CONTRACT FIELDS:
+[summary]
+
+VALIDATION SAMPLE:
+[table]
+
+DISTRIBUTION VALIDATION:
+[table]
+
+RANKING IMPACT:
+[summary/table]
+
+ACTIONABILITY SAFETY:
+[summary/table]
+
+FILES CHANGED:
+[list]
+
+End exactly:
+
+VALUATION COMPONENT VERDICT
+
+CORE_MAX_REMAINS_100:
+[YES/NO]
+
+BONUS_MAX_REMAINS_25:
+[YES/NO]
+
+VALUATION_COMPONENT_ADDED:
+[YES/NO]
+
+VALUATION_MAX_POINTS:
+[8]
+
+OPTIONS_REWEIGHTED_TO_18:
+[YES/NO]
+
+CATALYST_REWEIGHTED_TO_12:
+[YES/NO]
+
+INVESTMENT_REWEIGHTED_TO_12:
+[YES/NO]
+
+PE_USED_IN_VALUATION:
+[YES/NO]
+
+PS_USED_IN_VALUATION:
+[YES/NO]
+
+FORWARD_PE_USED_IN_VALUATION:
+[YES/NO]
+
+VALUATION_REMOVED_FROM_INVESTMENT_DUPLICATION:
+[YES/NO/NOT_APPLICABLE]
+
+ACTIONABILITY_UNCHANGED:
+[YES/NO]
+
+READY_SAFETY_CHECK_PASSED:
+[YES/NO]
+
+RANKING_DISTORTIONS_FOUND:
+[YES/NO]
+
+PROVIDER_CALLS_USED:
+NO
+
+FRONTEND_UPDATE_REQUIRED:
+YES
