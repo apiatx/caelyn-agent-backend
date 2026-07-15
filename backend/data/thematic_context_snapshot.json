@@ -39,11 +39,11 @@
     },
     {
       "name": "Memory & Storage",
-      "score": 76.8,
+      "score": 77.3,
       "source": "theme_rs_service",
       "evidence": [
         "Top-percentile RS (76/100) vs theme universe. Outperforming SPY +4.5%, QQQ +2.8%. Breadth N/A.",
-        "X consensus: 1 ticker mentioned"
+        "X consensus: 2 tickers mentioned"
       ],
       "related_etfs": [
         "AEHR",
@@ -76,11 +76,11 @@
   "emerging_themes": [
     {
       "name": "Semiconductor Equipment",
-      "score": 69.0,
+      "score": 69.2,
       "source": "theme_rs_service",
       "evidence": [
         "Rising RS (69/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
-        "X consensus: 1 ticker mentioned"
+        "X consensus: 2 tickers mentioned"
       ],
       "related_etfs": [
         "ACLS",
@@ -96,10 +96,11 @@
     },
     {
       "name": "Technology",
-      "score": 67.8,
+      "score": 68.0,
       "source": "theme_rs_service",
       "evidence": [
-        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt"
+        "Rising RS (68/100) with positive momentum acceleration. Positive return but not yet top-tier vs theme universe. SPY delt",
+        "X consensus: 1 ticker mentioned"
       ],
       "related_etfs": [
         "XLK",
@@ -277,7 +278,7 @@
   ],
   "sector_laggards": [],
   "risk_notes": [],
-  "last_updated": "2026-07-15T05:14:13.672355+00:00",
+  "last_updated": "2026-07-15T14:31:41.684302+00:00",
   "snapshot_status": "fresh",
   "snapshot_age_minutes": 0,
   "source_health": {
@@ -288,5 +289,5 @@
     "x_consensus": "ok",
     "polymarket": "fallback"
   },
-  "_saved_at": 1784092453.672396
+  "_saved_at": 1784125901.6844988
 }

@@ -131,6 +131,13 @@ def build_risk_flags(row: dict) -> list[str]:
     (i.e. extension_quality != CONSTRUCTIVE or chase_extension == True).
     Constructive extreme extension goes to caution_flags instead.
     Data/coverage/pending flags go in build_data_status_flags().
+
+    Breakout-floor retest exception: when extension_reset_state ==
+    CONSTRUCTIVE_RETEST_AFTER_EXTENSION and the bucket was promoted to
+    NEAR_ACTIONABLE, EXTREME_EXTENSION and CHASE_EXTENSION are demoted
+    from red risk_flags to amber caution_flags.  Actionability is
+    unaffected — _p6_chase_bad reads chase_extension directly from row,
+    not from this derived list.
     """
     flags: list[str] = []
     bucket      = str(row.get("caelyn_confluence_bucket") or "")
@@ -141,12 +148,20 @@ def build_risk_flags(row: dict) -> list[str]:
     entry_pts   = _fvf(row, "entry_exit_points")
     entry_ex_st = str(row.get("entry_exit_status") or "").lower()
     chase       = _fvb(row, "chase_extension")
+    ext_reset   = str(row.get("extension_reset_state") or "").upper()
+
+    # Breakout-floor retest: chase extension was constructively resolved
+    # and the row was promoted to NEAR_ACTIONABLE.  Demote to amber.
+    is_floor_retest = (
+        ext_reset == "CONSTRUCTIVE_RETEST_AFTER_EXTENSION"
+        and bucket == "NEAR_ACTIONABLE"
+    )
 
     if ext_state == "EXTREME_EXTENSION":
         # Only red if NOT a constructive reset — chase or non-constructive quality
-        if chase or ext_quality != "CONSTRUCTIVE":
+        if (chase or ext_quality != "CONSTRUCTIVE") and not is_floor_retest:
             flags.append("EXTREME_EXTENSION")
-    if chase:
+    if chase and not is_floor_retest:
         flags.append("CHASE_EXTENSION")
     if _fvb(row, "major_lower_low_confirmed"):
         flags.append("MAJOR_LOWER_LOW_CONFIRMED")
@@ -179,13 +194,27 @@ def build_caution_flags(row: dict) -> list[str]:
     """
     Amber-level caution signals — not trade blockers.
     Frontend renders these as amber badges, never red.
+
+    EXTENDED_BUT_RETESTING_BREAKOUT_FLOOR / BREAKOUT_FLOOR_RETEST_ACTIVE
+    replace the red CHASE_EXTENSION + EXTREME_EXTENSION flags when the row
+    satisfies the breakout-floor retest criteria (see build_risk_flags).
     """
     flags: list[str] = []
     ext_state   = str(row.get("extension_state") or "").upper()
     ext_quality = str(row.get("extension_quality") or "").upper()
     chase       = _fvb(row, "chase_extension")
+    ext_reset   = str(row.get("extension_reset_state") or "").upper()
+    bucket      = str(row.get("caelyn_confluence_bucket") or "")
 
-    if ext_state == "EXTREME_EXTENSION" and ext_quality == "CONSTRUCTIVE" and not chase:
+    is_floor_retest = (
+        ext_reset == "CONSTRUCTIVE_RETEST_AFTER_EXTENSION"
+        and bucket == "NEAR_ACTIONABLE"
+    )
+
+    if is_floor_retest:
+        flags.append("EXTENDED_BUT_RETESTING_BREAKOUT_FLOOR")
+        flags.append("BREAKOUT_FLOOR_RETEST_ACTIVE")
+    elif ext_state == "EXTREME_EXTENSION" and ext_quality == "CONSTRUCTIVE" and not chase:
         flags.append("EXTREME_EXTENSION_CONSTRUCTIVE_RESET")
     return flags
 
