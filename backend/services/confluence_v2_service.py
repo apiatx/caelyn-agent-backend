@@ -2491,12 +2491,17 @@ def build_confluence_snapshot(
             r["is_near_actionable"]                  = True
             r["is_watch_for_reset"]                  = False
 
-        # ── P6 gap: AGGRESSIVE_ACTIONABLE bucket upgrade ──────────────────────
-        # PATH C / PATH E can set _p6_tier=AGGRESSIVE_ACTIONABLE but V4.2's
-        # pre-P6 bucket (e.g. WATCH_FOR_RESET) is never updated for this tier.
-        # Upgrade to NEAR_ACTIONABLE so these rows surface correctly.
+        # ── P6 gap: P6-tier bucket upgrade ────────────────────────────────────
+        # When P6 computes NEAR_ACTIONABLE or AGGRESSIVE_ACTIONABLE but V4.2
+        # pre-assigned a weaker bucket (WATCH_FOR_RESET / NO_CLEAR_CONFLUENCE /
+        # WATCH), the bucket is never updated because those tiers have no
+        # promotion block.  Upgrade so derive_boolean_flags honours P6's verdict.
+        # Safety: NEAR_ACTIONABLE tier already requires not _p6_chase_bad (line
+        # 2311) and both tiers require decent entry/stage.  WFR bucket that
+        # correctly belongs in WFR will have _p6_tier == "WATCH_FOR_RESET"
+        # (the elif branch) — not NEAR_ACTIONABLE — so no false promotions.
         if (
-            _p6_tier == "AGGRESSIVE_ACTIONABLE"
+            _p6_tier in {"NEAR_ACTIONABLE", "AGGRESSIVE_ACTIONABLE"}
             and str(r.get("caelyn_confluence_bucket") or "") in {
                 "WATCH_FOR_RESET", "NO_CLEAR_CONFLUENCE", "WATCH",
             }
