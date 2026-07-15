@@ -1,0 +1,104 @@
+BACKEND ONLY — FORWARD P/E REFRESH SMOKE TEST
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math.
+Do not change actionability logic.
+Do not run a full fundamentals backfill.
+Do not create new provider paths.
+Use the existing FmpFundamentalsRefresher path only.
+
+Goal:
+
+Forward P/E derivation was added to the scheduled fundamentals refresher:
+
+forward_pe = price / (next-quarter epsEstimated × 4)
+
+It is currently 0/414 populated because cached fundamentals snapshots were written before the patch.
+
+Run a small controlled refresh smoke test for:
+
+TSM
+NVDA
+CRWD
+VRT
+ALGM
+ABCL
+HIMS
+PANW
+ENTG
+MU
+
+Use the existing cadence-safe fundamentals refresh path.
+
+Validate for each symbol:
+
+symbol
+price_used
+eps_estimate_used
+eps_estimate_period
+forward_eps_estimate
+forward_pe
+forward_pe_source
+forward_pe_asof
+forward_pe_confidence
+forward_pe_is_approximate
+forward_pe_missing_reason
+stored_in_watchlist_fundamentals_cache
+visible_in_confluence_valuation
+valuation_forward_pe
+valuation_forward_pe_value_score
+valuation_coverage_status_before
+valuation_coverage_status_after
+provider_calls_used
+fmp_endpoint_used
+
+Rules:
+
+- Do not call FMP from Confluence scoring.
+- Do not call FMP from ticker-detail endpoint.
+- Do not call FMP request-time from frontend.
+- Only the scheduled/cached refresher path may use provider calls.
+- If a symbol cannot derive Forward P/E, return the exact missing reason.
+
+Then rebuild/read Confluence for only these 10 symbols and confirm:
+
+- Forward P/E appears where derivable
+- valuation_coverage_status improves from partial to available where all 3 fields exist
+- valuation still respects max /8
+- actionability labels do not change solely due Forward P/E
+- ABCL remains not READY
+- VRT / ALGM / TSM status explained
+
+Return:
+
+FORWARD P/E REFRESH SMOKE TEST REPORT
+
+End exactly:
+
+FORWARD_PE_SMOKE_TEST_VERDICT
+
+REFRESH_PATH_USED:
+[YES/NO]
+
+REQUEST_TIME_PROVIDER_CALLS_USED:
+NO
+
+FORWARD_PE_POPULATED_FOR_COUNT:
+[number]/10
+
+FORWARD_PE_STORED_IN_CACHE:
+[YES/NO]
+
+FORWARD_PE_VISIBLE_IN_CONFLUENCE:
+[YES/NO]
+
+VALUATION_COVERAGE_IMPROVED:
+[YES/NO/PARTIAL]
+
+ACTIONABILITY_STABLE:
+[YES/NO]
+
+READY_FOR_FRONTEND:
+[YES/NO]
