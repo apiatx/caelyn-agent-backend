@@ -1,0 +1,414 @@
+BACKEND — FINAL WATCHLIST ALIGNMENT CHECK + RUN SCOPED INITIAL 10Y HISTORY BACKFILL
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change code unless a tiny response-shape bug is found.
+Do not change provider logic.
+Do not expand the backfill universe.
+Do not include broad Theme baskets.
+Do not include Theme candidates.
+Do not run Options Flow changes.
+Do not run any provider calls during the Watchlist alignment check.
+
+Goal:
+
+Before running the scoped initial 10Y canonical history backfill tonight, first verify the real Watchlist alignment endpoint returns rows and includes the new Confluence semantic fields.
+
+Then run the initial_full_backfill safely after market close.
+
+Important context:
+
+Earlier, /api/watchlist/default/alignment returned {"empty": true} because "default" was not a real watchlist ID/name in this environment. That was not related to 10Y history. It was a test/watchlist-ID mismatch.
+
+We need to test with an actual real watchlist ID from the app/backend.
+
+==================================================
+PART 1 — FIND REAL WATCHLIST ID
+==================================================
+
+Do not guess "default".
+
+Find the real watchlist ID(s) available in the backend.
+
+Use existing watchlist list/read functions or existing endpoints.
+
+Return:
+
+available_watchlists:
+- id
+- name
+- ticker_count
+
+Pick the primary real watchlist used by the app.
+
+Do not call Tradier.
+Do not call FMP.
+Do not call historical providers.
+
+==================================================
+PART 2 — REAL WATCHLIST ALIGNMENT ENDPOINT CHECK
+==================================================
+
+Call:
+
+GET /api/watchlist/{real_watchlist_id}/alignment
+
+Using the actual real watchlist ID from Part 1.
+
+Confirm the endpoint returns rows, not {"empty": true}.
+
+For at least 5 sample rows, preferably:
+
+VRT
+ALGM
+ABCL
+CRDO
+TSM
+
+or the first 5 rows if those symbols are not present, verify each row includes:
+
+Nested object:
+- confluence_v42
+- confluence_v42.action.execution_state
+- confluence_v42.action.execution_label
+- confluence_v42.risk.caution_flags
+- confluence_v42.risk.risk_flags
+- confluence_v42.metadata.data_status_flags
+- confluence_v42.technical.entry_state_display
+
+Flat aliases:
+- entry_execution_state
+- entry_execution_label
+- caution_flags
+- risk_flags
+- data_status_flags
+- entry_state_display
+
+Return:
+
+watchlist_id_tested
+watchlist_name_tested
+rows_returned
+empty_response
+fields_present
+fields_missing
+sample_rows
+
+Expected:
+
+empty_response = false
+rows_returned > 0
+all required fields present
+
+If fields are missing:
+
+- patch only the response passthrough in watchlist_router.py
+- do not touch scoring
+- do not touch Confluence math
+- do not touch providers
+- restart and retest
+
+==================================================
+PART 3 — PRE-BACKFILL SAFETY CHECK
+==================================================
+
+Before starting the full backfill, call:
+
+GET /api/admin/canonical-history/status
+GET /api/rate-status if available
+
+Confirm:
+
+- market is closed / market-hours gate is not blocking
+- backfill_job.running = false
+- history lane idle
+- options flow not saturated / no meaningful conflict
+- default_universe_count around 352
+- missing_symbols_count > 0
+- broad Theme basket excluded
+- Theme candidates excluded
+- CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES=false
+- CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES=false
+
+Return:
+
+market_open_now
+backfill_job_running
+history_lane_usage
+options_flow_busy_pct
+default_universe_count
+missing_symbols_count
+complete_symbols_count
+available_10y_count
+available_lifetime_under_10y_count
+broad_theme_basket_included
+theme_candidates_included
+
+Do not start if:
+- market_hours gate blocks the job
+- another backfill is running
+- broad Theme basket/candidates are included
+- history lane is not idle
+- default universe unexpectedly jumps toward 600+
+
+==================================================
+PART 4 — SET REQUIRED FLAGS
+==================================================
+
+Confirm/set:
+
+CANONICAL_HISTORY_BACKFILL_ENABLED=true
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=true
+CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false
+CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES=false
+CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES=false
+CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED=true
+CANONICAL_HISTORY_MISSING_CATCHUP_ENABLED=true
+
+Important:
+
+FULL_BACKFILL_ENABLED should only stay true during tonight's one-time full backfill.
+After completion, set FULL_BACKFILL_ENABLED=false.
+
+BACKFILL_ENABLED should stay true after completion because the off-hours scheduler uses it for future small missing-symbol catch-up and incremental maintenance.
+
+==================================================
+PART 5 — RUN INITIAL FULL BACKFILL IN BATCHES
+==================================================
+
+Run this exact sequence.
+
+Batch 1 — test batch:
+
+POST /api/admin/canonical-history/backfill?mode=initial_full_backfill&max_syms=20
+
+Wait until complete.
+
+Verify:
+
+GET /api/admin/canonical-history/status
+
+Return:
+
+batch=20
+started
+completed_count
+failed_count
+last_symbol
+last_error
+available_10y_count
+available_lifetime_under_10y_count
+missing_symbols_remaining
+history_lane_max_rpm_observed
+options_flow_impacted
+
+If clean, continue.
+
+Batch 2:
+
+POST /api/admin/canonical-history/backfill?mode=initial_full_backfill&max_syms=100
+
+Wait until complete.
+
+Return the same batch report.
+
+Batch 3 — remainder:
+
+POST /api/admin/canonical-history/backfill?mode=initial_full_backfill&max_syms=500
+
+Wait until complete.
+
+Return the same batch report.
+
+Expected:
+
+- total eligible symbols around 352
+- estimated duration around 70–90 minutes at 5 RPM
+- older symbols classify as available_10y
+- younger/recent ticker histories classify as available_lifetime_under_10y
+- actual limited histories classify as actual_ticker_history_limit if applicable
+- missing_symbols_count approaches 0
+
+==================================================
+PART 6 — ASSET AGE / HISTORY CLASSIFICATION VALIDATION
+==================================================
+
+After completion, validate a mixed sample:
+
+Older / should likely be available_10y:
+SPY
+AAPL
+NVDA
+TSM
+VRT
+CRWD
+PANW
+
+Younger / should likely be available_lifetime_under_10y:
+ABCL
+ALGM
+SOFI
+HOOD
+HIMS
+WYFI
+
+Potential special/mixed:
+OUST
+MARA
+
+For each return:
+
+symbol
+in_canonical_index
+provider
+bar_count
+oldest_bar_date
+newest_bar_date
+history_status
+years_available
+classified_as
+plain_english_explanation
+
+Expected behavior:
+
+- Do not force 10Y on tickers that have not existed for 10 years.
+- Use full available lifetime for younger tickers.
+- Store and mark them as available_lifetime_under_10y when appropriate.
+- Do not fall back to 400 bars when canonical history is usable.
+
+==================================================
+PART 7 — FINAL POST-BACKFILL SETTINGS
+==================================================
+
+After the full backfill completes successfully:
+
+Set:
+
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=false
+
+Leave:
+
+CANONICAL_HISTORY_BACKFILL_ENABLED=true
+CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED=true
+CANONICAL_HISTORY_MISSING_CATCHUP_ENABLED=true
+CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false
+CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES=false
+CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES=false
+
+Confirm:
+
+- full backfill cannot accidentally rerun
+- future missing-symbol catch-up can still run off-hours
+- future incremental append can still run off-hours
+- market-hours history calls remain blocked
+
+==================================================
+PART 8 — READY FOR NEXT STEP
+==================================================
+
+After the backfill completes, do not recalibrate scoring yet.
+
+Return whether we are ready for:
+
+- Confluence snapshot rebuild
+- Fib/Wave population validation
+- post-10Y Ready/Near/Watch/Reset calibration audit
+
+Do not run those unless explicitly asked after this report.
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+WATCHLIST ALIGNMENT + 10Y CANONICAL HISTORY BACKFILL REPORT
+
+WATCHLIST ALIGNMENT CHECK:
+[summary/table]
+
+PRE-BACKFILL SAFETY:
+[summary/table]
+
+BATCH 20 REPORT:
+[summary/table]
+
+BATCH 100 REPORT:
+[summary/table]
+
+FINAL BATCH REPORT:
+[summary/table]
+
+HISTORY CLASSIFICATION VALIDATION:
+[table]
+
+POST-BACKFILL FLAGS:
+[summary]
+
+NEXT STEP READINESS:
+[summary]
+
+End exactly:
+
+ALIGNMENT + 10Y BACKFILL VERDICT
+
+REAL_WATCHLIST_ALIGNMENT_TESTED:
+[YES/NO]
+
+ALIGNMENT_RETURNED_ROWS:
+[YES/NO]
+
+ALIGNMENT_HAS_CONFLUENCE_V42:
+[YES/NO]
+
+ALIGNMENT_HAS_NEW_SEMANTIC_FIELDS:
+[YES/NO]
+
+FULL_BACKFILL_STARTED:
+[YES/NO]
+
+FULL_BACKFILL_COMPLETED:
+[YES/NO]
+
+TOTAL_SYMBOLS_BACKFILLED:
+[number]
+
+AVAILABLE_10Y_COUNT:
+[number]
+
+AVAILABLE_LIFETIME_UNDER_10Y_COUNT:
+[number]
+
+ACTUAL_TICKER_HISTORY_LIMIT_COUNT:
+[number]
+
+MISSING_SYMBOLS_REMAINING:
+[number]
+
+HISTORY_LANE_MAX_RPM_USED:
+[number]
+
+OPTIONS_FLOW_IMPACTED:
+[YES/NO]
+
+BROAD_THEME_BASKET_EXCLUDED:
+[YES/NO]
+
+THEME_CANDIDATES_EXCLUDED:
+[YES/NO]
+
+ASSET_AGE_CLASSIFICATION_WORKING:
+[YES/NO]
+
+NO_400_BAR_FALLBACK_FOR_USABLE_CANONICAL_HISTORY:
+[YES/NO]
+
+FULL_BACKFILL_FLAG_DISABLED_AFTER_COMPLETION:
+[YES/NO]
+
+STEADY_STATE_CATCHUP_AND_APPEND_STILL_ENABLED:
+[YES/NO]
+
+READY_TO_REBUILD_CONFLUENCE_SNAPSHOT:
+[YES/NO]
