@@ -1,0 +1,500 @@
+BACKEND ONLY — VALUATION READY REGRESSION + FORWARD P/E DERIVATION PATCH
+
+Backend repo only.
+
+Do not touch frontend.
+Do not remove Valuation.
+Do not remove Forward P/E.
+Do not change Confluence UI contracts unless needed to expose corrected valuation fields.
+Do not run request-time provider calls.
+Do not add LLM calls.
+Do not use stale CSV/upload data as canonical.
+Do not hand-wave READY=0 as market state without proof.
+
+Context:
+
+We added Valuation as a separate Confluence core component:
+
+Theme 15
+Stage 15
+Options 18
+Technical Setup 8
+Entry / Exit 12
+Catalyst 12
+Investment 12
+Valuation 8
+Core max 100
+Bonus max 25
+
+Full valuation QA then showed:
+- 414 symbols scored
+- 0 READY
+- Forward P/E populated 0/414
+- all valuation rows are partial/unavailable
+- report claimed Forward P/E is missing due FMP Starter limitation
+
+That is not acceptable without deeper verification.
+
+Important user-provided constraint:
+
+FMP Starter may not provide a single precomputed Forward P/E field, but it includes Ratios TTM, Key Metrics, and Financial Estimates APIs. Forward P/E can be calculated:
+
+Forward P/E = Current Stock Price / Estimated Forward EPS
+
+Use cached/current quote price and cached EPS estimate fields when available.
+
+Also check whether Ratios TTM exposes forwardPriceToEarningsGrowthRatioTTM or similar fields that can approximate forward P/E from trailing P/E and growth factor.
+
+Do not call FMP at modal/page request time. If new data is needed, it must be added only to the existing scheduled/cached fundamentals refresh path.
+
+==================================================
+PART 1 — READY COLLAPSE ROOT-CAUSE AUDIT
+==================================================
+
+The full QA report showed READY = 0 across 414 symbols.
+
+Do not explain this as “market state” unless exact changed inputs prove it.
+
+Compare current post-valuation output against pre-valuation behavior.
+
+If an actual pre-valuation retained snapshot/checkpoint exists, use it.
+
+If not, reconstruct old core score from the same current component raw scores:
+
+OLD CORE:
+Theme 15
+Stage 15
+Options 20
+Technical Setup 8
+Entry / Exit 12
+Catalyst 15
+Investment 15
+Valuation 0
+
+NEW CORE:
+Theme 15
+Stage 15
+Options 18
+Technical Setup 8
+Entry / Exit 12
+Catalyst 12
+Investment 12
+Valuation 8
+
+For every symbol return:
+
+symbol
+old_core_reconstructed
+new_core
+core_delta
+old_total_reconstructed
+new_total
+total_delta
+old_normalized_total if available/reconstructable
+new_normalized_total
+old_action_reconstructed if possible
+new_action
+old_bucket if possible
+new_bucket
+component delta breakdown:
+- options_reweight_loss
+- catalyst_reweight_loss
+- investment_reweight_loss
+- valuation_gain
+- other_data_change
+
+Aggregate:
+
+READY count old/reconstructed
+READY count new
+NEAR_ACTIONABLE count old/new
+WATCH_FOR_RESET count old/new
+WAIT_FOR_RETEST count old/new
+WATCH count old/new
+
+==================================================
+PART 2 — READY DEMOTION TRACE
+==================================================
+
+Trace all symbols that were READY before or would have been READY under old weights.
+
+Must include:
+
+TSM
+VRT
+ALGM
+ENTG
+MU
+ADEA
+any other previous READY symbols from recent logs/checkpoints
+
+For each return:
+
+symbol
+old_action
+new_action
+old_core
+new_core
+core_delta
+old_normalized_total
+new_normalized_total
+threshold crossed
+old component points
+new component points
+valuation_points
+valuation_coverage_status
+risk_flags
+caution_flags
+entry_state
+execution_state
+bucket
+why_demoted
+
+Important:
+
+If you claim market state caused demotion, show the exact changed market-state field:
+- options_alignment changed
+- stage_quality changed
+- technical_setup changed
+- entry_exit changed
+- catalyst changed
+- quote/price changed
+- extension_state changed
+- risk_flags changed
+
+If the demotion was caused by reweighting, say so directly.
+
+==================================================
+PART 3 — ACTIONABILITY THRESHOLD DEPENDENCY
+==================================================
+
+Trace the exact actionability logic.
+
+Find whether READY depends on:
+
+- core_score
+- total_score
+- normalized_total
+- actionable_tier
+- component thresholds
+- entry score
+- technical score
+- stage score
+- risk flags
+- bucket
+- retained snapshot labels
+
+Return exact file/function and thresholds.
+
+Question:
+
+Can changing component weights from Options/Catalyst/Investment into Valuation reduce normalized_total enough to demote READY rows?
+
+Answer directly:
+YES / NO
+
+If YES, list affected symbols.
+
+==================================================
+PART 4 — FORWARD P/E SOURCE AUDIT
+==================================================
+
+Do not remove Forward P/E.
+
+The QA report said forward_pe is 0/414 populated and claimed FMP Starter does not expose it.
+
+Audit all existing sources and code paths:
+
+A. Existing cached fundamentals:
+- watchlist_fundamentals_cache fields
+- screener_fundamentals_cache fields
+- company profile cache
+- any analyst/estimate cache
+- any earnings estimate cache
+
+B. Existing scheduled updater:
+- FmpFundamentalsRefresher
+- fundamentals_enricher
+- any Financial Estimates endpoint code
+- any price target / estimates code
+- any EPS estimate fields currently stored
+
+C. FMP plan capabilities already documented:
+- Ratios TTM
+- Key Metrics TTM
+- Financial Estimates
+- Stock Quote / cached quote
+
+Questions to answer:
+
+1. Is a precomputed forward_pe field already cached under another key?
+2. Is forward EPS estimate cached under another key?
+3. Is next-year EPS estimate cached?
+4. Is next-quarter EPS estimate cached?
+5. Is EPS growth estimate cached but not absolute EPS estimate?
+6. Does any FMP estimate endpoint currently used return estimated EPS?
+7. Can forward_pe be calculated from cached data today?
+8. Can forward_pe be calculated after adding a field to the existing weekly fundamentals refresh?
+
+Return:
+
+forward_pe_precomputed_cached: YES/NO
+forward_eps_cached: YES/NO
+forward_pe_calculable_from_cache_today: YES/NO
+forward_pe_calculable_from_existing_fmp_estimates_endpoint: YES/NO
+scheduled_refresh_patch_needed: YES/NO
+request_time_provider_calls_needed: NO
+
+==================================================
+PART 5 — FORWARD P/E DERIVATION DESIGN
+==================================================
+
+Implement if data path exists safely.
+
+Preferred method:
+
+Forward P/E = current_price / forward_eps_ntm
+
+Where forward_eps_ntm should be selected in this priority:
+
+1. FMP Financial Estimates NTM / next fiscal year EPS estimate if directly available
+2. Average or consensus EPS estimate for next fiscal year if available
+3. Sum of next 4 quarters EPS estimates if quarterly estimates are available
+4. Approximate from current EPS and EPS growth estimate only if explicitly labeled approximate
+
+Use cached quote/current price:
+- Prefer same price field already stored in fundamentals snapshot if available.
+- Otherwise use cached quote/current price at scheduled refresh time.
+- Do not fetch quote request-time just for modal/confluence.
+
+Store fields in the fundamentals cache:
+
+forward_eps_estimate
+forward_eps_estimate_period
+forward_eps_estimate_source
+forward_pe
+forward_pe_source
+forward_pe_asof
+forward_pe_confidence
+forward_pe_is_approximate
+forward_pe_missing_reason
+
+If current FMP estimate data only supports approximate calculation, label it clearly:
+forward_pe_is_approximate = true
+
+If exact EPS estimate is not available, do not fake precision.
+
+==================================================
+PART 6 — PATCH FUNDAMENTALS REFRESH, NOT REQUEST PATH
+==================================================
+
+If Financial Estimates data is available through existing FMP plan/access:
+
+Patch the existing weekly/off-hours fundamentals refresh path only.
+
+Rules:
+
+- Do not call FMP during Confluence scoring.
+- Do not call FMP during ticker modal open.
+- Do not call FMP during Watchlist render.
+- Add forward_pe derivation to the scheduled/cached fundamentals refresh.
+- Reuse existing FMP call spacing/budget governor.
+- Do not create duplicate FMP calls if estimates already fetched elsewhere.
+- Persist derived fields in Neon watchlist_fundamentals_cache fields JSONB.
+
+If patching the refresher is too large for this pass:
+- implement the audit and exact implementation plan
+- do not pretend forward_pe is impossible
+
+==================================================
+PART 7 — UPDATE VALUATION SCORER TO USE DERIVED FORWARD P/E
+==================================================
+
+Once forward_pe is available from cache, update valuation scorer to read it.
+
+Use source priority:
+
+1. forward_pe
+2. forward_price_to_earnings if present
+3. derived_forward_pe
+4. approximate_forward_pe
+5. None
+
+Expose in Confluence:
+
+valuation_forward_pe
+valuation_forward_pe_source
+valuation_forward_pe_is_approximate
+valuation_forward_pe_missing_reason
+valuation_forward_pe_value_score
+
+Do not score approximate forward_pe the same as exact if confidence is low:
+- exact/consensus: full weight
+- next-year estimate: full or 0.9 confidence
+- next-4-quarter summed: full or 0.9 confidence
+- growth-ratio approximate: 0.75 confidence
+- EPS growth estimate approximate: 0.65 confidence
+
+==================================================
+PART 8 — READY FIX OPTIONS
+==================================================
+
+If READY collapse is caused by reweighting or score threshold sensitivity, propose and/or implement the safest fix.
+
+Preferred principle:
+
+Actionability should not collapse because a technically ready setup is expensive.
+Valuation should affect ranking/context, but technical/entry/risk gates should dominate READY/NEAR decisions.
+
+Evaluate options:
+
+Option A:
+Recalibrate READY thresholds under new 8-component score.
+
+Option B:
+Use pre-valuation/actionability_score for actionability gates and use new core_score for ranking/display.
+
+Option C:
+Keep Valuation visible but exclude it from actionability thresholds.
+
+Option D:
+Add valuation only as a soft cap/caution, not a hard demotion.
+
+Recommendation preference:
+Use an actionability-specific score or old technical/confluence threshold so valuation does not collapse READY. Valuation should influence prioritization, not erase technically actionable setups.
+
+If implementing:
+- Keep labels sane.
+- Preserve risk gates: no READY with lower_low/chase/risk_conflict/missing invalidation.
+- ABCL should remain NEAR_ACTIONABLE, not READY.
+- VRT / ALGM / TSM should not be demoted solely due valuation if technical/entry/risk remain READY.
+
+==================================================
+PART 9 — FULL VALIDATION AFTER PATCH
+==================================================
+
+Rebuild/read full retained snapshot across all active symbols.
+
+Return:
+
+Universe count
+Error count
+Component count distribution
+Forward P/E coverage:
+- forward_pe populated count
+- exact count
+- approximate count
+- missing count
+- average forward_pe
+- top/bottom examples
+
+Valuation coverage:
+- available / partial / unavailable
+- valuation point buckets
+- valuation labels
+- % at 0
+- % >7
+
+Actionability distribution:
+- READY
+- NEAR_ACTIONABLE
+- WAIT_FOR_RETEST
+- WATCH_FOR_RESET
+- WATCH
+- AVOID
+- RISK_CONFLICT
+
+Safety checks:
+- 0 READY with LOWER_LOW_CONFIRMED
+- 0 READY with CHASE_EXTENSION
+- 0 READY missing invalidation
+- ABCL remains NEAR_ACTIONABLE, not READY
+- VRT / ALGM / TSM status explained
+- LITE / LASR / VECO remain not READY
+
+Ranking checks:
+- top 30 before/after
+- cheap junk not over-promoted
+- expensive elite growth not over-punished
+- no-data symbols not distorted
+
+==================================================
+PART 10 — FINAL REPORT
+==================================================
+
+Return:
+
+VALUATION READY REGRESSION + FORWARD P/E PATCH REPORT
+
+READY COLLAPSE ROOT CAUSE:
+[clear explanation]
+
+ACTIONABILITY THRESHOLD DEPENDENCY:
+[summary]
+
+READY DEMOTION TRACE:
+[table]
+
+FORWARD P/E SOURCE AUDIT:
+[summary]
+
+FORWARD P/E DERIVATION PATCH:
+[summary or implementation plan]
+
+VALUATION SCORER UPDATE:
+[summary]
+
+FULL VALIDATION:
+[table]
+
+FILES CHANGED:
+[list]
+
+End exactly:
+
+VALUATION READY + FORWARD PE VERDICT
+
+READY_COLLAPSE_CONFIRMED:
+[YES/NO]
+
+READY_COLLAPSE_CAUSED_BY_VALUATION_REWEIGHT:
+[YES/NO/PARTIAL]
+
+READY_COLLAPSE_CAUSED_BY_MARKET_STATE:
+[YES/NO/PARTIAL]
+
+READY_COLLAPSE_CAUSED_BY_SNAPSHOT_COLD_START:
+[YES/NO/PARTIAL]
+
+ACTIONABILITY_DEPENDS_ON_REWEIGHTED_SCORE:
+[YES/NO]
+
+FORWARD_PE_REMOVED:
+NO
+
+FORWARD_PE_POPULATED_AFTER_PATCH:
+[YES/NO/PARTIAL]
+
+FORWARD_PE_CALCULABLE_FROM_CACHE_TODAY:
+[YES/NO]
+
+FORWARD_PE_CALCULABLE_FROM_FMP_ESTIMATES_REFRESH:
+[YES/NO]
+
+REQUEST_TIME_PROVIDER_CALLS_ADDED:
+NO
+
+SCHEDULED_REFRESH_PATCH_ADDED:
+[YES/NO]
+
+VALUATION_COMPONENT_RETAINED:
+YES
+
+ACTIONABILITY_FIX_APPLIED:
+[YES/NO]
+
+READY_SAFETY_CHECK_PASSED:
+[YES/NO]
+
+FRONTEND_READY:
+[YES/NO]

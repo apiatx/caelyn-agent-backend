@@ -5880,6 +5880,118 @@ async def valuation_qa_endpoint(watchlist_id: str):
 
     total = len(scored)
 
+    # ── 0. READY regression analysis ───────────────────────────────────────
+    # Reconstruct approximate OLD v4.1 normalized_total for each symbol using
+    # current component points scaled back to old max caps
+    # (Options 18→20, Catalyst 12→15, Investment 12→15, Valuation excluded).
+    # Approximation: assumes same RELATIVE quality score across weight change.
+    # Old available_max when 7 components available = 20+15+15+15+15+8+12 = 100
+    _OLD_MAXES = {
+        "theme_alignment":      15.0,
+        "stage_quality":        15.0,
+        "options_alignment":    20.0,
+        "technical_setup":       8.0,
+        "entry_exit":           12.0,
+        "catalyst_alignment":   15.0,
+        "investment_alignment": 15.0,
+    }
+
+    def _reconstruct_old(r):
+        comps   = r.get("caelyn_confluence_v42_components") or {}
+        bonus   = r.get("caelyn_confluence_bonus_score") or 0
+        theme   = (comps.get("theme_alignment")      or {}).get("points", 0)
+        stage   = (comps.get("stage_quality")         or {}).get("points", 0)
+        opts    = (comps.get("options_alignment")     or {}).get("points", 0)
+        tech    = (comps.get("technical_setup")       or {}).get("points", 0)
+        entry   = (comps.get("entry_exit")            or {}).get("points", 0)
+        cat     = (comps.get("catalyst_alignment")    or {}).get("points", 0)
+        inv     = (comps.get("investment_alignment")  or {}).get("points", 0)
+        # Scale to old maxes
+        opts_old = opts * (20.0 / 18.0)
+        cat_old  = cat  * (15.0 / 12.0)
+        inv_old  = inv  * (15.0 / 12.0)
+        old_core = theme + stage + opts_old + tech + entry + cat_old + inv_old
+        # available_max for old system (7 non-val components that are available)
+        avail_max_old = 0.0
+        for k, mx in _OLD_MAXES.items():
+            if (comps.get(k) or {}).get("available"):
+                avail_max_old += mx
+        if avail_max_old > 0:
+            old_norm_core = min(100.0, (old_core / avail_max_old) * 100.0)
+        else:
+            old_norm_core = 0.0
+        old_total = round(min(125.0, old_norm_core + bonus), 1)
+        return old_total, round(old_core, 1)
+
+    regression_rows = []
+    old_act_counter: dict = {}
+    probe_symbols = {"TSM", "VRT", "ALGM", "ENTG", "MU", "ADEA",
+                     "ABCL", "NVDA", "AMD", "SMCI", "PLTR", "CEG",
+                     "FLR", "AIR", "OSCR", "EQT"}
+    for r in scored:
+        sym       = r["symbol"]
+        new_act   = r.get("caelyn_confluence_v42_actionability", "WATCH")
+        new_total = r.get("caelyn_confluence_actionability_gate_score") or \
+                    r.get("caelyn_confluence_v42_normalized_score") or 0
+        new_full  = r.get("caelyn_confluence_v42_normalized_score") or 0
+        entry_pts = (r.get("caelyn_confluence_v42_components") or {}).get(
+            "entry_exit", {}).get("points") or 0
+        confidence = r.get("caelyn_confluence_v42_confidence_score") or 0
+        old_total, old_core = _reconstruct_old(r)
+        # Simulate old actionability
+        old_bucket = (
+            "RISK_CONFLICT"    if r.get("major_lower_low_confirmed") else
+            "WATCH_FOR_RESET"  if r.get("chase_extension") and not r.get("constructive_extension") else
+            "ACTIONABLE"       if old_total >= 82 and entry_pts >= 9 and confidence >= 55 else
+            "NEAR_ACTIONABLE"  if old_total >= 65 and entry_pts >= 4 and confidence >= 45 else
+            "NO_CLEAR_CONFLUENCE"
+        )
+        old_act = (
+            "AVOID"          if r.get("major_lower_low_confirmed") else
+            "WATCH_FOR_RESET" if r.get("chase_extension") and not r.get("constructive_extension") else
+            "READY"          if old_total >= 90 and entry_pts >= 8 and old_bucket in ("ACTIONABLE","NEAR_ACTIONABLE") and confidence >= 70 else
+            "NEAR_ACTIONABLE" if old_total >= 76 and entry_pts >= 5 else
+            "WAIT_FOR_RETEST" if old_total >= 62 else
+            "WATCH"
+        )
+        old_act_counter[old_act] = old_act_counter.get(old_act, 0) + 1
+        delta = round(old_total - new_total, 1)
+        val_pts = (r.get("caelyn_confluence_v42_components") or {}).get(
+            "valuation", {}).get("points") or 0
+        if sym in probe_symbols or old_act != new_act:
+            regression_rows.append({
+                "symbol":           sym,
+                "old_action_est":   old_act,
+                "new_action":       new_act,
+                "old_total_est":    old_total,
+                "new_gate_total":   round(new_total, 1),
+                "new_full_total":   round(new_full, 1),
+                "delta":            delta,
+                "entry_pts":        round(entry_pts, 1),
+                "valuation_pts":    round(val_pts, 2),
+                "confidence":       round(confidence, 1),
+                "demoted_by_reweight": (old_act in ("READY","NEAR_ACTIONABLE") and
+                                        new_act not in ("READY","NEAR_ACTIONABLE") and
+                                        delta > 2),
+            })
+
+    # Aggregate regression
+    ready_old = old_act_counter.get("READY", 0)
+    ready_new = sum(1 for r in scored if r.get("caelyn_confluence_v42_actionability") == "READY")
+    na_old    = old_act_counter.get("NEAR_ACTIONABLE", 0)
+    na_new    = sum(1 for r in scored if r.get("caelyn_confluence_v42_actionability") == "NEAR_ACTIONABLE")
+
+    demoted = [r for r in regression_rows if r.get("demoted_by_reweight")]
+    probe_detail = sorted(
+        [r for r in regression_rows if r["symbol"] in probe_symbols],
+        key=lambda x: x.get("old_total_est") or 0, reverse=True,
+    )
+    changed = [r for r in regression_rows if r["old_action_est"] != r["new_action"]]
+
+    ready_collapse_by_reweight = (
+        ready_new < ready_old and len(demoted) > 0
+    )
+
     # ── 1. Component count validation ──────────────────────────────────────
     comp_counts: dict[int, int] = Counter(
         len(r.get("caelyn_confluence_v42_components") or {}) for r in scored
@@ -6066,4 +6178,22 @@ async def valuation_qa_endpoint(watchlist_id: str):
             "val_avail_pct": round(val_avail_for_conf / total * 100, 1) if total else 0,
         },
         "errors_sample": errors[:10],
+        "ready_regression_analysis": {
+            "ready_count_old_reconstructed":  ready_old,
+            "ready_count_new":                ready_new,
+            "near_actionable_old_estimated":  na_old,
+            "near_actionable_new":            na_new,
+            "ready_collapse_confirmed":       ready_new < ready_old,
+            "ready_collapse_by_reweight":     ready_collapse_by_reweight,
+            "old_actionability_distribution": dict(sorted(old_act_counter.items(),
+                                                          key=lambda x: -x[1])),
+            "new_actionability_distribution": dict(Counter(
+                r.get("caelyn_confluence_v42_actionability") for r in scored
+            ).most_common()),
+            "probe_symbol_detail":            probe_detail,
+            "symbols_changed_actionability":  len(changed),
+            "demoted_by_reweight_count":      len(demoted),
+            "demoted_by_reweight_sample":     demoted[:20],
+            "all_changed_sample":             changed[:30],
+        },
     }

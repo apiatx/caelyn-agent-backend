@@ -13,15 +13,20 @@ V4.2 is the live canonical engine. `caelyn_confluence_score` and `caelyn_conflue
 - The Phase 2 promotion block in `confluence_v2_service.py` (line ~1906) is the single place that promotes V4.2 → canonical fields; don't add promotion logic elsewhere
 - Always validate via the live server's `/confluence/v4-report` endpoint (re-computes V4.2 live); never trust a standalone subprocess for options-dependent data
 
-## Score formula (V4.2)
+## Score formula (V4.2 with Valuation — current canonical)
 - **Core = 100 max:**
   - Theme Alignment: 15 pts (policy multiplier folded in, not additive)
   - Stage Quality: 15 pts
-  - Options Alignment: 20 pts (60% `options_current_composite_normalized` + 40% `options_direction_score`)
+  - Options Alignment: **18 pts** (was 20 before valuation added)
   - Technical Setup: 8 pts (pattern type × extension/support modifiers)
   - Entry/Exit: 12 pts (shelf state, distance, risk/reward)
-  - Catalyst Alignment: 15 pts (75% scheduled event + 25% intelligence score)
-  - Investment Alignment: 15 pts (3-pillar model)
+  - Catalyst Alignment: **12 pts** (was 15; 75% scheduled event + 25% intelligence)
+  - Investment Alignment: **12 pts** (was 15; 3-pillar model)
+  - **Valuation: 8 pts** (new; fwd P/E → label → pts; does NOT affect READY gate)
+  - Raw 7 non-val maxes: 15+15+18+8+12+12+12 = 92 → normalized to 100 for gate
+- **Actionability gate rule:** READY/NEAR_ACTIONABLE thresholds use
+  `caelyn_confluence_actionability_gate_score` (7-component, valuation excluded),
+  NOT `caelyn_confluence_v42_normalized_score`. Valuation shifts display score only.
 - **Bonus = 25 max:**
   - Social: 15 pts (3 sections × 5 pts: Confluence, Acceleration, Fresh from `x_consensus_weekly.json`)
   - Whale/Insider: 5 pts (unavailable → 0)
@@ -51,7 +56,22 @@ ACTIONABLE ≥ 85 | NEAR_ACTIONABLE ≥ 60 | INVESTMENT_QUALITY (3 pillars, scor
 - Alignment endpoint fields: `backend/services/watchlist_router.py` (line ~4344)
 - Diagnostic report: `GET /{watchlist_id}/confluence/v4-report` (re-computes V4.2 live)
 
-## Validated distribution (379-ticker universe, 2026-07-13)
-- 379/379 scored, 0 errors
-- avg score 31.5/125 (83% of tickers lack options → max attainable ~80-105)
-- confidence avg 75.3%; top scorer CRDO 70.2/125 (3 investment pillars)
+## Forward P/E derivation (watchlist_fundamentals_refresh.py)
+- Stored as `Forward P/E` in fundamentals snapshot by refresher (no request-time calls)
+- Formula: `price / (epsEstimated × 4)`; sanity-bounded [1, 500]; marked `forward_pe_is_approximate=True`
+- `price` extracted from FMP stable/profile section 1 (`current_price` key)
+- `epsEstimated` from FMP earnings section 7 (next-quarter forward estimate)
+- Valuation scorer reads: `Forward P/E`, `Forward PE`, `Forward P/E Ratio`, `forwardPE` keys
+- Count populates on next weekly refresh cycle (0/414 in cached snapshots until refreshed)
+
+## QA endpoint
+`GET /{watchlist_id}/confluence/valuation-qa` — full 414-symbol re-score with:
+- Bound violations, valuation distributions, READY regression reconstruction
+- Old v4.1 score reconstructed by scaling component pts back to old maxes (opts ×20/18, cat ×15/12, inv ×15/12)
+
+## Validated distribution (414-ticker universe, 2026-07-15)
+- 414/414 scored, 0 errors; fundamentals coverage 323/414
+- NEAR_ACTIONABLE=72, WATCH=253, WATCH_FOR_RESET=49, WAIT_FOR_RETEST=27, AVOID=13, READY=0
+- Gate fix promoted 17 symbols WAIT_FOR_RETEST→NEAR_ACTIONABLE vs pre-fix
+- READY=0 is market-state (TSM gate=87.7, VRT gate=81.5, ALGM gate=79.4); NOT reweight-caused
+- avg conf 74.5%, all confidence in [0,100], all bounds clean

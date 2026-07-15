@@ -2125,25 +2125,37 @@ def _score_valuation_v42(
 
     val_pts = round(valuation_quality / 100.0 * 8.0, 2) if available_count > 0 else 0.0
 
+    # ── Forward P/E metadata ──────────────────────────────────────────────────
+    _fpe_source      = fields.get("forward_pe_source")       if fields else None
+    _fpe_approx      = fields.get("forward_pe_is_approximate") if fields else None
+    _fpe_miss_reason: Optional[str] = None
+    if fpe_raw is None:
+        _fpe_miss_reason = "FORWARD_PE_NOT_IN_CACHE"
+    elif fpe_raw < 0:
+        _fpe_miss_reason = "FORWARD_PE_NEGATIVE"
+
     return {
-        "raw_score":                    round(valuation_quality, 1),
-        "points":                       val_pts,
-        "available":                    available_count > 0,
-        "status":                       coverage_status if available_count > 0 else "unavailable",
-        "valuation_alignment_points":   val_pts,
-        "valuation_quality_score":      round(valuation_quality, 1),
-        "valuation_label":              val_label,
-        "valuation_coverage_status":    coverage_status if available_count > 0 else "unavailable",
-        "valuation_missing_fields":     missing_fields,
-        "pe_ratio":                     pe_raw,
-        "ps_ratio":                     ps_raw,
-        "forward_pe":                   fpe_raw,
-        "pe_value_score":               round(pe_score,  1) if pe_score  is not None else None,
-        "ps_value_score":               round(ps_score,  1) if ps_score  is not None else None,
-        "forward_pe_value_score":       round(fpe_score, 1) if fpe_score is not None else None,
-        "valuation_reason_codes":       reason_codes,
-        "valuation_explanation":        val_explanation,
-        "reason_codes":                 reason_codes,
+        "raw_score":                            round(valuation_quality, 1),
+        "points":                               val_pts,
+        "available":                            available_count > 0,
+        "status":                               coverage_status if available_count > 0 else "unavailable",
+        "valuation_alignment_points":           val_pts,
+        "valuation_quality_score":              round(valuation_quality, 1),
+        "valuation_label":                      val_label,
+        "valuation_coverage_status":            coverage_status if available_count > 0 else "unavailable",
+        "valuation_missing_fields":             missing_fields,
+        "pe_ratio":                             pe_raw,
+        "ps_ratio":                             ps_raw,
+        "forward_pe":                           fpe_raw,
+        "pe_value_score":                       round(pe_score,  1) if pe_score  is not None else None,
+        "ps_value_score":                       round(ps_score,  1) if ps_score  is not None else None,
+        "forward_pe_value_score":               round(fpe_score, 1) if fpe_score is not None else None,
+        "valuation_forward_pe_source":          _fpe_source,
+        "valuation_forward_pe_is_approximate":  _fpe_approx,
+        "valuation_forward_pe_missing_reason":  _fpe_miss_reason,
+        "valuation_reason_codes":               reason_codes,
+        "valuation_explanation":                val_explanation,
+        "reason_codes":                         reason_codes,
     }
 
 
@@ -2536,6 +2548,32 @@ def compute_confluence_v42(
 
     normalized_total = round(min(125.0, normalized_core + bonus_score), 1)
 
+    # ── Actionability gate score (excludes valuation) ─────────────────────────
+    # Valuation affects ranking/display but NOT actionability gates (READY /
+    # NEAR_ACTIONABLE / etc.).  A technically-ready setup must not be demoted
+    # because valuation data is expensive or partially missing.
+    # Gate uses the 7 non-valuation components normalized to their own
+    # available_max so the threshold behaviour is stable across coverage states.
+    _ACT_GATE_MAXES: dict = {
+        "theme_alignment":      15.0,
+        "stage_quality":        15.0,
+        "options_alignment":    18.0,
+        "technical_setup":       8.0,
+        "entry_exit":           12.0,
+        "catalyst_alignment":   12.0,
+        "investment_alignment": 12.0,
+    }
+    _act_core_pts   = sum(components[k]["points"] for k in _ACT_GATE_MAXES)
+    _act_avail_max  = sum(
+        _ACT_GATE_MAXES[k] for k in _ACT_GATE_MAXES
+        if components.get(k, {}).get("available")
+    )
+    if _act_avail_max > 0:
+        _act_norm_core = min(100.0, (_act_core_pts / _act_avail_max) * 100.0)
+    else:
+        _act_norm_core = 0.0
+    actionability_gate_score = round(min(125.0, _act_norm_core + bonus_score), 1)
+
     # ── Confidence ────────────────────────────────────────────────────────────
     _used_tier1 = any(
         "CONSTRUCTIVE_" in rc and "_STRONG_ENTRY" in rc
@@ -2549,8 +2587,10 @@ def compute_confluence_v42(
     )
 
     # ── Bucket + Actionability ────────────────────────────────────────────────
+    # Both use actionability_gate_score (7-component) so valuation dilution
+    # cannot collapse READY symbols that remain technically actionable.
     v42_bucket = _assign_v42_bucket(
-        normalized_total = normalized_total,
+        normalized_total = actionability_gate_score,
         core_score       = core_score,
         major_llc    = bool(snapshot_row.get("major_lower_low_confirmed")),
         chase        = bool(snapshot_row.get("chase_extension")),
@@ -2562,7 +2602,7 @@ def compute_confluence_v42(
     )
 
     v42_actionability = _derive_actionability_v42(
-        normalized_total = normalized_total,
+        normalized_total = actionability_gate_score,
         bucket       = v42_bucket,
         major_llc    = bool(snapshot_row.get("major_lower_low_confirmed")),
         chase        = bool(snapshot_row.get("chase_extension")),
@@ -2665,9 +2705,13 @@ def compute_confluence_v42(
         "valuation_forward_pe":           val_comp.get("forward_pe"),
         "valuation_pe_value_score":       val_comp.get("pe_value_score"),
         "valuation_ps_value_score":       val_comp.get("ps_value_score"),
-        "valuation_forward_pe_value_score": val_comp.get("forward_pe_value_score"),
+        "valuation_forward_pe_value_score":     val_comp.get("forward_pe_value_score"),
+        "valuation_forward_pe_source":          val_comp.get("valuation_forward_pe_source"),
+        "valuation_forward_pe_is_approximate":  val_comp.get("valuation_forward_pe_is_approximate"),
+        "valuation_forward_pe_missing_reason":  val_comp.get("valuation_forward_pe_missing_reason"),
         "valuation_reason_codes":         val_comp.get("valuation_reason_codes"),
         "valuation_explanation":          val_comp.get("valuation_explanation"),
+        "caelyn_confluence_actionability_gate_score": actionability_gate_score,
         "social_bonus_points":          soc_bonus["points"],
         "social_sections_hit":          soc_bonus.get("social_sections_hit"),
         "social_confluence_hit":        soc_bonus.get("social_confluence_hit"),

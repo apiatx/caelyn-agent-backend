@@ -161,6 +161,14 @@ class FmpFundamentalsRefresher:
             fields["Market Cap"] = int(mkt_cap)
         else:
             missing.append("Market Cap")
+        # Store current price for Forward P/E derivation in section 7
+        _current_price: float | None = None
+        try:
+            _p = profile.get("price")
+            if _p is not None:
+                _current_price = float(_p)
+        except (ValueError, TypeError):
+            pass
 
         # ── 2. Income Statement (quarterly, 8Q) ──────────────────────────────
         raw = await self._get("income-statement", {"symbol": sym, "period": "quarter", "limit": 8})
@@ -349,6 +357,29 @@ class FmpFundamentalsRefresher:
                 missing.append("EPS Growth This Quarter")
         else:
             missing += ["Rev Growth Next Quarter", "EPS Growth This Quarter"]
+
+        # ── Forward P/E derivation ────────────────────────────────────────────
+        # Source: current price (from profile) / next-quarter EPS estimate × 4
+        # (annualise one forward quarter as NTM proxy).
+        # Labelled approximate; stored only when both inputs are positive.
+        _fpe_stored = False
+        if future_earn and _current_price is not None and _current_price > 0:
+            _nxt_eps_est = future_earn[0].get("epsEstimated")
+            try:
+                _nxt_eps_f = float(_nxt_eps_est) if _nxt_eps_est is not None else None
+            except (ValueError, TypeError):
+                _nxt_eps_f = None
+            if _nxt_eps_f is not None and _nxt_eps_f > 0:
+                _fwd_eps_ann = round(_nxt_eps_f * 4, 4)
+                _fwd_pe_val  = round(_current_price / _fwd_eps_ann, 2)
+                if 1.0 <= _fwd_pe_val <= 500.0:   # sanity bounds
+                    fields["Forward P/E"]               = _fwd_pe_val
+                    fields["forward_eps_estimate"]      = _fwd_eps_ann
+                    fields["forward_pe_source"]         = "quarterly_eps_annualized"
+                    fields["forward_pe_is_approximate"] = True
+                    _fpe_stored = True
+        if not _fpe_stored:
+            missing.append("Forward P/E")
 
         # Fields that require analyst-estimates (premium, 402 on Starter) — always CSV fallback
         for csv_fallback in [
