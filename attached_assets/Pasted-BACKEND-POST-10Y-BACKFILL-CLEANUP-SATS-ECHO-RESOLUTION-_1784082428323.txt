@@ -1,0 +1,410 @@
+BACKEND — POST 10Y BACKFILL CLEANUP, SATS/ECHO RESOLUTION, IDENTITY VALIDATION, THEN CONFLUENCE REBUILD
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math.
+Do not run broad backfill again.
+Do not expand universe.
+Do not include broad Theme baskets.
+Do not include Theme candidates.
+Do not run Options Flow changes.
+Use provider calls only for the targeted SATS/ECHO identity check if needed.
+
+Context:
+
+Initial 10Y canonical history backfill completed:
+
+351 / 352 done
+188 available_10y_fresh
+154 available_lifetime_under_10y
+9 actual_ticker_history_limit
+1 failed / missing: SATS
+Tradier returned no bars for SATS.
+
+Important:
+
+SATS may be stale because EchoStar changed its ticker from SATS to ECHO effective June 24, 2026.
+
+Goal:
+
+1. Disable the one-time full backfill flag.
+2. Investigate SATS/ECHO properly.
+3. Confirm FMP fallback behavior.
+4. Validate ticker/company identity for canonical history.
+5. Backfill ECHO if SATS is stale.
+6. Rebuild Confluence snapshot.
+7. Validate Fib/Wave/Stage/Entry now use canonical 10Y/lifetime history.
+
+==================================================
+PART 1 — DISABLE FULL BACKFILL FLAG
+==================================================
+
+Set:
+
+CANONICAL_HISTORY_FULL_BACKFILL_ENABLED=false
+
+Leave enabled:
+
+CANONICAL_HISTORY_BACKFILL_ENABLED=true
+CANONICAL_HISTORY_INCREMENTAL_APPEND_ENABLED=true
+CANONICAL_HISTORY_MISSING_CATCHUP_ENABLED=true
+CANONICAL_HISTORY_ALLOW_MARKET_HOURS=false
+CANONICAL_HISTORY_INCLUDE_ALL_THEME_PROXIES=false
+CANONICAL_HISTORY_INCLUDE_ALL_THEME_CANDIDATES=false
+
+Confirm:
+
+- full backfill cannot accidentally rerun
+- small future off-hours catch-up remains enabled
+- incremental daily append remains enabled
+- market-hours history calls remain blocked
+
+==================================================
+PART 2 — SATS / ECHO IDENTITY RESOLUTION
+==================================================
+
+Investigate SATS.
+
+Do not assume SATS is the correct active ticker.
+
+Check provider metadata for both:
+
+SATS
+ECHO
+
+Use existing available metadata/cache first.
+Use targeted provider calls only if needed.
+
+For each symbol, return:
+
+symbol
+provider
+company_name
+exchange
+exchange_short_name
+is_active
+CIK if available
+CUSIP if available
+ISIN if available
+first_trade_date / ipo_date if available
+latest_quote_available
+historical_bars_available
+oldest_bar_date
+newest_bar_date
+bar_count
+provider_error
+
+Determine:
+
+- Is SATS a stale/deprecated ticker?
+- Is ECHO the current EchoStar ticker?
+- Do SATS and ECHO map to the same company/security?
+- Is the watchlist carrying an old ticker?
+- Should canonical history key be moved from SATS to ECHO?
+
+==================================================
+PART 3 — FMP FALLBACK AUDIT
+==================================================
+
+Audit the canonical history backfill code path.
+
+Find the exact behavior when Tradier returns zero bars.
+
+Return:
+
+file/function
+does initial_full_backfill use FMP fallback?
+does FMP fallback trigger on:
+- Tradier HTTP error
+- Tradier insufficient bars
+- Tradier zero bars
+- symbol not found
+- stale ticker / alias needed
+
+If FMP fallback did not run for SATS, explain why.
+
+Important:
+
+Do not broadly change provider behavior yet unless this is a tiny bug. Report first.
+
+Recommended behavior:
+
+- If Tradier returns zero bars for a symbol, backend should check whether the symbol is stale/renamed before counting it as missing.
+- FMP profile/search/exchange-variant lookup can be used for identity resolution.
+- Historical fallback should only run after identity resolution confirms the symbol is still valid.
+
+==================================================
+PART 4 — TARGETED SATS/ECHO BACKFILL
+==================================================
+
+If ECHO is confirmed as the active successor ticker for EchoStar:
+
+Run targeted canonical history backfill for ECHO only.
+
+Do not run the whole universe again.
+
+Return:
+
+symbol_backfilled
+provider_used
+bar_count
+oldest_bar_date
+newest_bar_date
+history_status
+classification:
+- available_10y_fresh
+- available_lifetime_under_10y
+- actual_ticker_history_limit
+- failed
+
+Then decide what to do with SATS:
+
+Option A:
+Mark SATS as stale_alias_of=ECHO and exclude SATS from missing count.
+
+Option B:
+If watchlist still contains SATS, report that watchlist should update SATS → ECHO.
+
+Do not silently keep both as separate companies.
+
+==================================================
+PART 5 — TICKER IDENTITY VALIDATION SAMPLE
+==================================================
+
+Validate that canonical history belongs to the right company/security.
+
+Sample older / 10Y names:
+
+SPY
+AAPL
+NVDA
+TSM
+VRT
+CRWD
+PANW
+
+Sample younger / lifetime-under-10Y names:
+
+ABCL
+ALGM
+SOFI
+HOOD
+HIMS
+WYFI
+
+Special cases:
+
+OUST
+MARA
+SATS
+ECHO if available
+
+For each return:
+
+symbol
+canonical_key
+company_name
+exchange
+provider_symbol_used
+CIK/CUSIP/ISIN if available
+bar_count
+oldest_bar_date
+newest_bar_date
+years_available
+history_status
+identity_confidence: HIGH / MEDIUM / LOW
+identity_notes
+
+Flag any case where:
+
+- provider returned a different company than expected
+- exchange mismatch
+- ticker appears duplicated across exchanges
+- ticker appears stale/renamed
+- company name does not match watchlist metadata
+- history starts suspiciously late for an old company
+- canonical row appears to use a 400-bar fallback
+
+==================================================
+PART 6 — FINAL HISTORY STATUS SUMMARY
+==================================================
+
+Return:
+
+total_eligible_symbols
+complete_symbols
+missing_symbols
+available_10y_fresh_count
+available_lifetime_under_10y_count
+actual_ticker_history_limit_count
+failed_count
+stale_alias_count
+symbols_requiring_manual_review
+
+Expected:
+
+missing_symbols should be 0 after SATS/ECHO resolution, or SATS should be explicitly classified as stale alias/manual review.
+
+==================================================
+PART 7 — REBUILD CONFLUENCE SNAPSHOT
+==================================================
+
+After history validation and SATS/ECHO resolution:
+
+Rebuild the retained Confluence snapshot.
+
+Do not change score math.
+
+Return:
+
+snapshot_rows
+build_duration
+provider_calls_used
+fib_wave_status_counts
+symbols_with_fib_available
+symbols_with_wave_available
+symbols_still_fib_pending
+symbols_still_wave_pending
+stage_history_depth_counts
+entry_history_depth_counts
+
+Expected:
+
+- Fib/Wave should no longer be globally pending for all rows.
+- Stage/Entry/Fib/Wave should read canonical history where available.
+- No 400-bar fallback should be used when canonical history exists.
+
+==================================================
+PART 8 — FIB / WAVE VALIDATION
+==================================================
+
+Validate these symbols:
+
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+NVDA
+TSM
+SOFI
+WYFI
+OUST
+ECHO if available
+
+For each return:
+
+symbol
+history_status
+bar_count
+years_available
+fib_wave_status
+primary_fib_context
+primary_fib_confidence
+fib_nearest_level
+fib_distance_pct
+wave_structure_label
+stage_label
+entry_state
+extension_state
+execution_state
+plain_english_summary
+
+Expected:
+
+- older tickers use long-term/10Y history
+- younger tickers use full available lifetime
+- ABCL/ALGM/VRT should no longer be limited to short 400-bar logic
+- Fib/Wave pending should only remain where history is genuinely unavailable or insufficient
+
+==================================================
+PART 9 — NEXT STEP READINESS
+==================================================
+
+Do not recalibrate yet.
+
+Return whether we are ready for:
+
+- post-10Y Ready/Near/Watch/Reset calibration audit
+- final frontend display validation
+- options coverage audit
+- catalyst/whale/insider wiring later
+
+==================================================
+PART 10 — FINAL REPORT
+==================================================
+
+Return:
+
+POST 10Y BACKFILL CLEANUP + SATS/ECHO RESOLUTION REPORT
+
+FULL BACKFILL FLAG STATUS:
+[summary]
+
+SATS/ECHO RESOLUTION:
+[summary/table]
+
+FMP FALLBACK AUDIT:
+[summary]
+
+TARGETED ECHO BACKFILL:
+[summary/table]
+
+TICKER IDENTITY VALIDATION:
+[table]
+
+FINAL HISTORY STATUS:
+[summary/table]
+
+CONFLUENCE SNAPSHOT REBUILD:
+[summary/table]
+
+FIB/WAVE VALIDATION:
+[table]
+
+NEXT STEP READINESS:
+[summary]
+
+End exactly:
+
+POST 10Y BACKFILL VERDICT
+
+FULL_BACKFILL_FLAG_DISABLED:
+[YES/NO]
+
+STEADY_STATE_CATCHUP_ENABLED:
+[YES/NO]
+
+SATS_RESOLVED:
+[YES/NO]
+
+SATS_IS_STALE_ALIAS:
+[YES/NO/UNKNOWN]
+
+ECHO_CONFIRMED_ACTIVE_SUCCESSOR:
+[YES/NO/UNKNOWN]
+
+ECHO_BACKFILLED:
+[YES/NO/N/A]
+
+MISSING_SYMBOLS_REMAINING:
+[number]
+
+FMP_FALLBACK_BEHAVIOR_CONFIRMED:
+[YES/NO]
+
+TICKER_IDENTITY_VALIDATION_PASSED:
+[YES/NO]
+
+NO_400_BAR_FALLBACK_FOR_USABLE_CANONICAL_HISTORY:
+[YES/NO]
+
+CONFLUENCE_SNAPSHOT_REBUILT:
+[YES/NO]
+
+FIB_WAVE_POPULATED:
+[YES/NO/PARTIAL]
+
+READY_FOR_POST_10Y_CALIBRATION_AUDIT:
+[YES/NO]
