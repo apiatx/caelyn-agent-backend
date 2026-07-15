@@ -916,25 +916,193 @@ def _event_is_direct_catalyst(evt: object) -> tuple[bool, str]:
     return False, ""
 
 
+def _catalyst_phb_direct_score(
+    primary_event: dict,
+    source: str,
+    cat_score_fallback: float | None,
+    is_scheduled: bool,
+) -> tuple:
+    """
+    Phase B: graduated catalyst direct score (0–100 scale).
+
+    Uses event_type tier + materiality + confidence + relevance +
+    freshness + proximity + article_count modifiers sourced entirely
+    from cached catalyst_primary_event fields — no provider calls.
+
+    Returns: (score: float, tier: str, event_type_norm: str, detail: dict)
+    """
+    from datetime import datetime, timezone as _tz
+
+    et_raw = (primary_event.get("event_type") or "").upper().strip()
+
+    # ── Event-type tier → base score ─────────────────────────────────────
+    # Tier A  80 — regulatory, hyperscaler, major defense/govt award
+    # Tier B  70 — M&A, earnings guidance, analyst upgrade, investor day
+    # Tier C1 58 — strategic partnership, technical milestone, product launch
+    # Tier C2 48 — commercial contract (materiality unknown by default)
+    # Tier D  28 — split/dividend, generic, unknown
+    _TIER_A  = {"FDA_READOUT", "REGULATORY_DECISION", "HYPERSCALER_ANCHOR",
+                "DEFENSE_MILITARY", "MAJOR_GOVERNMENT_AWARD"}
+    _TIER_B  = {"MNA", "EARNINGS_GUIDANCE", "EARNINGS_DATE", "ANALYST_UPGRADE",
+                "INVESTOR_DAY", "ANALYST_DAY"}
+    _TIER_C1 = {"STRATEGIC_PARTNERSHIP", "TECHNICAL_MILESTONE", "PRODUCT_LAUNCH",
+                "PRODUCT_UPDATE", "FINANCING"}
+    _TIER_C2 = {"COMMERCIAL_CONTRACT"}
+    _TIER_D  = {"SPLIT_THIS_WEEK", "DIVIDEND_THIS_WEEK", "GENERIC_RSS"}
+
+    if et_raw in _TIER_A:
+        base, tier = 80.0, "TIER_A"
+    elif et_raw in _TIER_B:
+        base, tier = 70.0, "TIER_B"
+    elif et_raw in _TIER_C1:
+        base, tier = 58.0, "TIER_C"
+    elif et_raw in _TIER_C2:
+        base, tier = 48.0, "TIER_C"
+    elif et_raw in _TIER_D:
+        base, tier = 28.0, "TIER_D"
+    else:
+        base, tier = 30.0, "TIER_D"   # unknown event type
+
+    # ── Materiality modifier  [-10, +10] ─────────────────────────────────
+    mat = primary_event.get("materiality_score")
+    mat_mod = round((float(mat) - 0.5) * 20.0, 1) if mat is not None else 0.0
+
+    # ── Confidence modifier  [-5, +5] ────────────────────────────────────
+    conf = primary_event.get("confidence_score")
+    conf_mod = round((float(conf) - 0.5) * 10.0, 1) if conf is not None else 0.0
+
+    # ── Ticker relevance modifier ─────────────────────────────────────────
+    rel = primary_event.get("ticker_relevance_score")
+    if rel is None:
+        rel_mod = 0.0
+    elif float(rel) >= 0.95:
+        rel_mod = 6.0
+    elif float(rel) >= 0.70:
+        rel_mod = 4.0
+    elif float(rel) >= 0.30:
+        rel_mod = 2.0
+    else:
+        rel_mod = -6.0
+
+    # ── Freshness modifier (published_at / catalyst_date) ────────────────
+    fresh_mod = 0.0
+    age_days:  int | None = None
+    dt_str = primary_event.get("published_at") or primary_event.get("catalyst_date")
+    if dt_str:
+        try:
+            s = str(dt_str)
+            if "T" in s:
+                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            else:
+                dt = datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=_tz.utc)
+            age_days = max(0, (datetime.now(_tz.utc) - dt).days)
+            if age_days <= 3:
+                fresh_mod = 6.0
+            elif age_days <= 14:
+                fresh_mod = 4.0
+            elif age_days <= 45:
+                fresh_mod = 2.0
+        except Exception:
+            pass
+
+    # ── Proximity modifier (scheduled future event with days_until) ───────
+    prox_mod = 0.0
+    days_until = primary_event.get("days_until")
+    if is_scheduled and days_until is not None:
+        try:
+            du = float(days_until)
+            if du <= 7:
+                prox_mod = 10.0
+            elif du <= 30:
+                prox_mod = 6.0
+            elif du <= 90:
+                prox_mod = 3.0
+        except (TypeError, ValueError):
+            pass
+
+    # ── Article count (corroboration signal) ─────────────────────────────
+    art_count = primary_event.get("article_count") or 1
+    art_mod = 4.0 if art_count >= 3 else (2.0 if art_count >= 2 else 0.0)
+
+    total = base + mat_mod + conf_mod + rel_mod + fresh_mod + prox_mod + art_mod
+    final = max(0.0, min(100.0, total))
+
+    detail = {
+        "base": base,
+        "tier": tier,
+        "event_type_norm": et_raw or "UNKNOWN",
+        "mat_mod": mat_mod,
+        "conf_mod": conf_mod,
+        "rel_mod": rel_mod,
+        "fresh_mod": fresh_mod,
+        "prox_mod": prox_mod,
+        "art_mod": art_mod,
+        "age_days": age_days,
+    }
+    return final, tier, et_raw or "UNKNOWN", detail
+
+
+def _catalyst_phb_theme_policy_score(cat_score: float | None) -> tuple:
+    """
+    Phase B score for theme_policy-only rows that have no rich primary_event data.
+    Maps cat_score to Tier D range (15–40) so theme items stay low-to-moderate.
+    Returns: (score, tier, event_type_norm, detail)
+    """
+    if cat_score is None or cat_score < 1.0:
+        return 0.0, "TIER_E", "THEME_POLICY", {"base": 0.0, "tier": "TIER_E"}
+    # Spread within Tier D: 15 + fraction × 25 (gives 15–40 range)
+    score = min(40.0, 15.0 + (float(cat_score) / 100.0) * 25.0)
+    return score, "TIER_D", "THEME_POLICY", {"base": score, "tier": "TIER_D", "cat_score_input": cat_score}
+
+
+def _catalyst_phb_explanation(tier: str, et_norm: str, bearish: bool,
+                               age_days: int | None, source: str, pts: float) -> str:
+    """Human-readable explanation for catalyst score."""
+    if bearish:
+        return "Bearish catalyst conflict detected; catalyst points suppressed to zero."
+    if pts == 0:
+        return "No qualifying catalyst signal found."
+    tier_labels = {
+        "TIER_A": "High-conviction catalyst",
+        "TIER_B": "Moderate-high catalyst",
+        "TIER_C": "Moderate catalyst",
+        "TIER_D": "Low-confidence or thematic catalyst",
+        "TIER_E": "Minimal/stale catalyst",
+    }
+    base_label = tier_labels.get(tier, "Catalyst")
+    et_display = et_norm.replace("_", " ").title() if et_norm not in ("UNKNOWN", "THEME_POLICY") else ("theme-policy tailwind" if et_norm == "THEME_POLICY" else "unclassified event")
+    if et_norm == "THEME_POLICY":
+        return f"Theme-policy tailwind only; low direct catalyst confidence. Scored conservatively ({pts:.1f}/15)."
+    freshness = ""
+    if age_days is not None:
+        if age_days <= 3:
+            freshness = " Published within last 3 days."
+        elif age_days <= 14:
+            freshness = f" Published {age_days}d ago."
+        elif age_days <= 45:
+            freshness = f" Published {age_days}d ago — moderate freshness."
+        else:
+            freshness = f" Stale ({age_days}d ago)."
+    return f"{base_label} ({et_display}) via {source}.{freshness} Scored {pts:.1f}/15."
+
+
 def _score_catalyst_alignment_v42(row: dict) -> dict:
     """
     Catalyst Alignment — 15 pts max.
 
+    Phase B (V4.2.7): graduated continuous scoring using event-type tier,
+    materiality, confidence, relevance, freshness, proximity, and article-count
+    modifiers sourced from cached catalyst_primary_event fields.
+
+    No binary event→100 collapse. Generic RSS events no longer auto-max.
+    Bearish conflict zeroing preserved.
+
     Formula:
-      catalyst_raw   = direct_catalyst_score * 0.75 + intelligence_score * 0.25
-      catalyst_pts   = catalyst_raw / 100 * 15
+      direct_score  = _catalyst_phb_direct_score(primary_event, ...)
+      catalyst_pts  = direct_score / 100 * 15
 
-    Direct Catalyst (75%):
-      Any non-bearish qualified catalyst event present → score = 100
-      No event → score = 0
-      Bearish conflict → direct = 0, sets flag
-
-    Catalyst Intelligence (25%):
-      Uses news volume / change data. Unavailable in snapshot = 0.
-
-    V4.2.1: extended event detection — checks flat fields AND nested catalyst
-    dict AND primary_catalyst / catalyst_v2_primary_event / catalyst_events.
-    SCORE_ONLY branch uses cat_score directly (no -25 deduction), threshold ≥ 40.
+    When catalyst intelligence data is available, restore the blended formula:
+      catalyst_raw = direct_score * 0.75 + intelligence_score * 0.25
     """
     # ── Resolve all catalyst fields — flat AND nested dict ─────────────────
     _cat_nested   = row.get("catalyst") or {}
@@ -949,7 +1117,7 @@ def _score_catalyst_alignment_v42(row: dict) -> dict:
     bearish_conf = bool(row.get("catalyst_bearish_conflict")
                         or _cat_nested.get("bearish_conflict"))
 
-    # Event candidates — priority order for direct detection
+    # Event candidates
     _ev_scheduled = row.get("catalyst_scheduled_event") or _cat_nested.get("scheduled_event")
     _ev_rss       = row.get("catalyst_rss_event")       or _cat_nested.get("rss_event")
     _ev_primary   = (row.get("primary_catalyst")
@@ -959,90 +1127,105 @@ def _score_catalyst_alignment_v42(row: dict) -> dict:
                      or _cat_nested.get("v2_primary_event"))
     _ev_list      = row.get("catalyst_events") or _cat_nested.get("events") or []
 
-    has_scheduled  = bool(_ev_scheduled)
-    has_rss        = bool(_ev_rss)
-    reason_codes: list[str] = []
+    # canonical rich event — always prefer catalyst_primary_event (146/146 populated)
+    _rich_event   = row.get("catalyst_primary_event") or _ev_primary or _ev_v2 or {}
 
-    # ── Determine direct catalyst presence ─────────────────────────────────
+    has_scheduled = bool(_ev_scheduled)
+    has_rss       = bool(_ev_rss)
+    source        = str(row.get("catalyst_primary_source") or "unknown")
+    reason_codes: list = []
+
+    # ── Phase B: graduated direct score ────────────────────────────────────
     direct_score   = 0.0
     direct_present = False
     direct_type    = None
     detected_event = None
+    phb_tier       = "TIER_E"
+    phb_et_norm    = "UNKNOWN"
+    phb_detail: dict = {}
 
     if bearish_conf:
         reason_codes.append("BEARISH_CATALYST_CONFLICT")
+        direct_score  = 0.0
+        direct_type   = "bearish_suppressed"
 
-    elif has_scheduled:
-        is_direct, etype = _event_is_direct_catalyst(_ev_scheduled)
-        if is_direct or True:   # scheduled events are always direct
-            direct_score   = 100.0
+    elif _rich_event and _rich_event.get("event_type"):
+        # Rich primary event available — use graduated Phase B scoring
+        is_sched_ev = has_scheduled or source == "scheduled"
+        direct_score, phb_tier, phb_et_norm, phb_detail = _catalyst_phb_direct_score(
+            _rich_event, source, cat_score, is_sched_ev
+        )
+        if direct_score > 0:
             direct_present = True
-            direct_type    = "scheduled_event"
-            detected_event = _ev_scheduled
-            reason_codes.append("SCHEDULED_CATALYST_DIRECT")
+            direct_type    = phb_et_norm.lower()
+            detected_event = _rich_event
+            reason_codes.append(f"PHB_GRADUATED_{phb_tier}")
+        else:
+            reason_codes.append("PHB_SCORE_ZERO")
 
-    elif has_rss:
-        is_direct, etype = _event_is_direct_catalyst(_ev_rss)
-        if is_direct or True:   # RSS events already gated at catalyst service
-            direct_score   = 100.0
+    elif "theme_policy" in source and (cat_score is not None):
+        # Theme-policy only row — no rich event data; conservative Tier D scoring
+        direct_score, phb_tier, phb_et_norm, phb_detail = _catalyst_phb_theme_policy_score(cat_score)
+        if direct_score > 0:
             direct_present = True
-            direct_type    = "rss_event"
-            detected_event = _ev_rss
-            reason_codes.append("RSS_CATALYST_DIRECT")
+            direct_type    = "theme_policy"
+            detected_event = _ev_primary
+            reason_codes.append("PHB_THEME_POLICY_TIERD")
+        else:
+            reason_codes.append("PHB_THEME_POLICY_NO_SCORE")
+
+    elif has_rss or has_scheduled:
+        # Fallback: has RSS/scheduled event but primary_event has no event_type
+        # Use legacy detection to avoid silent drop, but cap at Tier C max (73)
+        for _cand_src, _cand_ev in [("rss", _ev_rss), ("scheduled", _ev_scheduled)]:
+            if _cand_ev:
+                is_direct, etype = _event_is_direct_catalyst(_cand_ev)
+                if is_direct:
+                    direct_score   = min(73.0, 55.0)  # Tier C cap for untyped events
+                    direct_present = True
+                    direct_type    = etype or _cand_src
+                    detected_event = _cand_ev
+                    phb_tier       = "TIER_C"
+                    phb_et_norm    = (etype or "UNKNOWN").upper()
+                    reason_codes.append("PHB_FALLBACK_LEGACY_DETECT")
+                    break
 
     else:
-        # V4.2.1: scan additional event fields for qualified direct catalysts
-        _candidates = [
-            ("primary_catalyst",  _ev_primary),
-            ("v2_primary_event",  _ev_v2),
-        ]
-        for _evlist_item in (_ev_list[:3] if isinstance(_ev_list, list) else []):
-            _candidates.append(("catalyst_events", _evlist_item))
-
-        for src, evt in _candidates:
-            is_direct, etype = _event_is_direct_catalyst(evt)
-            if is_direct:
-                direct_score   = 100.0
+        # Score-only path (no event, just a raw cat_score)
+        if cat_available and cat_score is not None:
+            raw_val = _safe_float(cat_score, 0.0)
+            if raw_val >= 20.0:
+                direct_score   = raw_val
                 direct_present = True
-                direct_type    = etype or src
-                detected_event = evt
-                reason_codes.append(f"DIRECT_CATALYST_FROM_{src.upper()}")
-                break
-
-        if not direct_present:
-            if cat_available and cat_score is not None:
-                # V4.2.6: use score directly across full range.  Threshold lowered
-                # from 40 → 20 (Granularity Audit P1-A: prior threshold created a
-                # dead zone where cat_score 1–39 produced near-zero pts = 0.91–1.52
-                # regardless of underlying signal strength).
-                raw_val       = _safe_float(cat_score, 0.0)
-                direct_score  = raw_val
-                direct_present = raw_val >= 20.0
-                if direct_present:
-                    direct_type = "score_based"
-                    reason_codes.append("CATALYST_SCORE_BASED_DIRECT")
-                else:
-                    reason_codes.append("CATALYST_SCORE_BELOW_THRESHOLD")
-            elif _avail_flat is False and cat_score is None:
-                reason_codes.append("NO_ACTIVE_CATALYST")
+                direct_type    = "score_based"
+                phb_tier       = "TIER_D" if raw_val < 50 else "TIER_C"
+                phb_et_norm    = "SCORE_BASED"
+                reason_codes.append("PHB_SCORE_BASED")
             else:
-                reason_codes.append("CATALYST_CACHE_MISSING")
+                reason_codes.append("CATALYST_SCORE_BELOW_THRESHOLD")
+        elif _avail_flat is False and cat_score is None:
+            reason_codes.append("NO_ACTIVE_CATALYST")
+        else:
+            reason_codes.append("CATALYST_CACHE_MISSING")
 
-    # ── Catalyst Intelligence (25 %) — unavailable in snapshot ─────────────
+    # ── Catalyst Intelligence (unavailable in snapshot) ─────────────────────
     intelligence_score  = 0.0
     intelligence_status = "unavailable"
     reason_codes.append("CATALYST_INTELLIGENCE_UNAVAILABLE")
 
-    # ── Combined ────────────────────────────────────────────────────────────
-    # V4.2.6: Intelligence weight removed from live formula while intelligence_score
-    # is unavailable in snapshot mode.  Prior formula (direct×0.75 + intel×0.25)
-    # permanently capped catalyst_pts at 11.25/15 (dead 25% weight — Granularity
-    # Audit P0-A).  When intelligence_score is implemented, restore the blended
-    # formula:  catalyst_raw = direct_score * 0.75 + intelligence_score * 0.25
-    catalyst_raw = direct_score  # full 100-pt scale maps to 15-pt ceiling
+    # ── Final score → points ─────────────────────────────────────────────────
+    # When intelligence_score is implemented, restore blended formula:
+    #   catalyst_raw = direct_score * 0.75 + intelligence_score * 0.25
+    catalyst_raw = direct_score
     catalyst_pts = round(min(15.0, catalyst_raw / 100.0 * 15.0), 2)
 
-    # ── Overall status ──────────────────────────────────────────────────────
+    # ── Explainability ───────────────────────────────────────────────────────
+    _age_days_for_expl = phb_detail.get("age_days")
+    catalyst_explanation = _catalyst_phb_explanation(
+        phb_tier, phb_et_norm, bearish_conf, _age_days_for_expl, source, catalyst_pts
+    )
+
+    # ── Overall status ───────────────────────────────────────────────────────
     _any_signal = cat_available or has_scheduled or has_rss or bool(detected_event)
     if not _any_signal and cat_score is None:
         cat_status = "no_catalyst" if _avail_flat is False else "missing_cache"
@@ -1050,29 +1233,38 @@ def _score_catalyst_alignment_v42(row: dict) -> dict:
         cat_status = "available"
 
     return {
-        "raw_score":                   round(catalyst_raw, 1),
-        "points":                      catalyst_pts,
-        "available":                   _any_signal,
-        "status":                      cat_status,
-        "direct_catalyst_score":       round(direct_score, 1),
-        "direct_catalyst_present":     direct_present,
-        "direct_catalyst_type":        direct_type,
-        "direct_catalyst_event":       detected_event or _ev_primary,
-        "direct_catalyst_polarity":    "bearish" if bearish_conf else ("bullish" if direct_present else None),
-        "catalyst_intelligence_score": intelligence_score,
-        "news_volume_market_cap_48h":  None,
-        "news_volume_market_cap_score": None,
-        "news_change_48h_pct":         None,
-        "news_change_48h_score":       None,
-        "catalyst_intelligence_status": intelligence_status,
+        "raw_score":                        round(catalyst_raw, 1),
+        "points":                           catalyst_pts,
+        "available":                        _any_signal,
+        "status":                           cat_status,
+        "direct_catalyst_score":            round(direct_score, 1),
+        "direct_catalyst_present":          direct_present,
+        "direct_catalyst_type":             direct_type,
+        "direct_catalyst_event":            detected_event or _ev_primary,
+        "direct_catalyst_polarity":         "bearish" if bearish_conf else ("bullish" if direct_present else None),
+        "catalyst_intelligence_score":      intelligence_score,
+        "news_volume_market_cap_48h":       None,
+        "news_volume_market_cap_score":     None,
+        "news_change_48h_pct":              None,
+        "news_change_48h_score":            None,
+        "catalyst_intelligence_status":     intelligence_status,
         "catalyst_intelligence_reason_codes": ["CATALYST_INTELLIGENCE_UNAVAILABLE"],
-        "catalyst_alignment_raw_score": round(catalyst_raw, 1),
-        "catalyst_alignment_points":    catalyst_pts,
-        "catalyst_status":              cat_status,
-        "catalyst_detail_status":       detail_status,
-        "catalyst_bearish_conflict":    bearish_conf,
-        "catalyst_reason_codes":        reason_codes,
-        "reason_codes":                 reason_codes,
+        "catalyst_alignment_raw_score":     round(catalyst_raw, 1),
+        "catalyst_alignment_points":        catalyst_pts,
+        "catalyst_status":                  cat_status,
+        "catalyst_detail_status":           detail_status,
+        "catalyst_bearish_conflict":        bearish_conf,
+        "catalyst_reason_codes":            reason_codes,
+        "reason_codes":                     reason_codes,
+        # Phase B explainability fields
+        "catalyst_direct_score":            round(direct_score, 1),
+        "catalyst_event_type":              phb_et_norm,
+        "catalyst_event_tier":              phb_tier,
+        "catalyst_freshness_score":         phb_detail.get("fresh_mod", 0.0),
+        "catalyst_relevance_score":         phb_detail.get("rel_mod", 0.0),
+        "catalyst_materiality_score":       phb_detail.get("mat_mod", 0.0),
+        "catalyst_phb_detail":              phb_detail,
+        "catalyst_explanation":             catalyst_explanation,
     }
 
 
@@ -2014,6 +2206,14 @@ def compute_confluence_v42(
         "direct_catalyst_present":      cat_comp.get("direct_catalyst_present"),
         "direct_catalyst_type":         cat_comp.get("direct_catalyst_type"),
         "catalyst_intelligence_score":  cat_comp.get("catalyst_intelligence_score"),
+        "catalyst_direct_score":        cat_comp.get("catalyst_direct_score"),
+        "catalyst_event_type":          cat_comp.get("catalyst_event_type"),
+        "catalyst_event_tier":          cat_comp.get("catalyst_event_tier"),
+        "catalyst_freshness_score":     cat_comp.get("catalyst_freshness_score"),
+        "catalyst_relevance_score":     cat_comp.get("catalyst_relevance_score"),
+        "catalyst_materiality_score":   cat_comp.get("catalyst_materiality_score"),
+        "catalyst_explanation":         cat_comp.get("catalyst_explanation"),
+        "catalyst_reason_codes":        cat_comp.get("catalyst_reason_codes"),
         "investment_alignment_points":    invest_comp["points"],
         "investment_pillar_count":        invest_comp.get("investment_pillar_count"),
         "investment_quality_label":       invest_comp.get("investment_quality_label"),

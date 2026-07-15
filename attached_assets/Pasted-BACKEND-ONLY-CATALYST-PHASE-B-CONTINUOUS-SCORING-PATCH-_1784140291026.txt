@@ -1,0 +1,353 @@
+BACKEND ONLY — CATALYST PHASE B CONTINUOUS SCORING PATCH
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change actionability logic.
+Do not change Investment scoring.
+Do not change Entry scoring.
+Do not run new provider calls.
+Do not add LLM calls.
+Do not fetch news at request time.
+Use existing catalyst_alignment_lkg, cached RSS/news/event data, cached calendar/event data, and retained Confluence snapshot only.
+
+Goal:
+
+Phase A fixed the catalyst ceiling bug, but Catalyst is still effectively binary:
+
+- 146 catalyst LKG rows
+- only 4 unique catalyst values
+- 107 / 146 rows score 15.0
+- 73.3% of rows max out
+- 10–14 range is empty
+- any rss_v2 event currently maps to direct=100 → 15/15 regardless of materiality
+
+We need Catalyst Phase B: graduated, continuous catalyst scoring.
+
+Do not make generic RSS events max-score.
+
+==================================================
+PART 1 — CURRENT CATALYST INPUT AUDIT
+==================================================
+
+Before implementing, inspect existing catalyst_alignment_lkg and Confluence catalyst inputs.
+
+Return available fields per catalyst row:
+
+symbol
+source
+event_type
+cat_score
+direct_score
+bearish_conflict
+event_date if present
+published_at if present
+headline/title if present
+reason_codes
+rss_event flag
+theme_policy flag
+any confidence fields
+any freshness/proximity fields
+
+Return distribution by:
+
+source
+event_type
+bearish_conflict
+event age / date availability if possible
+
+Confirm which fields are actually available for scoring.
+
+==================================================
+PART 2 — IMPLEMENT GRADUATED CATALYST DIRECT SCORE
+==================================================
+
+Replace binary event scoring with event-tier scoring.
+
+Suggested direct catalyst quality score, 0–100:
+
+Tier A — 85–100:
+- FDA/regulatory decision/readout
+- confirmed major contract/customer win
+- hyperscaler/strategic customer deal
+- earnings guidance raise
+- material M&A
+- major government/defense award
+- confirmed product launch with direct company impact
+
+Tier B — 65–85:
+- earnings date / earnings report proximity
+- analyst upgrade / price target raise if cached
+- partnership
+- investor day / analyst day
+- product update
+- sector-specific event with direct ticker relevance
+
+Tier C — 40–65:
+- commercial contract mention with unclear size
+- generic business update
+- non-material partnership
+- thematic/sector tailwind directly tied to ticker
+
+Tier D — 15–40:
+- generic RSS mention
+- theme_policy-only item
+- weak/undated event
+- sector-wide news with indirect relevance
+
+Tier E — 0–15:
+- stale, generic, low-confidence, or no direct ticker catalyst
+
+Bearish conflict:
+- if bearish_conflict true, catalyst_points should be 0 or strongly capped, preserving current behavior.
+
+Important:
+rss_v2 alone should NOT mean 100.
+commercial_contract should NOT automatically equal M&A or earnings.
+unknown event type should not score above 40 unless strong cat_score/confidence exists.
+
+==================================================
+PART 3 — FRESHNESS / PROXIMITY MODIFIER
+==================================================
+
+Use available date fields only. Do not fetch new data.
+
+Add freshness/proximity modifier:
+
+If confirmed future catalyst:
+- 0–7 days: +10 to direct score
+- 8–30 days: +6
+- 31–90 days: +3
+- >90 days or unknown: +0
+
+If news/article catalyst:
+- published within 0–3 days: +8
+- 4–14 days: +5
+- 15–45 days: +2
+- stale/unknown: +0
+
+Cap final direct_score at 100.
+
+If no date fields exist, do not invent proximity. Just use event materiality.
+
+==================================================
+PART 4 — CONFIDENCE / RELEVANCE MODIFIER
+==================================================
+
+Use available fields only.
+
+Add confidence/relevance modifier:
+
+Direct company-specific event:
++10
+
+Ticker explicitly mentioned:
++6
+
+Theme/sector-only event:
++0 to +3
+
+Unknown or weak relevance:
+-10
+
+If no confidence fields exist, infer conservatively from source/event_type/reason_codes only.
+
+==================================================
+PART 5 — MAP FINAL SCORE TO POINTS
+==================================================
+
+Final catalyst points:
+
+catalyst_alignment_points = final_catalyst_score / 100 * 15
+
+But preserve bearish conflict zeroing/capping.
+
+Expected distribution after Phase B:
+
+- not more than 25–35% of symbols at 15/15
+- 10–14 range populated
+- 5–10 range populated
+- weak RSS/theme_policy items mostly 1–5
+- true hard catalysts still high
+
+==================================================
+PART 6 — EXPLAINABILITY FIELDS
+==================================================
+
+Add/ensure fields in Confluence row and confluence_v42 component:
+
+catalyst_direct_score
+catalyst_event_type
+catalyst_event_tier
+catalyst_freshness_score
+catalyst_relevance_score
+catalyst_materiality_score
+catalyst_reason_codes
+catalyst_explanation
+
+Example explanations:
+
+"Confirmed earnings/guidance catalyst within 7 days."
+"Generic RSS commercial-contract mention; materiality unknown, scored conservatively."
+"Bearish catalyst conflict; catalyst points suppressed."
+"Theme-policy tailwind only; low direct catalyst confidence."
+
+Do not expose huge raw article text.
+
+==================================================
+PART 7 — VALIDATION
+==================================================
+
+Rebuild retained Confluence snapshot from cache only.
+
+Return before/after catalyst distribution:
+
+unique values
+min
+max
+mean
+median
+std dev
+% at 0
+% at 15
+top 20 values with counts
+event_type distribution
+source distribution
+
+Validate these known samples:
+
+AAOI
+AEHR
+ALAB
+ALGM
+AMD
+ASTS
+AVAV
+MU
+ADEA
+AKAM
+BB
+BTDR
+TSM
+VRT
+ABCL
+CRWD
+HIMS
+PANW
+
+For each:
+
+symbol
+old catalyst points
+new catalyst points
+source
+event_type
+event_tier
+freshness/proximity
+relevance/confidence
+bearish_conflict
+explanation
+
+Expected:
+
+- AMD / ASTS / AVAV / MU stay suppressed if bearish conflict remains.
+- Generic commercial_contract RSS items should not all stay 15.
+- Stronger event types can still score 10–15.
+- Theme_policy-only items should remain low-to-moderate, not max.
+- 10–14 and 5–10 ranges should populate.
+
+==================================================
+PART 8 — RANKING / ACTIONABILITY SAFETY
+==================================================
+
+Confirm this patch does not change actionability gates.
+
+Return:
+
+READY count
+NEAR_ACTIONABLE count
+WATCH_FOR_RESET count
+WATCH count
+RISK_CONFLICT count
+
+Safety checks:
+
+- ABCL remains NEAR_ACTIONABLE, not READY.
+- VRT / ALGM / TSM remain READY.
+- LITE / LASR / VECO remain not READY.
+- No READY with LOWER_LOW_CONFIRMED.
+- No READY with CHASE_EXTENSION.
+- No READY with missing invalidation.
+
+Then return top 30 Confluence rows after catalyst Phase B.
+
+Flag any suspicious ranking changes caused by catalyst.
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+CATALYST PHASE B CONTINUOUS SCORING REPORT
+
+INPUT FIELD AUDIT:
+[summary/table]
+
+SCORING FORMULA:
+[summary]
+
+DISTRIBUTION BEFORE / AFTER:
+[table]
+
+SAMPLE VALIDATION:
+[table]
+
+RANKING IMPACT:
+[summary/table]
+
+ACTIONABILITY SAFETY:
+[summary/table]
+
+REMAINING CATALYST GAPS:
+[list]
+
+End exactly:
+
+CATALYST PHASE B VERDICT
+
+PROVIDER_CALLS_USED:
+[YES/NO]
+
+LLM_CALLS_USED:
+[YES/NO]
+
+GENERIC_RSS_AUTO_MAX_FIXED:
+[YES/NO]
+
+CATALYST_NOW_CONTINUOUS:
+[YES/NO]
+
+UNIQUE_CATALYST_VALUES_AFTER:
+[number]
+
+PERCENT_AT_MAX_AFTER:
+[number]
+
+RANGE_10_TO_14_POPULATED:
+[YES/NO]
+
+RANGE_5_TO_10_POPULATED:
+[YES/NO]
+
+BEARISH_CONFLICT_SUPPRESSION_PRESERVED:
+[YES/NO]
+
+ACTIONABILITY_UNCHANGED:
+[YES/NO]
+
+READY_SAFETY_CHECK_PASSED:
+[YES/NO]
+
+READY_FOR_FRONTEND_CATALYST_TOOLTIP:
+[YES/NO]
