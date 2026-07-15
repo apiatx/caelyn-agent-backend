@@ -1,0 +1,267 @@
+BACKEND ONLY — TICKER DETAIL CONTRACT BLOCKER FIXES
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math.
+Do not change actionability logic.
+Do not run provider calls.
+Do not add LLM calls.
+Do not create duplicate updaters.
+Do not use stale upload/CSV data.
+
+The new endpoint exists:
+
+GET /api/watchlist/ticker-detail/{symbol}
+
+Architecture is good, but frontend is NOT ready to build against it yet because the data contract has two blockers:
+
+1. Fundamentals contract is incomplete.
+2. Quote fallback/coverage needs cleaner status/fallback handling.
+3. ABCL score/actionability consistency needs a quick snapshot check.
+
+==================================================
+PART 1 — FUNDAMENTALS SOURCE TRACE
+==================================================
+
+The endpoint report said:
+
+"revenue=None observed for all validation symbols — revenue as a raw field is not part of the current schema."
+
+This is not acceptable because the Watchlist Fundamental toggle already displays fields including:
+
+- Revenue
+- Rev Grwth (Q)
+- Rev Grwth (Y)
+- Gross Mgn
+- FCF Mgn
+- Free CF
+- Op. Income
+- EBIT
+- P/E
+- P/S
+- EV/EBITDA
+- EPS Grwth
+- D/E
+- ND/EBITDA
+- Insider %
+- Earn. Date
+- Rev Grwth Est
+- Rev Grwth NQ
+- Rev Grwth NY
+- EPS Grwth Est
+- EPS Grwth TQ
+- EPS Grwth NQ
+- EPS Grwth TY
+- EPS Grwth NY
+
+Find the exact backend source used by the Watchlist Fundamental toggle.
+
+Return:
+
+- endpoint used by Fundamental toggle
+- service/function used
+- Neon table/cache used
+- exact field names returned for each column
+- whether Revenue exists under a different key
+- whether any fields currently come from old upload/CSV data
+- whether the new ticker-detail endpoint is using the same source or the wrong/incomplete source
+
+Do not guess. Trace the real code path.
+
+==================================================
+PART 2 — FIX FUNDAMENTALS CONTRACT
+==================================================
+
+Update GET /api/watchlist/ticker-detail/{symbol} so fundamentals returns the exact canonical fields used by the Watchlist Fundamental toggle.
+
+The endpoint should return normalized frontend-friendly keys:
+
+fundamentals:
+- ticker
+- theme
+- market_cap
+- revenue
+- revenue_growth_q
+- revenue_growth_y
+- gross_margin
+- fcf_margin
+- free_cash_flow
+- operating_income
+- ebit
+- pe_ratio
+- ps_ratio
+- ev_ebitda
+- eps_growth
+- debt_equity
+- net_debt_ebitda
+- insider_percent
+- earnings_date
+- revenue_growth_est
+- revenue_growth_next_quarter
+- revenue_growth_next_year
+- eps_growth_est
+- eps_growth_this_quarter
+- eps_growth_next_quarter
+- eps_growth_this_year
+- eps_growth_next_year
+
+Also include:
+
+fundamentals_source:
+- source_table/cache
+- last_updated if available
+- freshness_status
+- missing_fields array
+
+Rules:
+
+- Do not use old upload/CSV fields if canonical cache exists.
+- Do not call FMP request-time.
+- Do not create a second fundamentals updater.
+- Values must match the Watchlist Fundamental toggle.
+- Missing fields should be genuinely missing, not caused by wrong key mapping.
+
+==================================================
+PART 3 — QUOTE FALLBACK CONTRACT
+==================================================
+
+The report said quote=False for many validation symbols because quote cache only covers actively polled symbols.
+
+Fix the contract so frontend can handle this cleanly.
+
+Return:
+
+quote:
+- price
+- change_percent
+- volume
+- relative_volume
+- quote_status: available / unavailable / row_fallback_recommended
+- source: quote_cache / watchlist_row_cache / unavailable
+- last_updated if available
+
+If there is a safe cached watchlist row source for the selected symbol, use it as fallback.
+If not, return null values with quote_status="row_fallback_recommended".
+
+No provider calls.
+
+==================================================
+PART 4 — ABCL SNAPSHOT CONSISTENCY CHECK
+==================================================
+
+The endpoint validation showed:
+
+ABCL C42 Score = 37.8
+
+But recent Confluence work classified ABCL as NEAR_ACTIONABLE after the breakout-floor retest fix.
+
+Validate ABCL across:
+
+- ticker-detail endpoint
+- /api/alpha/confluence/ABCL
+- retained Confluence snapshot used by the table
+- current Confluence table row if available
+
+Return:
+
+symbol
+endpoint/source
+total_score
+core_score
+bonus_score
+action.label
+execution_state
+bucket
+is_near_actionable
+is_watch_for_reset
+catalyst_points
+investment_points
+entry_points
+technical_setup_points
+reason if different
+
+Question:
+
+Is ticker-detail reading the same retained snapshot as the Confluence table?
+If not, fix it.
+If yes, explain why score/actionability changed.
+
+==================================================
+PART 5 — VALIDATION
+==================================================
+
+Validate again:
+
+ENTG
+MU
+TSM
+ABCL
+ALGM
+VRT
+HIMS
+CRWD
+
+For each return:
+
+- fundamentals all required keys present?
+- revenue present?
+- missing fundamental keys
+- fundamentals source matches Watchlist Fundamental toggle?
+- quote_status
+- confluence_v42 present?
+- confluence snapshot consistent?
+- news present?
+- direct catalyst present when applicable?
+- provider calls used? must be NO
+
+==================================================
+PART 6 — FINAL REPORT
+==================================================
+
+Return:
+
+TICKER DETAIL CONTRACT BLOCKER FIX REPORT
+
+FUNDAMENTALS SOURCE TRACE:
+[summary]
+
+FUNDAMENTALS CONTRACT FIX:
+[summary/table]
+
+QUOTE CONTRACT FIX:
+[summary]
+
+ABCL SNAPSHOT CONSISTENCY:
+[summary/table]
+
+VALIDATION:
+[table by symbol]
+
+FILES CHANGED:
+[list]
+
+End exactly:
+
+TICKER DETAIL CONTRACT READINESS VERDICT
+
+FUNDAMENTALS_MATCH_WATCHLIST_TOGGLE:
+[YES/NO]
+
+REVENUE_FIELD_FIXED:
+[YES/NO]
+
+STALE_UPLOAD_DATA_AVOIDED:
+[YES/NO]
+
+QUOTE_STATUS_CONTRACT_ADDED:
+[YES/NO]
+
+ABCL_SNAPSHOT_CONSISTENT:
+[YES/NO]
+
+NO_PROVIDER_CALLS_ON_MODAL_OPEN:
+[YES/NO]
+
+FRONTEND_READY_TO_IMPLEMENT:
+[YES/NO]

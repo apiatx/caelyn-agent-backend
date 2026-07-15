@@ -3495,6 +3495,38 @@ async def remove_favorite(request: Request, ticker: str):
 
 _CAT_LKG_PATH = None   # resolved lazily on first call
 
+# ── Fundamentals canonical → snake_case normalization map ────────────────────
+# Keys match EXACTLY what FmpFundamentalsRefresher stores in watchlist_fundamentals_cache.
+# Source: watchlist_fundamentals_refresh.py field-mapping audit table.
+_FUND_NORM: dict[str, str] = {
+    "Market Cap":                "market_cap",
+    "Revenue":                   "revenue",
+    "Revenue Growth (Q)":        "revenue_growth_q",
+    "Revenue Growth (YoY)":      "revenue_growth_y",
+    "Gross Margin":              "gross_margin",
+    "FCF Margin":                "fcf_margin",
+    "Free Cash Flow":            "free_cash_flow",
+    "Operating Income":          "operating_income",
+    "EBIT":                      "ebit",
+    "PE Ratio":                  "pe_ratio",
+    "PS Ratio":                  "ps_ratio",
+    "EV/EBITDA":                 "ev_ebitda",
+    "EPS Growth":                "eps_growth",
+    "Debt / Equity":             "debt_equity",
+    "Net Debt / EBITDA":         "net_debt_ebitda",
+    "Shares Insiders":           "insider_percent",
+    "Earnings Date":             "earnings_date",
+    "Revenue Growth Est.":       "revenue_growth_est",
+    "Rev Growth Next Quarter":   "revenue_growth_next_quarter",
+    "Rev Growth Next Year":      "revenue_growth_next_year",
+    "Rev Growth This Year":      "revenue_growth_this_year",
+    "EPS Growth Est.":           "eps_growth_est",
+    "EPS Growth This Quarter":   "eps_growth_this_quarter",
+    "EPS Growth Next Quarter":   "eps_growth_next_quarter",
+    "EPS Growth This Year":      "eps_growth_this_year",
+    "EPS Growth Next Year":      "eps_growth_next_year",
+}
+
 def _read_catalyst_lkg_sym(sym: str) -> dict:
     """
     Return the raw catalyst LKG row for one symbol — disk read, no network.
@@ -3571,24 +3603,44 @@ async def ticker_detail_endpoint(symbol: str):
         coverage["company_profile"] = False
         coverage["description"]     = False
 
-    # ── 2. Overview (live quote from cache) ───────────────────────────────────
+    # ── 2. Overview (live quote from cache — zero provider calls) ─────────────
+    # quote_status semantics:
+    #   available                — price present in watchlist_quote_cache
+    #   unavailable              — symbol not in active quote poll; price=None
+    #   row_fallback_recommended — same as unavailable; frontend may use a
+    #                              stale row price from the watchlist table
     overview: dict = {}
     try:
         from services.watchlist_quote_cache import get_watchlist_quotes
         _qmap = await get_watchlist_quotes([sym])
         q = _qmap.get(sym) or {}
+        _price = q.get("price")
+        _last_upd = q.get("quote_updated_at")
+        if _price is not None:
+            _qstatus = "available"
+            _qsource = "quote_cache"
+        else:
+            _qstatus = "row_fallback_recommended"
+            _qsource = "unavailable"
         overview = {
-            "price":           q.get("price"),
-            "change_pct_1d":   q.get("change_pct_1d"),
-            "volume":          q.get("volume"),
-            "average_volume":  q.get("average_volume"),
-            "relative_volume": q.get("relative_volume"),
-            "quote_source":    q.get("quote_source"),
-            "quote_updated_at": q.get("quote_updated_at"),
+            "price":            _price,
+            "change_percent":   q.get("change_pct_1d"),
+            "volume":           q.get("volume"),
+            "average_volume":   q.get("average_volume"),
+            "relative_volume":  q.get("relative_volume"),
+            "quote_status":     _qstatus,
+            "source":           _qsource,
+            "last_updated":     _last_upd,
         }
-        coverage["quote"] = q.get("price") is not None
+        coverage["quote"] = _price is not None
     except Exception as _e:
         print(f"[TICKER_DETAIL] quote error {sym}: {_e}")
+        overview = {
+            "price": None, "change_percent": None, "volume": None,
+            "average_volume": None, "relative_volume": None,
+            "quote_status": "unavailable", "source": "unavailable",
+            "last_updated": None,
+        }
         coverage["quote"] = False
 
     # ── 3. Confluence V4.2 detail ─────────────────────────────────────────────
@@ -3685,6 +3737,10 @@ async def ticker_detail_endpoint(symbol: str):
         coverage["technical"] = False
 
     # ── 5. Fundamentals (watchlist_fundamentals_cache Neon) ───────────────────
+    # Fields are stored in title-case keys (e.g. "Revenue", "PE Ratio").
+    # Normalized here to snake_case to match the frontend contract spec.
+    # Source is identical to the Watchlist Fundamental toggle — same Neon table,
+    # same FmpFundamentalsRefresher write path.  No request-time FMP calls.
     fundamentals: dict = {}
     try:
         def _fetch_fund():
@@ -3692,15 +3748,59 @@ async def ticker_detail_endpoint(symbol: str):
             snap = _get_fs(sym)
             if snap is None:
                 return {}
-            fields = snap.get("fields") or {}
-            return {
-                "ticker":        sym,
-                "refreshed_at":  snap.get("refreshed_at"),
-                "next_refresh_at": snap.get("next_refresh_at"),
-                **fields,
+            raw_fields: dict = snap.get("fields") or {}
+            missing_fields: list = snap.get("missing_fields") or []
+
+            # Normalize to snake_case using the canonical map
+            norm: dict = {"ticker": sym, "theme": None}  # theme injected below
+            for canonical_key, snake_key in _FUND_NORM.items():
+                v = raw_fields.get(canonical_key)
+                norm[snake_key] = v  # None when field is missing/stale
+
+            # Determine which expected keys are genuinely missing from store
+            expected_keys = list(_FUND_NORM.values())
+            actual_missing = [
+                k for k in expected_keys
+                if norm.get(k) is None
+            ]
+
+            # Freshness classification
+            refreshed_at = snap.get("refreshed_at") or ""
+            next_refresh  = snap.get("next_refresh_at") or ""
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                ra = _dt.fromisoformat(refreshed_at) if refreshed_at else None
+                age_days = (
+                    (_dt.now(_tz.utc) - ra).days if ra else None
+                )
+                if age_days is None:
+                    freshness = "unknown"
+                elif age_days <= 7:
+                    freshness = "fresh"
+                elif age_days <= 21:
+                    freshness = "stale"
+                else:
+                    freshness = "very_stale"
+            except Exception:
+                freshness = "unknown"
+                age_days = None
+
+            norm["fundamentals_source"] = {
+                "source_table":     "watchlist_fundamentals_cache",
+                "source_service":   "FmpFundamentalsRefresher",
+                "last_updated":     refreshed_at or None,
+                "next_refresh_at":  next_refresh or None,
+                "freshness_status": freshness,
+                "age_days":         age_days,
+                "missing_fields":   actual_missing,
+                "fmp_call_count":   snap.get("fmp_call_count"),
             }
+            return norm
         fundamentals = await _aio.to_thread(_fetch_fund)
-        coverage["fundamentals"] = bool(fundamentals.get("refreshed_at"))
+        # Inject theme from confluence_v42 (built in step 3)
+        if fundamentals:
+            fundamentals["theme"] = confluence_v42.get("theme_name")
+        coverage["fundamentals"] = bool(fundamentals.get("fundamentals_source"))
     except Exception as _e:
         print(f"[TICKER_DETAIL] fundamentals error {sym}: {_e}")
         coverage["fundamentals"] = False
