@@ -5825,3 +5825,245 @@ async def v4_report_endpoint(watchlist_id: str):
         "not_scanned_symbols":            not_scanned_symbols,
         "confirmed_no_options_symbols":   confirmed_no_options_symbols,
     }
+
+
+@router.get("/{watchlist_id}/confluence/valuation-qa")
+async def valuation_qa_endpoint(watchlist_id: str):
+    """
+    Full-universe Valuation component QA.
+    Pure read: zero provider calls, zero LLM calls.
+    Re-scores all retained-snapshot symbols live via compute_confluence_v42.
+    """
+    from collections import Counter
+    from services.confluence_v2_service import get_retained_confluence_snapshot
+    from services.caelyn_confluence_v42 import (
+        compute_confluence_v42,
+        build_social_sections_map as _build_ssm,
+    )
+
+    snap = await asyncio.to_thread(get_retained_confluence_snapshot)
+    if not snap:
+        raise HTTPException(status_code=503, detail="Retained confluence snapshot not yet built")
+
+    rows = snap.get("results") or []
+    if not rows:
+        raise HTTPException(status_code=503, detail="Retained snapshot has 0 rows")
+
+    social_sections_map: dict = {}
+    try:
+        social_sections_map = _build_ssm()
+    except Exception:
+        pass
+
+    fundamentals_map: dict = {}
+    try:
+        from data.watchlist_fundamentals_store import get_snapshots_bulk as _gfb
+        universe = [str(r.get("symbol", "")).upper() for r in rows if r.get("symbol")]
+        fundamentals_map = await asyncio.to_thread(_gfb, universe) or {}
+    except Exception:
+        pass
+
+    scored: list[dict] = []
+    errors: list[dict] = []
+    for row in rows:
+        sym = str(row.get("symbol", "")).upper()
+        try:
+            v42 = compute_confluence_v42(
+                row,
+                social_sections_map=social_sections_map,
+                bottleneck_map=None,
+                fundamentals_map=fundamentals_map,
+            )
+            scored.append({"symbol": sym, **v42})
+        except Exception as exc:
+            errors.append({"symbol": sym, "error": str(exc)})
+
+    total = len(scored)
+
+    # ── 1. Component count validation ──────────────────────────────────────
+    comp_counts: dict[int, int] = Counter(
+        len(r.get("caelyn_confluence_v42_components") or {}) for r in scored
+    )
+    symbols_not_8 = [
+        {"symbol": r["symbol"], "comp_count": len(r.get("caelyn_confluence_v42_components") or {})}
+        for r in scored
+        if len(r.get("caelyn_confluence_v42_components") or {}) != 8
+    ]
+
+    # ── 2. Bound violations ────────────────────────────────────────────────
+    core_over_100  = [r["symbol"] for r in scored if (r.get("caelyn_confluence_core_score") or 0) > 100.01]
+    total_over_125 = [r["symbol"] for r in scored if (r.get("caelyn_confluence_score") or 0) > 125.01]
+
+    def _comp_pts(r, key):
+        return (r.get("caelyn_confluence_v42_components") or {}).get(key, {}).get("points") or 0
+
+    opts_over_18   = [r["symbol"] for r in scored if _comp_pts(r, "options_alignment")    > 18.01]
+    cat_over_12    = [r["symbol"] for r in scored if _comp_pts(r, "catalyst_alignment")   > 12.01]
+    inv_over_12    = [r["symbol"] for r in scored if _comp_pts(r, "investment_alignment") > 12.01]
+    val_over_8     = [r["symbol"] for r in scored if _comp_pts(r, "valuation")            >  8.01]
+
+    # ── 3. Valuation distributions ─────────────────────────────────────────
+    val_pts_list  = [round(_comp_pts(r, "valuation"), 4) for r in scored]
+    val_labels    = Counter(r.get("valuation_label") or "missing" for r in scored)
+    val_cov       = Counter(r.get("valuation_coverage_status") or "missing" for r in scored)
+    fwd_pe_count  = sum(1 for r in scored if r.get("valuation_forward_pe") is not None)
+    missing_flds  = Counter(len(r.get("valuation_missing_fields") or []) for r in scored)
+    val_zero      = sum(1 for v in val_pts_list if v == 0.0)
+    val_gt_7      = sum(1 for v in val_pts_list if v > 7.0)
+    val_avg       = round(sum(val_pts_list) / total, 3) if total else 0
+    val_max_seen  = round(max(val_pts_list), 3) if val_pts_list else 0
+
+    val_pts_buckets = {
+        "0":      sum(1 for v in val_pts_list if v == 0),
+        "0-2":    sum(1 for v in val_pts_list if 0 < v < 2),
+        "2-4":    sum(1 for v in val_pts_list if 2 <= v < 4),
+        "4-6":    sum(1 for v in val_pts_list if 4 <= v < 6),
+        "6-8":    sum(1 for v in val_pts_list if 6 <= v <= 8),
+    }
+
+    # ── 4. Top / Bottom 30 by valuation points ─────────────────────────────
+    sorted_by_val = sorted(scored, key=lambda r: _comp_pts(r, "valuation"), reverse=True)
+
+    def _val_row(r):
+        return {
+            "symbol":   r["symbol"],
+            "val_pts":  round(_comp_pts(r, "valuation"), 2),
+            "val_q":    round(r.get("valuation_quality_score") or 0, 1),
+            "val_lbl":  r.get("valuation_label"),
+            "val_cov":  r.get("valuation_coverage_status"),
+            "pe":       r.get("valuation_pe_ratio"),
+            "ps":       r.get("valuation_ps_ratio"),
+            "fpe":      r.get("valuation_forward_pe"),
+            "core":     round(r.get("caelyn_confluence_core_score") or 0, 1),
+            "total":    round(r.get("caelyn_confluence_score") or 0, 1),
+            "act":      r.get("caelyn_confluence_v42_actionability"),
+            "conf":     round(r.get("caelyn_confluence_v42_confidence_score") or 0, 1),
+        }
+
+    top30_val    = [_val_row(r) for r in sorted_by_val[:30]]
+    bottom30_val = [_val_row(r) for r in sorted_by_val[-30:]]
+
+    # ── 5. Actionability safety ────────────────────────────────────────────
+    sym_map = {r["symbol"]: r for r in scored}
+    safety_symbols = {
+        "ABCL": "NEAR_ACTIONABLE",
+        "VRT":  "READY",
+        "ALGM": "READY",
+        "TSM":  "READY",
+        "LITE": ("not_READY", lambda a: a != "READY"),
+        "LASR": ("not_READY", lambda a: a != "READY"),
+        "VECO": ("not_READY", lambda a: a != "READY"),
+    }
+    safety_results = {}
+    for sym, expected in safety_symbols.items():
+        row = sym_map.get(sym)
+        if row is None:
+            safety_results[sym] = {"found": False, "act": None, "pass": False, "expected": expected if isinstance(expected, str) else expected[0]}
+            continue
+        act = row.get("caelyn_confluence_v42_actionability")
+        if isinstance(expected, tuple):
+            ok = expected[1](act)
+            safety_results[sym] = {"found": True, "act": act, "pass": ok, "expected": expected[0]}
+        else:
+            ok = act == expected
+            safety_results[sym] = {"found": True, "act": act, "pass": ok, "expected": expected}
+
+    ready_symbols = [r for r in scored if r.get("caelyn_confluence_v42_actionability") == "READY"]
+    def _get_risk_flags(r):
+        return r.get("caelyn_confluence_v42_risk_flags") or r.get("risk_flags") or []
+    ready_lower_low = [
+        r["symbol"] for r in ready_symbols if "LOWER_LOW_CONFIRMED" in _get_risk_flags(r)
+    ]
+    ready_chase     = [
+        r["symbol"] for r in ready_symbols if "CHASE_EXTENSION" in _get_risk_flags(r)
+    ]
+    ready_no_invalidation = [
+        r["symbol"] for r in ready_symbols
+        if not (r.get("invalidation_price") or r.get("invalidation_level"))
+    ]
+
+    # ── 6. Confidence safety ───────────────────────────────────────────────
+    conf_vals = [r.get("caelyn_confluence_v42_confidence_score") or 0 for r in scored]
+    conf_over_100 = [r["symbol"] for r in scored if (r.get("caelyn_confluence_v42_confidence_score") or 0) > 100.1]
+    conf_below_0  = [r["symbol"] for r in scored if (r.get("caelyn_confluence_v42_confidence_score") or 0) < 0]
+    conf_avg      = round(sum(conf_vals) / total, 1) if total else 0
+
+    # valuation included in confidence — proxy: count where valuation comp is available
+    val_avail_for_conf = sum(
+        1 for r in scored
+        if ((r.get("caelyn_confluence_v42_components") or {}).get("valuation") or {}).get("available")
+    )
+
+    # ── 7. Max-point caps check ────────────────────────────────────────────
+    caps_ok = (
+        not opts_over_18 and not cat_over_12 and not inv_over_12 and not val_over_8
+        and not core_over_100 and not total_over_125
+    )
+
+    all_8_comps = len(symbols_not_8) == 0
+    safety_all_pass = all(v["pass"] for v in safety_results.values() if v["found"])
+
+    return {
+        "meta": {
+            "engine":               "v4.2-valuation-qa",
+            "total_rows":           len(rows),
+            "scored":               total,
+            "errors":               len(errors),
+            "snap_built_at":        snap.get("generated_at") or snap.get("built_at"),
+            "fundamentals_coverage": len(fundamentals_map),
+        },
+        "component_count_validation": {
+            "all_have_8_components": all_8_comps,
+            "distribution":          dict(comp_counts),
+            "symbols_not_8":         symbols_not_8[:20],
+        },
+        "bound_violations": {
+            "caps_all_ok":           caps_ok,
+            "core_over_100":         core_over_100,
+            "total_over_125":        total_over_125,
+            "options_over_18":       opts_over_18,
+            "catalyst_over_12":      cat_over_12,
+            "investment_over_12":    inv_over_12,
+            "valuation_over_8":      val_over_8,
+        },
+        "valuation_distributions": {
+            "total_symbols":             total,
+            "fwd_pe_populated":          fwd_pe_count,
+            "fwd_pe_pct":                round(fwd_pe_count / total * 100, 1) if total else 0,
+            "coverage_status":           dict(val_cov),
+            "labels":                    dict(val_labels.most_common()),
+            "pts_buckets":               val_pts_buckets,
+            "missing_fields_count":      dict(sorted(missing_flds.items())),
+            "val_pts_zero":              val_zero,
+            "val_pts_gt_7":              val_gt_7,
+            "val_pts_avg":               val_avg,
+            "val_pts_max_seen":          val_max_seen,
+            "val_avail_counted_in_conf": val_avail_for_conf,
+        },
+        "top30_valuation":    top30_val,
+        "bottom30_valuation": bottom30_val,
+        "actionability_distribution": dict(Counter(
+            r.get("caelyn_confluence_v42_actionability") for r in scored
+        ).most_common()),
+        "safety_checks": {
+            "per_symbol":              safety_results,
+            "ready_lower_low":         ready_lower_low,
+            "ready_chase_extension":   ready_chase,
+            "ready_no_invalidation":   ready_no_invalidation[:20],
+            "ready_total":             len(ready_symbols),
+            "all_pass":                (
+                safety_all_pass
+                and not ready_lower_low
+                and not ready_chase
+            ),
+        },
+        "confidence_safety": {
+            "avg":          conf_avg,
+            "over_100":     conf_over_100,
+            "below_0":      conf_below_0,
+            "range_ok":     not conf_over_100 and not conf_below_0,
+            "val_avail_counted_in_conf": val_avail_for_conf,
+            "val_avail_pct": round(val_avail_for_conf / total * 100, 1) if total else 0,
+        },
+        "errors_sample": errors[:10],
+    }
