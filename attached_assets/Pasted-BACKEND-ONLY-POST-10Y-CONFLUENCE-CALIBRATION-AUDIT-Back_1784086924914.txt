@@ -1,0 +1,527 @@
+BACKEND ONLY — POST-10Y CONFLUENCE CALIBRATION AUDIT
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math yet.
+Do not change provider logic.
+Do not run history backfill.
+Do not run provider calls.
+Use cached canonical history, refreshed entry_state_lkg, Stage2 LKG, and retained Confluence snapshot only.
+
+Goal:
+
+10Y/lifetime canonical history is complete. Entry state service has been rerun. Fib/Wave are now populated across the production universe after fixing bad imports.
+
+Now audit whether V4.2 actionability, Ready/Near/Watch/Reset, Fib retest paths, extension/chase logic, and canonical labels are calibrated correctly.
+
+Do not implement changes yet. Report findings and recommended calibration changes first.
+
+Known current state:
+
+- 344/344 OK-status production symbols have Fib/Wave.
+- confluence_v42.action.* is canonical.
+- confluence_verdict / BUY / WATCH / NEUTRAL / AVOID is legacy and should not drive frontend.
+- SATS is stale/dead; ECHO is active and populated.
+- ABCL remains WATCH_FOR_RESET despite weekly Fib/Wave.
+- VRT canonical action is READY / RETEST_IN_PROGRESS despite legacy WATCH.
+- TSM and ALGM are canonical READY.
+- NVDA is NEAR_ACTIONABLE / BREAKOUT_TRIGGER_READY.
+
+==================================================
+PART 1 — CLEAN COVERAGE / COUNT RECONCILIATION
+==================================================
+
+First cleanly restate the current universe counts.
+
+Return:
+
+stage2_total_symbols
+stage2_ok_symbols
+stage2_no_bars_symbols
+entry_lkg_total_rows
+entry_lkg_real_rows
+entry_lkg_test_rows
+entry_lkg_rows_with_fib_wave
+confluence_snapshot_rows
+confluence_rows_with_fib_wave
+
+Clarify the prior inconsistency:
+
+Prior report said:
+- Stage2 total = 413
+- Stage2 ok = 344
+- Stage2 no_bars = 69
+- Entry LKG rows = 347
+- 3 TEST rows exist in entry LKG
+
+Confirm the correct gap math.
+
+Expected:
+
+- 344 real OK symbols with Fib/Wave
+- 3 TEST rows should be ignored
+- no eligible domestic equity missing Fib/Wave
+- no_bars symbols should not be counted as Fib/Wave failures
+
+==================================================
+PART 2 — CURRENT ACTIONABILITY DISTRIBUTION
+==================================================
+
+Using the latest retained Confluence snapshot, return counts by:
+
+confluence_v42.action.label
+confluence_v42.action.label_display
+confluence_v42.action.execution_state
+confluence_v42.action.bucket
+caelyn_confluence_bucket
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+is_risk_conflict
+is_investment_quality
+
+Also return:
+
+ready_count
+near_actionable_count
+wait_for_retest_count
+wait_for_breakout_count
+watch_for_reset_count
+watch_count
+avoid_count
+risk_conflict_count
+investment_quality_count
+
+Compare to pre-Fib/Wave state if available:
+
+- Did Ready count change?
+- Did Near count change?
+- Did Watch For Reset count change?
+- Did Fib retest path activate new Ready rows?
+
+==================================================
+PART 3 — READY ROW QUALITY AUDIT
+==================================================
+
+For all READY rows, validate:
+
+- no CHASE_EXTENSION in risk_flags
+- no RISK_CONFLICT
+- no MAJOR_LOWER_LOW_CONFIRMED
+- no WATCH_FOR_RESET bucket
+- no missing invalidation_level
+- no WAIT_FOR_RETEST rows >15% above support
+- no raw NO_CLEAR_ENTRY display
+- no missing primary_fib_context unless genuinely insufficient history
+- no missing wave_structure_label unless genuinely insufficient history
+
+Return:
+
+ready_count
+ready_rows_with_fib_retest
+ready_rows_without_fib_retest
+ready_rows_with_constructive_extension_caution
+ready_rows_with_red_risk_flags
+ready_rows_missing_invalidation
+ready_rows_far_from_entry
+
+List top 30 READY rows by score with:
+
+symbol
+score_total
+score_core
+action_label
+execution_state
+technical_setup_label
+entry_state
+entry_state_display
+extension_state
+extension_quality
+primary_fib_context
+fib_retest_detected
+fib_retest_type
+nearest_fib_level
+fib_distance_pct
+wave_structure_label
+risk_flags
+caution_flags
+invalidation_level
+why_now
+why_wait
+
+==================================================
+PART 4 — NEAR ACTIONABLE AUDIT
+==================================================
+
+For all NEAR_ACTIONABLE rows, explain why they are not READY.
+
+Return top 30 Near rows with:
+
+symbol
+score_total
+action_label
+execution_state
+technical_setup_label
+entry_state
+extension_state
+extension_quality
+primary_fib_context
+fib_retest_detected
+nearest_fib_level
+fib_distance_pct
+wave_structure_label
+entry_exit_points
+technical_setup_points
+stage_quality_points
+risk_flags
+caution_flags
+why_now
+why_wait
+ready_blockers
+
+Classify each blocker:
+
+- needs_breakout_confirmation
+- set_alert_for_retest
+- not_at_entry
+- minor_lower_low
+- weak_entry_score
+- weak_setup_score
+- fib_retest_missing
+- chase_extension
+- missing_invalidation
+- other
+
+==================================================
+PART 5 — WATCH_FOR_RESET / CHASE AUDIT
+==================================================
+
+Audit all WATCH_FOR_RESET rows, especially those with strong Fib/Wave structure.
+
+Return:
+
+watch_for_reset_count
+watch_for_reset_with_weekly_or_monthly_impulse
+watch_for_reset_with_second_leg_continuation
+watch_for_reset_with_fib_near_entry
+watch_for_reset_with_chase_extension
+watch_for_reset_with_constructive_extension
+
+List top 30 Watch For Reset rows with:
+
+symbol
+score_total
+stage_label
+entry_state
+extension_state
+extension_quality
+primary_fib_context
+nearest_fib_level
+fib_distance_pct
+fib_retest_detected
+wave_structure_label
+risk_flags
+caution_flags
+why_wait
+reset_needed_reason
+
+Specifically include:
+
+ABCL
+CRDO
+WYFI
+OUST
+Any other high-score WATCH_FOR_RESET names
+
+Question to answer:
+
+Are any Watch For Reset rows false negatives that should be READY or NEAR because Fib/Wave shows a valid retest?
+
+==================================================
+PART 6 — SPECIFIC SYMBOL SANITY CHECKS
+==================================================
+
+Audit these symbols deeply:
+
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+NVDA
+TSM
+SOFI
+WYFI
+OUST
+ECHO
+HIMS
+NET
+CRWD
+FTNT
+MSTR if present
+SMCI if present
+MSFT if present
+
+For each return:
+
+symbol
+score_total
+score_core
+score_bonus
+legacy_verdict
+canonical_action_label
+canonical_action_display
+bucket
+execution_state
+execution_label
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+stage_label
+entry_state
+entry_state_display
+extension_state
+extension_quality
+primary_fib_context
+primary_fib_confidence
+primary_fib_timeframe
+nearest_fib_level
+fib_distance_pct
+fib_retest_detected
+fib_retest_type
+wave_structure_label
+entry_exit_points
+technical_setup_points
+stage_quality_points
+risk_flags
+caution_flags
+data_status_flags
+invalidation_level
+target_zone
+why_now
+why_wait
+plain_english_verdict
+
+Specifically answer:
+
+- Is ABCL correctly Watch For Reset, or is it a Fib retest false negative?
+- Is CRDO correctly Watch / Investment Quality despite constructive Fib retest?
+- Is VRT correctly Ready / Retest In Progress?
+- Is ALGM correctly Ready / Breakout Trigger?
+- Is NVDA correctly Near / Breakout Trigger rather than Ready?
+- Is SOFI correctly Watch despite Fib retest due downtrend?
+- Is ECHO correctly Watch / Not Actionable due lower-low/downtrend?
+- Are CRWD/FTNT still Wait For Retest / Set Alert if far from support?
+
+==================================================
+PART 7 — FIB RETEST PATH AUDIT
+==================================================
+
+Audit the Fib Retest path specifically.
+
+Find code path that uses:
+
+fib_retest_detected
+fib_retest_type
+nearest_fib_level
+fib_distance_pct
+primary_fib_confidence
+wave_structure_label
+
+Return:
+
+file/function
+conditions
+thresholds
+fields used
+how many symbols triggered Fib Retest path
+how many became READY
+how many became NEAR_ACTIONABLE
+how many stayed WATCH/WATCH_FOR_RESET
+top symbols where Fib Retest helped
+top symbols where Fib Retest was detected but blocked
+
+Answer:
+
+- Is Fib Retest currently influencing actionability?
+- Or is it only displayed but not used enough?
+- Should Fib Retest override NO_CLEAR_ENTRY in some cases?
+- Should Fib Retest help convert WATCH_FOR_RESET to NEAR/READY when distance is close and extension_quality is constructive?
+- Should Fib Retest be blocked when extension_quality is CHASE?
+
+==================================================
+PART 8 — EXTENSION / CHASE SEVERITY AUDIT
+==================================================
+
+Audit extension logic post-Fib/Wave.
+
+Return counts by:
+
+extension_state
+extension_quality
+risk_flags containing EXTREME_EXTENSION
+risk_flags containing CHASE_EXTENSION
+caution_flags containing EXTREME_EXTENSION_CONSTRUCTIVE_RESET
+
+Specifically validate:
+
+- EXTREME + CHASE → red risk, not Ready
+- EXTREME + CONSTRUCTIVE → amber caution, can be Ready/near
+- EXTREME + NORMAL → decide whether risk or caution
+- MODERATELY_EXTENDED + constructive → not blocker
+- healthy pullbacks do not get chase penalty
+
+List any contradictions.
+
+==================================================
+PART 9 — LEGACY FIELD CLEANUP / FRONTEND CONTRACT
+==================================================
+
+Confirm again:
+
+Frontend should ignore:
+- confluence_verdict
+- legacy_verdict
+- BUY/WATCH/NEUTRAL/AVOID score bucket labels
+- legacy Trade Alignment fields
+
+Frontend should use:
+- confluence_v42.action.label_display
+- confluence_v42.action.execution_label
+- confluence_v42.booleans.*
+- risk_flags
+- caution_flags
+- data_status_flags
+- entry_state_display
+- primary_fib_context / wave_structure_label in detail drawer
+
+List any stale/contradictory fields that should be removed later or hidden from UI.
+
+==================================================
+PART 10 — CALIBRATION RECOMMENDATIONS ONLY
+==================================================
+
+Do not implement yet.
+
+Return recommended calibration changes, if any, grouped by priority:
+
+P0 — required correctness fixes
+P1 — important semantic fixes
+P2 — optional scoring/label improvements
+
+For each recommendation include:
+
+problem
+evidence
+proposed logic
+symbols affected
+expected effect
+risk of false positives
+
+Potential areas:
+
+- ABCL Fib/Wave false negative
+- Fib Retest path too weak
+- NO_CLEAR_ENTRY despite valid Fib retest
+- Ready rows still too broad/narrow
+- Near rows better as Set Alert
+- Watch For Reset too harsh/too lenient
+- extension/chase threshold issues
+- legacy verdict cleanup
+
+==================================================
+PART 11 — FINAL REPORT
+==================================================
+
+Return:
+
+POST-10Y CONFLUENCE CALIBRATION AUDIT REPORT
+
+COVERAGE / COUNT RECONCILIATION:
+[summary]
+
+ACTIONABILITY DISTRIBUTION:
+[table]
+
+READY ROW QUALITY:
+[summary/table]
+
+NEAR ACTIONABLE AUDIT:
+[summary/table]
+
+WATCH FOR RESET / CHASE AUDIT:
+[summary/table]
+
+SPECIFIC SYMBOL SANITY CHECKS:
+[table]
+
+FIB RETEST PATH AUDIT:
+[summary/table]
+
+EXTENSION / CHASE SEVERITY:
+[summary/table]
+
+FRONTEND CONTRACT:
+[summary]
+
+CALIBRATION RECOMMENDATIONS:
+[list]
+
+End exactly:
+
+POST-10Y CALIBRATION AUDIT VERDICT
+
+FIB_WAVE_AVAILABLE_FOR_ACTIONABILITY:
+[YES/NO]
+
+READY_COUNT:
+[number]
+
+NEAR_ACTIONABLE_COUNT:
+[number]
+
+WATCH_FOR_RESET_COUNT:
+[number]
+
+READY_ROWS_PASS_SAFETY_CHECK:
+[YES/NO]
+
+FIB_RETEST_PATH_ACTIVE:
+[YES/NO]
+
+FIB_RETEST_PATH_TOO_WEAK:
+[YES/NO]
+
+WATCH_FOR_RESET_FALSE_NEGATIVES_FOUND:
+[YES/NO]
+
+ABCL_CLASSIFICATION_CORRECT:
+[YES/NO/NEEDS_CALIBRATION]
+
+CRDO_CLASSIFICATION_CORRECT:
+[YES/NO/NEEDS_CALIBRATION]
+
+VRT_CLASSIFICATION_CORRECT:
+[YES/NO]
+
+ALGM_CLASSIFICATION_CORRECT:
+[YES/NO]
+
+NVDA_CLASSIFICATION_CORRECT:
+[YES/NO/NEEDS_CALIBRATION]
+
+SOFI_CLASSIFICATION_CORRECT:
+[YES/NO]
+
+LEGACY_VERDICTS_SHOULD_BE_HIDDEN:
+YES
+
+SCORING_MATH_CHANGE_REQUIRED:
+[YES/NO]
+
+ACTIONABILITY_LOGIC_CHANGE_REQUIRED:
+[YES/NO]
+
+READY_FOR_TARGETED_CALIBRATION_PATCH:
+[YES/NO]
