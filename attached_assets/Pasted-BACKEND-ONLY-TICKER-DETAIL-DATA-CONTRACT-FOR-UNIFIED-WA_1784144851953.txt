@@ -1,0 +1,415 @@
+BACKEND ONLY — TICKER DETAIL DATA CONTRACT FOR UNIFIED WATCHLIST POPUP
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change Confluence scoring.
+Do not change actionability logic.
+Do not change Catalyst scoring.
+Do not run new provider calls.
+Do not add LLM calls.
+Do not add a duplicate updater.
+Do not create new database tables unless absolutely unavoidable.
+Use existing cached data only.
+
+Goal:
+
+The frontend ticker popup needs one clean backend data contract so it can display:
+
+1. Overview
+2. About / company profile
+3. Confluence V4.2 detail
+4. Technical fields matching Watchlist Technical toggle
+5. Fundamental fields matching Watchlist Fundamental toggle
+6. News articles matching Watchlist Live News / Catalyst RSS pipeline
+7. Direct Catalyst article highlighting
+
+Important architecture rule:
+
+The ticker popup must reuse the same backend producers/caches that already power:
+- Watchlist screener Technical toggle
+- Watchlist screener Fundamental toggle
+- Confluence V4.2 table/detail
+- Watchlist Live News section
+- Catalyst Phase B rss_v2/catalyst_primary_event data
+
+Do not invent a parallel data path.
+
+==================================================
+PART 1 — AUDIT EXISTING BACKEND ENDPOINTS
+==================================================
+
+Find existing endpoints or services that provide:
+
+A. Watchlist technical row data
+B. Watchlist fundamental row data
+C. Confluence V4.2 row/detail data
+D. FMP company profile / company description
+E. Watchlist Live News / ticker RSS news
+F. Catalyst primary event / direct catalyst article fields
+
+Return:
+
+- endpoint path
+- service file/function
+- source cache/table/LKG
+- whether it already includes selected ticker lookup
+- whether fields are fresh/canonical or old upload/static data
+- whether provider calls happen during request
+- missing fields, if any
+
+Do not implement before this audit.
+
+==================================================
+PART 2 — TICKER DETAIL CONTRACT
+==================================================
+
+If existing endpoints already expose all needed fields, do not create a new endpoint. Return the exact endpoints/frontend should call.
+
+If the data is scattered and no clean ticker-level endpoint exists, add one read-only cached endpoint, preferably by extending an existing watchlist/ticker detail route.
+
+Suggested endpoint only if needed:
+
+GET /api/watchlist/ticker-detail/{symbol}
+
+This endpoint must use cached data only and return:
+
+{
+  "symbol": "ENTG",
+  "company": {},
+  "overview": {},
+  "confluence_v42": {},
+  "technical": {},
+  "fundamentals": {},
+  "news": {},
+  "direct_catalyst": {},
+  "coverage": {}
+}
+
+Do not fetch FMP/RSS/Tradier live during this request.
+
+==================================================
+PART 3 — COMPANY PROFILE / ABOUT
+==================================================
+
+Expose cached company profile data if available:
+
+company:
+- symbol
+- company_name
+- sector
+- industry
+- exchange
+- market_cap
+- website if cached
+- description / about text
+
+Source:
+Use existing cached FMP company profile data if already stored.
+
+If description is unavailable, return null / empty field.
+Do not call FMP request-time.
+
+Also report whether FMP profile description is currently cached for test symbols.
+
+==================================================
+PART 4 — CONFLUENCE V4.2 DETAIL FIELDS
+==================================================
+
+Expose all fields currently used by the right-hand Confluence drawer so frontend can move that content into the ticker popup.
+
+Return/ensure:
+
+confluence_v42:
+- total_score
+- core_score
+- bonus_score
+- confidence
+- action.label
+- action.label_display
+- action.execution_state
+- action.execution_label
+- bucket
+- invalidation_level
+- target_zone_1
+- target_zone_2
+- why_now
+- why_wait
+- risk_flags
+- caution_flags
+- coverage_flags
+- component scores:
+  - theme score /15, quality percentile, label/context
+  - stage score /15, quality percentile, label/context
+  - technical setup score /8, quality percentile, setup label
+  - options score /20, quality percentile, option status/signal
+  - entry / exit score /12, quality percentile, entry label/state
+  - catalyst score /15, quality percentile, event data
+  - investment score /15, quality percentile, investment label
+- bonuses:
+  - social
+  - whale / insider
+  - bottleneck
+  - bottleneck anchors
+- technical details:
+  - stage
+  - stage_score
+  - setup
+  - entry_state
+  - entry_score
+  - extension_state
+  - extension_quality
+  - extension_reset_state
+  - nearest_fib
+  - distance_fib
+  - fib_wave_status
+  - wave_structure
+  - wave_score
+- options coverage status
+- catalyst details:
+  - status
+  - direct catalyst present/none
+  - catalyst_event_type
+  - catalyst_event_tier
+  - catalyst_freshness_score
+  - catalyst_relevance_score
+  - catalyst_materiality_score
+  - catalyst_reason_codes
+  - catalyst_explanation
+
+Do not include huge raw debug by default.
+Debug can remain available under debug only.
+
+==================================================
+PART 5 — TECHNICAL DATA CONTRACT
+==================================================
+
+Expose the exact same canonical fields used by the Watchlist Technical toggle.
+
+technical:
+- ticker
+- company
+- theme
+- price
+- change_percent
+- volume
+- volx
+- vol_rank
+- volume_market_cap_ratio
+- stage
+- opt_score
+- opt_signal
+- put_call_ratio
+- iv
+- expected_move
+- option_volume
+- open_interest
+- ma_stack
+- pct_vs_50d
+- pct_vs_200d
+- extension_risk
+- fifty_two_week_position
+- pct_from_52w_high
+- entry_zone
+- breakout_signal
+- accumulation_distribution
+- squeeze
+- atr_percent
+- momentum_trend
+- technical_state
+
+Critical:
+These values must come from the same source used by the Watchlist Technical toggle.
+Do not read old upload/CSV data.
+
+==================================================
+PART 6 — FUNDAMENTAL DATA CONTRACT
+==================================================
+
+Expose the exact same canonical fields used by the Watchlist Fundamental toggle.
+
+fundamentals:
+- ticker
+- theme
+- market_cap
+- revenue
+- revenue_growth_q
+- revenue_growth_y
+- gross_margin
+- fcf_margin
+- free_cash_flow
+- operating_income
+- ebit
+- pe_ratio
+- ps_ratio
+- ev_ebitda
+- eps_growth
+- debt_equity
+- net_debt_ebitda
+- insider_percent
+- earnings_date
+- revenue_growth_est
+- revenue_growth_next_quarter
+- revenue_growth_next_year
+- eps_growth_est
+- eps_growth_this_quarter
+- eps_growth_next_quarter
+- eps_growth_this_year
+- eps_growth_next_year
+
+Critical:
+These values must match the Fundamental toggle in the Watchlist screener.
+They must update on the same cadence as the existing fundamental updater.
+Do not use stale initial CSV/upload fields if canonical fundamentals exist.
+
+==================================================
+PART 7 — NEWS / DIRECT CATALYST CONTRACT
+==================================================
+
+Expose ticker-level news from the same cached RSS/live news pipeline used by:
+
+- Watchlist Live News section
+- Confluence Catalyst scoring
+- catalyst_primary_event / rss_v2
+
+news:
+{
+  "articles": [...],
+  "direct_catalyst_articles": [...],
+  "last_updated": "...",
+  "status": "available/no_cached_news/error"
+}
+
+Each article should include, when available:
+
+- title/headline
+- source
+- url
+- published_at
+- age
+- summary
+- tickers
+- event_type
+- event_tier
+- catalyst_score
+- materiality_score
+- confidence_score
+- ticker_relevance_score
+- freshness_score
+- reason_codes
+- is_direct_catalyst
+
+Direct Catalyst article logic:
+
+Mark article as direct catalyst if it is the article/event used by catalyst_primary_event or otherwise has:
+- catalyst_event_type present
+- catalyst_event_tier present
+- ticker-specific relevance
+- materiality/confidence/freshness fields
+
+Sort direct catalyst articles by:
+1. event_tier
+2. catalyst_score / direct_score
+3. materiality / relevance / freshness
+4. published_at desc
+
+Do not run new RSS fetches request-time.
+
+==================================================
+PART 8 — VALIDATION SYMBOLS
+==================================================
+
+Validate endpoint/data contract for:
+
+ENTG
+MU
+TSM
+ABCL
+ALGM
+VRT
+HIMS
+CRWD
+
+For each return:
+
+- company profile present?
+- about description present?
+- confluence_v42 present?
+- technical fields present?
+- fundamentals fields present?
+- news articles present?
+- direct catalyst article present if applicable?
+- provider calls during request? must be NO
+- stale/static upload fields detected? must be NO for canonical fundamentals/technical
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+BACKEND TICKER DETAIL CONTRACT REPORT
+
+EXISTING ENDPOINT AUDIT:
+[summary]
+
+DATA CONTRACT:
+[endpoint or endpoints frontend should use]
+
+COMPANY PROFILE:
+[summary]
+
+CONFLUENCE FIELDS:
+[summary]
+
+TECHNICAL FIELDS:
+[summary]
+
+FUNDAMENTAL FIELDS:
+[summary]
+
+NEWS / DIRECT CATALYST:
+[summary]
+
+VALIDATION:
+[table by symbol]
+
+FILES CHANGED:
+[list or none]
+
+End exactly:
+
+BACKEND TICKER DETAIL CONTRACT VERDICT
+
+DEDICATED_ENDPOINT_CREATED:
+[YES/NO]
+
+EXISTING_ENDPOINTS_REUSED:
+[YES/NO]
+
+NO_PROVIDER_CALLS_ON_MODAL_OPEN:
+[YES/NO]
+
+COMPANY_PROFILE_AVAILABLE:
+[YES/NO/PARTIAL]
+
+CONFLUENCE_FIELDS_AVAILABLE:
+[YES/NO]
+
+TECHNICAL_MATCHES_WATCHLIST_TOGGLE_SOURCE:
+[YES/NO]
+
+FUNDAMENTALS_MATCH_WATCHLIST_TOGGLE_SOURCE:
+[YES/NO]
+
+NEWS_USES_LIVE_NEWS_RSS_PIPELINE:
+[YES/NO]
+
+DIRECT_CATALYST_ARTICLES_AVAILABLE:
+[YES/NO/PARTIAL]
+
+STALE_UPLOAD_DATA_REMOVED_FROM_CONTRACT:
+[YES/NO/PARTIAL]
+
+FRONTEND_READY_TO_IMPLEMENT:
+[YES/NO]

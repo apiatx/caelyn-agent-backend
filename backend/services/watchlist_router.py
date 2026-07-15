@@ -3479,6 +3479,383 @@ async def remove_favorite(request: Request, ticker: str):
     return {"ticker": raw, "is_favorite": False, "favorites": favorites}
 
 
+# ── Ticker Detail — unified popup data contract ───────────────────────────────
+# GET /api/watchlist/ticker-detail/{symbol}
+#
+# Read-only. Zero provider calls. All data from in-memory / disk / Neon caches:
+#   company     → screener_fundamentals_cache (Neon, 7-day TTL)
+#   overview    → watchlist_quote_cache (in-memory, 10-min TTL)
+#   confluence  → get_confluence_for_symbol → retained snapshot or live build
+#   technical   → watchlist_stage2_lkg (disk JSON, 20h TTL)
+#   fundamentals→ watchlist_fundamentals_cache (Neon, cadence-controlled)
+#   news        → _news_lkg (module in-memory) + rss_article_archive Neon fallback
+#   direct_catalyst → catalyst_alignment_lkg.json (disk JSON) + V4.2 fields
+#
+# Must remain above the /{watchlist_id} catch-all routes.
+
+_CAT_LKG_PATH = None   # resolved lazily on first call
+
+def _read_catalyst_lkg_sym(sym: str) -> dict:
+    """
+    Return the raw catalyst LKG row for one symbol — disk read, no network.
+    Uses a module-level path reference so it survives hot-reloads.
+    Never raises.
+    """
+    global _CAT_LKG_PATH
+    try:
+        if _CAT_LKG_PATH is None:
+            import pathlib
+            _CAT_LKG_PATH = (
+                pathlib.Path(__file__).resolve().parent.parent
+                / "data" / "catalyst_alignment_lkg.json"
+            )
+        if not _CAT_LKG_PATH.exists():
+            return {}
+        raw = _json.loads(_CAT_LKG_PATH.read_text(encoding="utf-8"))
+        return (raw.get("data") or {}).get(sym.upper()) or {}
+    except Exception:
+        return {}
+
+
+@router.get("/ticker-detail/{symbol}")
+async def ticker_detail_endpoint(symbol: str):
+    """
+    GET /api/watchlist/ticker-detail/{symbol}
+
+    Unified cached data contract for the watchlist ticker popup.
+    Zero provider calls — all data from in-process / disk / Neon caches.
+
+    Response shape:
+      { symbol, company, overview, confluence_v42,
+        technical, fundamentals, news, direct_catalyst, coverage }
+    """
+    import asyncio as _aio
+
+    sym = symbol.upper().strip()
+    if not sym:
+        raise HTTPException(status_code=422, detail="symbol is required")
+
+    coverage: dict = {}
+
+    # ── 1. Company profile + description ──────────────────────────────────────
+    company: dict = {"symbol": sym}
+    try:
+        def _fetch_company():
+            from services.fmp_cache_service import (
+                get_company_profile_cached,
+                get_fundamentals_cached,
+            )
+            prof = get_company_profile_cached(sym) or {}
+            fdb  = get_fundamentals_cached(sym) or {}
+            raw_p = fdb.get("profile") or {}
+            return {
+                "symbol":      sym,
+                "company_name": prof.get("name") or raw_p.get("companyName") or "",
+                "sector":      prof.get("sector") or "",
+                "industry":    prof.get("industry") or "",
+                "market_cap":  prof.get("market_cap"),
+                "exchange":    prof.get("exchange") or "",
+                "country":     prof.get("country") or "",
+                "beta":        prof.get("beta"),
+                "website":     raw_p.get("website") or None,
+                "image":       raw_p.get("image") or None,
+                "description": raw_p.get("description") or None,
+                "ceo":         raw_p.get("ceo") or None,
+                "source":      prof.get("source") or "screener_fundamentals_cache",
+            }
+        company = await _aio.to_thread(_fetch_company)
+        coverage["company_profile"] = bool(company.get("company_name"))
+        coverage["description"]     = bool(company.get("description"))
+    except Exception as _e:
+        print(f"[TICKER_DETAIL] company error {sym}: {_e}")
+        coverage["company_profile"] = False
+        coverage["description"]     = False
+
+    # ── 2. Overview (live quote from cache) ───────────────────────────────────
+    overview: dict = {}
+    try:
+        from services.watchlist_quote_cache import get_watchlist_quotes
+        _qmap = await get_watchlist_quotes([sym])
+        q = _qmap.get(sym) or {}
+        overview = {
+            "price":           q.get("price"),
+            "change_pct_1d":   q.get("change_pct_1d"),
+            "volume":          q.get("volume"),
+            "average_volume":  q.get("average_volume"),
+            "relative_volume": q.get("relative_volume"),
+            "quote_source":    q.get("quote_source"),
+            "quote_updated_at": q.get("quote_updated_at"),
+        }
+        coverage["quote"] = q.get("price") is not None
+    except Exception as _e:
+        print(f"[TICKER_DETAIL] quote error {sym}: {_e}")
+        coverage["quote"] = False
+
+    # ── 3. Confluence V4.2 detail ─────────────────────────────────────────────
+    # Fast path: retained snapshot (already computed, dict lookup only).
+    # Fallback: single-symbol build (slow ~5s, only for symbols not in retained).
+    confluence_v42: dict = {}
+    try:
+        def _fetch_c42():
+            from services.confluence_v2_service import (
+                get_retained_confluence_snapshot,
+                get_confluence_for_symbol as _build_c42,
+            )
+            try:
+                retained = get_retained_confluence_snapshot()
+                by_sym = {
+                    r.get("symbol"): r
+                    for r in (retained.get("results") or [])
+                }
+                if sym in by_sym:
+                    return by_sym[sym]
+            except Exception:
+                pass
+            return _build_c42(sym)
+        confluence_v42 = await _aio.to_thread(_fetch_c42)
+        coverage["confluence_v42"] = confluence_v42.get("caelyn_confluence_score") is not None
+    except Exception as _e:
+        print(f"[TICKER_DETAIL] confluence error {sym}: {_e}")
+        coverage["confluence_v42"] = False
+
+    # ── 4. Technical (stage2 LKG — in-memory, zero I/O) ───────────────────────
+    technical: dict = {}
+    try:
+        from services.watchlist_stage2_service import get_stage2 as _get_s2
+        s2 = _get_s2(sym)
+        tm = s2.get("technical_metrics") or {}
+        technical = {
+            "ticker":                sym,
+            # Weinstein stage
+            "stage":                 s2.get("label"),
+            "stage_score":           s2.get("score"),
+            "stage_reason":          s2.get("reason"),
+            "stage_confidence":      s2.get("stage_confidence"),
+            "stage_confidence_reason": s2.get("stage_confidence_reason"),
+            "signals":               s2.get("signals"),
+            # Core TA from technical_metrics
+            "technical_state":       s2.get("technical_state") or tm.get("technical_state"),
+            "technical_timing_score": s2.get("technical_timing_score"),
+            "ma_stack":              tm.get("ma_stack"),
+            "pct_vs_50d":            tm.get("pct_vs_sma_50"),
+            "pct_vs_200d":           tm.get("pct_vs_sma_200"),
+            "pct_vs_20d":            tm.get("pct_vs_sma_20"),
+            "extension_risk":        tm.get("extension_risk"),
+            "fifty_two_week_position": tm.get("range_position_52w"),
+            "pct_from_52w_high":     tm.get("pct_from_52w_high"),
+            "pct_from_52w_low":      tm.get("pct_from_52w_low"),
+            "high_52w":              tm.get("high_52w"),
+            "low_52w":               tm.get("low_52w"),
+            "sma_20":                tm.get("sma_20"),
+            "sma_50":                tm.get("sma_50"),
+            "sma_200":               tm.get("sma_200"),
+            "entry_zone":            tm.get("entry_zone"),
+            "breakout_signal":       tm.get("breakout_signal"),
+            "high_20d":              tm.get("high_20d"),
+            "high_50d":              tm.get("high_50d"),
+            "accumulation_distribution": tm.get("accumulation_distribution_signal"),
+            "accumulation_distribution_score": tm.get("accumulation_distribution_score"),
+            "squeeze":               tm.get("squeeze_signal"),
+            "atr_percent":           tm.get("atr_14_pct"),
+            "atr_14":                tm.get("atr_14"),
+            "momentum_trend":        tm.get("momentum_trend"),
+            "roc_20d":               tm.get("roc_20d"),
+            "roc_50d":               tm.get("roc_50d"),
+            "avg_volume_20d":        tm.get("avg_volume_20d"),
+            "accumulation_days_20d": tm.get("accumulation_days_20d"),
+            "distribution_days_20d": tm.get("distribution_days_20d"),
+            # Live quote overlay
+            "price":                 overview.get("price"),
+            "change_percent":        overview.get("change_pct_1d"),
+            "volume":                overview.get("volume"),
+            "relative_volume":       overview.get("relative_volume"),
+            # Options overlay (from V4.2)
+            "opt_score":    confluence_v42.get("options_alignment_points"),
+            "opt_signal":   confluence_v42.get("options_status"),
+            # History provenance
+            "history_source":    s2.get("history_source"),
+            "bars_count":        s2.get("bars_count"),
+            "history_start":     s2.get("history_start_date"),
+            "history_end":       s2.get("history_end_date"),
+            "computed_at":       s2.get("computed_at"),
+        }
+        coverage["technical"] = s2.get("score") is not None
+    except Exception as _e:
+        print(f"[TICKER_DETAIL] technical error {sym}: {_e}")
+        coverage["technical"] = False
+
+    # ── 5. Fundamentals (watchlist_fundamentals_cache Neon) ───────────────────
+    fundamentals: dict = {}
+    try:
+        def _fetch_fund():
+            from data.watchlist_fundamentals_store import get_snapshot as _get_fs
+            snap = _get_fs(sym)
+            if snap is None:
+                return {}
+            fields = snap.get("fields") or {}
+            return {
+                "ticker":        sym,
+                "refreshed_at":  snap.get("refreshed_at"),
+                "next_refresh_at": snap.get("next_refresh_at"),
+                **fields,
+            }
+        fundamentals = await _aio.to_thread(_fetch_fund)
+        coverage["fundamentals"] = bool(fundamentals.get("refreshed_at"))
+    except Exception as _e:
+        print(f"[TICKER_DETAIL] fundamentals error {sym}: {_e}")
+        coverage["fundamentals"] = False
+
+    # ── 6. News — in-memory LKG → rss_article_archive Neon fallback ──────────
+    news: dict = {
+        "articles":                 [],
+        "direct_catalyst_articles": [],
+        "hyperscaler_articles":     [],
+        "status":                   "no_cached_news",
+        "last_updated":             None,
+    }
+    try:
+        import services.watchlist_router as _wr_mod
+
+        # Primary: module-level news LKG (default watchlist only for now)
+        _lkg_entry = _wr_mod._news_lkg.get("default") or {}
+        _lkg_data  = _lkg_entry.get("data") or {}
+        articles_for_sym: list = list(_lkg_data.get("articles", {}).get(sym) or [])
+
+        # Hyperscaler cache filtered to this ticker
+        hyp_arts: list = [
+            a for a in (_wr_mod._HYP_CACHE.get("articles") or [])
+            if sym in (a.get("watchlist_symbols") or [])
+        ]
+
+        # If in-memory LKG empty, fall back to Neon archive (96h window)
+        if not articles_for_sym:
+            def _fetch_archive():
+                from data.rss_article_archive import query_ticker_activity_articles
+                rows, _ = query_ticker_activity_articles(sym, 96)
+                return rows
+            articles_for_sym = await _aio.to_thread(_fetch_archive)
+
+        if articles_for_sym or hyp_arts:
+            news["status"] = "available"
+
+        lkg_ts = _lkg_entry.get("ts")
+        news["last_updated"] = (
+            datetime.fromtimestamp(lkg_ts, tz=timezone.utc).isoformat()
+            if lkg_ts else None
+        )
+        news["articles"]             = articles_for_sym
+        news["hyperscaler_articles"] = hyp_arts
+        coverage["news"] = bool(articles_for_sym or hyp_arts)
+    except Exception as _e:
+        print(f"[TICKER_DETAIL] news error {sym}: {_e}")
+        news["error"] = str(_e)
+        coverage["news"] = False
+
+    # ── 7. Direct catalyst — LKG raw event + V4.2 scored fields ──────────────
+    direct_catalyst: dict = {}
+    try:
+        cat_row = await _aio.to_thread(_read_catalyst_lkg_sym, sym)
+        pe = cat_row.get("catalyst_primary_event") or {}
+
+        if cat_row:
+            direct_catalyst = {
+                # Availability
+                "available":               cat_row.get("catalyst_alignment_available"),
+                "primary_source":          cat_row.get("catalyst_primary_source"),
+                "bearish_conflict":        bool(cat_row.get("catalyst_bearish_conflict")),
+                "catalyst_score_raw":      cat_row.get("catalyst_alignment_score"),
+                # Raw event article fields
+                "event_type":              pe.get("event_type"),
+                "event_reason":            pe.get("event_reason"),
+                "direction":               pe.get("direction"),
+                "materiality_score":       pe.get("materiality_score"),
+                "confidence_score":        pe.get("confidence_score"),
+                "ticker_relevance_score":  pe.get("ticker_relevance_score"),
+                "ticker_relevance_reason": pe.get("ticker_relevance_reason"),
+                "article_count":           pe.get("article_count"),
+                "published_at":            pe.get("published_at"),
+                "catalyst_date":           pe.get("catalyst_date"),
+                "days_until":              pe.get("days_until"),
+                "title":                   pe.get("title"),
+                "url":                     pe.get("url"),
+                "why_it_matters":          pe.get("why_it_matters"),
+                "primary_subject":         pe.get("primary_subject"),
+                # Phase B scored fields (from V4.2 run above)
+                "catalyst_alignment_points":  confluence_v42.get("catalyst_alignment_points"),
+                "catalyst_event_type":        confluence_v42.get("catalyst_event_type"),
+                "catalyst_event_tier":        confluence_v42.get("catalyst_event_tier"),
+                "catalyst_freshness_score":   confluence_v42.get("catalyst_freshness_score"),
+                "catalyst_relevance_score":   confluence_v42.get("catalyst_relevance_score"),
+                "catalyst_materiality_score": confluence_v42.get("catalyst_materiality_score"),
+                "catalyst_reason_codes":      confluence_v42.get("catalyst_reason_codes"),
+                "catalyst_explanation":       confluence_v42.get("catalyst_explanation"),
+                "direct_catalyst_present":    confluence_v42.get("direct_catalyst_present"),
+                "reason_codes":               cat_row.get("catalyst_v2_reason_codes"),
+            }
+
+            # Mark any news article that matches the direct catalyst event
+            cat_title = pe.get("title") or ""
+            cat_url   = pe.get("url") or ""
+            dc_arts: list[dict] = []
+            for art_list in (news["articles"], news["hyperscaler_articles"]):
+                for art in art_list:
+                    is_dc = (
+                        (cat_title and art.get("title") == cat_title)
+                        or (cat_url and art.get("url") == cat_url)
+                    )
+                    if is_dc:
+                        art["is_direct_catalyst"]    = True
+                        art["catalyst_event_type"]   = pe.get("event_type")
+                        art["catalyst_event_tier"]   = confluence_v42.get("catalyst_event_tier")
+                        art["materiality_score"]     = pe.get("materiality_score")
+                        art["confidence_score"]      = pe.get("confidence_score")
+                        art["ticker_relevance_score"] = pe.get("ticker_relevance_score")
+                        art["freshness_score"]       = confluence_v42.get("catalyst_freshness_score")
+                        art["reason_codes"]          = cat_row.get("catalyst_v2_reason_codes")
+                        dc_arts.append(art)
+
+            # Also surface the raw catalyst event as a pseudo-article if no match found
+            # (article may be older than the 96h news window)
+            if not dc_arts and cat_title and cat_row.get("catalyst_alignment_available"):
+                dc_arts.append({
+                    "ticker":                  sym,
+                    "title":                   cat_title,
+                    "url":                     cat_url or None,
+                    "published_at":            pe.get("published_at"),
+                    "source":                  pe.get("source") or "rss",
+                    "summary":                 pe.get("why_it_matters") or "",
+                    "is_direct_catalyst":      True,
+                    "catalyst_event_type":     pe.get("event_type"),
+                    "catalyst_event_tier":     confluence_v42.get("catalyst_event_tier"),
+                    "materiality_score":       pe.get("materiality_score"),
+                    "confidence_score":        pe.get("confidence_score"),
+                    "ticker_relevance_score":  pe.get("ticker_relevance_score"),
+                    "freshness_score":         confluence_v42.get("catalyst_freshness_score"),
+                    "reason_codes":            cat_row.get("catalyst_v2_reason_codes"),
+                    "article_count":           pe.get("article_count"),
+                })
+
+            news["direct_catalyst_articles"] = dc_arts
+            coverage["direct_catalyst"] = bool(cat_row.get("catalyst_alignment_available"))
+        else:
+            coverage["direct_catalyst"] = False
+    except Exception as _e:
+        print(f"[TICKER_DETAIL] catalyst error {sym}: {_e}")
+        coverage["direct_catalyst"] = False
+
+    return {
+        "symbol":        sym,
+        "company":       company,
+        "overview":      overview,
+        "confluence_v42": confluence_v42,
+        "technical":     technical,
+        "fundamentals":  fundamentals,
+        "news":          news,
+        "direct_catalyst": direct_catalyst,
+        "coverage":      coverage,
+    }
+
+
 # ── Defiance 2X enrichment helper (shared by watchlist alias + strategy route) ─
 
 async def _build_defiance_rows(
