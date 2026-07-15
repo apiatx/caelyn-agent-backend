@@ -1,0 +1,270 @@
+BACKEND ONLY — COMPONENT GRANULARITY PHASE A VALIDATION
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change provider logic.
+Do not run provider calls.
+Do not implement Phase B/C yet.
+Use retained Confluence snapshot, cached catalyst LKG, cached fundamentals, and live API samples only.
+
+Goal:
+
+Validate the Phase A component granularity fixes:
+
+1. Catalyst ceiling restored from 11.25/15 to 15/15.
+2. Catalyst score-only threshold lowered from 40 to 20.
+3. Investment points now use continuous investment_quality_score instead of pillar_count × 5.
+
+We need to confirm the fixes improved score distributions without creating over-crediting or ranking distortions.
+
+==================================================
+PART 1 — POST-FIX COMPONENT DISTRIBUTIONS
+==================================================
+
+Return updated score distributions for:
+
+- catalyst_alignment_points out of 15
+- investment_alignment_points out of 15
+- entry_exit_points out of 12
+- technical_setup_points out of 8
+- options_alignment_points out of 20
+- theme_alignment_points out of 15
+- stage_quality_points out of 15
+
+For each:
+
+total rows
+unique value count
+top 20 most common values with counts
+min
+max
+mean
+median
+std dev
+percent at 0
+percent at max
+bucketed_or_continuous verdict
+
+Expected:
+
+Investment should now have many decimal values, not just 0/5/10/15.
+Catalyst should have more than 4 values and max should be able to reach 15.
+
+==================================================
+PART 2 — INVESTMENT FIX VALIDATION
+==================================================
+
+Validate at least these symbols:
+
+ACLS
+IONQ
+CAI
+SMCI
+ALAB
+ABCL
+VRT
+ALGM
+TSM
+SOFI
+MARA
+CRDO
+NVDA
+ECHO
+
+For each return:
+
+symbol
+old_investment_points if available
+new_investment_points
+investment_quality_score
+investment_label
+financial_pillar_score
+growth_pillar_score
+future_growth_pillar_score
+fundamental fields used
+plain_english_explanation
+
+Confirm:
+
+- investment points are no longer limited to 0/5/10/15
+- high investment_quality_score maps to high points
+- low/moderate investment_quality_score does not get 15 just because it has 3 coarse pillars
+- labels still make sense
+
+==================================================
+PART 3 — CATALYST FIX VALIDATION
+==================================================
+
+Validate catalyst distribution after the two fixes.
+
+Return examples for:
+
+- 15 / 15 or near max
+- 10–14 / 15
+- 5–10 / 15
+- 1–5 / 15
+- 0 / 15
+
+For each sample:
+
+symbol
+catalyst_points
+raw catalyst score
+direct_score
+intelligence_score if any
+event type
+event source
+rss_event or hard catalyst
+event date/proximity if available
+reason code
+plain_english_explanation
+
+Confirm:
+
+- generic rss_event does not automatically become near-max
+- hard direct catalysts can score high
+- moderate catalyst scores now get some points
+- stale/weak/undated catalysts stay low
+
+==================================================
+PART 4 — TOP RANKING IMPACT
+==================================================
+
+Return top 50 Confluence rows before/after Phase A if prior snapshot available.
+
+If prior snapshot unavailable, return current top 50 with:
+
+symbol
+total score
+catalyst points
+investment points
+entry points
+setup points
+action label
+execution state
+risk flags
+why it ranks high
+
+Identify any suspicious ranking jumps caused by:
+
+- catalyst over-credit
+- investment over-credit
+- missing data treated as zero
+- generic RSS catalyst dominating
+- low-quality investment name over-scored
+
+==================================================
+PART 5 — ACTIONABILITY SAFETY
+==================================================
+
+Confirm Phase A did not change actionability logic unexpectedly.
+
+Return counts:
+
+READY
+NEAR_ACTIONABLE
+WAIT_FOR_RETEST
+WATCH_FOR_RESET
+WATCH
+AVOID
+RISK_CONFLICT
+
+Safety checks:
+
+- 0 READY with CHASE_EXTENSION
+- 0 READY with LOWER_LOW_CONFIRMED
+- 0 READY with RISK_CONFLICT
+- 0 READY missing invalidation_level
+- ABCL remains NEAR_ACTIONABLE, not READY
+- VRT / ALGM / TSM remain READY
+- LITE / LASR / VECO remain not READY
+
+==================================================
+PART 6 — WHAT STILL NEEDS PHASE B / C
+==================================================
+
+Do not implement.
+
+Return:
+
+Catalyst remaining flaws:
+- whether generic RSS still too dominant
+- whether event type/materiality is differentiated
+- whether event proximity is scored
+- whether direct hard catalysts are separated from attention/news
+- whether catalyst confidence exists
+
+Investment remaining flaws:
+- whether continuous IQ score source is good enough
+- whether subcomponent pillar scores are exposed
+- whether forward estimates/analyst target upside are missing
+- whether strategic/future growth score is still too crude
+
+Entry remaining flaws:
+- support status boundary cliff
+- repeated values
+- missing ATR/reward-risk modifiers
+
+==================================================
+PART 7 — FINAL REPORT
+==================================================
+
+Return:
+
+COMPONENT GRANULARITY PHASE A VALIDATION REPORT
+
+POST-FIX DISTRIBUTIONS:
+[table]
+
+INVESTMENT VALIDATION:
+[table]
+
+CATALYST VALIDATION:
+[table]
+
+RANKING IMPACT:
+[summary/table]
+
+ACTIONABILITY SAFETY:
+[summary/table]
+
+REMAINING PHASE B/C WORK:
+[list]
+
+End exactly:
+
+PHASE A COMPONENT GRANULARITY VERDICT
+
+CATALYST_CEILING_RESTORED:
+[YES/NO]
+
+CATALYST_DISTRIBUTION_IMPROVED:
+[YES/NO/PARTIAL]
+
+CATALYST_OVER_CREDITING_FOUND:
+[YES/NO]
+
+INVESTMENT_NOW_CONTINUOUS:
+[YES/NO]
+
+INVESTMENT_BUCKETING_FIXED:
+[YES/NO]
+
+INVESTMENT_RANKING_DISTORTIONS_FOUND:
+[YES/NO]
+
+ENTRY_NEEDS_FUTURE_SMOOTHING:
+[YES/NO/PARTIAL]
+
+ACTIONABILITY_UNCHANGED:
+[YES/NO]
+
+READY_SAFETY_CHECK_PASSED:
+[YES/NO]
+
+READY_FOR_CATALYST_PHASE_B:
+[YES/NO]
+
+READY_FOR_INVESTMENT_TOOLTIP_FRONTEND:
+[YES/NO]
