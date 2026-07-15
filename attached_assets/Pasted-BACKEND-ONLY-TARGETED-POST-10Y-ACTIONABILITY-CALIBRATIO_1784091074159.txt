@@ -1,0 +1,401 @@
+BACKEND ONLY — TARGETED POST-10Y ACTIONABILITY CALIBRATION PATCH
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change provider logic.
+Do not run history backfill.
+Do not run provider calls.
+Do not broaden the universe.
+Use cached canonical history, refreshed entry_state_lkg, Stage2 LKG, and retained Confluence snapshot only.
+
+Goal:
+
+The post-10Y calibration audit found specific actionability consistency issues now that Fib/Wave are live.
+
+Implement only targeted correctness/semantic fixes. Do not broadly recalibrate scoring yet.
+
+Known audit results:
+
+- Fib/Wave live for 344/344 production OK symbols.
+- READY count = 57.
+- NEAR_ACTIONABLE = 9 by action.label, but 24 by boolean.
+- 3 READY rows carry LOWER_LOW_CONFIRMED risk: LITE, LASR, VECO.
+- 3 likely WATCH_FOR_RESET false negatives: CIFR, TAC, AUR.
+- PATH I reads fib_retest_detected but not primary_fib_retest_detected.
+- PATH I lacks an explicit chase_bad guard.
+- 41 READY + 9 NEAR use Fib Retest paths, but why_now never mentions Fib Retest.
+- ABCL is correctly WATCH_FOR_RESET due EXTREME_EXTENSION + CHASE_EXTENSION.
+- VRT, ALGM, TSM are correctly READY.
+- CRDO is a constructive Fib retest but remains WATCH because tech_setup_points = 2.4 sentinel.
+
+==================================================
+PART 1 — P0 FIX: LOWER_LOW_CONFIRMED BLOCKS READY
+==================================================
+
+Implement a hard rule:
+
+If risk_flags contains LOWER_LOW_CONFIRMED:
+- do not allow action.label = READY
+- do not allow bucket = ACTIONABLE
+- do not allow is_actionable_setup = true
+
+Do not automatically classify as AVOID unless MAJOR_LOWER_LOW_CONFIRMED or RISK_CONFLICT is present.
+
+Suggested downgrade logic:
+
+If setup is otherwise strong:
+- action.label = NEAR_ACTIONABLE
+- bucket = NEAR_ACTIONABLE
+- execution_state remains relevant, such as BREAKOUT_TRIGGER_READY or RETEST_IN_PROGRESS
+- why_wait includes "Lower low risk must resolve before Ready"
+
+If setup is weak:
+- action.label = WATCH
+
+Validate:
+
+LITE
+LASR
+VECO
+
+Expected:
+All 3 no longer READY.
+
+==================================================
+PART 2 — P1 FIX: NEAR / WAIT_FOR_RETEST LABEL CONSISTENCY
+==================================================
+
+Fix rows where:
+
+is_near_actionable = true
+bucket = NEAR_ACTIONABLE
+but action.label = WAIT_FOR_RETEST
+
+These should display as:
+
+action.label = NEAR_ACTIONABLE
+action.label_display = "Near Actionable" or existing display equivalent
+execution_state = SET_ALERT_FOR_RETEST
+execution_label = "Set Retest Alert"
+
+why_wait should still explain:
+"Entry trigger not reached — set alert at support/retest."
+
+Do not make them READY.
+
+Validate the known examples:
+
+CRWD
+HIMS
+PANW
+SNOW
+RDDT
+SITM
+NET
+FTNT
+
+Return all affected symbols.
+
+==================================================
+PART 3 — P1 AUDIT/FIX: WATCH_FOR_RESET FALSE NEGATIVES
+==================================================
+
+Investigate why these are WATCH_FOR_RESET:
+
+CIFR
+TAC
+AUR
+
+They reportedly have:
+
+- TRENDLINE_SUPPORT_TEST
+- primary fib proximity < 1%
+- entry score >= 8.65
+- tech score >= 6.64
+- stage score >= 10.5
+- no risk flags
+- no caution flags
+
+Find the exact code path assigning WATCH_FOR_RESET.
+
+Return:
+
+symbol
+current action label
+bucket
+is_watch_for_reset
+entry_state
+extension_state
+extension_quality
+fib_retest_detected
+primary_fib_retest_detected
+nearest_fib_level
+fib_distance_pct
+entry_exit_points
+technical_setup_points
+stage_quality_points
+risk_flags
+caution_flags
+reason_codes
+actionability_blockers
+p6_tier
+p6_path
+exact blocker or override
+
+If they truly meet Ready/near criteria and have no risk/caution blockers, fix the override so they become READY or NEAR_ACTIONABLE according to existing thresholds.
+
+Do not hardcode symbols.
+
+Expected:
+CIFR / TAC / AUR should not remain WATCH_FOR_RESET unless a real blocker is found.
+
+==================================================
+PART 4 — P1 FIX: PATH I USES PRIMARY FIB RETEST
+==================================================
+
+In the Fib Retest path, replace:
+
+_p6_fib_retest = bool(r.get("fib_retest_detected"))
+
+with:
+
+_p6_fib_retest = bool(
+    r.get("primary_fib_retest_detected")
+    or r.get("fib_retest_detected")
+)
+
+Or equivalent.
+
+Also ensure displayed detail uses the primary Fib fields where available.
+
+Validate:
+
+how many symbols now have _p6_fib_retest true
+how many PATH I candidates changed
+how many became READY / NEAR / WATCH
+
+==================================================
+PART 5 — P2 SAFETY: ADD CHASE GUARD TO PATH I
+==================================================
+
+Add explicit chase guard to PATH I:
+
+and not _p6_chase_bad
+
+Do not rely on low technical_setup_points indirectly blocking chase names.
+
+Validate:
+
+ABCL remains WATCH_FOR_RESET.
+ALAB / AMAT / MEI / VICR chase names remain blocked.
+No CHASE_EXTENSION row becomes READY.
+
+==================================================
+PART 6 — P1 EXPLAINABILITY: ADD FIB RETEST TO WHY_NOW / WHY_WAIT
+==================================================
+
+If P6 path is:
+
+fib_retest_entry
+constructive_retest_after_extension
+
+or if Fib Retest materially contributed to READY / NEAR:
+
+Add deterministic why_now text such as:
+
+"Price is retesting [FIB_LEVEL] within [DISTANCE]% with [TIMEFRAME] Fib structure intact."
+
+If Fib Retest is detected but blocked, add why_wait text such as:
+
+"Fib retest detected, but [blocker] prevents Ready."
+
+Examples:
+- CRWD / HIMS: Fib retest detected but entry trigger not reached / set alert.
+- CRDO: Fib retest detected but no recognized technical pattern yet.
+- ABCL: Fib structure intact but extension/chase risk requires reset.
+
+Validate:
+At least the 41 READY + 9 NEAR Fib Retest rows should now include Fib language in why_now or why_wait.
+
+==================================================
+PART 7 — P1.5 AUDIT ONLY: TECH SENTINEL 2.4 BLOCKING CONSTRUCTIVE FIB RETESTS
+==================================================
+
+Do not implement threshold changes yet.
+
+Audit rows like:
+
+CRDO
+OUST
+MRVL
+AEHR if present
+
+Where:
+
+- primary_fib_retest_detected = true
+- extension_quality = CONSTRUCTIVE
+- entry_state in TRENDLINE_SUPPORT_TEST / SUPPORT_TEST / CONSTRUCTIVE_DIP
+- stage_quality_points >= 9
+- entry_exit_points >= 4.5
+- technical_setup_points = 2.4 sentinel
+- action is WATCH
+
+Return:
+
+count
+symbols
+what pattern labels are missing
+whether extension_reset_state is set correctly
+whether a future PATH H2 should exist
+
+Recommended future rule to evaluate, but do not implement yet:
+
+CONSTRUCTIVE_FIB_RETEST_PATH:
+- primary_fib_retest_detected = true
+- extension_quality = CONSTRUCTIVE
+- entry_state in support/retest states
+- entry_exit_points >= 4.5
+- stage_quality_points >= 9
+- no chase
+- no lower low
+- tech_setup_points >= 2.4 allowed only if entry + fib + wave are strong
+
+==================================================
+PART 8 — VALIDATION AFTER PATCH
+==================================================
+
+Rebuild retained Confluence snapshot from cache only.
+
+Return before/after:
+
+READY count
+NEAR_ACTIONABLE action.label count
+is_near_actionable true count
+WATCH_FOR_RESET count
+WAIT_FOR_RETEST count
+RISK_CONFLICT count
+
+Validate specific symbols:
+
+LITE
+LASR
+VECO
+CIFR
+TAC
+AUR
+ABCL
+CRDO
+VRT
+ALGM
+TSM
+NVDA
+CRWD
+HIMS
+PANW
+FTNT
+NET
+SOFI
+ECHO
+
+For each return:
+
+symbol
+action.label
+bucket
+execution_state
+is_actionable_setup
+is_near_actionable
+is_watch_for_reset
+entry_state
+extension_state
+extension_quality
+primary_fib_retest_detected
+fib_distance_pct
+wave_structure_label
+risk_flags
+caution_flags
+why_now
+why_wait
+plain_english_result
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+TARGETED POST-10Y CALIBRATION PATCH REPORT
+
+LOWER_LOW READY BLOCK:
+[summary/table]
+
+NEAR / WAIT_FOR_RETEST LABEL CONSISTENCY:
+[summary/table]
+
+WATCH_FOR_RESET FALSE NEGATIVES:
+[summary/table]
+
+PATH I PRIMARY FIB RETEST:
+[summary/table]
+
+PATH I CHASE GUARD:
+[summary/table]
+
+FIB RETEST EXPLAINABILITY:
+[summary/table]
+
+TECH SENTINEL CONSTRUCTIVE FIB RETEST AUDIT:
+[summary/table]
+
+DISTRIBUTION BEFORE / AFTER:
+[table]
+
+SPECIFIC SYMBOL VALIDATION:
+[table]
+
+End exactly:
+
+TARGETED POST-10Y PATCH VERDICT
+
+SCORING_MATH_CHANGED:
+[YES/NO]
+
+PROVIDER_CALLS_USED:
+[YES/NO]
+
+LOWER_LOW_READY_BLOCK_FIXED:
+[YES/NO]
+
+LITE_LASR_VECO_NOT_READY:
+[YES/NO]
+
+NEAR_WAIT_LABEL_CONSISTENCY_FIXED:
+[YES/NO]
+
+CIFR_TAC_AUR_WFR_FALSE_NEGATIVES_RESOLVED:
+[YES/NO/PARTIAL]
+
+PATH_I_USES_PRIMARY_FIB_RETEST:
+[YES/NO]
+
+PATH_I_CHASE_GUARD_ADDED:
+[YES/NO]
+
+FIB_RETEST_EXPLAINABILITY_ADDED:
+[YES/NO]
+
+ABCL_REMAINS_WATCH_FOR_RESET:
+[YES/NO]
+
+VRT_ALGM_TSM_REMAIN_READY:
+[YES/NO]
+
+CRDO_CONSTRUCTIVE_FIB_RETEST_REVIEWED_NOT_PATCHED:
+[YES/NO]
+
+READY_ROWS_PASS_SAFETY_CHECK:
+[YES/NO]
+
+READY_FOR_FRONTEND_FINAL_VALIDATION:
+[YES/NO]

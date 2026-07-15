@@ -2108,7 +2108,7 @@ def build_confluence_snapshot(
         # V4.2.4: chase_bad only when extension_quality is CHASE or no constructive signal
         # V4.2.5: also not chase_bad when extension_reset_state=CONSTRUCTIVE_RETEST_AFTER_EXTENSION
         _p6_ext_reset        = str(r.get("extension_reset_state") or "").upper()
-        _p6_fib_retest       = bool(r.get("fib_retest_detected"))
+        _p6_fib_retest       = bool(r.get("primary_fib_retest_detected") or r.get("fib_retest_detected"))
         _p6_is_constr_retest = (_p6_ext_reset == "CONSTRUCTIVE_RETEST_AFTER_EXTENSION")
         _p6_chase_bad        = (
             _p6_chase
@@ -2292,6 +2292,7 @@ def build_confluence_snapshot(
                 and _p6_stage >= 9.0
                 and not _p6_support_lost
                 and not _p6_major_llc
+                and not _p6_chase_bad
             ):
                 _p6_is_act  = True
                 _p6_tier    = "ACTIONABLE_NOW"
@@ -2474,6 +2475,37 @@ def build_confluence_snapshot(
                 r["is_actionable_setup"]                 = True
                 r["is_near_actionable"]                  = False
                 r["is_watch_for_reset"]                  = False
+
+        # ── P0: LLC gate — lower_low_confirmed blocks READY promotion ─────────
+        # A non-major lower low means the stock has broken a prior swing low.
+        # Structure must repair before a READY label is warranted.  Downgrade
+        # to NEAR_ACTIONABLE so the setup remains visible but not executable.
+        if (
+            not _p6_major_llc
+            and bool(r.get("lower_low_confirmed"))
+            and r.get("caelyn_confluence_v42_actionability") == "READY"
+        ):
+            r["caelyn_confluence_v42_actionability"] = "NEAR_ACTIONABLE"
+            r["caelyn_confluence_bucket"]            = "NEAR_ACTIONABLE"
+            r["is_actionable_setup"]                 = False
+            r["is_near_actionable"]                  = True
+            r["is_watch_for_reset"]                  = False
+
+        # ── P6 gap: AGGRESSIVE_ACTIONABLE bucket upgrade ──────────────────────
+        # PATH C / PATH E can set _p6_tier=AGGRESSIVE_ACTIONABLE but V4.2's
+        # pre-P6 bucket (e.g. WATCH_FOR_RESET) is never updated for this tier.
+        # Upgrade to NEAR_ACTIONABLE so these rows surface correctly.
+        if (
+            _p6_tier == "AGGRESSIVE_ACTIONABLE"
+            and str(r.get("caelyn_confluence_bucket") or "") in {
+                "WATCH_FOR_RESET", "NO_CLEAR_CONFLUENCE", "WATCH",
+            }
+        ):
+            r["caelyn_confluence_bucket"]            = "NEAR_ACTIONABLE"
+            r["caelyn_confluence_v42_actionability"] = "NEAR_ACTIONABLE"
+            r["is_actionable_setup"]                 = False
+            r["is_near_actionable"]                  = True
+            r["is_watch_for_reset"]                  = False
 
         # AGGRESSIVE_ACTIONABLE: good setup, not yet at clean entry — keep NEAR_ACTIONABLE.
         # NEAR_ACTIONABLE / WATCH_FOR_RESET / RISK_CONFLICT: leave canonical fields as-is.

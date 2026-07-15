@@ -299,6 +299,8 @@ def build_why_now(row: dict) -> list[str]:
     v42_bb       = row.get("caelyn_confluence_v42_bonus_breakdown") or {}
     social_bb    = v42_bb.get("social") or {}
     social_sects = social_bb.get("sections_hit", social_hit) or 0
+    fib_retest   = _fvb(row, "primary_fib_retest_detected") or _fvb(row, "fib_retest_detected")
+    p6_path      = str(row.get("actionable_path") or "")
 
     if bucket in {"ACTIONABLE", "NEAR_ACTIONABLE"} or act in {"READY", "NEAR_ACTIONABLE"}:
         if theme_score >= 55.0 and theme_pts >= 7.0:
@@ -317,6 +319,13 @@ def build_why_now(row: dict) -> list[str]:
             reasons.append("Social momentum is active")
         if bottle_pts > 0:
             reasons.append("Bottleneck exposure adds bonus support")
+        if fib_retest and ("fib_retest" in p6_path or "constructive_retest" in p6_path):
+            nearest_fib = (
+                row.get("primary_nearest_fib_label")
+                or row.get("nearest_fib_label")
+                or "Fib level"
+            )
+            reasons.append(f"Fibonacci retest zone active ({nearest_fib})")
     elif bucket == "INVESTMENT_QUALITY":
         if inv_score >= 68.0:
             reasons.append("Investment quality is strong")
@@ -336,6 +345,7 @@ def build_why_wait(row: dict) -> list[str]:
     entry_pts   = _fvf(row, "entry_exit_points")
     is_risk     = _fvb(row, "is_risk_conflict") or bucket == "RISK_CONFLICT"
     major_llc   = _fvb(row, "major_lower_low_confirmed")
+    llc         = _fvb(row, "lower_low_confirmed")
     conf_score  = _fvf(row, "caelyn_confluence_score")
     dist        = row.get("distance_to_active_support_pct")
 
@@ -343,6 +353,8 @@ def build_why_wait(row: dict) -> list[str]:
         reasons.append("Risk conflict detected")
     if major_llc:
         reasons.append("Major lower low risk present")
+    if llc and not major_llc:
+        reasons.append("Lower low confirmed — wait for structure to repair")
     if act in {"WATCH_FOR_RESET"} or bucket == "WATCH_FOR_RESET":
         if ext_state == "EXTREME_EXTENSION" or _fvb(row, "chase_extension"):
             reasons.append("Extension risk is elevated")
@@ -445,6 +457,11 @@ def build_confluence_v42_object(row: dict) -> dict:
 
     act_raw     = str(row.get("caelyn_confluence_v42_actionability") or "WATCH")
     bucket_raw  = str(row.get("caelyn_confluence_bucket") or "NO_CLEAR_CONFLUENCE")
+    # P2: is_near_actionable rows should show NEAR_ACTIONABLE label, not WAIT_FOR_RETEST.
+    # The execution_state field already provides the granular WAIT_FOR_RETEST / SET_ALERT
+    # timing; the top-level label should reflect the broader bucket state.
+    if row.get("is_near_actionable") and act_raw == "WAIT_FOR_RETEST":
+        act_raw = "NEAR_ACTIONABLE"
     label_disp  = _LABEL_DISPLAY_MAP.get(act_raw, act_raw.replace("_", " ").title())
 
     inv_level         = build_invalidation_level(row)
