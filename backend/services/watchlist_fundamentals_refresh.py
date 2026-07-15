@@ -361,17 +361,37 @@ class FmpFundamentalsRefresher:
         # ── Forward P/E derivation ────────────────────────────────────────────
         # Source: current price (from profile) / next-quarter EPS estimate × 4
         # (annualise one forward quarter as NTM proxy).
-        # Labelled approximate; stored only when both inputs are positive.
+        # Labelled approximate; stored only when both inputs are positive and
+        # the derived P/E passes sanity bounds [1, 500].
+        # Metadata fields (price_used, raw_eps, period, warning_codes) are
+        # always stored so callers can audit data quality without re-fetching.
         _fpe_stored = False
         if future_earn and _current_price is not None and _current_price > 0:
-            _nxt_eps_est = future_earn[0].get("epsEstimated")
+            _nxt_earn_row = future_earn[0]
+            _nxt_eps_est  = _nxt_earn_row.get("epsEstimated")
             try:
                 _nxt_eps_f = float(_nxt_eps_est) if _nxt_eps_est is not None else None
             except (ValueError, TypeError):
                 _nxt_eps_f = None
             if _nxt_eps_f is not None and _nxt_eps_f > 0:
-                _fwd_eps_ann = round(_nxt_eps_f * 4, 4)
-                _fwd_pe_val  = round(_current_price / _fwd_eps_ann, 2)
+                _fwd_eps_ann   = round(_nxt_eps_f * 4, 4)
+                _fwd_pe_val    = round(_current_price / _fwd_eps_ann, 2)
+                _implied_price = round(_fwd_pe_val * _fwd_eps_ann, 2)  # = _current_price
+                _fpe_warn: list[str] = []
+                # Warning: quarterly EPS estimate unusually large (possible
+                # cents-scale data, ADR currency mismatch, or wrong fiscal period).
+                if _nxt_eps_f > 20.0:
+                    _fpe_warn.append("HIGH_EPS_ESTIMATE")
+                # Warning: FMP-reported price itself is implausibly high
+                # (e.g. FMP returning local-currency price for an ADR).
+                if _current_price > 700.0:
+                    _fpe_warn.append("HIGH_PRICE_USED")
+                # Metadata — stored regardless of P/E validity so UI can audit
+                fields["forward_pe_price_used"]      = _current_price
+                fields["forward_pe_raw_eps_estimate"] = round(_nxt_eps_f, 4)
+                fields["forward_pe_raw_period"]      = _nxt_earn_row.get("date") or ""
+                if _fpe_warn:
+                    fields["forward_pe_warning_codes"] = _fpe_warn
                 if 1.0 <= _fwd_pe_val <= 500.0:   # sanity bounds
                     fields["Forward P/E"]               = _fwd_pe_val
                     fields["forward_eps_estimate"]      = _fwd_eps_ann

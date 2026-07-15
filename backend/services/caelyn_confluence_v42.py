@@ -2589,12 +2589,25 @@ def compute_confluence_v42(
     # ── Bucket + Actionability ────────────────────────────────────────────────
     # Both use actionability_gate_score (7-component) so valuation dilution
     # cannot collapse READY symbols that remain technically actionable.
+    #
+    # V4.2.6 — CONSTRUCTIVE_RETEST_AFTER_EXTENSION gate override:
+    # The entry_exit scorer (line ~677) and Phase 6 multi-path (line ~2112) both
+    # recognise extension_reset_state="CONSTRUCTIVE_RETEST_AFTER_EXTENSION" as a
+    # constructive signal even when constructive_extension=False in the snapshot.
+    # The bucket / actionability hard-gate must apply the same override so a
+    # valid breakout-floor retest is NOT misclassified as WATCH_FOR_RESET simply
+    # because the raw snapshot field hasn't been promoted.
+    _gate_ext_reset      = str(snapshot_row.get("extension_reset_state") or "").upper()
+    _gate_is_constr_retest = (_gate_ext_reset == "CONSTRUCTIVE_RETEST_AFTER_EXTENSION")
+    _gate_chase          = bool(snapshot_row.get("chase_extension"))
+    _gate_constructive   = bool(snapshot_row.get("constructive_extension")) or _gate_is_constr_retest
+
     v42_bucket = _assign_v42_bucket(
         normalized_total = actionability_gate_score,
         core_score       = core_score,
         major_llc    = bool(snapshot_row.get("major_lower_low_confirmed")),
-        chase        = bool(snapshot_row.get("chase_extension")),
-        constructive = bool(snapshot_row.get("constructive_extension")),
+        chase        = _gate_chase,
+        constructive = _gate_constructive,
         asst_status  = str(snapshot_row.get("active_support_status") or ""),
         entry_exit_pts = entry_comp["points"],
         invest_pts     = invest_comp["points"],
@@ -2605,8 +2618,8 @@ def compute_confluence_v42(
         normalized_total = actionability_gate_score,
         bucket       = v42_bucket,
         major_llc    = bool(snapshot_row.get("major_lower_low_confirmed")),
-        chase        = bool(snapshot_row.get("chase_extension")),
-        constructive = bool(snapshot_row.get("constructive_extension")),
+        chase        = _gate_chase,
+        constructive = _gate_constructive,
         pattern      = str(snapshot_row.get("pattern_type") or "NO_PATTERN"),
         asst_status  = str(snapshot_row.get("active_support_status") or ""),
         entry_exit_pts  = entry_comp["points"],
@@ -2622,6 +2635,8 @@ def compute_confluence_v42(
     all_reason_codes.extend(wi_bonus.get("reason_codes") or [])
     all_reason_codes.extend(bn_bonus.get("reason_codes") or [])
     all_reason_codes.append("PREDICTION_MARKETS_DISABLED_FROM_SCORE")
+    if _gate_is_constr_retest:
+        all_reason_codes.append("CONSTR_RETEST_GATE_OVERRIDE")
     all_reason_codes.append(f"V42_BUCKET_{v42_bucket}")
     all_reason_codes.append(f"V42_ACT_{v42_actionability}")
 

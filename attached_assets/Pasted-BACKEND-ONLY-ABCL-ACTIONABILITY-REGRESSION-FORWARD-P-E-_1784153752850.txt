@@ -1,0 +1,300 @@
+BACKEND ONLY — ABCL ACTIONABILITY REGRESSION + FORWARD P/E SANITY CHECK
+
+Backend repo only.
+
+Do not touch frontend.
+Do not remove Valuation.
+Do not remove Forward P/E.
+Do not change scoring broadly.
+Do not run a full backfill.
+Do not add request-time provider calls.
+Use existing cached data and the existing scheduled fundamentals refresher path only.
+
+Goal:
+
+The Forward P/E smoke test proved the refresh path works, but two issues remain:
+
+1. ABCL has regressed back to WATCH_FOR_RESET, even though the prior ABCL breakout-floor retest work correctly classified it as NEAR_ACTIONABLE.
+2. Some derived Forward P/E inputs look potentially suspicious, especially MU showing Q EPS estimate 31.29 and annualized EPS 125.16.
+
+We need one targeted cleanup audit before frontend consumes this as final.
+
+==================================================
+PART 1 — ABCL BREAKOUT-FLOOR REGRESSION TRACE
+==================================================
+
+Trace ABCL through the current full Confluence path.
+
+Return current ABCL fields:
+
+symbol
+core_score
+total_score
+action.label
+execution_state
+bucket
+is_near_actionable
+is_watch_for_reset
+entry_state
+entry_state_display
+extension_state
+extension_quality
+extension_reset_state
+active_support_status
+active_support_type
+active_support_level
+nearest_fib_level
+nearest_fib_price
+fib_distance_pct
+primary_fib_context
+primary_fib_retest_detected
+wave_structure_label
+risk_flags
+caution_flags
+why_now
+why_wait
+actionability_gate_score
+normalized_core
+component scores
+
+Question:
+
+Why is ABCL now WATCH_FOR_RESET instead of NEAR_ACTIONABLE?
+
+Specifically check whether the prior breakout-floor retest logic still fires:
+
+- extension_reset_state == CONSTRUCTIVE_RETEST_AFTER_EXTENSION
+- nearest_fib_level == FIB_1.000
+- price near prior resistance / support shelf
+- active_support_status in bounced_from_support / above_support
+- no lower_low_confirmed
+- no major lower low
+- valid invalidation exists
+- CHASE_EXTENSION red flag should be suppressed into caution if breakout-floor retest criteria pass
+
+Compare ABCL against MEI too, since MEI previously shared the same fix class.
+
+Return:
+
+ABCL_should_be_NEAR_ACTIONABLE:
+YES/NO
+
+If NO:
+Show exact market/state field that broke the setup.
+
+If YES:
+Fix the regression with the smallest targeted change.
+
+Do not make ABCL READY.
+Do not weaken chase logic broadly.
+Do not hardcode ABCL.
+
+==================================================
+PART 2 — BREAKOUT-FLOOR RETEST SAFETY CHECK
+==================================================
+
+Validate these symbols after any fix:
+
+ABCL
+MEI
+ALAB
+AMAT
+VICR
+SHLS
+INTC
+SMTC
+CIFR
+TAC
+AUR
+CRDO
+OUST
+WYFI
+
+Return:
+
+symbol
+action.label
+bucket
+execution_state
+extension_state
+extension_quality
+extension_reset_state
+nearest_fib_level
+fib_distance_pct
+active_support_status
+risk_flags
+caution_flags
+why_now
+why_wait
+classification:
+- BREAKOUT_FLOOR_RETEST
+- TRUE_CHASE
+- BROKEN_RETEST
+- CONSTRUCTIVE_RESET
+- NO_MATCH
+
+Confirm:
+
+- ABCL/MEI are NEAR_ACTIONABLE only if breakout-floor retest still passes.
+- TRUE_CHASE names remain WATCH_FOR_RESET.
+- Broken support names remain WATCH/AVOID.
+- No new READY promotions.
+
+==================================================
+PART 3 — FORWARD P/E RAW PAYLOAD SANITY AUDIT
+==================================================
+
+The smoke test derived Forward P/E for 8/10 symbols, but some raw estimates look suspicious.
+
+Audit raw FMP estimate payloads used by the scheduled refresher for:
+
+TSM
+NVDA
+CRWD
+VRT
+ALGM
+PANW
+ENTG
+MU
+ABCL
+HIMS
+
+For each return:
+
+symbol
+price_used
+price_source
+raw_eps_estimate_payload
+selected_eps_estimate_field
+selected_eps_estimate_value
+selected_period
+currency_if_available
+fiscal_date_if_available
+annualized_forward_eps
+derived_forward_pe
+forward_pe_source
+forward_pe_is_approximate
+forward_pe_missing_reason
+
+Specifically validate:
+
+- Are EPS estimates in dollars or cents?
+- Are ADR/local-share symbols mixing local currency EPS with USD ADR price?
+- Is MU's epsEstimated=31.29 real, cents-scaled, or the wrong field?
+- Are TSM estimates using local Taiwan EPS or ADR-compatible EPS?
+- Are any estimates stale or for the wrong fiscal period?
+- Are negative/zero estimates correctly excluded?
+
+Do not use internet/web.
+Use raw cached/FMP response data from the refresher path and stored cache.
+
+==================================================
+PART 4 — FORWARD P/E SANITY GUARDS
+==================================================
+
+If raw estimate units/currency are uncertain, add guards before storing forward_pe.
+
+Recommended guards:
+
+- If selected_eps_estimate_value is absurdly high for a US/ADR EPS quarter, flag as suspicious.
+- If annualized_forward_eps <= 0, do not compute.
+- If derived_forward_pe < 1 or > 500, do not store.
+- If EPS estimate appears cents-scaled, either correct it with explicit reason code or skip with missing_reason.
+- If symbol is ADR/foreign and currency mismatch is possible, set forward_pe_confidence lower or skip unless source confirms compatible units.
+- Store forward_pe_missing_reason or forward_pe_warning_codes.
+
+Do not fake precision.
+
+Add fields if needed:
+
+forward_pe_warning_codes
+forward_pe_raw_eps_estimate
+forward_pe_raw_period
+forward_pe_price_used
+forward_pe_price_source
+
+==================================================
+PART 5 — VALIDATION AFTER FIX
+==================================================
+
+Validate:
+
+A. ABCL / MEI actionability:
+- ABCL expected NEAR_ACTIONABLE if breakout-floor retest criteria still pass.
+- MEI expected NEAR_ACTIONABLE if same class still passes.
+- Neither should become READY.
+
+B. Forward P/E:
+- forward_pe only stored where raw estimate is sane.
+- MU either passes with explanation or is skipped/corrected with warning.
+- TSM either passes with explanation or is skipped/corrected with warning.
+- ABCL/HIMS remain missing if no positive estimate exists.
+
+C. Actionability safety:
+- 0 READY with LOWER_LOW_CONFIRMED
+- 0 READY with CHASE_EXTENSION
+- 0 READY missing invalidation
+- LITE/LASR/VECO remain not READY
+
+==================================================
+PART 6 — FINAL REPORT
+==================================================
+
+Return:
+
+ABCL REGRESSION + FORWARD P/E SANITY REPORT
+
+ABCL REGRESSION TRACE:
+[summary/table]
+
+BREAKOUT-FLOOR SAFETY CHECK:
+[table]
+
+FORWARD P/E RAW PAYLOAD AUDIT:
+[table]
+
+FORWARD P/E SANITY GUARDS:
+[summary]
+
+VALIDATION:
+[summary/table]
+
+FILES CHANGED:
+[list]
+
+End exactly:
+
+ABCL + FORWARD PE CLEANUP VERDICT
+
+ABCL_REGRESSION_CONFIRMED:
+[YES/NO]
+
+ABCL_FIXED_TO_NEAR_ACTIONABLE:
+[YES/NO/NOT_NEEDED]
+
+MEI_STILL_CORRECT:
+[YES/NO]
+
+TRUE_CHASE_NAMES_UNCHANGED:
+[YES/NO]
+
+FORWARD_PE_RAW_INPUTS_VERIFIED:
+[YES/NO/PARTIAL]
+
+MU_FORWARD_PE_VALID:
+[YES/NO/SKIPPED]
+
+TSM_FORWARD_PE_VALID:
+[YES/NO/SKIPPED]
+
+FORWARD_PE_SANITY_GUARDS_ADDED:
+[YES/NO]
+
+REQUEST_TIME_PROVIDER_CALLS_ADDED:
+NO
+
+READY_SAFETY_CHECK_PASSED:
+[YES/NO]
+
+FRONTEND_READY:
+[YES/NO]
