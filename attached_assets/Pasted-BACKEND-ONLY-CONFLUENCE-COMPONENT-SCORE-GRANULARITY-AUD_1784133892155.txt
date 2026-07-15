@@ -1,0 +1,489 @@
+BACKEND ONLY — CONFLUENCE COMPONENT SCORE GRANULARITY AUDIT
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change provider logic.
+Do not run new provider calls.
+Do not run history backfill.
+Do not change actionability labels yet.
+Use cached Neon/FMP fundamentals, cached catalyst/news/RSS/event data, refreshed entry_state_lkg, Stage2 LKG, and retained Confluence snapshot only.
+
+Goal:
+
+The frontend now exposes the component scores clearly. We can see that Catalyst and Investment Quality are overly bucketed/discrete, and Entry may also be too template-driven.
+
+This is not acceptable for a serious confluence engine.
+
+Observed from UI:
+
+Catalyst scores mostly appear as:
+- 11.3 / 15
+- 1.5 / 15
+- 0 / 15
+
+Investment scores mostly appear as:
+- 15 / 15
+- 10 / 15
+- 5 / 15
+- 0 / 15
+
+Entry scores repeat heavily:
+- 10.7 / 12
+- 8.8 / 12
+- 8.7 / 12
+- 5.2 / 12
+- 2.8 / 12
+- 0.0 / 12
+
+We need to audit whether these are real continuous models or crude bucket systems.
+
+Do not implement major changes until after reporting. If there is an obvious one-line display bug, report it first.
+
+==================================================
+PART 1 — COMPONENT SCORE DISTRIBUTION AUDIT
+==================================================
+
+Using the latest retained Confluence snapshot, return score distributions for:
+
+- catalyst_alignment_points / catalyst score out of 15
+- investment_alignment_points / investment score out of 15
+- entry_exit_points / entry score out of 12
+- technical_setup_points / setup score out of 8
+- options_alignment_points / options score out of 20
+- theme_alignment_points / theme score out of 15
+- stage_quality_points / stage score out of 15
+
+For each component return:
+
+- total rows
+- unique score values count
+- top 20 most common score values with counts
+- min
+- max
+- mean
+- median
+- standard deviation
+- percent of rows at 0
+- percent of rows at max
+- whether scoring appears continuous or bucketed
+
+Expected concern:
+
+Catalyst and Investment Quality likely have very few unique values and are too bucketed.
+
+==================================================
+PART 2 — CATALYST SCORING AUDIT
+==================================================
+
+Find the exact catalyst scoring code path used by Confluence V4.2.
+
+Return:
+
+file/function
+input fields used
+data sources used
+whether it uses:
+- scheduled events
+- earnings
+- FDA/regulatory
+- contracts/customer wins
+- product launches
+- guidance changes
+- analyst upgrades/price target changes
+- partnership/M&A
+- IPO/spinoff/splits
+- macro/sector events
+- RSS/news event presence
+- news recency
+- news volume
+- source credibility
+- ticker-specific relevance
+- direct catalyst confidence
+- event proximity in days
+- social/news acceleration
+
+Return the scoring formula and thresholds.
+
+Then sample rows for each catalyst score bucket:
+
+- 11.3 / 15
+- 1.5 / 15
+- 0 / 15
+- any other values
+
+For each sample return:
+
+symbol
+catalyst_score
+catalyst_points
+raw catalyst fields
+news/catalyst source
+event type
+event date
+event proximity
+reason codes
+why it received that exact score
+
+Question to answer:
+
+Is the catalyst score currently a crude yes/no/event-present score?
+Is 11.3 / 15 being assigned too broadly to generic rss_event rows?
+Should catalyst scoring be split into:
+- direct hard catalyst score
+- news attention / acceleration score
+- event proximity score
+- quality/confidence score?
+
+==================================================
+PART 3 — INVESTMENT QUALITY SCORING AUDIT
+==================================================
+
+Find the exact investment scoring code path used by Confluence V4.2.
+
+Return:
+
+file/function
+input fields used
+data sources used
+pillar definitions
+
+Specifically audit whether it currently scores as:
+
+- financial quality 0 or 5
+- growth quality 0 or 5
+- future growth / strategic quality 0 or 5
+
+If yes, confirm that the total can only be:
+0, 5, 10, 15
+
+Return distribution of investment scores.
+
+Then sample rows from each bucket:
+
+15 / 15
+10 / 15
+5 / 15
+0 / 15
+
+For each sample return:
+
+symbol
+investment_score
+investment_label
+financial_pillar_score
+growth_pillar_score
+future_growth_pillar_score
+fundamental fields used:
+- revenue growth quarterly
+- revenue growth annual
+- gross margin
+- free cash flow margin
+- operating income
+- EBIT
+- free cash flow
+- cash/debt if available
+- market cap
+- valuation multiples if used
+- analyst sentiment if used
+- analyst target upside if used
+- earnings/revision data if used
+- theme/strategic relevance if used
+
+Question to answer:
+
+Is investment score currently bucketed instead of continuous?
+Are labels like "Quality Compounder", "High Growth Compounder", "Speculative Growth", "No Clear Investment Case" driven by coarse thresholds?
+Do we have enough cached fundamentals to make each pillar continuous?
+
+==================================================
+PART 4 — ENTRY SCORE GRANULARITY AUDIT
+==================================================
+
+Audit entry_exit_points.
+
+Return:
+
+file/function
+input fields used
+unique entry score values
+top 30 repeated entry scores with counts
+mapping from entry_state to typical entry_exit_points
+whether entry score is mostly archetype/template based
+
+For common repeated scores like:
+
+10.7
+10.54
+8.81
+8.73
+8.65
+5.2
+2.8
+0.0
+
+Return:
+
+what rule produces that value
+which symbols get it
+whether it includes continuous modifiers such as:
+- distance_to_support_pct
+- distance_to_fib_pct
+- distance_to_active_support_pct
+- invalidation distance
+- reward/risk
+- ATR distance
+- volume confirmation
+- support quality
+- trigger proximity
+- execution_state
+
+Question:
+
+Is Entry score sufficiently continuous, or is it mostly a lookup table based on entry_state?
+
+==================================================
+PART 5 — PROPOSE CONTINUOUS CATALYST SCORING MODEL
+==================================================
+
+Do not implement yet.
+
+Propose Catalyst score out of 15 as continuous:
+
+Suggested structure:
+
+A. Direct hard catalyst quality: 0–6
+Examples:
+- FDA/data readout/regulatory decision
+- major contract/customer win
+- hyperscaler/strategic customer deal
+- earnings/guidance/revision
+- product launch
+- M&A/partnership
+- government award
+- analyst day / investor day
+- index inclusion / spinoff / split
+
+B. Event proximity / freshness: 0–3
+Examples:
+- confirmed event within 0–7 days
+- 8–30 days
+- 31–90 days
+- stale/undated
+
+C. News attention / acceleration: 0–3
+Examples:
+- volume of recent relevant articles
+- acceleration vs baseline
+- source quality
+- repeated coverage
+
+D. Ticker-specific relevance/confidence: 0–3
+Examples:
+- direct ticker mention
+- company-specific vs sector-wide
+- high-confidence classifier
+- weak generic RSS item
+
+Return formula, reason codes, and examples.
+
+Important:
+
+Do not let generic rss_event automatically become 11.3 / 15.
+Generic RSS should likely be 1–4 unless it is direct, fresh, and material.
+
+==================================================
+PART 6 — PROPOSE CONTINUOUS INVESTMENT QUALITY MODEL
+==================================================
+
+Do not implement yet.
+
+Propose Investment Quality out of 15 as continuous:
+
+A. Financial quality: 0–5
+Potential inputs:
+- gross margin
+- free cash flow margin
+- operating margin / EBIT
+- balance sheet / cash-debt if available
+- revenue quality / recurring if available
+- profitability trend
+
+B. Growth quality: 0–5
+Potential inputs:
+- quarterly revenue growth
+- annual revenue growth
+- EPS growth
+- FCF growth
+- analyst forward revenue/EPS growth if cached
+- consistency of growth
+
+C. Strategic/future upside quality: 0–5
+Potential inputs:
+- theme alignment
+- moat/platform relevance
+- TAM/market expansion label if available
+- analyst sentiment / target upside
+- estimate revisions
+- options/social/catalyst support as secondary confirmation, not double counted
+- early-stage speculative asymmetry
+
+Return a formula that can produce decimals like:
+
+11.3 / 15
+8.7 / 15
+12.6 / 15
+4.2 / 15
+
+Do not just assign full 5-point buckets.
+
+Also propose labels from continuous bands:
+
+13–15: A+ Investment
+10–13: Quality Compounder
+7–10: Emerging Investment Case
+4–7: Speculative / Developing
+0–4: No Clear Investment Case
+
+==================================================
+PART 7 — PROPOSE ENTRY SCORE GRANULARITY IMPROVEMENTS
+==================================================
+
+Do not implement yet.
+
+Propose how to make Entry score more continuous without destroying the current setup logic.
+
+Suggested model:
+
+Base entry state score:
+- breakout pullback
+- retest in progress
+- trendline support
+- high-base ready
+- set alert for retest
+- no clear entry
+- support lost
+
+Continuous modifiers:
+- distance to active support
+- distance to Fib level
+- invalidation tightness
+- reward/risk to target
+- ATR-adjusted risk
+- MA/support confluence
+- volume confirmation
+- pullback quality
+- execution_state
+- lower-low/risk penalties
+
+Return formula and examples.
+
+==================================================
+PART 8 — CALIBRATION SAFETY / NON-GOALS
+==================================================
+
+Explicitly state what should NOT change yet:
+
+- Do not touch Ready/Near/Watch labels until component scoring is recalibrated and tested.
+- Do not make generic catalysts dominate the score.
+- Do not double-count theme/catalyst/social/options.
+- Do not punish missing data as zero unless coverage is confirmed.
+- Do not fetch new provider data at request time.
+- Do not replace existing entry_state_service; improve scoring layer around it.
+
+==================================================
+PART 9 — IMPLEMENTATION PLAN
+==================================================
+
+Return a staged implementation plan:
+
+Phase 1:
+- Audit only / confirm formulas
+- expose raw subcomponent scores in confluence_v42.components
+
+Phase 2:
+- implement continuous Investment Quality first
+- validate distribution
+
+Phase 3:
+- implement Catalyst V2 continuous scoring
+- validate rss_event no longer dominates
+
+Phase 4:
+- refine Entry score modifiers
+- validate Ready/Near distribution
+
+Phase 5:
+- frontend display of subcomponent tooltips
+
+For each phase return:
+files likely touched
+risk level
+test plan
+expected distribution change
+
+==================================================
+PART 10 — FINAL REPORT
+==================================================
+
+Return:
+
+CONFLUENCE COMPONENT GRANULARITY AUDIT REPORT
+
+COMPONENT SCORE DISTRIBUTIONS:
+[summary/table]
+
+CATALYST SCORING AUDIT:
+[summary/table]
+
+INVESTMENT QUALITY AUDIT:
+[summary/table]
+
+ENTRY SCORE GRANULARITY AUDIT:
+[summary/table]
+
+CONTINUOUS CATALYST MODEL PROPOSAL:
+[formula]
+
+CONTINUOUS INVESTMENT QUALITY MODEL PROPOSAL:
+[formula]
+
+ENTRY SCORE IMPROVEMENT PROPOSAL:
+[formula]
+
+IMPLEMENTATION PLAN:
+[phases]
+
+End exactly:
+
+COMPONENT GRANULARITY VERDICT
+
+CATALYST_SCORE_BUCKETED:
+[YES/NO]
+
+CATALYST_ENGINE_TOO_CRUDE:
+[YES/NO]
+
+INVESTMENT_SCORE_BUCKETED:
+[YES/NO]
+
+INVESTMENT_ENGINE_TOO_CRUDE:
+[YES/NO]
+
+ENTRY_SCORE_OVERLY_DISCRETE:
+[YES/NO/PARTIAL]
+
+CONTINUOUS_INVESTMENT_MODEL_NEEDED:
+[YES/NO]
+
+CONTINUOUS_CATALYST_MODEL_NEEDED:
+[YES/NO]
+
+ENTRY_MODIFIER_REFINEMENT_NEEDED:
+[YES/NO/PARTIAL]
+
+PROVIDER_CALLS_NEEDED_FOR_AUDIT:
+NO
+
+READY_FOR_COMPONENT_SCORING_PATCH:
+[YES/NO]

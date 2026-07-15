@@ -1011,10 +1011,13 @@ def _score_catalyst_alignment_v42(row: dict) -> dict:
 
         if not direct_present:
             if cat_available and cat_score is not None:
-                # V4.2.1: use score directly (no -25 deduction); threshold ≥ 40
+                # V4.2.6: use score directly across full range.  Threshold lowered
+                # from 40 → 20 (Granularity Audit P1-A: prior threshold created a
+                # dead zone where cat_score 1–39 produced near-zero pts = 0.91–1.52
+                # regardless of underlying signal strength).
                 raw_val       = _safe_float(cat_score, 0.0)
                 direct_score  = raw_val
-                direct_present = raw_val >= 40.0
+                direct_present = raw_val >= 20.0
                 if direct_present:
                     direct_type = "score_based"
                     reason_codes.append("CATALYST_SCORE_BASED_DIRECT")
@@ -1031,7 +1034,12 @@ def _score_catalyst_alignment_v42(row: dict) -> dict:
     reason_codes.append("CATALYST_INTELLIGENCE_UNAVAILABLE")
 
     # ── Combined ────────────────────────────────────────────────────────────
-    catalyst_raw = direct_score * 0.75 + intelligence_score * 0.25
+    # V4.2.6: Intelligence weight removed from live formula while intelligence_score
+    # is unavailable in snapshot mode.  Prior formula (direct×0.75 + intel×0.25)
+    # permanently capped catalyst_pts at 11.25/15 (dead 25% weight — Granularity
+    # Audit P0-A).  When intelligence_score is implemented, restore the blended
+    # formula:  catalyst_raw = direct_score * 0.75 + intelligence_score * 0.25
+    catalyst_raw = direct_score  # full 100-pt scale maps to 15-pt ceiling
     catalyst_pts = round(min(15.0, catalyst_raw / 100.0 * 15.0), 2)
 
     # ── Overall status ──────────────────────────────────────────────────────
@@ -1429,8 +1437,24 @@ def _score_investment_alignment_v42(
     fwd_strong = pillars["forward_growth_strong"]
 
     strong_count = int(fh_strong) + int(cg_strong) + int(fwd_strong)
-    inv_pts      = round(float(strong_count) * 5.0, 2)
-    inv_raw      = round(float(strong_count) / 3.0 * 100.0, 1)
+
+    # ── Continuous Investment Quality Score (V4.2.2) — computed first so
+    #    inv_pts can use it (see Granularity Audit, fix P0-C) ────────────────
+    fh_score_0_100  = pillars.get("financial_health_score_0_100",  0)
+    cg_score_0_100  = pillars.get("current_growth_score_0_100",    0)
+    fwd_score_0_100 = pillars.get("forward_growth_score_0_100",    0)
+
+    _best_pillar   = max(fh_score_0_100, cg_score_0_100, fwd_score_0_100)
+    _strong_scored = sum(1 for s in [fh_score_0_100, cg_score_0_100, fwd_score_0_100] if s >= 50)
+    _breadth_bonus = {0: 0, 1: 0, 2: 7, 3: 12}.get(_strong_scored, 0)
+    inv_quality_score = int(min(100, round(_best_pillar + _breadth_bonus)))
+
+    # Points: continuous 0–15 derived from the continuous quality score.
+    # Replaces the prior 4-bucket formula (strong_pillar_count × 5) which
+    # produced only {0, 5, 10, 15} and caused ordering inversions where a
+    # symbol with 1 pillar but IQ=88 scored below one with 3 pillars but IQ=63.
+    inv_pts = round(inv_quality_score / 100.0 * 15.0, 2)
+    inv_raw = float(inv_quality_score)
 
     # Quality label
     if strong_count == 3:
@@ -1463,16 +1487,7 @@ def _score_investment_alignment_v42(
     reason_codes.extend(pillars["current_growth_reason_codes"])
     reason_codes.extend(pillars["forward_growth_reason_codes"])
 
-    # ── Continuous Investment Quality Score (V4.2.2) ──────────────────────────
-    fh_score_0_100  = pillars.get("financial_health_score_0_100",  0)
-    cg_score_0_100  = pillars.get("current_growth_score_0_100",    0)
-    fwd_score_0_100 = pillars.get("forward_growth_score_0_100",    0)
-
-    _best_pillar   = max(fh_score_0_100, cg_score_0_100, fwd_score_0_100)
-    _strong_scored = sum(1 for s in [fh_score_0_100, cg_score_0_100, fwd_score_0_100] if s >= 50)
-    _breadth_bonus = {0: 0, 1: 0, 2: 7, 3: 12}.get(_strong_scored, 0)
-    inv_quality_score = int(min(100, round(_best_pillar + _breadth_bonus)))
-
+    # ── IQ rank label (inv_quality_score computed earlier, above inv_pts) ────
     if inv_quality_score >= 90:   iq_rank_label = "A+ Investment"
     elif inv_quality_score >= 80: iq_rank_label = "Excellent Investment Quality"
     elif inv_quality_score >= 70: iq_rank_label = "Strong Investment Quality"
