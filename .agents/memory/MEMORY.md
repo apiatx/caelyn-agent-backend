@@ -1,3 +1,4 @@
+- [Fib/Wave import path bug](fib-wave-import-bug.md) — entry_state_service.py must use `from services.fib_engine` not `from backend.services.fib_engine`; wrong prefix = silent ModuleNotFoundError; fib/wave always None until fixed
 - [Autoscale startup timeout fix](autoscale-startup-timeout.md) — module-level Neon call at import + dense sync lifespan block = 50s startup; fix: remove module call + background thread for sync block; lifespan now yields in <5s
 - [Canonical History Tradier 10Y precision](canonical-history-tradier-10y.md) — no 5Y cap; false cap was _LONG_HIST_DAYS=1825; 3650d window → 2510 bars; bars<2200=lifetime_under_10y; oldest_gap doesn't drive classification
 - [CNO flag gap — options_alignment vs V4](cno-flag-gap-v4.md) — CNO return path must override options_pressure_state="confirmed_no_options"; _UNAVAILABLE_BASE sets "INSUFFICIENT_HISTORY" which V4 never matches

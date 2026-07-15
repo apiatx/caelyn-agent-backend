@@ -1,0 +1,337 @@
+BACKEND — RUN ENTRY STATE SERVICE WITH CANONICAL 10Y HISTORY, THEN REBUILD CONFLUENCE
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring math.
+Do not run broad history backfill again.
+Do not call Tradier/FMP for history unless a symbol has no canonical history.
+Prefer canonical cached bars only.
+Do not run Options Flow changes.
+Do not recalibrate Ready/Near/Watch yet.
+
+Goal:
+
+10Y canonical history is now complete, but Fib/Wave are still pending because entry_state_lkg was computed before the 10Y backfill.
+
+We need to rerun entry_state_service / analyze_entry_state_from_bars across the eligible Confluence universe using canonical history bars, write fresh entry_state_lkg, then rebuild Confluence snapshot and validate Fib/Wave fields.
+
+Important context:
+
+- ECHO is already backfilled successfully: 2,511 bars, available_10y_fresh.
+- SATS is stale_alias_of=ECHO and should not block.
+- Confluence snapshot currently rebuilt too early from old entry_state_lkg.
+- primary_fib_context and wave_structure_label come from entry_state_lkg / entry_state_service outputs.
+
+==================================================
+PART 1 — PRE-RUN STATUS
+==================================================
+
+Report current:
+
+canonical_history complete count
+entry_state_lkg symbol count
+stage2_lkg symbol count
+confluence snapshot row count
+symbols with primary_fib_context populated
+symbols with wave_structure_label populated
+symbols with fib_wave_status pending
+symbols missing from entry_state_lkg
+
+Specifically check:
+
+NVDA
+ECHO
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+TSM
+SOFI
+WYFI
+OUST
+
+Return whether each has:
+
+canonical_history
+entry_state_lkg row
+stage_label
+entry_state
+extension_state
+primary_fib_context
+wave_structure_label
+
+==================================================
+PART 2 — RERUN ENTRY STATE SERVICE FROM CANONICAL BARS
+==================================================
+
+Run the entry_state_service analysis across the full eligible universe.
+
+Use canonical history as Step 0 source.
+
+For each symbol:
+
+- load canonical bars
+- pass full available bars into analyze_entry_state_from_bars()
+- compute stage_label
+- compute entry_state
+- compute extension_state
+- compute fib fields
+- compute wave structure fields
+- write/update entry_state_lkg
+
+Do not use old 400-bar fallback if canonical history exists.
+
+Do not skip symbols merely because an old entry_state_lkg row already exists.
+
+Force refresh existing entry-state rows because old rows were created before Fib/Wave existed.
+
+Universe should include at minimum:
+
+- all Confluence eligible symbols
+- all watchlist symbols
+- ECHO
+- all symbols with canonical history except stale aliases/ineligible foreign-prefixed symbols if policy excludes them
+
+Exclude:
+
+- SATS stale alias
+- prefixed foreign/OTC symbols if they are ineligible by current policy
+
+Return:
+
+symbols_attempted
+symbols_updated
+symbols_skipped
+symbols_failed
+provider_calls_used
+canonical_bars_used_count
+fallback_400_used_count
+duration
+
+Expected:
+
+fallback_400_used_count = 0 for symbols with canonical history.
+
+==================================================
+PART 3 — SATS / ECHO CLEAN STATUS
+==================================================
+
+Make sure SATS does not appear as a normal missing symbol.
+
+Desired status:
+
+SATS:
+status = stale_alias
+stale_alias_of = ECHO
+excluded_from_missing = true
+
+ECHO:
+status = available_10y_fresh
+included in canonical history
+included in entry_state_lkg if part of eligible universe
+
+Return:
+
+SATS status
+ECHO status
+whether SATS still counts in missing_symbols_remaining
+whether ECHO has entry_state_lkg row after rerun
+
+Do not silently keep SATS and ECHO as separate active companies.
+
+==================================================
+PART 4 — POST-RUN ENTRY LKG VALIDATION
+==================================================
+
+After entry_state_service rerun, validate:
+
+entry_state_lkg symbol count
+stage_label coverage
+entry_state coverage
+extension_state coverage
+primary_fib_context coverage
+wave_structure_label coverage
+
+Return counts:
+
+total_entry_lkg_rows
+rows_with_stage_label
+rows_with_entry_state
+rows_with_extension_state
+rows_with_primary_fib_context
+rows_with_wave_structure_label
+rows_fib_pending
+rows_wave_pending
+rows_failed
+
+Expected:
+
+Fib/Wave should no longer be globally pending.
+Pending should remain only for genuinely insufficient-history symbols.
+
+==================================================
+PART 5 — SAMPLE FIB / WAVE VALIDATION
+==================================================
+
+Validate these symbols:
+
+ABCL
+ALGM
+VRT
+CRDO
+MARA
+NVDA
+TSM
+SOFI
+WYFI
+OUST
+ECHO
+
+For each return:
+
+symbol
+canonical_history_status
+bar_count
+years_available
+entry_state_lkg_present
+stage_label
+entry_state
+extension_state
+fib_wave_status
+primary_fib_context
+primary_fib_confidence
+primary_fib_timeframe
+nearest_fib_level
+fib_distance_pct
+wave_structure_label
+wave_confidence if available
+used_canonical_history
+used_400_bar_fallback
+plain_english_summary
+
+Expected:
+
+- older symbols use 10Y canonical bars
+- younger symbols use full available lifetime
+- ABCL/ALGM/VRT are not limited to 400-bar logic
+- NVDA and ECHO should no longer be missing from entry_lkg
+- used_400_bar_fallback = false for all with canonical history
+
+==================================================
+PART 6 — REBUILD CONFLUENCE SNAPSHOT AFTER ENTRY LKG REFRESH
+==================================================
+
+Only after entry_state_lkg is refreshed:
+
+Rebuild retained Confluence snapshot.
+
+Return:
+
+snapshot_rows
+build_duration
+provider_calls_used
+rows_with_confluence_v42
+rows_with_primary_fib_context
+rows_with_wave_structure_label
+fib_wave_status_counts
+ready_count
+near_actionable_count
+watch_for_reset_count
+risk_conflict_count
+
+Expected:
+
+- Confluence rows should now carry Fib/Wave fields from refreshed entry_state_lkg.
+- provider_calls_used = 0
+- Ready/Near/Watch may change slightly, but do not recalibrate yet.
+
+==================================================
+PART 7 — AUDIT FOR REMAINING ISSUES
+==================================================
+
+Report any remaining blockers:
+
+- symbols still globally Fib pending
+- symbols with canonical history but missing entry_state_lkg
+- symbols using 400-bar fallback despite canonical history
+- stale alias still counted as missing
+- ECHO missing from entry_state_lkg
+- NVDA missing from entry_state_lkg
+- Confluence fields not passing through to frontend endpoints
+- actionability changes caused by Fib/Wave refresh
+
+Do not implement major scoring changes.
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+ENTRY STATE + FIB/WAVE REFRESH REPORT
+
+PRE-RUN STATUS:
+[summary/table]
+
+ENTRY_STATE_SERVICE RERUN:
+[summary/table]
+
+SATS/ECHO CLEAN STATUS:
+[summary]
+
+POST-RUN ENTRY LKG VALIDATION:
+[summary/table]
+
+SAMPLE FIB/WAVE VALIDATION:
+[table]
+
+CONFLUENCE SNAPSHOT REBUILD:
+[summary/table]
+
+REMAINING ISSUES:
+[list]
+
+End exactly:
+
+ENTRY STATE FIB/WAVE VERDICT
+
+ENTRY_STATE_SERVICE_RERUN:
+[YES/NO]
+
+USED_CANONICAL_HISTORY:
+[YES/NO]
+
+PROVIDER_CALLS_USED:
+[number]
+
+FALLBACK_400_USED_FOR_CANONICAL_SYMBOLS:
+[YES/NO]
+
+ENTRY_LKG_ROWS_AFTER:
+[number]
+
+FIB_WAVE_GLOBALLY_PENDING:
+[YES/NO]
+
+PRIMARY_FIB_CONTEXT_POPULATED:
+[YES/NO/PARTIAL]
+
+WAVE_STRUCTURE_LABEL_POPULATED:
+[YES/NO/PARTIAL]
+
+NVDA_IN_ENTRY_LKG:
+[YES/NO]
+
+ECHO_IN_ENTRY_LKG:
+[YES/NO]
+
+SATS_EXCLUDED_AS_STALE_ALIAS:
+[YES/NO]
+
+CONFLUENCE_SNAPSHOT_REBUILT_AFTER_ENTRY_REFRESH:
+[YES/NO]
+
+READY_FOR_POST_10Y_CALIBRATION_AUDIT:
+[YES/NO]

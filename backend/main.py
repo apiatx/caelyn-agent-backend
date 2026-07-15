@@ -17757,16 +17757,26 @@ async def admin_stage2_force_warmup(
     request: Request,
     api_key: str = Header(None, alias="X-API-Key"),
     force_all: bool = Query(False),
+    symbols_csv: str = Query(
+        "",
+        description=(
+            "Extra symbols to include beyond watchlist tickers (comma-separated). "
+            "Merged with watchlist universe when force_all=true; used as the "
+            "sole universe when force_all=false."
+        ),
+    ),
 ):
     """
     Force-recompute Weinstein stage for watchlist tickers.
 
     force_all=false (default): recompute only null/failed entries (recovery mode).
         Entries with valid labels within their TTL are skipped.
+        If symbols_csv is provided, those specific symbols are force-refreshed.
 
     force_all=true: recompute ALL watchlist tickers regardless of TTL freshness.
         Pacer (rate-limiter sleep + concurrency cap) is preserved.
         Use after code changes that affect entry_state or stage scoring.
+        symbols_csv extras are merged into the full watchlist universe.
 
     Fires as a background task and returns immediately.
     Poll GET /api/admin/stage2/status to watch progress.
@@ -17781,8 +17791,12 @@ async def admin_stage2_force_warmup(
         warmup_stage2_all_watchlists as _warmup_all,
     )
 
+    _extra_syms: list[str] = [
+        s.strip().upper() for s in symbols_csv.split(",") if s.strip()
+    ] if symbols_csv else []
+
     if force_all:
-        # Full forced re-computation of all watchlist tickers
+        # Full forced re-computation of all watchlist tickers + any extras
         from data.pg_storage import watchlist_list, watchlist_read
         _tickers: list[str] = []
         try:
@@ -17795,17 +17809,40 @@ async def admin_stage2_force_warmup(
                         _tickers.extend(_store.get("tickers") or [])
         except Exception as _err:
             print(f"[ADMIN] stage2 force-all watchlist read error: {_err}")
+        _tickers.extend(_extra_syms)
         total = len(set(_tickers))
-        print(f"[ADMIN] stage2 force-all triggered: {total} unique tickers, ALL freshness bypassed")
+        extra_note = f" + {len(_extra_syms)} extra symbols" if _extra_syms else ""
+        print(
+            f"[ADMIN] stage2 force-all triggered: {total} unique tickers "
+            f"(watchlist{extra_note}), ALL freshness bypassed"
+        )
         _asyncio.create_task(_warmup(_tickers, force=True))
         return {
             "status": "started",
             "mode": "force_all",
-            "message": f"Force-all warmup running for {total} unique watchlist tickers. All TTL bypassed.",
+            "extra_symbols": _extra_syms,
+            "message": (
+                f"Force-all warmup running for {total} unique tickers"
+                f"{extra_note}. All TTL bypassed."
+            ),
             "poll": "GET /api/admin/stage2/status",
         }
 
-    # Default: null-only recovery mode
+    # Default: null-only recovery mode — optionally include specific extras with force
+    if _extra_syms:
+        print(
+            f"[ADMIN] stage2 force-warmup (extra symbols): "
+            f"{len(_extra_syms)} symbols forced"
+        )
+        _asyncio.create_task(_warmup(_extra_syms, force=True))
+        return {
+            "status": "started",
+            "mode": "extra_symbols_force",
+            "extra_symbols": _extra_syms,
+            "message": f"Force warmup running for {len(_extra_syms)} extra symbols.",
+            "poll": "GET /api/admin/stage2/status",
+        }
+
     null_count = sum(
         1 for v in __import__("services.watchlist_stage2_service", fromlist=["_STAGE2_LKG"])._STAGE2_LKG.values()
         if v.get("label") is None

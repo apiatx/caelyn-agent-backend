@@ -1271,7 +1271,7 @@ def analyze_entry_state_from_bars(
 
     if sorted_bars and price is not None and price > 0:
         try:
-            from backend.services.fib_engine import compute_fib_levels as _fib_fn
+            from services.fib_engine import compute_fib_levels as _fib_fn
             _fib_fields = _fib_fn(
                 sorted_bars,
                 current_price=price,
@@ -1281,7 +1281,7 @@ def analyze_entry_state_from_bars(
             _fib_fields = {}
 
         try:
-            from backend.services.wave_structure_engine import classify_wave_structure as _wave_fn
+            from services.wave_structure_engine import classify_wave_structure as _wave_fn
             _wave_fields = _wave_fn(
                 bars                  = sorted_bars,
                 entry_state           = None,   # final entry_state not yet computed here
