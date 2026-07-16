@@ -216,7 +216,10 @@ async def _x_consensus_loop():
         print("[X_CONSENSUS_LOOP] xAI provider not available — background loop disabled")
         return
 
-    from services.x_consensus_cache import _run_refresh, _CACHE_PATH, _CACHE_TTL_SECONDS
+    from services.x_consensus_cache import (
+        _run_refresh, _CACHE_PATH, _CACHE_TTL_SECONDS,
+        _load_disk_cache as _xc_ldc, _is_fresh as _xc_fresh,
+    )
     import time as _xc_time
 
     _CT = ZoneInfo("America/Chicago")
@@ -290,11 +293,29 @@ async def _x_consensus_loop():
         if datetime.now(_CT).weekday() == 5:
             print("[X_CONSENSUS_LOOP] Saturday — skipping refresh (no Grok call)")
         else:
-            print("[X_CONSENSUS_LOOP] 10:00 AM CT reached — running daily Grok/XAI refresh")
-            try:
-                await _run_refresh(data_service)
-            except Exception as exc:
-                print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
+            # Freshness guard: startup catch-up (or an earlier manual refresh) may
+            # have already produced a fresh snapshot this morning.  Skip the
+            # scheduled fire if the canonical cache is still within TTL — prevents
+            # the confirmed double-fire pattern where a 08:00–09:59 CT restart
+            # triggers catch-up AND then fires again at 10:00 AM.
+            _sched_raw = _xc_ldc()
+            if _xc_fresh(_sched_raw):
+                _snap_age_h = (
+                    _xc_time.time() - float(_sched_raw.get("_saved_at") or 0)
+                ) / 3600
+                print(
+                    f"[X_CONSENSUS_LOOP] Scheduled refresh skipped — "
+                    f"canonical cache still fresh "
+                    f"(age={_snap_age_h:.1f}h, "
+                    f"generated={_sched_raw.get('generated_at', '?')}) "
+                    f"reason: canonical_cache_still_fresh"
+                )
+            else:
+                print("[X_CONSENSUS_LOOP] 10:00 AM CT reached — running daily Grok/XAI refresh")
+                try:
+                    await _run_refresh(data_service)
+                except Exception as exc:
+                    print(f"[X_CONSENSUS_LOOP] Refresh error: {exc}")
 
         # Small buffer before recalculating next target (avoids same-minute re-trigger)
         await _asyncio.sleep(90)
@@ -4268,96 +4289,47 @@ async def social_grok_query(
                 "cache_age_min": _age_min,
             })
 
-        print(f"[SOCIAL_GROK] Cache stale or force_refresh — firing live Grok calls")
+        # ── Stale / force_refresh: use canonical locked pipeline only ──────
+        # The legacy local pipeline (Phase 1 + Phase 2 inline, no lock, no disk
+        # write, no diagnostics) has been removed.  All consensus work is done by
+        # _run_refresh via the canonical _trigger_background_refresh path, which:
+        #   • holds _REFRESH_LOCK (single-flight, no races)
+        #   • writes the canonical disk snapshot
+        #   • runs backend scoring and LKG merge
+        #   • logs to Social diagnostics
+        from services.x_consensus_cache import (
+            _trigger_background_refresh as _xc_bg_refresh,
+            _REFRESH_LOCK as _xc_lock,
+        )
 
-        # ── Phase 1: Parallel batched x_search (max ~8 handles per call) ──
-        # Grok's allowed_x_handles supports ~10 per call; we batch into groups
-        # using the fast non-reasoning model for data collection.
-        BATCH_SIZE = 8
-        batches = [_X_SELECT_HANDLES[i:i + BATCH_SIZE]
-                    for i in range(0, len(_X_SELECT_HANDLES), BATCH_SIZE)]
-        print(f"[SOCIAL_GROK] Select trader consensus — {len(_X_SELECT_HANDLES)} handles in {len(batches)} batches")
+        _already_running = _xc_lock.locked()
+        _refresh_accepted = False
 
-        async def _fetch_batch(handles: list[str], batch_num: int) -> str:
-            """Fetch raw post data for a batch of handles."""
-            import datetime as _dt
-            _since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=7)).strftime("%Y-%m-%d")
-            batch_prompt = (
-                f"Search X/Twitter posts from the last 7 days from EACH of these accounts: "
-                + ", ".join(f"@{h}" for h in handles)
-                + ". For each account, list the tickers/assets they mention with bullish/bearish context, "
-                "their thesis, conviction level, and any catalysts they cite. "
-                "Include the account handle with each finding. Be thorough and specific — "
-                "quote or closely paraphrase their actual posts."
-            )
-            result = await data_service.xai._call_grok_with_x_search(
-                prompt=batch_prompt,
-                raw_mode=True,
-                use_deep_model=False,
-                timeout=60.0,
-                x_search_config={"allowed_x_handles": handles, "from_date": _since},
-            )
-            text = ""
-            if isinstance(result, dict):
-                text = result.get("_raw_analysis", "") or result.get("error", "")
-            print(f"[SOCIAL_GROK] Batch {batch_num + 1}/{len(batches)}: {len(handles)} handles -> {len(text)} chars")
-            return text
+        if not _already_running:
+            asyncio.create_task(_xc_bg_refresh(data_service))
+            _refresh_accepted = True
+            _reason = "force_refresh_accepted" if _force_refresh else "stale_cache_refresh_triggered"
+            print(f"[SOCIAL_GROK] {_reason} — canonical background refresh triggered (lock acquired)")
+        else:
+            print(f"[SOCIAL_GROK] Canonical refresh already in progress — returning stale snapshot")
 
-        try:
-            # Run all batches in parallel
-            batch_results = await asyncio.gather(
-                *[_fetch_batch(batch, i) for i, batch in enumerate(batches)],
-                return_exceptions=True,
-            )
-            # Combine results, skip failures
-            combined_data = []
-            for i, res in enumerate(batch_results):
-                if isinstance(res, Exception):
-                    print(f"[SOCIAL_GROK] Batch {i + 1} failed: {res}")
-                    continue
-                if res and not res.startswith("xAI"):
-                    combined_data.append(f"=== Batch {i + 1} ({', '.join('@' + h for h in batches[i])}) ===\n{res}")
-
-            if not combined_data:
-                return JSONResponse(status_code=502, content={
-                    "error": "All x_search batches failed — xAI may be experiencing issues",
-                    "query": query,
-                })
-
-            # ── Phase 2: Synthesize with reasoning model ──────────────────
-            combined_text = "\n\n".join(combined_data)
-            print(f"[SOCIAL_GROK] Synthesis phase: {len(combined_text):,} chars from {len(combined_data)} batches")
-
-            synthesis_prompt = (
-                f"Below is raw data from X/Twitter posts (last 7 days) by {len(_X_SELECT_HANDLES)} select trader accounts. "
-                "Analyze ALL of this data and produce the consensus JSON output per your schema.\n\n"
-                "RAW X DATA:\n" + combined_text + "\n\n"
-                "Now synthesize this into the exact JSON schema from your system instructions. "
-                "Return ONLY valid JSON — no markdown, no backticks, no extra text."
-            )
-
-            result = await data_service.xai._call_grok_with_x_search(
-                prompt=synthesis_prompt,
-                raw_mode=False,
-                use_deep_model=True,
-                timeout=90.0,
-                system_text=X_SELECT_TRADER_CONSENSUS_CONTRACT,
-                max_output_tokens=4000,
-            )
-            if isinstance(result, dict) and not result.get("error"):
-                return JSONResponse(content={
-                    "response": result,
-                    "query": query or "Consensus tickers among select X traders",
-                    "structured": True,
-                    "preset": "x_select_trader_consensus",
-                })
-            else:
-                err = result.get("error", "unknown") if isinstance(result, dict) else str(result)
-                print(f"[SOCIAL_GROK] Synthesis error: {err}")
-                return JSONResponse(status_code=502, content={"error": err, "query": query})
-        except Exception as e:
-            print(f"[SOCIAL_GROK] Select consensus exception: {e}")
-            return JSONResponse(status_code=500, content={"error": str(e), "query": query})
+        _stale_raw = (_cached_snap or {}).get("raw") if _cached_snap else None
+        _age_min   = (
+            round((_time_mod.time() - float((_cached_snap or {}).get("_saved_at") or 0)) / 60, 1)
+            if _cached_snap else None
+        )
+        return JSONResponse(content={
+            "response":           _stale_raw,
+            "query":              query or "Consensus tickers among select X traders",
+            "structured":         True,
+            "preset":             "x_select_trader_consensus",
+            "from_cache":         True,
+            "cache_age_min":      _age_min,
+            "source":             "canonical_x_consensus_cache",
+            "refresh_requested":  True,
+            "refresh_accepted":   _refresh_accepted,
+            "refresh_in_progress": _already_running or _refresh_accepted,
+        })
 
     # ── Generic social query (free-form) ────────────────────────────────
     if not query.strip():

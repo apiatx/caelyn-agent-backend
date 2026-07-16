@@ -1,0 +1,420 @@
+Fix Proven Social/X Cost Leaks Without Changing Results
+
+Implement the smallest safe production fixes identified in the completed Social/X forensic audit.
+
+This is a surgical backend-only task.
+
+Primary objective
+
+Reduce unnecessary xAI spend while preserving:
+
+Current tracked handles
+Current refresh frequency
+Current ticker ranking
+Current Social dashboard sections
+Current API response shapes
+Current prompts
+Current Grok model
+Current deterministic scoring
+Current LKG behavior
+Current manual refresh behavior
+Current frontend behavior
+
+Do not implement the 30-day bootstrap, incremental ingestion, database event ledger, 32-handle expansion, or new frontend features in this task.
+
+Proven findings
+
+The forensic audit established:
+
+16 handles
+2 Phase-1 calls
+1 Phase-2 call
+3 calls per clean refresh
+Both phases use grok-4.3
+Phase 2 performs an untargeted live X Search with 15 results
+The one-run parity test showed:
+Same consensus ticker membership
+Same consensus order
+Same market pulse
+Same portfolio bias
+Same spotlight
+num_sources_used = 0
+Phase-2 cost dropped by roughly 49% when X Search was disabled
+Startup catch-up plus the 10:00 AM scheduler caused confirmed duplicate refreshes
+/api/social/query contains a separate legacy 3-call consensus pipeline without the canonical lock, scoring, cache write, LKG merge, or diagnostics
+The xAI wrapper currently discards provider request ID, cost, tokens, and X Search usage metadata
+
+Treat the existing production code as the source of truth.
+
+Fix 1 — Add exact Social/X provider usage logging
+
+File:
+
+backend/data/xai_sentiment_provider.py
+
+In _call_grok_with_x_search, after:
+
+data = response.json()
+
+extract and preserve/log:
+
+request_id
+model
+service_tier
+input_tokens
+cached_input_tokens
+output_tokens
+reasoning_tokens
+total_tokens
+num_sources_used
+num_server_side_tools_used
+x_search_calls
+cost_in_usd_ticks
+
+Requirements:
+
+Do not alter the existing return contract.
+Do not alter _extract_text.
+Do not expose API keys.
+Do not log the full prompt.
+Do not log private chain-of-thought or reasoning content.
+Use one compact structured log line per provider request.
+Include a caller-supplied label if safely possible, such as:
+social_phase1_batch_1
+social_phase1_batch_2
+social_phase2
+social_query_freeform
+If adding a label requires changing the wrapper signature, make it an optional parameter with a safe default so all existing callers remain compatible.
+Confirm the units of cost_in_usd_ticks from the official xAI response contract or existing provider metadata. Do not convert it to dollars unless the conversion is verified.
+Preserve raw ticks in logs regardless.
+
+Also add refresh-level cost aggregation to the existing Social diagnostics entry when possible:
+
+phase1_cost_in_usd_ticks
+phase2_cost_in_usd_ticks
+total_cost_in_usd_ticks
+phase1_x_search_calls
+phase2_x_search_calls
+total_input_tokens
+total_output_tokens
+
+Add fields only; do not remove existing diagnostics keys.
+
+Fix 2 — Prevent startup catch-up plus scheduled double-fire
+
+File:
+
+backend/main.py
+
+Target:
+
+_x_consensus_loop
+
+Current problem:
+
+Restart between 08:00 and 09:59 CT
+Startup catch-up runs
+Cache is written successfully
+Scheduler still fires unconditionally at 10:00 CT
+Results in two full refreshes on the same morning
+
+Add a freshness check immediately before the scheduled 10:00 AM refresh.
+
+Use the existing canonical helpers:
+
+_load_disk_cache
+_is_fresh
+
+Required behavior:
+
+raw = _load_disk_cache()
+
+if _is_fresh(raw):
+    log that the scheduled refresh was skipped because startup catch-up or another canonical refresh already produced a fresh snapshot
+else:
+    run the normal canonical refresh
+
+Requirements:
+
+Do not remove startup catch-up.
+Do not change the scheduled 10:00 AM CT time.
+Do not change the 23-hour TTL.
+Do not change Saturday behavior.
+Do not affect manual refresh.
+Do not affect stale catch-up.
+Do not add a new independent “refreshed today” state if the existing cache freshness check is sufficient.
+Log the skip with:
+current cache age
+generated timestamp
+reason: canonical_cache_still_fresh
+
+Test these cases:
+
+Restart at 09:00 CT, successful catch-up, scheduler at 10:00 CT → scheduler skips.
+Restart at 09:00 CT, failed catch-up, scheduler at 10:00 CT → scheduler runs.
+No restart, stale cache at 10:00 CT → scheduler runs.
+Fresh cache for another legitimate reason → scheduler skips.
+Manual refresh before 10:00 CT → scheduler skips if cache remains fresh.
+Fix 3 — Disable live X Search for canonical Phase 2
+
+Files:
+
+backend/services/x_consensus_cache.py
+backend/data/xai_sentiment_provider.py
+
+Current problem:
+
+The canonical Phase-2 synthesis calls _call_grok_with_x_search() without x_search_config, and the wrapper automatically adds:
+
+{
+  "type": "x_search",
+  "x_search": {
+    "num_x_results": 15
+  }
+}
+
+Phase 2 already receives all Phase-1 account data and the backend-generated ranking.
+
+Wrapper change
+
+Add an explicit supported way to disable X Search.
+
+Preferred interface:
+
+x_search_config={"enabled": False}
+
+or an optional dedicated parameter:
+
+enable_x_search=False
+
+Choose whichever fits the existing code most safely.
+
+Requirements:
+
+Default behavior must remain unchanged for all existing callers.
+Existing callers that omit the new flag must still receive X Search.
+Only the canonical Social Phase-2 synthesis call should disable X Search in this task.
+Phase 1 must continue using targeted X Search.
+Free-form Social query must remain unchanged.
+Do not use an invalid provider payload such as passing "mode": "off" inside the X Search tool unless the xAI API explicitly supports it.
+When disabled, omit the X Search tool from the request payload entirely.
+Canonical Phase-2 call change
+
+In _run_refresh(), set X Search disabled for the synthesis call only.
+
+Preserve exactly:
+
+Same model
+Same system prompt
+Same synthesis prompt
+Same backend ranking preamble
+Same max output tokens
+Same timeout
+Same parsing
+Same normalization
+Same LKG behavior
+Preserve fresh_trades quality
+
+The parity test showed one candidate response omitted a fresh_trades entry that was present in Phase-1 data.
+
+Do not re-enable Phase-2 X Search to solve this.
+
+Instead audit the existing Phase-1 and deterministic data and add a conservative fallback only when Grok returns no valid fresh_trades.
+
+The fallback must derive candidates from existing data already used by the current system:
+
+recency_days <= 1 or current approved freshness threshold
+has_top_conviction = true
+valid ticker
+valid thesis fragment
+valid source account
+
+Requirements:
+
+If Grok returns valid fresh_trades, preserve them unchanged.
+Only fill missing/empty fresh_trades.
+Do not change consensus rankings.
+Do not invent a ticker not present in Phase-1 data.
+Do not invent a thesis.
+Use existing thesis fragments and account attribution.
+Match the existing schema exactly.
+Keep the fallback small and conservative.
+Add a diagnostic flag:
+fresh_trades_fallback_used
+Add a test using the parity-test case where BRUN was present in Phase 1 but omitted from Phase 2.
+
+Do not change the Social-page Freshest Alpha builder in this task unless required for schema compatibility.
+
+Fix 4 — Remove the legacy live consensus pipeline from /api/social/query
+
+File:
+
+backend/main.py
+
+Target:
+
+POST /api/social/query
+preset_intent == "x_select_trader_consensus"
+
+Current behavior contains a separate 3-call implementation that:
+
+Re-searches the same handles
+Does not use deterministic backend scoring
+Does not acquire _REFRESH_LOCK
+Does not write the canonical cache
+Does not use LKG merge
+Does not add canonical diagnostics
+Can race with the real refresh
+
+Replace the live duplicate pipeline with the canonical cache path.
+
+Required behavior:
+
+Cache fresh and force_refresh is false
+
+Return the current canonical cached Social/X snapshot or the existing compatible response wrapper derived from it.
+
+Cache stale and force_refresh is false
+
+Return the current stale canonical cache immediately and trigger the canonical locked background refresh using the existing canonical mechanism.
+
+Do not run an inline duplicate pipeline.
+
+force_refresh is true
+
+Use the canonical manual refresh or canonical locked refresh path.
+
+Do not reimplement Phase 1 or Phase 2 locally.
+
+Return a clear response indicating:
+
+refresh accepted
+refresh already running
+manual cooldown
+xAI unavailable
+
+Preserve the existing route response contract as much as possible for undocumented external clients.
+
+If the existing response shape is:
+
+{
+  "response": ...,
+  "query": ...,
+  "structured": true,
+  "preset": ...
+}
+
+retain those top-level keys and place the canonical cached payload under response.
+
+Add additive metadata if needed:
+
+source: "canonical_x_consensus_cache"
+refresh_requested
+refresh_accepted
+refresh_in_progress
+
+Requirements:
+
+Do not delete the entire /api/social/query route.
+Do not alter free-form query behavior.
+Do not alter rate limits.
+Do not break external compatibility unnecessarily.
+Remove or bypass only the live duplicate consensus implementation.
+Ensure this route cannot initiate a second unlocked 3-call pipeline.
+Ensure canonical locking, caching, diagnostics, and LKG behavior are used.
+Fix 5 — Correct stale comments only after behavior changes
+
+Update misleading comments and docstrings:
+
+27 accounts → 16 accounts
+5 calls → 3 calls
+bi-hourly → daily
+4-hour TTL → 23-hour TTL
+08:00–20:00 → 08:00–18:00 where executable code uses 18:00
+
+Do not change executable behavior while editing comments.
+
+Tests required
+
+Add or update tests covering:
+
+Scheduler
+Successful startup catch-up prevents the 10:00 AM duplicate refresh.
+Failed startup catch-up does not prevent the scheduled refresh.
+Scheduled refresh still runs when cache is stale.
+Manual refresh behavior remains unchanged.
+X Search configuration
+Phase 1 request includes X Search.
+Phase 1 includes allowed handles and from-date.
+Canonical Phase 2 omits the X Search tool.
+Free-form Social query still includes X Search.
+Existing callers that do not specify the new flag retain prior behavior.
+Phase-2 payload
+Same model slug.
+Same system prompt.
+Same synthesis prompt.
+Same output-token ceiling.
+Same timeout.
+Same normalization path.
+Fresh trades
+Existing valid Grok fresh_trades are untouched.
+Empty fresh_trades can be filled from qualifying Phase-1 data.
+No fallback ticker can appear unless present in Phase 1.
+No fallback ticker changes consensus ranking.
+Fallback usage is visible in diagnostics.
+Legacy route
+Fresh cache returns canonical data with zero xAI calls.
+Stale cache does not run the local duplicate pipeline.
+force_refresh uses canonical locking.
+Route response maintains required top-level compatibility fields.
+Free-form query remains unchanged.
+A concurrent canonical refresh prevents a duplicate consensus refresh.
+Usage logging
+Cost and token metadata are captured when present.
+Missing usage metadata does not break the request.
+API keys and full prompts are never logged.
+Existing wrapper return values remain unchanged.
+Verification run
+
+After implementation:
+
+Run all focused tests.
+Perform one manual canonical refresh.
+Verify diagnostics show:
+2 Phase-1 X Search calls
+1 Phase-2 provider call
+0 Phase-2 X Search calls
+Provider cost fields recorded
+Verify the Social dashboard payload still includes:
+market pulse
+portfolio bias
+Ask Livermore
+X Consensus
+Freshest Alpha
+Theme Leadership
+Sentiment Acceleration
+Compare the new payload against the most recent clean production payload:
+Same top ticker ordering unless the source posts genuinely changed
+Same schema keys and types
+No empty sections caused by the change
+Simulate a startup catch-up before 10:00 CT and confirm the scheduled refresh skips.
+Call /api/social/query with the consensus preset and confirm it produces zero independent xAI calls.
+Final report
+
+Return:
+
+Files changed
+Exact changes made
+Test results
+Before/after provider call behavior
+Before/after X Search calls per canonical refresh
+Example usage diagnostic entry
+Example scheduler skip log
+Confirmation that consensus ranking logic was unchanged
+Confirmation that tracked handles were unchanged
+Confirmation that frontend code was untouched
+Confirmation that free-form Social query behavior was unchanged
+Any compatibility concerns for undocumented external /api/social/query consumers
+Rollback instructions for each fix
+
+Do not begin the historical ledger or incremental scanning work yet.

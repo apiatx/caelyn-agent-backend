@@ -1,5 +1,5 @@
 """
-Bi-hourly cached X "Select Trader Consensus" snapshot.
+Daily cached X "Select Trader Consensus" snapshot.
 
 Architecture:
   Phase 1 (parallel batches): Grok searches X and returns structured per-account
@@ -13,7 +13,8 @@ This ensures top_trader accounts have real numeric influence, recency is
 prioritised via explicit decay buckets, and fresh/hidden names surface instead
 of only the most-obvious tickers.
 
-Refresh window: 08:00–20:00 America/Chicago only.
+Scheduled once daily at 10:00 AM America/Chicago.
+Startup catch-up fires within 08:00–20:00 CT if cache is stale on restart.
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ try:
 except ImportError:
     from backports.zoneinfo import ZoneInfo  # Python <3.9 fallback
 
-# ── Canonical account universe (27 accounts, 6 categories) ────────────────
+# ── Canonical account universe (16 accounts, 5 categories) ────────────────
 # SOURCE OF TRUTH — do not edit individual handles without user approval.
 # The Social page `/api/social/query` imports X_SELECT_HANDLES (derived below).
 X_SELECT_ACCOUNTS: list[dict] = [
@@ -645,11 +646,14 @@ async def _fetch_batch(
     data_service,
     since_date: str,
     batch_idx: int,
+    _usage_out: dict = None,
 ) -> str:
     """Phase-1 batch: one focused Grok x_search call for a small group of accounts.
 
     Passing only 8 handles to x_search_config means Grok searches each account
     thoroughly — the original approach that produced rich, accurate results.
+    _usage_out, if provided, is passed through to _call_grok_with_x_search and
+    populated with provider usage metadata (cost_in_usd_ticks, tokens, etc.).
     """
     handles = [a["handle"] for a in batch_accounts]
     account_lines = "\n".join(
@@ -694,6 +698,8 @@ async def _fetch_batch(
             timeout=_PHASE1_TIMEOUT,
             x_search_config={"allowed_x_handles": handles, "from_date": since_date},
             max_output_tokens=2000,
+            caller_label=f"social_phase1_batch_{batch_idx}",
+            _usage_out=_usage_out,
         )
     except Exception as e:
         print(f"[X_CONSENSUS] Batch {batch_idx} exception ({handles[0]}…): {e}")
@@ -1009,8 +1015,8 @@ async def _run_refresh(data_service) -> Optional[dict]:
       It receives the backend-determined rank order and must follow it — it does
       NOT decide final ranking itself.
 
-    Call count per refresh: ceil(27/8) + 1 = 4 + 1 = 5.
-    With 4h TTL + 08:00–18:00 window ≈ 2–3 refreshes/day → ~10–15 calls/day.
+    Call count per refresh: ceil(16/8) + 1 = 2 + 1 = 3.
+    With 23h TTL + once-daily schedule: 3 calls/day (6 on double-fire days).
 
     Fallback: if Phase-1 parsing yields no structured data (Grok returned prose),
       the combined raw text is still passed to Phase 2 unchanged.  No crash.
@@ -1050,10 +1056,16 @@ async def _run_refresh(data_service) -> Optional[dict]:
 
     # ── Phase 1: concurrent focused batch calls ────────────────────────────
     semaphore = asyncio.Semaphore(_PHASE1_CONCURRENCY)
+    _p1_usages: list[dict] = []   # one usage dict per batch; aggregated into diagnostics
 
     async def _guarded_batch(batch_accounts: list[dict], idx: int) -> str:
         async with semaphore:
-            return await _fetch_batch(batch_accounts, data_service, since_date, idx)
+            _u: dict = {}
+            text = await _fetch_batch(
+                batch_accounts, data_service, since_date, idx, _usage_out=_u
+            )
+            _p1_usages.append(_u)
+            return text
 
     batch_texts: list[str] = await asyncio.gather(
         *[_guarded_batch(b, i + 1) for i, b in enumerate(batches)]
@@ -1164,6 +1176,12 @@ async def _run_refresh(data_service) -> Optional[dict]:
         "No markdown fences, no backticks, no extra text."
     )
 
+    # Phase-2 disables live X Search: the synthesis model already receives all
+    # Phase-1 account data plus the backend-ranked ticker list in its prompt.
+    # Parity test confirmed num_sources_used=0 for Phase-2 X Search — it ran
+    # but contributed zero cited sources while adding a 49% cost premium.
+    # Omitting the tool saves that overhead with no material schema change.
+    _p2_usage: dict = {}
     try:
         result = await data_service.xai._call_grok_with_x_search(
             prompt=synthesis_prompt,
@@ -1172,6 +1190,9 @@ async def _run_refresh(data_service) -> Optional[dict]:
             timeout=120.0,
             system_text=X_SELECT_TRADER_CONSENSUS_CONTRACT,
             max_output_tokens=6000,
+            x_search_config={"enabled": False},
+            caller_label="social_phase2",
+            _usage_out=_p2_usage,
         )
     except Exception as e:
         print(f"[X_CONSENSUS] Synthesis exception: {e}")
@@ -1181,6 +1202,49 @@ async def _run_refresh(data_service) -> Optional[dict]:
         err = result.get("error", "unknown") if isinstance(result, dict) else str(result)
         print(f"[X_CONSENSUS] Synthesis error: {err}")
         return None
+
+    # ── fresh_trades conservative fallback ───────────────────────────────────
+    # If Grok returns no fresh_trades (can happen without x_search), derive
+    # candidates from Phase-1 data using top_trader accounts with high-conviction
+    # same-day or yesterday mentions.  Never invents tickers or theses — only
+    # uses data already present in all_account_mentions.
+    _ft_fallback_used = False
+    if not result.get("fresh_trades") and all_account_mentions:
+        _ft_candidates: list[dict] = []
+        _ft_seen: set = set()
+        for _acct in all_account_mentions:
+            if _ACCOUNT_CATEGORY_BY_HANDLE.get(_acct.get("handle", "")) != "top_trader":
+                continue
+            for _m in _acct.get("mentions", []):
+                if (
+                    _m.get("sentiment") == "bullish"
+                    and _m.get("conviction") == "high"
+                    and isinstance(_m.get("recency_days"), (int, float))
+                    and _m["recency_days"] <= 1
+                    and _m.get("ticker")
+                    and _m.get("thesis")
+                ):
+                    _tk = _m["ticker"].lstrip("$").upper()
+                    if _tk and _tk not in _ft_seen:
+                        _ft_seen.add(_tk)
+                        _ft_candidates.append({
+                            "ticker":             _tk,
+                            "name":               _tk,
+                            "tradingview_symbol": f"NASDAQ:{_tk}",
+                            "first_mentioned_by": [f"@{_acct['handle']}"],
+                            "why_fresh": (
+                                "First appearance in last 24h via top_trader account — "
+                                "early signal before crowd [fallback from Phase-1 data]"
+                            ),
+                            "entry_thesis": _m["thesis"][:250],
+                        })
+        if _ft_candidates:
+            result["fresh_trades"] = _ft_candidates[:3]
+            _ft_fallback_used = True
+            print(
+                f"[X_CONSENSUS] fresh_trades fallback: "
+                f"{[c['ticker'] for c in result['fresh_trades']]}"
+            )
 
     # ── Normalise and persist ─────────────────────────────────────────────
     normalized = _normalize_consensus(result, backend_scores=backend_score_by_ticker)
@@ -1255,6 +1319,17 @@ async def _run_refresh(data_service) -> Optional[dict]:
 
     # ── Diagnostics log ───────────────────────────────────────────────────────
     _write_status = "written_lkg_partial" if _lkg_merged else "written_clean"
+
+    # Aggregate Phase-1 cost fields from per-batch usage accumulators.
+    _p1_cost_ticks  = sum(u.get("cost_in_usd_ticks") or 0 for u in _p1_usages)
+    _p1_x_search    = sum(u.get("x_search_calls") or 0 for u in _p1_usages)
+    _p1_in_tokens   = sum(u.get("input_tokens") or 0 for u in _p1_usages)
+    _p1_out_tokens  = sum(u.get("output_tokens") or 0 for u in _p1_usages)
+    _p2_cost_ticks  = _p2_usage.get("cost_in_usd_ticks") or 0
+    _p2_x_search    = _p2_usage.get("x_search_calls") or 0
+    _p2_in_tokens   = _p2_usage.get("input_tokens") or 0
+    _p2_out_tokens  = _p2_usage.get("output_tokens") or 0
+
     _append_scan_diagnostics({
         "scan_ts":            datetime.now(timezone.utc).isoformat(),
         "accounts_count":     len(X_SELECT_ACCOUNTS),
@@ -1269,6 +1344,15 @@ async def _run_refresh(data_service) -> Optional[dict]:
         "top_tickers":        len(snapshot.get("top_tickers") or []),
         "cache_write_status": _write_status,
         "error":              None,
+        # ── Cost aggregation fields (additive — existing keys are never removed) ──
+        "phase1_cost_in_usd_ticks":  _p1_cost_ticks,
+        "phase2_cost_in_usd_ticks":  _p2_cost_ticks,
+        "total_cost_in_usd_ticks":   _p1_cost_ticks + _p2_cost_ticks,
+        "phase1_x_search_calls":     _p1_x_search,
+        "phase2_x_search_calls":     _p2_x_search,
+        "total_input_tokens":        _p1_in_tokens + _p2_in_tokens,
+        "total_output_tokens":       _p1_out_tokens + _p2_out_tokens,
+        "fresh_trades_fallback_used": _ft_fallback_used,
     })
 
     _save_disk_cache(snapshot)

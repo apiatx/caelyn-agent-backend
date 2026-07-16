@@ -726,44 +726,59 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
         x_search_config: dict = None,
         system_text: str = None,
         max_output_tokens: int = 3000,
+        caller_label: str = "",
+        _usage_out: dict = None,
     ) -> dict:
         """
-        Call the xAI Responses API with x_search enabled.
+        Call the xAI Responses API with optional x_search tool.
+
         If raw_mode=True, returns the raw text analysis instead of trying to parse JSON.
-        If use_deep_model=True, uses the reasoning model for deeper X searching.
-        x_search_config can include from_date, to_date, etc.
-        system_text, when provided, is prepended as a system message before the user prompt
-        so that full trading context (system prompt + market data) is preserved when Grok
-        acts as a final or solo reasoning model.
-        max_output_tokens caps output (and reasoning) token generation — critical for cost
-        control with reasoning models.  Default 3000; synthesis calls pass 4000.
+        If use_deep_model=True, uses the reasoning model for deeper synthesis.
+        x_search_config can include from_date, to_date, allowed_x_handles, etc.
+        x_search_config={"enabled": False} disables the X Search tool entirely —
+          the request is sent without any tools array, saving the x_search cost premium.
+        system_text, when provided, is prepended as a system message before the user prompt.
+        max_output_tokens caps output (and reasoning) token generation.  Default 3000.
+        caller_label is included in log lines for per-call cost attribution
+          (e.g. "social_phase1_batch_1", "social_phase2", "social_query_freeform").
+        _usage_out, if a dict is passed, is populated with provider usage metadata after
+          the call completes (cost_in_usd_ticks, tokens, x_search_calls, request_id, etc.).
+          The return value of this function is never altered regardless of _usage_out.
         """
         model = self.deep_model if use_deep_model else self.model
+        _label_tag = f" [{caller_label}]" if caller_label else ""
 
-        # Cost control: limit x_search results to keep input tokens reasonable.
-        # Default 15 results per search (xAI default is much higher).
-        x_search_opts = dict(x_search_config or {})
-        x_search_opts.setdefault("num_x_results", 15)
+        # Determine whether X Search is enabled for this call.
+        # x_search_config={"enabled": False} omits the tool entirely; any other value
+        # (or None) enables it with the default 15-result cap.
+        _x_search_enabled = not (
+            isinstance(x_search_config, dict) and x_search_config.get("enabled") is False
+        )
+        if _x_search_enabled:
+            # Cost control: limit x_search results to keep input tokens reasonable.
+            # Default 15 results per search (xAI default is much higher).
+            x_search_opts = {k: v for k, v in (x_search_config or {}).items() if k != "enabled"}
+            x_search_opts.setdefault("num_x_results", 15)
+        else:
+            x_search_opts = {}
 
         input_messages = []
         if system_text:
             input_messages.append({"role": "system", "content": system_text})
         input_messages.append({"role": "user", "content": prompt})
 
-        payload = {
+        payload: dict = {
             "model": model,
             "max_output_tokens": max_output_tokens,
-            "tools": [
-                {
-                    "type": "x_search",
-                    "x_search": x_search_opts,
-                }
-            ],
             "input": input_messages,
         }
+        if _x_search_enabled:
+            payload["tools"] = [{"type": "x_search", "x_search": x_search_opts}]
 
-        ctx_tag = f", system={len(system_text):,}chars" if system_text else ""
-        print(f"[XAI] Calling {model} max_out={max_output_tokens} (raw_mode={raw_mode}, x_search_config={x_search_opts}{ctx_tag})")
+        ctx_tag    = f", system={len(system_text):,}chars" if system_text else ""
+        xsrch_tag  = f"x_search={x_search_opts}" if _x_search_enabled else "x_search=DISABLED"
+        print(f"[XAI]{_label_tag} Calling {model} max_out={max_output_tokens} "
+              f"(raw_mode={raw_mode}, {xsrch_tag}{ctx_tag})")
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -775,29 +790,69 @@ Be specific and opinionated — generic blue chips like AAPL or MSFT only if the
 
             if response.status_code != 200:
                 error_text = response.text[:500]
-                print(f"[XAI] API error {response.status_code}: {error_text}")
+                print(f"[XAI]{_label_tag} API error {response.status_code}: {error_text}")
                 return {"error": f"xAI API returned {response.status_code}", "detail": error_text}
 
             data = response.json()
 
+            # ── Provider usage metadata ──────────────────────────────────────
+            # xAI Responses API returns cost_in_usd_ticks as an integer; the
+            # exact USD conversion factor is not documented — raw ticks are
+            # preserved without conversion.
+            _usage  = data.get("usage") or {}
+            _stu    = _usage.get("server_side_tool_usage_details") or {}
+            _itd    = _usage.get("input_tokens_details") or {}
+            _otd    = _usage.get("output_tokens_details") or {}
+            _req_id = data.get("id", "")
+
+            _usage_meta = {
+                "request_id":                 _req_id,
+                "model":                      data.get("model", model),
+                "service_tier":               data.get("service_tier", ""),
+                "input_tokens":               _usage.get("input_tokens"),
+                "cached_input_tokens":        _itd.get("cached_tokens"),
+                "output_tokens":              _usage.get("output_tokens"),
+                "reasoning_tokens":           _otd.get("reasoning_tokens"),
+                "total_tokens":               _usage.get("total_tokens"),
+                "num_sources_used":           _usage.get("num_sources_used"),
+                "num_server_side_tools_used": _usage.get("num_server_side_tools_used"),
+                "x_search_calls":             _stu.get("x_search_calls"),
+                "cost_in_usd_ticks":          _usage.get("cost_in_usd_ticks"),
+            }
+            print(
+                f"[XAI_USAGE]{_label_tag} "
+                f"req={_req_id[:8] if _req_id else '?'} "
+                f"model={_usage_meta['model']} "
+                f"in={_usage_meta['input_tokens']} "
+                f"(cached={_usage_meta['cached_input_tokens']}) "
+                f"out={_usage_meta['output_tokens']} "
+                f"(reasoning={_usage_meta['reasoning_tokens']}) "
+                f"total={_usage_meta['total_tokens']} "
+                f"x_search_calls={_usage_meta['x_search_calls']} "
+                f"sources_used={_usage_meta['num_sources_used']} "
+                f"cost_ticks={_usage_meta['cost_in_usd_ticks']}"
+            )
+            if _usage_out is not None:
+                _usage_out.update(_usage_meta)
+            # ── End usage metadata ───────────────────────────────────────────
+
             text = self._extract_text(data)
 
             if not text:
-                print(f"[XAI] No text in response. Keys: {list(data.keys())}")
+                print(f"[XAI]{_label_tag} No text in response. Keys: {list(data.keys())}")
                 return {"error": "No text in Grok response", "raw": str(data)[:500]}
 
             if raw_mode:
-                # Return raw text analysis — don't try to parse as JSON
-                print(f"[XAI] Raw mode: returning {len(text)} chars of analysis")
+                print(f"[XAI]{_label_tag} Raw mode: returning {len(text)} chars of analysis")
                 return {"_raw_analysis": text, "success": True}
 
             return self._parse_json_response(text)
 
         except httpx.TimeoutException:
-            print(f"[XAI] Request timed out after {timeout}s")
+            print(f"[XAI]{_label_tag} Request timed out after {timeout}s")
             return {"error": f"xAI request timed out after {timeout}s"}
         except Exception as e:
-            print(f"[XAI] Error: {e}")
+            print(f"[XAI]{_label_tag} Error: {e}")
             return {"error": str(e)}
     def _extract_text(self, data: dict) -> str:
         """Extract text content from xAI Responses API output."""
