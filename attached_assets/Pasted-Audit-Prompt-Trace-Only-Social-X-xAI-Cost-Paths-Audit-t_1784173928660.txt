@@ -1,0 +1,391 @@
+Audit Prompt — Trace Only Social/X xAI Cost Paths
+
+Audit the backend for every xAI/Grok call that can contribute to the Social page, Home social snapshot, X consensus cache, Ask Livermore, Social query, or any scheduled/background refresh of those features.
+
+This is a forensic audit only. Do not change code. Do not optimize yet. Do not refactor. Do not rename anything.
+
+Scope boundary
+
+Focus only on code paths tied to:
+
+services.x_consensus_cache
+services.social_x
+Social page endpoints
+Home-page social/X consensus endpoints
+Ask Livermore
+/api/social/query
+X consensus refreshes
+XAI calls that read or analyze the configured X_SELECT_HANDLES
+Schedulers, startup jobs, cron jobs, background loops, or stale-cache refreshes that invoke those exact features
+Any shared xAI wrapper behavior triggered by those paths
+
+Do not report unrelated Grok/xAI usage for:
+
+General AI agents
+Portfolio analysis
+Stock analysis
+News analysis
+Theme generation unrelated to Social/X
+Screener analysis
+Options analysis
+Chat endpoints
+Any other feature that does not use the Social/X handle universe or Social/X cache
+
+A generic caller of _call_grok_with_x_search() is not relevant unless it can be reached from the Social/X feature paths above.
+
+Primary files already identified
+
+Start from the actual executable code in:
+
+services/x_consensus_cache.py
+services/social_x.py
+
+The current known production refresh path appears to be:
+
+_run_refresh()
+  → Phase 1: _fetch_batch()
+      → data_service.xai._call_grok_with_x_search(...)
+  → backend scoring
+  → Phase 2 synthesis
+      → data_service.xai._call_grok_with_x_search(...)
+  → normalize
+  → LKG merge
+  → save snapshot
+
+Confirm this from code rather than relying on comments.
+
+Audit objective
+
+Determine whether the apparent daily Social/X pipeline is the only source of the current xAI spend, or whether duplicate, legacy, hidden, retried, or independently scheduled Social/X calls still exist.
+
+Answer these questions with direct code evidence.
+
+1. Build a Social/X-only call graph
+
+Trace outward from these exact functions:
+
+_run_refresh
+_trigger_background_refresh
+get_weekly_snapshot
+trigger_manual_refresh
+_fetch_batch
+build_x_dashboard
+
+For each one, list only callers that can affect the Social/X feature.
+
+For each relevant caller, include:
+
+file
+function or route
+line number
+trigger type
+sync or background
+whether it can produce an xAI call
+conditions required
+
+Classify each trigger as:
+
+scheduled
+startup
+stale-cache catch-up
+page request
+manual refresh
+internal retry
+fallback
+duplicate legacy path
+test/dev only
+unreachable/dead code
+
+Do not dump unrelated references merely because the function name appears in a test, comment, import, or unused helper.
+
+2. Find every Social/X xAI invocation
+
+Search for every invocation of:
+
+_call_grok_with_x_search
+
+Then filter the results to only those reachable from:
+
+Social page
+Home Social/X snapshot
+X consensus cache
+Ask Livermore
+/api/social/query
+configured Social/X handles
+
+For each relevant invocation, report:
+
+file
+function
+phase/purpose
+model selected
+use_deep_model value
+raw_mode value
+system prompt
+X Search enabled or disabled
+allowed handles
+lookback window
+max output tokens
+timeout
+retry behavior
+
+Explicitly answer:
+
+How many xAI calls occur in one clean scheduled refresh?
+How many occur when one Phase-1 batch fails?
+How many occur when Phase 2 fails?
+Are failed requests retried?
+Are retries inside the wrapper, outside the wrapper, or both?
+Can a timeout still result in billable provider work?
+Is Ask Livermore part of the existing Phase-2 call only, or queried separately elsewhere?
+Does /api/social/query make separate xAI calls?
+3. Audit the shared wrapper only as used by Social/X
+
+Inspect the implementation of:
+
+data_service.xai._call_grok_with_x_search
+
+Do not audit every feature that uses it. Report only behavior that affects the Social/X calls.
+
+Determine:
+
+Exact model slug for use_deep_model=False
+Exact model slug for use_deep_model=True
+Whether x_search_config is required to enable X Search
+Whether Phase 2 performs X Search when no x_search_config is supplied
+Whether the wrapper adds a default X Search tool automatically
+Whether the wrapper adds hidden system instructions or extra context
+Default reasoning effort
+Service tier
+Prompt caching behavior
+Retry count
+Backoff behavior
+Fallback model behavior
+Whether one logical call can create multiple provider requests
+Whether usage metadata is returned
+Whether tool-call usage is returned
+Whether cost metadata is returned
+Whether logs contain provider request IDs
+
+This is critical: determine whether the Phase-2 “synthesis” call is actually another X Search call or merely uses a poorly named wrapper.
+
+4. Audit only relevant schedulers and background triggers
+
+Search the repository and deployment configuration for jobs specifically tied to:
+
+x consensus
+social refresh
+X_SELECT_HANDLES
+x_consensus_cache
+social_x
+Ask Livermore
+weekly_snapshot
+manual social refresh
+
+Inspect:
+
+application startup hooks
+lifespan handlers
+periodic asyncio loops
+APScheduler jobs
+cron definitions
+Replit scheduled deployments
+shell scripts
+worker startup commands
+route-triggered background tasks
+external scheduler endpoints
+health-check or warmup paths that may indirectly refresh Social/X
+
+For every relevant scheduler, report:
+
+location
+schedule/cadence
+timezone
+target function or endpoint
+enabled by default?
+production only?
+can overlap another refresh?
+
+Do not include generic schedulers that never reach Social/X.
+
+Also identify any scheduler mentioned in deployment configuration but not in backend code.
+
+5. Check for duplicate production trigger paths
+
+Determine whether a refresh can be started through more than one of these paths during the same day:
+
+scheduled job
+stale cache catch-up
+manual refresh
+application startup
+Home endpoint request
+Social endpoint request
+external scheduler endpoint
+
+For each pair of paths, explain whether they can overlap.
+
+Specifically inspect:
+
+The module-level asyncio.Lock
+Number of production workers/processes
+Whether each worker gets its own lock
+Whether multiple instances/deployments can refresh simultaneously
+Whether disk cache freshness is shared across workers
+Whether the 30-minute manual cooldown is process-local
+Whether restarts reset the cooldown
+Whether two concurrent processes can both see stale cache and start refreshes
+Whether deployment restarts can cause additional scans
+
+State clearly whether the existing lock is:
+
+process-safe
+worker-safe
+instance-safe
+distributed
+
+Do not assume one worker. Verify the actual deployment/start command.
+
+6. Inspect /api/social/query separately
+
+The code comments state that /api/social/query imports X_SELECT_HANDLES.
+
+Audit the full route and service path.
+
+Report:
+
+Does it call xAI?
+Does it search the same handles again?
+Is it user-triggered?
+Does loading the Social page call it automatically?
+Does it have its own cache?
+Does it use a different prompt/model?
+Does it have rate limits or cooldowns?
+Can frontend polling trigger it repeatedly?
+Is it distinct from the cached dashboard endpoint?
+
+Do not assume that sharing X_SELECT_HANDLES means it shares the same cache.
+
+7. Inspect Home and Social frontend request behavior only as needed
+
+Only inspect frontend code enough to identify backend call frequency.
+
+Determine:
+
+Which endpoint loads the Home social snapshot
+Which endpoint loads the Social dashboard
+Whether either endpoint automatically triggers refresh
+Whether the frontend polls
+Poll interval
+Whether React effects can double-call in development or production
+Whether page focus/reconnect triggers refetch
+Whether the manual refresh endpoint can be invoked more than once
+Whether both Home and Social pages independently initiate stale refreshes
+
+Do not perform a frontend design audit.
+
+8. Reconcile stale comments with executable behavior
+
+Create a small table comparing comments versus live constants/code for:
+
+active handle count
+batch count
+calls per refresh
+TTL
+automatic refresh cadence
+refresh window
+manual cooldown
+Phase-1 concurrency
+lookback window
+
+Treat executable code as authoritative.
+
+Explicitly confirm whether the current runtime is:
+
+16 handles
+2 Phase-1 calls
+1 Phase-2 call
+3 expected calls per clean refresh
+23-hour TTL
+7-day rolling search window
+
+If not, show the actual values.
+
+9. Use existing logs and diagnostics
+
+Inspect existing Social/X diagnostics, provider logs, and cache metadata where available.
+
+For the latest available period, report:
+
+number of refresh attempts
+successful refreshes
+failed refreshes
+manual refreshes
+stale catch-up refreshes
+scheduled refreshes
+Phase-1 requests
+Phase-2 requests
+timeouts
+retries
+LKG partial writes
+aborted scans
+
+Where possible, include timestamps and provider request IDs.
+
+Do not estimate unseen production activity from code alone. Separate:
+
+Proven by logs
+Possible from code
+Not verifiable from available data
+
+If logs are insufficient, say exactly which instrumentation is missing.
+
+10. Required final output
+
+Return a concise forensic report with these sections:
+
+A. Confirmed Social/X xAI paths
+
+List each real path that can produce a provider call.
+
+B. Expected calls per normal refresh
+
+Show exact call count and purpose.
+
+C. Potential duplicate or hidden calls
+
+Only include paths supported by code or deployment configuration.
+
+For each, classify:
+
+confirmed active
+possible
+legacy but reachable
+dead/unreachable
+unknown due to missing external configuration
+D. Phase-2 X Search verdict
+
+State clearly whether Phase 2 performs X Search.
+
+E. /api/social/query verdict
+
+State clearly whether it independently spends xAI money.
+
+F. Concurrency and duplicate-refresh risk
+
+State whether multiple workers or instances can bypass the module lock.
+
+G. Most likely cost drivers
+
+Rank only verified or strongly supported causes.
+
+H. Files that would need changes later
+
+List them, but do not change them.
+
+I. Exact next recommendation
+
+Recommend the smallest safe next step based on evidence.
+
+J. No-code-change confirmation
+
+Confirm that this audit made no code changes.
