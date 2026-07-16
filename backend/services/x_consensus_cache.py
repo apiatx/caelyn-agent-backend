@@ -1067,9 +1067,37 @@ async def _run_refresh(data_service) -> Optional[dict]:
             _p1_usages.append(_u)
             return text
 
-    batch_texts: list[str] = await asyncio.gather(
-        *[_guarded_batch(b, i + 1) for i, b in enumerate(batches)]
-    )
+    # Hard wall-clock timeout for Phase-1.  httpx timeout=_PHASE1_TIMEOUT only
+    # measures time between received chunks — grok-4.3 x_search sends periodic
+    # heartbeat bytes, so httpx never fires and the gather can block for 26+ min.
+    # asyncio.wait_for() enforces the absolute wall-clock limit.
+    _P1_HARD_TIMEOUT = _PHASE1_TIMEOUT + 15.0  # 135 s
+    try:
+        batch_texts: list[str] = await asyncio.wait_for(
+            asyncio.gather(*[_guarded_batch(b, i + 1) for i, b in enumerate(batches)]),
+            timeout=_P1_HARD_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        print(
+            f"[X_CONSENSUS] Phase-1 hard timeout after {_P1_HARD_TIMEOUT:.0f}s "
+            f"(httpx per-chunk timeout bypassed by chunked stream) — aborting refresh"
+        )
+        _append_scan_diagnostics({
+            "scan_ts":            datetime.now(timezone.utc).isoformat(),
+            "accounts_count":     len(X_SELECT_ACCOUNTS),
+            "batch_count":        len(batches),
+            "batches_returned":   0,
+            "sections_ok":        [],
+            "sections_missing":   ["all"],
+            "lkg_sections_used":  [],
+            "ticker_count":       0,
+            "mention_records":    0,
+            "consensus_picks":    0,
+            "top_tickers":        0,
+            "cache_write_status": "aborted_phase1_hard_timeout",
+            "error":              f"Phase-1 asyncio.wait_for hard timeout after {_P1_HARD_TIMEOUT:.0f}s",
+        })
+        return None
 
     all_account_mentions: list[dict] = []   # for backend scoring
     combined_data: list[str] = []            # raw text for Phase-2 synthesis
@@ -1182,18 +1210,28 @@ async def _run_refresh(data_service) -> Optional[dict]:
     # but contributed zero cited sources while adding a 49% cost premium.
     # Omitting the tool saves that overhead with no material schema change.
     _p2_usage: dict = {}
+    _P2_HARD_TIMEOUT = 135.0  # hard wall-clock; httpx timeout=120 is per-chunk
     try:
-        result = await data_service.xai._call_grok_with_x_search(
-            prompt=synthesis_prompt,
-            raw_mode=False,
-            use_deep_model=True,
-            timeout=120.0,
-            system_text=X_SELECT_TRADER_CONSENSUS_CONTRACT,
-            max_output_tokens=6000,
-            x_search_config={"enabled": False},
-            caller_label="social_phase2",
-            _usage_out=_p2_usage,
+        result = await asyncio.wait_for(
+            data_service.xai._call_grok_with_x_search(
+                prompt=synthesis_prompt,
+                raw_mode=False,
+                use_deep_model=True,
+                timeout=120.0,
+                system_text=X_SELECT_TRADER_CONSENSUS_CONTRACT,
+                max_output_tokens=6000,
+                x_search_config={"enabled": False},
+                caller_label="social_phase2",
+                _usage_out=_p2_usage,
+            ),
+            timeout=_P2_HARD_TIMEOUT,
         )
+    except asyncio.TimeoutError:
+        print(
+            f"[X_CONSENSUS] Phase-2 hard timeout after {_P2_HARD_TIMEOUT:.0f}s "
+            f"(httpx per-chunk timeout bypassed by chunked stream) — aborting refresh"
+        )
+        return None
     except Exception as e:
         print(f"[X_CONSENSUS] Synthesis exception: {e}")
         return None

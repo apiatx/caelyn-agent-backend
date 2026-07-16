@@ -1,0 +1,112 @@
+The Social/X feature is broken after the recent cost-optimization changes.
+
+Fix it in place. Do not roll back unrelated backend work. Do not remove the cost-saving improvements unless one of them is directly causing the failure. The goal is:
+
+Keep Phase 2 X Search disabled
+Keep the duplicate-refresh fix
+Keep the canonical /api/social/query path
+Keep the new cost logging
+Restore the Social page so every section works exactly like before
+
+Currently empty/broken:
+
+X Consensus / Confluence
+Freshest Alpha
+Theme Leadership / Theme Alignment
+Sentiment Acceleration
+Kobeissi Market Pulse
+Ask Livermore
+Portfolio Bias
+
+Start by tracing the live failure from:
+
+provider response
+→ Phase 1 parsing
+→ backend scoring
+→ Phase 2 synthesis
+→ normalization
+→ snapshot write
+→ build_x_dashboard
+→ GET /api/social/x-dashboard
+
+Do not guess. Find the first point where valid data becomes empty or errors.
+
+Check these likely causes from the last changes:
+
+The new X Search disable logic may have created an invalid Phase-2 request payload.
+The provider wrapper return shape may have changed and broken callers.
+Usage/cost logging may be throwing an exception after a successful response.
+Fresh-trades fallback code may be mutating or invalidating raw, normalized, or snapshot.
+New diagnostics fields may reference unset variables on error or fallback paths.
+The scheduler freshness guard may be preventing a needed refresh while the cache is empty.
+/api/social/query rerouting may have broken a path actually used by the frontend.
+The latest cache file may now contain an empty or malformed snapshot.
+
+First inspect:
+
+data/x_consensus_weekly.json
+data/x_consensus_weekly_prior.json
+data/social_scan_diagnostics.json
+
+Report counts for:
+
+raw.consensus_picks
+raw.hype_radar
+raw.market_pulse
+raw.portfolio_bias
+_backend_ranked
+_mention_data
+ask_livermore_signal
+
+Then call:
+
+GET /api/social/x-dashboard
+
+and compare the cache contents with the API output.
+
+If the cache is healthy but the API is empty, fix build_x_dashboard or its loading path.
+
+If the cache is empty, trace the latest refresh logs and fix the exact stage that failed.
+
+After the code fix, trigger exactly one canonical Social/X refresh and verify:
+
+2 Phase-1 batches return data
+all_account_mentions > 0
+_backend_ranked > 0
+Phase 2 returns valid JSON
+raw.consensus_picks > 0
+raw.hype_radar > 0
+raw.market_pulse exists
+raw.portfolio_bias exists
+ask_livermore_signal exists
+cache write succeeds
+
+Then verify GET /api/social/x-dashboard returns populated:
+
+x_consensus
+freshest_alpha.trades
+theme_leadership.themes
+sentiment_acceleration
+market_pulse
+portfolio_bias
+ask_livermore_signal
+
+Important:
+
+Do not broadly roll back commits.
+Do not undo unrelated backend work.
+Do not re-enable Phase-2 X Search unless you prove the disabled-search request itself is malformed and cannot be fixed cleanly.
+Preserve the duplicate-refresh prevention.
+Preserve canonical locking and caching.
+Preserve cost logging.
+Make the smallest code change required to restore the feature.
+Test the actual endpoint, not just unit tests.
+
+At the end, give me:
+
+The exact root cause
+The exact files changed
+The exact fix
+The live section counts after refresh
+Confirmation that the cost-saving changes are still active
+Confirmation that the Social page is fully working again
