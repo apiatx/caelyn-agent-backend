@@ -1,0 +1,442 @@
+Forensic Prompt — Prove the Real Social/X Cost Leaks Before Any Fix
+
+This is a read-only forensic audit and controlled parity investigation focused only on the Social/X pipeline.
+
+Do not refactor production code.
+Do not change account lists.
+Do not change prompts.
+Do not change models.
+Do not change refresh cadence.
+Do not disable any path yet.
+Do not alter the Social API response.
+Do not touch the frontend.
+
+The goal is to prove exactly which paths are creating cost, which paths are duplicates, and whether Phase 2 actually needs live X Search.
+
+Known findings to verify
+
+The previous audit found:
+
+16 active handles
+2 Phase-1 calls per canonical refresh
+1 Phase-2 call per canonical refresh
+3 xAI calls per normal refresh
+Startup catch-up and scheduled refresh often both run on the same day
+/api/social/query contains a separate duplicate consensus pipeline
+Phase 2 appears to enable X Search even though it already receives Phase-1 data
+Current deployment uses one Gunicorn worker
+The existing process-local lock does not protect the duplicate /api/social/query path
+
+Treat these as hypotheses until verified directly from executable code, logs, and provider metadata.
+
+Part 1 — Produce the exact Social/X trigger graph
+
+Trace only the paths related to:
+
+x_consensus_cache
+Social dashboard
+Home Social/X snapshot
+Ask Livermore
+/api/social/query
+X_SELECT_HANDLES
+canonical Social/X scheduled refresh
+
+Start from:
+
+_run_refresh
+_trigger_background_refresh
+get_weekly_snapshot
+trigger_manual_refresh
+_fetch_batch
+build_x_dashboard
+
+For every relevant path, report:
+
+trigger name
+source file
+function or route
+line number
+what invokes it
+when it runs
+whether it calls xAI
+number of xAI calls
+whether it acquires _REFRESH_LOCK
+whether it writes canonical cache
+whether it can overlap another path
+
+Exclude unrelated xAI usage elsewhere in the app.
+
+Part 2 — Verify the canonical refresh call count
+
+For the current active configuration, calculate from executable constants:
+
+active handle count
+batch size
+batch count
+Phase-1 request count
+Phase-2 request count
+total provider requests
+
+Confirm the actual values for:
+
+X_SELECT_ACCOUNTS
+_BATCH_SIZE
+_PHASE1_CONCURRENCY
+_CACHE_TTL_SECONDS
+_WINDOW_START_HOUR
+_WINDOW_END_HOUR
+_MANUAL_COOLDOWN_SECONDS
+
+Also list every stale comment or docstring that contradicts runtime behavior.
+
+Part 3 — Inspect the xAI wrapper behavior exactly
+
+Audit the implementation of:
+
+_call_grok_with_x_search
+
+Only report behavior relevant to Social/X calls.
+
+For both Phase 1 and Phase 2, determine:
+
+model slug
+reasoning effort
+service tier
+raw_mode
+structured-output mode
+system prompt
+max output tokens
+timeout
+retry count
+fallback model
+X Search enabled?
+default number of X results
+allowed handle configuration
+usage metadata returned?
+provider request ID returned?
+provider-reported cost returned?
+
+Explicitly answer:
+
+Does Phase 2 actually invoke the X Search tool?
+If x_search_config is omitted, what exact tool configuration is sent?
+Does one wrapper call ever create multiple provider requests?
+Can retries make the billed request count higher than the application-level call count?
+Can timeout responses still represent billable provider work?
+Does the wrapper log enough information to reconcile against the xAI billing dashboard?
+
+Include the actual wrapper code path that proves each answer.
+
+Part 4 — Prove the startup/scheduled double-fire
+
+Inspect:
+
+application lifespan startup
+_x_consensus_loop
+startup catch-up logic
+daily scheduled logic
+cache freshness checks
+cache write timing
+
+Build a timeline for a server restart occurring:
+
+before 8:00 CT
+between 8:00 and 10:00 CT
+between 10:00 and 18:00 CT
+after 18:00 CT
+
+For each window, explain whether:
+
+startup catch-up runs
+scheduled refresh later runs
+both can run on the same date
+cache freshness prevents the second run
+any “already refreshed today” guard exists
+
+Use the diagnostics log to identify all confirmed double-fire dates.
+
+For each double-fire date, report:
+
+first scan timestamp
+second scan timestamp
+time gap
+whether both completed cleanly
+whether both wrote the cache
+whether either used LKG
+
+Then identify the exact root condition. Do not merely say “restart.”
+
+Answer this precisely:
+
+After a successful startup catch-up, why does the scheduled loop still run again shortly afterward instead of recognizing that the cache is fresh?
+
+Part 5 — Audit /api/social/query as an independent cost path
+
+Read the full route and every helper it invokes.
+
+Split it into:
+
+A. x_select_trader_consensus preset
+
+Determine:
+
+when it returns cache
+when it runs live xAI
+number of xAI calls
+Phase-1 behavior
+Phase-2 behavior
+model
+timeouts
+max tokens
+whether it uses backend scoring
+whether it uses canonical prompts
+whether it writes disk cache
+whether it acquires _REFRESH_LOCK
+whether it has its own retry logic
+
+Then compare it field-by-field with canonical _run_refresh().
+
+Create a table:
+
+Behavior	Canonical _run_refresh	/api/social/query consensus path
+
+Include:
+
+handle list
+batching
+search window
+scoring
+synthesis prompt
+model
+output contract
+locking
+caching
+LKG behavior
+diagnostics
+timeouts
+token limits
+
+Explicitly classify this path as one of:
+
+intentional alternate product
+legacy duplicate
+partial duplicate
+required compatibility path
+unused/dead
+
+Support the classification with route and frontend usage evidence.
+
+B. Free-form Social query
+
+Determine:
+
+whether it always calls xAI
+whether it uses X Search
+rate limit
+frontend callers
+whether page load invokes it
+whether polling invokes it
+whether it is user-initiated only
+Part 6 — Verify actual frontend call behavior
+
+Inspect only enough frontend code to answer:
+
+Which endpoint loads the Social dashboard?
+Which endpoint loads the Home Social/X snapshot?
+Does either automatically call /api/social/query?
+Is /api/social/query invoked on page load?
+Is there polling?
+Is there refetch-on-focus or reconnect?
+Does React Strict Mode create duplicate requests in production?
+Does the refresh button call only the canonical refresh route?
+Are there any hidden or legacy frontend calls to the duplicate consensus preset?
+
+Return exact files and line numbers.
+
+Do not redesign the frontend.
+
+Part 7 — Reconcile provider billing against application scans
+
+Use all available:
+
+Social diagnostics
+application logs
+xAI wrapper logs
+provider request IDs
+timestamps
+usage metadata
+screenshot billing dates, where relevant
+
+For the available date range, create a daily table:
+
+Date	Canonical scans	Duplicate query scans	Manual scans	Free-form calls	Expected provider requests	Confirmed provider requests	Known cost	Unknown gap
+
+If exact provider cost per request is unavailable, say so.
+
+Separate conclusions into:
+
+proven by logs
+proven by code
+strongly inferred
+possible but unverified
+
+Identify any dates where the billing amount cannot be explained by the known Social/X paths.
+
+Do not assume all xAI account spend belongs to this feature.
+
+Part 8 — Controlled Phase-2 X Search parity test
+
+We need to determine whether Phase 2’s live X Search contributes useful information or is redundant.
+
+Do not change production behavior.
+
+Create a local or non-production test harness that:
+
+Loads one existing successful Phase-1 combined_text.
+Loads the exact same rank preamble.
+Loads the exact same system contract.
+Calls the same Grok model twice:
+Control
+
+Current Phase-2 behavior with X Search enabled.
+
+Candidate
+
+Identical Phase-2 request with X Search disabled.
+
+Do not run this repeatedly. Use one representative snapshot first.
+
+Save both raw JSON outputs and compare:
+
+valid JSON
+schema completeness
+consensus_picks membership
+consensus_picks order
+ticker names
+hype scores
+trader counts
+consensus strength
+buzz trend
+thesis
+catalysts
+risk
+trader theses
+market pulse
+portfolio bias
+hype radar
+fresh trades
+Ask Livermore
+
+Classify every difference as:
+
+formatting only
+harmless wording difference
+useful enrichment
+factual discrepancy
+missing field
+ranking drift
+material quality loss
+
+Also report:
+
+input tokens
+cached input tokens
+output tokens
+reasoning tokens
+X Search tool calls
+provider cost
+latency
+
+Do not switch production based on one test.
+
+The purpose is to determine whether a larger shadow sample is justified.
+
+Part 9 — Determine whether exact-cost instrumentation already exists
+
+Inspect whether xAI responses expose any of:
+
+usage.input_tokens
+usage.cached_input_tokens
+usage.output_tokens
+usage.reasoning_tokens
+usage.num_sources_used
+usage.cost_in_usd_ticks
+request_id
+response_id
+tool usage
+
+Report:
+
+which fields are currently returned
+which fields the wrapper discards
+which fields are currently logged
+whether exact Social/X per-request cost can be captured without changing provider behavior
+
+Do not implement instrumentation yet unless a tiny temporary local test is required to inspect the raw response.
+
+Required final report
+
+Return the audit in this structure:
+
+1. Canonical refresh path
+
+Exact call count, models, search behavior, and cost-relevant settings.
+
+2. Confirmed duplicate paths
+
+Only paths proven reachable.
+
+3. Double-fire root cause
+
+Exact code sequence and confirmed dates.
+
+4. /api/social/query verdict
+
+State whether it is a live legacy duplicate, whether the frontend uses it, and whether it can race with canonical refresh.
+
+5. Phase-2 X Search verdict
+
+State:
+
+whether it is active
+what it searches
+whether the one-run parity test showed material value
+cost difference between control and candidate
+6. Billing reconciliation
+
+Explain what portion of observed usage is accounted for and what remains unexplained.
+
+7. Risk-ranked findings
+
+Rank each finding:
+
+critical
+high
+medium
+low
+informational
+8. Smallest safe fixes
+
+List fixes in priority order, but do not implement them.
+
+For each proposed fix, include:
+
+files affected
+behavior preserved
+risk
+expected call reduction
+rollback path
+required parity test
+9. No-production-change confirmation
+
+Confirm:
+
+no production code changed
+no scheduler changed
+no route changed
+no cache changed
+no prompt changed
+no model changed
+no frontend changed
+
+Do not start the event ledger, 30-day bootstrap, 32-handle expansion, or incremental scanning yet. First prove the current billing paths and Phase-2 behavior with hard evidence.
