@@ -170,6 +170,44 @@ class FmpFundamentalsRefresher:
         except (ValueError, TypeError):
             pass
 
+        # ── Profile metadata (description, website, ceo, etc.) ───────────────
+        # Stored in fields["profile"] so ticker-detail can use it without
+        # any request-time FMP calls.  Only non-null/non-empty values are
+        # written; missing values are simply absent from the sub-dict so the
+        # ticker-detail fallback chain can cascade to screener_fundamentals_cache.
+        _profile_meta: dict[str, Any] = {}
+        for _fmp_key, _meta_key in [
+            ("description", "description"),
+            ("website",     "website"),
+            ("ceo",         "ceo"),
+            ("image",       "image"),
+            ("country",     "country"),
+            ("sector",      "sector"),
+            ("industry",    "industry"),
+        ]:
+            _v = profile.get(_fmp_key) or None
+            if _v:
+                _profile_meta[_meta_key] = str(_v)
+        # exchange: stable/profile uses exchangeShortName or exchange key
+        _exch = (
+            profile.get("exchangeShortName")
+            or profile.get("exchange")
+            or None
+        )
+        if _exch:
+            _profile_meta["exchange"] = str(_exch)
+        # beta: stored as float for direct numeric use in ticker-detail
+        try:
+            _beta_raw = profile.get("beta")
+            if _beta_raw is not None:
+                _beta_f = float(_beta_raw)
+                if _beta_f != 0.0:
+                    _profile_meta["beta"] = _beta_f
+        except (ValueError, TypeError):
+            pass
+        if _profile_meta:
+            fields["profile"] = _profile_meta
+
         # ── 2. Income Statement (quarterly, 8Q) ──────────────────────────────
         raw = await self._get("income-statement", {"symbol": sym, "period": "quarter", "limit": 8})
         calls += 1
@@ -464,6 +502,23 @@ class FmpFundamentalsRefresher:
 
             try:
                 result = await self.normalize_symbol(sym)
+
+                # ── No-null-overwrite for profile metadata ────────────────────
+                # If FMP returned an empty/null description (e.g. ADR or micro-cap
+                # with no analyst page) but we already have a good description from
+                # a prior refresh, keep the prior value.  Only profile sub-keys
+                # are merged this way; numeric evidence fields always replace.
+                _existing_snap = snapshots.get(sym.upper())
+                if _existing_snap and _existing_snap.get("fields"):
+                    _old_profile = (_existing_snap["fields"].get("profile") or {})
+                    if _old_profile:
+                        _new_profile = result["fields"].get("profile") or {}
+                        _merged_profile: dict[str, Any] = {**_old_profile}
+                        for _k, _v in _new_profile.items():
+                            if _v is not None and _v != "":
+                                _merged_profile[_k] = _v
+                        result["fields"]["profile"] = _merged_profile
+
                 outcome = upsert_snapshot(
                     symbol=sym,
                     watchlist_id=watchlist_id,

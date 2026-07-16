@@ -1,0 +1,226 @@
+BACKEND ONLY — TICKER DETAIL COMPANY DESCRIPTION COVERAGE FIX
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change scoring.
+Do not change Confluence logic.
+Do not change actionability.
+Do not add request-time FMP calls.
+Do not create a new provider path.
+Do not add LLM calls.
+
+Problem:
+
+The unified ticker popup About section now displays FMP company descriptions when backend returns them. Example: CLFD displays a company profile description.
+
+But OSS and many other tickers show:
+"Company profile unavailable for OSS."
+
+User verified FMP has company profile descriptions for OSS and other missing tickers.
+
+So the issue is likely backend/cache/profile persistence, not frontend rendering.
+
+Goal:
+
+Ensure GET /api/watchlist/ticker-detail/{symbol} returns the cached FMP company profile description whenever FMP has it, using existing cached/scheduled data paths only.
+
+==================================================
+PART 1 — AUDIT DESCRIPTION SOURCES
+==================================================
+
+Trace every backend source that can contain company description:
+
+- screener_fundamentals_cache
+- watchlist_fundamentals_cache
+- FMP company profile cache
+- get_company_profile_cached()
+- get_fundamentals_cached()
+- FmpFundamentalsRefresher
+- any profile/profile_description fields in Neon JSONB
+
+For each source return:
+
+source/table/cache
+field path for description
+example for CLFD
+example for OSS
+example for ANET
+example for TSM
+whether description exists
+last_updated
+whether ticker-detail endpoint reads this source
+
+==================================================
+PART 2 — TICKER DETAIL DESCRIPTION CONTRACT
+==================================================
+
+Audit GET /api/watchlist/ticker-detail/{symbol}.
+
+For:
+
+CLFD
+OSS
+ANET
+TSM
+VRT
+ENTG
+ABCL
+CRWD
+
+Return the exact company object:
+
+company.name
+company.symbol
+company.sector
+company.industry
+company.market_cap
+company.exchange
+company.country
+company.description
+description_source
+description_last_updated
+description_missing_reason
+
+If description is missing, explain exactly why:
+
+- not in watchlist_fundamentals_cache
+- not in screener_fundamentals_cache
+- profile cache stale
+- field stored under another key
+- FMP profile fetch did not persist description
+- ticker symbol mismatch
+- foreign/ADR issue
+- other
+
+==================================================
+PART 3 — FIX DESCRIPTION FALLBACK ORDER
+==================================================
+
+Update ticker-detail company.description source priority to:
+
+1. watchlist_fundamentals_cache.fields.profile.description
+2. watchlist_fundamentals_cache.fields.description
+3. screener_fundamentals_cache.profile.description
+4. screener_fundamentals_cache.description
+5. get_company_profile_cached(sym).description
+6. get_fundamentals_cached(sym).profile.description
+7. any existing cached FMP company profile JSON path
+
+Do not call FMP during ticker-detail request.
+
+Also return metadata:
+
+company.description_source
+company.description_last_updated
+company.description_missing_reason
+
+==================================================
+PART 4 — PATCH SCHEDULED PROFILE PERSISTENCE IF NEEDED
+==================================================
+
+If FmpFundamentalsRefresher currently fetches FMP profile but does not store description, patch the existing scheduled/off-hours refresher to persist:
+
+profile.description
+description
+website
+exchange
+sector
+industry
+country
+market_cap
+
+into the existing fundamentals/profile cache.
+
+Rules:
+
+- Existing scheduled/cached refresh path only.
+- No request-time provider calls.
+- No duplicate updater.
+- Reuse existing FMP budget governor/call spacing.
+- Do not overwrite good existing descriptions with null/empty strings.
+
+==================================================
+PART 5 — TARGETED REFRESH SMOKE TEST
+==================================================
+
+Run a small targeted refresh through the existing fundamentals/profile refresh path for:
+
+OSS
+ANET
+TSM
+VRT
+ENTG
+ABCL
+CRWD
+CLFD
+
+Do not run a full universe backfill.
+
+Validate:
+
+symbol
+description_before
+description_after
+description_length
+description_source
+description_stored_in_cache
+ticker_detail_company_description_present
+provider_calls_used
+endpoint_used
+
+If any still missing, return exact reason.
+
+==================================================
+PART 6 — FINAL REPORT
+==================================================
+
+Return:
+
+COMPANY DESCRIPTION COVERAGE FIX REPORT
+
+DESCRIPTION SOURCE AUDIT:
+[summary/table]
+
+TICKER DETAIL CONTRACT:
+[summary/table]
+
+DESCRIPTION FALLBACK FIX:
+[summary]
+
+SCHEDULED REFRESH PATCH:
+[summary or not needed]
+
+TARGETED REFRESH VALIDATION:
+[table]
+
+FILES CHANGED:
+[list]
+
+End exactly:
+
+COMPANY DESCRIPTION VERDICT
+
+CLFD_DESCRIPTION_PRESENT:
+[YES/NO]
+
+OSS_DESCRIPTION_PRESENT_AFTER_FIX:
+[YES/NO]
+
+ANET_DESCRIPTION_PRESENT_AFTER_FIX:
+[YES/NO]
+
+TICKER_DETAIL_RETURNS_DESCRIPTION:
+[YES/NO/PARTIAL]
+
+DESCRIPTION_SOURCE_METADATA_ADDED:
+[YES/NO]
+
+REQUEST_TIME_FMP_CALLS_ADDED:
+NO
+
+SCHEDULED_REFRESH_PATCHED:
+[YES/NO/NOT_NEEDED]
+
+FRONTEND_READY_FOR_ABOUT_SECTION:
+[YES/NO]

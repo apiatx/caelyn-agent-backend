@@ -3577,23 +3577,78 @@ async def ticker_detail_endpoint(symbol: str):
                 get_company_profile_cached,
                 get_fundamentals_cached,
             )
-            prof = get_company_profile_cached(sym) or {}
-            fdb  = get_fundamentals_cached(sym) or {}
+            from data.watchlist_fundamentals_store import get_snapshot as _get_wf_snap
+
+            prof  = get_company_profile_cached(sym) or {}
+            fdb   = get_fundamentals_cached(sym) or {}
             raw_p = fdb.get("profile") or {}
+
+            # ── watchlist_fundamentals_cache profile metadata ─────────────────
+            # Written by FmpFundamentalsRefresher.normalize_symbol step 1 which
+            # calls /stable/profile directly — richer than the screener-API blob
+            # stored in screener_fundamentals_cache by the Screener Hub warm job.
+            wf_snap    = _get_wf_snap(sym) or {}
+            wf_fields  = wf_snap.get("fields") or {}
+            wf_profile = wf_fields.get("profile") or {}
+            wf_refreshed_at = wf_snap.get("refreshed_at") or None
+
+            # ── 7-level description fallback ──────────────────────────────────
+            # Priority: watchlist_fundamentals_cache (FmpFundamentalsRefresher)
+            #           → screener_fundamentals_cache (Screener Hub warm job)
+            _desc_candidates = [
+                (wf_profile.get("description"),  "watchlist_fundamentals_cache_profile"),
+                (wf_fields.get("description"),   "watchlist_fundamentals_cache_fields"),
+                (raw_p.get("description"),        "screener_fundamentals_cache_profile"),
+                (fdb.get("description"),          "screener_fundamentals_cache_root"),
+            ]
+            description: str | None = None
+            description_source: str | None = None
+            for _d, _src in _desc_candidates:
+                if _d:
+                    description = _d
+                    description_source = _src
+                    break
+
+            description_last_updated: str | None = None
+            if description_source and description_source.startswith("watchlist"):
+                description_last_updated = wf_refreshed_at
+            elif description_source and description_source.startswith("screener"):
+                description_last_updated = (
+                    fdb.get("fetched_at") or fdb.get("updated_at") or None
+                )
+
+            description_missing_reason: str | None = None
+            if not description:
+                if not wf_snap and not fdb:
+                    description_missing_reason = "symbol_not_in_any_cache"
+                elif wf_snap and not wf_profile.get("description") and not raw_p.get("description"):
+                    description_missing_reason = "profile_fetched_but_description_absent_from_fmp"
+                else:
+                    description_missing_reason = "cache_miss_pending_refresh"
+
+            # ── Profile metadata fallback (website / image / ceo / exchange / country) ──
+            # Same priority: watchlist_fundamentals_cache.fields.profile first,
+            # then screener_fundamentals_cache.profile blob.
+            def _pf(key: str) -> str | None:
+                return wf_profile.get(key) or raw_p.get(key) or None
+
             return {
-                "symbol":      sym,
+                "symbol":       sym,
                 "company_name": prof.get("name") or raw_p.get("companyName") or "",
-                "sector":      prof.get("sector") or "",
-                "industry":    prof.get("industry") or "",
-                "market_cap":  prof.get("market_cap"),
-                "exchange":    prof.get("exchange") or "",
-                "country":     prof.get("country") or "",
-                "beta":        prof.get("beta"),
-                "website":     raw_p.get("website") or None,
-                "image":       raw_p.get("image") or None,
-                "description": raw_p.get("description") or None,
-                "ceo":         raw_p.get("ceo") or None,
-                "source":      prof.get("source") or "screener_fundamentals_cache",
+                "sector":       prof.get("sector") or "",
+                "industry":     prof.get("industry") or "",
+                "market_cap":   prof.get("market_cap"),
+                "exchange":     prof.get("exchange") or wf_profile.get("exchange") or "",
+                "country":      prof.get("country") or wf_profile.get("country") or "",
+                "beta":         prof.get("beta") if prof.get("beta") is not None else wf_profile.get("beta"),
+                "website":      _pf("website"),
+                "image":        _pf("image"),
+                "description":  description,
+                "ceo":          _pf("ceo"),
+                "source":       prof.get("source") or "screener_fundamentals_cache",
+                "description_source":       description_source,
+                "description_last_updated": description_last_updated,
+                "description_missing_reason": description_missing_reason if not description else None,
             }
         company = await _aio.to_thread(_fetch_company)
         coverage["company_profile"] = bool(company.get("company_name"))
