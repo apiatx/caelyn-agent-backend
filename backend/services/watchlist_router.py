@@ -1050,24 +1050,38 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         if sym:
             csv_map[sym] = row
 
-    # Get cached quotes (non-blocking); stale cache triggers background refresh
+    # Fetch quotes and name overrides in parallel — both may involve I/O:
+    #   - get_watchlist_quotes: may hydrate disk LKG (sync) or schedule Tradier refresh
+    #   - get_name_overrides: hits a 5-min in-memory cache; on miss makes a Neon call
+    # Running them concurrently saves ~50–300 ms on cold name-override cache.
+    import asyncio as _aio_enrich
     quote_map: dict[str, dict] = {}
-    try:
-        quote_map = await get_watchlist_quotes(tickers)
-    except Exception as _qe:
-        print(f"[WATCHLIST_ENRICH] quote fetch failed (non-fatal): {_qe}")
-
-    now_str = datetime.now(timezone.utc).isoformat() + "Z"
-
-    # Load name overrides once for this enrichment pass — applied last in
-    # _build_ticker_row so they win over Tradier description, FMP quote name,
-    # and CSV columns.  Cache-backed; no DB hit if cache is warm.
     _name_overrides: dict[str, str] = {}
+    _t_fetch = _time.monotonic()
     try:
         from services.name_overrides import get_name_overrides as _get_name_overrides
-        _name_overrides = _get_name_overrides("default")
-    except Exception as _nov_err:
-        print(f"[WATCHLIST_ENRICH] name overrides load failed (non-fatal): {_nov_err}")
+        _loop = _aio_enrich.get_event_loop()
+        _q_res, _n_res = await _aio_enrich.gather(
+            get_watchlist_quotes(tickers),
+            _loop.run_in_executor(None, _get_name_overrides, "default"),
+            return_exceptions=True,
+        )
+        if isinstance(_q_res, Exception):
+            print(f"[WATCHLIST_ENRICH] quote fetch failed (non-fatal): {_q_res}")
+        else:
+            quote_map = _q_res or {}
+        if isinstance(_n_res, Exception):
+            print(f"[WATCHLIST_ENRICH] name overrides load failed (non-fatal): {_n_res}")
+        else:
+            _name_overrides = _n_res or {}
+    except Exception as _fetch_err:
+        print(f"[WATCHLIST_ENRICH] parallel fetch failed (non-fatal): {_fetch_err}")
+    print(
+        f"[WATCHLIST_ENRICH] quote+names fetch_ms={round((_time.monotonic()-_t_fetch)*1000)} "
+        f"quotes={len(quote_map)} name_overrides={len(_name_overrides)}"
+    )
+
+    now_str = datetime.now(timezone.utc).isoformat() + "Z"
 
     def _build_ticker_row(sym: str, base_row: dict) -> dict:
         """Build one enriched ticker row from quote + CSV data."""
@@ -1103,23 +1117,40 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                 except Exception:
                     pass
 
-        # ── Live market fields (always overwrite with freshest Tradier data)
+        # ── Live market fields — use merged quote map (volume already LKG-preserved)
         if q:
             enriched["change_pct_1d"]  = q.get("change_pct_1d")
-            enriched["volume"]         = q.get("volume")
-            enriched["average_volume"] = q.get("average_volume")
-            rel_vol = q.get("relative_volume")
-            if rel_vol is None:
-                v  = q.get("volume")
-                av = q.get("average_volume")
-                if v is not None and av:
-                    try:
-                        rel_vol = round(float(v) / float(av), 4)
-                    except Exception:
-                        rel_vol = None
+            # Volume: use whatever the cache gave us (already LKG-merged).
+            # Never write None/zero — fall back to existing enriched value.
+            _q_vol = q.get("volume")
+            _q_avg = q.get("average_volume")
+            if _q_vol is not None and float(_q_vol) > 0 if _q_vol else False:
+                enriched["volume"] = _q_vol
+            # average_volume: same — preserve positive value
+            if _q_avg is not None and float(_q_avg) > 0 if _q_avg else False:
+                enriched["average_volume"] = _q_avg
+            # relative_volume: recompute from effective values
+            _eff_vol = enriched.get("volume")
+            _eff_avg = enriched.get("average_volume")
+            if _eff_vol is not None and _eff_avg and float(_eff_avg) > 0:
+                try:
+                    rel_vol = round(float(_eff_vol) / float(_eff_avg), 4)
+                except Exception:
+                    rel_vol = q.get("relative_volume")
+            else:
+                rel_vol = q.get("relative_volume")
             enriched["relative_volume"]  = rel_vol
             enriched["quote_source"]     = q.get("quote_source") or "tradier"
             enriched["quote_updated_at"] = q.get("quote_updated_at", now_str)
+            # Provenance fields (additive — frontend can use for tooltip/badge)
+            enriched["market_session"]        = q.get("market_session")
+            enriched["quote_is_stale"]        = q.get("quote_is_stale", False)
+            enriched["price_is_stale"]        = q.get("price_is_stale", False)
+            enriched["volume_is_stale"]       = q.get("volume_is_stale", False)
+            enriched["price_source"]          = q.get("price_source") or q.get("quote_source") or "tradier"
+            enriched["volume_source"]         = q.get("volume_source") or q.get("quote_source") or "tradier"
+            enriched["volume_updated_at"]     = q.get("volume_updated_at") or q.get("quote_updated_at")
+            enriched["quote_fallback_reason"] = q.get("quote_fallback_reason")
 
         # ── Vol/MC ratio ───────────────────────────────────────────────────
         _raw_mc = (
@@ -4410,24 +4441,37 @@ async def get_by_id_endpoint(watchlist_id: str):
       - name          (from Tradier description)
       - price         (Tradier live, or CSV fallback)
       - change_pct_1d (Tradier 1D % change)
-      - quote_source / quote_updated_at
+      - quote_source / quote_updated_at / volume_is_stale / price_is_stale / …
 
     All existing LLM-generated fields (catalyst, sentiment, action_note, etc.)
     are preserved.  Quote data is served from a 10-minute in-memory cache;
     a background refresh is triggered automatically when the TTL expires.
+
+    Performance contract:
+      - Zero third-party provider calls in the blocking request path.
+      - Warm response: under 500 ms.
+      - Cold-process response (with existing disk LKG): under 1.5 s.
     """
     import asyncio as _aio
+    import time as _t_get
+    _t0_get = _t_get.monotonic()
+
     store = load_watchlist(watchlist_id)
     if store is None:
         return {"empty": True}
+    _wl_load_ms = round((_t_get.monotonic() - _t0_get) * 1000)
+
+    _t1_get = _t_get.monotonic()
     try:
         store = await _enrich_store_with_quotes(store)
     except Exception as _enrich_err:
         print(f"[WATCHLIST] Quote enrichment failed (returning raw): {_enrich_err}")
+    _enrich_ms = round((_t_get.monotonic() - _t1_get) * 1000)
 
-    # ── FMP fundamentals overlay (weekly cache, non-blocking read) ────────────
-    # Overlays cached FMP values onto csv_data. No-null overwrite: FMP null/missing
-    # values never erase existing CSV values. Theme column is never sourced from FMP.
+    # ── FMP fundamentals overlay (weekly cache) ───────────────────────────────
+    # Wrapped in run_in_executor: get_snapshots_bulk makes a synchronous Neon
+    # call; running it off the event loop prevents blocking page load.
+    _t2_get = _t_get.monotonic()
     try:
         from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_snaps
         from services.watchlist_fundamentals_refresh import apply_fmp_overlays as _apply_fmp
@@ -4437,11 +4481,67 @@ async def get_by_id_endpoint(watchlist_id: str):
                 (r.get("Symbol") or r.get("symbol") or r.get("Ticker") or "").strip().upper()
                 for r in _raw_csv
             ]
-            _snaps = _get_fund_snaps([s for s in _syms if s])
+            _syms_f = [s for s in _syms if s]
+            _loop_get = _aio.get_event_loop()
+            _snaps = await _loop_get.run_in_executor(None, _get_fund_snaps, _syms_f)
             if _snaps:
                 store["csv_data"] = _apply_fmp(_raw_csv, _snaps)
-    except Exception as _fund_err:
+    except Exception:
         pass  # non-fatal — serve unmodified CSV data
+    _fund_ms = round((_t_get.monotonic() - _t2_get) * 1000)
+
+    # ── Phase timing + coverage ───────────────────────────────────────────────
+    _total_ms = round((_t_get.monotonic() - _t0_get) * 1000)
+    _all_rows = [
+        r for s in (store.get("analysis") or {}).get("sections", [])
+        for r in s.get("tickers", [])
+    ]
+    _n = max(len(_all_rows), 1)
+    _price_cov  = sum(1 for r in _all_rows if r.get("price") is not None) / _n
+    _vol_cov    = sum(1 for r in _all_rows if r.get("volume") and float(r["volume"]) > 0) / _n
+    _rv_cov     = sum(1 for r in _all_rows if r.get("relative_volume") is not None) / _n
+    _dv_cov     = sum(1 for r in _all_rows if r.get("dollar_volume") is not None) / _n
+    _vm_cov     = sum(1 for r in _all_rows if r.get("vol_mc_pct") is not None) / _n
+    _vol_stale  = sum(1 for r in _all_rows if r.get("volume_is_stale")) / _n
+
+    # Determine data_state from quote cache freshness
+    try:
+        from services.watchlist_quote_cache import (
+            _cache_ts as _qts, _QUOTE_TTL as _qttl, _get_lock as _qlock
+        )
+        _qage   = _t_get.monotonic() - _qts
+        _q_refreshing = _qlock().locked()
+        if _qage < _qttl and not _q_refreshing:
+            _data_state = "fresh"
+        elif _q_refreshing:
+            _data_state = "refreshing"
+        else:
+            _data_state = "cached"
+    except Exception:
+        _data_state = "cached"
+        _q_refreshing = False
+
+    print(
+        f"[WATCHLIST_GET] wl={watchlist_id} total_ms={_total_ms} "
+        f"watchlist_load_ms={_wl_load_ms} row_enrichment_ms={_enrich_ms} "
+        f"fundamentals_overlay_ms={_fund_ms} "
+        f"saved_ticker_count={len(store.get('tickers', []))} rows={len(_all_rows)} "
+        f"price_coverage={_price_cov:.0%} volume_coverage={_vol_cov:.0%} "
+        f"relative_volume_coverage={_rv_cov:.0%} vol_mc_coverage={_vm_cov:.0%} "
+        f"volume_stale_pct={_vol_stale:.0%} data_state={_data_state}"
+    )
+
+    store["_meta"] = {
+        "data_state":               _data_state,
+        "quotes_refreshing":        _q_refreshing,
+        "price_coverage":           round(_price_cov, 3),
+        "volume_coverage":          round(_vol_cov, 3),
+        "relative_volume_coverage": round(_rv_cov, 3),
+        "dollar_volume_coverage":   round(_dv_cov, 3),
+        "vol_mc_coverage":          round(_vm_cov, 3),
+        "volume_stale_pct":         round(_vol_stale, 3),
+        "response_ms":              _total_ms,
+    }
 
     # ── Alert bus hook: watchlist full-activity metrics ───────────────────────
     # Fire-and-forget; runs after response is already built. No provider calls.
@@ -4459,7 +4559,6 @@ async def get_by_id_endpoint(watchlist_id: str):
                     _price = _row.get("price")
                     _vol = _row.get("volume")
                     _vol_mc_pct = _row.get("vol_mc_pct")
-                    # Only record if we have at least one activity metric
                     if _chg is None and _relvol is None and _vol_mc_pct is None:
                         continue
                     await _rs(

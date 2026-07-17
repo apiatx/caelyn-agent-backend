@@ -1,0 +1,228 @@
+Fix two related Watchlist backend problems:
+
+1. Missing price, volume, VolX, dollar volume, and Vol/MC values—especially after market close.
+2. Slow initial Watchlist loading because GET /api/watchlist/{watchlist_id} can wait on quote enrichment/provider activity.
+
+This is a surgical repair of the existing canonical Watchlist and quote-cache paths. Do not create a second quote service, a replacement Watchlist endpoint, a new provider architecture, or a duplicate cache system.
+
+Audit the live deployed code before editing because it may be ahead of GitHub main.
+
+PART 1 — PRESERVE REGULAR-SESSION QUOTE FIELDS AFTER HOURS
+
+Current architecture to preserve:
+
+* services/watchlist_quote_cache.py
+* services/home_service.py::_batch_quotes()
+* shared canonical per-symbol quote caches such as:
+
+  * tradier:quote:sym:{SYM}
+  * quote:lkg:{SYM}
+  * home:wl_tradier_lkg:{SYM}
+  * any existing durable quote/LKG store already used elsewhere
+* services/watchlist_router.py::_enrich_store_with_quotes()
+* the existing VolX and Vol/MC formulas
+
+The required behavior is field-level last-known-good merging.
+
+A newer quote must not erase a valid older field merely because the newer response is sparse.
+
+Implement one shared canonical quote-merge policy and reuse it wherever Watchlist/Home canonical quote rows are updated.
+
+Field rules:
+
+* price:
+
+  * Use the newest valid finite price greater than zero.
+  * If the newest quote has no valid price, retain the last valid canonical price.
+* change/change percentage:
+
+  * Use the newest finite value.
+  * Otherwise retain the last valid value.
+* volume:
+
+  * Treat null, missing, NaN, empty string, and zero as unavailable unless zero is explicitly proven to be a legitimate completed-session value.
+  * Never overwrite a positive last-known regular-session volume with null/zero from an after-hours or closed-market response.
+* average_volume:
+
+  * Never overwrite a positive cached value with null/zero.
+* relative_volume:
+
+  * Recompute from the effective merged volume and average_volume.
+  * Only use an upstream relative-volume value when the effective inputs are unavailable.
+* dollar_volume:
+
+  * Recompute from effective price × effective regular-session volume.
+* vol_mc_ratio and vol_mc_pct:
+
+  * Recompute from effective dollar volume and market cap.
+* high/low/name:
+
+  * Preserve the latest valid non-empty value.
+
+Do not merge whole quote dictionaries with a simple dictionary replacement when the incoming quote may be sparse.
+
+The canonical LKG must be updated with the fully merged row, not the raw provider row.
+
+Example:
+
+Existing canonical row:
+{
+price: 50,
+volume: 1200000,
+average_volume: 800000
+}
+
+New after-hours Tradier row:
+{
+price: 51,
+volume: null,
+average_volume: null
+}
+
+Required merged result:
+{
+price: 51,
+volume: 1200000,
+average_volume: 800000,
+relative_volume: 1.5
+}
+
+Add provenance metadata without changing the existing display fields:
+
+* market_session
+* quote_is_stale
+* price_is_stale
+* volume_is_stale
+* price_source
+* volume_source
+* quote_updated_at
+* volume_updated_at or volume_market_date
+* quote_fallback_reason
+
+When regular-session volume is retained after hours, mark the volume as cached/LKG, but continue displaying it. Stale-but-valid is far better than blank pretending to be purity.
+
+The retained volume should represent the most recent regular trading session. Do not mix extended-hours trade volume into the full regular-session volume unless an existing provider explicitly returns a correctly combined daily total.
+
+DURABILITY
+
+Prove whether quote:lkg and the related caches survive:
+
+* backend restart
+* Replit redeploy
+* normal weekend
+* three-day market holiday weekend
+
+If the current canonical LKG is only process memory, reuse the existing persistent cache/LKG infrastructure already present in the project. Persist only the necessary canonical quote fields. Do not create a broad new market-data database architecture.
+
+The valid regular-session price/volume snapshot must survive long enough to cover weekends and holidays.
+
+FALLBACK ORDER
+
+For each field—not merely each ticker—use this precedence:
+
+1. Fresh valid canonical Tradier field.
+2. Last-known-good regular-session field.
+3. Existing cached FMP quote field where already available and permitted.
+4. Stored Watchlist/CSV value for price where applicable.
+5. Null only when no valid source has ever existed.
+
+Do not introduce per-ticker FMP calls. Any FMP fallback must use the existing cached or batched provider path and must obey the existing FMP budget controls.
+
+Foreign/exchange-prefixed tickers may remain unsupported where the providers genuinely lack coverage. Preserve the explicit unsupported reason for those symbols.
+
+PART 2 — MAKE WATCHLIST GET CACHE-FIRST AND NON-BLOCKING
+
+GET /api/watchlist/{watchlist_id} must return the saved Watchlist and cached rows quickly. It must not wait for Tradier, FMP, news, AI, options analysis, or any other third-party provider.
+
+Current desired request behavior:
+
+1. Load the saved Watchlist from the existing canonical Postgres/file fallback.
+2. Immediately hydrate rows from already-available canonical quote/LKG data.
+3. Build the saved ticker rows even when analysis sections are incomplete.
+4. Return the response.
+5. If quotes are stale or incomplete, schedule the existing quote refresh in the background.
+6. Subsequent frontend refetches receive refreshed fields.
+
+Change the cold-cache behavior in get_watchlist_quotes():
+
+* Do not await a provider network refresh from the page-load GET.
+* First hydrate the module cache from the existing per-symbol canonical LKG.
+* Return that data immediately.
+* Start the existing locked refresh with asyncio.create_task().
+* If no quote has ever been cached, still return all saved ticker rows immediately using stored analysis/CSV fields.
+
+Preserve the existing 10-minute live quote refresh TTL unless profiling proves it is itself incorrect. The change is that stale/cold reads must serve LKG immediately rather than blocking the page.
+
+Audit all synchronous operations currently executed inside the async GET request, including:
+
+* fundamental snapshot bulk reads
+* name override reads
+* relative-volume snapshot loads
+* Vol/MC snapshot loads
+* any PostgreSQL calls
+* per-ticker stage lookups
+
+Move blocking database/file work to asyncio.to_thread or an executor where necessary.
+
+Do not run the relative-volume Neon load and the Vol/MC Neon load serially if they can safely be loaded together or in parallel. Do not add provider calls to either pass.
+
+Add phase timing logs for:
+
+* watchlist_load_ms
+* quote_lkg_hydrate_ms
+* quote_refresh_scheduled
+* row_enrichment_ms
+* rv_snapshot_ms
+* volmc_snapshot_ms
+* fundamentals_overlay_ms
+* total_response_ms
+* saved_ticker_count
+* price_coverage
+* volume_coverage
+* relative_volume_coverage
+* vol_mc_coverage
+
+Return additive response metadata such as:
+
+{
+"data_state": "cached" | "refreshing" | "fresh",
+"quotes_refreshing": true,
+"price_coverage": 0.98,
+"volume_coverage": 0.96
+}
+
+Do not change or remove existing response fields.
+
+ACCEPTANCE TESTS
+
+Quote correctness:
+
+* During regular hours, valid live fields overwrite older fields.
+* After hours, a sparse quote with valid price but null volume updates price while retaining regular-session volume.
+* Null after-hours volume cannot erase volume, average_volume, relative_volume, dollar_volume, or Vol/MC.
+* Restart the backend after market close and confirm those fields still render.
+* Test at least 20 US Watchlist tickers, including one illiquid small cap.
+* Foreign unsupported tickers continue showing the correct unsupported reason.
+* No ticker with previously valid data becomes blank because of a sparse refresh.
+
+Performance:
+
+* GET /api/watchlist/{id} makes zero third-party provider calls in its blocking request path.
+* Warm response target: under 500 ms.
+* Cold-process response target with existing durable data: under 1.5 seconds.
+* All saved tickers are present in the first response.
+* A background quote refresh does not duplicate when several browser requests arrive together.
+* News, options, earnings, fundamentals refreshes, and AI analysis are not triggered by simply opening the Watchlist page.
+
+Before editing, report the exact measured root causes and timing breakdown.
+
+After editing, report:
+
+* Files changed.
+* Exact field-level merge policy.
+* Existing cache keys/storage reused.
+* Proof of after-hours sparse-quote behavior.
+* Proof across restart.
+* Before/after endpoint timing.
+* Coverage counts for price, volume, VolX, dollar volume, and Vol/MC.
+* Confirmation that no Watchlist persistence or provider architecture was replaced.
