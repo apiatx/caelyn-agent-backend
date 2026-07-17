@@ -170,6 +170,18 @@ class FmpFundamentalsRefresher:
         except (ValueError, TypeError):
             pass
 
+        # ── Store share basis for live market cap resolution ──────────────────
+        # FMP stable/profile returns marketCap AND price in the same payload —
+        # implied_shares = marketCap / price at zero extra cost (0 added calls).
+        # Stored as underscore-prefixed private fields so they are invisible to
+        # the CSV screener columns but readable by market_cap_resolver.
+        if mkt_cap is not None and mkt_cap > 0 and _current_price is not None and _current_price > 0:
+            _implied = round(float(mkt_cap) / _current_price, 0)
+            if _implied > 0:
+                fields["_market_cap_implied_shares"]   = _implied
+                fields["_market_cap_price_at_refresh"] = round(_current_price, 4)
+                fields["_market_cap_static_source"]    = "fmp_profile"
+
         # ── Profile metadata (description, website, ceo, etc.) ───────────────
         # Stored in fields["profile"] so ticker-detail can use it without
         # any request-time FMP calls.  Only non-null/non-empty values are

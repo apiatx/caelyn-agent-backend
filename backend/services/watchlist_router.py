@@ -1057,13 +1057,16 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
     import asyncio as _aio_enrich
     quote_map: dict[str, dict] = {}
     _name_overrides: dict[str, str] = {}
+    fund_snaps: dict[str, dict] = {}
     _t_fetch = _time.monotonic()
     try:
         from services.name_overrides import get_name_overrides as _get_name_overrides
+        from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_snaps_mc
         _loop = _aio_enrich.get_event_loop()
-        _q_res, _n_res = await _aio_enrich.gather(
+        _q_res, _n_res, _f_res = await _aio_enrich.gather(
             get_watchlist_quotes(tickers),
             _loop.run_in_executor(None, _get_name_overrides, "default"),
+            _loop.run_in_executor(None, _get_fund_snaps_mc, tickers),
             return_exceptions=True,
         )
         if isinstance(_q_res, Exception):
@@ -1074,12 +1077,18 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             print(f"[WATCHLIST_ENRICH] name overrides load failed (non-fatal): {_n_res}")
         else:
             _name_overrides = _n_res or {}
+        if isinstance(_f_res, Exception):
+            print(f"[WATCHLIST_ENRICH] fund_snaps load failed (non-fatal): {_f_res}")
+        else:
+            fund_snaps = _f_res or {}
     except Exception as _fetch_err:
         print(f"[WATCHLIST_ENRICH] parallel fetch failed (non-fatal): {_fetch_err}")
     print(
-        f"[WATCHLIST_ENRICH] quote+names fetch_ms={round((_time.monotonic()-_t_fetch)*1000)} "
-        f"quotes={len(quote_map)} name_overrides={len(_name_overrides)}"
+        f"[WATCHLIST_ENRICH] quote+names+fundsnaps fetch_ms={round((_time.monotonic()-_t_fetch)*1000)} "
+        f"quotes={len(quote_map)} name_overrides={len(_name_overrides)} fund_snaps={len(fund_snaps)}"
     )
+    # Pre-load for get_by_id_endpoint's apply_fmp_overlays — avoids a second Neon round-trip
+    store["_fund_snaps_for_apply_fmp"] = fund_snaps
 
     now_str = datetime.now(timezone.utc).isoformat() + "Z"
 
@@ -1170,6 +1179,39 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             _vol_f = float(_vol_f) if _vol_f is not None else None
         except Exception:
             _vol_f = None
+
+        # ── Canonical market cap — live price × implied shares ─────────────
+        # Upgrades the stale CSV value to a live price-derived figure when
+        # the FmpFundamentalsRefresher has stored implied shares (set during
+        # the most recent Sunday refresh cycle).  fund_snaps was loaded in
+        # the parallel gather above — zero extra Neon calls here.
+        try:
+            from services.market_cap_resolver import resolve_canonical_market_cap as _resolve_mc
+            _fund_snap_row   = fund_snaps.get(sym) or {}
+            _fund_fields_mc  = _fund_snap_row.get("fields") or {}
+            _fund_ref_at     = _fund_snap_row.get("refreshed_at")
+            _mc_contract = _resolve_mc(
+                sym,
+                _fund_fields_mc,
+                live_price=_price_f,
+                live_price_source="tradier",
+                static_market_cap_override=_mc,
+                fund_refreshed_at=_fund_ref_at,
+            )
+            _mc_display = _mc_contract.get("market_cap_display")
+            if _mc_display and _mc_display > 0:
+                _mc = _mc_display  # use live/resolved value for vol_mc calc
+            enriched["market_cap_static"]              = _mc_contract.get("market_cap_static")
+            enriched["market_cap_live"]                = _mc_contract.get("market_cap_live")
+            enriched["market_cap_display"]             = _mc_display
+            enriched["market_cap_display_source"]      = _mc_contract.get("market_cap_display_source")
+            enriched["market_cap_display_freshness"]   = _mc_contract.get("market_cap_display_freshness")
+            enriched["market_cap_display_warning_codes"] = _mc_contract.get("market_cap_display_warning_codes")
+            enriched["market_cap_implied_shares"]      = _mc_contract.get("market_cap_implied_shares")
+            enriched["market_cap_live_price"]          = _mc_contract.get("market_cap_live_price")
+        except Exception:
+            pass  # non-fatal: fall back to CSV _mc value
+
         enriched.update(_vol_mc_fields(_price_f, _vol_f, _mc))
 
         # ── More-specific unavail reasons ──────────────────────────────────
@@ -3663,12 +3705,30 @@ async def ticker_detail_endpoint(symbol: str):
             def _pf(key: str) -> str | None:
                 return wf_profile.get(key) or raw_p.get(key) or None
 
+            # Resolve canonical market cap using watchlist_fundamentals_cache share
+            # basis so company.market_cap == fundamentals.market_cap (same resolver,
+            # same implied_shares).  No live price available here (overview not yet
+            # built) so the auto-lookup path inside resolve_canonical_market_cap
+            # reads from the in-process tradier/quote-lkg caches.
+            _static_mc_fb = prof.get("market_cap")
+            try:
+                from services.market_cap_resolver import resolve_canonical_market_cap as _mc_res_c
+                _mc_contract_c = _mc_res_c(
+                    sym,
+                    wf_fields,
+                    static_market_cap_override=_static_mc_fb,
+                    fund_refreshed_at=wf_refreshed_at,
+                )
+                _company_mc = _mc_contract_c.get("market_cap_display") or _static_mc_fb
+            except Exception:
+                _company_mc = _static_mc_fb
+
             return {
                 "symbol":       sym,
                 "company_name": prof.get("name") or raw_p.get("companyName") or "",
                 "sector":       prof.get("sector") or "",
                 "industry":     prof.get("industry") or "",
-                "market_cap":   prof.get("market_cap"),
+                "market_cap":   _company_mc,
                 "exchange":     prof.get("exchange") or wf_profile.get("exchange") or "",
                 "country":      prof.get("country") or wf_profile.get("country") or "",
                 "beta":         prof.get("beta") if prof.get("beta") is not None else wf_profile.get("beta"),
@@ -3842,6 +3902,32 @@ async def ticker_detail_endpoint(symbol: str):
             for canonical_key, snake_key in _FUND_NORM.items():
                 v = raw_fields.get(canonical_key)
                 norm[snake_key] = v  # None when field is missing/stale
+
+            # ── Canonical live market cap override ────────────────────────────
+            # Replaces the raw FMP static value with live_price × implied_shares
+            # so this tab matches company.market_cap (same resolver, same logic).
+            # overview is already populated (step 2 ran before step 5).
+            try:
+                from services.market_cap_resolver import resolve_canonical_market_cap as _mc_res_f
+                _mc_contract_f = _mc_res_f(
+                    sym,
+                    raw_fields,
+                    live_price=overview.get("price"),
+                    live_price_source="tradier",
+                    fund_refreshed_at=snap.get("refreshed_at"),
+                )
+                _mc_disp_f = _mc_contract_f.get("market_cap_display")
+                if _mc_disp_f and _mc_disp_f > 0:
+                    norm["market_cap"] = _mc_disp_f
+                norm["market_cap_static"]              = _mc_contract_f.get("market_cap_static")
+                norm["market_cap_live"]                = _mc_contract_f.get("market_cap_live")
+                norm["market_cap_live_price"]          = _mc_contract_f.get("market_cap_live_price")
+                norm["market_cap_implied_shares"]      = _mc_contract_f.get("market_cap_implied_shares")
+                norm["market_cap_display_source"]      = _mc_contract_f.get("market_cap_display_source")
+                norm["market_cap_display_freshness"]   = _mc_contract_f.get("market_cap_display_freshness")
+                norm["market_cap_display_warning_codes"] = _mc_contract_f.get("market_cap_display_warning_codes")
+            except Exception:
+                pass  # non-fatal: market_cap already set from _FUND_NORM above
 
             # Determine which expected keys are genuinely missing from store
             expected_keys = list(_FUND_NORM.values())
@@ -4469,8 +4555,9 @@ async def get_by_id_endpoint(watchlist_id: str):
     _enrich_ms = round((_t_get.monotonic() - _t1_get) * 1000)
 
     # ── FMP fundamentals overlay (weekly cache) ───────────────────────────────
-    # Wrapped in run_in_executor: get_snapshots_bulk makes a synchronous Neon
-    # call; running it off the event loop prevents blocking page load.
+    # fund_snaps were pre-loaded inside _enrich_store_with_quotes (parallel with
+    # the quote+name fetch) to save a second Neon round-trip.  We pop the temp
+    # key here; if absent (e.g. enrich was skipped), we fall back to a fresh load.
     _t2_get = _t_get.monotonic()
     try:
         from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_fund_snaps
@@ -4482,12 +4569,17 @@ async def get_by_id_endpoint(watchlist_id: str):
                 for r in _raw_csv
             ]
             _syms_f = [s for s in _syms if s]
-            _loop_get = _aio.get_event_loop()
-            _snaps = await _loop_get.run_in_executor(None, _get_fund_snaps, _syms_f)
+            # Prefer fund_snaps pre-loaded by _enrich_store_with_quotes
+            _snaps = store.pop("_fund_snaps_for_apply_fmp", None)
+            if _snaps is None:
+                _loop_get = _aio.get_event_loop()
+                _snaps = await _loop_get.run_in_executor(None, _get_fund_snaps, _syms_f)
             if _snaps:
                 store["csv_data"] = _apply_fmp(_raw_csv, _snaps)
     except Exception:
         pass  # non-fatal — serve unmodified CSV data
+    # Defensive cleanup — remove temp key if enrich was skipped (store unchanged)
+    store.pop("_fund_snaps_for_apply_fmp", None)
     _fund_ms = round((_t_get.monotonic() - _t2_get) * 1000)
 
     # ── Phase timing + coverage ───────────────────────────────────────────────
@@ -6368,4 +6460,77 @@ async def valuation_qa_endpoint(watchlist_id: str):
             "demoted_by_reweight_sample":     demoted[:20],
             "all_changed_sample":             changed[:30],
         },
+    }
+
+
+# ── Admin: market cap audit ────────────────────────────────────────────────────
+@router.get("/admin/market-cap-audit")
+async def market_cap_audit_endpoint(symbols: str = "BE,NVDA,MSFT,TSLA,AAPL,AMZN,META,GOOGL,AMD,PLTR"):
+    """
+    GET /api/watchlist/admin/market-cap-audit?symbols=BE,NVDA,...
+
+    Returns a per-symbol table showing every stage of the canonical market cap
+    resolution pipeline so discrepancies between screener and popup can be diagnosed.
+
+    Reads only from in-memory / Neon caches — zero FMP calls.
+    """
+    import asyncio as _aio_mc
+
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        sym_list = ["BE", "NVDA", "MSFT", "TSLA", "AAPL"]
+
+    from data.watchlist_fundamentals_store import get_snapshots_bulk as _get_snaps_audit
+    from services.fmp_cache_service import get_company_profile_cached as _get_prof_audit
+    from services.market_cap_resolver import (
+        resolve_canonical_market_cap as _resolve_mc_audit,
+        get_live_price_for_mc as _get_price_audit,
+    )
+
+    loop = _aio_mc.get_event_loop()
+    fund_snaps = await loop.run_in_executor(None, _get_snaps_audit, sym_list)
+
+    rows = []
+    for sym in sym_list:
+        snap = fund_snaps.get(sym) or {}
+        fund_fields = snap.get("fields") or {}
+        refreshed_at = snap.get("refreshed_at")
+
+        prof = await loop.run_in_executor(None, _get_prof_audit, sym)
+        screener_mc = (prof or {}).get("market_cap")
+
+        live_price, live_price_src = _get_price_audit(sym)
+
+        contract = _resolve_mc_audit(
+            sym,
+            fund_fields,
+            live_price=live_price,
+            live_price_source=live_price_src,
+            static_market_cap_override=screener_mc,
+            fund_refreshed_at=refreshed_at,
+        )
+
+        rows.append({
+            "symbol":                       sym,
+            "fund_refreshed_at":            refreshed_at,
+            "screener_fundamentals_mc":     screener_mc,
+            "fund_cache_mc_raw":            fund_fields.get("Market Cap"),
+            "implied_shares":               contract.get("market_cap_implied_shares"),
+            "price_at_refresh":             contract.get("market_cap_price_at_static_refresh"),
+            "live_price":                   live_price,
+            "live_price_source":            live_price_src,
+            "market_cap_static":            contract.get("market_cap_static"),
+            "market_cap_static_source":     contract.get("market_cap_static_source"),
+            "market_cap_live":              contract.get("market_cap_live"),
+            "market_cap_live_source":       contract.get("market_cap_live_source"),
+            "market_cap_display":           contract.get("market_cap_display"),
+            "market_cap_display_source":    contract.get("market_cap_display_source"),
+            "market_cap_display_freshness": contract.get("market_cap_display_freshness"),
+            "warning_codes":                contract.get("market_cap_display_warning_codes"),
+        })
+
+    return {
+        "symbols_audited": len(rows),
+        "note": "All values from cache — no FMP calls. market_cap_display is what screener+popup will show after the next FmpFundamentalsRefresher cycle stores implied_shares.",
+        "rows": rows,
     }

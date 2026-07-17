@@ -1,0 +1,289 @@
+BACKEND ONLY — CANONICAL MARKET CAP SYNC + PRICE-SENSITIVE REFRESH FIX
+
+Backend repo only.
+
+Do not touch frontend yet.
+Do not change Confluence scoring.
+Do not change actionability.
+Do not change fundamental formulas except market-cap/price-sensitive fields explicitly listed here.
+Do not add request-time FMP calls.
+Do not create a new provider path if existing FMP/Tradier/cache paths can be reused.
+Do not rewrite the fundamentals refresher.
+
+Problem:
+
+Watchlist screener and ticker popup show different market caps for the same ticker.
+
+Example:
+
+BE / Bloom Energy:
+- Watchlist screener shows ~$82B market cap
+- Popup Fundamentals tab shows ~$69B market cap
+- TradingView currently shows closer to ~$58B after selloff
+
+Both app values are stale/inconsistent.
+
+Likely cause:
+market_cap is being treated as a weekly FMP fundamental and/or read from different cached sources by screener vs ticker-detail.
+
+Market cap is price-sensitive and must update with current/latest quote.
+
+Goal:
+
+Create one canonical market cap field used by both:
+
+1. Watchlist screener Fundamental toggle
+2. Ticker popup Fundamentals tab
+3. Ticker-detail endpoint
+4. Confluence/valuation display if it shows market cap
+
+==================================================
+PART 1 — AUDIT CURRENT MARKET CAP SOURCES
+==================================================
+
+Trace every place BE market cap is sourced.
+
+For BE, ANET, TSM, VRT, CRWD, OSS, CLFD, HIMS:
+
+Report:
+
+- watchlist screener market_cap value
+- popup/ticker-detail market_cap value
+- watchlist_fundamentals_cache market_cap
+- watchlist_fundamentals_cache fields.profile.marketCap / market_cap
+- screener_fundamentals_cache market_cap
+- company profile cache marketCap
+- quote cache price
+- canonical quote price
+- FMP profile price if stored
+- any shares outstanding / implied shares field if present
+- last_updated for each source
+
+Find exactly why screener and popup differ.
+
+Do not patch until this audit is complete.
+
+==================================================
+PART 2 — DEFINE CANONICAL MARKET CAP CONTRACT
+==================================================
+
+Add/standardize this backend contract:
+
+market_cap_static
+market_cap_static_source
+market_cap_static_last_updated
+
+market_cap_price_at_static_refresh
+market_cap_implied_shares
+market_cap_implied_shares_source
+
+market_cap_live
+market_cap_live_source
+market_cap_live_price
+market_cap_live_price_source
+market_cap_live_last_updated
+
+market_cap_display
+market_cap_display_source
+market_cap_display_freshness
+market_cap_display_warning_codes
+
+Rules:
+
+1. market_cap_static comes from existing FMP company profile / market cap cache.
+2. market_cap_implied_shares is derived as:
+   market_cap_static / market_cap_price_at_static_refresh
+   only if both values are positive and sane.
+3. market_cap_live is derived as:
+   latest_canonical_price * market_cap_implied_shares
+4. market_cap_display should prefer market_cap_live when available.
+5. If no latest price or no implied shares, fall back to market_cap_static.
+6. Do not overwrite a good market cap with null/zero.
+7. 0, null, negative, or absurd market caps should be rejected and flagged.
+8. Do not call FMP during ticker-detail request.
+
+==================================================
+PART 3 — PRICE SOURCE PRIORITY
+==================================================
+
+For latest price used in market_cap_live, use:
+
+1. canonical Tradier quote cache price
+2. watchlist quote cache price
+3. selected quote/LKG price if canonical is fresh
+4. FMP profile price only as fallback
+5. no price → fall back to market_cap_static
+
+Do not add new quote calls if existing canonical quote cache has the ticker.
+
+Market cap should move whenever canonical quote price updates.
+
+==================================================
+PART 4 — PATCH FUNDAMENTALS REFRESHER TO STORE SHARE BASIS
+==================================================
+
+In the existing scheduled FMP fundamentals/profile refresh path, when FMP profile/market-cap data is refreshed, store:
+
+- market_cap_static
+- market_cap_price_at_static_refresh
+- market_cap_static_source
+- market_cap_static_last_updated
+- market_cap_implied_shares
+
+If FMP returns marketCap and price in the same profile payload, use those to derive implied shares.
+
+If there is already a better sharesOutstanding field in cache, use that instead and document it.
+
+No request-time calls.
+
+No full-universe emergency backfill unless explicitly triggered.
+
+==================================================
+PART 5 — CREATE ONE MARKET CAP NORMALIZER
+==================================================
+
+Create one helper function, for example:
+
+resolve_canonical_market_cap(symbol, fundamentals_row, quote_row, profile_row)
+
+It should return the canonical contract from Part 2.
+
+Use this helper in:
+
+- watchlist screener row builder
+- ticker-detail endpoint company/fundamentals object
+- any popup fundamentals payload
+- confluence row payload if market cap is included
+
+Do not let each endpoint independently pick market cap from a different field.
+
+==================================================
+PART 6 — REFRESH CADENCE
+==================================================
+
+Separate cadence:
+
+A. Static fundamentals:
+weekly/off-hours is okay:
+- revenue
+- margins
+- FCF
+- EBIT
+- op income
+- debt
+- EPS/revenue growth
+- estimates
+
+B. Market cap live/display:
+should update whenever quote cache updates, because it derives from latest price.
+
+C. Market cap static/share basis:
+refresh nightly or with existing weekly FMP profile refresh.
+
+Preferred:
+- Do not add a new FMP nightly call for every ticker if unnecessary.
+- Use cached implied shares + live Tradier price for daily/intraday market cap.
+- Refresh implied shares/profile nightly only if cost-safe, otherwise weekly is acceptable because share count changes slowly.
+
+==================================================
+PART 7 — VALIDATION
+==================================================
+
+Validate with:
+
+BE
+ANET
+TSM
+VRT
+CRWD
+OSS
+CLFD
+HIMS
+NVDA
+MU
+
+For each report:
+
+symbol
+static_market_cap
+static_price_at_refresh
+implied_shares
+latest_quote_price
+live_market_cap
+display_market_cap
+display_source
+screener_market_cap
+popup_market_cap
+screener_popup_match
+freshness
+warning_codes
+
+Acceptance:
+
+1. BE screener and popup show the same market cap.
+2. BE market cap is closer to latest quote-derived value, not stale weekly FMP value.
+3. Screener and popup use identical market_cap_display.
+4. No endpoint shows $82B while another shows $69B for same ticker.
+5. No request-time FMP calls added.
+6. Missing quote falls back to static market cap with a freshness warning.
+7. Existing non-price-sensitive fundamentals remain unchanged.
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+CANONICAL MARKET CAP SYNC REPORT
+
+ROOT CAUSE:
+[why screener and popup differed]
+
+CURRENT BE AUDIT:
+[all market cap sources and timestamps]
+
+CANONICAL CONTRACT:
+[summary]
+
+FILES CHANGED:
+[list]
+
+MARKET CAP NORMALIZER:
+[summary]
+
+REFRESH CADENCE:
+[summary]
+
+VALIDATION:
+[table by symbol]
+
+End exactly:
+
+MARKET CAP SYNC VERDICT
+
+SCREENER_AND_POPUP_USE_SAME_MARKET_CAP:
+[YES/NO]
+
+BE_MARKET_CAP_SYNCED:
+[YES/NO]
+
+MARKET_CAP_MOVES_WITH_LATEST_QUOTE:
+[YES/NO]
+
+FUNDAMENTALS_WEEKLY_REFRESH_UNCHANGED:
+[YES/NO]
+
+NO_REQUEST_TIME_FMP_CALLS:
+[YES/NO]
+
+CANONICAL_MARKET_CAP_HELPER_USED:
+[YES/NO]
+
+STATIC_MARKET_CAP_FALLBACK_AVAILABLE:
+[YES/NO]
+
+WARNING_CODES_FOR_STALE_OR_FALLBACK_DATA:
+[YES/NO]
+
+FRONTEND_READY:
+[YES/NO]
