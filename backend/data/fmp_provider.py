@@ -693,8 +693,14 @@ class FMPProvider:
         raw_items: list = []
         for resp in (sym_resp, name_resp):
             if isinstance(resp, Exception):
+                _label = "search-symbol" if resp is sym_resp else "search-name"
+                print(f"[FMP] security_search {_label} exception: {type(resp).__name__}: {resp}")
                 continue
-            if getattr(resp, "status_code", None) not in (200, 201):
+            sc = getattr(resp, "status_code", None)
+            if sc not in (200, 201):
+                _label = "search-symbol" if resp is sym_resp else "search-name"
+                _body = (resp.text or "")[:120] if hasattr(resp, "text") else ""
+                print(f"[FMP] security_search {_label} status={sc} body={_body!r}")
                 continue
             try:
                 data = resp.json()
@@ -710,7 +716,15 @@ class FMPProvider:
             build_canonical_registry,
             resolve_with_registry,
         )
-        registry = build_canonical_registry()
+        # Run synchronous DB call in a thread so it does not block the event loop.
+        # build_canonical_registry() has its own exception handler and returns {}
+        # on any failure, so this never raises.
+        try:
+            registry = await _aio.get_event_loop().run_in_executor(
+                None, build_canonical_registry
+            )
+        except Exception:
+            registry = {}
 
         q_upper = q.upper()
         seen_canonical: set = set()

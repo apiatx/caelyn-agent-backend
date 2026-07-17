@@ -1,0 +1,72 @@
+Fix the broken manual ticker security search used by the Watchlist page.
+
+Current user-visible failure:
+
+“Security search unavailable. Try again.”
+
+This is a surgical repair. Do not redesign the Watchlist system, create a new watchlist architecture, replace existing storage, rename existing endpoints, or roll back unrelated work.
+
+Audit the live deployed code first and identify the exact endpoint the frontend currently calls when the user types into the manual ticker-add field.
+
+Requirements:
+
+1. Trace the complete request:
+
+   * Browser-facing search URL.
+   * Express proxy URL, if applicable.
+   * FastAPI endpoint.
+   * Underlying provider/helper.
+   * Actual HTTP status and response body at the failing layer.
+
+2. Search the existing backend for an established security, symbol, company, instrument, or ticker-search implementation before writing anything new.
+
+   * Reuse existing FMP clients, API-key handling, retry logic, normalization, and provider services.
+   * Do not create a second FMP service or parallel security master.
+
+3. FMP is the intended provider and the paid plan includes:
+
+   * Stock Symbol Search.
+   * Company Name Search.
+   * Exchange Variants.
+     Use the existing FMP service/path already present in the backend.
+
+4. Repair or restore the exact endpoint expected by the frontend.
+   It must:
+
+   * Accept partial ticker or company-name queries.
+   * Return HTTP 200 with a predictable JSON payload.
+   * Return an empty results array for no matches, not a server error.
+   * Normalize at least symbol, company/name, exchange, and asset/security type when available.
+   * Exclude obvious non-stock results when the existing product behavior requires stocks.
+   * Never expose the FMP API key to the browser.
+
+5. Preserve all existing canonical watchlist endpoints and persistence behavior. In particular, do not alter or replace the route currently used to add tickers to an existing watchlist.
+
+6. Confirm route ordering so a dynamic route such as `/api/watchlist/{wid}` cannot capture a fixed search route.
+
+7. Add useful error logging:
+
+   * Requested query.
+   * Upstream provider status.
+   * Internal endpoint status.
+   * Safe, truncated upstream response.
+     Never log secrets.
+
+Acceptance tests:
+
+* Search `AAPL` returns Apple.
+* Search `Palantir` returns PLTR.
+* Search a partial term such as `NVID` returns NVDA.
+* A nonsense query returns HTTP 200 with zero results.
+* The endpoint works through the same public/proxied URL used by the Watchlist browser.
+* Adding one returned ticker still persists it to the currently selected canonical watchlist.
+* Duplicate handling remains intact.
+* Search and manual add do not trigger a full watchlist refresh, AI analysis, or unnecessary fundamental-data refresh.
+
+Before changing code, report the precise root cause in one sentence. After fixing it, provide:
+
+* Root cause.
+* Files changed.
+* Exact endpoint chain.
+* Test requests and returned statuses.
+* Confirmation that existing watchlist persistence paths were preserved.

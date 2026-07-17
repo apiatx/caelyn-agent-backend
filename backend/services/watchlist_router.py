@@ -4215,25 +4215,32 @@ async def security_search_endpoint(request: Request, q: str = "", limit: int = 2
       canonical_ticker, provider_symbol, company_name, exchange,
       exchange_short_name, country, currency, security_type,
       is_actively_trading, display_symbol
+
+    Always returns HTTP 200 — empty results array on no match or provider error.
     """
     q = q.strip()
     if len(q) < 1:
-        return {"query": q, "results": [], "error": "query_too_short"}
+        return {"query": q, "results": [], "count": 0, "error": "query_too_short"}
 
+    print(f"[WATCHLIST-SEARCH] query={q!r} limit={min(limit, 50)}")
     try:
         from config import FMP_API_KEY as _fmp_key
         from data.fmp_provider import FMPProvider
+        if not _fmp_key:
+            print("[WATCHLIST-SEARCH] FMP_API_KEY not configured — returning empty")
+            return {"query": q, "results": [], "count": 0, "error": "provider_not_configured"}
         provider = FMPProvider(_fmp_key)
         results = await provider.search_securities(q, limit=min(limit, 50))
+        print(f"[WATCHLIST-SEARCH] query={q!r} → {len(results)} results "
+              f"(top: {[r['canonical_ticker'] for r in results[:5]]})")
+        return {
+            "query":   q,
+            "results": results,
+            "count":   len(results),
+        }
     except Exception as exc:
-        print(f"[WATCHLIST-SEARCH] security_search failed: {exc}")
-        raise HTTPException(status_code=500, detail="Search unavailable")
-
-    return {
-        "query":   q,
-        "results": results,
-        "count":   len(results),
-    }
+        print(f"[WATCHLIST-SEARCH] ERROR query={q!r} exc={type(exc).__name__}: {exc}")
+        return {"query": q, "results": [], "count": 0, "error": "provider_error"}
 
 
 # ── Parameterized endpoints (MUST be after static paths) ────────────────────
