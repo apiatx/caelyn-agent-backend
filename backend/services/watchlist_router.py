@@ -3347,15 +3347,19 @@ async def earnings_by_symbols_endpoint(body: EarningsBySymbolsRequest):
         }
 
     try:
-        from services.user_earnings_service import get_earnings_for_symbols as _get_e_bys  # type: ignore
-        events_raw, missing_symbols, meta = await _get_e_bys(
+        from services.user_earnings_service import (  # type: ignore
+            get_upcoming_earnings_for_symbols as _gue_bys,
+        )
+        result = await _gue_bys(
             symbols   = symbols,
-            fmp_key   = _fmp_key_bys,
             from_date = from_date,
             to_date   = to_date,
+            fmp_key   = _fmp_key_bys,
+            sync_on_miss            = True,   # explicit POST — wait for sync
+            background_sync_on_miss = False,
         )
     except Exception as _e_bys:
-        print(f"[EARNINGS_BY_SYMS] get_earnings_for_symbols error: {_e_bys}")
+        print(f"[EARNINGS_BY_SYMS] get_upcoming_earnings_for_symbols error: {_e_bys}")
         return {
             "symbols_requested": symbols,
             "events":            [],
@@ -3367,55 +3371,46 @@ async def earnings_by_symbols_endpoint(body: EarningsBySymbolsRequest):
             "error":             str(_e_bys),
         }
 
-    # ── Normalise events to spec shape ────────────────────────────────────────
-    def _fmt_date_bys(dt_str):
-        if not dt_str:
-            return None
-        try:
-            from datetime import datetime as _dtt
-            return _dtt.strptime(dt_str, "%Y-%m-%d").strftime("%b %-d")
-        except Exception:
-            return dt_str
-
-    normalised_events = []
-    for ev in (events_raw or []):
-        sym = (ev.get("symbol") or "").upper()
-        if not sym:
-            continue
-        normalised_events.append({
-            "symbol":            sym,
-            "ticker":            sym,
-            "company":           ev.get("companyName") or ev.get("name") or sym,
-            "earnings_date":     ev.get("date"),
-            "earnings_date_fmt": _fmt_date_bys(ev.get("date")),
-            "time":              ev.get("time"),
-            "eps_estimate":      ev.get("epsEstimated"),
-            "revenue_estimate":  ev.get("revenueEstimated"),
-            "previous_eps":      ev.get("epsActual"),
-            "source":            ev.get("source", "fmp"),
-            "last_updated":      meta.get("last_updated"),
-            "importance":        ev.get("importance"),
-            "market_cap":        ev.get("marketCap"),
-        })
-
-    # Sort ascending by date
-    normalised_events.sort(key=lambda x: x.get("earnings_date") or "")
-
     _ms_bys = round((_tm_bys.time() - _t0_bys) * 1000)
     print(
-        f"[EARNINGS_BY_SYMS] symbols={len(symbols)} events={len(normalised_events)} "
-        f"missing={len(missing_symbols)} cache_status={meta.get('cache_status')} elapsed_ms={_ms_bys}"
+        f"[EARNINGS_BY_SYMS] symbols={len(symbols)} events={len(result.get('events',[]))} "
+        f"missing={len(result.get('missing_symbols',[]))} "
+        f"cache_status={result.get('cache_status')} elapsed_ms={_ms_bys}"
     )
+    result["elapsed_ms"] = _ms_bys
+    return result
 
+
+# ── Favorites earnings (virtual watchlist) ────────────────────────────────────
+
+@router.get("/favorites/earnings")
+async def favorites_earnings_endpoint():
+    """
+    GET /api/watchlist/favorites/earnings
+
+    Favorites is managed client-side only — there is no backend favorites
+    watchlist.  This endpoint returns a stable, informative response so
+    frontends that call it receive a clear explanation rather than a 404 or
+    a stale payload from a catch-all /{watchlist_id} route.
+
+    Frontends should use POST /api/watchlist/earnings/by-symbols with the
+    user's favorite symbols to get earnings for favorites.
+    """
     return {
-        "symbols_requested": symbols,
-        "events":            normalised_events,
-        "missing_symbols":   missing_symbols,
-        "source":            meta.get("source", "cached_earnings"),
-        "last_updated":      meta.get("last_updated"),
-        "stale":             meta.get("stale", False),
-        "cache_status":      meta.get("cache_status"),
-        "elapsed_ms":        _ms_bys,
+        "favorites_virtual":  True,
+        "watchlist_id":       "favorites",
+        "symbols_requested":  [],
+        "events":             [],
+        "missing_symbols":    [],
+        "source":             "cached_earnings",
+        "last_updated":       None,
+        "stale":              False,
+        "cache_status":       "favorites_unsupported_server_side",
+        "message": (
+            "Favorites is managed client-side. "
+            "Send favorite symbols to POST /api/watchlist/earnings/by-symbols "
+            "to retrieve their upcoming earnings."
+        ),
     }
 
 
@@ -3423,9 +3418,9 @@ async def earnings_by_symbols_endpoint(body: EarningsBySymbolsRequest):
 #
 # GET /api/watchlist/{watchlist_id}/earnings
 #
-# Convenience wrapper: loads the given watchlist's symbols, then delegates
-# to earnings_by_symbols_endpoint logic.  This endpoint is NOT subject to
-# the default-load bug because it always loads by explicit ID.
+# Resolves watchlist membership server-side, then delegates to the canonical
+# get_upcoming_earnings_for_symbols function (sync_on_miss=True so explicit
+# calls always return fresh data when the cache is cold).
 #
 # Route note: registered at /{watchlist_id}/earnings (2 path segments) —
 # FastAPI does not confuse this with /{watchlist_id} (1 segment).
@@ -3443,17 +3438,20 @@ async def watchlist_id_earnings_endpoint(
 
     Primary → Primary symbols only.
     Strong Bases → Strong Bases symbols only.
+    Custom watchlist → that watchlist's symbols only.
     Never mixes symbol universes from different watchlists.
 
     Query params:
         from_date  YYYY-MM-DD (default: today)
         to_date    YYYY-MM-DD (default: today + 90 days)
 
-    Response: same shape as POST /earnings/by-symbols
+    Response: same shape as POST /earnings/by-symbols + watchlist_id/name.
+    Delegates to get_upcoming_earnings_for_symbols (sync_on_miss=True).
     """
     store = load_watchlist(watchlist_id)
     if store is None or not store.get("tickers"):
         return {
+            "watchlist_id":      watchlist_id,
             "symbols_requested": [],
             "events":            [],
             "missing_symbols":   [],
@@ -3461,19 +3459,55 @@ async def watchlist_id_earnings_endpoint(
             "last_updated":      None,
             "stale":             False,
             "cache_status":      "empty",
-            "watchlist_id":      watchlist_id,
         }
 
     symbols: list[str] = [t.strip().upper() for t in store.get("tickers", []) if t.strip()]
 
-    # Delegate to EarningsBySymbolsRequest body handler via inline call
-    req = EarningsBySymbolsRequest(
-        symbols   = symbols,
-        from_date = from_date,
-        to_date   = to_date,
-    )
-    result = await earnings_by_symbols_endpoint(req)
-    result["watchlist_id"] = watchlist_id
+    try:
+        from config import FMP_API_KEY as _fmp_key_wid  # type: ignore
+    except Exception:
+        _fmp_key_wid = os.getenv("FMP_API_KEY", "")
+
+    if not _fmp_key_wid:
+        return {
+            "watchlist_id":      watchlist_id,
+            "symbols_requested": symbols,
+            "events":            [],
+            "missing_symbols":   symbols,
+            "source":            "cached_earnings",
+            "last_updated":      None,
+            "stale":             True,
+            "cache_status":      "error",
+            "error":             "fmp_key_unavailable",
+        }
+
+    try:
+        from services.user_earnings_service import (  # type: ignore
+            get_upcoming_earnings_for_symbols as _gue_wid,
+        )
+        result = await _gue_wid(
+            symbols   = symbols,
+            from_date = from_date,
+            to_date   = to_date,
+            fmp_key   = _fmp_key_wid,
+            sync_on_miss            = True,   # explicit GET — wait for sync
+            background_sync_on_miss = False,
+        )
+    except Exception as _e_wid:
+        print(f"[WL_ID_EARNINGS] get_upcoming_earnings_for_symbols error: {_e_wid}")
+        return {
+            "watchlist_id":      watchlist_id,
+            "symbols_requested": symbols,
+            "events":            [],
+            "missing_symbols":   symbols,
+            "source":            "cached_earnings",
+            "last_updated":      None,
+            "stale":             True,
+            "cache_status":      "error",
+            "error":             str(_e_wid),
+        }
+
+    result["watchlist_id"]   = watchlist_id
     result["watchlist_name"] = store.get("name", "")
     return result
 
@@ -5420,6 +5454,52 @@ async def get_by_id_endpoint(watchlist_id: str):
     store.pop("_fund_snaps_for_apply_fmp", None)
     _fund_ms = round((_t_get.monotonic() - _t2_get) * 1000)
 
+    # ── Upcoming earnings (cache-first, non-blocking, ≤1.5 s timeout) ─────────
+    # Resolves earnings for exactly this watchlist's tickers.
+    # sync_on_miss=False → never waits for FMP; fires background sync on cache miss.
+    # asyncio.wait_for guard ensures earnings never delay the watchlist response.
+    _t3_get = _t_get.monotonic()
+    _upcoming_earnings: dict = {
+        "watchlist_id":      watchlist_id,
+        "symbols_requested": [],
+        "events":            [],
+        "missing_symbols":   [],
+        "source":            "cached_earnings",
+        "last_updated":      None,
+        "stale":             True,
+        "cache_status":      "skipped",
+    }
+    try:
+        from services.user_earnings_service import (  # type: ignore
+            get_upcoming_earnings_for_symbols as _gue_get,
+        )
+        _wl_tickers_earn = [t.strip().upper() for t in (store.get("tickers") or []) if t.strip()]
+        if _wl_tickers_earn:
+            try:
+                _fmp_key_get = os.getenv("FMP_API_KEY", "")
+                try:
+                    from config import FMP_API_KEY as _fmp_key_get  # type: ignore
+                except Exception:
+                    pass
+                _earn_payload = await _aio.wait_for(
+                    _gue_get(
+                        _wl_tickers_earn,
+                        fmp_key                 = _fmp_key_get,
+                        sync_on_miss            = False,   # non-blocking GET path
+                        background_sync_on_miss = True,
+                    ),
+                    timeout=1.5,
+                )
+                _upcoming_earnings = {"watchlist_id": watchlist_id, **_earn_payload}
+            except _aio.TimeoutError:
+                _upcoming_earnings["cache_status"] = "timeout"
+            except Exception as _earn_err:
+                _upcoming_earnings["cache_status"] = f"error:{type(_earn_err).__name__}"
+                print(f"[WATCHLIST_GET] upcoming_earnings error (non-fatal): {_earn_err}")
+    except Exception as _earn_import_err:
+        _upcoming_earnings["cache_status"] = f"import_error:{type(_earn_import_err).__name__}"
+    _earn_ms = round((_t_get.monotonic() - _t3_get) * 1000)
+
     # ── Phase timing + coverage ───────────────────────────────────────────────
     _total_ms = round((_t_get.monotonic() - _t0_get) * 1000)
     _all_rows = [
@@ -5471,7 +5551,11 @@ async def get_by_id_endpoint(watchlist_id: str):
         "vol_mc_coverage":          round(_vm_cov, 3),
         "volume_stale_pct":         round(_vol_stale, 3),
         "response_ms":              _total_ms,
+        "earnings_ms":              _earn_ms,
+        "earnings_cache_status":    _upcoming_earnings.get("cache_status", "skipped"),
     }
+
+    store["upcoming_earnings"] = _upcoming_earnings
 
     # ── Alert bus hook: watchlist full-activity metrics ───────────────────────
     # Fire-and-forget; runs after response is already built. No provider calls.

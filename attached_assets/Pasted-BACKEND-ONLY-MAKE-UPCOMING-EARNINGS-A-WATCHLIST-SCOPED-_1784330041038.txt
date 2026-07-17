@@ -1,0 +1,321 @@
+BACKEND ONLY — MAKE UPCOMING EARNINGS A WATCHLIST-SCOPED BACKEND FIELD
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change Watchlist UI.
+Do not change Confluence scoring.
+Do not change technical/fundamental row scoring.
+Do not change hydration behavior.
+Do not change theme assignment.
+Do not create duplicate earnings pipelines.
+
+Problem:
+
+Upcoming Earnings on the Watchlist page has become fragile because frontend is trying to derive earnings from rendered screener row state.
+
+That is the wrong architecture.
+
+Upcoming Earnings should be generated from backend watchlist membership, not from frontend sortedTickers, displayRows, csv_data, filters, hydration, or visible table rows.
+
+Known context:
+
+- Primary Watchlist Upcoming Earnings used to work.
+- The issue was that earnings were not scoped to the selected watchlist.
+- Custom watchlists should show earnings for their own tickers.
+- Favorites should show earnings for favorite tickers.
+- We already collect / cache next earnings per ticker for watchlist tickers.
+- Backend already added or claimed to add:
+  - POST /api/watchlist/earnings/by-symbols
+  - GET /api/watchlist/{watchlist_id}/earnings
+- But frontend proxy/routing/rendering has remained fragile.
+- Long-term fix: backend should return watchlist-scoped upcoming earnings from canonical membership.
+
+Goal:
+
+Backend must provide a stable watchlist-scoped Upcoming Earnings payload that the frontend can consume directly with no symbol reconstruction.
+
+==================================================
+PART 1 — AUDIT EXISTING BACKEND WATCHLIST PAYLOAD
+==================================================
+
+Audit:
+
+GET /api/watchlist/{watchlist_id}
+
+Report:
+
+- endpoint path/function
+- response shape
+- where watchlist membership is resolved
+- whether response includes csv_data / rows / tickers
+- whether next earnings are already attached to rows
+- whether earnings fields exist per ticker
+- whether earnings source is cached
+- whether request path makes provider calls
+- whether earnings are currently loaded globally or per watchlist
+
+Do not patch until this is known.
+
+==================================================
+PART 2 — AUDIT EXISTING EARNINGS STORAGE
+==================================================
+
+Find where next earnings data already exists.
+
+Report:
+
+- table/cache/file/service name
+- fields available per ticker
+- date field name
+- EPS estimate field name
+- revenue estimate field name
+- last updated field
+- how frequently refreshed
+- whether Primary/custom watchlist tickers are already covered
+- whether favorites symbols can be resolved
+
+Important:
+
+Do not add request-time FMP calls per ticker.
+
+This endpoint should use existing cached earnings data or existing safe batch calendar cache.
+
+==================================================
+PART 3 — CREATE CANONICAL WATCHLIST-SCOPED EARNINGS FUNCTION
+==================================================
+
+Create one backend function:
+
+get_upcoming_earnings_for_symbols(symbols, from_date, to_date)
+
+Rules:
+
+- accepts explicit symbol list
+- uppercase/dedupe
+- uses cached earnings/calendar data
+- returns only requested symbols
+- does not return unrequested symbols
+- does not perform per-symbol provider calls
+- returns stable field names
+
+Stable event shape:
+
+{
+  "ticker": "CRWD",
+  "company": "CrowdStrike Holdings",
+  "earnings_date": "2026-08-26",
+  "earnings_date_fmt": "Aug 26",
+  "time": "AMC",
+  "eps_estimate": 0.94,
+  "previous_eps": 0.88,
+  "revenue_estimate": 1210000000,
+  "source": "cached_earnings",
+  "last_updated": "..."
+}
+
+If old field names exist, optional aliases are okay:
+
+{
+  "next_date": "2026-08-26",
+  "est_eps": 0.94,
+  "revenue_estimated": 1210000000
+}
+
+But canonical fields should be the new names.
+
+==================================================
+PART 4 — ATTACH UPCOMING EARNINGS TO WATCHLIST RESPONSE
+==================================================
+
+Update:
+
+GET /api/watchlist/{watchlist_id}
+
+to include:
+
+{
+  ...
+  "upcoming_earnings": {
+    "watchlist_id": "...",
+    "symbols_requested": [...],
+    "events": [...],
+    "missing_symbols": [...],
+    "source": "cached_earnings",
+    "last_updated": "...",
+    "stale": false
+  }
+}
+
+Rules:
+
+- Use exact membership for that watchlist_id.
+- Primary response includes Primary ticker earnings.
+- Strong Bases response includes Strong Bases ticker earnings.
+- Any custom watchlist response includes that custom watchlist’s ticker earnings.
+- Do not include earnings from other watchlists.
+- Do not block the entire watchlist response for slow provider calls.
+- Use existing cache only.
+- If earnings cache is unavailable, return events: [] with cache_status explaining why, but do not crash.
+
+This makes earnings load with the watchlist payload and prevents frontend from reconstructing ticker universe.
+
+==================================================
+PART 5 — ADD FAVORITES BACKEND ENDPOINT
+==================================================
+
+Favorites is virtual, so add one stable endpoint:
+
+GET /api/watchlist/favorites/earnings
+
+or, if favorite membership only exists frontend-side, keep:
+
+POST /api/watchlist/earnings/by-symbols
+
+But preferred long-term if backend can resolve favorites:
+
+GET /api/watchlist/favorites/earnings
+
+Response shape should match watchlist-scoped earnings:
+
+{
+  "watchlist_id": "favorites",
+  "symbols_requested": [...],
+  "events": [...],
+  "missing_symbols": [...],
+  "source": "cached_earnings",
+  "last_updated": "...",
+  "stale": false
+}
+
+If backend cannot resolve favorites, report that clearly and keep by-symbols for Favorites only.
+
+==================================================
+PART 6 — KEEP EXISTING ROUTES COMPATIBLE
+==================================================
+
+Keep existing routes working:
+
+POST /api/watchlist/earnings/by-symbols
+
+GET /api/watchlist/{watchlist_id}/earnings
+
+But make them delegate to the same canonical function from Part 3.
+
+Do not maintain three separate earnings implementations.
+
+==================================================
+PART 7 — VALIDATION
+==================================================
+
+Run direct backend validation.
+
+Primary:
+
+1. Resolve Primary watchlist id by name/type, not listData[0].
+2. Call GET /api/watchlist/{primaryId}.
+3. Confirm response.upcoming_earnings.events length > 0 if cached earnings exist.
+4. Confirm every event ticker is in Primary membership.
+5. Confirm no Strong Bases-only ticker appears unless it also belongs to Primary.
+
+Strong Bases:
+
+1. Resolve Strong Bases id.
+2. Call GET /api/watchlist/{strongBasesId}.
+3. Confirm upcoming_earnings.events are subset of Strong Bases membership.
+
+Any other custom watchlist:
+
+1. Pick another custom watchlist if available.
+2. Confirm upcoming_earnings scoped to that watchlist.
+
+Favorites:
+
+1. If backend favorites endpoint exists, call it.
+2. Confirm symbols_requested matches favorites.
+3. Confirm events are subset of favorites.
+
+Negative test:
+
+- Request a watchlist with no earnings.
+- Response should return events: [] calmly, not unrelated events.
+
+Performance:
+
+Measure GET /api/watchlist/{primaryId} before/after.
+
+Acceptance:
+
+- No request-time provider calls.
+- Primary response remains reasonably fast.
+- Earnings are from cache.
+- No unrelated watchlist leakage.
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+BACKEND WATCHLIST-SCOPED UPCOMING EARNINGS REPORT
+
+ROOT CAUSE:
+[why frontend-derived earnings was fragile]
+
+WATCHLIST PAYLOAD CHANGE:
+[response shape]
+
+CANONICAL EARNINGS FUNCTION:
+[function/service]
+
+ROUTES UPDATED:
+[list]
+
+FAVORITES SUPPORT:
+[backend endpoint or by-symbols-only explanation]
+
+VALIDATION:
+[table]
+
+PERFORMANCE:
+[before/after timings]
+
+FILES CHANGED:
+[list]
+
+End exactly:
+
+BACKEND WATCHLIST-SCOPED EARNINGS VERDICT
+
+PRIMARY_WATCHLIST_RESPONSE_INCLUDES_UPCOMING_EARNINGS:
+[YES/NO]
+
+PRIMARY_EARNINGS_SCOPED_TO_PRIMARY_MEMBERSHIP:
+[YES/NO]
+
+CUSTOM_WATCHLIST_RESPONSE_INCLUDES_UPCOMING_EARNINGS:
+[YES/NO]
+
+CUSTOM_EARNINGS_SCOPED_TO_CUSTOM_MEMBERSHIP:
+[YES/NO]
+
+FAVORITES_EARNINGS_SUPPORTED:
+[YES/NO]
+
+NO_UNREQUESTED_SYMBOLS_RETURNED:
+[YES/NO]
+
+NO_REQUEST_TIME_PROVIDER_CALLS:
+[YES/NO]
+
+EXISTING_BY_SYMBOLS_ROUTE_STILL_WORKS:
+[YES/NO]
+
+EXISTING_WATCHLIST_ID_EARNINGS_ROUTE_STILL_WORKS:
+[YES/NO]
+
+PRIMARY_RESPONSE_PERFORMANCE_ACCEPTABLE:
+[YES/NO]
+
+FRONTEND_READY_TO_READ_WATCHLIST_UPCOMING_EARNINGS:
+[YES/NO]

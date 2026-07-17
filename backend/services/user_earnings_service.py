@@ -366,11 +366,51 @@ async def sync_universe_background(
         print(f"[user_earnings] Background sync error (universe={universe}): {e}")
 
 
-# ── Explicit-symbol API (by-symbols endpoint) ─────────────────────────────────
+# ── Explicit-symbol API (by-symbols endpoint + canonical watchlist attachment) ──
 
 # Neon universe key used by the by-symbols cache.  Separate from "watchlist"
 # (which is always the default/first watchlist) so there is no cross-contamination.
 _BY_SYMS_UNIVERSE = "watchlist_by_syms"
+
+
+def _normalize_event_canonical(ev: dict, last_updated: Optional[str]) -> dict:
+    """
+    Normalize a raw earnings event dict to the canonical watchlist event shape.
+
+    Canonical fields (new names, spec-defined):
+        ticker, company, earnings_date, earnings_date_fmt, time,
+        eps_estimate, previous_eps, revenue_estimate, source, last_updated
+
+    Legacy aliases (backward compat for existing callers):
+        next_date, date_raw, est_eps, revenue_estimated, importance, market_cap
+    """
+    sym      = (ev.get("symbol") or "").upper()
+    raw_date = ev.get("date")
+    try:
+        from datetime import datetime as _dtt
+        fmt_date = _dtt.strptime(raw_date, "%Y-%m-%d").strftime("%b %-d") if raw_date else None
+    except Exception:
+        fmt_date = raw_date
+    return {
+        # ── Canonical (spec) ──────────────────────────────────────────────────
+        "ticker":            sym,
+        "company":           ev.get("companyName") or ev.get("name") or sym,
+        "earnings_date":     raw_date,
+        "earnings_date_fmt": fmt_date,
+        "time":              ev.get("time"),
+        "eps_estimate":      ev.get("epsEstimated"),
+        "previous_eps":      ev.get("epsActual"),
+        "revenue_estimate":  ev.get("revenueEstimated"),
+        "source":            "cached_earnings",
+        "last_updated":      last_updated,
+        # ── Legacy aliases ────────────────────────────────────────────────────
+        "next_date":         fmt_date,
+        "date_raw":          raw_date,
+        "est_eps":           ev.get("epsEstimated"),
+        "revenue_estimated": ev.get("revenueEstimated"),
+        "importance":        ev.get("importance"),
+        "market_cap":        ev.get("marketCap"),
+    }
 
 
 async def _sync_for_explicit_symbols(
@@ -521,3 +561,149 @@ async def get_earnings_for_symbols(
         "last_updated":          last_updated,
         "stale":                 cache_status in ("miss",),
     }
+
+
+# ── Canonical public API — get_upcoming_earnings_for_symbols ──────────────────
+#
+# All earnings endpoints (GET /{id}, POST /by-symbols, GET /{id}/earnings)
+# delegate here.  This is the single implementation for watchlist-scoped earnings.
+#
+# Modes controlled by kwargs:
+#   sync_on_miss=True  — wait for FMP sync if cache miss (explicit POST/GET calls)
+#   sync_on_miss=False + background_sync_on_miss=True — fire background sync,
+#                         return empty events immediately (non-blocking GET /{id})
+#   sync_on_miss=False + background_sync_on_miss=False — cache-only, never block
+
+async def get_upcoming_earnings_for_symbols(
+    symbols:   list[str],
+    from_date: Optional[str] = None,
+    to_date:   Optional[str] = None,
+    *,
+    fmp_key:                 str  = "",
+    sync_on_miss:            bool = False,
+    background_sync_on_miss: bool = True,
+) -> dict:
+    """
+    Canonical function: return watchlist-scoped upcoming earnings for an
+    explicit symbol list.
+
+    Response shape (stable):
+        {
+          "symbols_requested": [...],      // ordered, uppercase
+          "events":            [...],      // canonical event dicts
+          "missing_symbols":   [...],      // requested but no earnings found
+          "source":            "cached_earnings",
+          "last_updated":      "...",
+          "stale":             false,
+          "cache_status":      "hit|miss_syncing|miss|partial_syncing|empty|error"
+        }
+
+    Each event uses _normalize_event_canonical — canonical fields + legacy aliases.
+
+    Rules:
+      - Never returns events for unrequested symbols.
+      - Never makes per-symbol provider calls.
+      - sync_on_miss=False  → never blocks for FMP (watchlist GET path).
+      - sync_on_miss=True   → awaits FMP sync on cache miss (explicit endpoints).
+    """
+    from datetime import date as _d, timedelta as _td
+    import asyncio as _aio_ue
+
+    ordered_syms: list[str] = list(dict.fromkeys(
+        s.strip().upper() for s in symbols if s.strip()
+    ))
+    req_syms: set[str] = set(ordered_syms)
+
+    _today = _d.today().isoformat()
+    from_date = from_date or _today
+    to_date   = to_date   or (_d.today() + _td(days=90)).isoformat()
+
+    def _empty_response(cache_status: str, stale: bool = False) -> dict:
+        return {
+            "symbols_requested": ordered_syms,
+            "events":            [],
+            "missing_symbols":   ordered_syms,
+            "source":            "cached_earnings",
+            "last_updated":      None,
+            "stale":             stale,
+            "cache_status":      cache_status,
+        }
+
+    if not req_syms:
+        return _empty_response("empty", stale=False)
+
+    def _build_response(
+        events_raw: list[dict],
+        last_upd: Optional[str],
+        status: str,
+        stale: bool = False,
+    ) -> dict:
+        filtered  = [ev for ev in events_raw if (ev.get("symbol") or "").upper() in req_syms]
+        in_range  = _filter_by_date(filtered, from_date, to_date)
+        normalised = [_normalize_event_canonical(ev, last_upd) for ev in in_range]
+        normalised.sort(key=lambda x: x.get("earnings_date") or "")
+        syms_with_events = {ev["ticker"] for ev in normalised}
+        missing = sorted(req_syms - syms_with_events)
+        return {
+            "symbols_requested": ordered_syms,
+            "events":            normalised,
+            "missing_symbols":   missing,
+            "source":            "cached_earnings",
+            "last_updated":      last_upd,
+            "stale":             stale,
+            "cache_status":      status,
+        }
+
+    # ── Try Neon cache (run in executor so event loop is never blocked) ───────
+    try:
+        _loop_ue = _aio_ue.get_event_loop()
+        cached = await _loop_ue.run_in_executor(None, _pg_read, _BY_SYMS_UNIVERSE)
+    except Exception as _cache_err:
+        print(f"[user_earnings] get_upcoming_earnings_for_symbols cache read error: {_cache_err}")
+        return _empty_response("error", stale=True)
+
+    if cached and _is_fresh(cached.get("fetched_at")):
+        cached_syms  = set(cached.get("symbols", []))
+        last_updated = cached.get("fetched_at")
+
+        if req_syms.issubset(cached_syms):
+            # Full cache HIT — all symbols covered
+            return _build_response(cached.get("events", []), last_updated, "hit", stale=False)
+        else:
+            # Partial miss — some new symbols not in cache
+            added_syms = req_syms - cached_syms
+            if sync_on_miss and fmp_key:
+                # Expand + await sync
+                expanded = cached_syms | req_syms
+                events = await _sync_for_explicit_symbols(_BY_SYMS_UNIVERSE, expanded, fmp_key)
+                return _build_response(events, _today_str(), "refreshed", stale=False)
+            elif background_sync_on_miss and fmp_key:
+                # Fire background expand, return partial result from existing cache
+                expanded = cached_syms | req_syms
+                _aio_ue.create_task(
+                    _sync_for_explicit_symbols(_BY_SYMS_UNIVERSE, expanded, fmp_key)
+                )
+                print(
+                    f"[user_earnings] partial_syncing: {len(added_syms)} new symbols "
+                    f"background-queued for universe expand"
+                )
+            # Return events we have (filtered to requested symbols)
+            return _build_response(cached.get("events", []), last_updated, "partial_syncing", stale=False)
+    else:
+        # Cache miss or stale
+        if sync_on_miss and fmp_key:
+            # Await full sync
+            events = await _sync_for_explicit_symbols(_BY_SYMS_UNIVERSE, req_syms, fmp_key)
+            return _build_response(events, _today_str(), "miss", stale=False)
+        elif background_sync_on_miss and fmp_key:
+            # Fire background sync, return empty immediately
+            _aio_ue.create_task(
+                _sync_for_explicit_symbols(_BY_SYMS_UNIVERSE, req_syms, fmp_key)
+            )
+            print(
+                f"[user_earnings] miss_syncing: {len(req_syms)} symbols "
+                f"background-queued for initial sync"
+            )
+            return _empty_response("miss_syncing", stale=True)
+        else:
+            return _empty_response("miss", stale=True)
