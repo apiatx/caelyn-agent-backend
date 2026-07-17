@@ -28,6 +28,7 @@ Rules (from spec Part 2):
 from __future__ import annotations
 
 import math
+import time as _time
 from typing import Any
 
 
@@ -36,6 +37,51 @@ _MIN_MC   = 1_000_000          # $1M minimum (reject sub-penny shells)
 _MAX_MC   = 20_000_000_000_000 # $20T maximum (reject corrupt data)
 _MAX_LIVE_TO_STATIC_RATIO = 5.0  # live/static divergence guard
 _MIN_LIVE_TO_STATIC_RATIO = 0.2  # live/static divergence guard (reverse)
+
+# ── Disk LKG cache (module-level, 60 s TTL) ──────────────────────────────────
+# Populated from backend/data/watchlist_quote_lkg.json which survives restarts
+# and 4-day market closures.  Cached to avoid repeated file I/O per call.
+_DISK_LKG: dict[str, dict] = {}
+_DISK_LKG_TS: float = 0.0
+_DISK_LKG_TTL = 60.0
+_DISK_LKG_MAX_AGE = 96 * 3600  # 4-day max age matches watchlist_quote_cache.py
+
+
+def _load_disk_lkg_price(symbol: str) -> float | None:
+    """
+    Return the last-known price from the watchlist quote disk LKG.
+    Cache is refreshed at most once every 60 s to amortise file I/O.
+    Returns None if file absent, symbol not found, or entry too stale.
+    """
+    global _DISK_LKG, _DISK_LKG_TS
+    import os, json
+    now_mono = _time.monotonic()
+    if now_mono - _DISK_LKG_TS > _DISK_LKG_TTL:
+        try:
+            path = os.path.join(os.path.dirname(__file__), "..", "data", "watchlist_quote_lkg.json")
+            with open(path, "r", encoding="utf-8") as _f:
+                _DISK_LKG = json.load(_f)
+            _DISK_LKG_TS = now_mono
+        except Exception:
+            _DISK_LKG_TS = now_mono  # don't spam retries on missing file
+    entry = _DISK_LKG.get(symbol.upper()) or {}
+    p = _positive(entry.get("price"))
+    if p is None:
+        return None
+    # Respect max age: reject entries older than 4 days
+    try:
+        from datetime import datetime, timezone, timedelta
+        upd_str = entry.get("quote_updated_at") or ""
+        if upd_str:
+            upd = datetime.fromisoformat(upd_str.rstrip("Z").replace("Z", "+00:00"))
+            if upd.tzinfo is None:
+                upd = upd.replace(tzinfo=timezone.utc)
+            age_s = (datetime.now(timezone.utc) - upd).total_seconds()
+            if age_s > _DISK_LKG_MAX_AGE:
+                return None  # too old — don't use
+    except Exception:
+        pass  # parse error → accept the price rather than drop it
+    return p
 
 
 def _safe_float(v: Any) -> float | None:
@@ -57,12 +103,13 @@ def _positive(v: Any) -> float | None:
 
 def get_live_price_for_mc(symbol: str) -> tuple[float | None, str | None]:
     """
-    Return (price, source_label) from in-memory caches — no network calls.
+    Return (price, source_label) from in-memory / disk caches — no network calls.
 
     Priority (Part 3 of spec):
       1. tradier:quote:sym:{SYM}  — 60 s per-symbol cache written by TradierProvider
       2. quote:lkg:{SYM}          — 72 h LKG written by watchlist/home/portfolio
       3. watchlist_quote_cache     — 10 min module cache (_quote_cache)
+      4. watchlist_quote_lkg.json — disk LKG, 4-day max age, survives restarts
     """
     sym = symbol.upper()
 
@@ -82,7 +129,7 @@ def get_live_price_for_mc(symbol: str) -> tuple[float | None, str | None]:
     except Exception:
         pass
 
-    # 3: watchlist module cache
+    # 3: watchlist module in-memory cache
     try:
         from services.watchlist_quote_cache import _quote_cache
         q = _quote_cache.get(sym) or {}
@@ -91,6 +138,11 @@ def get_live_price_for_mc(symbol: str) -> tuple[float | None, str | None]:
             return p, "watchlist_quote_cache"
     except Exception:
         pass
+
+    # 4: watchlist disk LKG — survives restarts and multi-day closures
+    p = _load_disk_lkg_price(sym)
+    if p:
+        return p, "watchlist_quote_disk_lkg"
 
     return None, None
 

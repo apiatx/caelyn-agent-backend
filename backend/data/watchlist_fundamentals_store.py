@@ -388,6 +388,48 @@ def schedule_refresh(symbol: str, watchlist_id: str, days: int = 7) -> bool:
         return False
 
 
+def merge_fields(symbol: str, extra_fields: dict[str, Any]) -> bool:
+    """
+    Merge extra_fields into the existing fields JSONB for one symbol using
+    PostgreSQL's || (jsonb merge) operator.  Keys in extra_fields are written;
+    all other existing keys are preserved.  Never replaces good data with null.
+
+    Returns True on success (row existed and was updated), False otherwise.
+    Never raises.
+    """
+    if not symbol or not extra_fields:
+        return False
+    # Reject any attempted null-overwrites — callers must pass only non-null values
+    clean = {k: v for k, v in extra_fields.items() if v is not None}
+    if not clean:
+        return False
+    try:
+        from data.pg_storage import _get_conn, _put_conn
+        import json as _json
+        conn = _get_conn()
+        if conn is None:
+            return False
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {_TABLE}
+                SET fields = fields || %s::jsonb
+                WHERE symbol = %s
+                """,
+                (_json.dumps(clean), symbol.upper()),
+            )
+            updated = cur.rowcount
+            conn.commit()
+            cur.close()
+            return updated > 0
+        finally:
+            _put_conn(conn)
+    except Exception as exc:
+        log.warning("[FUND_STORE] merge_fields(%s) error: %s", symbol, exc)
+        return False
+
+
 def get_diagnostics(watchlist_id: str) -> dict:
     """Return summary stats for the fundamentals cache for a given watchlist."""
     try:

@@ -18,7 +18,7 @@ import time as _time
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from typing import Any, Dict, List, Optional
 
@@ -6531,6 +6531,183 @@ async def market_cap_audit_endpoint(symbols: str = "BE,NVDA,MSFT,TSLA,AAPL,AMZN,
 
     return {
         "symbols_audited": len(rows),
-        "note": "All values from cache — no FMP calls. market_cap_display is what screener+popup will show after the next FmpFundamentalsRefresher cycle stores implied_shares.",
+        "note": "All values from cache — no FMP calls. implied_shares is populated by FmpFundamentalsRefresher on each weekly refresh AND by the backfill-market-cap-share-basis admin endpoint.",
         "rows": rows,
+    }
+
+
+# ── Market-cap share basis backfill ──────────────────────────────────────────
+
+class _BackfillMCBody(BaseModel):
+    symbols: list[str] | None = None
+    all_watchlist: bool = False
+    dry_run: bool = False
+
+
+@router.post("/admin/backfill-market-cap-share-basis")
+async def backfill_market_cap_share_basis(
+    request: Request,
+    body: _BackfillMCBody = Body(default_factory=_BackfillMCBody),
+):
+    """
+    POST /api/watchlist/admin/backfill-market-cap-share-basis
+
+    Admin endpoint — immediately backfills _market_cap_implied_shares for
+    symbols whose watchlist_fundamentals_cache row pre-dates the field.
+
+    Body (JSON):
+      { "symbols": ["BE", "NVDA"], "all_watchlist": false, "dry_run": false }
+      OR
+      { "all_watchlist": true }
+
+    Behaviour:
+      - Calls FMP /stable/profile once per symbol (1 call, not the full 8).
+      - Derives implied_shares = marketCap / price from the SAME FMP response
+        so the numerator/denominator are always consistent.
+      - Calls merge_fields() to patch only the 3 private keys into Neon:
+            _market_cap_implied_shares
+            _market_cap_price_at_refresh
+            _market_cap_static_source
+        All other fields + refreshed_at are untouched.
+      - Never overwrites an existing non-null implied_shares (LKG protection).
+      - Respects _CALL_DELAY (0.45 s between FMP calls).
+      - dry_run=true reports what would happen without writing to Neon.
+
+    Auth: admin token / ADMIN_PASSWORD required.
+    """
+    # ── Auth ─────────────────────────────────────────────────────────────────
+    _auth_hdr = request.headers.get("Authorization", "")
+    _token = _auth_hdr.removeprefix("Bearer ").strip() if _auth_hdr.startswith("Bearer ") else ""
+    import os as _os_bf
+    _admin_pw = _os_bf.getenv("ADMIN_PASSWORD", "")
+    if not _admin_pw or _token != _admin_pw:
+        # Try bcrypt hash path
+        try:
+            from auth import require_admin_user_or_api_key as _req_admin
+            await _req_admin(request)
+        except Exception:
+            raise HTTPException(status_code=401, detail="admin_auth_required")
+
+    # ── Resolve symbol list ───────────────────────────────────────────────────
+    import asyncio as _aio_bf
+    from data.watchlist_fundamentals_store import get_snapshots_bulk as _snaps_bf, merge_fields as _merge_f
+
+    raw_symbols: list[str] = []
+    if body.all_watchlist:
+        # All symbols that already have a cache row in Neon
+        try:
+            from data.pg_storage import _get_conn, _put_conn
+            _c_bf = _get_conn()
+            if _c_bf:
+                try:
+                    _cur_bf = _c_bf.cursor()
+                    _cur_bf.execute("SELECT symbol FROM public.watchlist_fundamentals_cache")
+                    raw_symbols = [r[0] for r in _cur_bf.fetchall()]
+                    _cur_bf.close()
+                finally:
+                    _put_conn(_c_bf)
+        except Exception as _e_bf:
+            raise HTTPException(status_code=503, detail=f"db_error: {_e_bf}")
+    elif body.symbols:
+        raw_symbols = [s.strip().upper() for s in body.symbols if s.strip()]
+
+    if not raw_symbols:
+        raise HTTPException(status_code=400, detail="Provide symbols list or all_watchlist=true")
+
+    # ── FMP setup ─────────────────────────────────────────────────────────────
+    _fmp_key_bf = _os_bf.getenv("FMP_API_KEY", "")
+    if not _fmp_key_bf:
+        raise HTTPException(status_code=503, detail="FMP_API_KEY not configured")
+
+    from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher as _FmpBF
+    _refresher_bf = _FmpBF(_fmp_key_bf)
+
+    # ── Load existing snaps once ───────────────────────────────────────────────
+    loop_bf = _aio_bf.get_event_loop()
+    existing_snaps = await loop_bf.run_in_executor(None, _snaps_bf, raw_symbols)
+
+    results = []
+    for sym in raw_symbols:
+        snap = existing_snaps.get(sym.upper()) or {}
+        fund_fields = snap.get("fields") or {}
+
+        # LKG protection — skip if already populated
+        existing_shares = fund_fields.get("_market_cap_implied_shares")
+        if existing_shares is not None:
+            results.append({
+                "symbol": sym,
+                "status": "skipped_already_populated",
+                "implied_shares": existing_shares,
+                "price_at_refresh": fund_fields.get("_market_cap_price_at_refresh"),
+            })
+            continue
+
+        if body.dry_run:
+            results.append({
+                "symbol": sym,
+                "status": "dry_run_would_backfill",
+                "fund_cache_mc": fund_fields.get("Market Cap"),
+            })
+            continue
+
+        # ── FMP profile call — 1 call per symbol ─────────────────────────────
+        try:
+            raw_profile = await _refresher_bf._get("profile", {"symbol": sym.upper()})
+            profile = (raw_profile[0] if isinstance(raw_profile, list) and raw_profile
+                       else (raw_profile if isinstance(raw_profile, dict) else {}))
+
+            mkt_cap_raw = profile.get("marketCap")
+            price_raw   = profile.get("price")
+
+            if not mkt_cap_raw or not price_raw:
+                results.append({
+                    "symbol": sym, "status": "fmp_null",
+                    "raw_mkt_cap": mkt_cap_raw, "raw_price": price_raw,
+                })
+                continue
+
+            mkt_cap  = float(mkt_cap_raw)
+            price    = float(price_raw)
+
+            if mkt_cap <= 0 or price <= 0:
+                results.append({
+                    "symbol": sym, "status": "rejected_zero_or_negative",
+                    "mkt_cap": mkt_cap, "price": price,
+                })
+                continue
+
+            implied_shares = round(mkt_cap / price, 0)
+            if implied_shares <= 0:
+                results.append({"symbol": sym, "status": "rejected_absurd_shares", "implied_shares": implied_shares})
+                continue
+
+            # ── Merge into Neon (non-destructive) ────────────────────────────
+            ok = await loop_bf.run_in_executor(None, _merge_f, sym, {
+                "_market_cap_implied_shares":    implied_shares,
+                "_market_cap_price_at_refresh":  round(price, 4),
+                "_market_cap_static_source":     "fmp_profile",
+            })
+
+            results.append({
+                "symbol":          sym,
+                "status":          "ok" if ok else "db_error_no_row",
+                "implied_shares":  implied_shares,
+                "price_at_refresh": round(price, 4),
+                "fmp_mkt_cap":     mkt_cap,
+            })
+        except Exception as _exc_sym:
+            results.append({"symbol": sym, "status": f"error: {_exc_sym}"})
+
+    ok_count   = sum(1 for r in results if r.get("status") == "ok")
+    skip_count = sum(1 for r in results if r.get("status") == "skipped_already_populated")
+    fail_count = sum(1 for r in results if r.get("status") not in (
+        "ok", "skipped_already_populated", "dry_run_would_backfill"))
+
+    return {
+        "total":   len(results),
+        "ok":      ok_count,
+        "skipped": skip_count,
+        "failed":  fail_count,
+        "dry_run": body.dry_run,
+        "results": results,
     }
