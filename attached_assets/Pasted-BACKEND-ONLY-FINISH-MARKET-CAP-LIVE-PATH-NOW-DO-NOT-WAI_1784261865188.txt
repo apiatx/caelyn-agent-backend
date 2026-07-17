@@ -1,0 +1,254 @@
+BACKEND ONLY — FINISH MARKET CAP LIVE PATH NOW, DO NOT WAIT UNTIL NEXT WEEKLY REFRESH
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change Confluence scoring.
+Do not change actionability.
+Do not add request-time FMP calls.
+Do not create a new provider path.
+
+The prior pass fixed source consistency, but the live market-cap path is not active yet.
+
+Audit result showed:
+
+implied_shares = null for existing rows
+
+That means market_cap_display is still falling back to static watchlist_fundamentals_cache values. Screener and popup may now match, but they can still both be stale.
+
+This does not fully satisfy the requirement.
+
+Requirement:
+
+Market cap must:
+1. be identical in Watchlist screener and popup
+2. move with latest quote when possible
+3. not wait until next Sunday to become live
+4. not use stale CSV/upload market cap
+5. not add request-time provider calls
+
+==================================================
+PART 1 — CONFIRM CURRENT BE STATE
+==================================================
+
+Run the market cap audit endpoint for:
+
+BE
+ANET
+TSM
+VRT
+CRWD
+OSS
+CLFD
+HIMS
+NVDA
+MU
+
+Report:
+
+symbol
+static_market_cap
+static_source
+static_last_updated
+static_price_at_refresh
+implied_shares
+latest_quote_price
+latest_quote_source
+market_cap_live
+market_cap_display
+market_cap_display_source
+warning_codes
+
+For BE specifically, confirm whether market_cap_display is still stale/static.
+
+==================================================
+PART 2 — POPULATE IMPLIED SHARES NOW THROUGH EXISTING SAFE REFRESH PATH
+==================================================
+
+Do not wait until Sunday.
+
+Run a targeted safe refresh/backfill using the existing FmpFundamentalsRefresher path for:
+
+BE
+ANET
+TSM
+VRT
+CRWD
+OSS
+CLFD
+HIMS
+NVDA
+MU
+
+If safe, run it for the full watchlist universe.
+
+The refresh must store:
+
+market_cap_static
+market_cap_price_at_static_refresh
+market_cap_static_source
+market_cap_static_last_updated
+market_cap_implied_shares
+
+Preferred source order for implied shares:
+
+1. Explicit shares outstanding / weighted average shares / share count field if already available from FMP/profile/cache
+2. Otherwise derive:
+   market_cap_static / profile_price_at_refresh
+
+Reject if:
+- market_cap_static <= 0
+- price_at_refresh <= 0
+- implied_shares absurd/null
+- FMP returns null
+
+Do not overwrite good existing implied_shares with null.
+
+==================================================
+PART 3 — VERIFY LIVE MARKET CAP ACTIVATES
+==================================================
+
+After targeted refresh, rerun audit.
+
+For each symbol:
+
+market_cap_live should equal:
+
+latest_canonical_quote_price * market_cap_implied_shares
+
+market_cap_display should prefer market_cap_live when available.
+
+For BE:
+
+- market_cap_implied_shares must not be null
+- latest quote price must not be null
+- market_cap_live must not be null
+- market_cap_display_source should be live/quote-derived, not static fallback
+- screener and popup should use this same market_cap_display
+
+==================================================
+PART 4 — FIX IF LIVE DISPLAY STILL FALLS BACK TO STATIC
+==================================================
+
+If implied_shares exists and latest quote exists but market_cap_display still uses static value, fix the resolver priority.
+
+Correct priority:
+
+1. market_cap_live from latest quote × implied_shares
+2. market_cap_static fallback only if live cannot be calculated
+
+Do not prefer watchlist_fundamentals_cache static market cap over live market cap when quote + implied shares exist.
+
+==================================================
+PART 5 — ADD ADMIN BACKFILL IF NEEDED
+==================================================
+
+If there is no existing safe way to backfill implied_shares for the current cache, add an admin-only endpoint or script:
+
+POST /api/watchlist/admin/backfill-market-cap-share-basis
+
+Requirements:
+- admin/auth protected
+- uses existing FmpFundamentalsRefresher/profile path
+- accepts symbols list or all_watchlist=true
+- respects existing FMP budget/call spacing
+- stores implied_shares/share basis
+- no request-time ticker-detail calls
+
+Only add this if no existing admin refresh path can do it.
+
+==================================================
+PART 6 — VALIDATION
+==================================================
+
+Validate:
+
+BE
+ANET
+TSM
+VRT
+CRWD
+OSS
+CLFD
+HIMS
+NVDA
+MU
+
+For each report:
+
+symbol
+implied_shares_before
+implied_shares_after
+latest_quote_price
+market_cap_live
+market_cap_static
+market_cap_display
+display_source
+screener_market_cap
+popup_market_cap
+screener_popup_match
+warning_codes
+
+Acceptance:
+
+1. BE screener and popup match exactly.
+2. BE market cap is live quote-derived if implied_shares + quote exist.
+3. BE no longer shows old stale $82B/$69B unless that is truly live quote-derived.
+4. Existing static fundamentals remain unchanged.
+5. No request-time FMP calls added.
+6. Missing quote/share basis falls back to static with warning.
+7. All future scheduled refreshes keep implied_shares populated.
+
+==================================================
+PART 7 — FINAL REPORT
+==================================================
+
+Return:
+
+MARKET CAP LIVE PATH COMPLETION REPORT
+
+ROOT CAUSE AFTER PRIOR PASS:
+[source consistency fixed, but implied_shares null prevented live market cap]
+
+BACKFILL METHOD:
+[existing refresh/admin endpoint/script]
+
+FILES CHANGED:
+[list]
+
+BEFORE / AFTER:
+[table]
+
+LIVE MARKET CAP RESOLVER:
+[summary]
+
+VALIDATION:
+[table by symbol]
+
+End exactly:
+
+MARKET CAP LIVE PATH VERDICT
+
+IMPLIED_SHARES_POPULATED_NOW:
+[YES/NO]
+
+BE_LIVE_MARKET_CAP_ACTIVE:
+[YES/NO]
+
+BE_SCREENER_POPUP_MATCH:
+[YES/NO]
+
+MARKET_CAP_DISPLAY_PREFERS_LIVE_WHEN_AVAILABLE:
+[YES/NO]
+
+STATIC_FALLBACK_ONLY_WHEN_NEEDED:
+[YES/NO]
+
+NO_REQUEST_TIME_FMP_CALLS:
+[YES/NO]
+
+FULL_WATCHLIST_BACKFILL_DONE_OR_SCHEDULED:
+[DONE/SCHEDULED/NO]
+
+FRONTEND_READY:
+[YES/NO]
