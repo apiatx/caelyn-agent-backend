@@ -1812,6 +1812,7 @@ def _hydration_entry(sym: str) -> dict:
         "quote":        "unknown",
         "technical":    "unknown",
         "fundamentals": "unknown",
+        "options":      "unknown",
         "enqueued_at":  None,
         "last_error":   None,
         "last_updated": None,
@@ -1848,6 +1849,7 @@ async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> No
             "quote":        "pending",
             "technical":    "pending",
             "fundamentals": "pending",
+            "options":      "pending",
             "enqueued_at":  ts_enq,
             "last_error":   None,
             "last_updated": ts_enq,
@@ -1969,6 +1971,84 @@ async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> No
                     pass
     except Exception:
         pass  # non-fatal — market-cap backfill best-effort
+
+    # ── E. Options overlay (supplement priority queue + per-ticker cache check) ─
+    #
+    # Architecture:
+    #   Options data flows: Tradier → supplement_loop/watchlist_scanner
+    #                       → get_combined_ticker_data() → Confluence V4.2
+    #                       → GET /{watchlist_id} options fields
+    #
+    # We do NOT create new Tradier calls here. Instead we:
+    #   1. Check get_no_options_symbols() — confirmed no-options: immediate final state
+    #   2. Check get_combined_ticker_data() — already in supplement cache: done
+    #   3. Check portfolio_opts:{sym} per-ticker cache — written by watchlist scanner
+    #   4. Call add_high_priority_symbols() — front-queues in supplement scan loop
+    #
+    # Status values: pending/done/no_options/not_applicable/error
+    # "pending" = enqueued in supplement loop, data arrives in ≤ next scan cycle
+    # "done"    = data verified present in combined cache or per-ticker cache
+    try:
+        from services.watchlist_quote_cache import is_tradier_quote_eligible as _trad_elig_o
+        from data.options_theme_supplement import (
+            get_no_options_symbols  as _get_no_opts_o,
+            add_high_priority_symbols as _add_hi_opts_o,
+            get_combined_ticker_data  as _get_combined_o,
+        )
+        from data.portfolio_options_service import _per_ticker_cache_key as _ptck_o
+        from data.cache import cache as _opts_cache_o
+
+        _no_opts_set = _get_no_opts_o()
+        _combined_now = _get_combined_o()
+
+        opts_eligible = [s for s in deduped if _trad_elig_o(s)]
+
+        for sym in deduped:
+            if sym not in opts_eligible:
+                # Foreign / exchange-prefixed / non-US — options not applicable
+                _HYDRATION_STATE[sym]["options"] = "not_applicable"
+                continue
+
+            if sym in _no_opts_set:
+                # Already confirmed by Tradier to have no options chain
+                _HYDRATION_STATE[sym]["options"] = "no_options"
+                continue
+
+            if sym in _combined_now:
+                # Already present in supplement/master/LKG data
+                _HYDRATION_STATE[sym]["options"] = "done"
+                continue
+
+            # Check per-ticker portfolio cache written by watchlist/portfolio scanner
+            _ptck_row = _opts_cache_o.get(_ptck_o(sym))
+            if _ptck_row:
+                _ptck_reason = (_ptck_row.get("_reason") or "").lower()
+                if "no_expir" in _ptck_reason or "no_options" in _ptck_reason or "confirmed_no" in _ptck_reason:
+                    _HYDRATION_STATE[sym]["options"] = "no_options"
+                elif _ptck_row.get("options_score") is not None or _ptck_row.get("iv") is not None:
+                    _HYDRATION_STATE[sym]["options"] = "done"
+                else:
+                    _HYDRATION_STATE[sym]["options"] = "pending"
+            else:
+                # Not in any cache yet — enqueue in supplement priority queue
+                _HYDRATION_STATE[sym]["options"] = "pending"
+
+        # Front-queue all pending eligible symbols in the supplement scan loop.
+        # add_high_priority_symbols() is safe to call from any context (pure in-memory write).
+        _pending_opts = [
+            s for s in opts_eligible
+            if _HYDRATION_STATE.get(s, {}).get("options") == "pending"
+        ]
+        if _pending_opts:
+            _add_hi_opts_o(_pending_opts)
+            print(f"[PRIORITY_HYDRATE] options: {len(_pending_opts)} symbol(s) enqueued hi-priority: {_pending_opts[:5]}")
+
+    except Exception as _opts_e:
+        for sym in deduped:
+            if _HYDRATION_STATE.get(sym, {}).get("options") in ("pending", "running", None):
+                _HYDRATION_STATE[sym]["options"] = "error"
+                _HYDRATION_STATE[sym]["last_error"] = f"options: {_opts_e}"
+        print(f"[PRIORITY_HYDRATE] options step error: {_opts_e}")
 
     _ts_done = _now()
     for sym in deduped:
@@ -4626,7 +4706,7 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         except Exception as _fund_sched_exc:
             print(f"[WATCHLIST] schedule_refresh({t}) on add failed: {_fund_sched_exc}")
 
-        # ── Priority hydration: quote + technical + FMP (non-blocking) ───────
+        # ── Priority hydration: quote + technical + FMP + options (non-blocking) ─
         # Set initial state synchronously so the response can include it.
         from datetime import datetime, timezone as _tz_add
         _ts_add = datetime.now(_tz_add.utc).isoformat()
@@ -4634,6 +4714,7 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
             "quote":        "pending",
             "technical":    "pending",
             "fundamentals": "pending",
+            "options":      "pending",
             "enqueued_at":  _ts_add,
             "last_error":   None,
             "last_updated": _ts_add,
@@ -4779,6 +4860,7 @@ async def bulk_add_tickers_endpoint(watchlist_id: str, body: _BulkAddBody):
                 "quote":        "pending",
                 "technical":    "pending",
                 "fundamentals": "pending",
+                "options":      "pending",
                 "enqueued_at":  _ts_bulk,
                 "last_error":   None,
                 "last_updated": _ts_bulk,
@@ -4949,17 +5031,28 @@ async def get_hydration_status_endpoint(watchlist_id: str, symbol: str):
     Returns the real-time hydration status for a ticker that was recently added
     via POST /{watchlist_id}/ticker or POST /{watchlist_id}/tickers.
 
-    Also includes a snapshot of what data is currently available in the caches
-    (stage2 LKG, fundamentals store, quote cache) so the caller can assess
-    completeness without waiting for the full hydration task to finish.
+    hydration_status fields:
+      quote        — pending/running/done/not_applicable/error
+      technical    — pending/running/done/not_applicable/error
+      fundamentals — pending/running/done/not_applicable/error
+      options      — pending/done/no_options/not_applicable/error
+
+    cache_presence shows what data is actually accessible right now in the
+    in-memory caches (independent of _HYDRATION_STATE — reads live).
     """
     sym = symbol.strip().upper()
+
+    # ── Live hydration state (from _HYDRATION_STATE) ─────────────────────────
     hydration = _hydration_entry(sym)
 
-    # Augment with live cache presence checks
+    # ── Live cache presence (independent of hydration state) ─────────────────
+    # These check the actual caches in real-time, so they reflect data that
+    # arrived via any path (scheduled, background loop, or priority hydration).
     _stage2_present   = False
     _fund_present     = False
     _quote_present    = False
+    _options_present  = False  # options data in combined cache or per-ticker cache
+    _options_no_opts  = False  # confirmed no options chain
 
     try:
         from services.watchlist_stage2_service import _STAGE2_LKG as _s2lkg
@@ -4982,14 +5075,51 @@ async def get_hydration_status_endpoint(watchlist_id: str, symbol: str):
     except Exception:
         pass
 
+    try:
+        from data.options_theme_supplement import (
+            get_no_options_symbols  as _no_opts_chk,
+            get_combined_ticker_data as _combined_chk,
+        )
+        from data.portfolio_options_service import _per_ticker_cache_key as _ptck_chk
+        from data.cache import cache as _chk_cache
+
+        _no_opts_chk_set = _no_opts_chk()
+        if sym in _no_opts_chk_set:
+            _options_no_opts = True
+        else:
+            _comb = _combined_chk()
+            if sym in _comb:
+                _options_present = True
+            else:
+                _ptck_row = _chk_cache.get(_ptck_chk(sym))
+                if _ptck_row:
+                    _reason_chk = (_ptck_row.get("_reason") or "").lower()
+                    if "no_expir" in _reason_chk or "no_options" in _reason_chk:
+                        _options_no_opts = True
+                    elif _ptck_row.get("options_score") is not None or _ptck_row.get("iv") is not None:
+                        _options_present = True
+
+        # Reconcile live cache presence with stored hydration state
+        # (handles case where options arrived via background path after pending)
+        if _options_no_opts and hydration.get("options") == "pending":
+            hydration["options"] = "no_options"
+            _HYDRATION_STATE.setdefault(sym, {})["options"] = "no_options"
+        elif _options_present and hydration.get("options") == "pending":
+            hydration["options"] = "done"
+            _HYDRATION_STATE.setdefault(sym, {})["options"] = "done"
+    except Exception:
+        pass
+
     return {
-        "watchlist_id":    watchlist_id,
-        "symbol":          sym,
+        "watchlist_id":     watchlist_id,
+        "symbol":           sym,
         "hydration_status": hydration,
-        "cache_presence":  {
-            "stage2_technical": _stage2_present,
-            "fundamentals":     _fund_present,
-            "quote":            _quote_present,
+        "cache_presence":   {
+            "stage2_technical":  _stage2_present,
+            "fundamentals":      _fund_present,
+            "quote":             _quote_present,
+            "options":           _options_present,
+            "options_no_chain":  _options_no_opts,
         },
     }
 

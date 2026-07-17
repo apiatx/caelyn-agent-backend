@@ -1,0 +1,346 @@
+BACKEND ONLY — WATCHLIST MANUAL ADD HYDRATION COMPLETENESS AUDIT + FIX
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change Watchlist UI.
+Do not change Confluence scoring.
+Do not change Score Lens.
+Do not change ticker popup UI.
+Do not create duplicate data pipelines.
+Do not add request-time provider calls outside the explicit user-triggered manual-add hydration path.
+Reuse existing FMP, Tradier, Stage2, and Options Flow/cache paths.
+
+Problems:
+
+1. Newly manually added tickers appear, but fundamentals are still not consistently filled quickly.
+2. Technical data can still lag after manual add.
+3. Options overlay fields appear less complete than before.
+4. Manual add / batch add should skip ahead of scheduled backlog and hydrate all required row fields quickly.
+
+Goal:
+
+Manual add and batch add should immediately enqueue priority hydration for:
+
+- quote
+- technical/stage
+- fundamentals/FMP
+- options overlay/options snapshot if optionable
+
+The add response should remain fast. Hydration should run in the background but status should be truthful and not mark done until data is actually written and visible in the watchlist payload.
+
+==================================================
+PART 1 — AUDIT MANUAL ADD HYDRATION PATH
+==================================================
+
+Trace backend only.
+
+Find:
+
+- single ticker add endpoint
+- batch ticker add endpoint
+- hydration task function started after add
+- quote hydration path
+- technical/stage hydration path
+- fundamentals/FMP hydration path
+- options overlay/options snapshot hydration path, if any
+- hydration_status storage/state
+- watchlist row builder after hydration
+- cache invalidation after each write
+
+For a newly added valid ticker, report:
+
+symbol
+watchlist membership added_at
+quote queued/started/completed
+technical queued/started/completed
+fundamentals queued/started/completed
+options queued/started/completed
+status values returned by hydration-status endpoint
+fields actually visible in GET watchlist response
+
+Do not patch until this audit is complete.
+
+==================================================
+PART 2 — VERIFY FUNDAMENTALS HYDRATION
+==================================================
+
+On manual add / batch add, fundamentals must not wait for weekly refresh.
+
+Verify existing targeted FMP refresher is called for newly added symbols.
+
+Required fields to hydrate/store for Watchlist Fundamental toggle:
+
+Ticker
+Theme
+Mkt Cap / market_cap_display
+Revenue
+Rev Grwth Q
+Rev Grwth Y
+Gross Mgn
+FCF Mgn
+Free CF
+Op. Income
+EBIT
+P/E
+P/S
+EV/EBITDA
+EPS Grwth
+D/E
+ND/EBITDA
+Insider %
+Earn. Date
+Rev Grwth Est
+Rev Grwth NQ
+Rev Grwth NY
+EPS Grwth Est
+EPS Grwth TQ
+EPS Grwth NQ
+EPS Grwth TY
+EPS Grwth NY
+
+Fix if needed:
+
+- manual add should call existing targeted FmpFundamentalsRefresher path
+- write to watchlist_fundamentals_cache
+- update market_cap share basis / market_cap_display fields if applicable
+- invalidate watchlist row/cache after write
+- hydration_status.fundamentals should remain running until write is complete and visible
+
+Do not mark fundamentals done immediately after queueing.
+
+==================================================
+PART 3 — VERIFY TECHNICAL HYDRATION
+==================================================
+
+On manual add / batch add, technical data should hydrate via existing Stage2/technical path.
+
+Required technical fields:
+
+Price
+Chg %
+Volume
+VOLX
+VOL RANK
+Vol/MC
+Stage
+MA Stack
+% vs 50D
+% vs 200D
+Extension Risk
+52W Pos
+% From 52W High
+Entry Zone
+Breakout Signal
+Accum/Dist
+Squeeze
+ATR %
+Momentum Trend
+Technical State
+
+Fix if needed:
+
+- manual add should priority enqueue stage/technical warmup
+- use existing Stage2/technical cache path
+- invalidate watchlist row/cache after write
+- status should remain running until data is written
+
+==================================================
+PART 4 — VERIFY OPTIONS OVERLAY HYDRATION
+==================================================
+
+The Watchlist Technical toggle includes options overlay fields:
+
+Opt Score
+Opt Signal
+P/C
+IV
+EM
+Opt Vol
+OI
+
+These are not the same as basic technical/stage data.
+
+Audit whether manual-add hydration currently warms the same canonical options path used elsewhere.
+
+Check:
+
+- options chain/snapshot/flow cache path
+- no-options detection
+- watchlist row options overlay builder
+- whether new manual tickers are added to the options scan queue
+- whether optionable tickers get priority options hydration
+- whether no-options tickers get status done/no_options instead of pending forever
+
+Fix if needed:
+
+- manual add / batch add should enqueue priority options overlay hydration for optionable symbols
+- use existing options scan/snapshot path only
+- do not create new options provider logic
+- do not block the add response
+- hydration_status.options should be separate from technical
+- status should be:
+  pending/running/done/no_options/error
+
+Acceptance:
+Optionable newly added ticker eventually gets Opt Score, Opt Signal, P/C, IV, EM, Opt Vol, OI if provider/cache supports it.
+
+==================================================
+PART 5 — PRIORITY QUEUE BEHAVIOR
+==================================================
+
+Manual add and batch add should skip ahead of scheduled backlog.
+
+Use priority labels if needed:
+
+manual_add
+user_import
+scheduled
+
+Rules:
+
+- manual_add/user_import before scheduled backlog
+- dedupe symbols already queued
+- batch where existing providers support batch
+- respect FMP budget governor/call spacing
+- respect Tradier/options pacing
+- do not starve scheduled jobs forever
+
+==================================================
+PART 6 — HYDRATION STATUS CONTRACT
+==================================================
+
+Hydration status should separate categories:
+
+hydration_status:
+{
+  quote: "pending/running/done/error",
+  technical: "pending/running/done/error",
+  fundamentals: "pending/running/done/error",
+  options: "pending/running/done/no_options/error",
+  last_error: null | string,
+  updated_at: timestamp
+}
+
+Do not collapse options into technical.
+
+Do not report done until data is written or no-options is confirmed.
+
+Include enough status in existing hydration-status endpoint or watchlist response for frontend polling.
+
+==================================================
+PART 7 — VALIDATION
+==================================================
+
+Use valid tickers not currently in the watchlist.
+
+Single add:
+- one optionable ticker
+- one low-liquidity/non-optionable ticker if available
+
+For each:
+
+1. POST add returns quickly.
+2. Immediate GET watchlist includes ticker.
+3. hydration_status has quote/technical/fundamentals/options separately.
+4. Quote fields populate.
+5. Technical fields populate.
+6. Fundamentals populate without waiting for weekly refresh.
+7. Options fields populate if optionable.
+8. no_options status appears if not optionable.
+9. Watchlist row payload contains populated fields.
+10. No duplicate rows.
+
+Batch add:
+
+1. Add 5 valid tickers.
+2. All appear immediately.
+3. All priority hydrate.
+4. Fundamentals populate.
+5. Options populate or no_options.
+6. Queues respect provider pacing.
+7. Scheduled backlog remains intact.
+
+==================================================
+PART 8 — FINAL REPORT
+==================================================
+
+Return:
+
+BACKEND WATCHLIST HYDRATION COMPLETENESS REPORT
+
+ROOT CAUSE:
+[exact backend issue]
+
+FILES CHANGED:
+[list]
+
+ADD FLOW:
+[summary]
+
+QUOTE HYDRATION:
+[summary]
+
+TECHNICAL HYDRATION:
+[summary]
+
+FUNDAMENTALS HYDRATION:
+[summary]
+
+OPTIONS HYDRATION:
+[summary]
+
+HYDRATION STATUS CONTRACT:
+[summary]
+
+CACHE INVALIDATION:
+[summary]
+
+VALIDATION:
+[table]
+
+End exactly:
+
+BACKEND WATCHLIST HYDRATION VERDICT
+
+NEW_TICKER_VISIBLE_IMMEDIATELY:
+[YES/NO]
+
+FUNDAMENTALS_HYDRATE_ON_MANUAL_ADD:
+[YES/NO]
+
+TECHNICALS_HYDRATE_ON_MANUAL_ADD:
+[YES/NO]
+
+OPTIONS_HYDRATE_ON_MANUAL_ADD:
+[YES/NO/PARTIAL]
+
+HYDRATION_STATUS_SEPARATES_QUOTE_TECH_FUND_OPTIONS:
+[YES/NO]
+
+HYDRATION_STATUS_TRUTHFUL_AFTER_WRITES:
+[YES/NO]
+
+WATCHLIST_CACHE_INVALIDATES_AFTER_HYDRATION_WRITES:
+[YES/NO]
+
+BATCH_ADD_PRIORITY_HYDRATION_WORKS:
+[YES/NO]
+
+MANUAL_ADDS_SKIP_SCHEDULED_BACKLOG:
+[YES/NO]
+
+FMP_BUDGET_GOVERNOR_RESPECTED:
+[YES/NO]
+
+TRADIER_EXISTING_PATH_REUSED:
+[YES/NO]
+
+OPTIONS_EXISTING_PATH_REUSED:
+[YES/NO]
+
+NO_DUPLICATE_PIPELINES:
+[YES/NO]
+
+FRONTEND_READY:
+[YES/NO]
