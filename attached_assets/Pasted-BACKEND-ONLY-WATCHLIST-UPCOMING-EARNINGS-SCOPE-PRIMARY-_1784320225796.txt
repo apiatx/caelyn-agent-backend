@@ -1,0 +1,295 @@
+BACKEND ONLY — WATCHLIST UPCOMING EARNINGS SCOPE + PRIMARY WATCHLIST LATENCY AUDIT
+
+Backend repo only.
+
+Do not touch frontend.
+Do not change Watchlist UI.
+Do not change Confluence scoring.
+Do not change Score Lens.
+Do not change add ticker hydration.
+Do not change theme dropdown.
+Do not create duplicate pipelines.
+
+Current bugs:
+
+1. Upcoming Earnings on Watchlist page is scoped wrong.
+   - When user is viewing Primary watchlist, earnings shown are from custom watchlist “Strong Bases.”
+   - When user is viewing Favorites, earnings show blank / no upcoming earnings.
+   - This is wrong. Upcoming Earnings must be based on the currently viewed watchlist’s symbols.
+
+2. Primary Watchlist screener still takes ~10 seconds to show rows.
+   - Frontend cache work did not fix it.
+   - Audit backend endpoint latency and determine whether GET /api/watchlist/{primaryId} is slow or returning late.
+
+Goal:
+
+Backend must provide a reliable earnings contract that can return earnings for a requested watchlist or requested symbol list.
+
+Backend must also report why Primary watchlist endpoint is slow.
+
+==================================================
+PART 1 — AUDIT CURRENT EARNINGS ENDPOINT
+==================================================
+
+Find the endpoint feeding the Watchlist Upcoming Earnings section.
+
+Report:
+
+- endpoint path
+- request params
+- whether it accepts watchlist_id
+- whether it accepts symbols
+- how it chooses ticker universe
+- whether it uses active watchlist, default watchlist, cached custom watchlist, or global cache
+- whether it is returning Strong Bases earnings because of stale cache or wrong watchlist id
+- whether Favorites is supported at all
+- cache key used for earnings
+- last_updated of earnings cache
+- symbols included in the current earnings response
+
+Validate with real current state:
+
+Primary watchlist:
+- id
+- ticker count
+- first 20 tickers
+- expected earnings symbols
+
+Strong Bases:
+- id
+- ticker count
+- symbols
+- earnings symbols currently returned
+
+Favorites:
+- favorite ticker count
+- favorite symbols
+- whether backend has a favorites ticker list endpoint
+- whether earnings endpoint can accept those symbols
+
+Do not patch until this audit is complete.
+
+==================================================
+PART 2 — FIX EARNINGS CONTRACT
+==================================================
+
+Preferred endpoint:
+
+POST /api/watchlist/earnings/by-symbols
+
+Body:
+{
+  "symbols": ["AAPL", "MSFT", "NVDA"]
+}
+
+Alternative acceptable endpoint:
+
+GET /api/watchlist/earnings?symbols=AAPL,MSFT,NVDA
+
+Requirements:
+
+- Accept explicit symbols from frontend.
+- Normalize uppercase.
+- Deduplicate.
+- Return upcoming earnings only for requested symbols.
+- Never return earnings for unrequested symbols.
+- Use existing cached earnings/FMP calendar path.
+- Do not add one FMP request per symbol at request time.
+- If cache is missing for a requested symbol, return it in missing_symbols.
+- If no earnings exist for requested symbols, return empty events calmly.
+- Do not return Strong Bases events unless Strong Bases symbols were requested.
+
+Response:
+
+{
+  "symbols_requested": [...],
+  "events": [...],
+  "missing_symbols": [...],
+  "source": "cached_earnings",
+  "last_updated": "...",
+  "stale": false
+}
+
+Each event:
+
+- symbol or ticker
+- company
+- earnings_date
+- time
+- eps_estimate
+- revenue_estimate
+- previous_eps if available
+- source
+- last_updated
+
+==================================================
+PART 3 — OPTIONAL WATCHLIST-ID EARNINGS ENDPOINT
+==================================================
+
+If easier, also support:
+
+GET /api/watchlist/{watchlist_id}/earnings
+
+But Favorites is likely virtual/global, so symbol-list endpoint is still preferred.
+
+If implementing watchlist-id route:
+
+- Primary id returns Primary symbols only.
+- Strong Bases id returns Strong Bases symbols only.
+- It must not use last active/custom watchlist cache.
+
+==================================================
+PART 4 — VALIDATE EARNINGS SCOPE
+==================================================
+
+Run backend validation.
+
+Primary request:
+- request Primary symbols
+- returned event symbols must be subset of Primary symbols
+- must not include Strong Bases-only symbols
+
+Strong Bases request:
+- request Strong Bases symbols
+- returned event symbols must be subset of Strong Bases symbols
+
+Favorites request:
+- request Favorites symbols
+- returned event symbols must be subset of Favorites symbols
+- if favorite symbols have cached upcoming earnings, return them
+
+Negative test:
+- request symbols with no upcoming earnings
+- return empty events
+- do not return unrelated/global events
+
+Acceptance:
+
+Primary must not show Strong Bases earnings.
+Favorites must not be blank if favorite symbols have earnings in cache.
+Backend must never return unrequested symbols.
+
+==================================================
+PART 5 — AUDIT PRIMARY WATCHLIST ENDPOINT LATENCY
+==================================================
+
+Now audit the slow Primary watchlist load.
+
+Measure:
+
+GET /api/watchlist/{primaryId}
+
+Break down timing:
+
+- DB membership fetch
+- manual watchlist membership load
+- fundamentals cache load
+- technical/stage cache load
+- quote overlay
+- options overlay
+- market cap resolver
+- confluence/alignment if included
+- earnings/news if included
+- any sequential loops
+- any provider calls accidentally happening during request
+- total response time
+
+Run timing for:
+
+Primary
+Strong Bases
+Favorites if endpoint exists
+
+Report:
+
+- Primary ticker count
+- total request time
+- slowest functions
+- whether request does any external API calls
+- whether request does per-ticker blocking work
+- whether Strong Bases is faster only because fewer tickers
+
+==================================================
+PART 6 — FIX PRIMARY LATENCY ONLY IF SAFE
+==================================================
+
+If GET /api/watchlist/{primaryId} takes ~10 seconds because it does heavy row enrichment request-time:
+
+Fix safely.
+
+Rules:
+
+- no request-time provider calls
+- no sequential per-ticker slow loops if data can be batch-loaded
+- use cached/LKG data
+- batch DB/cache reads
+- return membership/ticker rows quickly
+- let hydration/background refresh update missing data
+- do not block response waiting for fundamentals/options/confluence recomputation
+
+Preferred behavior:
+
+GET /api/watchlist/{id} should return cached row payload quickly.
+
+If some enrichment is missing:
+- return row with pending/missing status
+- do not hold entire response for 10 seconds
+
+Do not change scoring logic.
+
+==================================================
+PART 7 — FINAL REPORT
+==================================================
+
+Return:
+
+BACKEND WATCHLIST EARNINGS + PRIMARY LATENCY REPORT
+
+EARNINGS ROOT CAUSE:
+[why Primary got Strong Bases earnings and Favorites got none]
+
+EARNINGS ENDPOINT:
+[path + request/response shape]
+
+EARNINGS VALIDATION:
+[table]
+
+PRIMARY LATENCY ROOT CAUSE:
+[exact bottleneck]
+
+PRIMARY LATENCY TIMINGS:
+[table]
+
+FILES CHANGED:
+[list]
+
+End exactly:
+
+BACKEND WATCHLIST EARNINGS/LATENCY VERDICT
+
+EARNINGS_SUPPORTS_SYMBOL_LIST:
+[YES/NO]
+
+PRIMARY_EARNINGS_PRIMARY_ONLY:
+[YES/NO]
+
+STRONG_BASES_EARNINGS_CUSTOM_ONLY:
+[YES/NO]
+
+FAVORITES_EARNINGS_SUPPORTED:
+[YES/NO]
+
+NO_UNREQUESTED_STRONG_BASES_EARNINGS:
+[YES/NO]
+
+PRIMARY_WATCHLIST_LATENCY_AUDITED:
+[YES/NO]
+
+PRIMARY_ENDPOINT_UNDER_2S_OR_BOTTLENECK_IDENTIFIED:
+[YES/NO]
+
+NO_REQUEST_TIME_PROVIDER_CALLS:
+[YES/NO]
+
+FRONTEND_READY_FOR_EARNINGS_WIRING:
+[YES/NO]

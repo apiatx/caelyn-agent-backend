@@ -3246,6 +3246,238 @@ async def watchlist_earnings_endpoint(
     return {"earnings": normalised, "meta": meta}
 
 
+# ── Earnings by Explicit Symbol List ─────────────────────────────────────────
+#
+# POST /api/watchlist/earnings/by-symbols
+#
+# Frontend sends the symbols it is currently displaying; backend returns
+# earnings scoped to exactly those symbols.  This is the preferred contract
+# for multi-watchlist and Favorites support where the viewing context is
+# determined client-side, not inferred server-side from a default load.
+#
+# Architecture note:
+#   Uses universe="watchlist_by_syms" in user_earnings_cache (Neon) — a
+#   dedicated cache row separate from "watchlist" so there is no
+#   cross-contamination with the default-load earnings cache.
+#   FMP calendar is a date-window batch call (not per-symbol); filtering
+#   happens in Python.  The cache expands automatically when new symbols
+#   are requested (UNION re-sync, still a single FMP call).
+
+class EarningsBySymbolsRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    symbols:   List[str]
+    from_date: Optional[str] = None
+    to_date:   Optional[str] = None
+
+
+@router.post("/earnings/by-symbols")
+async def earnings_by_symbols_endpoint(body: EarningsBySymbolsRequest):
+    """
+    POST /api/watchlist/earnings/by-symbols
+
+    Accept an explicit list of symbols from the frontend (Primary, Strong Bases,
+    or Favorites symbols) and return upcoming earnings for exactly those symbols.
+
+    Never returns earnings for symbols that were not requested.
+    Never uses the default-load watchlist as the symbol source.
+
+    Request:
+        {
+          "symbols":   ["AAPL", "MSFT", "NVDA"],
+          "from_date": "2026-07-17",   // optional, defaults to today
+          "to_date":   "2026-10-15"    // optional, defaults to today + 90 days
+        }
+
+    Response:
+        {
+          "symbols_requested": [...],
+          "events":            [...],
+          "missing_symbols":   [...],   // requested but no earnings found
+          "source":            "cached_earnings",
+          "last_updated":      "...",
+          "stale":             false,
+          "cache_status":      "hit|miss|refreshed|empty"
+        }
+
+    Each event:
+        symbol, company, earnings_date, time, eps_estimate, revenue_estimate,
+        previous_eps, source, last_updated, importance, market_cap
+    """
+    from datetime import date as _date_cls, timedelta as _td_cls
+    import time as _tm_bys
+
+    _t0_bys = _tm_bys.time()
+
+    # Normalize + deduplicate (preserve order)
+    symbols: list[str] = list(dict.fromkeys(
+        s.strip().upper() for s in (body.symbols or []) if s.strip()
+    ))
+
+    if not symbols:
+        return {
+            "symbols_requested": [],
+            "events":            [],
+            "missing_symbols":   [],
+            "source":            "cached_earnings",
+            "last_updated":      None,
+            "stale":             False,
+            "cache_status":      "empty",
+        }
+
+    # Default date window: today → +90 days
+    from_date = body.from_date or _date_cls.today().isoformat()
+    to_date   = body.to_date   or (_date_cls.today() + _td_cls(days=90)).isoformat()
+
+    # FMP key
+    try:
+        from config import FMP_API_KEY as _fmp_key_bys  # type: ignore
+    except Exception:
+        _fmp_key_bys = os.getenv("FMP_API_KEY", "")
+
+    if not _fmp_key_bys:
+        return {
+            "symbols_requested": symbols,
+            "events":            [],
+            "missing_symbols":   symbols,
+            "source":            "cached_earnings",
+            "last_updated":      None,
+            "stale":             True,
+            "cache_status":      "error",
+            "error":             "fmp_key_unavailable",
+        }
+
+    try:
+        from services.user_earnings_service import get_earnings_for_symbols as _get_e_bys  # type: ignore
+        events_raw, missing_symbols, meta = await _get_e_bys(
+            symbols   = symbols,
+            fmp_key   = _fmp_key_bys,
+            from_date = from_date,
+            to_date   = to_date,
+        )
+    except Exception as _e_bys:
+        print(f"[EARNINGS_BY_SYMS] get_earnings_for_symbols error: {_e_bys}")
+        return {
+            "symbols_requested": symbols,
+            "events":            [],
+            "missing_symbols":   symbols,
+            "source":            "cached_earnings",
+            "last_updated":      None,
+            "stale":             True,
+            "cache_status":      "error",
+            "error":             str(_e_bys),
+        }
+
+    # ── Normalise events to spec shape ────────────────────────────────────────
+    def _fmt_date_bys(dt_str):
+        if not dt_str:
+            return None
+        try:
+            from datetime import datetime as _dtt
+            return _dtt.strptime(dt_str, "%Y-%m-%d").strftime("%b %-d")
+        except Exception:
+            return dt_str
+
+    normalised_events = []
+    for ev in (events_raw or []):
+        sym = (ev.get("symbol") or "").upper()
+        if not sym:
+            continue
+        normalised_events.append({
+            "symbol":            sym,
+            "ticker":            sym,
+            "company":           ev.get("companyName") or ev.get("name") or sym,
+            "earnings_date":     ev.get("date"),
+            "earnings_date_fmt": _fmt_date_bys(ev.get("date")),
+            "time":              ev.get("time"),
+            "eps_estimate":      ev.get("epsEstimated"),
+            "revenue_estimate":  ev.get("revenueEstimated"),
+            "previous_eps":      ev.get("epsActual"),
+            "source":            ev.get("source", "fmp"),
+            "last_updated":      meta.get("last_updated"),
+            "importance":        ev.get("importance"),
+            "market_cap":        ev.get("marketCap"),
+        })
+
+    # Sort ascending by date
+    normalised_events.sort(key=lambda x: x.get("earnings_date") or "")
+
+    _ms_bys = round((_tm_bys.time() - _t0_bys) * 1000)
+    print(
+        f"[EARNINGS_BY_SYMS] symbols={len(symbols)} events={len(normalised_events)} "
+        f"missing={len(missing_symbols)} cache_status={meta.get('cache_status')} elapsed_ms={_ms_bys}"
+    )
+
+    return {
+        "symbols_requested": symbols,
+        "events":            normalised_events,
+        "missing_symbols":   missing_symbols,
+        "source":            meta.get("source", "cached_earnings"),
+        "last_updated":      meta.get("last_updated"),
+        "stale":             meta.get("stale", False),
+        "cache_status":      meta.get("cache_status"),
+        "elapsed_ms":        _ms_bys,
+    }
+
+
+# ── Earnings by Watchlist ID ──────────────────────────────────────────────────
+#
+# GET /api/watchlist/{watchlist_id}/earnings
+#
+# Convenience wrapper: loads the given watchlist's symbols, then delegates
+# to earnings_by_symbols_endpoint logic.  This endpoint is NOT subject to
+# the default-load bug because it always loads by explicit ID.
+#
+# Route note: registered at /{watchlist_id}/earnings (2 path segments) —
+# FastAPI does not confuse this with /{watchlist_id} (1 segment).
+
+@router.get("/{watchlist_id}/earnings")
+async def watchlist_id_earnings_endpoint(
+    watchlist_id: str,
+    from_date: Optional[str] = None,
+    to_date:   Optional[str] = None,
+):
+    """
+    GET /api/watchlist/{watchlist_id}/earnings
+
+    Return upcoming earnings for a specific watchlist's symbols.
+
+    Primary → Primary symbols only.
+    Strong Bases → Strong Bases symbols only.
+    Never mixes symbol universes from different watchlists.
+
+    Query params:
+        from_date  YYYY-MM-DD (default: today)
+        to_date    YYYY-MM-DD (default: today + 90 days)
+
+    Response: same shape as POST /earnings/by-symbols
+    """
+    store = load_watchlist(watchlist_id)
+    if store is None or not store.get("tickers"):
+        return {
+            "symbols_requested": [],
+            "events":            [],
+            "missing_symbols":   [],
+            "source":            "cached_earnings",
+            "last_updated":      None,
+            "stale":             False,
+            "cache_status":      "empty",
+            "watchlist_id":      watchlist_id,
+        }
+
+    symbols: list[str] = [t.strip().upper() for t in store.get("tickers", []) if t.strip()]
+
+    # Delegate to EarningsBySymbolsRequest body handler via inline call
+    req = EarningsBySymbolsRequest(
+        symbols   = symbols,
+        from_date = from_date,
+        to_date   = to_date,
+    )
+    result = await earnings_by_symbols_endpoint(req)
+    result["watchlist_id"] = watchlist_id
+    result["watchlist_name"] = store.get("name", "")
+    return result
+
+
 # ── Stock Deep-Dive ─────────────────────────────────────────────────────────
 
 class StockDeepDiveRequest(BaseModel):

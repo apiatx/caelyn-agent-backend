@@ -364,3 +364,160 @@ async def sync_universe_background(
         print(f"[user_earnings] Background sync complete for universe={universe}")
     except Exception as e:
         print(f"[user_earnings] Background sync error (universe={universe}): {e}")
+
+
+# ── Explicit-symbol API (by-symbols endpoint) ─────────────────────────────────
+
+# Neon universe key used by the by-symbols cache.  Separate from "watchlist"
+# (which is always the default/first watchlist) so there is no cross-contamination.
+_BY_SYMS_UNIVERSE = "watchlist_by_syms"
+
+
+async def _sync_for_explicit_symbols(
+    universe: str,
+    symbols:  set[str],
+    fmp_key:  str,
+) -> list[dict]:
+    """
+    Fetch FMP earnings for an explicit symbol set and cache under *universe*.
+
+    FMP's earnings-calendar endpoint returns ALL companies for the date window
+    regardless of which symbols are passed.  The *symbols* param is forwarded
+    to _fetch_earnings_dates only for importance scoring; the actual filtering
+    to the requested symbol set is done here in Python.
+
+    Writes the filtered result to Neon under the given universe key.
+    Does NOT write if FMP returns zero events (transient API failure guard).
+    """
+    win_from = _today_str()
+    win_to   = _window_end_str()
+    print(
+        f"[user_earnings] _sync_for_explicit_symbols universe={universe}: "
+        f"{len(symbols)} symbols, window={win_from}→{win_to}"
+    )
+    try:
+        from services.catalyst_calendar_service import (  # type: ignore
+            CatalystFMP,
+            _fetch_earnings_dates,
+        )
+        fmp = CatalystFMP(fmp_key)
+        # Pass requested symbols as *watchlist* — used for importance scoring only.
+        all_events = await _fetch_earnings_dates(fmp, win_from, win_to, symbols, set())
+        if not all_events:
+            print(
+                f"[user_earnings] FMP returned 0 events (transient?) "
+                f"— skipping cache write for universe={universe}"
+            )
+            return []
+        filtered = [
+            ev for ev in all_events
+            if (ev.get("symbol") or "").upper() in symbols
+        ]
+        print(
+            f"[user_earnings] _sync_for_explicit_symbols: "
+            f"{len(filtered)}/{len(all_events)} events match {len(symbols)} symbols"
+        )
+        _pg_write(universe, filtered, sorted(symbols), win_from, win_to)
+        return filtered
+    except Exception as e:
+        print(f"[user_earnings] _sync_for_explicit_symbols error (universe={universe}): {e}")
+        return []
+
+
+async def get_earnings_for_symbols(
+    symbols:   list[str],
+    fmp_key:   str,
+    from_date: Optional[str] = None,
+    to_date:   Optional[str] = None,
+) -> tuple[list[dict], list[str], dict]:
+    """
+    Return (events, missing_symbols, meta) for an explicit symbol list.
+
+    Cache strategy (universe="watchlist_by_syms"):
+      HIT          — all requested symbols are in the cached universe (30-day TTL)
+      REFRESHED    — cache exists but new symbols were requested; re-syncs with
+                     the UNION of old + new so future requests are still fast
+      MISS/STALE   — no cache or TTL expired; full FMP sync for requested symbols
+
+    missing_symbols — requested symbols that were not found in any cached event.
+                      These may simply have no upcoming earnings (not an error).
+
+    Events are filtered to [from_date, to_date] before returning.
+    Events are always scoped to exactly the requested symbols (defensive re-filter).
+    """
+    req_syms: set[str] = {s.strip().upper() for s in symbols if s.strip()}
+    if not req_syms:
+        return [], [], {
+            "symbols_requested": [],
+            "events_count":      0,
+            "missing_symbols_count": 0,
+            "cache_status":      "empty",
+            "source":            "cached_earnings",
+            "last_updated":      None,
+            "stale":             False,
+        }
+
+    cached       = _pg_read(_BY_SYMS_UNIVERSE)
+    cache_status = "miss"
+    events: list[dict]  = []
+    cached_syms:  set[str] = set()
+    last_updated: Optional[str] = None
+
+    if cached and _is_fresh(cached.get("fetched_at")):
+        cached_syms  = set(cached.get("symbols", []))
+        last_updated = cached.get("fetched_at")
+
+        if req_syms.issubset(cached_syms):
+            # Cache covers all requested symbols
+            events       = cached["events"]
+            cache_status = "hit"
+            print(
+                f"[user_earnings] get_earnings_for_symbols HIT: "
+                f"{len(events)} events, {len(req_syms)} symbols requested"
+            )
+        else:
+            # Expand universe to include new symbols, re-sync
+            expanded     = cached_syms | req_syms
+            print(
+                f"[user_earnings] get_earnings_for_symbols EXPAND: "
+                f"{len(req_syms - cached_syms)} new symbols → re-syncing with {len(expanded)} total"
+            )
+            events       = await _sync_for_explicit_symbols(_BY_SYMS_UNIVERSE, expanded, fmp_key)
+            cached_syms  = expanded
+            cache_status = "refreshed"
+            last_updated = _today_str()
+    else:
+        # Cache miss or stale
+        print(
+            f"[user_earnings] get_earnings_for_symbols MISS: "
+            f"syncing {len(req_syms)} symbols from FMP"
+        )
+        events       = await _sync_for_explicit_symbols(_BY_SYMS_UNIVERSE, req_syms, fmp_key)
+        cached_syms  = req_syms
+        cache_status = "miss"
+        last_updated = _today_str()
+
+    # ── Filter to requested symbols + date window ─────────────────────────────
+    filtered = [
+        ev for ev in events
+        if (ev.get("symbol") or "").upper() in req_syms
+    ]
+    in_range = _filter_by_date(filtered, from_date, to_date)
+
+    # Symbols that appeared in none of the cached events (may have no earnings)
+    symbols_with_events = {(ev.get("symbol") or "").upper() for ev in filtered}
+    missing = sorted(req_syms - symbols_with_events)
+
+    print(
+        f"[user_earnings] get_earnings_for_symbols → {len(in_range)} events, "
+        f"{len(missing)} missing, cache_status={cache_status}"
+    )
+    return in_range, missing, {
+        "symbols_requested":     sorted(req_syms),
+        "events_count":          len(in_range),
+        "missing_symbols_count": len(missing),
+        "cache_status":          cache_status,
+        "source":                "cached_earnings",
+        "last_updated":          last_updated,
+        "stale":                 cache_status in ("miss",),
+    }
