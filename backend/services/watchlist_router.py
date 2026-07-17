@@ -1798,6 +1798,185 @@ async def debug_fundamentals_refresh(
 _backfill_state: dict = {"status": "idle", "refreshed": 0, "failed": 0, "total": 0,
                          "failed_symbols": [], "started_at": None, "finished_at": None}
 
+# ── Manual-add priority hydration state ──────────────────────────────────────
+# Keyed by SYMBOL (uppercase). Tracks per-symbol hydration progress for
+# tickers added via POST /{watchlist_id}/ticker or POST /{watchlist_id}/tickers.
+# In-process only — lost on restart, which is fine because each hydration step
+# persists its own result to Neon/disk.
+_HYDRATION_STATE: dict[str, dict] = {}
+
+
+def _hydration_entry(sym: str) -> dict:
+    """Return the current hydration state for a symbol or sensible defaults."""
+    return dict(_HYDRATION_STATE.get(sym.upper(), {
+        "quote":        "unknown",
+        "technical":    "unknown",
+        "fundamentals": "unknown",
+        "enqueued_at":  None,
+        "last_error":   None,
+        "last_updated": None,
+    }))
+
+
+async def _priority_hydrate_symbols(symbols: list[str], watchlist_id: str) -> None:
+    """
+    Background priority hydration for manually added symbols.
+
+    Runs three sequential steps so each step can build on prior results:
+      A. Quote      — refresh_watchlist_quotes_now() (Tradier batch, in-memory cache)
+      B. Technical  — warmup_stage2(force=True) (stage + all technical_metrics)
+      C. FMP        — FmpFundamentalsRefresher.normalize_symbol() + upsert_snapshot()
+      D. Market cap — merge implied_shares into existing fund cache row
+
+    State is written to _HYDRATION_STATE[symbol] throughout so the status
+    endpoint can return real-time progress to the caller.
+
+    Uses existing budget/throttle safeguards in each step. User-triggered
+    manual adds are allowed to call APIs immediately (same as the upload warmup).
+    """
+    import asyncio as _aio
+    from datetime import datetime, timezone as _tz
+    _now = lambda: datetime.now(_tz.utc).isoformat()
+
+    deduped = list(dict.fromkeys(s.strip().upper() for s in symbols if s.strip()))
+    if not deduped:
+        return
+
+    ts_enq = _now()
+    for sym in deduped:
+        _HYDRATION_STATE[sym] = {
+            "quote":        "pending",
+            "technical":    "pending",
+            "fundamentals": "pending",
+            "enqueued_at":  ts_enq,
+            "last_error":   None,
+            "last_updated": ts_enq,
+        }
+
+    # ── A. Quote ──────────────────────────────────────────────────────────────
+    try:
+        from services.watchlist_quote_cache import (
+            refresh_watchlist_quotes_now as _rq,
+            is_tradier_quote_eligible as _trad_elig,
+        )
+        tradier_syms = [s for s in deduped if _trad_elig(s)]
+        for sym in deduped:
+            _HYDRATION_STATE[sym]["quote"] = (
+                "running" if sym in tradier_syms else "not_applicable"
+            )
+        if tradier_syms:
+            await _rq(tradier_syms)
+        for sym in tradier_syms:
+            _HYDRATION_STATE[sym]["quote"] = "done"
+    except Exception as _qe:
+        for sym in deduped:
+            if _HYDRATION_STATE[sym]["quote"] in ("pending", "running"):
+                _HYDRATION_STATE[sym]["quote"] = "error"
+                _HYDRATION_STATE[sym]["last_error"] = f"quote: {_qe}"
+        print(f"[PRIORITY_HYDRATE] quote step error: {_qe}")
+
+    # ── B. Technical / Stage2 ─────────────────────────────────────────────────
+    try:
+        from services.watchlist_stage2_service import warmup_stage2 as _ws2
+        from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_elig
+        tech_syms = [s for s in deduped if _fmp_elig(s)]
+        for sym in deduped:
+            _HYDRATION_STATE[sym]["technical"] = (
+                "running" if sym in tech_syms else "not_applicable"
+            )
+        if tech_syms:
+            await _ws2(tech_syms, force=True)
+        for sym in tech_syms:
+            _HYDRATION_STATE[sym]["technical"] = "done"
+    except Exception as _te:
+        for sym in deduped:
+            if _HYDRATION_STATE[sym]["technical"] in ("pending", "running"):
+                _HYDRATION_STATE[sym]["technical"] = "error"
+                _HYDRATION_STATE[sym]["last_error"] = f"technical: {_te}"
+        print(f"[PRIORITY_HYDRATE] technical step error: {_te}")
+
+    # ── C. FMP Fundamentals ───────────────────────────────────────────────────
+    try:
+        import os as _os_h
+        _fmp_key_h = _os_h.getenv("FMP_API_KEY", "")
+        if not _fmp_key_h:
+            raise RuntimeError("FMP_API_KEY not configured")
+        from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher as _FmpH
+        from data.watchlist_fundamentals_store import upsert_snapshot as _us_h
+        from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_elig2
+        _ref_h = _FmpH(_fmp_key_h)
+        fund_syms = [s for s in deduped if _fmp_elig2(s)]
+        for sym in deduped:
+            _HYDRATION_STATE[sym]["fundamentals"] = (
+                "running" if sym in fund_syms else "not_applicable"
+            )
+        for sym in fund_syms:
+            try:
+                _res = await _ref_h.normalize_symbol(sym)
+                _out = _us_h(
+                    sym, watchlist_id,
+                    _res.get("fields") or {},
+                    _res.get("missing_fields") or [],
+                    _res.get("fmp_call_count", 0),
+                )
+                _HYDRATION_STATE[sym]["fundamentals"] = (
+                    "done" if _out == "success" else f"done_{_out}"
+                )
+            except Exception as _fsym_e:
+                _HYDRATION_STATE[sym]["fundamentals"] = "error"
+                _HYDRATION_STATE[sym]["last_error"] = f"fmp: {_fsym_e}"
+                print(f"[PRIORITY_HYDRATE] FMP({sym}) error: {_fsym_e}")
+    except Exception as _fe:
+        for sym in deduped:
+            if _HYDRATION_STATE[sym]["fundamentals"] in ("pending", "running"):
+                _HYDRATION_STATE[sym]["fundamentals"] = "error"
+                _HYDRATION_STATE[sym]["last_error"] = f"fmp_setup: {_fe}"
+        print(f"[PRIORITY_HYDRATE] fundamentals step error: {_fe}")
+
+    # ── D. Market-cap implied shares (best-effort, non-fatal) ─────────────────
+    try:
+        import os as _os_mc
+        _fmp_mc = _os_mc.getenv("FMP_API_KEY", "")
+        if _fmp_mc:
+            from data.watchlist_fundamentals_store import (
+                get_snapshots_bulk as _gs_mc,
+                merge_fields as _mf_mc,
+            )
+            from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher as _FmpMC
+            from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_elig3
+            _ref_mc = _FmpMC(_fmp_mc)
+            mc_syms = [s for s in deduped if _fmp_elig3(s)]
+            _existing = _gs_mc(mc_syms)
+            for sym in mc_syms:
+                _snap_f = (_existing.get(sym) or {}).get("fields") or {}
+                if _snap_f.get("_market_cap_implied_shares") is not None:
+                    continue
+                try:
+                    _raw = await _ref_mc._get("profile", {"symbol": sym})
+                    _prof = (_raw[0] if isinstance(_raw, list) and _raw
+                             else (_raw if isinstance(_raw, dict) else {}))
+                    _mc = _prof.get("marketCap")
+                    _px = _prof.get("price")
+                    if _mc and _px and float(_mc) > 0 and float(_px) > 0:
+                        _imp = round(float(_mc) / float(_px), 0)
+                        if _imp > 0:
+                            _mf_mc(sym, {
+                                "_market_cap_implied_shares":   _imp,
+                                "_market_cap_price_at_refresh": round(float(_px), 4),
+                                "_market_cap_static_source":    "fmp_profile",
+                            })
+                except Exception:
+                    pass
+    except Exception:
+        pass  # non-fatal — market-cap backfill best-effort
+
+    _ts_done = _now()
+    for sym in deduped:
+        if sym in _HYDRATION_STATE:
+            _HYDRATION_STATE[sym]["last_updated"] = _ts_done
+    print(f"[PRIORITY_HYDRATE] finished for {deduped}")
+
+
 # ── Upload-triggered Stage2 warmup state ──────────────────────────────────────
 _UPLOAD_WARMUP_STATE: dict = {
     "watchlist_id":   None,
@@ -4427,6 +4606,7 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         raise HTTPException(status_code=500, detail=result["error"])
 
     if result.get("added"):
+        import asyncio as _aio_add
         try:
             from services.user_earnings_service import invalidate_user_earnings
             invalidate_user_earnings("watchlist")
@@ -4435,11 +4615,9 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         _rv_registry.pop(watchlist_id, None)
         _volmc_registry.pop(watchlist_id, None)
         _news_lkg.pop(watchlist_id, None)
-        # Register the new ticker with the existing canonical fundamentals
-        # refresh pipeline so it is not permanently invisible to the weekly
-        # due-queue. This only writes a row (next_refresh_at = now, i.e.
-        # immediately due) — it does NOT call FMP synchronously; the existing
-        # background weekly loop performs the actual provider work.
+
+        # Mark the new symbol as immediately due for the weekly FMP queue
+        # (non-blocking row insert — actual FMP work follows below).
         try:
             from services.watchlist_quote_cache import is_fmp_symbol_eligible
             if is_fmp_symbol_eligible(t):
@@ -4448,14 +4626,29 @@ async def add_ticker_endpoint(watchlist_id: str, body: _AddTickerBody):
         except Exception as _fund_sched_exc:
             print(f"[WATCHLIST] schedule_refresh({t}) on add failed: {_fund_sched_exc}")
 
+        # ── Priority hydration: quote + technical + FMP (non-blocking) ───────
+        # Set initial state synchronously so the response can include it.
+        from datetime import datetime, timezone as _tz_add
+        _ts_add = datetime.now(_tz_add.utc).isoformat()
+        _HYDRATION_STATE[t] = {
+            "quote":        "pending",
+            "technical":    "pending",
+            "fundamentals": "pending",
+            "enqueued_at":  _ts_add,
+            "last_error":   None,
+            "last_updated": _ts_add,
+        }
+        _aio_add.create_task(_priority_hydrate_symbols([t], watchlist_id))
+
     resp = {
-        "success":      True,
-        "watchlist_id": watchlist_id,
-        "ticker":       t,
-        "company_name": body.company_name or "",
-        "added":        result.get("added", False),
-        "duplicate":    result.get("duplicate", False),
-        "ticker_count": result.get("ticker_count", 0),
+        "success":          True,
+        "watchlist_id":     watchlist_id,
+        "ticker":           t,
+        "company_name":     body.company_name or "",
+        "added":            result.get("added", False),
+        "duplicate":        result.get("duplicate", False),
+        "ticker_count":     result.get("ticker_count", 0),
+        "hydration_status": _hydration_entry(t),
     }
     if result.get("conflict_type"):
         resp["existing_ticker"] = result.get("existing_ticker", "")
@@ -4515,6 +4708,289 @@ async def remove_ticker_endpoint(watchlist_id: str, ticker: str):
         "ticker":       t,
         "removed":      result.get("removed", False),
         "ticker_count": result.get("ticker_count", 0),
+    }
+
+
+# ── Bulk-add multiple tickers ─────────────────────────────────────────────────
+
+class _BulkAddBody(BaseModel):
+    tickers: list[str]
+    theme:   Optional[str] = None
+
+
+@router.post("/{watchlist_id}/tickers")
+async def bulk_add_tickers_endpoint(watchlist_id: str, body: _BulkAddBody):
+    """
+    POST /api/watchlist/{watchlist_id}/tickers
+
+    Add multiple tickers to a watchlist in one call.
+
+    Body:  { "tickers": ["BE", "OSS", "AMKR"], "theme": null }
+
+    - Persists all tickers atomically (one by one, advisory lock per symbol).
+    - Returns each ticker with added/duplicate status + hydration_status.
+    - Fires a single background _priority_hydrate_symbols() task for all newly
+      added symbols (quote → technical → FMP fundamentals → market-cap backfill).
+    - Optionally assigns theme to all newly added tickers via PATCH /category path.
+    - Deduplicates symbols already in the queue.
+    - Respects FMP budget/throttle inside _priority_hydrate_symbols().
+    """
+    import asyncio as _aio_bulk
+    from datetime import datetime, timezone as _tz_bulk
+
+    if not body.tickers:
+        raise HTTPException(status_code=400, detail="tickers list is required")
+
+    try:
+        from data.pg_storage import watchlist_add_ticker as _wl_add, is_available as _is_av
+        from services.canonical_security_adapter import exchange_family_aliases as _efa
+        if not _is_av():
+            raise HTTPException(status_code=503, detail="Database unavailable")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    results = []
+    newly_added: list[str] = []
+    _ts_bulk = datetime.now(_tz_bulk.utc).isoformat()
+
+    for raw in body.tickers:
+        sym = raw.strip().upper()
+        if not sym:
+            continue
+        try:
+            _aliases = _efa(sym)
+            _res = _wl_add(watchlist_id, sym, family_aliases=_aliases)
+        except Exception as _exc_sym:
+            results.append({
+                "ticker":           sym,
+                "added":            False,
+                "duplicate":        False,
+                "error":            str(_exc_sym),
+                "hydration_status": _hydration_entry(sym),
+            })
+            continue
+
+        if _res.get("added"):
+            newly_added.append(sym)
+            # Pre-seed hydration state synchronously before background task
+            _HYDRATION_STATE[sym] = {
+                "quote":        "pending",
+                "technical":    "pending",
+                "fundamentals": "pending",
+                "enqueued_at":  _ts_bulk,
+                "last_error":   None,
+                "last_updated": _ts_bulk,
+            }
+            # Mark as immediately due in fundamentals queue
+            try:
+                from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_e
+                if _fmp_e(sym):
+                    from data.watchlist_fundamentals_store import schedule_refresh as _sr
+                    _sr(sym, watchlist_id, days=0)
+            except Exception:
+                pass
+
+        row: dict = {
+            "ticker":           sym,
+            "added":            _res.get("added", False),
+            "duplicate":        _res.get("duplicate", False),
+            "ticker_count":     _res.get("ticker_count", 0),
+            "hydration_status": _hydration_entry(sym),
+        }
+        if _res.get("conflict_type"):
+            row["existing_ticker"] = _res.get("existing_ticker", "")
+            row["conflict_type"]   = _res["conflict_type"]
+        if _res.get("error"):
+            row["error"] = _res["error"]
+        results.append(row)
+
+    if newly_added:
+        # Invalidate caches for the watchlist
+        try:
+            from services.user_earnings_service import invalidate_user_earnings as _ieu
+            _ieu("watchlist")
+        except Exception:
+            pass
+        _rv_registry.pop(watchlist_id, None)
+        _volmc_registry.pop(watchlist_id, None)
+        _news_lkg.pop(watchlist_id, None)
+
+        # Optional theme assignment for all newly added tickers
+        if body.theme:
+            try:
+                from services.category_overrides import upsert_override as _uo
+                for sym in newly_added:
+                    _uo("default", sym, body.theme, "manual", "bulk_add")
+            except Exception as _te_bulk:
+                print(f"[BULK_ADD] theme assignment failed (non-fatal): {_te_bulk}")
+
+        # Single priority hydration task for all new symbols
+        _aio_bulk.create_task(_priority_hydrate_symbols(newly_added, watchlist_id))
+
+    return {
+        "success":      True,
+        "watchlist_id": watchlist_id,
+        "added_count":  len(newly_added),
+        "total":        len(results),
+        "results":      results,
+    }
+
+
+# ── Per-ticker theme assignment ───────────────────────────────────────────────
+
+@router.patch("/{watchlist_id}/tickers/{symbol}/theme")
+async def patch_ticker_theme_endpoint(
+    watchlist_id: str,
+    symbol:       str,
+    request:      Request,
+    body:         dict = Body(default_factory=dict),
+):
+    """
+    PATCH /api/watchlist/{watchlist_id}/tickers/{symbol}/theme
+
+    Assign or update the theme for a ticker that is already in the watchlist.
+
+    Body: { "theme": "Datacenter Infra" }
+
+    - Validates symbol exists in the watchlist.
+    - Persists theme via watchlist_category_overrides (same store as PATCH /category).
+    - Triggers cross-sync: theme_ticker_mapper + theme_ticker_overrides + Options Flow.
+    - Returns updated theme row.
+    - Handles unknown / custom themes gracefully (stored as-is).
+    """
+    sym = symbol.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    theme = (body.get("theme") or "").strip()
+    if not theme:
+        raise HTTPException(status_code=400, detail="theme is required in body")
+
+    # Validate symbol is in this watchlist
+    try:
+        from data.pg_storage import watchlist_read as _wl_read
+        _wl = _wl_read(watchlist_id)
+    except Exception as _exc_wlr:
+        raise HTTPException(status_code=500, detail=str(_exc_wlr))
+    if _wl is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    _tickers_in_wl = [t.strip().upper() for t in (_wl.get("tickers") or [])]
+    if sym not in _tickers_in_wl:
+        raise HTTPException(status_code=404, detail=f"{sym} not found in watchlist {watchlist_id}")
+
+    # Resolve user_id (JWT middleware disabled — parse Bearer directly)
+    _auth_hdr = request.headers.get("Authorization", "")
+    _token = _auth_hdr.removeprefix("Bearer ").strip() if _auth_hdr.startswith("Bearer ") else ""
+    _user_id = "default"
+    if _token:
+        try:
+            from auth import verify_token as _vt
+            _payload = _vt(_token)
+            _user_id = _payload.get("sub") or "default"
+        except Exception:
+            pass
+
+    # Persist theme override (same path as PATCH /category)
+    try:
+        from services.category_overrides import upsert_override as _uo_theme
+        ok = _uo_theme(_user_id, sym, theme, "manual", "watchlist_theme_patch")
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to persist theme override")
+    except HTTPException:
+        raise
+    except Exception as _exc_uo:
+        raise HTTPException(status_code=500, detail=str(_exc_uo))
+
+    # Cross-sync: theme_ticker_mapper in-memory index
+    try:
+        from services.theme_ticker_mapper import register_llm_classified_tickers as _sync_m
+        _sync_m([{"ticker": sym, "theme": theme, "confidence": "manual"}])
+    except Exception as _me_th:
+        print(f"[THEME_PATCH] mapper sync failed (non-fatal): {_me_th}")
+
+    # Cross-sync: theme_ticker_overrides + Options Flow (best-effort)
+    try:
+        from services.theme_rs_universe import THEME_RS_UNIVERSE as _trs
+        _tid = next(
+            (tid for tid, m in _trs.items()
+             if m.get("display_name", "").lower() == theme.lower()),
+            None,
+        )
+        if _tid:
+            from data.pg_storage import upsert_theme_ticker_override as _utto
+            _utto(theme_id=_tid, symbol=sym, action="add",
+                  source="watchlist_theme_patch", note="synced from PATCH /tickers/theme",
+                  created_by=_user_id)
+            from services.theme_merge_layer import refresh_enriched_universe as _ref_u
+            _ref_u()
+            from data.options_flow_sectors import invalidate_sectors_cache as _inv_sc
+            _inv_sc()
+    except Exception as _ue_th:
+        print(f"[THEME_PATCH] Options Flow sync failed (non-fatal): {_ue_th}")
+
+    return {
+        "success":      True,
+        "watchlist_id": watchlist_id,
+        "symbol":       sym,
+        "theme":        theme,
+        "user_id":      _user_id,
+    }
+
+
+# ── Per-ticker hydration status ───────────────────────────────────────────────
+
+@router.get("/{watchlist_id}/tickers/{symbol}/hydration-status")
+async def get_hydration_status_endpoint(watchlist_id: str, symbol: str):
+    """
+    GET /api/watchlist/{watchlist_id}/tickers/{symbol}/hydration-status
+
+    Returns the real-time hydration status for a ticker that was recently added
+    via POST /{watchlist_id}/ticker or POST /{watchlist_id}/tickers.
+
+    Also includes a snapshot of what data is currently available in the caches
+    (stage2 LKG, fundamentals store, quote cache) so the caller can assess
+    completeness without waiting for the full hydration task to finish.
+    """
+    sym = symbol.strip().upper()
+    hydration = _hydration_entry(sym)
+
+    # Augment with live cache presence checks
+    _stage2_present   = False
+    _fund_present     = False
+    _quote_present    = False
+
+    try:
+        from services.watchlist_stage2_service import _STAGE2_LKG as _s2lkg
+        entry = _s2lkg.get(sym)
+        _stage2_present = bool(entry and entry.get("label") is not None)
+    except Exception:
+        pass
+
+    try:
+        from data.watchlist_fundamentals_store import get_snapshot as _gs
+        import asyncio as _aio_hs
+        _snap = await _aio_hs.get_event_loop().run_in_executor(None, _gs, sym)
+        _fund_present = bool(_snap and (_snap.get("fields") or {}))
+    except Exception:
+        pass
+
+    try:
+        from services.watchlist_quote_cache import _quote_cache as _qc
+        _quote_present = sym in _qc and bool(_qc[sym].get("price"))
+    except Exception:
+        pass
+
+    return {
+        "watchlist_id":    watchlist_id,
+        "symbol":          sym,
+        "hydration_status": hydration,
+        "cache_presence":  {
+            "stage2_technical": _stage2_present,
+            "fundamentals":     _fund_present,
+            "quote":            _quote_present,
+        },
     }
 
 

@@ -1,0 +1,392 @@
+BACKEND ONLY — MANUAL WATCHLIST ADD PRIORITY HYDRATION + THEME ASSIGNMENT FIX
+
+Backend repo only.
+
+Do not touch frontend.
+Do not rewrite the Watchlist system.
+Do not replace existing FMP/Tradier/technical refresh pipelines.
+Do not create duplicate refreshers if existing ones can be reused.
+Do not bypass the existing FMP budget governor / call spacing.
+Do not break weekly/off-hours fundamentals refresh.
+Do not change Confluence scoring.
+Do not change Options Flow.
+
+Problems:
+
+1. Newly added manual tickers are lagged and do not appear immediately/reliably.
+2. Newly added tickers do not consistently get technical and fundamental data right away.
+   - Technical data can take minutes.
+   - Fundamental data may wait until the weekly refresh.
+3. Manually added tickers need to skip to the front of technical/fundamental queues.
+4. Adding a new watchlist / multiple tickers should priority-hydrate all of them quickly.
+5. Theme assignment dropdown appears after manual add, but the backend persistence/update path appears broken or incomplete.
+
+Goal:
+
+Manual watchlist additions should immediately:
+- persist the ticker
+- return it in watchlist responses
+- enqueue priority technical hydration
+- enqueue priority quote hydration
+- enqueue priority FMP fundamentals/profile hydration
+- allow theme assignment to persist correctly
+
+==================================================
+PART 1 — AUDIT CURRENT ADD FLOW
+==================================================
+
+Trace the full manual add path.
+
+Find:
+
+- endpoint used to add one ticker
+- endpoint used to add multiple tickers / new watchlist
+- DB/cache location where manual watchlist membership is stored
+- how added tickers are returned to frontend
+- whether add endpoint invalidates or refreshes watchlist cache
+- whether add endpoint enqueues quote refresh
+- whether add endpoint enqueues technical refresh
+- whether add endpoint enqueues fundamentals refresh
+- whether theme is stored on add
+- whether theme can be patched after add
+
+Return exact files/functions before editing.
+
+==================================================
+PART 2 — IMMEDIATE WATCHLIST PRESENCE
+==================================================
+
+When a ticker is manually added:
+
+- validate/normalize symbol
+- persist symbol immediately
+- return the added row immediately
+- ensure the next GET watchlist response includes it
+- invalidate any stale in-memory watchlist response cache
+- invalidate frontend-facing cached watchlist payload if backend owns it
+- do not wait for technical/fundamental hydration before making ticker visible
+
+Returned row may include:
+
+hydration_status:
+{
+  quote: "pending",
+  technical: "pending",
+  fundamentals: "pending"
+}
+
+But the ticker itself must appear immediately.
+
+Acceptance:
+POST add ticker → immediate GET watchlist includes ticker.
+
+==================================================
+PART 3 — PRIORITY HYDRATION QUEUE FOR MANUAL ADDS
+==================================================
+
+Add or reuse a priority hydration path.
+
+When ticker is manually added, enqueue it at the front of existing queues:
+
+A. Quote / Tradier
+- priority quote refresh
+- use existing canonical quote/watchlist quote cache path
+- no duplicate quote system
+
+B. Technical
+- priority technical/stage hydration
+- use existing technical/Stage2 pipeline
+- hydrate enough fields for Watchlist Technical toggle:
+  Price
+  Chg %
+  Volume
+  VOLX
+  VOL RANK
+  Vol/MC
+  Stage
+  Opt Score
+  Opt Signal
+  P/C
+  IV
+  EM
+  Opt Vol
+  OI
+  MA Stack
+  % vs 50D
+  % vs 200D
+  Extension Risk
+  52W Pos
+  % From 52W High
+  Entry Zone
+  Breakout Signal
+  Accum/Dist
+  Squeeze
+  ATR %
+  Momentum Trend
+  Technical State
+
+C. Fundamentals / FMP
+- priority FMP fundamentals/profile refresh
+- use existing FmpFundamentalsRefresher / watchlist_fundamentals_cache path
+- do not wait until weekly refresh
+- hydrate enough fields for Watchlist Fundamental toggle:
+  Ticker
+  Theme
+  Mkt Cap
+  Revenue
+  Rev Grwth Q
+  Rev Grwth Y
+  Gross Mgn
+  FCF Mgn
+  Free CF
+  Op. Income
+  EBIT
+  P/E
+  P/S
+  EV/EBITDA
+  EPS Grwth
+  D/E
+  ND/EBITDA
+  Insider %
+  Earn. Date
+  Rev Grwth Est
+  Rev Grwth NQ
+  Rev Grwth NY
+  EPS Grwth Est
+  EPS Grwth TQ
+  EPS Grwth NQ
+  EPS Grwth TY
+  EPS Grwth NY
+  market_cap_display fields if available
+
+Important:
+This is allowed to call APIs immediately because it is user-triggered manual hydration, but it must still use existing budget/throttle safeguards.
+
+==================================================
+PART 4 — MULTI-TICKER / NEW WATCHLIST ADD
+==================================================
+
+When multiple tickers are added:
+
+- persist all immediately
+- return all immediately with hydration pending status
+- enqueue all at priority
+- dedupe symbols already in queues
+- batch where existing APIs support batch
+- respect FMP and Tradier pacing
+- process these before normal background refresh backlog
+
+Add status metadata:
+
+hydration_status:
+{
+  quote: "pending/running/done/error",
+  technical: "pending/running/done/error",
+  fundamentals: "pending/running/done/error",
+  last_error: null | string,
+  last_updated: timestamp
+}
+
+Do not block the HTTP response waiting for every API call to finish unless the existing add endpoint is designed to do so. Preferred:
+- return immediately
+- background priority job hydrates
+- frontend can refetch/poll lightly or receive updated watchlist after completion
+
+==================================================
+PART 5 — FRONT-OF-QUEUE BEHAVIOR
+==================================================
+
+Manual add hydration must skip ahead of normal background backlog.
+
+Implement priority levels if needed:
+
+priority = "manual_add"
+priority = "user_import"
+priority = "scheduled"
+
+Manual add/user import should run before scheduled refresh work.
+
+Do not starve scheduled jobs forever; just prioritize user-triggered work.
+
+==================================================
+PART 6 — THEME ASSIGNMENT BACKEND FIX
+==================================================
+
+Audit the theme dropdown persistence path.
+
+Need working backend support for:
+
+- assign theme when adding ticker
+- update theme after ticker already exists
+- return updated theme in watchlist response
+- ensure theme appears consistently in:
+  - Watchlist screener
+  - ticker popup Fundamentals tab
+  - ticker popup About/metadata if used
+  - confluence row if theme displayed
+
+Create or fix endpoint if needed:
+
+PATCH /api/watchlist/tickers/{symbol}/theme
+
+Body:
+{
+  "theme": "Datacenter Infra"
+}
+
+Rules:
+- validate symbol exists in manual watchlist
+- validate theme is allowed, or allow custom theme if current product supports it
+- persist theme in the same canonical watchlist membership/theme mapping store
+- update/invalidate relevant caches
+- return updated row/theme
+
+Do not only update local memory.
+
+==================================================
+PART 7 — STATUS / DEBUG ENDPOINT
+==================================================
+
+Add or reuse admin/user-safe hydration status endpoint:
+
+GET /api/watchlist/tickers/{symbol}/hydration-status
+
+or include hydration_status in existing watchlist response.
+
+Must show:
+- quote status
+- technical status
+- fundamentals status
+- queued/running/done/error
+- timestamps
+- last error if any
+
+==================================================
+PART 8 — VALIDATION
+==================================================
+
+Test single add:
+
+Use symbols not currently in watchlist, for example:
+TEST WITH REAL VALID TICKERS ONLY:
+- BE
+- OSS
+- AMKR
+- CLFD
+- any currently absent valid symbol
+
+For each:
+
+1. Add ticker.
+2. Confirm POST response success.
+3. Confirm immediate GET watchlist includes ticker.
+4. Confirm hydration_status exists.
+5. Confirm quote refresh starts quickly.
+6. Confirm technical fields populate without waiting minutes unnecessarily.
+7. Confirm fundamentals refresh starts immediately and populates without waiting for weekly job.
+8. Confirm market_cap_display uses canonical market-cap resolver.
+9. Confirm no duplicate ticker row.
+
+Test multi-add:
+
+Add 5 tickers at once.
+
+Confirm:
+- all visible immediately
+- all priority enqueued
+- no duplicates
+- queues process before scheduled backlog
+- FMP pacing respected
+
+Test theme:
+
+1. Add ticker with no theme.
+2. Select theme via backend endpoint.
+3. Confirm theme persists.
+4. Confirm GET watchlist returns theme.
+5. Confirm changing theme updates row.
+6. Confirm invalid theme is handled gracefully.
+
+==================================================
+PART 9 — FINAL REPORT
+==================================================
+
+Return:
+
+WATCHLIST MANUAL ADD PRIORITY HYDRATION REPORT
+
+ROOT CAUSE:
+[why added tickers lagged and why data did not hydrate immediately]
+
+FILES CHANGED:
+[list]
+
+ADD FLOW:
+[summary]
+
+PRIORITY HYDRATION:
+[summary]
+
+QUOTE HYDRATION:
+[summary]
+
+TECHNICAL HYDRATION:
+[summary]
+
+FUNDAMENTALS HYDRATION:
+[summary]
+
+MULTI-TICKER IMPORT:
+[summary]
+
+THEME ASSIGNMENT:
+[summary]
+
+CACHE INVALIDATION:
+[summary]
+
+VALIDATION:
+[table]
+
+End exactly:
+
+WATCHLIST ADD HYDRATION VERDICT
+
+NEW_TICKER_VISIBLE_IMMEDIATELY:
+[YES/NO]
+
+SINGLE_ADD_PRIORITY_QUOTE_HYDRATION:
+[YES/NO]
+
+SINGLE_ADD_PRIORITY_TECHNICAL_HYDRATION:
+[YES/NO]
+
+SINGLE_ADD_PRIORITY_FUNDAMENTALS_HYDRATION:
+[YES/NO]
+
+MULTI_ADD_PRIORITY_HYDRATION:
+[YES/NO]
+
+MANUAL_ADDS_SKIP_SCHEDULED_BACKLOG:
+[YES/NO]
+
+FMP_BUDGET_GOVERNOR_RESPECTED:
+[YES/NO]
+
+TRADIER_EXISTING_PATH_REUSED:
+[YES/NO]
+
+FMP_EXISTING_PATH_REUSED:
+[YES/NO]
+
+THEME_ASSIGNMENT_PERSISTS:
+[YES/NO]
+
+WATCHLIST_CACHE_INVALIDATED_ON_ADD:
+[YES/NO]
+
+NO_DUPLICATE_REFRESH_PIPELINES:
+[YES/NO]
+
+FRONTEND_READY:
+[YES/NO]
