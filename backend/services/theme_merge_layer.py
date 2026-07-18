@@ -52,8 +52,14 @@ _SECTION_TO_THEME_ID: dict[str, Optional[str]] = {
     "Quantum Computing":           "quantum",
     "Rare Earth Metals":           "rare_earth",
     "Robotics & Automation":       "robotics_automation",
-    # "Semi Materials" — all three tickers are on foreign exchanges; skip entirely.
-    "Semi Materials":              None,
+    # "Semi Materials" resolves to the same basket as Semiconductor Equipment.
+    # The canonical display label is now "Semi Equipment & Materials" (theme_id
+    # "semicap_equipment" is frozen).  All historical label variants map here.
+    "Semi Equipment & Materials":  "semicap_equipment",
+    "Semi Equipment":              "semicap_equipment",
+    "Semi Materials":              "semicap_equipment",
+    "Semiconductor Materials":     "semicap_equipment",
+    "Semicap Equipment":           "semicap_equipment",
     "Semiconductor Equipment":     "semicap_equipment",
     "Semiconductors":              "semiconductors",
     "Solar":                       "solar",
@@ -80,7 +86,14 @@ _CATEGORY_TO_THEME_ID: dict[str, Optional[str]] = {
 # different label (used for the "aliases" field in merge-debug output).
 # key = canonical theme_id,  value = list of alternate watchlist section names merged in.
 _THEME_SECTION_ALIASES: dict[str, list[str]] = {
-    "uranium_nuclear": ["Nuclear / Grid"],   # second section that fed uranium_nuclear
+    "uranium_nuclear":    ["Nuclear / Grid"],         # second section that fed uranium_nuclear
+    "semicap_equipment":  [                           # all historical labels for this theme
+        "Semiconductor Equipment",
+        "Semicap Equipment",
+        "Semi Equipment",
+        "Semi Materials",
+        "Semiconductor Materials",
+    ],
 }
 
 # Dev-account identifiers (read-only; never exposed in API responses).

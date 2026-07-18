@@ -652,7 +652,12 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
     "semicap_equipment": {
         "classification": "sub_theme",
         "parent_sector":  "technology",
-        "display_name": "Semiconductor Equipment",
+        # Display label updated to "Semi Equipment & Materials" to reflect that
+        # the basket also covers process chemicals, specialty gases, and compound
+        # semiconductor materials companies alongside pure-play equipment makers.
+        # theme_id "semicap_equipment" is FROZEN — changing it would break all
+        # Neon theme_ticker_overrides rows and category_overrides entries.
+        "display_name": "Semi Equipment & Materials",
         "proxy_type": "custom",
         # custom proxy: candidate_symbols ARE the canonical universe so all 16 seeds
         # enter static_syms unconditionally regardless of ETF file availability.
@@ -681,9 +686,24 @@ THEME_RS_UNIVERSE: dict[str, dict] = {
             "NVMI",  # Nova Ltd — in-line process control metrology (OCD, XRF, XPS)
         ],
         "sector_tags": ["Technology"],
-        "keywords": ["semiconductor equipment", "lithography", "etch", "deposition", "ASML", "AMAT", "metrology", "inspection"],
+        "keywords": [
+            "semiconductor equipment", "lithography", "etch", "deposition",
+            "ASML", "AMAT", "metrology", "inspection",
+            "semiconductor materials", "semi materials", "process chemicals",
+            "specialty gases", "compound semiconductors", "semicap",
+        ],
         "macro_sensitivities": ["fab capex cycles", "leading-edge node ramp", "China restrictions"],
-        "aliases": ["semicap", "semiconductor_equipment"],
+        # All aliases resolve to this same theme_id.
+        # Used by _build_index() in theme_ticker_mapper for title-cased label matching.
+        "aliases": [
+            "semicap",
+            "semiconductor_equipment",
+            "semicap_equipment",
+            "semi_equipment",
+            "semi_materials",
+            "semiconductor_materials",
+            "semi_equipment_and_materials",
+        ],
     },
 
     "semiconductors": {

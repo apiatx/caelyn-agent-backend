@@ -1,0 +1,184 @@
+BACKEND ONLY — CANONICALIZE SEMICAP THEME DISPLAY NAME
+
+Backend repo only.
+
+Do not touch frontend.
+Do not mention frontend changes.
+Do not assume access to frontend code.
+
+Problem:
+
+“Semi Materials” was missing from the Watchlist theme dropdown. A temporary frontend-only supplement was added, but that is not the right long-term fix.
+
+If a theme is assignable in the app, it must come from the canonical backend theme universe.
+
+Goal:
+
+Do not create a separate new orphan theme called “Semi Materials” unless the audit proves it is truly needed.
+
+Preferred lighter fix:
+
+Rename the existing semiconductor equipment / semicap equipment theme display label to:
+
+Semi Equipment & Materials
+
+while keeping the existing theme_id stable.
+
+Likely existing theme names:
+- Semicap Equipment
+- Semiconductor Equipment
+
+Desired canonical display:
+- Semi Equipment & Materials
+
+Desired aliases:
+- Semicap Equipment
+- Semiconductor Equipment
+- Semi Materials
+- Semiconductor Materials
+- Semi Equipment
+
+==================================================
+PART 1 — AUDIT BACKEND THEME SOURCES
+==================================================
+
+Find the backend source for:
+
+- GET /api/themes/list
+- GET /api/themes/relative-strength
+- any canonical theme universe file/table
+- watchlist theme normalization
+- ticker theme mapping
+- theme_id/display-name definitions
+- theme aliases if supported
+
+Report:
+
+- where the semicap/semiconductor equipment theme is defined
+- current theme_id
+- current display label
+- whether ticker assignments use theme_id or display name
+- whether relative strength uses theme_id or display name
+- whether changing display label can break existing mappings
+
+Do not patch until this is known.
+
+==================================================
+PART 2 — CANONICALIZE EXISTING THEME
+==================================================
+
+If there is an existing semiconductor equipment / semicap equipment theme, keep the existing theme_id unchanged.
+
+Change only the display label to:
+
+Semi Equipment & Materials
+
+Do not create a second assignable “Semi Materials” theme unless there is no existing semicap/equipment theme.
+
+Add aliases/normalization if supported:
+
+- Semicap Equipment
+- Semiconductor Equipment
+- Semi Materials
+- Semiconductor Materials
+- Semi Equipment
+- semicap_equipment
+- semiconductor_equipment
+- semi_materials
+
+All of these should resolve to the same canonical theme.
+
+==================================================
+PART 3 — BACKWARD COMPATIBILITY
+==================================================
+
+Existing ticker assignments using any old label/id must continue to resolve to the canonical theme.
+
+These should all map to the same theme:
+
+- Semicap Equipment
+- Semiconductor Equipment
+- Semi Materials
+- Semiconductor Materials
+- semicap_equipment
+- semiconductor_equipment
+- semi_materials
+
+Do not lose existing ticker assignments.
+
+==================================================
+PART 4 — VALIDATION
+==================================================
+
+Validate backend endpoints:
+
+GET /api/themes/list
+
+Must include:
+- Semi Equipment & Materials
+
+GET /api/themes/relative-strength
+
+Must include:
+- Semi Equipment & Materials
+
+The canonical theme should have one stable theme_id.
+
+There should not be multiple separate assignable themes for:
+- Semicap Equipment
+- Semiconductor Equipment
+- Semi Materials
+- Semi Equipment & Materials
+
+unless old names appear only as aliases, not separate dropdown themes.
+
+==================================================
+FINAL REPORT
+==================================================
+
+Return:
+
+BACKEND THEME CANONICALIZATION REPORT
+
+CANONICAL SOURCE:
+[file/function/table]
+
+THEME_ID:
+[value]
+
+OLD LABEL:
+[value]
+
+NEW DISPLAY LABEL:
+Semi Equipment & Materials
+
+ALIASES / NORMALIZATION:
+[list]
+
+FILES CHANGED:
+[list]
+
+ENDPOINT VALIDATION:
+[table]
+
+End exactly:
+
+BACKEND THEME VERDICT
+
+CANONICAL_THEME_IN_BACKEND_LIST:
+[YES/NO]
+
+CANONICAL_THEME_IN_RELATIVE_STRENGTH:
+[YES/NO]
+
+THEME_ID_STABLE:
+[YES/NO]
+
+OLD_VALUES_NORMALIZE_TO_CANONICAL:
+[YES/NO]
+
+NO_DUPLICATE_ASSIGNABLE_THEMES:
+[YES/NO]
+
+NO_FRONTEND_CHANGES:
+[YES/NO]

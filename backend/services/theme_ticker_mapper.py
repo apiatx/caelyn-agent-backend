@@ -35,11 +35,11 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
     # Memory / Storage
     "KRX:000660": ("Memory & Storage",              "memory_storage"),       # SK Hynix — #2 DRAM/NAND globally
 
-    # Semiconductor Equipment
-    "OTC:ATEYY":  ("Semiconductor Equipment",       "semicap_equipment"),    # Advantest ADR — SoC/memory test systems
-    "OTC:KRKNF":  ("Semiconductor Equipment",       "semicap_equipment"),    # Kokusai Electric — CVD/diffusion batch tools
-    "ETR:AIXA":   ("Semiconductor Equipment",       "semicap_equipment"),    # Aixtron SE — MOCVD for GaN/SiC/III-V
-    "FRA:KLA":    ("Semiconductor Equipment",       "semicap_equipment"),    # KLA Corp Frankfurt listing — process control
+    # Semiconductor Equipment & Materials  (display_name updated; theme_id "semicap_equipment" frozen)
+    "OTC:ATEYY":  ("Semi Equipment & Materials",    "semicap_equipment"),    # Advantest ADR — SoC/memory test systems
+    "OTC:KRKNF":  ("Semi Equipment & Materials",    "semicap_equipment"),    # Kokusai Electric — CVD/diffusion batch tools
+    "ETR:AIXA":   ("Semi Equipment & Materials",    "semicap_equipment"),    # Aixtron SE — MOCVD for GaN/SiC/III-V
+    "FRA:KLA":    ("Semi Equipment & Materials",    "semicap_equipment"),    # KLA Corp Frankfurt listing — process control
 
     # Semi Materials
     "AIM:IQE":    ("Semi Materials",                "semiconductors"),       # IQE plc — compound semiconductor epiwafer foundry
@@ -70,9 +70,9 @@ _FOREIGN_ALIAS_MAP: dict[str, tuple[str, str]] = {
     "LAES":       ("Cybersecurity",                 "cybersecurity"),        # SEALSQ Corp — post-quantum secure RISC-V microchips for IoT/automotive (WISeKey spinoff)
     "AKAM":       ("Cybersecurity",                 "cybersecurity"),        # Akamai — CDN / edge security / bot protection (classified as "Software-Infrastructure" in screeners but core business is cybersecurity)
 
-    # Semiconductor Equipment
-    "TRT":        ("Semiconductor Equipment",       "semicap_equipment"),    # Trio-Tech International — semiconductor burn-in/test services for memory & logic
-    "AIM:TRT":    ("Semiconductor Equipment",       "semicap_equipment"),    # Trio-Tech International (AIM listing) — same company, overrides wrong "Auto Parts" CSV industry
+    # Semiconductor Equipment & Materials  (display_name updated; theme_id "semicap_equipment" frozen)
+    "TRT":        ("Semi Equipment & Materials",    "semicap_equipment"),    # Trio-Tech International — semiconductor burn-in/test services for memory & logic
+    "AIM:TRT":    ("Semi Equipment & Materials",    "semicap_equipment"),    # Trio-Tech International (AIM listing) — same company, overrides wrong "Auto Parts" CSV industry
 
     # Power / Cooling
     "SEI":        ("Power / Cooling",               "power_cooling"),      # Solaris Energy Infrastructure — mobile power generation for AI data centers & industrial

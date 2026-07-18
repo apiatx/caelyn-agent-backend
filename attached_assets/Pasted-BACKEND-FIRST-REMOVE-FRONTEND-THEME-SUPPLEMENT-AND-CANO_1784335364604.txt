@@ -1,0 +1,219 @@
+BACKEND FIRST — REMOVE FRONTEND THEME SUPPLEMENT AND CANONICALIZE SEMI EQUIPMENT & MATERIALS THEME
+
+Backend repo first.
+
+Then frontend only if needed to remove the temporary supplement.
+
+Problem:
+
+“Semi Materials” was added as a frontend-only dropdown supplement because it was missing from backend theme endpoints.
+
+That is not acceptable long-term.
+
+If a theme appears in the Watchlist theme dropdown, it must come from the canonical backend theme universe. The frontend should not invent local assignable themes.
+
+Goal:
+
+Do NOT create a frontend-only theme.
+
+Instead, canonicalize the existing semiconductor equipment theme into a broader canonical display name:
+
+Semi Equipment & Materials
+
+Preferred approach:
+
+Keep existing theme_id stable.
+
+Existing likely theme:
+- Semicap Equipment
+- Semiconductor Equipment
+
+New display label:
+- Semi Equipment & Materials
+
+Aliases/search labels:
+- Semicap Equipment
+- Semiconductor Equipment
+- Semi Materials
+- Semiconductor Materials
+- Semi Equipment
+
+==================================================
+PART 1 — AUDIT CANONICAL THEME SOURCES
+==================================================
+
+Find the canonical backend source for:
+
+- /api/themes/list
+- /api/themes/relative-strength
+- any watchlist theme dropdown endpoint
+- ticker theme mapping
+- theme_id/display name definitions
+- theme aliases if any
+
+Report:
+
+- where “Semicap Equipment” / “Semiconductor Equipment” is defined
+- its theme_id
+- whether watchlist ticker assignments use theme_id or display name
+- whether changing display name could break existing mappings
+- whether RS uses theme_id or display name
+- whether Confluence/theme scoring uses theme_id or display name
+
+Do not patch until this is known.
+
+==================================================
+PART 2 — RENAME DISPLAY LABEL WITHOUT BREAKING ID
+==================================================
+
+If existing theme_id is something like:
+
+semicap_equipment
+semiconductor_equipment
+
+keep it unchanged.
+
+Change display label to:
+
+Semi Equipment & Materials
+
+Do not change existing theme_id unless absolutely necessary.
+
+Add aliases if the theme system supports them:
+
+- Semicap Equipment
+- Semiconductor Equipment
+- Semi Materials
+- Semiconductor Materials
+- Semi Equipment
+
+If aliases are not supported, at minimum make sure old saved values still resolve to the same canonical theme.
+
+==================================================
+PART 3 — BACKWARD COMPATIBILITY
+==================================================
+
+Existing tickers currently categorized as:
+
+- Semicap Equipment
+- Semiconductor Equipment
+- Semi Materials if any were manually saved during the frontend supplement period
+
+must resolve to the canonical theme:
+
+Semi Equipment & Materials
+
+Add normalization if needed:
+
+if theme in [
+  "Semicap Equipment",
+  "Semiconductor Equipment",
+  "Semi Materials",
+  "Semiconductor Materials",
+  "semi_materials",
+  "semicap_equipment",
+  "semiconductor_equipment"
+]:
+  canonical theme = Semi Equipment & Materials / existing stable theme_id
+
+Do not lose existing ticker assignments.
+
+==================================================
+PART 4 — ENDPOINT VALIDATION
+==================================================
+
+Validate backend endpoints:
+
+GET /api/themes/list
+
+Must include:
+- Semi Equipment & Materials
+
+Must not include duplicate assignable versions:
+- Semicap Equipment
+- Semiconductor Equipment
+- Semi Materials
+
+unless they are aliases, not separate dropdown themes.
+
+GET /api/themes/relative-strength
+
+Must include the same canonical theme with the same theme_id.
+
+Watchlist theme dropdown source must include:
+- Semi Equipment & Materials
+
+==================================================
+PART 5 — FRONTEND CLEANUP
+==================================================
+
+Frontend repo only after backend validation.
+
+Remove the temporary local supplement that injected “Semi Materials” into the dropdown.
+
+The dropdown should rely on backend theme universe only.
+
+Do not hardcode Semi Materials in frontend.
+
+Validate:
+
+- Theme dropdown includes “Semi Equipment & Materials”
+- No duplicate “Semi Materials”
+- No duplicate “Semicap Equipment”
+- Saved old values still display under the canonical label
+- Updating a ticker to this theme works
+- Watchlist grouping/scoring does not break
+
+==================================================
+FINAL REPORT
+==================================================
+
+Return:
+
+SEMI EQUIPMENT & MATERIALS THEME CANONICALIZATION REPORT
+
+BACKEND CANONICAL SOURCE:
+[file/function]
+
+THEME_ID:
+[value]
+
+DISPLAY LABEL:
+Semi Equipment & Materials
+
+ALIASES / NORMALIZATION:
+[list]
+
+FILES CHANGED:
+[list]
+
+ENDPOINT VALIDATION:
+[table]
+
+FRONTEND CLEANUP:
+[summary]
+
+End exactly:
+
+THEME CANONICALIZATION VERDICT
+
+FRONTEND_SUPPLEMENT_REMOVED:
+[YES/NO]
+
+CANONICAL_THEME_IN_BACKEND_LIST:
+[YES/NO]
+
+CANONICAL_THEME_IN_RELATIVE_STRENGTH:
+[YES/NO]
+
+WATCHLIST_DROPDOWN_USES_BACKEND_THEME:
+[YES/NO]
+
+OLD_VALUES_NORMALIZE_TO_CANONICAL:
+[YES/NO]
+
+NO_DUPLICATE_ASSIGNABLE_THEMES:
+[YES/NO]
+
+THEME_ID_STABLE:
+[YES/NO]
