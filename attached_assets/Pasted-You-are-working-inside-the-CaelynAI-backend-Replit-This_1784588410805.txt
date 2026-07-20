@@ -1,0 +1,421 @@
+You are working inside the CaelynAI backend Replit.
+
+This is a targeted extension of the existing Watchlist fundamentals architecture.
+
+The live Replit workspace is the ultimate source of truth. The current GitHub `main` was recently refreshed, but audit the live deployed files before changing anything.
+
+## Goal
+
+Extend the existing Watchlist Fundamental Screener data pipeline with the fields needed for a new frontend `Quality` toggle.
+
+Do not create another fundamentals pipeline.
+
+Do not duplicate fields that already exist.
+
+The new Quality view will contain:
+
+* Financial Strength
+* Business Quality
+* Growth Quality
+* Valuation
+
+The existing Fundamental toggle and every field currently displayed there must remain unchanged.
+
+## Critical confirmed current architecture
+
+The current implementation already has:
+
+* `backend/services/watchlist_fundamentals_refresh.py`
+* Weekly/off-hours FMP refresh
+* Seven existing FMP calls per eligible symbol
+* Neon `watchlist_fundamentals_cache`
+* JSONB `fields`
+* Existing CSV fallback behavior
+* Existing no-null/LKG protection
+* Existing field provenance/debug support
+* Existing Watchlist GET overlay
+* No page-render FMP calls
+
+Preserve all of that.
+
+## Existing fields that must not be duplicated
+
+These already exist and are canonical:
+
+* `PE Ratio`
+* `PS Ratio`
+* `EV/EBITDA`
+
+They currently come from:
+
+* `ratios-ttm.priceToEarningsRatioTTM`
+* `ratios-ttm.priceToSalesRatioTTM`
+* `key-metrics-ttm.evToEBITDATTM`
+
+Do not:
+
+* Add another trailing P/E calculation
+* Add another trailing P/S calculation
+* Add another trailing EV/EBITDA calculation
+* Rename their snapshot keys
+* Add parallel snake_case values to the same snapshot unless an existing response-normalization layer already requires them
+
+These values are also consumed outside the Watchlist, including Confluence valuation logic. Preserve backward compatibility.
+
+## Existing Forward P/E that must be preserved
+
+The current refresher already stores:
+
+* `Forward P/E`
+* `forward_eps_estimate`
+* `forward_pe_source`
+* `forward_pe_is_approximate`
+* `forward_pe_price_used`
+* `forward_pe_raw_eps_estimate`
+* `forward_pe_raw_period`
+* `forward_pe_warning_codes`
+
+The current calculation annualizes the next-quarter EPS estimate by multiplying it by four.
+
+Do not create a second Forward P/E field.
+
+Instead, improve the source priority under the existing canonical key:
+
+1. Valid next-four-quarter consensus EPS sum, if all required quarterly estimates are available and fiscally aligned
+2. Valid FY1 consensus EPS estimate
+3. Existing next-quarter EPS × 4 approximation as fallback
+
+Requirements:
+
+* Keep the current approximation as a fallback.
+* Set `forward_pe_is_approximate` accurately.
+* Update `forward_pe_source` accurately.
+* Record the fiscal period used.
+* Preserve existing warning metadata.
+* Negative or zero forward EPS must produce null/not meaningful, not a negative Forward P/E.
+* Do not change Confluence valuation scoring without regression testing its current consumers.
+
+## Audit first
+
+Before coding, inspect the live versions of:
+
+* `backend/services/watchlist_fundamentals_refresh.py`
+* `backend/data/watchlist_fundamentals_store.py`
+* `backend/services/watchlist_router.py`
+* Fundamentals scheduler logic in `backend/main.py`
+* Existing Watchlist GET overlay
+* Existing provenance endpoint
+* Existing market-cap resolver
+* Existing Confluence valuation consumers
+* Existing migrations and Neon table helpers
+* Any existing estimate-history table
+* Any existing balance-sheet or analyst-estimate cache
+
+Return a short architecture report before making changes.
+
+## FMP entitlement and payload audit
+
+Use representative symbols:
+
+* AAPL
+* MSFT
+* NVDA
+* SOFI
+* ASTS
+* RKLB
+* IREN
+* MU
+
+Inspect full live payload keys from the endpoints already used:
+
+* `profile`
+* `income-statement`
+* `income-statement-growth`
+* `cash-flow-statement`
+* `ratios-ttm`
+* `key-metrics-ttm`
+* `earnings`
+
+Then test entitlement for:
+
+* Quarterly balance-sheet statement
+* Annual analyst estimates
+* Quarterly analyst estimates
+* Financial scores
+
+Report HTTP status and coverage before implementing.
+
+Do not hardcode remembered legacy FMP keys. Use keys proven in live responses.
+
+## New canonical Quality fields
+
+Before creating a field, search the entire live backend for an existing equivalent. Reuse the existing canonical value and source if one already exists.
+
+### Financial Strength
+
+Add or reuse:
+
+* `Cash`
+
+  * Cash and cash equivalents plus short-term investments when available.
+  * Document the exact components.
+
+* `Net Cash / Debt`
+
+  * Cash plus short-term investments minus total debt.
+  * Positive means net cash.
+  * Negative means net debt.
+
+* `Current Ratio`
+
+  * Prefer a confirmed direct TTM FMP value.
+  * Otherwise calculate current assets divided by current liabilities.
+
+* `Interest Coverage`
+
+  * Prefer a confirmed direct field.
+  * Otherwise TTM EBIT divided by absolute TTM interest expense.
+  * Null/not meaningful for invalid denominators.
+
+* `Cash Runway Months`
+
+* `Cash Runway Status`
+
+  * Negative TTM FCF:
+    cash divided by absolute TTM FCF multiplied by 12.
+  * Positive or zero TTM FCF:
+    status `self_funding`; months may remain null.
+  * Banks, insurers, and inappropriate financial businesses:
+    status `not_meaningful`.
+  * Never use zero to represent missing data.
+
+* `Altman Z-Score`
+
+* `Altman Z-Risk`
+
+  * Prefer the entitled FMP Financial Scores result.
+  * Do not silently substitute another score.
+  * Mark industries where it is not economically appropriate.
+
+### Business Quality
+
+Add or reuse:
+
+* `ROIC`
+* `Operating Margin`
+* `FCF Conversion`
+* `FCF Yield`
+* `Diluted Shares Growth YoY`
+* `SBC / Revenue`
+
+Definitions:
+
+* Operating Margin = TTM operating income / TTM revenue
+* FCF Conversion = TTM free cash flow / TTM net income
+* FCF Yield = TTM free cash flow / canonical market capitalization
+* Diluted Shares Growth YoY = current TTM weighted-average diluted shares versus prior TTM
+* SBC / Revenue = TTM stock-based compensation / TTM revenue
+
+Rules:
+
+* FCF Conversion is not meaningful when net income is zero, negative, or immaterial.
+* Do not assume missing SBC equals zero.
+* Use denominator safeguards against absurd values.
+
+### Growth Quality
+
+Add or reuse:
+
+* `Revenue Acceleration`
+* `Gross Margin Change YoY`
+* `Incremental Operating Margin`
+* `Forward Revenue Growth`
+* `Revenue Estimate Revision 90D`
+* `EPS Estimate Revision 90D`
+
+Definitions:
+
+* Revenue Acceleration =
+  latest quarterly YoY revenue growth minus previous quarter’s YoY growth
+
+* Gross Margin Change YoY =
+  current TTM gross margin minus prior-year TTM gross margin, expressed in percentage points
+
+* Incremental Operating Margin =
+  change in TTM operating income divided by change in TTM revenue
+
+* Forward Revenue Growth =
+  FY1 consensus revenue divided by latest actual fiscal-year revenue minus one
+
+Rules:
+
+* Match periods using fiscal year, fiscal quarter, and reported period.
+* Do not rely solely on array positions.
+* Incremental margin is not meaningful when revenue change is zero, negative, or too small.
+* Clearly identify FY1 versus NTM in metadata.
+
+### Valuation
+
+Reuse these existing fields unchanged:
+
+* `PE Ratio`
+* `PS Ratio`
+* `EV/EBITDA`
+* `Forward P/E`
+
+Add or reuse:
+
+* `Forward P/S`
+* `Forward EV/Sales`
+* `Forward EV/EBITDA`
+* `P/FCF`
+
+Definitions:
+
+* Forward P/S = canonical market cap / FY1 consensus revenue
+* Forward EV/Sales = canonical enterprise value / FY1 consensus revenue
+* Forward EV/EBITDA = canonical enterprise value / FY1 consensus EBITDA
+* P/FCF = canonical market cap / TTM free cash flow
+
+Rules:
+
+* Negative or zero FCF makes P/FCF not meaningful.
+* Negative or zero forward EBITDA makes Forward EV/EBITDA not meaningful.
+* Use the existing canonical market-cap resolver where appropriate.
+* Audit the existing enterprise-value source before deriving another one.
+* Do not make request-time FMP or quote calls.
+
+## Estimate-history persistence
+
+Audit for an existing estimate-history table before adding anything.
+
+If none exists, add one minimal append-only Neon table following existing project conventions.
+
+Store:
+
+* Symbol
+* Estimate metric
+* Annual or quarterly period type
+* Fiscal period/date
+* Consensus value
+* Analyst count when available
+* Observation timestamp/date
+* Source
+* FMP period identifiers needed for correct alignment
+
+Requirements:
+
+* Prevent duplicate daily observations.
+* Retain enough data for at least 18 months.
+* Use the closest valid observation near 90 days ago with a documented tolerance.
+* Until enough history exists, return null with missing reason `history_building`.
+* Never treat missing historical data as a 0% revision.
+* Do not infer analyst revision breadth from aggregate consensus.
+
+## Existing cache protection
+
+Preserve the current `watchlist_fundamentals_store.py` behavior:
+
+* Usable snapshots are retained.
+* Empty or unusable refreshes do not overwrite valid prior data.
+* Empty failures receive the short retry window.
+* Existing evidence fields remain valid.
+* Existing snapshot and scheduler contracts remain backward compatible.
+
+Update `_EVIDENCE_FIELDS` only additively if appropriate.
+
+Important:
+
+The current successful upsert replaces the complete `fields` JSONB payload. Ensure that failure of one new optional endpoint does not erase valid existing optional fields from the previous snapshot.
+
+Audit this carefully.
+
+Use either:
+
+* A safe field-level merge with explicit freshness/provenance, or
+* A complete new normalized result proven to contain the prior valid fields
+
+Do not casually change the entire cache merge contract.
+
+## Call management
+
+Map values from existing `ratios-ttm`, `key-metrics-ttm`, income, and cash-flow payloads before adding calls.
+
+Potential new calls:
+
+* Quarterly balance sheet
+* Annual analyst estimates
+* Quarterly analyst estimates
+* Financial scores only if entitled and needed
+
+Use the existing refresher’s `_get` path, pacing, timeout, scheduler, lock, cap, and retry behavior.
+
+Do not add:
+
+* FMP calls on page render
+* FMP calls on toggle changes
+* FMP calls in Confluence scoring
+* FMP calls in ticker-detail modal requests
+* Another refresh loop
+* Another local cache
+* LLM calls
+
+## Response contract
+
+Continue adding normalized fields to the same Watchlist row payload used by the current Fundamental view.
+
+For each new field, expose through existing provenance where possible:
+
+* Final value
+* Canonical key
+* Source endpoint
+* Direct or derived
+* Formula
+* TTM/FY1/quarterly period
+* Refreshed timestamp
+* Missing reason
+* Not-meaningful reason
+* Approximate/exact status
+
+Do not create multiple aliases in the backend response just to satisfy speculative frontend naming.
+
+## Validation
+
+Force-refresh a representative subset and prove:
+
+1. Existing `PE Ratio`, `PS Ratio`, and `EV/EBITDA` are unchanged.
+2. Existing `Forward P/E` still exists under the same canonical key.
+3. Existing Forward P/E fallback still works when better estimates are unavailable.
+4. Better consensus estimates upgrade the same Forward P/E key rather than creating a duplicate.
+5. All current Fundamental fields remain present.
+6. The Watchlist GET response remains backward compatible.
+7. No FMP calls occur during Watchlist render or toggle changes.
+8. Partial failures preserve valid LKG data.
+9. Estimate revisions show `history_building` when appropriate.
+10. Non-calendar fiscal-year companies are correctly aligned.
+11. Banks and insurers do not receive bogus cash-runway or Altman values.
+12. Negative EPS, EBITDA, or FCF produce not-meaningful valuation states.
+13. Confluence valuation output does not unexpectedly regress.
+14. Confluence actionability counts do not change merely because field sourcing was refactored.
+15. Existing scheduler, pacing, locks, caps, and retry behavior still work.
+
+## Final report
+
+Provide:
+
+* Architecture found
+* Files changed
+* Existing fields reused
+* New canonical fields added
+* Duplicate fields avoided
+* Endpoints reused and added
+* Calls per symbol before and after
+* Database changes
+* Formula/source table
+* Sample Watchlist payloads for AAPL, SOFI, ASTS, IREN, and MU
+* Forward P/E source results
+* Estimate-history status
+* Confluence regression results
+* Fields blocked by actual FMP entitlement
+
+Do not claim success based only on compilation. Validate the actual Watchlist response.

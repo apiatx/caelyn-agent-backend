@@ -1,6 +1,6 @@
 {
-  "updated_at": "2026-07-18T00:55:46.681158+00:00",
-  "symbol_count": 419,
+  "updated_at": "2026-07-20T23:05:36.735418+00:00",
+  "symbol_count": 426,
   "results": {
     "AAOI": {
       "score": 80.0,
@@ -77,7 +77,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ACLS": {
       "score": 80.0,
@@ -135,7 +135,7 @@
       "technical_state": "neutral",
       "technical_timing_score": 65.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "BREAKOUT_PULLBACK",
+      "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 20,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
@@ -154,7 +154,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ADEA": {
       "score": 100.0,
@@ -213,8 +213,8 @@
       "technical_timing_score": 70.0,
       "entry_family": "CONTINUATION",
       "entry_state": "TRENDLINE_SUPPORT_TEST",
-      "entry_score": 66,
-      "entry_grade": "B",
+      "entry_score": 70,
+      "entry_grade": "A",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
@@ -231,7 +231,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ADUR": {
       "score": 80.0,
@@ -288,11 +288,11 @@
       },
       "technical_state": "trend_advance",
       "technical_timing_score": 93.0,
-      "entry_family": "CONTINUATION",
-      "entry_state": "WAIT_FOR_RETEST",
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1195,
       "history_start_date": "2021-07-23",
@@ -308,7 +308,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AEHR": {
       "score": 80.0,
@@ -385,7 +385,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AEVA": {
       "score": 80.0,
@@ -442,10 +442,10 @@
       },
       "technical_state": "neutral",
       "technical_timing_score": 65.0,
-      "entry_family": "PRE_MOVE",
-      "entry_state": "LOW_BASE_FORMING",
-      "entry_score": 45,
-      "entry_grade": "C",
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_score": 70,
+      "entry_grade": "A",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1572,
@@ -462,35 +462,35 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AIM:FTC": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "AIM:ENSI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "AIM:IQE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "AIM:TRT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "AIR": {
       "score": 100.0,
@@ -567,7 +567,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ALAB": {
       "score": 100.0,
@@ -644,7 +644,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AKAM": {
       "score": 80.0,
@@ -721,7 +721,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ALGM": {
       "score": 100.0,
@@ -798,7 +798,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ALMU": {
       "score": 47.9,
@@ -875,14 +875,14 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ALOY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "AMBA": {
       "score": 63.7,
@@ -939,11 +939,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 80.0,
-      "entry_family": "PRE_MOVE",
-      "entry_state": "LOW_BASE_FORMING",
-      "entry_score": 45,
-      "entry_grade": "C",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "entry_family": "CONTINUATION",
+      "entry_state": "TRENDLINE_SUPPORT_TEST",
+      "entry_score": 69,
+      "entry_grade": "B",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -959,7 +959,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AMD": {
       "score": 100.0,
@@ -1020,7 +1020,7 @@
       "entry_state": "HIGH_BASE_FORMING",
       "entry_score": 45,
       "entry_grade": "C",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -1036,7 +1036,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AME": {
       "score": 90.1,
@@ -1113,7 +1113,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AMKR": {
       "score": 90.0,
@@ -1171,10 +1171,10 @@
       "technical_state": "pullback_entry",
       "technical_timing_score": 70.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
+      "entry_state": "BREAKOUT_PULLBACK",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2507,
       "history_start_date": "2016-07-18",
@@ -1190,7 +1190,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AMPG": {
       "score": 100.0,
@@ -1267,7 +1267,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AMPX": {
       "score": 37.1,
@@ -1344,7 +1344,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AMRC": {
       "score": 2.6,
@@ -1421,7 +1421,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ANET": {
       "score": 100.0,
@@ -1479,10 +1479,10 @@
       "technical_state": "trend_advance",
       "technical_timing_score": 90.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "HIGH_BASE_FORMING",
-      "entry_score": 70,
+      "entry_state": "BREAKOUT_CONFIRMED",
+      "entry_score": 80,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -1498,7 +1498,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AMSC": {
       "score": 46.9,
@@ -1559,7 +1559,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -1575,7 +1575,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AOSL": {
       "score": 80.0,
@@ -1652,7 +1652,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "APH": {
       "score": 100.0,
@@ -1729,7 +1729,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "APLD": {
       "score": 39.4,
@@ -1806,7 +1806,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ARM": {
       "score": 80.0,
@@ -1883,7 +1883,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ARRY": {
       "score": 1.9,
@@ -1944,7 +1944,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2205,
       "history_start_date": "2016-07-18",
@@ -1960,7 +1960,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ASPI": {
       "score": 9.4,
@@ -2021,7 +2021,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 919,
       "history_start_date": "2022-11-10",
@@ -2037,7 +2037,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ASTS": {
       "score": 28.7,
@@ -2098,7 +2098,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1637,
       "history_start_date": "2019-11-01",
@@ -2114,21 +2114,21 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AIM:VLX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "AMS:BESI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "ASYS": {
       "score": 80.0,
@@ -2205,7 +2205,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ATOM": {
       "score": 79.5,
@@ -2282,21 +2282,21 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ASX:AXE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "ASX:EOS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "AUR": {
       "score": 80.0,
@@ -2373,7 +2373,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AVAV": {
       "score": 0.0,
@@ -2450,14 +2450,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AVEX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "AXTI": {
       "score": 54.2,
@@ -2534,7 +2534,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BB": {
       "score": 100.0,
@@ -2611,7 +2611,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BE": {
       "score": 80.0,
@@ -2688,7 +2688,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BKSY": {
       "score": 40.7,
@@ -2765,7 +2765,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BTDR": {
       "score": 59.9,
@@ -2842,7 +2842,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BWA": {
       "score": 80.0,
@@ -2919,7 +2919,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BZAI": {
       "score": 0.0,
@@ -2996,7 +2996,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CAMT": {
       "score": 45.2,
@@ -3073,14 +3073,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CBRS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "CEG": {
       "score": 2.6,
@@ -3157,7 +3157,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CEVA": {
       "score": 100.0,
@@ -3234,7 +3234,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CGNX": {
       "score": 90.0,
@@ -3311,7 +3311,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CIEN": {
       "score": 80.0,
@@ -3388,7 +3388,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CIFR": {
       "score": 77.3,
@@ -3465,7 +3465,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CLFD": {
       "score": 58.8,
@@ -3542,7 +3542,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "COHR": {
       "score": 77.3,
@@ -3619,7 +3619,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CLSK": {
       "score": 65.1,
@@ -3696,7 +3696,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CODA": {
       "score": 34.2,
@@ -3773,7 +3773,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CORZ": {
       "score": 78.9,
@@ -3834,7 +3834,7 @@
       "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1054,
       "history_start_date": "2021-04-08",
@@ -3850,7 +3850,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "COHU": {
       "score": 100.0,
@@ -3927,7 +3927,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CPSH": {
       "score": 48.1,
@@ -4004,7 +4004,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CRDO": {
       "score": 90.0,
@@ -4081,7 +4081,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CRCL": {
       "score": 1.9,
@@ -4158,7 +4158,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CRML": {
       "score": 19.3,
@@ -4235,7 +4235,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CRUS": {
       "score": 50.4,
@@ -4312,7 +4312,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CSIQ": {
       "score": 1.2,
@@ -4389,7 +4389,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "DGXX": {
       "score": 69.2,
@@ -4466,7 +4466,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "DNN": {
       "score": 36.7,
@@ -4543,14 +4543,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ASX:EQR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "DRS": {
       "score": 70.1,
@@ -4627,7 +4627,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "DVLT": {
       "score": 0.0,
@@ -4704,7 +4704,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ELVA": {
       "score": 42.8,
@@ -4781,7 +4781,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ENLT": {
       "score": 80.0,
@@ -4858,7 +4858,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ENPH": {
       "score": 71.3,
@@ -4935,7 +4935,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ENTG": {
       "score": 87.5,
@@ -5012,7 +5012,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ENVX": {
       "score": 5.6,
@@ -5089,7 +5089,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "EOSE": {
       "score": 0.0,
@@ -5166,35 +5166,35 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CSE:FTEL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "CSE:MAXX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "EPA:ALRIB": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "EPA:MRN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "EQIX": {
       "score": 72.8,
@@ -5271,7 +5271,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "EQT": {
       "score": 2.6,
@@ -5348,7 +5348,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ETN": {
       "score": 99.4,
@@ -5425,7 +5425,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ESLT": {
       "score": 47.5,
@@ -5502,49 +5502,49 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "EPA:SOI": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "EPA:XFAB": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "ETR:AIXA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "ETR:JEN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "ETR:LPK": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "ETR:P4O": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "FCEL": {
       "score": 90.0,
@@ -5621,14 +5621,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FJET": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "FLNC": {
       "score": 5.6,
@@ -5689,7 +5689,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1180,
       "history_start_date": "2021-10-28",
@@ -5705,7 +5705,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FLY": {
       "score": 37.5,
@@ -5766,7 +5766,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1504,
       "history_start_date": "2016-07-18",
@@ -5782,7 +5782,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FN": {
       "score": 32.8,
@@ -5859,7 +5859,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FORM": {
       "score": 77.2,
@@ -5936,21 +5936,21 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ETR:SMHN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "ETR:TPE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "FRMI": {
       "score": 9.4,
@@ -6030,7 +6030,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "no_200d_tradier_path",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FSLR": {
       "score": 20.3,
@@ -6089,8 +6089,8 @@
       "technical_timing_score": 25.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "LOWER_HIGH_WARNING",
-      "entry_score": 45,
-      "entry_grade": "C",
+      "entry_score": 70,
+      "entry_grade": "A",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2507,
@@ -6107,7 +6107,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FTAI": {
       "score": 41.2,
@@ -6168,7 +6168,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -6184,7 +6184,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "GFS": {
       "score": 80.0,
@@ -6245,7 +6245,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1180,
       "history_start_date": "2021-10-28",
@@ -6261,7 +6261,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "GILT": {
       "score": 19.7,
@@ -6322,7 +6322,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2510,
       "history_start_date": "2016-07-18",
@@ -6338,7 +6338,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "GLW": {
       "score": 100.0,
@@ -6415,7 +6415,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "GLXY": {
       "score": 33.3,
@@ -6492,14 +6492,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ETR:WAF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "GNRC": {
       "score": 68.5,
@@ -6576,7 +6576,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "GSIT": {
       "score": 34.3,
@@ -6637,7 +6637,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -6653,7 +6653,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HIMX": {
       "score": 80.0,
@@ -6714,7 +6714,7 @@
       "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -6730,7 +6730,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HLIT": {
       "score": 80.0,
@@ -6788,10 +6788,10 @@
       "technical_state": "pullback_entry",
       "technical_timing_score": 75.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
+      "entry_state": "CONSTRUCTIVE_DIP",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -6807,7 +6807,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HNRG": {
       "score": 15.0,
@@ -6866,9 +6866,9 @@
       "technical_timing_score": 18.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "SUPPORT_TEST",
-      "entry_score": 52,
-      "entry_grade": "C",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "entry_score": 70,
+      "entry_grade": "A",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -6884,7 +6884,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HUT": {
       "score": 80.0,
@@ -6961,7 +6961,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HYLN": {
       "score": 80.0,
@@ -7020,8 +7020,8 @@
       "technical_timing_score": 65.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "NO_CLEAR_ENTRY",
-      "entry_score": 70,
-      "entry_grade": "A",
+      "entry_score": 22,
+      "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1446,
@@ -7038,7 +7038,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ICHR": {
       "score": 100.0,
@@ -7115,7 +7115,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "IMSR": {
       "score": 3.8,
@@ -7192,7 +7192,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "INDI": {
       "score": 65.8,
@@ -7253,7 +7253,7 @@
       "entry_state": "CONSTRUCTIVE_DIP",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1277,
       "history_start_date": "2021-06-11",
@@ -7269,21 +7269,21 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "INFQ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "FRA:APR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "INTC": {
       "score": 80.0,
@@ -7360,7 +7360,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "INTT": {
       "score": 76.2,
@@ -7421,7 +7421,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -7437,7 +7437,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "IONQ": {
       "score": 14.5,
@@ -7514,7 +7514,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "INV": {
       "score": 26.1,
@@ -7591,7 +7591,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "IPGP": {
       "score": 51.3,
@@ -7648,8 +7648,8 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 55.0,
-      "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_family": "CONTINUATION",
+      "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 20,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
@@ -7668,7 +7668,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "IPI": {
       "score": 49.7,
@@ -7745,7 +7745,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "IPWR": {
       "score": 68.8,
@@ -7806,7 +7806,7 @@
       "entry_state": "LOW_BASE_FORMING",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2510,
       "history_start_date": "2016-07-18",
@@ -7822,14 +7822,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FRA:KLA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "IPX": {
       "score": 1.9,
@@ -7906,7 +7906,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "JOBY": {
       "score": 1.9,
@@ -7983,7 +7983,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "IREN": {
       "score": 14.2,
@@ -8060,7 +8060,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KEYS": {
       "score": 80.0,
@@ -8121,7 +8121,7 @@
       "entry_state": "BREAKOUT_PULLBACK",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -8137,7 +8137,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KLAC": {
       "score": 100.0,
@@ -8214,7 +8214,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KEEL": {
       "score": 80.0,
@@ -8275,7 +8275,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1613,
       "history_start_date": "2019-08-16",
@@ -8291,7 +8291,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KLIC": {
       "score": 100.0,
@@ -8368,7 +8368,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KRMN": {
       "score": 0.0,
@@ -8429,7 +8429,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 354,
       "history_start_date": "2025-02-13",
@@ -8445,7 +8445,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KTOS": {
       "score": 0.0,
@@ -8522,7 +8522,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KOPN": {
       "score": 80.0,
@@ -8583,7 +8583,7 @@
       "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -8599,7 +8599,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LAES": {
       "score": 0.0,
@@ -8676,7 +8676,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KULR": {
       "score": 22.1,
@@ -8737,7 +8737,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1766,
       "history_start_date": "2018-07-18",
@@ -8753,7 +8753,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LAC": {
       "score": 1.9,
@@ -8830,7 +8830,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LITE": {
       "score": 80.0,
@@ -8907,7 +8907,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LASR": {
       "score": 80.0,
@@ -8984,7 +8984,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LIDR": {
       "score": 0.0,
@@ -9061,7 +9061,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LOGI": {
       "score": 33.4,
@@ -9122,7 +9122,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -9138,42 +9138,42 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "KRX:000660": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "LON:0RPO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "LON:0ABT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "LON:CWR": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "LON:QQ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "LPTH": {
       "score": 47.6,
@@ -9250,7 +9250,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LSCC": {
       "score": 80.0,
@@ -9311,7 +9311,7 @@
       "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -9327,7 +9327,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LUNR": {
       "score": 37.5,
@@ -9404,7 +9404,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "LWLG": {
       "score": 41.6,
@@ -9465,7 +9465,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -9481,7 +9481,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MARA": {
       "score": 80.0,
@@ -9558,7 +9558,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MEI": {
       "score": 100.0,
@@ -9619,7 +9619,7 @@
       "entry_state": "VERTICAL",
       "entry_score": 4,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -9635,7 +9635,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MDA": {
       "score": 76.7,
@@ -9696,7 +9696,7 @@
       "entry_state": "FAILED_BREAKOUT",
       "entry_score": 10,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 882,
       "history_start_date": "2021-05-18",
@@ -9712,7 +9712,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MCHP": {
       "score": 78.4,
@@ -9769,11 +9769,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 55.0,
-      "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_family": "CONTINUATION",
+      "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -9789,7 +9789,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MPWR": {
       "score": 76.4,
@@ -9850,7 +9850,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -9866,7 +9866,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MP": {
       "score": 5.2,
@@ -9943,7 +9943,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MNTS": {
       "score": 7.5,
@@ -10002,7 +10002,7 @@
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "LOWER_HIGH_WARNING",
-      "entry_score": 38,
+      "entry_score": 45,
       "entry_grade": "C",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
@@ -10020,7 +10020,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MRAM": {
       "score": 74.4,
@@ -10097,7 +10097,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MRVL": {
       "score": 100.0,
@@ -10174,7 +10174,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MTSI": {
       "score": 79.2,
@@ -10235,7 +10235,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -10251,7 +10251,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MX": {
       "score": 62.7,
@@ -10312,7 +10312,7 @@
       "entry_state": "LOW_BASE_FORMING",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -10328,7 +10328,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MU": {
       "score": 90.0,
@@ -10405,7 +10405,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MXL": {
       "score": 90.0,
@@ -10482,7 +10482,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NNE": {
       "score": 3.8,
@@ -10559,7 +10559,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NBIS": {
       "score": 80.0,
@@ -10636,7 +10636,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NNBR": {
       "score": 100.0,
@@ -10697,7 +10697,7 @@
       "entry_state": "WAIT_FOR_RETEST",
       "entry_score": 35,
       "entry_grade": "C",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -10713,7 +10713,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NOK": {
       "score": 80.0,
@@ -10770,11 +10770,11 @@
       },
       "technical_state": "neutral",
       "technical_timing_score": 50.0,
-      "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
-      "entry_score": 20,
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "REVERSAL_WATCH",
+      "entry_score": 19,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -10790,7 +10790,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NTAP": {
       "score": 90.0,
@@ -10867,7 +10867,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NUAI": {
       "score": 42.4,
@@ -10944,7 +10944,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NRGV": {
       "score": 5.6,
@@ -11005,7 +11005,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1104,
       "history_start_date": "2022-02-14",
@@ -11021,7 +11021,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NVEC": {
       "score": 80.0,
@@ -11098,7 +11098,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NVTS": {
       "score": 49.4,
@@ -11175,7 +11175,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NVT": {
       "score": 80.0,
@@ -11252,7 +11252,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NXT": {
       "score": 42.4,
@@ -11329,7 +11329,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NXXT": {
       "score": 0.0,
@@ -11406,7 +11406,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ON": {
       "score": 80.0,
@@ -11483,7 +11483,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OKLO": {
       "score": 0.0,
@@ -11560,7 +11560,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OCC": {
       "score": 100.0,
@@ -11637,7 +11637,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ONDS": {
       "score": 3.8,
@@ -11714,7 +11714,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OPTX": {
       "score": 72.7,
@@ -11791,7 +11791,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ONTO": {
       "score": 100.0,
@@ -11868,7 +11868,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ORA": {
       "score": 25.3,
@@ -11945,7 +11945,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OSS": {
       "score": 80.0,
@@ -12022,35 +12022,35 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OSL:NAPA": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "OSL:SMOP": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "OTC:ATEYY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "OTC:CGEH": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "OUST": {
       "score": 80.0,
@@ -12127,7 +12127,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "P": {
       "score": 60.0,
@@ -12204,7 +12204,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PATH": {
       "score": 38.6,
@@ -12281,7 +12281,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PDFS": {
       "score": 100.0,
@@ -12358,7 +12358,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PH": {
       "score": 84.6,
@@ -12435,7 +12435,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PENG": {
       "score": 100.0,
@@ -12512,7 +12512,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PKE": {
       "score": 100.0,
@@ -12589,7 +12589,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PI": {
       "score": 39.7,
@@ -12666,7 +12666,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PLAB": {
       "score": 19.4,
@@ -12743,7 +12743,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PL": {
       "score": 39.4,
@@ -12820,7 +12820,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "POET": {
       "score": 65.6,
@@ -12897,7 +12897,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PLUG": {
       "score": 44.2,
@@ -12974,7 +12974,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "POWI": {
       "score": 80.0,
@@ -13051,7 +13051,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "POWL": {
       "score": 79.1,
@@ -13128,7 +13128,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "Q": {
       "score": 78.1,
@@ -13208,7 +13208,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "insufficient_weekly_bars_for_stage",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PPSI": {
       "score": 10.0,
@@ -13285,7 +13285,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "QS": {
       "score": 0.0,
@@ -13362,7 +13362,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "QRVO": {
       "score": 35.7,
@@ -13439,21 +13439,21 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OTC:HGRAF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "OTC:KRKNF": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "RDW": {
       "score": 42.2,
@@ -13530,7 +13530,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "QUIK": {
       "score": 80.0,
@@ -13607,7 +13607,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RGTI": {
       "score": 5.6,
@@ -13684,7 +13684,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RKLB": {
       "score": 46.6,
@@ -13761,7 +13761,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ROK": {
       "score": 100.0,
@@ -13838,7 +13838,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RMBS": {
       "score": 47.7,
@@ -13915,7 +13915,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RUN": {
       "score": 1.9,
@@ -13976,7 +13976,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -13992,7 +13992,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SANM": {
       "score": 80.0,
@@ -14069,7 +14069,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SATL": {
       "score": 39.4,
@@ -14130,7 +14130,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1119,
       "history_start_date": "2022-01-26",
@@ -14146,7 +14146,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SATS": {
       "score": null,
@@ -14230,7 +14230,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SEI": {
       "score": 90.0,
@@ -14291,7 +14291,7 @@
       "entry_state": "REVERSAL_WATCH",
       "entry_score": 19,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2304,
       "history_start_date": "2017-05-12",
@@ -14307,14 +14307,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SHAZ": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "SES": {
       "score": 0.0,
@@ -14391,7 +14391,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SHLS": {
       "score": 80.0,
@@ -14468,7 +14468,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SHMD": {
       "score": 22.1,
@@ -14529,7 +14529,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 551,
       "history_start_date": "2024-05-01",
@@ -14545,7 +14545,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SILC": {
       "score": 100.0,
@@ -14606,7 +14606,7 @@
       "entry_state": "HIGH_BASE_COILING",
       "entry_score": 45,
       "entry_grade": "C",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -14622,7 +14622,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SIDU": {
       "score": 37.5,
@@ -14699,7 +14699,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SIMO": {
       "score": 100.0,
@@ -14776,7 +14776,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SITM": {
       "score": 80.0,
@@ -14833,11 +14833,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 55.0,
-      "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1667,
       "history_start_date": "2019-11-21",
@@ -14853,7 +14853,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SKYT": {
       "score": 70.1,
@@ -14914,7 +14914,7 @@
       "entry_state": "FAILED_BREAKOUT",
       "entry_score": 10,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1309,
       "history_start_date": "2021-04-21",
@@ -14930,7 +14930,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SLAB": {
       "score": 89.7,
@@ -14991,7 +14991,7 @@
       "entry_state": "HIGH_BASE_READY",
       "entry_score": 93,
       "entry_grade": "A+",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -15007,7 +15007,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SLNH": {
       "score": 11.7,
@@ -15084,7 +15084,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SMCI": {
       "score": 8.5,
@@ -15238,7 +15238,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SMTC": {
       "score": 80.0,
@@ -15295,11 +15295,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 70.0,
-      "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_family": "CONTINUATION",
+      "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -15315,7 +15315,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SNDK": {
       "score": 100.0,
@@ -15392,7 +15392,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SPIR": {
       "score": 61.2,
@@ -15469,7 +15469,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SSYS": {
       "score": 7.1,
@@ -15530,7 +15530,7 @@
       "entry_state": "LOWER_HIGH_WARNING",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -15546,7 +15546,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "STEM": {
       "score": 0.0,
@@ -15607,7 +15607,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1446,
       "history_start_date": "2020-10-08",
@@ -15623,7 +15623,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "STM": {
       "score": 90.0,
@@ -15680,11 +15680,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 70.0,
-      "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
-      "entry_score": 45,
-      "entry_grade": "C",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_score": 12,
+      "entry_grade": "AVOID",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -15700,35 +15700,35 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "STO:ACCON": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "STO:GAPW.B": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "STO:HTRO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "STO:SILEX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "STX": {
       "score": 90.0,
@@ -15805,7 +15805,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SVCO": {
       "score": 100.0,
@@ -15864,8 +15864,8 @@
       "technical_timing_score": 70.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "NO_CLEAR_ENTRY",
-      "entry_score": 70,
-      "entry_grade": "A",
+      "entry_score": 22,
+      "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 545,
@@ -15882,7 +15882,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SYNA": {
       "score": 80.0,
@@ -15943,7 +15943,7 @@
       "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -15959,7 +15959,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SYM": {
       "score": 0.0,
@@ -16036,7 +16036,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TE": {
       "score": 52.7,
@@ -16113,7 +16113,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SYPR": {
       "score": 17.5,
@@ -16190,7 +16190,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TEL": {
       "score": 7.1,
@@ -16267,7 +16267,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TER": {
       "score": 79.0,
@@ -16344,7 +16344,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TOYO": {
       "score": 22.3,
@@ -16405,7 +16405,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 509,
       "history_start_date": "2024-07-02",
@@ -16421,35 +16421,35 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SWX:HUBN": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "STO:SIVE": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TPE:3661": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TPE:8271": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TRMB": {
       "score": 0.0,
@@ -16508,8 +16508,8 @@
       "technical_timing_score": 17.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "LOWER_HIGH_WARNING",
-      "entry_score": 60,
-      "entry_grade": "B",
+      "entry_score": 70,
+      "entry_grade": "A",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2507,
@@ -16526,7 +16526,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TPL": {
       "score": 78.0,
@@ -16587,7 +16587,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1934,
       "history_start_date": "2016-07-18",
@@ -16603,7 +16603,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TRT": {
       "score": 80.0,
@@ -16664,7 +16664,7 @@
       "entry_state": "LOW_BASE_FORMING",
       "entry_score": 45,
       "entry_grade": "C",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2497,
       "history_start_date": "2016-07-18",
@@ -16680,7 +16680,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TSAT": {
       "score": 57.6,
@@ -16741,7 +16741,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1164,
       "history_start_date": "2021-11-19",
@@ -16757,7 +16757,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TSEM": {
       "score": 90.0,
@@ -16814,11 +16814,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 75.0,
-      "entry_family": "CONTINUATION",
-      "entry_state": "HIGH_BASE_COILING",
-      "entry_score": 20,
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -16834,7 +16834,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TSM": {
       "score": 90.0,
@@ -16891,11 +16891,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 70.0,
-      "entry_family": "PRE_MOVE",
-      "entry_state": "SIGNALS_BUILDING",
+      "entry_family": "CONTINUATION",
+      "entry_state": "HIGH_BASE_FORMING",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -16911,63 +16911,63 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TPEX:6643": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TSX:MAL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TSX:HPS.A": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TSX:FLT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TSXV:AAG": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TSX:VNP": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TSXV:XBOT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TSX:MOLY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "TXN": {
       "score": 90.0,
@@ -17044,7 +17044,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TYGO": {
       "score": 33.8,
@@ -17121,7 +17121,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TTI": {
       "score": 49.5,
@@ -17182,7 +17182,7 @@
       "entry_state": "FAILED_BREAKOUT",
       "entry_score": 10,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -17198,7 +17198,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "UFO": {
       "score": 47.2,
@@ -17275,7 +17275,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "UAMY": {
       "score": 31.9,
@@ -17352,7 +17352,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "UCTT": {
       "score": 100.0,
@@ -17429,7 +17429,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "UMAC": {
       "score": 80.0,
@@ -17506,7 +17506,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "USAR": {
       "score": 43.8,
@@ -17583,7 +17583,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "UUUU": {
       "score": 2.7,
@@ -17660,7 +17660,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VECO": {
       "score": 90.0,
@@ -17718,10 +17718,10 @@
       "technical_state": "pullback_entry",
       "technical_timing_score": 70.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "BREAKOUT_PULLBACK",
+      "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -17737,7 +17737,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VELO": {
       "score": 41.2,
@@ -17814,7 +17814,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VIAV": {
       "score": 80.0,
@@ -17891,7 +17891,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VICR": {
       "score": 80.0,
@@ -17952,7 +17952,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -17968,7 +17968,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VLN": {
       "score": 72.2,
@@ -18026,10 +18026,10 @@
       "technical_state": "pullback_entry",
       "technical_timing_score": 55.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
+      "entry_state": "CONSTRUCTIVE_DIP",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1200,
       "history_start_date": "2021-09-30",
@@ -18045,7 +18045,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VIVO": {
       "score": 80.0,
@@ -18102,9 +18102,9 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 75.0,
-      "entry_family": "PRE_MOVE",
-      "entry_state": "LOW_BASE_FORMING",
-      "entry_score": 20,
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_score": 12,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
@@ -18122,7 +18122,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VRT": {
       "score": 80.0,
@@ -18199,7 +18199,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VOYG": {
       "score": 47.7,
@@ -18260,7 +18260,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 273,
       "history_start_date": "2025-06-11",
@@ -18276,7 +18276,7 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "tradier_400d_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VPG": {
       "score": 80.0,
@@ -18337,7 +18337,7 @@
       "entry_state": "REVERSAL_WATCH",
       "entry_score": 4,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -18353,7 +18353,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VSAT": {
       "score": 80.0,
@@ -18430,7 +18430,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VSH": {
       "score": 80.0,
@@ -18491,7 +18491,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -18507,7 +18507,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "WDC": {
       "score": 100.0,
@@ -18584,7 +18584,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "WOLF": {
       "score": 80.0,
@@ -18661,7 +18661,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "WULF": {
       "score": 72.3,
@@ -18722,7 +18722,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 20,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2426,
       "history_start_date": "2016-07-18",
@@ -18738,7 +18738,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "WYFI": {
       "score": 100.0,
@@ -18817,14 +18817,14 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "no_52w_tradier_path",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "XNDU": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "XTIA": {
       "score": 33.5,
@@ -18901,28 +18901,28 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TYO:6315": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "WSE:VGO": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "XSAT:SMOL": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "PLTR": {
       "score": 6.6,
@@ -18999,7 +18999,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NVDA": {
       "score": 88.4,
@@ -19137,7 +19137,7 @@
       "entry_state": "LOW_BASE_FORMING",
       "entry_score": 45,
       "entry_grade": "C",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1217,
       "history_start_date": "2021-09-07",
@@ -19153,7 +19153,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ADPT": {
       "score": 98.1,
@@ -19212,7 +19212,7 @@
       "technical_timing_score": 73.0,
       "entry_family": "CONTINUATION",
       "entry_state": "WAIT_FOR_RETEST",
-      "entry_score": 45,
+      "entry_score": 50,
       "entry_grade": "C",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
@@ -19230,7 +19230,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ABCL": {
       "score": 100.0,
@@ -19307,7 +19307,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AMAT": {
       "score": 100.0,
@@ -19384,7 +19384,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BAND": {
       "score": 100.0,
@@ -19461,7 +19461,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BTBT": {
       "score": 12.3,
@@ -19538,7 +19538,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CAI": {
       "score": 10.2,
@@ -19615,7 +19615,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BTQ": {
       "score": 15.9,
@@ -19692,7 +19692,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CLS": {
       "score": 72.0,
@@ -19769,7 +19769,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CLYM": {
       "score": 100.0,
@@ -19846,7 +19846,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "DELL": {
       "score": 100.0,
@@ -19923,7 +19923,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "CRWD": {
       "score": 100.0,
@@ -19984,7 +19984,7 @@
       "entry_state": "WAIT_FOR_RETEST",
       "entry_score": 35,
       "entry_grade": "C",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1781,
       "history_start_date": "2019-06-12",
@@ -20000,7 +20000,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:53:03.426798+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FTNT": {
       "score": 100.0,
@@ -20077,7 +20077,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:53:09.433295+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "FLR": {
       "score": 97.1,
@@ -20135,10 +20135,10 @@
       "technical_state": "pullback_entry",
       "technical_timing_score": 87.0,
       "entry_family": "CONTINUATION",
-      "entry_state": "BREAKOUT_PULLBACK",
+      "entry_state": "TRENDLINE_SUPPORT_TEST",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -20154,7 +20154,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "DIOD": {
       "score": 80.0,
@@ -20231,7 +20231,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "EVMN": {
       "score": 1.9,
@@ -20311,7 +20311,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "insufficient_weekly_bars_for_stage",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "GEV": {
       "score": 100.0,
@@ -20388,7 +20388,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HIMS": {
       "score": 64.4,
@@ -20465,7 +20465,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "GRAL": {
       "score": 54.2,
@@ -20542,7 +20542,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HALO": {
       "score": 94.7,
@@ -20619,7 +20619,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HPE": {
       "score": 100.0,
@@ -20696,7 +20696,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "IBM": {
       "score": 11.2,
@@ -20773,7 +20773,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HIVE": {
       "score": 80.0,
@@ -20832,8 +20832,8 @@
       "technical_timing_score": 45.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "SUPPORT_TEST",
-      "entry_score": 70,
-      "entry_grade": "A",
+      "entry_score": 52,
+      "entry_grade": "C",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2238,
@@ -20850,7 +20850,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "HOOD": {
       "score": 66.2,
@@ -20927,7 +20927,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "IBRX": {
       "score": 100.0,
@@ -21004,7 +21004,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "INKT": {
       "score": 44.6,
@@ -21081,7 +21081,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MDB": {
       "score": 62.7,
@@ -21138,10 +21138,10 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 73.0,
-      "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
-      "entry_score": 70,
-      "entry_grade": "A",
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
+      "entry_score": 30,
+      "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2193,
@@ -21158,7 +21158,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NAUT": {
       "score": 4.3,
@@ -21235,7 +21235,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NET": {
       "score": 100.0,
@@ -21312,7 +21312,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:53:09.433295+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NGEN": {
       "score": 0.0,
@@ -21371,8 +21371,8 @@
       "technical_timing_score": 0.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "LOWER_HIGH_WARNING",
-      "entry_score": 38,
-      "entry_grade": "C",
+      "entry_score": 70,
+      "entry_grade": "A",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 1785,
@@ -21389,7 +21389,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NKLR": {
       "score": 11.7,
@@ -21453,7 +21453,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 189,
       "history_start_date": "2025-10-10",
@@ -21469,7 +21469,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "no_200d_tradier_path",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NKTR": {
       "score": 86.5,
@@ -21546,7 +21546,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "NTSK": {
       "score": 58.8,
@@ -21609,7 +21609,7 @@
       "entry_state": "VERTICAL",
       "entry_score": 4,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 205,
       "history_start_date": "2025-09-18",
@@ -21625,7 +21625,7 @@
       "stage_data_depth_confidence": 0.25,
       "stage_data_limitation_reason": "no_52w_tradier_path",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OCGN": {
       "score": 54.6,
@@ -21702,7 +21702,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OKTA": {
       "score": 100.0,
@@ -21779,7 +21779,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ORCL": {
       "score": 7.5,
@@ -21856,7 +21856,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OSCR": {
       "score": 100.0,
@@ -21933,7 +21933,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PANW": {
       "score": 100.0,
@@ -21994,7 +21994,7 @@
       "entry_state": "WAIT_FOR_RETEST",
       "entry_score": 35,
       "entry_grade": "C",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -22010,14 +22010,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:53:09.433295+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PBLS": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "PRME": {
       "score": 31.2,
@@ -22094,7 +22094,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "PSNL": {
       "score": 100.0,
@@ -22171,7 +22171,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "QBTS": {
       "score": 13.6,
@@ -22248,14 +22248,14 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "QNT": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "QUBT": {
       "score": 10.7,
@@ -22332,7 +22332,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "QURE": {
       "score": 100.0,
@@ -22409,7 +22409,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RBLX": {
       "score": 26.9,
@@ -22486,7 +22486,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RBRK": {
       "score": 96.1,
@@ -22563,7 +22563,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RCAT": {
       "score": 33.8,
@@ -22640,7 +22640,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RDDT": {
       "score": 60.6,
@@ -22717,7 +22717,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RR": {
       "score": 0.0,
@@ -22794,7 +22794,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "RXRX": {
       "score": 8.6,
@@ -22853,9 +22853,9 @@
       "technical_timing_score": 42.0,
       "entry_family": "BROKEN_OR_UNCLEAR",
       "entry_state": "SUPPORT_TEST",
-      "entry_score": 70,
-      "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "entry_score": 60,
+      "entry_grade": "B",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1316,
       "history_start_date": "2021-04-16",
@@ -22871,14 +22871,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OTC:IFNNY": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "SNOW": {
       "score": 100.0,
@@ -22955,14 +22955,14 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "OTC:NLST": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "SOFI": {
       "score": 30.9,
@@ -23039,7 +23039,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SPAI": {
       "score": 7.5,
@@ -23100,7 +23100,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 469,
       "history_start_date": "2024-08-28",
@@ -23116,28 +23116,28 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "SPCX": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "SHA:603986": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "SHA:688008": {
       "score": null,
       "label": null,
       "reason": null,
       "status": "no_bars",
-      "computed_at": "2026-07-18T00:52:57.345902+00:00"
+      "computed_at": "2026-07-20T23:02:07.366348+00:00"
     },
     "STIM": {
       "score": 88.8,
@@ -23196,8 +23196,8 @@
       "technical_timing_score": 22.0,
       "entry_family": "CHASE_EXHAUSTION",
       "entry_state": "VERTICAL",
-      "entry_score": 60,
-      "entry_grade": "B",
+      "entry_score": 45,
+      "entry_grade": "C",
       "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2020,
@@ -23214,7 +23214,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TAC": {
       "score": 70.1,
@@ -23271,11 +23271,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 73.0,
-      "entry_family": "CONTINUATION",
-      "entry_state": "TRENDLINE_SUPPORT_TEST",
+      "entry_family": "BROKEN_OR_UNCLEAR",
+      "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2510,
       "history_start_date": "2016-07-18",
@@ -23291,7 +23291,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TEM": {
       "score": 60.7,
@@ -23349,7 +23349,7 @@
       "technical_state": "neutral",
       "technical_timing_score": 85.0,
       "entry_family": "PRE_MOVE",
-      "entry_state": "LOW_BASE_READY",
+      "entry_state": "LOW_BASE_COILING",
       "entry_score": 70,
       "entry_grade": "A",
       "price_basis": "CANONICAL_CACHED_QUOTE",
@@ -23368,7 +23368,7 @@
       "stage_data_depth_confidence": 0.7,
       "stage_data_limitation_reason": "adequate_fmp_or_tradier_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TARS": {
       "score": 0.0,
@@ -23445,7 +23445,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "UMC": {
       "score": 100.0,
@@ -23502,11 +23502,11 @@
       },
       "technical_state": "pullback_entry",
       "technical_timing_score": 88.0,
-      "entry_family": "CONTINUATION",
-      "entry_state": "BREAKOUT_PULLBACK",
-      "entry_score": 45,
-      "entry_grade": "C",
-      "price_basis": "LAST_DAILY_CLOSE",
+      "entry_family": "CHASE_EXHAUSTION",
+      "entry_state": "EXTREME_EXTENSION",
+      "entry_score": 0,
+      "entry_grade": "AVOID",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -23522,7 +23522,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "TGTX": {
       "score": 100.0,
@@ -23599,7 +23599,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "XYZ": {
       "score": 100.0,
@@ -23660,7 +23660,7 @@
       "entry_state": "WAIT_FOR_RETEST",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2511,
       "history_start_date": "2016-07-18",
@@ -23676,7 +23676,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ZETA": {
       "score": 90.0,
@@ -23737,7 +23737,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 45,
       "entry_grade": "C",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1278,
       "history_start_date": "2021-06-10",
@@ -23753,7 +23753,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ZURA": {
       "score": 61.0,
@@ -23812,9 +23812,9 @@
       "technical_timing_score": 67.0,
       "entry_family": "PRE_MOVE",
       "entry_state": "SIGNALS_BUILDING",
-      "entry_score": 60,
-      "entry_grade": "B",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "entry_score": 70,
+      "entry_grade": "A",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1071,
       "history_start_date": "2021-09-03",
@@ -23830,7 +23830,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ZVRA": {
       "score": 100.0,
@@ -23891,7 +23891,7 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 2509,
       "history_start_date": "2016-07-18",
@@ -23907,7 +23907,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "MSFT": {
       "score": 9.2,
@@ -24041,11 +24041,11 @@
       },
       "technical_state": "neutral",
       "technical_timing_score": 75.0,
-      "entry_family": "BROKEN_OR_UNCLEAR",
-      "entry_state": "NO_CLEAR_ENTRY",
-      "entry_score": 70,
+      "entry_family": "CONTINUATION",
+      "entry_state": "HIGH_BASE_COILING",
+      "entry_score": 79,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1296,
       "history_start_date": "2021-05-14",
@@ -24061,7 +24061,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AREC": {
       "score": 0.0,
@@ -24122,7 +24122,7 @@
       "entry_state": "LOWER_LOW_CONFIRMED",
       "entry_score": 12,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1993,
       "history_start_date": "2017-06-19",
@@ -24138,7 +24138,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ACOG": {
       "score": 98.1,
@@ -24215,7 +24215,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ABSI": {
       "score": 100.0,
@@ -24276,7 +24276,7 @@
       "entry_state": "VERTICAL",
       "entry_score": 4,
       "entry_grade": "AVOID",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "price_basis": "LAST_DAILY_CLOSE",
       "history_source": "canonical_tradier",
       "bars_count": 1249,
       "history_start_date": "2021-07-22",
@@ -24292,7 +24292,7 @@
       "stage_data_depth_confidence": 0.85,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "ADTN": {
       "score": 62.1,
@@ -24369,7 +24369,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:45:10.789302+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "AAPL": {
       "score": 90.0,
@@ -27064,7 +27064,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T16:16:00.960963+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "VST": {
       "score": 17.0,
@@ -27141,7 +27141,7 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T20:32:27.929140+00:00"
+      "computed_at": "2026-07-18T17:39:37.508073+00:00"
     },
     "SNPS": {
       "score": 17.7,
@@ -27218,56 +27218,56 @@
       "stage_data_depth_confidence": 1.0,
       "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T20:32:27.929140+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     },
     "BCBP": {
       "score": 90.0,
       "label": "S2-S3 Advance",
-      "reason": "Established advance. Price +12.1% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat. Vol 2.0\u00d7 avg.",
+      "reason": "Established advance. Price +11.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: flat. Vol 2.0\u00d7 avg.",
       "signals": {
-        "price_vs_30w_ma_pct": 12.09,
-        "ma_30w_slope_pct": 3.2,
+        "price_vs_30w_ma_pct": 11.36,
+        "ma_30w_slope_pct": 3.18,
         "rs_vs_spy_trend": "flat",
-        "rs_vs_spy_8w_pct": -0.15,
-        "volume_ratio": 1.98,
+        "rs_vs_spy_8w_pct": -0.82,
+        "volume_ratio": 2.01,
         "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 31.81,
+        "prior_26w_trend_pct": 30.92,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
       "stage_confidence": "high",
-      "stage_confidence_reason": "tradier_400d_history",
+      "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 10.432,
-        "sma_50": 10.4574,
-        "sma_200": 8.9004,
-        "pct_vs_sma_20": -0.69,
-        "pct_vs_sma_50": -0.93,
-        "pct_vs_sma_200": 16.4,
+        "sma_20": 10.4285,
+        "sma_50": 10.456,
+        "sma_200": 8.9001,
+        "pct_vs_sma_20": -1.33,
+        "pct_vs_sma_50": -1.59,
+        "pct_vs_sma_200": 15.62,
         "ma_stack": "mixed",
         "extension_risk": "pullback_buy_zone",
         "high_52w": 11.47,
         "low_52w": 7.45,
-        "pct_from_52w_high": -9.68,
-        "pct_from_52w_low": 39.06,
-        "range_position_52w": 72.4,
+        "pct_from_52w_high": -10.29,
+        "pct_from_52w_low": 38.12,
+        "range_position_52w": 70.6,
         "high_20d": 11.06,
         "high_50d": 11.47,
         "breakout_signal": "no_setup",
         "entry_zone": "20d_pullback",
-        "avg_volume_20d": 218540.0,
+        "avg_volume_20d": 221576.0,
         "accumulation_days_20d": 2,
         "distribution_days_20d": 2,
         "accumulation_distribution_score": 0,
         "accumulation_distribution_signal": "neutral",
-        "atr_14": 0.2862,
-        "atr_14_pct": 2.76,
-        "range_20d_pct": 14.72,
+        "atr_14": 0.2959,
+        "atr_14_pct": 2.88,
+        "range_20d_pct": 14.82,
         "squeeze_signal": "normal",
-        "roc_20d": -6.92,
-        "roc_50d": 2.17,
+        "roc_20d": -7.55,
+        "roc_50d": 1.48,
         "momentum_trend": "negative",
         "technical_state": "pullback_entry",
         "technical_timing_score": 55.0,
@@ -27279,72 +27279,72 @@
       "entry_state": "NO_CLEAR_ENTRY",
       "entry_score": 70,
       "entry_grade": "A",
-      "price_basis": "CANONICAL_CACHED_QUOTE",
-      "history_source": "tradier",
-      "bars_count": 275,
-      "history_start_date": "2025-06-12",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "canonical_tradier",
+      "bars_count": 2512,
+      "history_start_date": "2016-07-20",
       "history_end_date": "2026-07-17",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 275,
-      "stage_years_available": 1.1,
-      "stage_history_status": "intermediate_only",
-      "stage_history_source": "tradier",
-      "stage_long_history_used": false,
-      "stage_data_depth_confidence": 0.5,
-      "stage_data_limitation_reason": "tradier_400d_history",
+      "stage_bar_count": 2512,
+      "stage_years_available": 10.0,
+      "stage_history_status": "available_5y",
+      "stage_history_source": "canonical_tradier",
+      "stage_long_history_used": true,
+      "stage_data_depth_confidence": 1.0,
+      "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:53:12.853294+00:00"
+      "computed_at": "2026-07-18T15:39:56.621008+00:00"
     },
     "ZS": {
-      "score": 28.0,
+      "score": 27.6,
       "label": "S4 Decline",
-      "reason": "Downtrend confirmed. Price -5.9% below a falling 30-week MA. RS vs SPY: rising. Avoid new longs.",
+      "reason": "Downtrend confirmed. Price -6.3% below a falling 30-week MA. RS vs SPY: rising. Avoid new longs.",
       "signals": {
-        "price_vs_30w_ma_pct": -5.89,
-        "ma_30w_slope_pct": -7.57,
+        "price_vs_30w_ma_pct": -6.32,
+        "ma_30w_slope_pct": -7.59,
         "rs_vs_spy_trend": "rising",
-        "rs_vs_spy_8w_pct": 8.42,
-        "volume_ratio": 0.59,
+        "rs_vs_spy_8w_pct": 7.92,
+        "volume_ratio": 0.61,
         "weeks_above_30w_ma_of_8": 0,
-        "prior_26w_trend_pct": -28.14,
+        "prior_26w_trend_pct": -28.47,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
       "stage_confidence": "high",
-      "stage_confidence_reason": "tradier_400d_history",
+      "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 139.9985,
-        "sma_50": 143.6448,
-        "sma_200": 197.9459,
-        "pct_vs_sma_20": 7.6,
-        "pct_vs_sma_50": 4.87,
-        "pct_vs_sma_200": -23.9,
+        "sma_20": 139.9635,
+        "sma_50": 143.6308,
+        "sma_200": 197.9424,
+        "pct_vs_sma_20": 7.13,
+        "pct_vs_sma_50": 4.39,
+        "pct_vs_sma_200": -24.25,
         "ma_stack": "bear",
         "extension_risk": "healthy",
         "high_52w": 336.27,
         "low_52w": 118.05,
-        "pct_from_52w_high": -55.2,
-        "pct_from_52w_low": 27.61,
-        "range_position_52w": 14.9,
+        "pct_from_52w_high": -55.41,
+        "pct_from_52w_low": 27.01,
+        "range_position_52w": 14.6,
         "high_20d": 152.09,
         "high_50d": 184.6,
         "breakout_signal": "near_trigger",
         "entry_zone": "breakout_watch",
-        "avg_volume_20d": 3443213.0,
+        "avg_volume_20d": 3498004.0,
         "accumulation_days_20d": 1,
         "distribution_days_20d": 0,
         "accumulation_distribution_score": 1,
         "accumulation_distribution_signal": "neutral",
         "atr_14": 8.3517,
-        "atr_14_pct": 5.54,
-        "range_20d_pct": 24.61,
+        "atr_14_pct": 5.57,
+        "range_20d_pct": 24.73,
         "squeeze_signal": "volatile",
-        "roc_20d": 21.11,
-        "roc_50d": 6.56,
+        "roc_20d": 20.55,
+        "roc_50d": 6.07,
         "momentum_trend": "accelerating",
         "technical_state": "neutral",
         "technical_timing_score": 50.0,
@@ -27357,71 +27357,71 @@
       "entry_score": 5,
       "entry_grade": "AVOID",
       "price_basis": "CANONICAL_CACHED_QUOTE",
-      "history_source": "tradier",
-      "bars_count": 275,
-      "history_start_date": "2025-06-12",
+      "history_source": "canonical_tradier",
+      "bars_count": 2095,
+      "history_start_date": "2018-03-16",
       "history_end_date": "2026-07-17",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 275,
-      "stage_years_available": 1.1,
-      "stage_history_status": "intermediate_only",
-      "stage_history_source": "tradier",
-      "stage_long_history_used": false,
-      "stage_data_depth_confidence": 0.5,
-      "stage_data_limitation_reason": "tradier_400d_history",
+      "stage_bar_count": 2095,
+      "stage_years_available": 8.3,
+      "stage_history_status": "available_5y",
+      "stage_history_source": "canonical_tradier",
+      "stage_long_history_used": true,
+      "stage_data_depth_confidence": 1.0,
+      "stage_data_limitation_reason": "fmp_multi_year_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:53:12.853294+00:00"
+      "computed_at": "2026-07-18T15:39:56.621008+00:00"
     },
     "DDOG": {
       "score": 100.0,
       "label": "S3 Momentum",
-      "reason": "Extended momentum. Price +57.6% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 0.7\u00d7 avg.",
+      "reason": "Extended momentum. Price +57.3% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 0.8\u00d7 avg.",
       "signals": {
-        "price_vs_30w_ma_pct": 57.63,
-        "ma_30w_slope_pct": 9.28,
+        "price_vs_30w_ma_pct": 57.29,
+        "ma_30w_slope_pct": 9.27,
         "rs_vs_spy_trend": "rising",
-        "rs_vs_spy_8w_pct": 5.43,
-        "volume_ratio": 0.74,
+        "rs_vs_spy_8w_pct": 5.2,
+        "volume_ratio": 0.75,
         "weeks_above_30w_ma_of_8": 8,
-        "prior_26w_trend_pct": 99.24,
+        "prior_26w_trend_pct": 98.79,
         "breakout_watch": false,
         "danger_zone": false,
         "breadth_above_30w_ma_pct": null,
         "breadth_rising_30w_ma_pct": null
       },
       "stage_confidence": "high",
-      "stage_confidence_reason": "tradier_400d_history",
+      "stage_confidence_reason": "fmp_multi_year_history",
       "technical_metrics": {
-        "sma_20": 249.945,
-        "sma_50": 233.2158,
-        "sma_200": 162.2786,
-        "pct_vs_sma_20": 3.73,
-        "pct_vs_sma_50": 11.17,
-        "pct_vs_sma_200": 59.77,
+        "sma_20": 249.916,
+        "sma_50": 233.2042,
+        "sma_200": 162.2757,
+        "pct_vs_sma_20": 3.51,
+        "pct_vs_sma_50": 10.93,
+        "pct_vs_sma_200": 59.41,
         "ma_stack": "bull",
         "extension_risk": "healthy",
         "high_52w": 277.49,
         "low_52w": 102.615,
-        "pct_from_52w_high": -6.57,
-        "pct_from_52w_low": 152.66,
-        "range_position_52w": 89.6,
+        "pct_from_52w_high": -6.78,
+        "pct_from_52w_low": 152.1,
+        "range_position_52w": 89.2,
         "high_20d": 270.73,
         "high_50d": 277.49,
         "breakout_signal": "near_trigger",
         "entry_zone": "breakout_watch",
-        "avg_volume_20d": 4490461.0,
+        "avg_volume_20d": 4567902.0,
         "accumulation_days_20d": 3,
         "distribution_days_20d": 1,
         "accumulation_distribution_score": 2,
         "accumulation_distribution_signal": "accumulation",
         "atr_14": 14.2111,
-        "atr_14_pct": 5.48,
-        "range_20d_pct": 24.67,
+        "atr_14_pct": 5.49,
+        "range_20d_pct": 24.73,
         "squeeze_signal": "volatile",
-        "roc_20d": 14.4,
-        "roc_50d": 77.91,
+        "roc_20d": 14.15,
+        "roc_50d": 77.51,
         "momentum_trend": "positive",
         "technical_state": "trend_advance",
         "technical_timing_score": 88.0,
@@ -27434,14 +27434,91 @@
       "entry_score": 45,
       "entry_grade": "C",
       "price_basis": "CANONICAL_CACHED_QUOTE",
-      "history_source": "tradier",
-      "bars_count": 275,
-      "history_start_date": "2025-06-12",
+      "history_source": "canonical_tradier",
+      "bars_count": 1715,
+      "history_start_date": "2019-09-19",
       "history_end_date": "2026-07-17",
       "has_ohlcv": true,
       "has_200d": true,
       "has_252d": true,
-      "stage_bar_count": 275,
+      "stage_bar_count": 1715,
+      "stage_years_available": 6.8,
+      "stage_history_status": "available_5y",
+      "stage_history_source": "canonical_tradier",
+      "stage_long_history_used": true,
+      "stage_data_depth_confidence": 1.0,
+      "stage_data_limitation_reason": "fmp_multi_year_history",
+      "status": "ok",
+      "computed_at": "2026-07-18T15:39:56.621008+00:00"
+    },
+    "ILMN": {
+      "score": 100.0,
+      "label": "S2-S3 Advance",
+      "reason": "Established advance. Price +28.4% above a rising 30-week MA (8/8 recent weeks above MA). RS vs SPY: rising. Vol 0.8\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 28.45,
+        "ma_30w_slope_pct": 5.28,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 15.04,
+        "volume_ratio": 0.78,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 28.26,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 183.6995,
+        "sma_50": 165.8629,
+        "sma_200": 135.3068,
+        "pct_vs_sma_20": 1.11,
+        "pct_vs_sma_50": 11.98,
+        "pct_vs_sma_200": 37.27,
+        "ma_stack": "bull",
+        "extension_risk": "pullback_buy_zone",
+        "high_52w": 194.33,
+        "low_52w": 91.0,
+        "pct_from_52w_high": -4.43,
+        "pct_from_52w_low": 104.1,
+        "range_position_52w": 91.7,
+        "high_20d": 194.33,
+        "high_50d": 194.33,
+        "breakout_signal": "near_trigger",
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 1880841.0,
+        "accumulation_days_20d": 3,
+        "distribution_days_20d": 2,
+        "accumulation_distribution_score": 1,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 6.7792,
+        "atr_14_pct": 3.65,
+        "range_20d_pct": 20.33,
+        "squeeze_signal": "normal",
+        "roc_20d": 14.7,
+        "roc_50d": 30.26,
+        "momentum_trend": "positive",
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 88.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 88.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "WAIT_FOR_RETEST",
+      "entry_score": 70,
+      "entry_grade": "A",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-16",
+      "history_end_date": "2026-07-20",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "stage_bar_count": 274,
       "stage_years_available": 1.1,
       "stage_history_status": "intermediate_only",
       "stage_history_source": "tradier",
@@ -27449,7 +27526,469 @@
       "stage_data_depth_confidence": 0.5,
       "stage_data_limitation_reason": "tradier_400d_history",
       "status": "ok",
-      "computed_at": "2026-07-17T17:53:12.853294+00:00"
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
+    },
+    "GH": {
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +35.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 0.8\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 35.53,
+        "ma_30w_slope_pct": 7.31,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 21.29,
+        "volume_ratio": 0.82,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 32.92,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 154.363,
+        "sma_50": 132.6252,
+        "sma_200": 103.4377,
+        "pct_vs_sma_20": -1.8,
+        "pct_vs_sma_50": 14.29,
+        "pct_vs_sma_200": 46.54,
+        "ma_stack": "bull",
+        "extension_risk": "pullback_buy_zone",
+        "high_52w": 170.77,
+        "low_52w": 40.98,
+        "pct_from_52w_high": -11.24,
+        "pct_from_52w_low": 269.89,
+        "range_position_52w": 85.2,
+        "high_20d": 170.77,
+        "high_50d": 170.77,
+        "breakout_signal": "failed_breakout",
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 3418191.0,
+        "accumulation_days_20d": 2,
+        "distribution_days_20d": 0,
+        "accumulation_distribution_score": 2,
+        "accumulation_distribution_signal": "accumulation",
+        "atr_14": 8.6074,
+        "atr_14_pct": 5.68,
+        "range_20d_pct": 32.3,
+        "squeeze_signal": "volatile",
+        "roc_20d": 15.03,
+        "roc_50d": 64.31,
+        "momentum_trend": "positive",
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 93.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 93.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "WAIT_FOR_RETEST",
+      "entry_score": 35,
+      "entry_grade": "C",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-16",
+      "history_end_date": "2026-07-20",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "stage_bar_count": 274,
+      "stage_years_available": 1.1,
+      "stage_history_status": "intermediate_only",
+      "stage_history_source": "tradier",
+      "stage_long_history_used": false,
+      "stage_data_depth_confidence": 0.5,
+      "stage_data_limitation_reason": "tradier_400d_history",
+      "status": "ok",
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
+    },
+    "TXG": {
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +68.5% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 0.8\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 68.47,
+        "ma_30w_slope_pct": 15.47,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 39.42,
+        "volume_ratio": 0.77,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 113.29,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 39.5593,
+        "sma_50": 31.9509,
+        "sma_200": 21.7743,
+        "pct_vs_sma_20": 8.91,
+        "pct_vs_sma_50": 34.85,
+        "pct_vs_sma_200": 97.87,
+        "ma_stack": "bull",
+        "extension_risk": "extended",
+        "high_52w": 45.79,
+        "low_52w": 11.34,
+        "pct_from_52w_high": -5.91,
+        "pct_from_52w_low": 279.94,
+        "range_position_52w": 92.1,
+        "high_20d": 45.79,
+        "high_50d": 45.79,
+        "breakout_signal": "no_setup",
+        "entry_zone": "extended",
+        "avg_volume_20d": 3332586.0,
+        "accumulation_days_20d": 1,
+        "distribution_days_20d": 3,
+        "accumulation_distribution_score": -2,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 2.686,
+        "atr_14_pct": 6.23,
+        "range_20d_pct": 34.86,
+        "squeeze_signal": "volatile",
+        "roc_20d": 23.97,
+        "roc_50d": 89.47,
+        "momentum_trend": "positive",
+        "technical_state": "extended",
+        "technical_timing_score": 73.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "extended",
+      "technical_timing_score": 73.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "WAIT_FOR_RETEST",
+      "entry_score": 35,
+      "entry_grade": "C",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-16",
+      "history_end_date": "2026-07-20",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "stage_bar_count": 274,
+      "stage_years_available": 1.1,
+      "stage_history_status": "intermediate_only",
+      "stage_history_source": "tradier",
+      "stage_long_history_used": false,
+      "stage_data_depth_confidence": 0.5,
+      "stage_data_limitation_reason": "tradier_400d_history",
+      "status": "ok",
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
+    },
+    "TWST": {
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +54.1% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 0.7\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 54.13,
+        "ma_30w_slope_pct": 16.03,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 33.08,
+        "volume_ratio": 0.67,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 123.27,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 93.8825,
+        "sma_50": 76.9351,
+        "sma_200": 49.9224,
+        "pct_vs_sma_20": -2.33,
+        "pct_vs_sma_50": 19.18,
+        "pct_vs_sma_200": 83.68,
+        "ma_stack": "bull",
+        "extension_risk": "pullback_buy_zone",
+        "high_52w": 102.88,
+        "low_52w": 24.16,
+        "pct_from_52w_high": -10.87,
+        "pct_from_52w_low": 279.53,
+        "range_position_52w": 85.8,
+        "high_20d": 102.88,
+        "high_50d": 102.88,
+        "breakout_signal": "failed_breakout",
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 1761331.0,
+        "accumulation_days_20d": 3,
+        "distribution_days_20d": 2,
+        "accumulation_distribution_score": 1,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 6.509,
+        "atr_14_pct": 7.1,
+        "range_20d_pct": 26.09,
+        "squeeze_signal": "volatile",
+        "roc_20d": 4.72,
+        "roc_50d": 54.03,
+        "momentum_trend": "positive",
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 88.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 88.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "WAIT_FOR_RETEST",
+      "entry_score": 35,
+      "entry_grade": "C",
+      "price_basis": "CANONICAL_CACHED_QUOTE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-16",
+      "history_end_date": "2026-07-20",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "stage_bar_count": 274,
+      "stage_years_available": 1.1,
+      "stage_history_status": "intermediate_only",
+      "stage_history_source": "tradier",
+      "stage_long_history_used": false,
+      "stage_data_depth_confidence": 0.5,
+      "stage_data_limitation_reason": "tradier_400d_history",
+      "status": "ok",
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
+    },
+    "TEVA": {
+      "score": 51.6,
+      "label": "S1 Base",
+      "reason": "Basing / bottoming. Price -3.0% vs flat 30-week MA. Prior 26w: -7%. RS vs SPY: falling. No breakout signal yet.",
+      "signals": {
+        "price_vs_30w_ma_pct": -3.02,
+        "ma_30w_slope_pct": 1.11,
+        "rs_vs_spy_trend": "falling",
+        "rs_vs_spy_8w_pct": -6.96,
+        "volume_ratio": 0.57,
+        "weeks_above_30w_ma_of_8": 5,
+        "prior_26w_trend_pct": -7.28,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "medium",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 33.1185,
+        "sma_50": 33.8312,
+        "sma_200": 30.1646,
+        "pct_vs_sma_20": -4.59,
+        "pct_vs_sma_50": -6.6,
+        "pct_vs_sma_200": 4.76,
+        "ma_stack": "mixed",
+        "extension_risk": "pullback_buy_zone",
+        "high_52w": 36.34,
+        "low_52w": 15.38,
+        "pct_from_52w_high": -13.04,
+        "pct_from_52w_low": 105.46,
+        "range_position_52w": 77.4,
+        "high_20d": 35.29,
+        "high_50d": 36.25,
+        "breakout_signal": "failed_breakout",
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 4927930.0,
+        "accumulation_days_20d": 2,
+        "distribution_days_20d": 3,
+        "accumulation_distribution_score": -1,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 0.9696,
+        "atr_14_pct": 3.07,
+        "range_20d_pct": 13.26,
+        "squeeze_signal": "normal",
+        "roc_20d": 0.38,
+        "roc_50d": -13.04,
+        "momentum_trend": "cooling",
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 67.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 67.0,
+      "entry_family": "CHASE_EXHAUSTION",
+      "entry_state": "FAILED_BREAKOUT",
+      "entry_score": 10,
+      "entry_grade": "AVOID",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-16",
+      "history_end_date": "2026-07-20",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "stage_bar_count": 274,
+      "stage_years_available": 1.1,
+      "stage_history_status": "intermediate_only",
+      "stage_history_source": "tradier",
+      "stage_long_history_used": false,
+      "stage_data_depth_confidence": 0.5,
+      "stage_data_limitation_reason": "tradier_400d_history",
+      "status": "ok",
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
+    },
+    "CLBT": {
+      "score": 56.6,
+      "label": "S2 Breakout",
+      "reason": "Confirmed breakout from base. Price +5.8% above 30-week MA (falling slope). Prior 26w: +3%. RS vs SPY: rising. Vol 0.6\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 5.78,
+        "ma_30w_slope_pct": -2.83,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 10.5,
+        "volume_ratio": 0.64,
+        "weeks_above_30w_ma_of_8": 4,
+        "prior_26w_trend_pct": 3.16,
+        "breakout_watch": true,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "medium",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 15.0233,
+        "sma_50": 14.0323,
+        "sma_200": 15.4768,
+        "pct_vs_sma_20": 1.01,
+        "pct_vs_sma_50": 8.14,
+        "pct_vs_sma_200": -1.95,
+        "ma_stack": "mixed",
+        "extension_risk": "pullback_buy_zone",
+        "high_52w": 19.56,
+        "low_52w": 11.03,
+        "pct_from_52w_high": -22.42,
+        "pct_from_52w_low": 37.58,
+        "range_position_52w": 48.6,
+        "high_20d": 16.61,
+        "high_50d": 16.61,
+        "breakout_signal": "no_setup",
+        "entry_zone": "20d_pullback",
+        "avg_volume_20d": 1870368.0,
+        "accumulation_days_20d": 5,
+        "distribution_days_20d": 1,
+        "accumulation_distribution_score": 4,
+        "accumulation_distribution_signal": "heavy_accumulation",
+        "atr_14": 0.7147,
+        "atr_14_pct": 4.71,
+        "range_20d_pct": 32.19,
+        "squeeze_signal": "normal",
+        "roc_20d": 18.28,
+        "roc_50d": 15.22,
+        "momentum_trend": "accelerating",
+        "technical_state": "pullback_entry",
+        "technical_timing_score": 90.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "pullback_entry",
+      "technical_timing_score": 90.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "BREAKOUT_RETEST",
+      "entry_score": 84,
+      "entry_grade": "A",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-16",
+      "history_end_date": "2026-07-20",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "stage_bar_count": 274,
+      "stage_years_available": 1.1,
+      "stage_history_status": "intermediate_only",
+      "stage_history_source": "tradier",
+      "stage_long_history_used": false,
+      "stage_data_depth_confidence": 0.5,
+      "stage_data_limitation_reason": "tradier_400d_history",
+      "status": "ok",
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
+    },
+    "CLOV": {
+      "score": 100.0,
+      "label": "S3 Momentum",
+      "reason": "Extended momentum. Price +48.0% above rising 30-week MA \u2014 late-stage advance (8/8 weeks above MA). RS vs SPY: rising. Trend intact but risk rising. Vol 0.6\u00d7 avg.",
+      "signals": {
+        "price_vs_30w_ma_pct": 47.95,
+        "ma_30w_slope_pct": 10.21,
+        "rs_vs_spy_trend": "rising",
+        "rs_vs_spy_8w_pct": 17.98,
+        "volume_ratio": 0.59,
+        "weeks_above_30w_ma_of_8": 8,
+        "prior_26w_trend_pct": 100.67,
+        "breakout_watch": false,
+        "danger_zone": false,
+        "breadth_above_30w_ma_pct": null,
+        "breadth_rising_30w_ma_pct": null
+      },
+      "stage_confidence": "high",
+      "stage_confidence_reason": "tradier_400d_history",
+      "technical_metrics": {
+        "sma_20": 4.9328,
+        "sma_50": 4.3195,
+        "sma_200": 2.8991,
+        "pct_vs_sma_20": -8.88,
+        "pct_vs_sma_50": 4.06,
+        "pct_vs_sma_200": 55.05,
+        "ma_stack": "bull",
+        "extension_risk": "healthy",
+        "high_52w": 5.41,
+        "low_52w": 1.7,
+        "pct_from_52w_high": -16.91,
+        "pct_from_52w_low": 164.41,
+        "range_position_52w": 75.3,
+        "high_20d": 5.41,
+        "high_50d": 5.41,
+        "breakout_signal": "failed_breakout",
+        "entry_zone": "neutral",
+        "avg_volume_20d": 6438874.0,
+        "accumulation_days_20d": 3,
+        "distribution_days_20d": 2,
+        "accumulation_distribution_score": 1,
+        "accumulation_distribution_signal": "neutral",
+        "atr_14": 0.2796,
+        "atr_14_pct": 6.22,
+        "range_20d_pct": 28.25,
+        "squeeze_signal": "volatile",
+        "roc_20d": -10.1,
+        "roc_50d": 67.72,
+        "momentum_trend": "negative",
+        "technical_state": "neutral",
+        "technical_timing_score": 65.0,
+        "missing_metric_reasons": []
+      },
+      "technical_state": "neutral",
+      "technical_timing_score": 65.0,
+      "entry_family": "CONTINUATION",
+      "entry_state": "WAIT_FOR_RETEST",
+      "entry_score": 35,
+      "entry_grade": "C",
+      "price_basis": "LAST_DAILY_CLOSE",
+      "history_source": "tradier",
+      "bars_count": 274,
+      "history_start_date": "2025-06-16",
+      "history_end_date": "2026-07-20",
+      "has_ohlcv": true,
+      "has_200d": true,
+      "has_252d": true,
+      "stage_bar_count": 274,
+      "stage_years_available": 1.1,
+      "stage_history_status": "intermediate_only",
+      "stage_history_source": "tradier",
+      "stage_long_history_used": false,
+      "stage_data_depth_confidence": 0.5,
+      "stage_data_limitation_reason": "tradier_400d_history",
+      "status": "ok",
+      "computed_at": "2026-07-20T14:25:36.519901+00:00"
     }
   }
 }
