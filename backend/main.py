@@ -18209,3 +18209,272 @@ async def admin_stage2_status(
         "lkg_path":        str(_s2._LKG_PATH),
         "sample_entries":  samples,
     }
+
+
+# ── Quality Backfill admin endpoints ─────────────────────────────────────────
+# Runs FmpFundamentalsRefresher.refresh_symbols(..., dev_force=True) for all
+# FMP-eligible Watchlist symbols inside the FastAPI event loop (asyncio task).
+# Survives as long as the app is running. Never concurrent. Resumable.
+
+_QBF_STATE: dict = {
+    "status":               "idle",   # idle | running | complete | error
+    "started_at":           None,
+    "pid":                  os.getpid(),
+    "total_eligible":       0,
+    "completed":            [],
+    "failed":               [],
+    "empty_preserved":      [],
+    "refreshed":            0,
+    "failed_total":         0,
+    "empty_total":          0,
+    "fmp_calls":            0,
+    "batches_done":         0,
+    "remaining":            0,
+    "current_batch":        [],
+    "last_completed_symbol": None,
+    "error":                None,
+}
+_QBF_TASK: asyncio.Task | None = None
+_QBF_PROGRESS_PATH = Path(__file__).parent.parent / "logs" / "quality_backfill_progress.json"
+_QBF_LOG_PATH      = Path(__file__).parent.parent / "logs" / "quality_backfill.log"
+_QBF_PAIRS_PATH    = Path(__file__).parent.parent / "logs" / "quality_backfill_pairs.json"
+
+
+def _qbf_log(msg: str) -> None:
+    ts   = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
+    try:
+        _QBF_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_QBF_LOG_PATH, "a") as _f:
+            _f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def _qbf_save_progress() -> None:
+    try:
+        _QBF_PROGRESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        snap = dict(_QBF_STATE)
+        snap["updated_at"] = _dt.now(_tz.utc).isoformat()
+        with open(_QBF_PROGRESS_PATH, "w") as _f:
+            _json.dump(snap, _f, indent=2)
+    except Exception:
+        pass
+
+
+async def _qbf_run_loop(fmp_key: str, pairs: list[list[str]], batch_size: int) -> None:
+    from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
+    refresher = FmpFundamentalsRefresher(fmp_key)
+
+    done_set = (
+        set(_QBF_STATE["completed"])
+        | set(_QBF_STATE["failed"])
+        | set(_QBF_STATE["empty_preserved"])
+    )
+    pending = [[s, w] for s, w in pairs if s not in done_set]
+    _QBF_STATE["remaining"] = len(pending)
+    batch_num = _QBF_STATE["batches_done"]
+
+    _qbf_log(
+        f"START pid={os.getpid()} total={len(pairs)} already_done={len(done_set)} "
+        f"pending={len(pending)} batch_size={batch_size} est_fmp_calls={len(pending)*10}"
+    )
+
+    try:
+        while pending:
+            chunk    = pending[:batch_size]
+            wl_id    = chunk[0][1]
+            syms     = [s for s, _ in chunk]
+            batch_num += 1
+            _QBF_STATE["current_batch"] = syms
+
+            _qbf_log(
+                f"BATCH {batch_num} start — size={len(syms)} "
+                f"syms={syms[:5]}{'...' if len(syms)>5 else ''} "
+                f"remaining_before={len(pending)}"
+            )
+
+            t0 = time.time()
+            try:
+                res = await refresher.refresh_symbols(syms, wl_id, dev_force=True)
+            except Exception as _exc:
+                _qbf_log(f"BATCH {batch_num} ERROR: {_exc}")
+                res = {
+                    "refreshed": [], "failed": syms,
+                    "skipped": [], "empty_payload_preserved": [],
+                    "empty_payload_no_prior": [],
+                }
+
+            elapsed  = round(time.time() - t0, 1)
+            n_ref    = len(res.get("refreshed", []))
+            n_fail   = len(res.get("failed",    []))
+            n_ep     = len(res.get("empty_payload_preserved", []))
+            n_eno    = len(res.get("empty_payload_no_prior",  []))
+
+            _QBF_STATE["completed"]       += res.get("refreshed", [])
+            _QBF_STATE["failed"]          += res.get("failed",    [])
+            _QBF_STATE["empty_preserved"] += res.get("empty_payload_preserved", []) + res.get("empty_payload_no_prior", [])
+            _QBF_STATE["refreshed"]        += n_ref
+            _QBF_STATE["failed_total"]     += n_fail
+            _QBF_STATE["empty_total"]      += n_ep + n_eno
+            _QBF_STATE["fmp_calls"]        += n_ref * 10
+            _QBF_STATE["batches_done"]      = batch_num
+            _QBF_STATE["last_completed_symbol"] = (res.get("refreshed") or [""])[-1] or None
+
+            done_set = (
+                set(_QBF_STATE["completed"])
+                | set(_QBF_STATE["failed"])
+                | set(_QBF_STATE["empty_preserved"])
+            )
+            pending = [[s, w] for s, w in pairs if s not in done_set]
+            _QBF_STATE["remaining"]      = len(pending)
+            _QBF_STATE["current_batch"]  = []
+            _qbf_save_progress()
+
+            _qbf_log(
+                f"BATCH {batch_num} done — "
+                f"ref={n_ref} fail={n_fail} ep={n_ep} eno={n_eno} "
+                f"elapsed={elapsed}s "
+                f"total_ref={_QBF_STATE['refreshed']} total_fail={_QBF_STATE['failed_total']} "
+                f"fmp_calls={_QBF_STATE['fmp_calls']} remaining={len(pending)}"
+            )
+            if res.get("failed"):
+                _qbf_log(f"BATCH {batch_num} failed_syms={res.get('failed')}")
+
+        _QBF_STATE["status"] = "complete"
+        _QBF_STATE["remaining"] = 0
+        _qbf_save_progress()
+        _qbf_log(
+            f"COMPLETE — total_ref={_QBF_STATE['refreshed']} "
+            f"total_fail={_QBF_STATE['failed_total']} "
+            f"fmp_calls={_QBF_STATE['fmp_calls']} batches={_QBF_STATE['batches_done']}"
+        )
+
+    except asyncio.CancelledError:
+        _QBF_STATE["status"] = "cancelled"
+        _qbf_save_progress()
+        _qbf_log("CANCELLED")
+    except Exception as _exc:
+        _QBF_STATE["status"] = "error"
+        _QBF_STATE["error"]  = str(_exc)
+        _qbf_save_progress()
+        _qbf_log(f"FATAL ERROR: {_exc}")
+
+
+@app.post("/api/admin/quality-backfill/start")
+async def admin_quality_backfill_start(
+    request:    Request,
+    api_key:    str = Header(None, alias="X-API-Key"),
+    batch_size: int = Query(25, ge=1, le=50),
+    resume:     bool = Query(True, description="Resume from prior progress file if it exists"),
+):
+    """
+    Launch one-time Quality fundamentals backfill for all FMP-eligible Watchlist symbols.
+
+    Runs FmpFundamentalsRefresher.refresh_symbols(..., dev_force=True) in sequential
+    batches of `batch_size` inside the FastAPI event loop — no detached process needed.
+    Safe to call multiple times; will refuse if already running.
+    Poll GET /api/admin/quality-backfill/status for progress.
+    """
+    global _QBF_TASK
+
+    if _QBF_STATE["status"] == "running" and _QBF_TASK and not _QBF_TASK.done():
+        return {
+            "status":    "already_running",
+            "refreshed": _QBF_STATE["refreshed"],
+            "remaining": _QBF_STATE["remaining"],
+            "poll":      "GET /api/admin/quality-backfill/status",
+        }
+
+    fmp_key = os.getenv("FMP_API_KEY", "")
+    if not fmp_key:
+        raise HTTPException(status_code=500, detail="FMP_API_KEY not configured")
+
+    # Build or reload symbol universe
+    pairs: list[list[str]] = []
+    if resume and _QBF_PAIRS_PATH.exists():
+        try:
+            pairs = _json.loads(_QBF_PAIRS_PATH.read_text())
+        except Exception:
+            pairs = []
+
+    if not pairs:
+        from data.pg_storage import watchlist_list
+        from services.watchlist_service import load_watchlist
+        from services.watchlist_quote_cache import is_fmp_symbol_eligible
+        seen: set[str] = set()
+        for _wl in (watchlist_list() or []):
+            _wl_id = _wl.get("id", "")
+            for _t in (load_watchlist(_wl_id) or {}).get("tickers", []):
+                _sym = (_t if isinstance(_t, str) else (_t or {}).get("symbol", "")).upper()
+                if _sym and _sym not in seen and is_fmp_symbol_eligible(_sym):
+                    seen.add(_sym)
+                    pairs.append([_sym, _wl_id])
+        _QBF_PAIRS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _QBF_PAIRS_PATH.write_text(_json.dumps(pairs))
+
+    # Optionally seed prior progress
+    if resume and _QBF_PROGRESS_PATH.exists():
+        try:
+            _prior = _json.loads(_QBF_PROGRESS_PATH.read_text())
+            for _k in ("completed", "failed", "empty_preserved",
+                       "refreshed", "failed_total", "empty_total",
+                       "fmp_calls", "batches_done", "last_completed_symbol"):
+                if _k in _prior:
+                    _QBF_STATE[_k] = _prior[_k]
+        except Exception:
+            pass
+
+    _QBF_STATE.update({
+        "status":         "running",
+        "started_at":     _dt.now(_tz.utc).isoformat(),
+        "pid":            os.getpid(),
+        "total_eligible": len(pairs),
+        "error":          None,
+    })
+    _qbf_save_progress()
+
+    _QBF_TASK = asyncio.create_task(_qbf_run_loop(fmp_key, pairs, batch_size))
+
+    pending = len(pairs) - len(_QBF_STATE["completed"]) - len(_QBF_STATE["failed"]) - len(_QBF_STATE["empty_preserved"])
+    return {
+        "status":          "started",
+        "pid":             os.getpid(),
+        "total_eligible":  len(pairs),
+        "already_done":    _QBF_STATE["refreshed"],
+        "pending":         pending,
+        "batch_size":      batch_size,
+        "est_fmp_calls":   pending * 10,
+        "log":             str(_QBF_LOG_PATH),
+        "progress_file":   str(_QBF_PROGRESS_PATH),
+        "poll":            "GET /api/admin/quality-backfill/status",
+    }
+
+
+@app.get("/api/admin/quality-backfill/status")
+async def admin_quality_backfill_status(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """Current state of the in-process Quality backfill."""
+    done = _QBF_STATE["refreshed"] + _QBF_STATE["failed_total"] + _QBF_STATE["empty_total"]
+    total = _QBF_STATE["total_eligible"]
+    return {
+        "status":               _QBF_STATE["status"],
+        "pid":                  _QBF_STATE["pid"],
+        "started_at":           _QBF_STATE["started_at"],
+        "total_eligible":       total,
+        "completed":            _QBF_STATE["refreshed"],
+        "failed":               _QBF_STATE["failed_total"],
+        "empty_preserved":      _QBF_STATE["empty_total"],
+        "remaining":            _QBF_STATE["remaining"],
+        "fmp_calls":            _QBF_STATE["fmp_calls"],
+        "batches_done":         _QBF_STATE["batches_done"],
+        "current_batch":        _QBF_STATE["current_batch"],
+        "last_completed_symbol": _QBF_STATE["last_completed_symbol"],
+        "pct_complete":         round(done / total * 100, 1) if total else 0,
+        "error":                _QBF_STATE["error"],
+        "log":                  str(_QBF_LOG_PATH),
+        "progress_file":        str(_QBF_PROGRESS_PATH),
+    }
