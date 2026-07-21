@@ -805,9 +805,10 @@ async def lifespan(app):
                             f"remaining_after={_remaining_after} cap={_max_per_run}"
                         )
                         _res = await _refresher.refresh_symbols(_batch, _wl_id, dev_force=False)
-                        _run_refreshed += _res.get("refreshed_symbols", 0)
-                        _run_failed    += _res.get("failed_symbols", 0)
-                        _run_skipped   += _res.get("skipped_fresh_symbols", 0)
+                        # refresh_symbols() returns lists; take len() of each.
+                        _run_refreshed += len(_res.get("refreshed", []))
+                        _run_failed    += len(_res.get("failed",    []))
+                        _run_skipped   += len(_res.get("skipped",   []))
                         _budget -= len(_batch)
 
                     _cycle_finished = datetime.now(timezone.utc)

@@ -1,0 +1,378 @@
+You are working inside the CaelynAI backend Replit.
+
+The frontend Quality Screener is complete and working. Do not touch frontend files.
+
+The problem is that existing Watchlist fundamentals snapshots were largely created before the new Quality fields were added. Existing snapshots are still inside their seven-day freshness window, so the canonical refresher skips them and the new Quality columns remain blank.
+
+This task has two narrow goals:
+
+1. Run one safe, canonical, one-time Quality backfill for the current Watchlist universe.
+2. Confirm the existing weekly Fundamental scheduler continues refreshing both Fundamental and Quality fields together.
+
+Do not create a new pipeline, table, recurring scheduler, provider client or page-load request.
+
+## Existing canonical path
+
+Preserve:
+
+```text
+Current Watchlist membership
+→ FmpFundamentalsRefresher
+→ watchlist_fundamentals_cache in Neon
+→ existing Watchlist GET payload
+→ Fundamental and Quality frontend modes
+```
+
+Primary existing files:
+
+* `backend/services/watchlist_fundamentals_refresh.py`
+* `backend/data/watchlist_fundamentals_store.py`
+* `backend/main.py`
+* Existing Watchlist loader/router files only as needed for read-only validation
+
+## Part 1 — Audit current live coverage before provider calls
+
+Load the current Watchlist universe dynamically using the existing canonical Watchlist loader.
+
+Report:
+
+* Total Watchlist symbols
+* FMP-eligible symbols
+* Foreign/ineligible symbols
+* Symbols with snapshots
+* Symbols whose snapshots already contain the new Quality field set
+* Symbols with legacy-only snapshots
+* Symbols with no snapshots
+* Symbols currently due by ordinary TTL
+* Symbols not due by TTL but requiring the one-time Quality backfill
+
+Define Quality coverage using substantive new fields, not only Forward P/E or existing legacy fields.
+
+Useful representative fields:
+
+```text
+Cash
+Net Cash / Debt
+Current Ratio
+Operating Margin
+ROIC
+FCF Conversion
+Diluted Shares Growth YoY
+Revenue Acceleration
+Forward Revenue Growth
+Forward P/S
+Altman Z-Score
+Piotroski Score
+```
+
+Do not count a snapshot as Quality-complete merely because P/E, P/S, Gross Margin, FCF Margin, D/E or Net Debt/EBITDA exists.
+
+Also report exact live state for:
+
+* AAPL
+* IREN
+* SOFI
+* JPM
+* COIN
+* HOOD
+* ASTS
+* MU
+
+## Part 2 — Fix the scheduler diagnostic return-key drift
+
+Audit the current weekly loop in `backend/main.py`.
+
+The loop currently appears to read:
+
+```python
+_res.get("refreshed_symbols", 0)
+_res.get("failed_symbols", 0)
+_res.get("skipped_fresh_symbols", 0)
+```
+
+The current `refresh_symbols()` contract returns lists under:
+
+```python
+"refreshed"
+"failed"
+"skipped"
+```
+
+Patch only the scheduler’s counting logic so it uses the current contract, for example by taking the lengths of those lists.
+
+Do not change:
+
+* Sunday maintenance window
+* Existing scheduler identity
+* Current Watchlist source
+* Maximum-per-run configuration
+* FMP pacing
+* Snapshot TTL
+* Provider endpoints
+* Refresh formulas
+
+Add backwards-compatible counting only if an older runtime contract genuinely still exists.
+
+Validate that logs now accurately report:
+
+* attempted
+* refreshed
+* failed
+* skipped
+* remaining due
+
+This diagnostic fix is not permission to rewrite the scheduler.
+
+## Part 3 — Run one-time forced Quality backfill through the existing refresher
+
+Use only:
+
+```python
+FmpFundamentalsRefresher.refresh_symbols(...)
+```
+
+or the exact current canonical wrapper around it.
+
+For this one-time backfill, use:
+
+```python
+dev_force=True
+```
+
+because legacy snapshots may still be considered fresh by the normal seven-day TTL.
+
+Do not update timestamps manually to fake them as due.
+
+Do not delete snapshots.
+
+Do not call FMP directly through a temporary custom loop.
+
+Do not create a permanent public endpoint merely for this backfill.
+
+If an existing authenticated admin/maintenance invocation already exists, reuse it. Otherwise run the canonical refresher from an operator script or Replit console and remove any temporary script after completion.
+
+## Part 4 — Preserve budget and rate safety
+
+The current Quality normalizer uses 10 FMP calls per symbol.
+
+Before running, report:
+
+```text
+eligible symbols × 10 = estimated maximum provider calls
+```
+
+Process in controlled batches using the existing safe provider pacing.
+
+Use the existing `WATCHLIST_FUNDAMENTALS_MAX_PER_RUN` value unless the live code proves another canonical batch cap is authoritative.
+
+Recommended maximum batch size:
+
+```text
+25–50 symbols
+```
+
+Do not increase concurrency.
+
+Do not bypass provider spacing.
+
+Do not attempt all symbols simultaneously.
+
+After each batch, report:
+
+* Batch number
+* Symbols attempted
+* Refreshed
+* Failed
+* Empty but prior snapshot preserved
+* Empty with no prior snapshot
+* Calls used
+* Elapsed time
+* Remaining Quality-incomplete symbols
+
+A symbol with a legitimate provider-empty result should not cause the entire backfill to stop.
+
+Continue controlled batches until:
+
+* All eligible symbols have been attempted, or
+* The existing budget governor says to defer the remainder
+
+If deferred, report the exact remaining symbols and queue depth. Do not claim completion.
+
+## Part 5 — Revision-history expectations
+
+The first successful Quality refresh must persist today’s FY1 estimate observations using the existing estimate-history store.
+
+Do not fabricate historical estimates.
+
+Do not backfill fake 90-day values.
+
+For symbols without an actual observation around 90 days ago:
+
+```text
+Revenue Estimate Revision 90D → history_building
+EPS Estimate Revision 90D → history_building
+```
+
+Confirm the Watchlist payload exposes the reason fields so the frontend can show `Building History`, not `0%`.
+
+These two revision columns are not required to show a numeric value for the immediate backfill to count as successful.
+
+## Part 6 — Verify the ordinary recurring schedule
+
+After the one-time forced backfill, confirm the existing weekly loop remains the sole recurring updater.
+
+Expected recurring behavior:
+
+```text
+Sunday 02:00–05:00 America/New_York
+→ load current live Watchlist membership dynamically
+→ dedupe eligible symbols
+→ list ordinary TTL-due symbols
+→ call the same FmpFundamentalsRefresher with dev_force=False
+→ persist the complete Fundamental + Quality snapshot together
+```
+
+Do not create a separate Quality schedule.
+
+Do not schedule Quality at a different cadence.
+
+Do not cause Fundamental and Quality to refresh independently.
+
+Newly added eligible Watchlist tickers must continue entering the existing fundamentals queue through the current registration/due-selection path.
+
+## Part 7 — Read-path validation
+
+After each successful batch and again at completion, validate through the real read path:
+
+```text
+GET /api/watchlist/{current_watchlist_id}
+```
+
+Do not validate only by reading the Neon table directly.
+
+For the representative symbols, prove the existing Watchlist payload contains the new values and that the frontend does not require another API.
+
+Validate:
+
+### AAPL
+
+* Cash
+* Net Cash/Debt
+* Current Ratio
+* ROIC
+* FCF Conversion
+* Diluted Shares Growth
+* Revenue Acceleration
+* Forward Revenue Growth
+* Forward P/E
+* Forward P/S
+
+### IREN
+
+* Canonical CaelynAI Theme unchanged
+* Cash Runway meaningful when inputs exist
+* Current Ratio meaningful when available
+* Negative FY1 EPS does not generate invalid Forward P/E
+* Provider sector metadata does not replace the Theme column
+
+### SOFI and JPM
+
+* Metric-specific N/M rules remain intact
+* No stale Cash Runway or Altman value is carried incorrectly
+
+### COIN and HOOD
+
+* Not incorrectly gated solely because FMP sector is Financial Services
+
+### ASTS
+
+* Negative FCF does not create positive P/FCF
+* Missing and N/M states remain honest
+
+### MU
+
+* Non-calendar FY1 alignment remains correct
+
+## Part 8 — Coverage acceptance
+
+Return both field-level and symbol-level coverage.
+
+For each Quality category report:
+
+```text
+Financial Strength:
+eligible rows with at least one substantive new value / eligible rows
+
+Business Quality:
+eligible rows with at least one substantive new value / eligible rows
+
+Growth Quality:
+eligible rows with at least one substantive new value / eligible rows
+
+Valuation:
+eligible rows with at least one substantive new forward/new Quality value / eligible rows
+```
+
+Also report per-field populated counts for:
+
+* Cash
+* Net Cash / Debt
+* Cash Runway Status
+* Current Ratio
+* Interest Coverage
+* Altman Z-Score or explicit N/M
+* Piotroski Score
+* Operating Margin
+* ROIC
+* FCF Yield
+* FCF Conversion or explicit N/M
+* Diluted Shares Growth YoY
+* SBC / Revenue
+* Revenue Acceleration
+* Gross Margin Change YoY
+* Incremental Operating Margin
+* Forward Revenue Growth
+* Forward P/S
+* Forward EV/Sales
+* Forward EV/EBITDA
+* P/FCF or explicit N/M
+* Revenue Revision 90D numeric
+* Revenue Revision 90D history-building
+* EPS Revision 90D numeric
+* EPS Revision 90D history-building
+
+Do not promise every field for every ticker. Provider coverage and metric applicability differ.
+
+## Part 9 — Regression requirements
+
+Prove:
+
+* Existing Fundamental Screener fields remain populated
+* No formulas were changed
+* No canonical field keys were renamed
+* Technical mode was not touched
+* Theme Universe was not touched
+* Canonical ticker Theme assignments were not touched
+* Confluence scoring was not changed
+* No frontend files changed
+* No new provider calls occur on page render
+* Calls remain 10 per refreshed symbol
+* Ordinary recurring cadence remains weekly
+* Existing seven-day freshness behavior remains after the one-time forced pass
+
+## Required final report
+
+Return:
+
+1. Pre-backfill coverage
+2. Estimated provider-call requirement
+3. Exact invocation used
+4. Batch-by-batch results
+5. Post-backfill coverage
+6. Remaining provider-empty, failed or deferred symbols
+7. Representative Watchlist GET payload verification
+8. 90-day history-building counts
+9. Scheduler return-key fix
+10. Confirmation that Fundamental and Quality now share the same weekly refresh
+11. Exact files changed
+12. Confirmation that no frontend files were modified

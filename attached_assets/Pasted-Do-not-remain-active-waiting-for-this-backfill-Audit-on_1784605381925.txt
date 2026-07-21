@@ -1,0 +1,63 @@
+Do not remain active waiting for this backfill.
+
+Audit only enough to confirm the existing canonical refresher invocation, then launch the one-time Quality backfill as a detached background operator process and end the Agent session immediately.
+
+Requirements:
+
+1. Use the existing:
+   FmpFundamentalsRefresher.refresh_symbols(..., dev_force=True)
+
+2. Do not create a new fundamentals pipeline, scheduler, endpoint, table, or provider client.
+
+3. Run the current live FMP-eligible Watchlist universe in safe sequential batches of 25–50 symbols using existing pacing.
+
+4. The background process must:
+   - Continue after the Replit Agent finishes
+   - Write progress after every batch
+   - Be restart-safe and resumable
+   - Skip symbols already successfully completed by this backfill
+   - Respect existing FMP limits
+   - Never run batches concurrently
+
+5. Store operator output in a clearly named log, for example:
+   logs/quality_backfill.log
+
+6. Store resumable progress in either:
+   - A small temporary progress JSON file, or
+   - Existing Neon job/progress storage if an appropriate canonical mechanism already exists
+
+7. Include:
+   - started_at
+   - PID or job identifier
+   - total eligible
+   - completed
+   - refreshed
+   - failed
+   - empty/preserved
+   - remaining
+   - current batch
+   - last completed symbol
+
+8. Use a detached process appropriate for the current Replit runtime, such as a background process launched from the shell. Do not keep the Agent open to monitor it.
+
+9. Before exiting, verify the process is actually alive and that the first batch has started. Do not wait for the first batch to finish.
+
+10. Also make the narrow backend/main.py scheduler counter fix if still required:
+    - refresh_symbols returns lists under refreshed, failed, skipped
+    - weekly loop must count len(...) rather than reading obsolete *_symbols keys
+
+11. Do not touch frontend files.
+
+12. Do not change the normal weekly schedule. Quality already shares the Fundamental refresh pipeline.
+
+After launching, return only:
+- Command/job mechanism used
+- PID or job ID
+- Log path
+- Progress/checkpoint path
+- Number of eligible symbols
+- Estimated calls
+- Confirmation the process is alive
+- Exact command I can use later to inspect progress
+
+Then stop. Do not poll, wait, or continue consuming Agent credits.
