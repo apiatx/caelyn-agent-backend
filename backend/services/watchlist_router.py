@@ -2123,8 +2123,9 @@ async def debug_fundamentals_backfill(
     """
     DEV-ONLY: Fire-and-forget full fundamentals backfill.
 
-    Universe = all symbols already present in watchlist_fundamentals_cache (existing
-    eligible universe). Spawns as asyncio background task; returns immediately.
+    Universe = dynamic Watchlist membership (load_watchlist tickers → is_fmp_symbol_eligible),
+    matching the weekly scheduler and admin quality-backfill paths exactly.
+    Spawns as asyncio background task; returns immediately.
     Poll GET /debug/fundamentals/backfill/status for progress.
     """
     import asyncio as _aio, os as _os
@@ -2137,20 +2138,31 @@ async def debug_fundamentals_backfill(
     if not fmp_key:
         raise HTTPException(status_code=503, detail="FMP_API_KEY not configured")
 
-    # Universe = all symbols already in the fundamentals cache table.
-    # This is the canonical "current eligible universe" (Part 10).
-    from data.watchlist_fundamentals_store import get_all_cached_symbols as _get_all
-    eligible = _get_all()
+    # Canonical universe: dynamic Watchlist membership, same as weekly scheduler and
+    # quality_backfill.py / quality_backfill_chunk.py scripts.
+    # Never reads from fundamentals_cache rows — cache rows are output, not input.
+    from data.pg_storage import watchlist_list as _wl_list
+    from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_eligible
 
-    to_refresh = eligible  # dev_force=True always: overwrite all snapshots
+    _seen: set[str] = set()
+    _pairs: list[tuple[str, str]] = []  # (symbol, watchlist_id)
+    for _wl in (_wl_list() or []):
+        _wl_id = _wl.get("id") or ""
+        if not _wl_id:
+            continue
+        # If caller supplied watchlist_id, restrict to that watchlist only
+        if watchlist_id and _wl_id != watchlist_id:
+            continue
+        _wl_data = load_watchlist(_wl_id) or {}
+        for _t in (_wl_data.get("tickers") or []):
+            _sym = (_t if isinstance(_t, str) else (_t or {}).get("symbol", "")).strip().upper()
+            if not _sym or _sym in _seen or not _fmp_eligible(_sym):
+                continue
+            _seen.add(_sym)
+            _pairs.append((_sym, _wl_id))
 
-    # Optionally restrict to a named watchlist's tickers when watchlist_id is passed
-    # and that watchlist actually has a tickers list populated.
-    if watchlist_id:
-        _wl = load_watchlist(watchlist_id)
-        _wl_tickers = (_wl or {}).get("tickers") or []
-        if _wl_tickers:
-            to_refresh = [s for s in eligible if s in set(_wl_tickers)]
+    to_refresh = [s for s, _ in _pairs]
+    wl_id = _pairs[0][1] if _pairs else (watchlist_id or "")
 
     _backfill_state.update({
         "status": "running", "refreshed": 0, "failed": 0,
@@ -2158,8 +2170,6 @@ async def debug_fundamentals_backfill(
         "started_at": __import__("datetime").datetime.utcnow().isoformat(),
         "finished_at": None,
     })
-
-    wl_id = watchlist_id or "00a0e3ea-31dc-4223-97bc-470720dd3215"
 
     async def _run():
         global _backfill_state
