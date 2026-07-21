@@ -1,0 +1,425 @@
+You are working inside the CaelynAI backend Replit.
+
+This is a targeted correction pass on the Quality fundamentals implementation that is already present.
+
+Do not roll back the new Quality work.
+
+Do not rebuild the pipeline.
+
+Do not touch frontend files.
+
+The live Replit workspace is the source of truth. The current implementation is now committed to GitHub `main`, primarily in:
+
+* `backend/services/watchlist_fundamentals_refresh.py`
+* `backend/data/watchlist_estimate_history_store.py`
+
+## Objective
+
+Fix the remaining correctness and stale-data problems in the current 10-call Quality fundamentals implementation before frontend work begins.
+
+Preserve:
+
+* Existing weekly/off-hours refresh
+* Existing 10-call pipeline
+* Existing FMP pacing and timeout
+* Existing Neon fundamentals snapshot
+* Existing Watchlist overlay
+* Existing P/E, P/S and EV/EBITDA keys
+* Existing canonical `Forward P/E` key
+* Existing CSV fallback
+* Existing empty-payload LKG protection
+* Existing Confluence behavior
+* No page-render provider calls
+* No request-time provider calls
+* No LLM calls
+
+Do not create another fundamentals service or cache.
+
+## Audit first
+
+Read the full current implementations of:
+
+* `backend/services/watchlist_fundamentals_refresh.py`
+* `backend/data/watchlist_estimate_history_store.py`
+* `backend/data/watchlist_fundamentals_store.py`
+* Watchlist fundamentals overlay
+* Existing provenance endpoint
+* Existing Confluence valuation consumer
+
+Before editing, report the exact current behavior of every issue below.
+
+Then patch the existing code in place.
+
+# Part 1 — Make TTM calculations strict
+
+The current `_ttm_sum()` can return a partial sum when fewer than four valid quarters exist.
+
+That must not be labeled TTM.
+
+Implement a strict TTM helper that:
+
+* Requires exactly four distinct valid quarterly periods
+* Requires a non-null numeric value for every required quarter
+* Returns null when four complete quarters are unavailable
+* Detects duplicate/restated period rows where practical
+* Sorts or matches using fiscal period/date rather than blindly trusting payload order
+
+If a separate partial-period helper is needed for non-TTM use, create it under a clearly different name.
+
+Validate that all of these use strict four-quarter TTM inputs:
+
+* Revenue
+* Operating Income
+* EBIT
+* Free Cash Flow
+* FCF Margin
+* Operating Margin fallback
+* FCF Conversion
+* SBC / Revenue
+* Current and prior TTM gross margin
+* Current and prior TTM incremental operating margin inputs
+
+Do not change existing values for companies with four complete valid quarters except for documented corrections.
+
+# Part 2 — Correct Business Quality formulas
+
+## FCF Conversion
+
+Canonical formula:
+
+TTM Free Cash Flow / TTM Net Income
+
+Rules:
+
+* Only calculate when TTM net income is materially positive.
+* Negative net income is `not_meaningful`.
+* Zero or immaterial net income is `not_meaningful`.
+* Do not use `abs(net_income)` as the validity gate.
+* Add a canonical missing/not-meaningful reason.
+* Ensure an old positive FCF Conversion is not carried forward when the current result becomes not meaningful.
+
+## Diluted Shares Growth YoY
+
+Current code compares one quarter with one quarter.
+
+Replace it with:
+
+* Current TTM average diluted shares across the latest four valid quarters
+* Prior TTM average diluted shares across the preceding four valid quarters
+* Growth = current TTM average / prior TTM average − 1
+
+Do not sum share counts.
+
+Require eight correctly matched quarters.
+
+Store provenance explaining that quarterly weighted-average diluted shares were averaged across each four-quarter window.
+
+## Operating Margin fallback
+
+Keep the direct FMP TTM value as first priority.
+
+When it is absent, derive:
+
+TTM operating income / TTM revenue
+
+Record direct versus derived source.
+
+# Part 3 — Correct Growth Quality formulas
+
+## Revenue Acceleration
+
+Continue using:
+
+Latest-quarter YoY revenue growth minus previous-quarter YoY revenue growth
+
+But match quarters through fiscal year/quarter/date identity.
+
+Do not assume row indexes 0, 1, 4 and 5 are automatically the corresponding periods.
+
+## Gross Margin Change YoY
+
+Continue using current TTM margin minus prior TTM margin.
+
+Require eight complete matched quarters.
+
+## Incremental Operating Margin
+
+Formula:
+
+Change in TTM operating income / change in TTM revenue
+
+Rules:
+
+* Require current TTM revenue to be greater than prior TTM revenue.
+* Negative revenue change is `not_meaningful`.
+* Zero or immaterial revenue change is `not_meaningful`.
+* Add a denominator threshold based on both an absolute floor and a reasonable percentage of prior revenue.
+* Do not calculate merely because `abs(delta_revenue)` is above $1 million.
+* Ensure a stale previous value cannot survive beside a current not-meaningful state.
+
+# Part 4 — Fix fiscal-year estimate alignment
+
+The current FY1 selection uses the nearest estimate date greater than or equal to today.
+
+That is not sufficient.
+
+Determine the latest completed actual fiscal year from existing financial-statement rows.
+
+Preferred approach without another FMP call:
+
+* Group quarterly income-statement rows by reported fiscal year and fiscal quarter.
+* Identify the latest fiscal year containing a complete Q1–Q4 set.
+* Sum those four quarters for latest actual fiscal-year revenue.
+* Select the first annual analyst-estimate fiscal period after that completed actual fiscal year.
+
+If the quarterly rows cannot reliably establish a completed fiscal year, return an explicit alignment failure rather than silently choosing an estimate based only on today’s date.
+
+Then calculate:
+
+Forward Revenue Growth =
+FY1 consensus revenue / latest completed actual fiscal-year revenue − 1
+
+Do not label FY1-versus-TTM growth as fiscal-year growth.
+
+Preserve metadata for:
+
+* Latest actual fiscal year used
+* FY1 estimate fiscal year/date
+* Alignment method
+* Alignment failure reason
+
+Test non-calendar fiscal companies including:
+
+* MU
+* IREN
+* AAPL
+* NVDA
+
+# Part 5 — Fix quarterly earnings alignment
+
+The existing logic still matches the upcoming earnings row to `past_earn[-4]`.
+
+Replace array-position matching with fiscal-period matching using available:
+
+* Fiscal year
+* Fiscal quarter
+* Period/date
+* Reported date
+* Calendar year when available
+
+For upcoming-quarter revenue and EPS growth, locate the actual result from the same fiscal quarter in the prior fiscal year.
+
+Do not calculate when a valid corresponding period cannot be proven.
+
+Regression-test:
+
+* MU
+* IREN
+* AAPL
+* SOFI
+* ASTS
+
+Report old and corrected values and the matched periods.
+
+# Part 6 — Fix 90-day estimate revision calculation
+
+Current production behavior reads the latest stored observation before today’s fresh observation is written.
+
+That makes the revision one refresh behind.
+
+Change the revision calculation so it compares:
+
+* Current value = the consensus value returned by the current FMP call
+* Prior value = the stored observation closest to current observation date minus 90 days, within the existing tolerance
+
+Preferred contract:
+
+`get_revision_90d(symbol, metric, fiscal_period, current_value, current_observed_date)`
+
+The function should not obtain the current value from the database when a fresh current value was supplied.
+
+Continue writing the current observation only after the fundamentals snapshot succeeds.
+
+Requirements:
+
+* First 90 days: `history_building`
+* Never use zero for missing history
+* Preserve exact fiscal-period identity
+* Return current value, prior value, prior observation date and actual day gap
+* Manual tests must reproduce production order:
+
+  1. Store old observation
+  2. Call revision using a fresh current value that is not yet stored
+  3. Verify revision
+  4. Persist current observation
+
+The previous test that inserted both observations before calculation is insufficient.
+
+# Part 7 — Replace blanket Quality carry-forward
+
+The current `_QUALITY_CARRY_FIELDS` loop carries any absent field forward regardless of why it is absent.
+
+That can preserve stale and contradictory values.
+
+Implement source-aware carry-forward.
+
+Carry a prior value only when:
+
+* The responsible endpoint genuinely failed, timed out, returned non-200, or returned an unusable empty payload
+* No valid current not-meaningful state was produced
+* No current value explicitly replaced it
+
+Do not carry a prior numeric value when the current calculation legitimately becomes not meaningful.
+
+Required cases:
+
+## P/FCF
+
+When current TTM FCF is zero or negative:
+
+* Remove/omit current P/FCF
+* Set not-meaningful reason
+* Do not carry the old positive P/FCF
+
+## Altman Z
+
+When the company is classified as financially inappropriate:
+
+* `Altman Z-Risk = not_meaningful`
+* Remove/omit numeric Altman Z-Score
+* Do not carry an old score
+
+## Forward valuation
+
+When current forward EPS, revenue or EBITDA is zero/negative:
+
+* Return the corresponding not-meaningful reason
+* Do not carry the old multiple
+
+When the analyst-estimates endpoint actually fails transiently:
+
+* Prior value may be carried with stale/source metadata
+
+## Revision fields
+
+* A revision value and `history_building` reason must never coexist.
+* A current revision value must clear an old missing reason.
+* A current missing reason must clear an old revision value unless the entire source endpoint failed and stale carry-forward is explicitly intended.
+
+Track per-endpoint outcomes, for example:
+
+* success_with_data
+* success_no_data
+* not_entitled
+* transient_failure
+* not_meaningful
+
+Do not infer endpoint failure merely from one missing field.
+
+# Part 8 — Correct Forward P/E provenance
+
+When FY1 consensus EPS upgrades the quarterly×4 fallback, update all Forward P/E metadata consistently.
+
+The final fields must agree:
+
+* `Forward P/E`
+* `forward_eps_estimate`
+* `forward_pe_source`
+* `forward_pe_is_approximate`
+* `forward_pe_raw_eps_estimate`
+* `forward_pe_raw_period`
+* `forward_pe_price_used`
+* warning codes
+* analyst count
+* fiscal period
+
+Do not leave `forward_pe_raw_eps_estimate` containing next-quarter EPS while `Forward P/E` uses FY1 annual EPS.
+
+Store separate analyst-count metadata where supplied:
+
+* FY1 revenue analyst count
+* FY1 EPS analyst count
+* FY1 EBITDA analyst count if available
+
+# Part 9 — Add Current Ratio fallback
+
+Keep `ratios-ttm.currentRatioTTM` as first priority.
+
+When absent and the quarterly balance sheet succeeded, derive:
+
+Current assets / current liabilities
+
+Record the source as derived from the balance sheet.
+
+Do not calculate for sectors where the metric is not meaningful.
+
+# Part 10 — Schedule estimate-history retention
+
+`prune_old_observations()` currently exists.
+
+Connect it safely to the existing weekly/off-hours fundamentals maintenance flow.
+
+Requirements:
+
+* Run once per batch or maintenance cycle, not once per symbol
+* Do not block each ticker refresh
+* Report the number of deleted rows in diagnostics
+* Preserve the 18-month retention window
+
+Do not create another scheduler.
+
+# Part 11 — Validation
+
+After patching, force-refresh and inspect actual output for:
+
+* AAPL
+* SOFI
+* ASTS
+* IREN
+* MU
+
+Also simulate:
+
+1. Balance-sheet endpoint transient failure with valid prior Cash
+2. Analyst-estimates transient failure with valid prior Forward P/S
+3. Current FCF changing from positive to negative
+4. Current forward EPS changing from positive to negative
+5. Company marked financial with a prior numeric Altman score
+6. Revision moving from `history_building` to a valid value
+7. Only three valid quarterly rows available
+8. Duplicate quarterly-period rows
+9. Negative revenue change for Incremental Operating Margin
+10. Negative net income for FCF Conversion
+
+Prove:
+
+* No stale contradictory values survive
+* No partial period is labeled TTM
+* Current FMP consensus is used in 90-day revisions
+* Non-calendar fiscal periods align correctly
+* Existing P/E, P/S and EV/EBITDA remain unchanged
+* Canonical `Forward P/E` remains the only Forward P/E field
+* Confluence output and actionability counts do not unexpectedly change
+* Watchlist GET remains backward compatible
+* Calls remain scheduled/cache-only
+* No frontend files are modified
+
+## Required final report
+
+Return:
+
+* Exact files changed
+* Root cause and fix for every numbered part
+* Old versus corrected formulas
+* Old versus corrected sample values
+* Exact period matches for MU and IREN
+* Source-aware carry-forward matrix
+* 90-day revision production-order test
+* TTM completeness tests
+* Retention-pruning result
+* Calls per symbol before and after
+* Watchlist payload samples
+* Confluence regression results
+* Remaining limitations caused by FMP entitlement
+
+Do not claim success from imports or two-symbol spot checks alone.

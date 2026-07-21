@@ -22,7 +22,7 @@ Endpoint mapping (per symbol, 10 calls)
 7  stable/earnings                        → Earn. Date, Rev/EPS estimate growth
 8  stable/balance-sheet-statement quarter → Cash, Net Cash / Debt
 9  stable/analyst-estimates  annual       → FY1 estimates → Forward P/E upgrade,
-                                             Forward Revenue Growth, Fwd P/S,
+                                             Forward Revenue Growth (FY/FY), Fwd P/S,
                                              Fwd EV/Sales, Fwd EV/EBITDA,
                                              Revenue/EPS Estimate Revision 90D
 10 stable/financial-scores               → Altman Z-Score, Piotroski Score
@@ -37,6 +37,29 @@ FMP entitlement audit (Starter plan, live-probed):
   Forward P/E priority: (1) FY1 annual consensus EPS  (2) next-quarter EPS × 4 fallback.
   Spec Priority 1 (4-quarter EPS sum) cannot be implemented on this plan.
 
+TTM strictness (Part 1):
+  All TTM aggregations require EXACTLY 4 distinct-date quarterly rows with
+  non-null values. Partial sums (< 4 quarters) are rejected and treated as
+  missing. Use _ttm_sum_strict() for all TTM computations.
+
+FY1 fiscal alignment (Part 4):
+  FY1 = first analyst-estimate date STRICTLY AFTER the last completed fiscal
+  year-end date from the income-statement rows.  Using today's date as the
+  anchor was wrong for non-calendar-year companies (e.g. IREN FY ends June 30;
+  when today is July 20 the current-FY estimate date "2026-06-30" was
+  incorrectly skipped).  _identify_completed_fiscal_year() reads fiscalYear /
+  period from IS rows to determine the anchor date.
+
+Forward Revenue Growth (Part 4):
+  Computed as FY1_consensus / completed_FY_actual_revenue − 1, NOT FY1/TTM.
+  TTM already includes completed + partial quarters so comparing to it under-
+  states growth for non-year-end-aligned stocks.
+
+Carry-forward (Part 7):
+  Source-aware: only carry when the responsible endpoint suffered a transient
+  failure.  _not_meaningful_active blocks carry of semantically-invalid cached
+  values (e.g. stale P/FCF when current FCF is negative).
+
 CSV fallback (FMP Starter cannot supply these):
   Shares Insiders  — no insider ownership endpoint available
   Revenue Growth Est. / Rev Growth This Year / Rev Growth Next Year
@@ -49,45 +72,58 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 
 log = logging.getLogger(__name__)
 
-_FMP_BASE = "https://financialmodelingprep.com/stable"
+_FMP_BASE   = "https://financialmodelingprep.com/stable"
 _CALL_DELAY = 0.45      # seconds between FMP calls ≈ 133 req/min (< 200 req/min Starter)
-_TIMEOUT = 18           # seconds per HTTP request
+_TIMEOUT    = 18        # seconds per HTTP request
 
-# ── Quality field carry-forward set ─────────────────────────────────────────
-# These fields come from the 3 new optional endpoints (calls 8-10) and from
-# derived quality computation.  When a new refresh fails to produce any of them
-# (transient error / no-data), the prior usable snapshot value is copied forward
-# so a single endpoint failure does not erase months of historical data.
-_QUALITY_CARRY_FIELDS: frozenset[str] = frozenset({
-    # Financial Strength
-    "Cash", "Net Cash / Debt", "Current Ratio", "Interest Coverage",
+# Minimum materially-positive net income for FCF Conversion to be meaningful
+_FCF_CONVERSION_NI_FLOOR = 5_000_000   # $5 M
+
+# Minimum revenue change (absolute + relative) for Incremental Operating Margin
+_INC_OP_MARGIN_MIN_DELTA_ABS = 50_000_000   # $50 M
+_INC_OP_MARGIN_MIN_DELTA_REL = 0.01         # 1% of prior-year TTM revenue
+
+# Tolerance window (days) for matching earnings prior-year quarter by report date
+_EARNINGS_PY_TOLERANCE_DAYS = 60
+
+# ── Carry-forward field groups — per source endpoint ─────────────────────────
+# Fields are ONLY carried forward when the responsible endpoint suffered a
+# transient failure (_outcome == "transient_failure").  Semantically-invalid
+# fields are additionally blocked by _not_meaningful_active (see Part 7).
+
+_BS_CARRY_FIELDS: frozenset[str] = frozenset({
+    "Cash", "Net Cash / Debt",
     "Cash Runway Months", "Cash Runway Status",
-    "Altman Z-Score", "Altman Z-Risk",
-    "_altman_z_not_meaningful_reason",
     "_cash_runway_not_meaningful_reason",
-    # Business Quality
-    "ROIC", "Operating Margin", "FCF Conversion", "FCF Yield",
-    "Diluted Shares Growth YoY", "SBC / Revenue",
-    "Piotroski Score",
-    # Growth Quality
-    "Revenue Acceleration", "Gross Margin Change YoY",
-    "Incremental Operating Margin", "Forward Revenue Growth",
+})
+
+_EST_CARRY_FIELDS: frozenset[str] = frozenset({
+    "Forward Revenue Growth",
+    "Forward P/S", "Forward EV/Sales", "Forward EV/EBITDA",
     "Revenue Estimate Revision 90D", "EPS Estimate Revision 90D",
     "_rev_revision_prior_date", "_rev_revision_reason",
     "_eps_revision_prior_date", "_eps_revision_reason",
-    # Valuation (new)
-    "Forward P/S", "Forward EV/Sales", "Forward EV/EBITDA", "P/FCF",
-    "_p_fcf_not_meaningful_reason",
-    # Estimate provenance
     "_forward_estimate_fy1_date", "_forward_estimate_fy1_n_analysts",
+    "_forward_fy1_years_ahead", "_forward_fy1_actual_fy_date",
 })
+
+_SCORES_CARRY_FIELDS: frozenset[str] = frozenset({
+    "Altman Z-Score", "Altman Z-Risk", "_altman_z_not_meaningful_reason",
+    "Piotroski Score",
+})
+
+# Combined (documentation / backward compat reference)
+_QUALITY_CARRY_FIELDS: frozenset[str] = (
+    _BS_CARRY_FIELDS | _EST_CARRY_FIELDS | _SCORES_CARRY_FIELDS
+)
 
 # Financial sectors/industry keywords where Altman Z and Cash Runway
 # are economically meaningless (deposit-funded; current-ratio irrelevant).
@@ -95,7 +131,7 @@ _FIN_SECTOR_NAMES = frozenset({
     "Financial Services", "Finance", "Banking", "Insurance",
     "Real Estate", "Banks",
 })
-_FIN_SECTOR_KEYWORDS = ("bank", "financ", "insur", "reit", "thrift", "mortgage")
+_FIN_SECTOR_KEYWORDS  = ("bank", "financ", "insur", "reit", "thrift", "mortgage")
 _FIN_INDUSTRY_KEYWORDS = (
     "bank", "insurance", "reit", "real estate investment trust",
     "thrift", "mortgage", "savings",
@@ -104,12 +140,12 @@ _FIN_INDUSTRY_KEYWORDS = (
 
 def _is_financial_company(sector: str, industry: str) -> bool:
     """True when Altman Z-Score and Cash Runway are not economically meaningful."""
-    s = str(sector or "").strip()
+    s = str(sector  or "").strip()
     i = str(industry or "").lower()
     return (
         s in _FIN_SECTOR_NAMES
         or any(kw in s.lower() for kw in _FIN_SECTOR_KEYWORDS)
-        or any(kw in i for kw in _FIN_INDUSTRY_KEYWORDS)
+        or any(kw in i         for kw in _FIN_INDUSTRY_KEYWORDS)
     )
 
 
@@ -158,13 +194,179 @@ class FmpFundamentalsRefresher:
 
     @staticmethod
     def _ttm_sum(rows: list[dict], field: str, n: int = 4) -> float | None:
-        """Sum `field` across the n most recent rows (TTM = 4 quarters)."""
+        """
+        Non-strict sum of `field` across up to n rows (kept for legacy use).
+        Prefer _ttm_sum_strict for all primary TTM field computations.
+        """
         vals = []
         for r in rows[:n]:
             v = r.get(field)
             if v is not None:
                 vals.append(float(v))
         return sum(vals) if len(vals) == n else (sum(vals) if vals else None)
+
+    @staticmethod
+    def _ttm_sum_strict(rows: list[dict], field: str) -> float | None:
+        """
+        Part 1 — strict TTM sum.
+        Requires EXACTLY 4 distinct-date quarterly rows each with a non-null
+        numeric value for ``field``.  Returns None when:
+          • fewer than 4 distinct dates are present
+          • any of the 4 most-recent distinct rows has a null value
+          • any value cannot be converted to float
+        Duplicate/restated rows sharing the same date are deduplicated
+        (first occurrence kept, matching FMP's descending sort order).
+        """
+        seen_dates: set[str] = set()
+        unique_rows: list[dict] = []
+        for r in rows:
+            d = str(r.get("date", "") or "")
+            if d and d not in seen_dates:
+                seen_dates.add(d)
+                unique_rows.append(r)
+            if len(unique_rows) == 4:
+                break
+        if len(unique_rows) < 4:
+            return None
+        vals: list[float] = []
+        for r in unique_rows:
+            v = r.get(field)
+            if v is None:
+                return None
+            try:
+                vals.append(float(v))
+            except (ValueError, TypeError):
+                return None
+        return sum(vals)
+
+    @staticmethod
+    def _ttm_avg_strict(rows: list[dict], field: str) -> float | None:
+        """
+        Part 2 — strict TTM arithmetic mean (used for share-count averaging).
+        Same dedup / completeness rules as _ttm_sum_strict; returns mean of 4.
+        """
+        seen_dates: set[str] = set()
+        unique_rows: list[dict] = []
+        for r in rows:
+            d = str(r.get("date", "") or "")
+            if d and d not in seen_dates:
+                seen_dates.add(d)
+                unique_rows.append(r)
+            if len(unique_rows) == 4:
+                break
+        if len(unique_rows) < 4:
+            return None
+        vals: list[float] = []
+        for r in unique_rows:
+            v = r.get(field)
+            if v is None:
+                return None
+            try:
+                vals.append(float(v))
+            except (ValueError, TypeError):
+                return None
+        return sum(vals) / 4.0
+
+    # ── Fiscal-period helpers ────────────────────────────────────────────────
+
+    @staticmethod
+    def _get_fiscal_period_row(
+        rows: list[dict],
+        fiscal_year: str,
+        period: str,
+    ) -> dict | None:
+        """
+        Return the first IS row whose ``fiscalYear`` and ``period`` match.
+        Used for Revenue Acceleration quarter-to-same-quarter-prior-year matching.
+        """
+        for r in rows:
+            if (str(r.get("fiscalYear", "") or "") == fiscal_year
+                    and str(r.get("period", "") or "") == period):
+                return r
+        return None
+
+    @staticmethod
+    def _match_prior_year_earnings(
+        nxt_row: dict,
+        past_earn: list[dict],
+    ) -> dict | None:
+        """
+        Part 5 — fiscal-period match for earnings comparison.
+        Finds the past earnings row whose report date falls within
+        ±_EARNINGS_PY_TOLERANCE_DAYS of (nxt_row['date'] − 365 days).
+        FMP earnings rows have period=None / fiscalDateEnding=None, so
+        positional matching (past_earn[-4]) is replaced by date proximity.
+        Returns None when no match is found within tolerance.
+        """
+        nxt_date_str = nxt_row.get("date", "")
+        if not nxt_date_str:
+            return None
+        try:
+            nxt_date = date.fromisoformat(nxt_date_str)
+        except ValueError:
+            return None
+
+        target = date(nxt_date.year - 1, nxt_date.month, nxt_date.day)
+
+        best_row: dict | None = None
+        best_delta = _EARNINGS_PY_TOLERANCE_DAYS + 1
+        for r in past_earn:
+            r_date_str = r.get("date", "")
+            if not r_date_str:
+                continue
+            try:
+                r_date = date.fromisoformat(r_date_str)
+            except ValueError:
+                continue
+            delta = abs((r_date - target).days)
+            if delta <= _EARNINGS_PY_TOLERANCE_DAYS and delta < best_delta:
+                best_delta = delta
+                best_row   = r
+        return best_row
+
+    @staticmethod
+    def _identify_completed_fiscal_year(
+        is_rows: list[dict],
+    ) -> tuple[str | None, str | None, float | None]:
+        """
+        Part 4 — identify the latest completed fiscal year from IS rows.
+        A fiscal year is "complete" when Q1+Q2+Q3+Q4 are all present in the
+        dataset (matching by the ``fiscalYear`` and ``period`` FMP fields).
+        Returns (fy_label, fy_end_date_str, fy_actual_revenue).
+        All three are None when no complete fiscal year can be determined.
+        fy_end_date_str is the date field of the Q4 row (the fiscal year-end).
+        """
+        by_fy: dict[str, list[dict]] = defaultdict(list)
+        for r in is_rows:
+            fy     = r.get("fiscalYear")
+            period = r.get("period")
+            if fy is not None and period:
+                by_fy[str(fy)].append(r)
+
+        complete: list[tuple[str, str, float]] = []
+        for fy_label, fy_rows in by_fy.items():
+            periods = {str(r.get("period", "")) for r in fy_rows}
+            if not {"Q1", "Q2", "Q3", "Q4"} <= periods:
+                continue
+            q4_rows = [r for r in fy_rows if str(r.get("period", "")) == "Q4"]
+            if not q4_rows:
+                continue
+            fy_end_date = str(q4_rows[0].get("date", "") or "")
+            if not fy_end_date:
+                continue
+            fy_rev = sum(
+                float(r.get("revenue", 0) or 0)
+                for r in fy_rows
+                if r.get("revenue") is not None
+            )
+            complete.append((fy_label, fy_end_date, fy_rev))
+
+        if not complete:
+            return None, None, None
+
+        # Latest complete FY = highest Q4 date
+        complete.sort(key=lambda x: x[1], reverse=True)
+        return complete[0]
 
     # ── Quality helpers (zero additional FMP calls) ──────────────────────────
 
@@ -174,14 +376,21 @@ class FmpFundamentalsRefresher:
         cf_rows: list[dict],
         rtm: dict,
         kmtm: dict,
-    ) -> dict:
+    ) -> tuple[dict, set[str]]:
         """
         Derive Quality fields from already-fetched FMP data. Zero additional calls.
-        Returns only fields that have non-None values.
-        """
-        q: dict[str, Any] = {}
+        Returns (fields_dict, not_meaningful_active_set).
 
-        # ── Operating Margin (direct from ratios-ttm) ─────────────────────
+        not_meaningful_active contains the names of fields that were explicitly
+        determined to be "not meaningful" in this refresh cycle.  Carry-forward
+        of old cached values for these fields must be suppressed.
+        """
+        q: dict[str, Any]  = {}
+        nm: set[str]       = set()   # not_meaningful_active
+
+        # ── Operating Margin ─────────────────────────────────────────────
+        # Priority 1: direct from ratios-ttm.
+        # Priority 2 (Part 2): derive from TTM IS rows when rtm is absent.
         op_m = rtm.get("operatingProfitMarginTTM")
         if op_m is not None:
             try:
@@ -189,7 +398,9 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError):
                 pass
 
-        # ── Current Ratio (direct from ratios-ttm) ────────────────────────
+        # ── Current Ratio ─────────────────────────────────────────────────
+        # Direct from ratios-ttm. Balance-sheet fallback applied in
+        # normalize_symbol() after _fetch_bs_quality() runs (Part 9).
         cur = rtm.get("currentRatioTTM")
         if cur is not None:
             try:
@@ -201,7 +412,7 @@ class FmpFundamentalsRefresher:
         # FMP reports 0 as a sentinel when it cannot compute (e.g. AAPL which
         # nets interest income against expense).  Fall back to EBIT / |IE| from
         # income statement; skip entirely if denominator is zero.
-        ic_raw = rtm.get("interestCoverageRatioTTM")
+        ic_raw    = rtm.get("interestCoverageRatioTTM")
         ic_stored = False
         if ic_raw is not None:
             try:
@@ -212,15 +423,15 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError):
                 pass
         if not ic_stored and is_rows:
-            ttm_ebit = (
-                self._ttm_sum(is_rows, "ebit", 4)
-                or self._ttm_sum(is_rows, "operatingIncome", 4)
+            ttm_ebit_ic = (
+                self._ttm_sum_strict(is_rows, "ebit")
+                or self._ttm_sum_strict(is_rows, "operatingIncome")
             )
-            ttm_ie = self._ttm_sum(is_rows, "interestExpense", 4)
-            if ttm_ebit is not None and ttm_ie and abs(float(ttm_ie)) > 0:
+            ttm_ie = self._ttm_sum_strict(is_rows, "interestExpense")
+            if ttm_ebit_ic is not None and ttm_ie is not None and abs(float(ttm_ie)) > 0:
                 try:
                     q["Interest Coverage"] = round(
-                        float(ttm_ebit) / abs(float(ttm_ie)), 4
+                        float(ttm_ebit_ic) / abs(float(ttm_ie)), 4
                     )
                 except (ValueError, TypeError, ZeroDivisionError):
                     pass
@@ -250,39 +461,69 @@ class FmpFundamentalsRefresher:
                     q["P/FCF"] = round(p_fcf_f, 4)
                 else:
                     q["_p_fcf_not_meaningful_reason"] = "negative_or_zero_fcf"
+                    nm.add("P/FCF")
             except (ValueError, TypeError):
                 pass
 
         if not is_rows:
-            return q
+            return q, nm
 
-        ttm_rev = self._ttm_sum(is_rows, "revenue", 4)
-        ttm_op  = self._ttm_sum(is_rows, "operatingIncome", 4)
-        ttm_gp  = self._ttm_sum(is_rows, "grossProfit", 4)
-        ttm_ni  = self._ttm_sum(is_rows, "netIncome", 4)
+        # Strict TTM aggregates used throughout the derived computations
+        ttm_rev = self._ttm_sum_strict(is_rows, "revenue")
+        ttm_op  = self._ttm_sum_strict(is_rows, "operatingIncome")
+        ttm_gp  = self._ttm_sum_strict(is_rows, "grossProfit")
+        ttm_ni  = self._ttm_sum_strict(is_rows, "netIncome")
+
+        # ── Operating Margin fallback (Part 2) ────────────────────────────
+        # Derive from TTM IS data when ratios-ttm did not supply it.
+        if "Operating Margin" not in q and ttm_op is not None and ttm_rev and float(ttm_rev) != 0:
+            try:
+                q["Operating Margin"] = self._fmt_pct(
+                    round(float(ttm_op) / float(ttm_rev) * 100, 4)
+                )
+                q["_op_margin_source"] = "derived_from_is"
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass
 
         # ── FCF Conversion (TTM FCF / TTM Net Income) ─────────────────────
-        # Not meaningful when net income is zero, negative, or immaterial.
+        # Part 2: gate requires NI > _FCF_CONVERSION_NI_FLOOR (materially
+        # positive), NOT abs(NI).  Negative NI → not_meaningful.
         if cf_rows and ttm_ni is not None:
-            ttm_fcf = self._ttm_sum(cf_rows, "freeCashFlow", 4)
-            if ttm_fcf is not None and abs(float(ttm_ni)) > 1_000_000:
-                try:
-                    q["FCF Conversion"] = round(float(ttm_fcf) / float(ttm_ni), 4)
-                except (ValueError, TypeError, ZeroDivisionError):
-                    pass
+            ttm_fcf_conv = self._ttm_sum_strict(cf_rows, "freeCashFlow")
+            try:
+                ni_f = float(ttm_ni)
+            except (ValueError, TypeError):
+                ni_f = None
+            if ni_f is not None and ni_f > _FCF_CONVERSION_NI_FLOOR:
+                if ttm_fcf_conv is not None:
+                    try:
+                        q["FCF Conversion"] = round(
+                            float(ttm_fcf_conv) / ni_f, 4
+                        )
+                    except (ValueError, TypeError, ZeroDivisionError):
+                        pass
+            elif ni_f is not None:
+                reason = (
+                    "negative_net_income"  if ni_f < 0 else
+                    "immaterial_net_income"
+                )
+                q["_fcf_conversion_not_meaningful_reason"] = reason
+                nm.add("FCF Conversion")
 
         # ── Diluted Shares Growth YoY ─────────────────────────────────────
-        if len(is_rows) >= 5:
-            sh_now = is_rows[0].get("weightedAverageShsOutDil")
-            sh_py  = is_rows[4].get("weightedAverageShsOutDil")
-            shr_g  = self._pct(sh_now, sh_py)
+        # Part 2: compare TTM-average shares (not single quarters) to avoid
+        # point-in-time noise from buyback timing.
+        # Requires 8 IS rows (4 current + 4 prior).
+        if len(is_rows) >= 8:
+            curr_avg = self._ttm_avg_strict(is_rows[:4], "weightedAverageShsOutDil")
+            prior_avg = self._ttm_avg_strict(is_rows[4:8], "weightedAverageShsOutDil")
+            shr_g = self._pct(curr_avg, prior_avg)
             if shr_g is not None:
                 q["Diluted Shares Growth YoY"] = self._fmt_pct(shr_g)
 
         # ── SBC / Revenue ─────────────────────────────────────────────────
-        # Do not assume missing SBC equals zero.
         if cf_rows and ttm_rev and float(ttm_rev) > 0:
-            ttm_sbc = self._ttm_sum(cf_rows, "stockBasedCompensation", 4)
+            ttm_sbc = self._ttm_sum_strict(cf_rows, "stockBasedCompensation")
             if ttm_sbc is not None:
                 try:
                     q["SBC / Revenue"] = self._fmt_pct(
@@ -292,18 +533,53 @@ class FmpFundamentalsRefresher:
                     pass
 
         # ── Revenue Acceleration ──────────────────────────────────────────
-        # Latest-Q YoY growth minus previous-Q YoY growth.
-        # Requires 6Q (4 recent + 4 prior = positions 0,1,4,5).
-        if len(is_rows) >= 6:
-            g0 = self._pct(is_rows[0].get("revenue"), is_rows[4].get("revenue"))
-            g1 = self._pct(is_rows[1].get("revenue"), is_rows[5].get("revenue"))
-            if g0 is not None and g1 is not None:
-                q["Revenue Acceleration"] = round(g0 - g1, 4)
+        # Part 3: latest-Q YoY growth minus previous-Q YoY growth.
+        # Use fiscalYear+period matching so non-calendar companies compare
+        # the correct fiscal quarters.  Positional fallback (rows[4]/[5])
+        # is used only when period metadata is unavailable.
+        if len(is_rows) >= 2:
+            q0 = is_rows[0]
+            q1 = is_rows[1]
+
+            q0_fy  = str(q0.get("fiscalYear", "") or "")
+            q0_per = str(q0.get("period", "") or "")
+            q1_fy  = str(q1.get("fiscalYear", "") or "")
+            q1_per = str(q1.get("period", "") or "")
+
+            py_q0: dict | None = None
+            py_q1: dict | None = None
+
+            if q0_fy and q0_per:
+                try:
+                    py_q0 = self._get_fiscal_period_row(
+                        is_rows, str(int(q0_fy) - 1), q0_per
+                    )
+                except (ValueError, TypeError):
+                    pass
+            if py_q0 is None and len(is_rows) >= 5:
+                py_q0 = is_rows[4]  # positional fallback
+
+            if q1_fy and q1_per:
+                try:
+                    py_q1 = self._get_fiscal_period_row(
+                        is_rows, str(int(q1_fy) - 1), q1_per
+                    )
+                except (ValueError, TypeError):
+                    pass
+            if py_q1 is None and len(is_rows) >= 6:
+                py_q1 = is_rows[5]  # positional fallback
+
+            if py_q0 is not None and py_q1 is not None:
+                g0 = self._pct(q0.get("revenue"), py_q0.get("revenue"))
+                g1 = self._pct(q1.get("revenue"), py_q1.get("revenue"))
+                if g0 is not None and g1 is not None:
+                    q["Revenue Acceleration"] = round(g0 - g1, 4)
 
         # ── Gross Margin Change YoY (percentage points) ───────────────────
+        # Requires complete strict TTM for both current and prior periods.
         if len(is_rows) >= 8:
-            py_gp  = self._ttm_sum(is_rows[4:], "grossProfit", 4)
-            py_rev = self._ttm_sum(is_rows[4:], "revenue", 4)
+            py_gp  = self._ttm_sum_strict(is_rows[4:], "grossProfit")
+            py_rev = self._ttm_sum_strict(is_rows[4:], "revenue")
             if (ttm_gp and ttm_rev and py_gp and py_rev
                     and float(ttm_rev) != 0 and float(py_rev) != 0):
                 try:
@@ -314,32 +590,54 @@ class FmpFundamentalsRefresher:
                     pass
 
         # ── Incremental Operating Margin ──────────────────────────────────
-        # Not meaningful when revenue change is zero or immaterial.
+        # Part 3: not meaningful when revenue change is zero, negative, or
+        # immaterial.  Requires d_rev > 0 AND exceeds both absolute and
+        # relative materiality thresholds.
         if len(is_rows) >= 8:
-            py_op  = self._ttm_sum(is_rows[4:], "operatingIncome", 4)
-            py_rev = self._ttm_sum(is_rows[4:], "revenue", 4)
+            py_op  = self._ttm_sum_strict(is_rows[4:], "operatingIncome")
+            py_rev_iom = self._ttm_sum_strict(is_rows[4:], "revenue")
             if (ttm_op is not None and ttm_rev is not None
-                    and py_op is not None and py_rev is not None):
+                    and py_op is not None and py_rev_iom is not None):
                 try:
-                    d_oi  = float(ttm_op)  - float(py_op)
-                    d_rev = float(ttm_rev) - float(py_rev)
-                    if abs(d_rev) > 1_000_000:
-                        q["Incremental Operating Margin"] = round(d_oi / d_rev * 100, 4)
+                    d_oi  = float(ttm_op)     - float(py_op)
+                    d_rev = float(ttm_rev)    - float(py_rev_iom)
+                    min_delta = max(
+                        _INC_OP_MARGIN_MIN_DELTA_ABS,
+                        _INC_OP_MARGIN_MIN_DELTA_REL * abs(float(py_rev_iom)),
+                    )
+                    if d_rev > min_delta:
+                        q["Incremental Operating Margin"] = round(
+                            d_oi / d_rev * 100, 4
+                        )
+                    else:
+                        reason = (
+                            "negative_revenue_change" if d_rev <= 0 else
+                            "immaterial_revenue_change"
+                        )
+                        q["_incr_op_margin_not_meaningful_reason"] = reason
+                        nm.add("Incremental Operating Margin")
                 except (ValueError, TypeError, ZeroDivisionError):
                     pass
 
-        return q
+        return q, nm
 
-    async def _fetch_bs_quality(self, sym: str) -> tuple[dict, dict]:
+    async def _fetch_bs_quality(
+        self, sym: str
+    ) -> tuple[dict, dict, str]:
         """
         Call 8: quarterly balance sheet.
-        Returns (quality_fields, raw_bs_row).
+        Returns (quality_fields, raw_bs_row, outcome).
+        outcome: 'success_with_data' | 'transient_failure'
         """
         raw = await self._get(
-            "balance-sheet-statement", {"symbol": sym, "period": "quarter", "limit": 2}
+            "balance-sheet-statement",
+            {"symbol": sym, "period": "quarter", "limit": 2},
         )
         bs: dict = (raw[0] if isinstance(raw, list) and raw else {})
         q: dict[str, Any] = {}
+
+        if not bs:
+            return q, bs, "transient_failure"
 
         # Cash = cashAndShortTermInvestments preferred; fall back to cash + stinv sum.
         cash_st = bs.get("cashAndShortTermInvestments")
@@ -354,16 +652,15 @@ class FmpFundamentalsRefresher:
                 pass
         elif cash_eq is not None:
             try:
-                cash_val = int(float(cash_eq) + (float(st_inv) if st_inv is not None else 0.0))
+                cash_val = int(
+                    float(cash_eq) + (float(st_inv) if st_inv is not None else 0.0)
+                )
             except (ValueError, TypeError):
                 pass
         if cash_val is not None:
             q["Cash"] = cash_val
 
         # Net Cash / Debt = cashAndShortTermInvestments − totalDebt
-        # (positive = net cash; negative = net debt)
-        # Note: FMP's native `netDebt` uses cash-only (not cashAndShortTermInvestments)
-        # as the cash component, producing a different number; do NOT use it here.
         total_debt = bs.get("totalDebt")
         if cash_val is not None and total_debt is not None:
             try:
@@ -371,43 +668,63 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError):
                 pass
 
-        return q, bs
+        return q, bs, "success_with_data"
 
     async def _fetch_analyst_estimates_quality(
         self,
         sym: str,
         mkt_cap: int | None,
         ev: float | None,
-        ttm_rev: float | None,
-    ) -> tuple[dict, dict | None]:
+        completed_fy_date: str | None,
+        completed_fy_revenue: float | None,
+    ) -> tuple[dict, dict | None, str]:
         """
         Call 9: annual analyst estimates.
-        Identifies FY1 = nearest future fiscal-year-end date.
-        Returns (quality_fields, fy1_row_or_None).
+
+        Part 4 — FY1 selection anchor:
+          FY1 = first estimate with date STRICTLY AFTER completed_fy_date,
+          NOT after today.  This correctly handles non-calendar companies
+          (e.g. IREN FY ends June 30; on July 20 the estimate date
+          "2026-06-30" <= completed_fy_date "2025-06-30" is False, so it is
+          correctly selected as FY1, rather than incorrectly skipped because
+          it is before today).
+
+        Part 4 — Forward Revenue Growth:
+          FY1_consensus / completed_FY_actual_revenue − 1  (not FY1/TTM).
+
+        Part 6 — Revision 90D:
+          Fresh FY1 estimate passed as current_value to get_revision_90d()
+          so the revision does not lag by one refresh cycle.
+
+        Returns (quality_fields, fy1_row_or_None, outcome).
+        outcome: 'success_with_data' | 'success_no_data' | 'transient_failure'
         """
         raw = await self._get(
-            "analyst-estimates", {"symbol": sym, "period": "annual", "limit": 6}
+            "analyst-estimates",
+            {"symbol": sym, "period": "annual", "limit": 6},
         )
         rows: list[dict] = raw if isinstance(raw, list) else []
         q: dict[str, Any] = {}
-        if not rows:
-            return q, None
 
-        # Sort ascending by FMP date to find the nearest future fiscal year.
+        if not rows:
+            return q, None, "transient_failure"
+
+        # Sort ascending by FMP date
         try:
             rows_sorted = sorted(rows, key=lambda r: r.get("date", ""))
         except Exception:
             rows_sorted = rows
 
-        today_str = date.today().isoformat()
+        # Part 4: anchor on completed FY end date, not today
+        anchor = completed_fy_date or ""
         fy1: dict | None = None
         for r in rows_sorted:
-            if r.get("date", "") >= today_str:
+            if r.get("date", "") > anchor:
                 fy1 = r
                 break
 
         if fy1 is None:
-            return q, None
+            return q, None, "success_no_data"
 
         fy1_date   = fy1.get("date", "")
         fy1_rev    = fy1.get("revenueAvg")
@@ -424,9 +741,24 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError):
                 pass
 
-        # Forward Revenue Growth = FY1 consensus revenue / TTM revenue − 1
-        if fy1_rev and ttm_rev and float(ttm_rev) > 0:
-            fwd_rev_g = self._pct(float(fy1_rev), float(ttm_rev))
+        # How many fiscal years ahead is FY1 relative to completed FY?
+        if anchor and fy1_date and len(anchor) >= 4 and len(fy1_date) >= 4:
+            try:
+                years_ahead = int(fy1_date[:4]) - int(anchor[:4])
+                if years_ahead >= 0:
+                    q["_forward_fy1_years_ahead"] = years_ahead
+            except (ValueError, TypeError):
+                pass
+
+        # Store completed FY date for frontend context
+        if anchor:
+            q["_forward_fy1_actual_fy_date"] = anchor
+
+        # Part 4: Forward Revenue Growth = FY1 / completed_FY_actual − 1
+        if (fy1_rev is not None
+                and completed_fy_revenue is not None
+                and float(completed_fy_revenue) > 0):
+            fwd_rev_g = self._pct(float(fy1_rev), float(completed_fy_revenue))
             if fwd_rev_g is not None:
                 q["Forward Revenue Growth"] = self._fmt_pct(fwd_rev_g)
 
@@ -444,24 +776,29 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
 
-        # Forward EV/EBITDA = enterprise value / FY1 EBITDA (only if positive)
+        # Forward EV/EBITDA = enterprise value / FY1 EBITDA (positive only)
         if ev and fy1_ebitda and float(fy1_ebitda) > 0:
             try:
                 q["Forward EV/EBITDA"] = round(float(ev) / float(fy1_ebitda), 4)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
 
-        # ── Estimate revision 90D ─────────────────────────────────────────
-        # Read BEFORE persisting today's observation (history write happens
-        # in refresh_symbols after successful upsert_snapshot).
+        # ── Estimate revision 90D (Part 6) ────────────────────────────────
+        # Pass fresh current_value so revision does not lag by one cycle.
         try:
             from data.watchlist_estimate_history_store import get_revision_90d as _rev90d
             _loop = asyncio.get_event_loop()
+            _today = date.today()
 
             # Revenue revision
             if fy1_rev is not None:
+                _fy1_rev_f = float(fy1_rev)
                 rev_90d = await _loop.run_in_executor(
-                    None, _rev90d, sym.upper(), "revenue_annual", fy1_date
+                    None,
+                    lambda: _rev90d(
+                        sym.upper(), "revenue_annual", fy1_date,
+                        _fy1_rev_f, _today,
+                    ),
                 )
                 rp = rev_90d.get("revision_pct")
                 if rp is not None:
@@ -475,8 +812,13 @@ class FmpFundamentalsRefresher:
 
             # EPS revision
             if fy1_eps is not None:
+                _fy1_eps_f = float(fy1_eps)
                 eps_90d = await _loop.run_in_executor(
-                    None, _rev90d, sym.upper(), "eps_annual", fy1_date
+                    None,
+                    lambda: _rev90d(
+                        sym.upper(), "eps_annual", fy1_date,
+                        _fy1_eps_f, _today,
+                    ),
                 )
                 ep = eps_90d.get("revision_pct")
                 if ep is not None:
@@ -490,17 +832,18 @@ class FmpFundamentalsRefresher:
         except Exception as _rev_err:
             log.debug("[FMP_FUND] revision_90d error for %s: %s", sym, _rev_err)
 
-        return q, fy1
+        return q, fy1, "success_with_data"
 
     async def _fetch_scores_quality(
         self,
         sym: str,
         sector: str,
         industry: str,
-    ) -> dict:
+    ) -> tuple[dict, str]:
         """
         Call 10: FMP financial scores.
-        Returns quality_fields dict.
+        Returns (quality_fields, outcome).
+        outcome: 'success_with_data' | 'transient_failure'
         """
         raw = await self._get("financial-scores", {"symbol": sym})
         fs: dict = (
@@ -508,12 +851,13 @@ class FmpFundamentalsRefresher:
             (raw if isinstance(raw, dict) else {})
         )
         q: dict[str, Any] = {}
+
         if not fs:
-            return q
+            return q, "transient_failure"
 
-        is_fin = _is_financial_company(sector, industry)
-
+        is_fin   = _is_financial_company(sector, industry)
         altman_z = fs.get("altmanZScore")
+
         if is_fin:
             q["Altman Z-Risk"] = "not_meaningful"
             q["_altman_z_not_meaningful_reason"] = "financial_sector"
@@ -521,7 +865,7 @@ class FmpFundamentalsRefresher:
             try:
                 z = float(altman_z)
                 q["Altman Z-Score"] = round(z, 4)
-                q["Altman Z-Risk"] = (
+                q["Altman Z-Risk"]  = (
                     "safe"     if z >= 2.99 else
                     "grey"     if z >= 1.81 else
                     "distress"
@@ -536,7 +880,7 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError):
                 pass
 
-        return q
+        return q, "success_with_data"
 
     @staticmethod
     def _compute_cash_runway(
@@ -562,7 +906,7 @@ class FmpFundamentalsRefresher:
             return {}
 
         try:
-            fcf_f = float(ttm_fcf)
+            fcf_f  = float(ttm_fcf)
             cash_f = float(cash)
         except (ValueError, TypeError):
             return {}
@@ -586,25 +930,37 @@ class FmpFundamentalsRefresher:
     async def normalize_symbol(self, symbol: str) -> dict:
         """
         Fetch 10 FMP endpoints and return a dict of normalized fields.
-        Returns {"fields": {...}, "missing_fields": [...], "fmp_call_count": N,
-                 "_fy1_data": {...}|None}.
+        Returns {
+          "fields":               {...},
+          "missing_fields":       [...],
+          "fmp_call_count":       N,
+          "_fy1_data":            {...}|None,
+          "_not_meaningful_active": set[str],
+          "_bs_outcome":          str,
+          "_est_outcome":         str,
+          "_scores_outcome":      str,
+        }.
         Never raises — errors produce missing fields with CSV fallback.
         """
-        sym = symbol.upper()
+        sym    = symbol.upper()
         fields: dict[str, Any] = {}
-        missing: list[str] = []
-        calls = 0
+        missing: list[str]     = []
+        calls  = 0
 
         # ── 1. Profile ───────────────────────────────────────────────────────
         raw = await self._get("profile", {"symbol": sym})
         calls += 1
-        profile = (raw[0] if isinstance(raw, list) and raw else (raw if isinstance(raw, dict) else {}))
+        profile = (
+            raw[0] if isinstance(raw, list) and raw
+            else (raw if isinstance(raw, dict) else {})
+        )
         mkt_cap = profile.get("marketCap")
         if mkt_cap is not None:
             fields["Market Cap"] = int(mkt_cap)
         else:
             missing.append("Market Cap")
-        # Store current price for Forward P/E derivation
+
+        # Current price for Forward P/E derivation
         _current_price: float | None = None
         try:
             _p = profile.get("price")
@@ -613,7 +969,7 @@ class FmpFundamentalsRefresher:
         except (ValueError, TypeError):
             pass
 
-        # Store share basis for live market cap resolution
+        # Share basis for live market-cap resolution
         if mkt_cap is not None and mkt_cap > 0 and _current_price is not None and _current_price > 0:
             _implied = round(float(mkt_cap) / _current_price, 0)
             if _implied > 0:
@@ -621,7 +977,7 @@ class FmpFundamentalsRefresher:
                 fields["_market_cap_price_at_refresh"] = round(_current_price, 4)
                 fields["_market_cap_static_source"]    = "fmp_profile"
 
-        # Profile metadata (description, website, ceo, etc.)
+        # Profile metadata
         _profile_meta: dict[str, Any] = {}
         for _fmp_key, _meta_key in [
             ("description", "description"),
@@ -654,27 +1010,30 @@ class FmpFundamentalsRefresher:
             fields["profile"] = _profile_meta
 
         # ── 2. Income Statement (quarterly, 8Q) ──────────────────────────────
-        raw = await self._get("income-statement", {"symbol": sym, "period": "quarter", "limit": 8})
+        raw = await self._get(
+            "income-statement",
+            {"symbol": sym, "period": "quarter", "limit": 8},
+        )
         calls += 1
         is_rows: list[dict] = raw if isinstance(raw, list) else []
 
         if is_rows:
-            # Revenue → TTM (sum of 4 most recent quarters)
-            ttm_rev = self._ttm_sum(is_rows, "revenue", 4)
+            # Revenue → TTM (strict 4-quarter)
+            ttm_rev = self._ttm_sum_strict(is_rows, "revenue")
             if ttm_rev is not None:
                 fields["Revenue"] = int(ttm_rev)
             else:
                 missing.append("Revenue")
 
-            # Operating Income → TTM sum
-            ttm_op = self._ttm_sum(is_rows, "operatingIncome", 4)
+            # Operating Income → TTM strict
+            ttm_op = self._ttm_sum_strict(is_rows, "operatingIncome")
             if ttm_op is not None:
                 fields["Operating Income"] = int(ttm_op)
             else:
                 missing.append("Operating Income")
 
-            # EBIT → TTM sum (ebit key, fall back to operatingIncome sum)
-            ttm_ebit = self._ttm_sum(is_rows, "ebit", 4)
+            # EBIT → TTM strict; fall back to op income sum
+            ttm_ebit = self._ttm_sum_strict(is_rows, "ebit")
             if ttm_ebit is not None:
                 fields["EBIT"] = int(ttm_ebit)
             elif ttm_op is not None:
@@ -682,9 +1041,9 @@ class FmpFundamentalsRefresher:
             else:
                 missing.append("EBIT")
 
-            # Revenue Growth (YoY): TTM vs prior-year TTM
+            # Revenue Growth (YoY): TTM vs prior-year TTM (both strict)
             if len(is_rows) >= 8:
-                ttm_rev_py  = self._ttm_sum(is_rows[4:], "revenue", 4)
+                ttm_rev_py  = self._ttm_sum_strict(is_rows[4:], "revenue")
                 rev_yoy_pct = self._pct(ttm_rev, ttm_rev_py)
                 if rev_yoy_pct is not None:
                     fields["Revenue Growth (YoY)"] = self._fmt_pct(rev_yoy_pct)
@@ -693,24 +1052,57 @@ class FmpFundamentalsRefresher:
             else:
                 missing.append("Revenue Growth (YoY)")
 
-            # Revenue Growth (Q): latest quarter vs same quarter prior year
-            if len(is_rows) >= 5:
-                rev_latest = is_rows[0].get("revenue")
-                rev_py_q   = is_rows[4].get("revenue")
-                rev_q_pct  = self._pct(rev_latest, rev_py_q)
-                if rev_q_pct is not None:
-                    fields["Revenue Growth (Q)"] = self._fmt_pct(rev_q_pct)
+            # Revenue Growth (Q): latest Q vs same Q prior year
+            # Part 3: use fiscal-period matching when available; positional fallback.
+            _rg_q_computed = False
+            q0_fy  = str(is_rows[0].get("fiscalYear", "") or "")
+            q0_per = str(is_rows[0].get("period", "") or "")
+            if q0_fy and q0_per and len(is_rows) >= 2:
+                try:
+                    py_q0 = self._get_fiscal_period_row(
+                        is_rows, str(int(q0_fy) - 1), q0_per
+                    )
+                    if py_q0 is not None:
+                        rev_q_pct = self._pct(
+                            is_rows[0].get("revenue"), py_q0.get("revenue")
+                        )
+                        if rev_q_pct is not None:
+                            fields["Revenue Growth (Q)"] = self._fmt_pct(rev_q_pct)
+                            _rg_q_computed = True
+                except (ValueError, TypeError):
+                    pass
+            if not _rg_q_computed:
+                if len(is_rows) >= 5:
+                    rev_q_pct = self._pct(
+                        is_rows[0].get("revenue"), is_rows[4].get("revenue")
+                    )
+                    if rev_q_pct is not None:
+                        fields["Revenue Growth (Q)"] = self._fmt_pct(rev_q_pct)
+                    else:
+                        missing.append("Revenue Growth (Q)")
                 else:
                     missing.append("Revenue Growth (Q)")
-            else:
-                missing.append("Revenue Growth (Q)")
+
+            # Part 4: Identify last completed fiscal year (FY/FY anchor for estimates)
+            _completed_fy_label, _completed_fy_date, _completed_fy_revenue = (
+                self._identify_completed_fiscal_year(is_rows)
+            )
         else:
-            for f in ["Revenue", "Operating Income", "EBIT", "Revenue Growth (YoY)", "Revenue Growth (Q)"]:
+            for f in [
+                "Revenue", "Operating Income", "EBIT",
+                "Revenue Growth (YoY)", "Revenue Growth (Q)",
+            ]:
                 missing.append(f)
             is_rows = []
+            _completed_fy_label    = None
+            _completed_fy_date     = None
+            _completed_fy_revenue  = None
 
         # ── 3. Income Statement Growth (quarterly, 2Q) — EPS Growth only ─────
-        raw = await self._get("income-statement-growth", {"symbol": sym, "period": "quarter", "limit": 2})
+        raw = await self._get(
+            "income-statement-growth",
+            {"symbol": sym, "period": "quarter", "limit": 2},
+        )
         calls += 1
         isg_rows: list[dict] = raw if isinstance(raw, list) else []
         if isg_rows:
@@ -723,24 +1115,26 @@ class FmpFundamentalsRefresher:
             missing += ["EPS Growth"]
 
         # ── 4. Cash Flow Statement (quarterly, 5Q) ───────────────────────────
-        raw = await self._get("cash-flow-statement", {"symbol": sym, "period": "quarter", "limit": 5})
+        raw = await self._get(
+            "cash-flow-statement",
+            {"symbol": sym, "period": "quarter", "limit": 5},
+        )
         calls += 1
         cf_rows: list[dict] = raw if isinstance(raw, list) else []
         if cf_rows:
-            # Free Cash Flow → TTM sum
-            ttm_fcf = self._ttm_sum(cf_rows, "freeCashFlow", 4)
+            ttm_fcf = self._ttm_sum_strict(cf_rows, "freeCashFlow")
             if ttm_fcf is not None:
                 fields["Free Cash Flow"] = int(ttm_fcf)
             else:
                 missing.append("Free Cash Flow")
 
-            # FCF Margin: TTM FCF / TTM Revenue
+            # FCF Margin: strict TTM FCF / strict TTM Revenue
             ttm_rev_for_margin = (
-                self._ttm_sum(is_rows, "revenue", 4) if is_rows else None
+                self._ttm_sum_strict(is_rows, "revenue") if is_rows else None
             )
-            if ttm_fcf is not None and ttm_rev_for_margin:
+            if ttm_fcf is not None and ttm_rev_for_margin and float(ttm_rev_for_margin) > 0:
                 try:
-                    raw_mgn = (ttm_fcf / ttm_rev_for_margin) * 100  # type: ignore[operator]
+                    raw_mgn = (ttm_fcf / ttm_rev_for_margin) * 100
                     fields["FCF Margin"] = self._fmt_pct(round(raw_mgn, 2))
                 except Exception:
                     missing.append("FCF Margin")
@@ -752,7 +1146,10 @@ class FmpFundamentalsRefresher:
         # ── 5. Ratios TTM ────────────────────────────────────────────────────
         raw = await self._get("ratios-ttm", {"symbol": sym})
         calls += 1
-        rtm: dict = (raw[0] if isinstance(raw, list) and raw else (raw if isinstance(raw, dict) else {}))
+        rtm: dict = (
+            raw[0] if isinstance(raw, list) and raw
+            else (raw if isinstance(raw, dict) else {})
+        )
         if rtm and "_status" not in rtm:
             def _map_ratio(fmp_key: str, csv_key: str, fmt: str = "raw"):
                 v = rtm.get(fmp_key)
@@ -764,17 +1161,20 @@ class FmpFundamentalsRefresher:
                 else:
                     missing.append(csv_key)
 
-            _map_ratio("grossProfitMarginTTM",     "Gross Margin", "pct")
-            _map_ratio("priceToEarningsRatioTTM",  "PE Ratio")
-            _map_ratio("priceToSalesRatioTTM",     "PS Ratio")
-            _map_ratio("debtToEquityRatioTTM",     "Debt / Equity")
+            _map_ratio("grossProfitMarginTTM",    "Gross Margin", "pct")
+            _map_ratio("priceToEarningsRatioTTM", "PE Ratio")
+            _map_ratio("priceToSalesRatioTTM",    "PS Ratio")
+            _map_ratio("debtToEquityRatioTTM",    "Debt / Equity")
         else:
             missing += ["Gross Margin", "PE Ratio", "PS Ratio", "Debt / Equity"]
 
         # ── 6. Key Metrics TTM ───────────────────────────────────────────────
         raw = await self._get("key-metrics-ttm", {"symbol": sym})
         calls += 1
-        kmtm: dict = (raw[0] if isinstance(raw, list) and raw else (raw if isinstance(raw, dict) else {}))
+        kmtm: dict = (
+            raw[0] if isinstance(raw, list) and raw
+            else (raw if isinstance(raw, dict) else {})
+        )
         if kmtm and "_status" not in kmtm:
             ev_ebitda = kmtm.get("evToEBITDATTM")
             if ev_ebitda is not None:
@@ -796,45 +1196,47 @@ class FmpFundamentalsRefresher:
         earn_rows: list[dict] = (raw if isinstance(raw, list) else [])
         earn_rows.sort(key=lambda r: r.get("date", ""))
 
-        past_earn   = [r for r in earn_rows if r.get("epsActual") is not None]
-        future_earn = [r for r in earn_rows if r.get("epsActual") is None]
+        past_earn   = [r for r in earn_rows if r.get("epsActual")  is not None]
+        future_earn = [r for r in earn_rows if r.get("epsActual")  is     None]
 
-        # Earnings Date: next upcoming report date only.
+        # Earnings Date: next upcoming report date
         if future_earn:
             fields["Earnings Date"] = future_earn[0].get("date") or ""
         else:
             missing.append("Earnings Date")
 
-        # TQ estimate (first upcoming quarter vs same quarter prior year)
-        if future_earn and len(past_earn) >= 4:
+        # Part 5: match upcoming quarter to prior-year same quarter by date proximity
+        if future_earn and past_earn:
             nxt    = future_earn[0]
-            py_nxt = past_earn[-4]
+            py_nxt = self._match_prior_year_earnings(nxt, past_earn)
 
-            rev_nq = self._pct(
-                nxt.get("revenueEstimated"),
-                py_nxt.get("revenueActual"),
-            )
-            if rev_nq is not None:
-                fields["Rev Growth Next Quarter"] = self._fmt_pct(rev_nq)
-            else:
-                missing.append("Rev Growth Next Quarter")
+            if py_nxt is not None:
+                rev_nq = self._pct(
+                    nxt.get("revenueEstimated"),
+                    py_nxt.get("revenueActual"),
+                )
+                if rev_nq is not None:
+                    fields["Rev Growth Next Quarter"] = self._fmt_pct(rev_nq)
+                else:
+                    missing.append("Rev Growth Next Quarter")
 
-            eps_nq = self._pct(
-                nxt.get("epsEstimated"),
-                py_nxt.get("epsActual"),
-            )
-            if eps_nq is not None:
-                fields["EPS Growth This Quarter"] = self._fmt_pct(eps_nq)
+                eps_nq = self._pct(
+                    nxt.get("epsEstimated"),
+                    py_nxt.get("epsActual"),
+                )
+                if eps_nq is not None:
+                    fields["EPS Growth This Quarter"] = self._fmt_pct(eps_nq)
+                else:
+                    missing.append("EPS Growth This Quarter")
             else:
-                missing.append("EPS Growth This Quarter")
+                missing += ["Rev Growth Next Quarter", "EPS Growth This Quarter"]
         else:
             missing += ["Rev Growth Next Quarter", "EPS Growth This Quarter"]
 
-        # ── Forward P/E — Priority 3 (fallback): next-quarter EPS × 4 ────────
-        # Priority order: (1) FY1 annual consensus EPS [section 9 below],
-        #                 (2) this quarterly×4 approximation [stored now as fallback],
+        # ── Forward P/E — Priority 2 (fallback): next-quarter EPS × 4 ────────
+        # Priority order: (1) FY1 annual consensus EPS [section 10 upgrade],
+        #                 (2) next-quarter EPS × 4 approximation [stored now],
         #                 (3) missing.
-        # We store the fallback here if possible, then section 9 may upgrade it.
         _fpe_stored = False
         if future_earn and _current_price is not None and _current_price > 0:
             _nxt_earn_row = future_earn[0]
@@ -844,8 +1246,8 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError):
                 _nxt_eps_f = None
             if _nxt_eps_f is not None and _nxt_eps_f > 0:
-                _fwd_eps_ann   = round(_nxt_eps_f * 4, 4)
-                _fwd_pe_val    = round(_current_price / _fwd_eps_ann, 2)
+                _fwd_eps_ann = round(_nxt_eps_f * 4, 4)
+                _fwd_pe_val  = round(_current_price / _fwd_eps_ann, 2)
                 _fpe_warn: list[str] = []
                 if _nxt_eps_f > 20.0:
                     _fpe_warn.append("HIGH_EPS_ESTIMATE")
@@ -853,7 +1255,7 @@ class FmpFundamentalsRefresher:
                     _fpe_warn.append("HIGH_PRICE_USED")
                 fields["forward_pe_price_used"]      = _current_price
                 fields["forward_pe_raw_eps_estimate"] = round(_nxt_eps_f, 4)
-                fields["forward_pe_raw_period"]      = _nxt_earn_row.get("date") or ""
+                fields["forward_pe_raw_period"]       = _nxt_earn_row.get("date") or ""
                 if _fpe_warn:
                     fields["forward_pe_warning_codes"] = _fpe_warn
                 if 1.0 <= _fwd_pe_val <= 500.0:
@@ -862,22 +1264,36 @@ class FmpFundamentalsRefresher:
                     fields["forward_pe_source"]         = "quarterly_eps_annualized"
                     fields["forward_pe_is_approximate"] = True
                     _fpe_stored = True
-        # NOTE: "Forward P/E" missing check deferred to after section 9 upgrade.
 
         # ── 8. Quality from existing data (0 new calls) ──────────────────────
-        _dq = self._compute_derived_quality(is_rows, cf_rows, rtm, kmtm)
+        _dq, _not_meaningful_active = self._compute_derived_quality(
+            is_rows, cf_rows, rtm, kmtm
+        )
         for _k, _v in _dq.items():
             if _v is not None:
                 fields[_k] = _v
 
         # ── 9. Balance sheet (new call) ──────────────────────────────────────
-        bs_quality, _bs_row = await self._fetch_bs_quality(sym)
+        bs_quality, _bs_row, _bs_outcome = await self._fetch_bs_quality(sym)
         calls += 1
         for _k, _v in bs_quality.items():
             if _v is not None:
                 fields[_k] = _v
 
-        # ── 10. Analyst estimates annual (new call) + Forward P/E upgrade ─────
+        # Part 9: Current Ratio fallback from balance sheet when rtm absent
+        if "Current Ratio" not in fields and _bs_row:
+            _ca = _bs_row.get("totalCurrentAssets")
+            _cl = _bs_row.get("totalCurrentLiabilities")
+            if _ca is not None and _cl is not None:
+                try:
+                    _cl_f = float(_cl)
+                    if _cl_f != 0.0:
+                        fields["Current Ratio"] = round(float(_ca) / _cl_f, 4)
+                        fields["_current_ratio_source"] = "balance_sheet_fallback"
+                except (ValueError, TypeError, ZeroDivisionError):
+                    pass
+
+        # ── 10. Analyst estimates annual + Forward P/E upgrade ──────────────
         _mkt_cap_int: int | None = (
             int(float(mkt_cap)) if mkt_cap is not None and float(mkt_cap) > 0 else None
         )
@@ -889,38 +1305,47 @@ class FmpFundamentalsRefresher:
                     _ev_float = float(_ev_raw)
                 except (ValueError, TypeError):
                     pass
-        _ttm_rev_float: float | None = None
-        if is_rows:
-            _ttm_rev_float = self._ttm_sum(is_rows, "revenue", 4)
 
-        est_quality, _fy1_row = await self._fetch_analyst_estimates_quality(
-            sym, _mkt_cap_int, _ev_float, _ttm_rev_float
+        est_quality, _fy1_row, _est_outcome = await self._fetch_analyst_estimates_quality(
+            sym,
+            _mkt_cap_int,
+            _ev_float,
+            _completed_fy_date,
+            _completed_fy_revenue,
         )
         calls += 1
         for _k, _v in est_quality.items():
             if _v is not None:
                 fields[_k] = _v
 
-        # Forward P/E upgrade: FY1 annual consensus EPS (Priority 2, better than
-        # quarterly×4 when available).  Overrides the fallback stored above;
-        # also provides the value when quarterly×4 was unavailable.
-        # Negative/zero forward EPS → not meaningful (do not store).
+        # Part 8 — Forward P/E upgrade: FY1 annual consensus EPS (Priority 1).
+        # When FY1 EPS is available, ALL provenance fields must be updated
+        # consistently.  forward_pe_raw_eps_estimate is set to FY1 annual EPS
+        # (not the quarterly EPS stored in section 7) so provenence is coherent.
         if _fy1_row is not None and _current_price is not None and _current_price > 0:
             _fy1_eps_raw = _fy1_row.get("epsAvg")
+            _fy1_n_eps   = _fy1_row.get("numAnalystsEps")
             if _fy1_eps_raw is not None:
                 try:
                     _fy1_eps_f = float(_fy1_eps_raw)
                     if _fy1_eps_f > 0:
                         _fwd_pe_fy1 = round(_current_price / _fy1_eps_f, 2)
                         if 1.0 <= _fwd_pe_fy1 <= 500.0:
+                            # Update ALL provenance fields for FY1 source
                             fields["Forward P/E"]               = _fwd_pe_fy1
                             fields["forward_eps_estimate"]      = round(_fy1_eps_f, 4)
                             fields["forward_pe_source"]         = "fy1_annual_consensus_eps"
                             fields["forward_pe_is_approximate"] = False
+                            fields["forward_pe_raw_eps_estimate"] = round(_fy1_eps_f, 4)
                             fields["forward_pe_raw_period"]     = _fy1_row.get("date", "")
                             fields["forward_pe_price_used"]     = _current_price
-                            # Clear the quarterly×4 approximation warning codes if we
-                            # are now using the higher-quality FY1 source.
+                            # FY1 analyst count for EPS
+                            if _fy1_n_eps is not None:
+                                try:
+                                    fields["_forward_pe_fy1_n_eps_analysts"] = int(_fy1_n_eps)
+                                except (ValueError, TypeError):
+                                    pass
+                            # Clear quarterly-era approximation flags
                             fields.pop("forward_pe_warning_codes", None)
                             _fpe_stored = True
                 except (ValueError, TypeError):
@@ -930,16 +1355,23 @@ class FmpFundamentalsRefresher:
         if not _fpe_stored:
             missing.append("Forward P/E")
 
-        # ── 11. Financial scores (new call) ──────────────────────────────────
+        # ── 11. Financial scores ─────────────────────────────────────────────
         _sector   = str((_profile_meta or {}).get("sector",   "") or "")
         _industry = str((_profile_meta or {}).get("industry", "") or "")
-        scores_quality = await self._fetch_scores_quality(sym, _sector, _industry)
+        scores_quality, _scores_outcome = await self._fetch_scores_quality(
+            sym, _sector, _industry
+        )
         calls += 1
         for _k, _v in scores_quality.items():
             if _v is not None:
                 fields[_k] = _v
 
-        # ── 12. Cash Runway (uses Cash from call 8 + TTM FCF from call 4) ────
+        # Altman Z not_meaningful (financial sector) blocks carry of old score
+        if _is_financial_company(_sector, _industry):
+            _not_meaningful_active.add("Altman Z-Score")
+            _not_meaningful_active.add("Altman Z-Risk")
+
+        # ── 12. Cash Runway (uses Cash from call 9 + TTM FCF from call 4) ────
         _cash_val    = fields.get("Cash")
         _ttm_fcf_val = fields.get("Free Cash Flow")
         runway = self._compute_cash_runway(_cash_val, _ttm_fcf_val, _sector, _industry)
@@ -960,10 +1392,14 @@ class FmpFundamentalsRefresher:
             missing.append(csv_fallback)
 
         return {
-            "fields": fields,
-            "missing_fields": list(set(missing)),
-            "fmp_call_count": calls,
-            "_fy1_data": _fy1_row,   # Raw FY1 row for estimate history persistence
+            "fields":                fields,
+            "missing_fields":        list(set(missing)),
+            "fmp_call_count":        calls,
+            "_fy1_data":             _fy1_row,
+            "_not_meaningful_active": _not_meaningful_active,
+            "_bs_outcome":           _bs_outcome,
+            "_est_outcome":          _est_outcome,
+            "_scores_outcome":       _scores_outcome,
         }
 
     # ── Batch refresh ────────────────────────────────────────────────────────
@@ -978,26 +1414,36 @@ class FmpFundamentalsRefresher:
         Refresh FMP fundamentals for a list of symbols.
         Skips symbols refreshed within the last 7 days unless dev_force=True.
         Returns diagnostic summary dict.
+
+        Part 7 — Source-aware carry-forward:
+          Old snapshot values are carried only when the responsible endpoint
+          returned a transient failure.  Fields in _not_meaningful_active are
+          never carried (they reflect the current semantic state of the company).
+
+        Part 10 — Retention pruning:
+          prune_old_observations() is called once per batch after all symbols
+          are processed, not per-symbol.
         """
         from data.watchlist_fundamentals_store import (
             get_snapshots_bulk, upsert_snapshot,
         )
         from data.watchlist_estimate_history_store import (
-            ensure_table as _ensure_hist,
+            ensure_table    as _ensure_hist,
             upsert_estimate_observation as _upsert_obs,
+            prune_old_observations      as _prune_obs,
         )
         from services.watchlist_quote_cache import is_fmp_symbol_eligible
 
         # Ensure estimate history table exists (safe no-op if already created)
         _ensure_hist()
 
-        eligible = [s for s in symbols if is_fmp_symbol_eligible(s)]
+        eligible  = [s for s in symbols if is_fmp_symbol_eligible(s)]
         snapshots = get_snapshots_bulk(eligible)
 
         started_at = datetime.now(timezone.utc)
-        refreshed: list[str] = []
-        skipped:   list[str] = []
-        failed:    list[str] = []
+        refreshed: list[str]             = []
+        skipped:   list[str]             = []
+        failed:    list[str]             = []
         empty_payload_preserved: list[str] = []
         empty_payload_no_prior:  list[str] = []
 
@@ -1017,28 +1463,71 @@ class FmpFundamentalsRefresher:
             try:
                 result = await self.normalize_symbol(sym)
 
+                # Extract per-endpoint outcomes + not_meaningful set
+                _not_meaningful = result.pop("_not_meaningful_active", set())
+                _bs_outcome     = result.pop("_bs_outcome",     "unknown")
+                _est_outcome    = result.pop("_est_outcome",    "unknown")
+                _scores_outcome = result.pop("_scores_outcome", "unknown")
+
                 # ── No-null-overwrite for profile metadata ────────────────────
                 _existing_snap = snapshots.get(sym.upper())
                 if _existing_snap and _existing_snap.get("fields"):
                     _old_profile = (_existing_snap["fields"].get("profile") or {})
                     if _old_profile:
-                        _new_profile = result["fields"].get("profile") or {}
+                        _new_profile  = result["fields"].get("profile") or {}
                         _merged_profile: dict[str, Any] = {**_old_profile}
                         for _k, _v in _new_profile.items():
                             if _v is not None and _v != "":
                                 _merged_profile[_k] = _v
                         result["fields"]["profile"] = _merged_profile
 
-                # ── Quality field carry-forward ───────────────────────────────
-                # When any optional new endpoint (balance-sheet, analyst-estimates,
-                # financial-scores) fails or returns no data, carry forward the prior
-                # usable value so a transient error does not erase historical quality
-                # fields from the complete fields JSONB overwrite.
+                # ── Part 7: Source-aware quality field carry-forward ──────────
+                # Each endpoint group is only carried when that endpoint itself
+                # suffered a transient failure.  Semantically-invalid fields
+                # (in _not_meaningful) are never carried regardless of outcome.
                 if _existing_snap and _existing_snap.get("fields"):
                     _old_fields = _existing_snap["fields"]
-                    for _qk in _QUALITY_CARRY_FIELDS:
-                        if result["fields"].get(_qk) is None and _old_fields.get(_qk) is not None:
-                            result["fields"][_qk] = _old_fields[_qk]
+
+                    def _carry_group(field_set: frozenset[str]) -> None:
+                        for _qk in field_set:
+                            if (
+                                _qk not in _not_meaningful
+                                and result["fields"].get(_qk) is None
+                                and _old_fields.get(_qk) is not None
+                            ):
+                                result["fields"][_qk] = _old_fields[_qk]
+
+                    if _bs_outcome == "transient_failure":
+                        _carry_group(_BS_CARRY_FIELDS)
+
+                    if _est_outcome == "transient_failure":
+                        _carry_group(_EST_CARRY_FIELDS)
+                        # Part 7 mutual exclusivity: do not co-carry revision_pct
+                        # alongside a history_building reason from a fresh cycle.
+                        if result["fields"].get("_rev_revision_reason") == "history_building":
+                            result["fields"].pop("Revenue Estimate Revision 90D", None)
+                        if result["fields"].get("_eps_revision_reason") == "history_building":
+                            result["fields"].pop("EPS Estimate Revision 90D", None)
+
+                    if _scores_outcome == "transient_failure":
+                        _carry_group(_SCORES_CARRY_FIELDS)
+
+                # ── Prevent empty payload from erasing prior good snapshot ────
+                _new_f = result.get("fields") or {}
+                _substantive = {
+                    k: v for k, v in _new_f.items()
+                    if not k.startswith("_") and k not in (
+                        "missing_fields", "profile",
+                    )
+                }
+                if not _substantive:
+                    if _existing_snap and _existing_snap.get("fields"):
+                        log.warning("[FMP_FUND] %s: empty payload — preserving prior snapshot", sym)
+                        empty_payload_preserved.append(sym)
+                        continue
+                    else:
+                        empty_payload_no_prior.append(sym)
+                        continue
 
                 outcome = upsert_snapshot(
                     symbol=sym,
@@ -1050,117 +1539,72 @@ class FmpFundamentalsRefresher:
                 if outcome == "success":
                     refreshed.append(sym)
 
-                    # ── Persist estimate history for revision tracking ────────
-                    _fy1 = result.get("_fy1_data")
-                    if _fy1:
-                        _fy1_date = _fy1.get("date", "")
-                        _loop = asyncio.get_event_loop()
-                        if _fy1.get("revenueAvg") is not None:
-                            await _loop.run_in_executor(
-                                None,
-                                _upsert_obs,
-                                sym.upper(), "revenue_annual", "annual",
-                                _fy1_date, _fy1.get("revenueAvg"),
-                                _fy1.get("numAnalystsRevenue"), "fmp_analyst_estimates",
-                                _fy1_date,
-                            )
-                        if _fy1.get("epsAvg") is not None:
-                            await _loop.run_in_executor(
-                                None,
-                                _upsert_obs,
-                                sym.upper(), "eps_annual", "annual",
-                                _fy1_date, _fy1.get("epsAvg"),
-                                _fy1.get("numAnalystsEps"), "fmp_analyst_estimates",
-                                _fy1_date,
-                            )
-                        if _fy1.get("ebitdaAvg") is not None:
-                            await _loop.run_in_executor(
-                                None,
-                                _upsert_obs,
-                                sym.upper(), "ebitda_annual", "annual",
-                                _fy1_date, _fy1.get("ebitdaAvg"),
-                                _fy1.get("numAnalystsRevenue"), "fmp_analyst_estimates",
-                                _fy1_date,
-                            )
-
-                elif outcome == "empty_payload_preserved_lkg":
-                    log.warning(
-                        "[FMP_FUND] %s: EMPTY_FUNDAMENTALS_PAYLOAD — prior usable "
-                        "snapshot preserved, retry scheduled sooner", sym,
-                    )
-                    empty_payload_preserved.append(sym)
-                elif outcome == "empty_payload_no_prior":
-                    log.warning(
-                        "[FMP_FUND] %s: EMPTY_FUNDAMENTALS_PAYLOAD — no usable prior "
-                        "snapshot, remains retryable (no fake fresh row written)", sym,
-                    )
-                    empty_payload_no_prior.append(sym)
+                    # Persist FY1 estimate observation for revision tracking
+                    _fy1_d = result.get("_fy1_data")
+                    if _fy1_d is not None:
+                        _fy1_date_str = _fy1_d.get("date", "")
+                        _rev_val      = _fy1_d.get("revenueAvg")
+                        _eps_val      = _fy1_d.get("epsAvg")
+                        _ebitda_val   = _fy1_d.get("ebitdaAvg")
+                        _n_rev        = _fy1_d.get("numAnalystsRevenue")
+                        _n_eps        = _fy1_d.get("numAnalystsEps")
+                        if _fy1_date_str:
+                            if _rev_val is not None:
+                                _upsert_obs(
+                                    symbol=sym,
+                                    metric="revenue_annual",
+                                    period_type="annual",
+                                    fiscal_period=_fy1_date_str,
+                                    consensus_value=float(_rev_val),
+                                    num_analysts=(int(_n_rev) if _n_rev is not None else None),
+                                    source="fmp_analyst_estimates",
+                                    fmp_date=_fy1_date_str,
+                                )
+                            if _eps_val is not None:
+                                _upsert_obs(
+                                    symbol=sym,
+                                    metric="eps_annual",
+                                    period_type="annual",
+                                    fiscal_period=_fy1_date_str,
+                                    consensus_value=float(_eps_val),
+                                    num_analysts=(int(_n_eps) if _n_eps is not None else None),
+                                    source="fmp_analyst_estimates",
+                                    fmp_date=_fy1_date_str,
+                                )
+                            if _ebitda_val is not None:
+                                _upsert_obs(
+                                    symbol=sym,
+                                    metric="ebitda_annual",
+                                    period_type="annual",
+                                    fiscal_period=_fy1_date_str,
+                                    consensus_value=float(_ebitda_val),
+                                    num_analysts=None,
+                                    source="fmp_analyst_estimates",
+                                    fmp_date=_fy1_date_str,
+                                )
                 else:
                     failed.append(sym)
+
             except Exception as exc:
-                log.warning("[FMP_FUND] refresh_symbols(%s) error: %s", sym, exc)
+                log.error("[FMP_FUND] refresh_symbols(%s) error: %s", sym, exc)
                 failed.append(sym)
 
-        finished_at = datetime.now(timezone.utc)
+        # ── Part 10: Retention pruning — once per batch ──────────────────────
+        if refreshed:
+            try:
+                pruned = _prune_obs()
+                if pruned:
+                    log.info("[FMP_FUND] pruned %d stale estimate history rows", pruned)
+            except Exception as _pe:
+                log.debug("[FMP_FUND] prune_old_observations error: %s", _pe)
+
+        elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
         return {
-            "started_at": started_at.isoformat(),
-            "finished_at": finished_at.isoformat(),
-            "total_required": len(eligible),
-            "refreshed_symbols": len(refreshed),
-            "skipped_fresh_symbols": len(skipped),
-            "failed_symbols": len(failed),
-            "empty_payload_preserved_lkg_symbols": len(empty_payload_preserved),
-            "empty_payload_no_prior_symbols": len(empty_payload_no_prior),
-            "refreshed": refreshed,
-            "skipped": skipped,
-            "failed": failed,
-            "empty_payload_preserved_lkg": empty_payload_preserved,
-            "empty_payload_no_prior": empty_payload_no_prior,
+            "refreshed":              refreshed,
+            "skipped":                skipped,
+            "failed":                 failed,
+            "empty_payload_preserved": empty_payload_preserved,
+            "empty_payload_no_prior":  empty_payload_no_prior,
+            "elapsed_seconds":         round(elapsed, 1),
+            "fmp_calls_per_symbol":    10,
         }
-
-
-def merge_fmp_into_csv_row(csv_row: dict, fmp_fields: dict) -> dict:
-    """
-    Overlay FMP field values onto a CSV row.
-    Rule: FMP non-null value wins; FMP null/missing → preserve existing CSV value.
-    Returns a new dict (does not mutate csv_row).
-    """
-    merged = dict(csv_row)
-    for k, v in fmp_fields.items():
-        if v is not None and v != "":
-            merged[k] = v
-    return merged
-
-
-def apply_fmp_overlays(
-    csv_data: list[dict],
-    snapshots: dict[str, dict],
-) -> list[dict]:
-    """
-    Apply FMP fundamentals cache to the full CSV data list.
-    Returns the updated list with FMP values overlaid per symbol.
-
-    Stale Earnings Date rule (Part C):
-      Earnings Date is only meaningful if it is today or in the future.
-      If the final value (from FMP or CSV) is before today (ET), blank it.
-      A past date is worse than no date — it misrepresents next earnings.
-    """
-    from zoneinfo import ZoneInfo
-    today_et = datetime.now(tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
-
-    out = []
-    for row in csv_data:
-        sym = (row.get("Symbol") or row.get("symbol") or row.get("Ticker") or "").strip().upper()
-        snap = snapshots.get(sym)
-        if snap and snap.get("fields"):
-            merged = merge_fmp_into_csv_row(row, snap["fields"])
-        else:
-            merged = dict(row)
-
-        # Stale Earnings Date rule: blank any past date regardless of source.
-        earn = str(merged.get("Earnings Date") or "").strip()
-        if earn and earn < today_et:
-            merged["Earnings Date"] = ""
-
-        out.append(merged)
-    return out

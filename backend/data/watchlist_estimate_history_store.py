@@ -132,13 +132,24 @@ def get_revision_90d(
     symbol: str,
     metric: str,
     fiscal_period: str,
+    current_value: float | None = None,
+    current_observed_date: date | None = None,
 ) -> dict[str, Any]:
     """
     Compute the ~90-day consensus revision for a given symbol/metric/fiscal_period.
 
+    Part 6 contract: caller MAY supply the freshly-fetched value via ``current_value``
+    (and optionally ``current_observed_date``).  When provided the function uses that
+    value directly as the "current" observation — skipping the DB read for latest —
+    so the revision reflects the value just fetched this refresh cycle rather than
+    the value stored on the *previous* refresh (which would be one cycle behind).
+
+    When ``current_value`` is None the function falls back to reading the most recent
+    DB row (legacy behaviour, still used by callers that do not have the fresh value).
+
     Returns dict with keys:
       revision_pct      float | None  — (current - prior) / |prior| * 100
-      current_value     float | None  — most recent observation
+      current_value     float | None  — current observation used
       prior_value       float | None  — observation ~90 days ago
       prior_date        str | None    — actual date of prior record used
       days_gap          int | None    — actual days between current and prior
@@ -156,28 +167,34 @@ def get_revision_90d(
             return {"revision_pct": None, "reason": "db_unavailable"}
         try:
             cur = conn.cursor()
-            # Latest observation for this symbol/metric/fiscal_period
-            cur.execute(
-                f"""
-                SELECT consensus_value, observed_date
-                FROM {_TABLE}
-                WHERE symbol = %s AND metric = %s AND fiscal_period = %s
-                ORDER BY observed_date DESC
-                LIMIT 1
-                """,
-                (symbol.upper(), metric, fiscal_period),
-            )
-            latest = cur.fetchone()
-            if not latest or latest[0] is None:
-                cur.close()
-                return {"revision_pct": None, "reason": "history_building"}
 
-            current_val, current_date = float(latest[0]), latest[1]
+            if current_value is not None:
+                # Caller provided fresh value — skip DB query for latest
+                current_val  = float(current_value)
+                current_date = current_observed_date or date.today()
+            else:
+                # Legacy: read most-recent stored observation
+                cur.execute(
+                    f"""
+                    SELECT consensus_value, observed_date
+                    FROM {_TABLE}
+                    WHERE symbol = %s AND metric = %s AND fiscal_period = %s
+                    ORDER BY observed_date DESC
+                    LIMIT 1
+                    """,
+                    (symbol.upper(), metric, fiscal_period),
+                )
+                latest = cur.fetchone()
+                if not latest or latest[0] is None:
+                    cur.close()
+                    return {"revision_pct": None, "reason": "history_building"}
+                current_val  = float(latest[0])
+                current_date = latest[1]
 
             # Find record closest to 90 days ago within ±15-day tolerance
-            target_date  = current_date - timedelta(days=_REVISION_DAYS)
-            low_date     = target_date - timedelta(days=_REVISION_TOLERANCE)
-            high_date    = target_date + timedelta(days=_REVISION_TOLERANCE)
+            target_date = current_date - timedelta(days=_REVISION_DAYS)
+            low_date    = target_date - timedelta(days=_REVISION_TOLERANCE)
+            high_date   = target_date + timedelta(days=_REVISION_TOLERANCE)
 
             cur.execute(
                 f"""
@@ -207,19 +224,19 @@ def get_revision_90d(
 
             if not prior or prior[0] is None:
                 return {
-                    "revision_pct": None,
+                    "revision_pct":  None,
                     "current_value": current_val,
-                    "reason": "history_building",
+                    "reason":        "history_building",
                 }
 
             prior_val, prior_date, gap_days = float(prior[0]), prior[1], int(prior[2])
             if abs(prior_val) < 1e-9:
                 return {
-                    "revision_pct": None,
+                    "revision_pct":  None,
                     "current_value": current_val,
-                    "prior_value": prior_val,
-                    "prior_date": prior_date.isoformat() if prior_date else None,
-                    "reason": "prior_value_zero",
+                    "prior_value":   prior_val,
+                    "prior_date":    prior_date.isoformat() if prior_date else None,
+                    "reason":        "prior_value_zero",
                 }
 
             rev_pct = round((current_val - prior_val) / abs(prior_val) * 100, 4)
