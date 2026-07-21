@@ -18478,3 +18478,121 @@ async def admin_quality_backfill_status(
         "log":                  str(_QBF_LOG_PATH),
         "progress_file":        str(_QBF_PROGRESS_PATH),
     }
+
+
+# ── Task 4: one-time Quality snapshot cleanup ────────────────────────────────
+# • Removes PE Ratio ≤ 0 from every Neon snapshot (no FMP calls).
+# • Converts numeric percentage fields (Revenue Acceleration,
+#   Gross Margin Change YoY, Incremental Operating Margin) from raw float
+#   to formatted string so existing rows match the new write-path contract.
+# • Idempotent: re-running is safe; already-clean rows are left unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fmt_pct_clean(v: float) -> str:
+    return f"{v:.2f}%"
+
+
+@app.post("/api/admin/quality-cleanup")
+async def admin_quality_cleanup(
+    request: Request,
+    api_key: str = Header(None, alias="X-API-Key"),
+):
+    """
+    One-time zero-provider-call Neon snapshot cleanup.
+
+    Fixes committed in this release that need retroactive application to
+    all existing snapshots:
+      1. Remove PE Ratio where value ≤ 0; add _pe_not_meaningful_reason.
+      2. Convert Revenue Acceleration / Gross Margin Change YoY /
+         Incremental Operating Margin from raw float to formatted string
+         (e.g. 0.9427 → "0.94%").
+
+    No FMP API calls are made.  Idempotent — safe to re-run.
+    Returns a summary with counts for each fix applied.
+    """
+    import json as _json2
+    from data.pg_storage import _get_conn, _put_conn
+    from psycopg2.extras import Json
+
+    _PCT_FIELDS = ("Revenue Acceleration", "Gross Margin Change YoY", "Incremental Operating Margin")
+
+    conn = _get_conn()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="DB connection unavailable")
+
+    stats = {
+        "total_rows": 0,
+        "pe_removed": 0,
+        "pct_converted": 0,
+        "rows_updated": 0,
+        "errors": [],
+    }
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT symbol, watchlist_id, fields, missing_fields, fmp_call_count "
+            "FROM watchlist_fundamentals_cache"
+        )
+        rows = cur.fetchall()
+        cur.close()
+    except Exception as exc:
+        _put_conn(conn)
+        raise HTTPException(status_code=500, detail=f"Fetch failed: {exc}")
+
+    stats["total_rows"] = len(rows)
+
+    for sym, wl_id, fields_raw, missing_raw, call_count in rows:
+        fields   = dict(fields_raw)   if fields_raw   else {}
+        missing  = list(missing_raw)  if missing_raw  else []
+        dirty    = False
+
+        # ── Fix 1: PE Ratio ≤ 0 ───────────────────────────────────────────
+        pe = fields.get("PE Ratio")
+        if pe is not None:
+            try:
+                pe_f = float(pe)
+                if pe_f <= 0:
+                    del fields["PE Ratio"]
+                    fields["_pe_not_meaningful_reason"] = "negative_or_zero_eps"
+                    if "PE Ratio" not in missing:
+                        missing.append("PE Ratio")
+                    stats["pe_removed"] += 1
+                    dirty = True
+            except (ValueError, TypeError):
+                pass
+
+        # ── Fix 2: numeric percentage fields → formatted string ──────────
+        for pf in _PCT_FIELDS:
+            v = fields.get(pf)
+            if v is not None and isinstance(v, (int, float)):
+                fields[pf] = _fmt_pct_clean(float(v))
+                stats["pct_converted"] += 1
+                dirty = True
+
+        if not dirty:
+            continue
+
+        # Write back — missing_fields column is jsonb, wrap with Json()
+        try:
+            cur2 = conn.cursor()
+            cur2.execute(
+                """
+                UPDATE watchlist_fundamentals_cache
+                SET fields = %s, missing_fields = %s
+                WHERE symbol = %s
+                """,
+                (Json(fields), Json(missing), sym),
+            )
+            conn.commit()
+            cur2.close()
+            stats["rows_updated"] += 1
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            stats["errors"].append(f"{sym}: {exc}")
+
+    _put_conn(conn)
+    return stats

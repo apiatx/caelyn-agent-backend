@@ -733,7 +733,9 @@ class FmpFundamentalsRefresher:
                     g0 = self._pct(q0.get("revenue"), py_q0.get("revenue"))
                     g1 = self._pct(q1.get("revenue"), py_q1.get("revenue"))
                     if g0 is not None and g1 is not None:
-                        q["Revenue Acceleration"] = round(g0 - g1, 4)
+                        # Store as formatted string — value is already in
+                        # percentage-point units; avoids frontend ×100 heuristics.
+                        q["Revenue Acceleration"] = self._fmt_pct(round(g0 - g1, 4))
                         _ra_method = "fiscal_year_period_exact"
                 # If no exact match found, metric stays missing (no fallback)
             else:
@@ -744,7 +746,7 @@ class FmpFundamentalsRefresher:
                     g0 = self._pct(q0.get("revenue"), py_q0_pos.get("revenue"))
                     g1 = self._pct(q1.get("revenue"), py_q1_pos.get("revenue"))
                     if g0 is not None and g1 is not None:
-                        q["Revenue Acceleration"] = round(g0 - g1, 4)
+                        q["Revenue Acceleration"] = self._fmt_pct(round(g0 - g1, 4))
                         _ra_method = "position_approximate"
 
             q["_revenue_acceleration_alignment_method"] = _ra_method
@@ -759,7 +761,9 @@ class FmpFundamentalsRefresher:
                 try:
                     gm_now = float(ttm_gp)  / float(ttm_rev)  * 100
                     gm_py  = float(py_gp)   / float(py_rev)   * 100
-                    q["Gross Margin Change YoY"] = round(gm_now - gm_py, 4)
+                    # Store as formatted string — value is already in percentage
+                    # points; avoids frontend ×100 heuristics.
+                    q["Gross Margin Change YoY"] = self._fmt_pct(round(gm_now - gm_py, 4))
                 except (ValueError, TypeError, ZeroDivisionError):
                     pass
 
@@ -780,9 +784,10 @@ class FmpFundamentalsRefresher:
                         _INC_OP_MARGIN_MIN_DELTA_REL * abs(float(py_rev_iom)),
                     )
                     if d_rev > min_delta:
-                        q["Incremental Operating Margin"] = round(
+                        # Store as formatted string — already ×100 → percentage units.
+                        q["Incremental Operating Margin"] = self._fmt_pct(round(
                             d_oi / d_rev * 100, 4
-                        )
+                        ))
                     else:
                         reason = (
                             "negative_revenue_change" if d_rev <= 0 else
@@ -956,10 +961,14 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
 
-        # Forward EV/EBITDA = enterprise value / FY1 EBITDA (positive only)
+        # Forward EV/EBITDA = enterprise value / FY1 EBITDA (positive result only).
+        # Negative EV (heavy net-cash companies) or negative EBITDA → not meaningful.
         if ev and fy1_ebitda and float(fy1_ebitda) > 0:
             try:
-                q["Forward EV/EBITDA"] = round(float(ev) / float(fy1_ebitda), 4)
+                _fwd_ev_ebitda = round(float(ev) / float(fy1_ebitda), 4)
+                if _fwd_ev_ebitda > 0:
+                    q["Forward EV/EBITDA"] = _fwd_ev_ebitda
+                # negative result → omit (renders as N/M on frontend)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
 
@@ -1365,7 +1374,23 @@ class FmpFundamentalsRefresher:
                     missing.append(csv_key)
 
             _map_ratio("grossProfitMarginTTM",    "Gross Margin", "pct")
-            _map_ratio("priceToEarningsRatioTTM", "PE Ratio")
+            # PE Ratio: only store strictly positive values.
+            # Negative P/E = negative earnings (not a meaningful multiple).
+            # Omitting it prevents the frontend from displaying a misleading
+            # negative number; the frontend should render null/missing as N/M.
+            _pe_raw = rtm.get("priceToEarningsRatioTTM")
+            if _pe_raw is not None:
+                try:
+                    _pe_f = float(_pe_raw)
+                    if _pe_f > 0:
+                        fields["PE Ratio"] = round(_pe_f, 6)
+                    else:
+                        fields["_pe_not_meaningful_reason"] = "negative_or_zero_eps"
+                        missing.append("PE Ratio")
+                except (ValueError, TypeError):
+                    missing.append("PE Ratio")
+            else:
+                missing.append("PE Ratio")
             _map_ratio("priceToSalesRatioTTM",    "PS Ratio")
             _map_ratio("debtToEquityRatioTTM",    "Debt / Equity")
         else:
@@ -1475,6 +1500,12 @@ class FmpFundamentalsRefresher:
         for _k, _v in _dq.items():
             if _v is not None:
                 fields[_k] = _v
+
+        # Augment not_meaningful_active with PE Ratio when it was suppressed
+        # for being negative/zero — this blocks carry-forward of a previously
+        # stored negative P/E from an old snapshot.
+        if fields.get("_pe_not_meaningful_reason"):
+            _not_meaningful_active.add("PE Ratio")
 
         # ── 9. Balance sheet (new call) ──────────────────────────────────────
         bs_quality, _bs_row, _bs_outcome = await self._fetch_bs_quality(sym)

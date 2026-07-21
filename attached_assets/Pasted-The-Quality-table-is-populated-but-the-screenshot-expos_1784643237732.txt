@@ -1,0 +1,66 @@
+The Quality table is populated, but the screenshot exposed two numerical-display defects.
+
+Do not redesign the table or change the data pipeline.
+
+FRONTEND FIX
+
+1. Remove the `Math.abs(n) <= 1.5 ? n * 100 : n` heuristic from the Quality percentage formatter.
+
+The backend Quality contract already returns percentage fields in percentage units:
+
+- Strings containing `%` are already fully formatted percentages.
+- Numeric Quality fields such as Gross Margin Change YoY and Incremental Operating Margin are already percentage-point/percentage values.
+
+For Quality fields:
+
+- `"0.42%"` must render as `0.42%`
+- `"14.90%"` must render as `14.90%`
+- numeric `0.9427` for Revenue Acceleration must render as `0.94%`, not `94.27%`
+- numeric `22.4` must render as `22.40%`
+
+Do not alter the existing Fundamental formatter without auditing its legacy inputs. Fix the Quality formatter specifically or add explicit percentage-unit metadata to column definitions.
+
+Audit every Quality percentage column with values below 1.5%.
+
+2. For valuation multiples, display `N/M` when:
+
+- P/E <= 0
+- Forward P/E <= 0
+- P/FCF <= 0
+- Forward EV/EBITDA <= 0
+
+Sort N/M and missing values after valid positive multiples in both ascending and descending directions.
+
+BACKEND CANONICAL FIX
+
+3. In watchlist_fundamentals_refresh.py, do not store a negative or zero PE Ratio as a meaningful value.
+
+When FMP priceToEarningsRatioTTM <= 0:
+
+- omit `PE Ratio`
+- set `_pe_not_meaningful_reason = "negative_or_zero_eps"`
+- ensure an older positive P/E cannot be carried over
+
+4. Audit existing Neon snapshots for PE Ratio <= 0.
+
+Perform a one-time zero-provider-call cleanup through the existing snapshot store:
+
+- remove invalid negative/zero PE Ratio values
+- add the not-meaningful reason
+- preserve all other fields and timestamps
+- do not call FMP again
+
+VALIDATION
+
+Use the screenshot examples:
+
+- BE P/FCF 240.57 → FCF Yield approximately 0.42%, not 42%
+- CRWD 139.18 → approximately 0.72%, not 72%
+- NET 271.91 → approximately 0.37%, not 37%
+- HIMS 96.19 → approximately 1.04%, not 104%
+- ALGM 69.16 → approximately 1.45%, not 145%
+- BAND 28.64 → approximately 3.49%
+
+Prove negative P/E values render as N/M and sort last.
+
+Do not touch Theme assignments, technical data, schedules, FMP calls, Confluence, or the overall UI design.
