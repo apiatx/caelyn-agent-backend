@@ -1,0 +1,687 @@
+You are working inside the CaelynAI backend Replit.
+
+## FINAL NUMERICAL AUDIT — AUDIT ONLY, NO FIXES
+
+The prior audit is not accepted.
+
+It found useful issues, but it incorrectly marked several fields as trusted by comparing FMP data against calculations using the same FMP inputs. It also ignored material differences between current market prices and the values actually stored and displayed to the user.
+
+Your task is to determine whether every Fundamental and Quality number currently displayed in the Watchlist is accurate.
+
+Do not modify code.
+
+Do not modify Neon.
+
+Do not modify frontend files.
+
+Do not rerun the Watchlist backfill.
+
+Do not publish or deploy.
+
+Do not create an endpoint.
+
+Do not implement fixes.
+
+Stop after returning the corrected audit report.
+
+---
+
+# 1. Reuse existing evidence
+
+Reuse all existing material from:
+
+* `audit/quality_metric_audit.json`
+* `audit/quality_metric_audit.csv`
+* Previously saved raw FMP responses
+* Existing Neon snapshots
+* Existing Watchlist GET payloads
+
+Do not repeat FMP calls when the raw response has already been saved.
+
+Only make provider calls for required symbols or endpoints whose raw evidence is genuinely missing.
+
+This audit should not become another full-universe provider refresh.
+
+---
+
+# 2. Required symbols
+
+Audit these representative symbols:
+
+* AAPL
+* AMD
+* MU
+* ALGM
+* IREN
+* CRWD
+* NET
+* HIMS
+* BE
+* ASTS
+* SOFI
+* JPM
+* COIN
+* HOOD
+* EQIX
+* BAND
+
+These cover:
+
+* Stable profitable companies
+* High-multiple software
+* Semiconductors
+* Non-calendar fiscal years
+* Negative earnings
+* Negative FCF
+* Capital-intensive businesses
+* Banks
+* Fintechs
+* Crypto platforms
+* REITs
+* FCF-yield examples visible in the screenshot
+
+---
+
+# 3. Metrics that must be audited
+
+Audit every field below.
+
+## Existing Fundamental fields used by Quality
+
+* Market Cap
+* Revenue
+* Revenue Growth (Q)
+* Revenue Growth (YoY)
+* Gross Margin
+* FCF Margin
+* Free Cash Flow
+* Operating Income
+* EBIT
+* P/E
+* P/S
+* EV/EBITDA
+* EPS Growth
+* Debt / Equity
+* Net Debt / EBITDA
+* Forward P/E
+
+## Financial Strength
+
+* Cash
+* Net Cash / Debt
+* Cash Runway Months
+* Cash Runway Status
+* Current Ratio
+* Interest Coverage
+* Altman Z-Score
+* Altman Z-Risk
+* Piotroski Score
+
+## Business Quality
+
+* Operating Margin
+* ROIC
+* FCF Yield
+* FCF Conversion
+* Diluted Shares Growth YoY
+* SBC / Revenue
+
+## Growth Quality
+
+* Revenue Acceleration
+* Gross Margin Change YoY
+* Incremental Operating Margin
+* Forward Revenue Growth
+* Revenue Estimate Revision 90D
+* EPS Estimate Revision 90D
+
+## Valuation
+
+* P/E
+* Forward P/E
+* P/S
+* Forward P/S
+* EV/EBITDA
+* Forward EV/Sales
+* Forward EV/EBITDA
+* P/FCF
+* FCF Yield
+
+---
+
+# 4. Five-layer trace required
+
+For every audited symbol and metric, report these five layers:
+
+1. Raw provider input or direct provider value
+2. Independent calculation
+3. `normalize_symbol()` output
+4. Neon snapshot value
+5. Watchlist GET/frontend-ready value
+
+For each layer include:
+
+* Exact numeric value
+* Unit
+* Formula or source field
+* Price timestamp
+* Statement period
+* Estimate period
+* Currency
+* Fiscal year
+* Whether the value is current or stale
+
+Do not omit a layer merely because the value matches another layer.
+
+Use targeted scripts to extract individual ticker rows. Do not repeatedly download the entire 2 MB Watchlist response when a focused extraction can be used.
+
+---
+
+# 5. Valid verdict states
+
+Use only these verdicts:
+
+* `VERIFIED_INDEPENDENTLY`
+* `FORMULA_CORRECT_BUT_STALE`
+* `INTERNALLY_CONSISTENT_ONLY`
+* `PROVIDER_DIRECT_UNVERIFIED`
+* `CONFIRMED_WRONG`
+* `NOT_MEANINGFUL`
+* `INSUFFICIENT_EVIDENCE`
+
+Do not use generic `PASS`, `YES`, or `TRUSTED`.
+
+A same-source recomputation is not independent verification.
+
+Examples:
+
+* FMP market cap divided by an FMP estimate only proves the division.
+* FMP P/FCF and FMP FCF Yield being reciprocal only proves internal consistency.
+* A provider-direct ratio matching the same provider’s raw value does not prove that ratio is economically correct.
+
+---
+
+# 6. Current-value accuracy versus refresh-time accuracy
+
+Every price-sensitive metric must receive two separate verdicts:
+
+1. Was the formula correct at the time of the weekly refresh?
+2. Is the number currently displayed accurate using the current Watchlist quote?
+
+Use the existing canonical live quote cache.
+
+Do not make an additional provider request for the live price when the quote cache already contains it.
+
+For every price-sensitive metric report:
+
+* Price used at fundamentals refresh
+* Current Watchlist/Tradier price
+* Percentage price change
+* Stored/displayed metric
+* Current independently recomputed metric
+* Percentage difference
+
+A metric is not current or verified when the displayed value differs materially because it uses an old price.
+
+Use a 1% difference as the reporting threshold. Do not silently call a 5–10% difference acceptable.
+
+Explicitly audit:
+
+* P/E
+* P/S
+* EV/EBITDA
+* P/FCF
+* FCF Yield
+* Forward P/E
+* Forward P/S
+* Forward EV/Sales
+* Forward EV/EBITDA
+
+---
+
+# 7. Canonical valuation recomputation
+
+Use one consistent current market basis.
+
+## Current market cap
+
+Calculate:
+
+```text
+current live price × validated share basis
+```
+
+Compare the following possible share bases:
+
+* FMP profile implied shares
+* Latest diluted shares
+* TTM-average diluted shares
+* Any existing canonical market-cap resolver share basis
+
+Report which basis the current application actually uses.
+
+Do not silently choose one without explaining the impact.
+
+## Trailing P/E
+
+Calculate both:
+
+```text
+current market cap / strict TTM net income
+```
+
+and:
+
+```text
+current price / strict TTM diluted EPS
+```
+
+Requirements:
+
+* Exactly four distinct quarters
+* Positive TTM net income
+* Consistent share basis
+* Consistent currency
+* Negative or zero earnings = N/M
+
+Explain material differences between the two methods.
+
+## Trailing P/S
+
+```text
+current market cap / strict TTM revenue
+```
+
+Revenue must be positive and in the same currency.
+
+## Enterprise value
+
+Calculate:
+
+```text
+current market cap
++ total debt
+- cash and short-term investments
+```
+
+Also report FMP’s enterprise value.
+
+Explain any difference caused by:
+
+* Preferred stock
+* Minority interest
+* Lease liabilities
+* Other adjustments
+
+Do not mix simplified internal EV and FMP EV across different columns without labeling the difference.
+
+## EV/EBITDA
+
+```text
+current EV / strict TTM EBITDA
+```
+
+Report the exact EBITDA definition used:
+
+* Reported EBITDA
+* EBIT + D&A
+* FMP EBITDA
+* Another definition
+
+Negative EBITDA or non-positive EV must not be displayed as a normal valuation multiple.
+
+## P/FCF
+
+```text
+current market cap / strict TTM FCF
+```
+
+Positive FCF required.
+
+## FCF Yield
+
+```text
+strict TTM FCF / current market cap × 100
+```
+
+Mandatory invariant when FCF is positive:
+
+```text
+FCF Yield % = 100 / P/FCF
+```
+
+Audit the screenshot examples:
+
+* BE
+* CRWD
+* NET
+* HIMS
+* ALGM
+* BAND
+
+Do not use an arbitrary 100% cap to declare a value invalid.
+
+For extreme results, determine whether the cause is:
+
+* Real FCF
+* One-time working-capital movement
+* Incorrect market cap
+* Stale market cap
+* Provider data error
+* Unit error
+
+## Forward P/E
+
+```text
+current live price / FY1 annual consensus EPS
+```
+
+Required proof:
+
+* Correct FY1 period
+* Positive EPS
+* Same listing/share basis
+* Same currency
+* Analyst count
+* Estimate date
+* Price timestamp
+
+The quarterly EPS × 4 fallback must be labeled approximate and must not be treated as equivalent to annual FY1 consensus.
+
+## Forward P/S
+
+```text
+current market cap / FY1 consensus revenue
+```
+
+## Forward EV/Sales
+
+```text
+current EV / FY1 consensus revenue
+```
+
+## Forward EV/EBITDA
+
+```text
+current EV / positive FY1 consensus EBITDA
+```
+
+For all forward metrics report:
+
+* Latest completed actual fiscal year
+* Selected FY1 date
+* Years ahead
+* Raw estimate
+* Analyst count
+* Currency
+* Current numerator
+* Current independent result
+* Stored result
+* Difference
+
+---
+
+# 8. Required formula audits
+
+Independently recompute these metrics rather than merely restating the existing code.
+
+## Revenue and margins
+
+* Revenue = strict latest four-quarter sum
+* Revenue Growth YoY = current strict TTM / prior strict TTM − 1
+* Revenue Growth Q = latest fiscal quarter / exact same fiscal quarter prior year − 1
+* Gross Margin = TTM gross profit / TTM revenue
+* Operating Margin = TTM operating income / TTM revenue
+* FCF Margin = TTM FCF / TTM revenue
+
+## Balance-sheet metrics
+
+* Cash
+* Net Cash / Debt
+* Current Ratio
+* Debt / Equity
+* Cash Runway
+
+Verify whether `cashAndShortTermInvestments` already includes short-term investments.
+
+Ensure the fallback does not add short-term investments twice.
+
+## Interest Coverage
+
+Reconcile the differences already observed.
+
+For every representative symbol print:
+
+* EBIT
+* Operating income
+* Interest expense
+* Net interest expense if present
+* FMP direct ratio
+* Current app ratio
+* Independent EBIT / absolute interest expense
+* Exact definition that best reproduces FMP
+
+Do not mark it verified when differences remain unexplained.
+
+## Net Debt / EBITDA
+
+Reconcile the existing major differences, including:
+
+* NVDA
+* SOFI
+
+Print:
+
+* FMP net debt
+* Total debt
+* Cash and short-term investments
+* FMP EBITDA
+* Independent EBITDA
+* FMP Net Debt/EBITDA
+* Independent result
+
+Do not mark this field verified until the provider definition is reproduced.
+
+## FCF Conversion
+
+```text
+strict TTM FCF / strict TTM net income
+```
+
+Positive materially meaningful net income required.
+
+## Diluted Shares Growth
+
+```text
+latest four-quarter average diluted shares
+/
+prior four-quarter average diluted shares
+- 1
+```
+
+## SBC / Revenue
+
+```text
+strict TTM SBC / strict TTM revenue
+```
+
+Verify the SBC sign convention.
+
+## Revenue Acceleration
+
+```text
+latest-quarter YoY revenue growth
+-
+previous-quarter YoY revenue growth
+```
+
+Unit: percentage points.
+
+## Gross Margin Change YoY
+
+```text
+current strict TTM gross margin
+-
+prior strict TTM gross margin
+```
+
+Unit: percentage points.
+
+## Incremental Operating Margin
+
+```text
+change in TTM operating income
+/
+positive material change in TTM revenue
+```
+
+## Forward Revenue Growth
+
+```text
+FY1 consensus revenue
+/
+latest completed actual fiscal-year revenue
+- 1
+```
+
+Prove that the completed fiscal year uses exactly Q1, Q2, Q3 and Q4 once each.
+
+## Revision metrics
+
+For Revenue and EPS Revision 90D report:
+
+* Current estimate
+* Prior stored estimate
+* Fiscal period
+* Current observation date
+* Prior observation date
+* Days from the 90-day target
+* Calculated revision
+* History-building status
+
+---
+
+# 9. EPS Growth definition
+
+Determine exactly what `growthEPSDiluted` means in the FMP endpoint currently used.
+
+Do not assume the existing code comment is correct.
+
+Compare it with:
+
+* Latest quarter EPS versus immediately prior quarter
+* Latest quarter EPS versus same quarter prior year
+
+State which one reproduces the provider field.
+
+Then determine whether the label `EPS Growth` is accurate or misleading.
+
+---
+
+# 10. Provider-direct fields
+
+For:
+
+* ROIC
+* Altman Z
+* Piotroski
+
+Report the raw provider value and current stored/displayed value.
+
+Do not mark them independently verified unless the required source inputs allow a real independent calculation.
+
+Use:
+
+* `PROVIDER_DIRECT_UNVERIFIED`
+
+when appropriate.
+
+---
+
+# 11. Full Neon invariant scan
+
+Run a zero-provider-call scan across the complete current table.
+
+Record one authoritative row count at the start and end.
+
+Explain any difference.
+
+Check for:
+
+* P/E <= 0
+* P/S <= 0
+* EV/EBITDA <= 0
+* Forward P/E <= 0
+* Forward P/S <= 0
+* Forward EV/Sales <= 0
+* Forward EV/EBITDA <= 0
+* P/FCF <= 0
+* FCF Yield/P-FCF reciprocal mismatch
+* Percentage unit errors
+* Duplicate N/M reason plus valid numeric value
+* Numeric value present when denominator is negative
+* Missing provenance on internally derived fields
+* Mixed stale/current numerator inputs
+* Invalid Piotroski range
+* Negative runway months
+* FY1 period more than one fiscal year beyond the completed actual fiscal year
+* Missing analyst counts on forward estimates
+* Symbols whose current quote changes a valuation ratio by more than:
+
+  * 1%
+  * 5%
+  * 10%
+
+Do not mutate any rows.
+
+---
+
+# 12. Required output
+
+Replace the prior verdicts in:
+
+* `audit/quality_metric_audit.json`
+* `audit/quality_metric_audit.csv`
+
+The CSV must contain one row per:
+
+```text
+symbol × metric
+```
+
+Required CSV columns:
+
+* symbol
+* metric
+* raw_provider_value
+* independent_value_at_refresh
+* current_independent_value
+* normalize_output
+* neon_value
+* api_value
+* refresh_price
+* current_price
+* statement_period
+* estimate_period
+* currency
+* difference_at_refresh_pct
+* current_difference_pct
+* verification_method
+* verdict
+* root_cause
+
+Return a concise human-readable report containing:
+
+1. Metrics confirmed correct
+2. Metrics correct only at refresh time but currently stale
+3. Metrics internally consistent but not independently verified
+4. Metrics confirmed wrong
+5. Exact affected-row counts
+6. Root causes
+7. Which prior audit conclusions were withdrawn
+8. Whether the full 331-symbol backfill must eventually be rerun
+9. Recommended fixes, but no implementation
+
+Do not begin fixing anything after the report.
+
+Stop and wait for approval.

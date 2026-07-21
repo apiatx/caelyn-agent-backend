@@ -1,0 +1,329 @@
+The audit artifacts contain valuable findings, but the audit is not accepted yet.
+
+Do not implement any formula changes.
+Do not mutate Neon.
+Do not rerun the 331-symbol backfill.
+Do not publish.
+
+Correct and complete the existing audit artifacts.
+
+Use the already-saved raw FMP data and Neon data wherever possible. Do not repeat provider calls unnecessarily.
+
+==================================================
+PART 1 — CORRECT FALSE PASS RESULTS
+==================================================
+
+The audit currently labels fields PASS based on provider-to-provider comparisons while ignoring the current value shown to the user.
+
+Every valuation test must compare:
+
+1. Current canonical quote
+2. Current independently calculated value
+3. Stored Neon value
+4. Watchlist GET value
+5. Frontend-ready value
+
+A field is not PASS when the current independent value materially differs from the stored/displayed value.
+
+Explicitly correct these AMD results:
+
+- Current independent P/E: approximately 174.30
+- Neon P/E: approximately 163.50
+- Current independent P/S: approximately 23.31
+- Neon P/S: approximately 21.92
+- Current Forward P/E: approximately 71.48
+- Neon Forward P/E: approximately 67.22
+- Current Forward P/S: approximately 17.43
+- Neon Forward P/S: approximately 16.40
+- Current Forward EV/EBITDA: approximately 80.19
+- Neon Forward EV/EBITDA: approximately 75.41
+
+Do not describe these as 0.4–1.3% differences.
+
+Calculate and report the actual difference.
+
+Classify separately:
+
+- formula correctness at refresh time
+- freshness/current-value correctness
+- display correctness
+
+==================================================
+PART 2 — ELIMINATE CIRCULAR VALIDATION
+==================================================
+
+Do not call a metric independently verified when the independent calculation uses the same provider numerator and denominator as the existing metric.
+
+For each field mark the audit method as:
+
+- truly independent
+- same-source recomputation
+- provider-direct comparison
+- invariant-only check
+- unverified
+
+Examples:
+
+Forward P/S using FMP profile market cap and FMP FY1 revenue is same-source recomputation, not independent verification.
+
+P/FCF and FCF Yield reciprocal agreement proves internal consistency, not that either input is correct.
+
+==================================================
+PART 3 — COMPLETE THE MISSING SYMBOL SET
+==================================================
+
+Complete the requested representative audit for:
+
+- IREN
+- MU
+- ALGM
+- NET
+- MDB
+- BE
+- COIN
+- HOOD
+
+Use saved raw responses when available.
+
+Only make additional provider calls for missing raw evidence.
+
+These symbols are mandatory because they cover:
+
+- non-calendar fiscal years
+- financial-services provider classification
+- crypto/brokerage operating companies
+- negative earnings
+- extreme valuation multiples
+- high-growth software
+- capital-intensive businesses
+
+==================================================
+PART 4 — RECONCILE NET DEBT/EBITDA
+==================================================
+
+The audit currently calls Net Debt/EBITDA trusted despite major discrepancies.
+
+Investigate:
+
+NVDA:
+- independent approximately -0.3511
+- FMP/Neon approximately -0.0022
+
+SOFI:
+- independent approximately -5.0664
+- FMP/Neon approximately -1.6661
+
+For each sampled symbol print:
+
+- FMP netDebtTTM if supplied
+- FMP netDebtToEBITDATTM
+- totalDebt
+- shortTermDebt
+- longTermDebt
+- cashAndShortTermInvestments
+- cashAndCashEquivalents
+- EBITDA definition used by FMP
+- independent EBITDA definitions attempted
+- exact formula that reproduces the provider value
+
+Do not mark trusted until the provider definition is reproduced or the app adopts a transparent internal definition.
+
+==================================================
+PART 5 — RECONCILE INTEREST COVERAGE
+==================================================
+
+Investigate the observed differences:
+
+- MSFT: 52.69 vs independent 55.65
+- NVDA: 544.58 vs independent 636.71
+- EQIX: 3.50 vs independent 3.86
+
+Print the exact numerator and denominator used by:
+
+- FMP
+- current app
+- independent calculation
+
+Check:
+
+- EBIT
+- operating income
+- interest expense
+- net interest expense
+- capitalized interest
+- sign conventions
+
+Do not claim <0.1% agreement when the evidence does not support it.
+
+==================================================
+PART 6 — COMPLETE EXTERNAL SANITY CHECK
+==================================================
+
+The current artifacts do not contain the required external sanity-check section.
+
+For representative symbols, compare current valuation figures against two independent sources where available.
+
+At minimum:
+
+- AAPL
+- AMD
+- CRWD
+- NET
+- HIMS
+- MU
+- IREN
+- SOFI
+- COIN
+- HOOD
+
+Record:
+
+- source name
+- value
+- as-of date/time
+- metric definition
+- whether it is trailing or forward
+- whether it uses GAAP or adjusted earnings
+- fiscal period
+
+Do not treat external sources as unquestioned truth. Use them to explain discrepancies.
+
+==================================================
+PART 7 — FIX ROW-COUNT CONSISTENCY
+==================================================
+
+Explain why the human report says 337 rows while the JSON says 341.
+
+Record:
+
+- scan start timestamp
+- scan end timestamp
+- exact query
+- rows present at each point
+- duplicate symbol count
+- null/invalid symbol count
+
+Use one final authoritative row count.
+
+==================================================
+PART 8 — RECLASSIFY TRUST LEVELS
+==================================================
+
+Use these trust states only:
+
+- VERIFIED_INDEPENDENTLY
+- INTERNALLY_CONSISTENT_ONLY
+- PROVIDER_DIRECT_UNVERIFIED
+- STALE_BUT_FORMULA_CORRECT_AT_REFRESH
+- CONFIRMED_WRONG
+- NOT_MEANINGFUL
+- INSUFFICIENT_EVIDENCE
+
+Do not use generic YES for a field that was not independently verified.
+
+At minimum, reclassify:
+
+- Market Cap: stale snapshot, not current
+- P/E: stale but formula/provider value may have been correct at refresh
+- P/S: stale; negative rows confirmed wrong
+- Forward P/E: stale but formula may be correct at refresh
+- Forward P/S: same-source recomputation, stale
+- Forward EV/Sales: same-source recomputation, stale
+- Forward EV/EBITDA: same-source recomputation, stale
+- Net Debt/EBITDA: insufficient evidence until reconciled
+- Interest Coverage: insufficient evidence until reconciled
+- ROIC: provider-direct unverified
+- Altman Z: provider-direct unverified
+- Piotroski: provider-direct unverified
+
+==================================================
+PART 9 — DO NOT USE AN ARBITRARY FCF YIELD CAP
+==================================================
+
+Do not recommend abs(FCF Yield) <= 100 as the canonical rule without evidence.
+
+Audit the five outliers individually.
+
+For each print:
+
+- market cap
+- TTM FCF
+- independent FCF yield
+- FMP FCF yield
+- P/FCF
+- latest statement quarters
+- whether FCF includes a one-time working-capital event
+- whether market cap or FCF is stale/incompatible
+
+Recommended valuation semantics to evaluate:
+
+- FCF <= 0:
+  P/FCF and FCF Yield shown as N/M in Valuation
+- FCF > 0:
+  calculate both from the same canonical live market cap
+- extreme positive values:
+  flag as data-quality/outlier, not automatically delete
+
+==================================================
+PART 10 — PROPOSE LIVE VALUATION ARCHITECTURE
+==================================================
+
+Audit whether the existing warm Tradier quote cache and stored implied-share basis can support zero-provider-call live valuation recomputation in the Watchlist GET path.
+
+Propose, but do not implement:
+
+Live Market Cap =
+live quote price × stored canonical implied shares
+
+Live EV =
+live market cap
++ total debt
+- cash and short-term investments
++ explicitly supported adjustments
+
+Then recompute:
+
+- P/E
+- P/S
+- EV/EBITDA
+- P/FCF
+- FCF Yield
+- Forward P/E
+- Forward P/S
+- Forward EV/Sales
+- Forward EV/EBITDA
+
+Report:
+
+- which stored raw denominator fields already exist
+- which need to be added to snapshots
+- expected GET-path computation cost
+- handling when live quote is unavailable
+- ADR/share-class safeguards
+- currency safeguards
+- whether ratios should expose a price timestamp
+
+Do not make provider calls in GET.
+
+==================================================
+REQUIRED OUTPUT
+==================================================
+
+Update:
+
+- audit/quality_metric_audit.json
+- audit/quality_metric_audit.csv
+
+Also return:
+
+1. Corrected executive verdict
+2. Fields whose prior PASS status was withdrawn
+3. Actual current-vs-Neon differences
+4. Completed missing-symbol results
+5. Net Debt/EBITDA reconciliation
+6. Interest Coverage reconciliation
+7. External sanity-check evidence
+8. Final authoritative row count
+9. Corrected trust classification for every field
+10. Recommended live valuation architecture
+11. Recommended fixes only — no implementation
