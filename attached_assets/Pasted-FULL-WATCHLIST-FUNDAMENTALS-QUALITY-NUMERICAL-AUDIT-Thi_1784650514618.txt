@@ -1,0 +1,780 @@
+FULL WATCHLIST FUNDAMENTALS + QUALITY NUMERICAL AUDIT
+
+This is an AUDIT-ONLY task.
+
+Do not modify production formulas.
+Do not modify frontend code.
+Do not mutate Neon.
+Do not rerun the 331-symbol backfill.
+Do not publish or deploy.
+Do not create a permanent endpoint.
+Do not create a new production data pipeline.
+
+The user has independently confirmed that P/E, P/S and forward valuation ratios are wrong. Therefore every displayed Fundamental and Quality metric must now be treated as unverified.
+
+Your job is to prove, field by field, exactly where every displayed number comes from and whether it is numerically, economically and temporally valid.
+
+The Replit workspace is the source of truth for current code paths.
+
+==================================================
+PART 1 — INVENTORY EVERY DISPLAYED FIELD
+==================================================
+
+Trace the actual live column definitions in the frontend and the actual backend payload keys.
+
+Create one complete inventory covering every metric displayed in:
+
+1. Quality Overview
+2. Quality Financial Strength
+3. Quality Business Quality
+4. Quality Growth
+5. Quality Valuation
+6. Any existing Fundamental fields reused inside Quality
+
+At minimum include:
+
+Core/raw fields:
+- Market Cap
+- Revenue
+- Free Cash Flow
+- Operating Income
+- EBIT
+- Gross Margin
+- FCF Margin
+- Revenue Growth (Q)
+- Revenue Growth (YoY)
+- EPS Growth
+- Debt / Equity
+- Net Debt / EBITDA
+- PE Ratio
+- PS Ratio
+- EV/EBITDA
+- Forward P/E
+
+Financial Strength:
+- Cash
+- Net Cash / Debt
+- Cash Runway Months
+- Cash Runway Status
+- Current Ratio
+- Interest Coverage
+- Altman Z-Score
+- Altman Z-Risk
+- Piotroski Score
+
+Business Quality:
+- Operating Margin
+- ROIC
+- FCF Yield
+- FCF Conversion
+- Diluted Shares Growth YoY
+- SBC / Revenue
+
+Growth Quality:
+- Revenue Acceleration
+- Gross Margin Change YoY
+- Incremental Operating Margin
+- Forward Revenue Growth
+- Revenue Estimate Revision 90D
+- EPS Estimate Revision 90D
+
+Valuation:
+- P/E
+- Forward P/E
+- P/S
+- Forward P/S
+- EV/EBITDA
+- Forward EV/Sales
+- Forward EV/EBITDA
+- P/FCF
+- FCF Yield
+
+For every field report:
+
+- Display label
+- Canonical backend key
+- Frontend aliases
+- Current provider endpoint
+- Exact provider field names
+- Whether it is:
+  - provider-direct
+  - internally derived
+  - provider-direct with fallback
+  - hybrid
+- Current formula
+- Intended financial formula
+- Raw unit
+- Stored unit
+- API unit
+- Frontend display unit
+- Time basis:
+  - current
+  - latest quarter
+  - strict TTM
+  - latest completed FY
+  - FY1 consensus
+- Fiscal-period basis
+- Price timestamp
+- Statement timestamp
+- Estimate timestamp
+- Currency
+- Share/listing basis
+- N/M conditions
+- Current provenance metadata
+- Current carry-forward behavior
+
+Do not omit fields because they appear provider-direct. Provider-direct ratios must also be validated independently.
+
+==================================================
+PART 2 — CAPTURE RAW PROVIDER EVIDENCE
+==================================================
+
+Use a temporary audit script outside the production request path.
+
+Do not use normalize_symbol() as the independent calculator.
+
+For each test symbol, capture the unmodified responses from all currently used FMP endpoints:
+
+- profile
+- income-statement?period=quarter
+- income-statement-growth?period=quarter
+- cash-flow-statement?period=quarter
+- ratios-ttm
+- key-metrics-ttm
+- earnings
+- balance-sheet-statement?period=quarter
+- analyst-estimates?period=annual
+- financial-scores
+
+Also capture:
+
+- Current canonical Watchlist quote
+- Current Tradier quote-cache price if available
+- Current live market-cap resolver result
+- Existing Neon fundamentals snapshot
+- Existing Watchlist GET ticker row
+- Exact frontend-ready values
+
+Test these symbols:
+
+Stable baseline:
+- AAPL
+- MSFT
+- NVDA
+
+High-growth/high-multiple:
+- CRWD
+- NET
+- HIMS
+- MDB
+
+Capital-intensive/speculative:
+- BE
+- ASTS
+- IREN
+
+Semiconductors/non-calendar:
+- AMD
+- MU
+- ALGM
+
+Financial structures:
+- SOFI
+- JPM
+- COIN
+- HOOD
+
+REIT:
+- EQIX
+
+Include one company with:
+- negative net income
+- positive FCF but negative GAAP income
+- negative FCF
+- negative enterprise value or heavy net cash
+- stock split history
+- ADR or foreign-listing complications
+- non-calendar fiscal year
+
+Keep the provider call count controlled. This is a representative raw-data audit, not another 331-symbol refresh.
+
+==================================================
+PART 3 — ESTABLISH ONE CONSISTENT VALUATION BASIS
+==================================================
+
+For each sample symbol, identify and print:
+
+- FMP profile price
+- Tradier/current Watchlist price
+- FMP profile market cap
+- Market cap endpoint result if entitled
+- Implied shares = profile market cap / profile price
+- Latest diluted weighted-average shares
+- Latest basic weighted-average shares
+- TTM-average diluted shares
+- Current live market cap from the canonical resolver
+- Currency for price
+- Reported currency for statements
+- Currency/basis of analyst estimates
+- Exchange
+- ADR/share-class status if applicable
+- Latest statement date
+- Fundamentals refresh timestamp
+- Live quote timestamp
+
+Then determine whether the current code mixes incompatible bases.
+
+Explicitly test:
+
+- Stale FMP profile price with live Watchlist price
+- Stale profile market cap with current estimates
+- Current market cap with old TTM financials
+- USD market cap divided by non-USD statements
+- ADR price divided by ordinary-share EPS
+- Split-adjusted price divided by unadjusted EPS
+- One share class market cap divided by consolidated company financials
+
+Any metric with a currency, listing or share-class mismatch must fail.
+
+==================================================
+PART 4 — INDEPENDENT VALUATION RECOMPUTATION
+==================================================
+
+Independently calculate the following.
+
+Do not simply copy FMP ratio fields.
+
+Use one documented canonical price/market-cap timestamp for all valuation metrics.
+
+### Trailing P/E
+
+Primary independent formula:
+
+current canonical market cap / strict TTM net income
+
+Requirements:
+- Exactly four distinct quarters
+- TTM net income must be positive
+- Same currency
+- P/E <= 0 is N/M
+
+Also compare against:
+
+current price / TTM diluted EPS
+
+Explain any difference caused by share-count changes.
+
+Compare:
+- Independent P/E
+- FMP priceToEarningsRatioTTM
+- Stored PE Ratio
+- Watchlist API value
+- Frontend value
+
+### Trailing P/S
+
+Formula:
+
+current canonical market cap / strict TTM revenue
+
+Compare:
+- Independent P/S
+- FMP priceToSalesRatioTTM
+- Stored PS Ratio
+- Frontend value
+
+### Enterprise value
+
+Calculate a clearly labeled simplified EV:
+
+current canonical market cap
++ total debt
+- cash and short-term investments
+
+Also report whether FMP provides:
+- preferred equity
+- minority interest
+- other EV adjustments
+
+Compare the simplified EV with FMP’s enterprise value.
+
+Do not silently use two different EV definitions across columns.
+
+### EV/EBITDA
+
+Formula:
+
+canonical EV / strict TTM EBITDA
+
+Requirements:
+- Four complete quarters
+- Positive EBITDA
+- Positive meaningful EV
+- Same currency
+
+Compare against FMP evToEBITDATTM.
+
+### Net Debt/EBITDA
+
+Formula:
+
+(total debt - cash and short-term investments) / strict TTM EBITDA
+
+State whether negative values mean net cash and whether the frontend should show them.
+
+### P/FCF
+
+Formula:
+
+current canonical market cap / strict TTM free cash flow
+
+Requirements:
+- Positive FCF
+- Same currency
+- Otherwise N/M
+
+### FCF Yield
+
+Formula:
+
+strict TTM free cash flow / current canonical market cap × 100
+
+Mandatory invariant:
+
+FCF Yield % ≈ 100 / P/FCF
+
+For every row containing both values, report the variance.
+
+### Forward P/E
+
+Formula:
+
+current canonical share price / FY1 annual consensus EPS
+
+Requirements:
+- FY1 must be the correct next unreported fiscal year
+- EPS must be for the same listing/share/ADR basis
+- Positive EPS
+- Same currency/share basis
+- Record analyst count
+- Record estimate period
+- Record price timestamp
+
+Compare against:
+- Stored Forward P/E
+- FMP estimate input
+- Quarterly-EPS×4 fallback
+- Any public/direct FMP forward metric available under the plan
+
+Do not call a quarterly×4 approximation equivalent to FY1 annual consensus.
+
+### Forward P/S
+
+Formula:
+
+current canonical market cap / FY1 consensus revenue
+
+Requirements:
+- Correct FY1 period
+- Same currency
+- Same company/listing basis
+- Positive revenue
+
+### Forward EV/Sales
+
+Formula:
+
+canonical EV / FY1 consensus revenue
+
+### Forward EV/EBITDA
+
+Formula:
+
+canonical EV / positive FY1 consensus EBITDA
+
+For every forward metric, print:
+
+- completed actual FY date
+- selected FY1 date
+- number of fiscal years ahead
+- raw consensus estimate
+- analyst count
+- numerator source
+- numerator timestamp
+- denominator source
+- denominator period
+- currency compatibility result
+
+==================================================
+PART 5 — INDEPENDENT FINANCIAL-STRENGTH AUDIT
+==================================================
+
+Recompute and compare:
+
+### Cash
+Audit whether `cashAndShortTermInvestments` already includes short-term investments.
+
+Prove there is no double counting in the fallback.
+
+### Net Cash / Debt
+
+cash and short-term investments - total debt
+
+Print the exact debt field used:
+- totalDebt
+- shortTermDebt + longTermDebt
+- another field
+
+Compare alternatives.
+
+### Cash Runway
+
+For negative strict TTM FCF:
+
+cash / absolute TTM FCF × 12
+
+For positive FCF:
+- Self-Funding
+
+Audit:
+- Whether total liquidity would be more appropriate than Cash
+- Whether restricted cash is included
+- Applicability gates
+- Currency consistency
+
+### Current Ratio
+
+current assets / current liabilities
+
+Compare:
+- direct FMP ratio
+- balance-sheet recomputation
+- stored result
+
+### Interest Coverage
+
+EBIT / absolute interest expense
+
+Audit:
+- positive vs negative interest expense signs
+- companies with net interest income
+- financial-company applicability
+- direct FMP ratio vs derived ratio
+
+### Debt / Equity
+
+Independently compute:
+
+total debt / total stockholders’ equity
+
+Compare against FMP debtToEquityRatioTTM.
+
+Determine whether FMP returns:
+- decimal ratio
+- percentage
+- total liabilities/equity instead of debt/equity
+
+### Altman Z and Piotroski
+
+These are provider-direct, but audit:
+- exact raw provider value
+- applicability
+- missing vs N/M
+- provider timestamp
+- classification thresholds
+
+==================================================
+PART 6 — INDEPENDENT BUSINESS-QUALITY AUDIT
+==================================================
+
+Use strict, deduplicated four-quarter data.
+
+Recompute:
+
+### Gross Margin
+
+TTM gross profit / TTM revenue × 100
+
+Compare direct FMP ratio.
+
+### Operating Margin
+
+TTM operating income / TTM revenue × 100
+
+Compare direct FMP ratio.
+
+### FCF Margin
+
+TTM FCF / TTM revenue × 100
+
+### ROIC
+
+Do not accept the provider value blindly.
+
+Print FMP’s raw ROIC and independently calculate at least one transparent version:
+
+NOPAT / average invested capital
+
+State:
+- tax-rate assumption
+- invested-capital definition
+- whether average beginning/ending capital is available
+- whether goodwill is included
+
+If the independent version cannot be supported cleanly with available fields, label displayed ROIC as provider-direct rather than internally verified.
+
+### FCF Conversion
+
+TTM FCF / TTM net income
+
+Requirements:
+- materially positive net income
+- otherwise N/M
+
+### Diluted Shares Growth YoY
+
+average diluted shares for latest four quarters
+/
+average diluted shares for prior four quarters
+- 1
+
+Audit split adjustments and duplicate quarters.
+
+### SBC / Revenue
+
+strict TTM stock-based compensation / strict TTM revenue × 100
+
+Check SBC sign conventions.
+
+==================================================
+PART 7 — INDEPENDENT GROWTH-QUALITY AUDIT
+==================================================
+
+Recompute:
+
+### Revenue Growth YoY
+
+strict current TTM revenue / strict prior TTM revenue - 1
+
+### Revenue Growth Q
+
+latest fiscal quarter revenue / exact same fiscal quarter prior year - 1
+
+No positional matching when fiscal metadata exists.
+
+### EPS Growth
+
+Audit exactly what the current field means.
+
+The current endpoint field may represent:
+- sequential growth
+- YoY growth
+- provider-defined statement growth
+
+Report the actual FMP definition and whether the frontend label is misleading.
+
+### Revenue Acceleration
+
+latest-quarter YoY revenue growth
+-
+previous-quarter YoY revenue growth
+
+Units must be percentage points.
+
+### Gross Margin Change YoY
+
+current strict TTM gross margin
+-
+prior strict TTM gross margin
+
+Units must be percentage points.
+
+### Incremental Operating Margin
+
+change in TTM operating income
+/
+positive, material change in TTM revenue
+× 100
+
+### Forward Revenue Growth
+
+FY1 consensus revenue
+/
+latest completed actual fiscal-year revenue
+- 1
+
+Prove the completed actual FY contains exactly Q1-Q4 once each.
+
+### Revenue and EPS Revision 90D
+
+current consensus
+/
+stored consensus near 90 days ago
+- 1
+
+Requirements:
+- same symbol
+- same metric
+- same fiscal period
+- actual prior observation, not fabricated
+- report selected prior observation date
+- report distance from 90-day target
+- report history-building honestly
+
+==================================================
+PART 8 — END-TO-END VALUE TRACE
+==================================================
+
+For every audited symbol and metric, compare five layers:
+
+1. Raw provider value/input
+2. Independent audit calculation
+3. normalize_symbol() output
+4. Neon snapshot value
+5. Watchlist GET/frontend-ready value
+
+Report:
+
+- exact value at every layer
+- absolute difference
+- percentage difference
+- unit
+- timestamp
+- pass/fail
+- root cause when failed
+
+A metric fails when:
+
+- wrong formula
+- wrong unit
+- incorrect ×100 conversion
+- mixed currencies
+- mixed fiscal periods
+- mixed share classes
+- stale numerator paired with live denominator
+- duplicate quarter
+- partial TTM
+- negative denominator treated as meaningful
+- provider-direct value materially disagrees with independently reproducible inputs
+- frontend changes the numeric meaning
+
+Do not hide discrepancies with rounding.
+
+==================================================
+PART 9 — FULL NEON INVARIANT SCAN
+==================================================
+
+After the representative live audit, run a zero-provider-call scan across every existing fundamentals snapshot.
+
+Do not mutate rows.
+
+Check:
+
+- P/E <= 0
+- P/S <= 0
+- EV/EBITDA <= 0
+- Forward P/E <= 0
+- Forward P/S <= 0
+- Forward EV/Sales <= 0
+- Forward EV/EBITDA <= 0
+- P/FCF <= 0
+- Current Ratio < 0
+- Piotroski outside 0–9
+- Cash Runway Months < 0
+- FCF Yield outside plausible bounds
+- P/FCF and FCF Yield reciprocal mismatch
+- Forward P/S inconsistent with stored Market Cap and FY1 estimate inputs
+- Forward EV/S inconsistent with stored EV and estimate inputs
+- Revenue or cash-flow percentages with obvious ×100 errors
+- Numeric value present beside an active N/M reason
+- N/M reason present beside a contradictory valid numeric value
+- Same symbol with stale mixed-format values
+- Missing provenance for internally calculated metrics
+
+Produce anomaly counts and symbol lists.
+
+==================================================
+PART 10 — EXTERNAL SANITY CHECK
+==================================================
+
+For the representative symbols only, compare the major valuation ratios with at least two independent reputable sources available to the project.
+
+Examples:
+- FMP direct endpoint
+- Finviz
+- company filing calculations
+- another available fundamentals API
+- current market cap and filings independently calculated
+
+Do not use an external website value as unquestioned truth.
+
+Use external sources only to identify which calculation is likely wrong.
+
+Report the as-of date for every comparison.
+
+==================================================
+PART 11 — NO FIXES YET
+==================================================
+
+Do not change code during this audit.
+
+Do not clean Neon.
+
+Do not overwrite bad values.
+
+Do not add fallbacks.
+
+Do not change column labels.
+
+Do not change the frontend formatter.
+
+After the evidence report, propose fixes separately and wait for approval.
+
+==================================================
+REQUIRED OUTPUT
+==================================================
+
+Return:
+
+1. Executive verdict:
+   - trusted fields
+   - untrusted fields
+   - confirmed wrong fields
+   - fields that are mathematically valid but economically misleading
+
+2. Complete field provenance matrix
+
+3. Representative symbol audit table
+
+4. Full Neon invariant-scan results
+
+5. Exact root causes ranked by severity
+
+6. Exact files/functions involved
+
+7. Proposed canonical formula contract for every metric
+
+8. Proposed source-of-truth hierarchy:
+   - price
+   - market cap
+   - shares
+   - statements
+   - enterprise value
+   - estimates
+   - currencies
+   - fiscal periods
+
+9. Recommended corrections, but NO implementation
+
+10. Estimated number of rows affected by each defect
+
+11. Whether the existing 331-symbol backfill must be rerun after corrections
+
+Save the detailed machine-readable audit as:
+
+- `audit/quality_metric_audit.json`
+- `audit/quality_metric_audit.csv`
+
+Also provide a concise human-readable report in the Agent response.
+
+Do not claim a field is accurate merely because it matches the existing code.
