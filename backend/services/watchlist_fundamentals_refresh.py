@@ -131,28 +131,102 @@ _QUALITY_CARRY_FIELDS: frozenset[str] = (
     _BS_CARRY_FIELDS | _EST_CARRY_FIELDS | _SCORES_CARRY_FIELDS
 )
 
-# Financial sectors/industry keywords where Altman Z and Cash Runway
-# are economically meaningless (deposit-funded; current-ratio irrelevant).
-_FIN_SECTOR_NAMES = frozenset({
-    "Financial Services", "Finance", "Banking", "Insurance",
-    "Real Estate", "Banks",
-})
-_FIN_SECTOR_KEYWORDS  = ("bank", "financ", "insur", "reit", "thrift", "mortgage")
-_FIN_INDUSTRY_KEYWORDS = (
-    "bank", "insurance", "reit", "real estate investment trust",
-    "thrift", "mortgage", "savings",
+# ── Metric-specific applicability helpers ─────────────────────────────────────
+#
+# FMP places operating companies (bitcoin miners, crypto exchanges, brokerage
+# platforms) in the same broad "Financial Services" sector as deposit-funded
+# banks.  Blocking metrics purely by sector string ("Financial Services" → all
+# blocked) mis-classifies IREN, COIN, HOOD, etc.
+#
+# The correct discriminator is the INDUSTRY string, which FMP populates at a
+# granular level (e.g. "Banks - Diversified" vs "Financial - Capital Markets").
+#
+# Three separate helpers replace the old single _is_financial_company() gate so
+# each metric can use its own, narrower applicability rule.
+
+# Deposit-funded or structurally bank-like industries.
+# Cash Runway and the BS Current Ratio fallback are not meaningful here.
+_DEPOSIT_FUNDED_INDUSTRY_KW: tuple[str, ...] = (
+    "banks",            # "Banks - Diversified", "Banks - Regional"
+    "thrift",           # "Thrifts & Mortgage Finance"
+    "savings",          # savings institutions
+    "mortgage finance", # mortgage-balance-sheet lenders
+    "credit services",  # SOFI-style regulated bank/deposit businesses
+)
+
+# Traditional insurer industries.
+_INSURANCE_INDUSTRY_KW: tuple[str, ...] = (
+    "insurance",        # "Insurance - Property & Casualty", "Life Insurance", …
+)
+
+# REIT industries — structurally incompatible with Altman Z, but not
+# necessarily with Cash Runway (e.g. data-center operator EQIX).
+_REIT_INDUSTRY_KW: tuple[str, ...] = (
+    "reit",
+    "real estate investment trust",
 )
 
 
-def _is_financial_company(sector: str, industry: str) -> bool:
-    """True when Altman Z-Score and Cash Runway are not economically meaningful."""
-    s = str(sector  or "").strip()
+def _is_cash_runway_not_meaningful(sector: str, industry: str) -> bool:
+    """
+    Cash Runway is not economically meaningful for deposit-funded banks and
+    traditional insurers.
+
+    Operating companies that FMP places in a broad 'Financial Services' sector
+    — bitcoin miners (IREN), crypto exchanges (COIN), brokerage platforms
+    (HOOD), fintech software companies — return False so that a calculated
+    runway or self_funding status is surfaced.
+
+    REITs are NOT blocked here; their cash-management model differs from
+    banks, and the metric can be informative for REIT sub-types.
+    """
     i = str(industry or "").lower()
     return (
-        s in _FIN_SECTOR_NAMES
-        or any(kw in s.lower() for kw in _FIN_SECTOR_KEYWORDS)
-        or any(kw in i         for kw in _FIN_INDUSTRY_KEYWORDS)
+        any(kw in i for kw in _DEPOSIT_FUNDED_INDUSTRY_KW)
+        or any(kw in i for kw in _INSURANCE_INDUSTRY_KW)
     )
+
+
+def _is_altman_z_not_meaningful(sector: str, industry: str) -> bool:
+    """
+    Altman Z-Score is not meaningful for deposit-funded banks, traditional
+    insurers, and REITs — their balance sheets are structurally incompatible
+    with the Altman model.
+
+    Operating companies in a broad financial sector that are not deposit-
+    funded (exchanges, miners, payment platforms) may still receive a
+    provider-supplied Altman Z.
+    """
+    i = str(industry or "").lower()
+    return (
+        any(kw in i for kw in _DEPOSIT_FUNDED_INDUSTRY_KW)
+        or any(kw in i for kw in _INSURANCE_INDUSTRY_KW)
+        or any(kw in i for kw in _REIT_INDUSTRY_KW)
+    )
+
+
+def _is_current_ratio_not_meaningful(sector: str, industry: str) -> bool:
+    """
+    The balance-sheet-derived Current Ratio fallback is not meaningful for
+    deposit-funded banks (demand deposits skew 'current liabilities') and
+    insurers (claim reserves distort the ratio).
+
+    Uses the same narrow industry match as _is_cash_runway_not_meaningful.
+    REITs are not blocked here.
+    """
+    i = str(industry or "").lower()
+    return (
+        any(kw in i for kw in _DEPOSIT_FUNDED_INDUSTRY_KW)
+        or any(kw in i for kw in _INSURANCE_INDUSTRY_KW)
+    )
+
+
+def _is_financial_company(sector: str, industry: str) -> bool:
+    """
+    Backward-compatible alias — returns True when ANY of the three metric
+    gates fires.  New code should call the specific helper directly.
+    """
+    return _is_altman_z_not_meaningful(sector, industry)
 
 
 class FmpFundamentalsRefresher:
@@ -966,12 +1040,12 @@ class FmpFundamentalsRefresher:
             final = _http_outcome if _http_outcome != "success_with_data" else "success_no_data"
             return q, final
 
-        is_fin   = _is_financial_company(sector, industry)
+        _altman_blocked = _is_altman_z_not_meaningful(sector, industry)
         altman_z = fs.get("altmanZScore")
 
-        if is_fin:
+        if _altman_blocked:
             q["Altman Z-Risk"] = "not_meaningful"
-            q["_altman_z_not_meaningful_reason"] = "financial_sector"
+            q["_altman_z_not_meaningful_reason"] = "deposit_funded_insurer_or_reit"
         elif altman_z is not None:
             try:
                 z = float(altman_z)
@@ -1006,11 +1080,10 @@ class FmpFundamentalsRefresher:
         Negative TTM FCF → cash / |TTM FCF| × 12 months.
         Financial companies → not_meaningful.
         """
-        is_fin = _is_financial_company(sector, industry)
-        if is_fin:
+        if _is_cash_runway_not_meaningful(sector, industry):
             return {
                 "Cash Runway Status": "not_meaningful",
-                "_cash_runway_not_meaningful_reason": "financial_sector",
+                "_cash_runway_not_meaningful_reason": "deposit_funded_or_insurer",
             }
 
         if cash is None or ttm_fcf is None:
@@ -1417,9 +1490,9 @@ class FmpFundamentalsRefresher:
         # financial firms but comes from FMP directly (not derived here) and
         # has different consumer expectations, so it is left unchanged.
         if "Current Ratio" not in fields and _bs_row:
-            if _is_financial_company(_sector, _industry):
+            if _is_current_ratio_not_meaningful(_sector, _industry):
                 fields["_current_ratio_not_meaningful_reason"] = (
-                    "financial_sector_balance_sheet_fallback_suppressed"
+                    "deposit_funded_or_insurer_balance_sheet_fallback_suppressed"
                 )
             else:
                 _ca = _bs_row.get("totalCurrentAssets")
@@ -1505,8 +1578,8 @@ class FmpFundamentalsRefresher:
             if _v is not None:
                 fields[_k] = _v
 
-        # Altman Z not_meaningful (financial sector) blocks carry of old score
-        if _is_financial_company(_sector, _industry):
+        # Altman Z not_meaningful blocks carry of old score
+        if _is_altman_z_not_meaningful(_sector, _industry):
             _not_meaningful_active.add("Altman Z-Score")
             _not_meaningful_active.add("Altman Z-Risk")
 

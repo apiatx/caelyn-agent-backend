@@ -1,0 +1,185 @@
+You are working inside the CaelynAI backend Replit.
+
+This is a tiny classification correction only.
+
+Do not rebuild the Quality pipeline.
+
+Do not change the 10-call architecture.
+
+Do not touch frontend files.
+
+Do not modify formulas, estimate history, fiscal alignment, source-aware carry-forward, scheduling, or existing canonical keys.
+
+## Problem
+
+The latest live validation reports:
+
+* AAPL Cash Runway = `self_funding`
+* IREN Cash Runway = `not_meaningful`
+
+Audit exactly why IREN is being classified as not meaningful.
+
+IREN is a bitcoin-mining/data-center operating business. Cash runway is economically relevant for it, particularly when free cash flow is negative.
+
+The current shared `_is_financial_company()` logic may be too broad because it appears to classify entire sectors such as:
+
+* `Financial Services`
+* `Finance`
+
+or any sector containing `financ`
+
+as equivalent to deposit-funded banks and insurers.
+
+Do not assume all companies placed in a broad Financial Services sector should have Cash Runway, Current Ratio, and Altman Z blocked.
+
+## Required audit
+
+Print the exact live FMP profile values for:
+
+* IREN
+* SOFI
+* JPM
+* BAC
+* COIN
+* HOOD
+* EQIX
+* ALL
+
+For each, report:
+
+* sector
+* industry
+* current result of `_is_financial_company()`
+* Cash Runway applicability
+* Current Ratio fallback applicability
+* Altman Z applicability
+* exact rule or keyword that triggered exclusion
+
+Do not make changes until this matrix is shown.
+
+## Required correction
+
+Replace the single universal financial-company gate with metric-specific applicability helpers.
+
+Suggested structure:
+
+* `_is_cash_runway_not_meaningful(sector, industry)`
+* `_is_altman_z_not_meaningful(sector, industry)`
+* `_is_current_ratio_not_meaningful(sector, industry)`
+
+Use the live project naming conventions if equivalent helpers already exist.
+
+### Cash Runway
+
+Mark not meaningful only for business models where ordinary corporate cash burn divided by cash balance is structurally misleading, primarily:
+
+* Deposit-funded banks
+* Thrifts and savings institutions
+* Traditional insurers
+* Mortgage banks/lenders when their balance sheet is financing inventory rather than operating runway
+
+Do not block Cash Runway merely because the broad sector is `Financial Services`.
+
+Cash Runway should remain meaningful for operating companies such as:
+
+* Bitcoin miners
+* Data-center operators
+* Fintech software/platform companies
+* Exchanges and brokerage platforms
+* Payment processors
+* Asset-light financial technology businesses
+
+IREN must receive a calculated Cash Runway or `self_funding` when Cash and strict TTM FCF are available.
+
+If inputs are unavailable, return missing—not `not_meaningful`.
+
+### Altman Z-Score
+
+Use a separate applicability rule.
+
+It may be not meaningful for:
+
+* Banks
+* Insurers
+* REITs
+* Other structurally financial balance sheets
+
+Do not automatically block it solely because the broad sector contains `Financial Services`.
+
+When FMP Financial Scores returns no Altman value for an otherwise applicable company:
+
+* Return missing/provider-no-data
+* Do not label it economically not meaningful
+
+### Current Ratio fallback
+
+Use its own applicability rule.
+
+Block the balance-sheet-derived fallback for:
+
+* Deposit-funded banks
+* Insurers where current/non-current classification is structurally different
+
+Do not block it for ordinary operating companies placed in a broad financial sector.
+
+Continue preserving a direct FMP Current Ratio according to the existing behavior unless the audit proves it is misleading.
+
+## Required validation
+
+Validate these expected classifications:
+
+* IREN:
+
+  * Cash Runway meaningful
+  * Current Ratio meaningful
+  * Altman result based on actual applicability/provider availability, not broad sector alone
+
+* COIN and HOOD:
+
+  * Do not automatically block Cash Runway merely because of sector naming
+
+* JPM and BAC:
+
+  * Cash Runway not meaningful
+  * Balance-sheet Current Ratio fallback not meaningful
+  * Altman Z not meaningful
+
+* ALL or another traditional insurer:
+
+  * Financial-model gates remain active
+
+* SOFI:
+
+  * Classify using its regulated bank/deposit-funded business model, not only its broad sector string
+
+* EQIX:
+
+  * Altman treatment may be REIT-specific
+  * Do not let the REIT rule accidentally classify unrelated data-center operators such as IREN
+
+Run a live refresh for:
+
+* IREN
+* SOFI
+* JPM
+* COIN
+* HOOD
+
+Prove:
+
+1. IREN no longer receives an incorrect Cash Runway `not_meaningful`.
+2. Missing provider data is not confused with economic inapplicability.
+3. Banks and insurers remain correctly gated.
+4. Existing five final correctness patches remain intact.
+5. Calls remain 10 per symbol.
+6. No frontend files are changed.
+7. Existing P/E, P/S, EV/EBITDA and Forward P/E keys remain unchanged.
+8. Confluence behavior does not regress.
+
+Return only:
+
+* Classification matrix
+* Root cause
+* Exact helper changes
+* Live results
+* Files changed
