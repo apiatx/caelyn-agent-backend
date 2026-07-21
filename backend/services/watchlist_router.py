@@ -1244,9 +1244,14 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
                             _overlay["_valuation_price_used"] = _live_px
                         _is_live = _mc_src not in (None, "static", "fmp_stored")
                         _overlay["_valuation_is_live"] = _is_live
-                        _freshness = enriched.get("market_cap_display_freshness")
-                        if _freshness:
-                            _overlay["_valuation_price_timestamp"] = _freshness
+                        # Actual cached quote timestamp (not the generic "live" string)
+                        _qt = enriched.get("quote_updated_at")
+                        if _qt:
+                            _overlay["_valuation_price_timestamp"] = _qt
+                        # Exact quote source from the cache (e.g. "tradier")
+                        _qs = enriched.get("quote_source")
+                        if _qs:
+                            _overlay["_valuation_quote_source"] = _qs
                         _fund_fields_q = {**_fund_fields_q, **_overlay}
                 except Exception:
                     pass  # non-fatal: fall back to stored snapshot values

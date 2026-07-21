@@ -1487,6 +1487,12 @@ class FmpFundamentalsRefresher:
             elif _q0_eps_raw is None:
                 fields["_eps_growth_not_meaningful_reason"] = "missing_diluted_eps"
 
+        else:
+            # IS data unavailable — tag method so every snapshot is identifiable
+            # as processed by the new engine regardless of data coverage.
+            fields["_eps_growth_method"] = "diluted_eps_yoy_fiscal_exact"
+            fields["_eps_growth_not_meaningful_reason"] = "missing_income_statement_data"
+
         if not _eps_growth_stored:
             missing.append("EPS Growth")
 
