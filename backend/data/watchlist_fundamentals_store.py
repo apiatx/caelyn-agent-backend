@@ -468,3 +468,26 @@ def get_diagnostics(watchlist_id: str) -> dict:
     except Exception as exc:
         log.warning("[FUND_STORE] get_diagnostics error: %s", exc)
         return {"error": str(exc)}
+
+
+def get_all_cached_symbols() -> list[str]:
+    """
+    Return every symbol currently present in the fundamentals cache table.
+    Used by the backfill endpoint to determine the eligible universe.
+    """
+    try:
+        from data.pg_storage import _get_conn, _put_conn
+        conn = _get_conn()
+        if conn is None:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT symbol FROM {_TABLE} ORDER BY symbol")
+            rows = cur.fetchall()
+            cur.close()
+            return [r[0] for r in rows if r[0]]
+        finally:
+            _put_conn(conn)
+    except Exception as exc:
+        log.warning("[FUND_STORE] get_all_cached_symbols error: %s", exc)
+        return []

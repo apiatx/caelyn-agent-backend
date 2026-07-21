@@ -1,0 +1,629 @@
+IMPLEMENT THE APPROVED FUNDAMENTALS + QUALITY CORRECTIONS
+
+The corrected numerical audit is accepted as the implementation basis.
+
+Read the current live files and both audit artifacts before making changes:
+
+- audit/quality_metric_audit.json
+- audit/quality_metric_audit.csv
+
+Preserve the existing architecture.
+
+Use the existing:
+
+- FmpFundamentalsRefresher
+- watchlist_fundamentals_cache snapshot store
+- estimate-history store
+- canonical Watchlist quote cache
+- existing market-cap resolver
+- Watchlist GET overlay/read path
+- existing weekly Fundamental refresh scheduler
+
+Do not create:
+
+- A new fundamentals pipeline
+- A new table
+- A new public/admin endpoint
+- A separate Quality scheduler
+- Provider calls during page render
+- A second quote client
+- A replacement market-cap resolver
+
+Do not touch frontend files during this backend phase.
+
+==================================================
+PART 1 — TRUE EPS GROWTH
+==================================================
+
+Replace the current EPS Growth source.
+
+The current field uses:
+
+income-statement-growth.growthEPSDiluted
+
+The audit proved this is sequential QoQ basic-EPS growth, not diluted-EPS YoY growth.
+
+Keep the existing canonical output key:
+
+EPS Growth
+
+Do not rename the backend key and break existing frontend aliases.
+
+Calculate true quarterly diluted EPS YoY from the existing eight quarterly income-statement rows:
+
+latest-quarter diluted EPS
+/
+exact same fiscal quarter prior fiscal year diluted EPS
+- 1
+
+Use the diluted EPS field from the quarterly income statement.
+
+Matching rules:
+
+- Use exact fiscalYear + period matching.
+- Do not use positional matching when fiscal metadata exists.
+- Do not use the income-statement-growth endpoint value.
+- Preserve the current 10-call architecture; the income-statement-growth call may continue supplying other legacy fields if anything else still needs it, but it must no longer determine EPS Growth.
+
+Economic gates:
+
+- Prior-year EPS > 0 and current EPS >= 0:
+  calculate the percentage.
+- Prior-year EPS <= 0 and current EPS > 0:
+  do not calculate a misleading percentage.
+  Store:
+  _eps_growth_status = "turned_profitable"
+- Prior-year EPS > 0 and current EPS < 0:
+  store:
+  _eps_growth_status = "turned_unprofitable"
+- Both periods <= 0:
+  store:
+  _eps_growth_not_meaningful_reason = "negative_eps_basis"
+- Missing exact prior fiscal-period match:
+  store:
+  _eps_growth_not_meaningful_reason = "missing_prior_fiscal_period"
+
+Add provenance:
+
+- _eps_growth_method = "diluted_eps_yoy_fiscal_exact"
+- _eps_growth_current_period
+- _eps_growth_prior_period
+- _eps_growth_current_eps
+- _eps_growth_prior_eps
+
+==================================================
+PART 2 — STORE CANONICAL RAW VALUATION INPUTS
+==================================================
+
+The weekly snapshot must store the slow-changing inputs needed to calculate current valuations without another FMP request.
+
+Persist these hidden/provenance inputs from the existing ten calls:
+
+- _valuation_ttm_net_income
+- _valuation_ttm_revenue
+- _valuation_ttm_fcf
+- _valuation_ttm_ebitda
+- _valuation_total_debt
+- _valuation_cash_and_short_term_investments
+- _valuation_fy1_eps
+- _valuation_fy1_revenue
+- _valuation_fy1_ebitda
+- _valuation_fy1_date
+- _valuation_fy1_eps_analyst_count
+- _valuation_fy1_revenue_analyst_count
+- _valuation_share_basis
+- _valuation_share_basis_source
+- _valuation_statement_currency
+- _valuation_price_currency
+- _valuation_estimate_currency when supplied
+- _valuation_refresh_price
+- _valuation_refresh_market_cap
+- _valuation_refresh_timestamp
+
+Rules:
+
+- TTM values require exactly four distinct quarterly periods.
+- Use the quarterly income-statement EBITDA field when available.
+- Do not derive EBITDA as EBIT plus full cash-flow D&A when that produces a different economic definition.
+- Positive FY1 values only where required.
+- Preserve the completed actual fiscal year and selected FY1 metadata.
+- Do not put raw audit payloads into Neon; store only required normalized inputs and provenance.
+
+==================================================
+PART 3 — TRANSPARENT STATIC QUALITY RATIOS
+==================================================
+
+Replace the unexplained provider definitions for these fields.
+
+## Net Debt / EBITDA
+
+Calculate:
+
+(total debt - cash and short-term investments)
+/
+strict TTM EBITDA
+
+Rules:
+
+- Strict positive TTM EBITDA required.
+- Negative result is valid and means net cash.
+- Banks, deposit-funded lenders and insurers:
+  N/M.
+- Add:
+  _net_debt_ebitda_method = "total_debt_minus_cash_stinv_over_strict_ttm_ebitda"
+- Do not fall back to FMP netDebtToEBITDATTM.
+
+This must use the same Cash and Total Debt basis used by Net Cash / Debt.
+
+## Interest Coverage
+
+Calculate:
+
+strict TTM EBIT
+/
+absolute strict TTM interest expense
+
+Rules:
+
+- A materially positive interest-expense denominator is required.
+- When interest expense is zero, missing, or represents net interest income:
+  N/M rather than a fabricated fallback.
+- Banks, deposit-funded lenders and insurers:
+  N/M.
+- Add:
+  _interest_coverage_method = "strict_ttm_ebit_over_absolute_interest_expense"
+- Do not fall back to FMP interestCoverageRatioTTM.
+
+## Provider-direct metrics
+
+Keep these provider-direct:
+
+- ROIC
+- Altman Z-Score
+- Piotroski Score
+
+But add explicit provenance:
+
+- _roic_source = "fmp_key_metrics_ttm_provider_direct"
+- _altman_z_source = "fmp_financial_scores_provider_direct"
+- _piotroski_source = "fmp_financial_scores_provider_direct"
+
+Do not describe them internally as independently verified.
+
+==================================================
+PART 4 — INVALID MULTIPLE GATES
+==================================================
+
+At the snapshot write path, enforce:
+
+## P/S
+
+Only store when:
+
+PS Ratio > 0
+
+Otherwise:
+
+- remove PS Ratio
+- set _ps_not_meaningful_reason
+- add PS Ratio to _not_meaningful_active so stale values cannot carry forward
+
+## EV/EBITDA
+
+Provider-direct trailing EV/EBITDA must not remain the displayed canonical value after the live overlay is implemented.
+
+For backward-compatible snapshot storage, only retain the provider value when it is strictly positive.
+
+Otherwise:
+
+- omit EV/EBITDA
+- set _ev_ebitda_not_meaningful_reason
+- block carry-forward
+
+## Forward EV/Sales
+
+Only store when the result is strictly positive.
+
+Otherwise:
+
+- omit it
+- set _forward_ev_sales_not_meaningful_reason
+- block carry-forward
+
+## Forward EV/EBITDA
+
+Audit every assignment and carry-forward path.
+
+Only store when:
+
+- EV > 0
+- FY1 EBITDA > 0
+- calculated result > 0
+
+Otherwise:
+
+- omit it
+- set _forward_ev_ebitda_not_meaningful_reason
+- block carry-forward
+
+The USAR slip-through must no longer be possible.
+
+==================================================
+PART 5 — LIVE VALUATION OVERLAY
+==================================================
+
+Price-sensitive valuation fields must be recalculated when building the Watchlist GET response.
+
+This must use only already-cached data.
+
+Do not call FMP, Tradier or any external provider from page render.
+
+Use:
+
+1. The existing canonical market-cap resolver when it has a valid current result.
+2. The existing warm quote cache and stored validated share basis only as the existing resolver’s approved fallback.
+3. Stored refresh-time market cap only when no current quote-based value is available.
+
+Do not create another market-cap implementation.
+
+For each ticker, use the already bulk-loaded fundamentals snapshot plus the existing current quote/market-cap data.
+
+## Current Market Cap
+
+Use the existing canonical resolver result.
+
+Expose:
+
+- Market Cap
+- _valuation_market_cap_source
+- _valuation_price_used
+- _valuation_price_timestamp
+- _valuation_is_live
+- _valuation_fallback_reason when static data is used
+
+## Current Enterprise Value
+
+Calculate the transparent current EV:
+
+current canonical market cap
++ total debt
+- cash and short-term investments
+
+Add:
+
+- _enterprise_value_method = "live_market_cap_plus_debt_minus_cash_stinv"
+
+Do not mix FMP’s proprietary enterpriseValueTTM into some columns while using the transparent EV in others.
+
+## Live P/E
+
+current market cap
+/
+strict TTM net income
+
+Requirements:
+
+- Positive TTM net income
+- Positive current market cap
+- Otherwise N/M
+
+## Live P/S
+
+current market cap
+/
+strict TTM revenue
+
+Positive revenue required.
+
+## Live EV/EBITDA
+
+current transparent EV
+/
+strict positive TTM EBITDA
+
+Requirements:
+
+- EV > 0
+- TTM EBITDA > 0
+- Otherwise N/M
+
+## Live P/FCF
+
+current market cap
+/
+strict positive TTM FCF
+
+Negative or zero FCF:
+N/M
+
+## Live FCF Yield
+
+strict TTM FCF
+/
+current market cap
+× 100
+
+Do not impose an arbitrary 100% cap.
+
+Negative FCF Yield may remain visible as a negative cash-burn yield.
+
+When absolute FCF Yield exceeds 100%, retain the mathematically correct value and add:
+
+- _fcf_yield_outlier = true
+- _fcf_yield_outlier_reason = "absolute_fcf_exceeds_market_cap"
+
+Mandatory invariant for positive FCF:
+
+FCF Yield % ≈ 100 / P/FCF
+
+## Live Forward P/E
+
+current quote price
+/
+positive FY1 annual consensus EPS
+
+Do not use quarterly EPS × 4 when real FY1 annual consensus exists.
+
+When the quarterly fallback is used:
+
+- preserve forward_pe_is_approximate = true
+- preserve its source and period
+- do not label it as annual consensus
+
+## Live Forward P/S
+
+current market cap
+/
+positive FY1 consensus revenue
+
+## Live Forward EV/Sales
+
+current transparent EV
+/
+positive FY1 consensus revenue
+
+EV must also be positive.
+
+## Live Forward EV/EBITDA
+
+current transparent EV
+/
+positive FY1 consensus EBITDA
+
+EV and EBITDA must both be positive.
+
+==================================================
+PART 6 — PRESERVE API CONTRACT
+==================================================
+
+The frontend already reads:
+
+analysis.sections[].tickers[].fundamentals.fields
+
+Keep the existing canonical visible field names:
+
+- Market Cap
+- PE Ratio
+- PS Ratio
+- EV/EBITDA
+- Net Debt / EBITDA
+- Forward P/E
+- Forward P/S
+- Forward EV/Sales
+- Forward EV/EBITDA
+- P/FCF
+- FCF Yield
+- EPS Growth
+- Interest Coverage
+
+The live overlay should replace the displayed price-sensitive values in the response without overwriting the stored weekly snapshot.
+
+Keep refresh-time values in provenance keys for diagnosis.
+
+Do not mutate Neon during GET.
+
+Do not overwrite:
+
+- ticker identity
+- company
+- canonical Theme ID
+- canonical Theme name
+- section assignment
+- technical fields
+- quote fields
+
+No FMP sector or industry may replace the canonical CaelynAI Theme.
+
+==================================================
+PART 7 — N/M REASONS
+==================================================
+
+Every omitted invalid metric must carry a specific reason.
+
+Use explicit reasons including:
+
+- negative_or_zero_net_income
+- negative_or_zero_revenue
+- negative_or_zero_fcf
+- negative_or_zero_ebitda
+- nonpositive_enterprise_value
+- missing_live_market_cap
+- missing_fy1_consensus
+- negative_eps_basis
+- turned_profitable
+- turned_unprofitable
+- not_meaningful_for_financial_company
+- currency_basis_mismatch
+- share_basis_unverified
+
+Never silently replace an invalid number with a blank.
+
+==================================================
+PART 8 — FRONTEND-READY SORTING CONTRACT
+==================================================
+
+Return valid numerical values only for meaningful multiples.
+
+Invalid/N/M fields must be null or omitted plus the explicit reason.
+
+Do not use:
+
+- zero
+- negative multiple
+- enormous sentinel number
+
+as a placeholder.
+
+This ensures the existing frontend can sort valid multiples separately from N/M values.
+
+Do not modify frontend code in this backend task.
+
+==================================================
+PART 9 — TESTS BEFORE BACKFILL
+==================================================
+
+Before running the full universe, validate the new normalizer and live overlay using:
+
+- AAPL
+- AMD
+- MU
+- ALGM
+- IREN
+- CRWD
+- NET
+- HIMS
+- BE
+- ASTS
+- SOFI
+- HOOD
+- EQIX
+- BAND
+
+Also test a symbol with:
+
+- negative EPS
+- positive EPS after prior-year loss
+- negative FCF
+- negative EBITDA
+- net cash
+- non-calendar fiscal year
+
+Prove:
+
+- AMD and MU valuation values use the current quote, not the old refresh price.
+- EPS Growth is diluted EPS YoY, not sequential QoQ.
+- NET Net Debt/EBITDA does not have the FMP sign-reversal caused by the incompatible definition.
+- SOFI receives financial-company N/M treatment where appropriate.
+- Negative EV/EBITDA is not returned.
+- Nonpositive P/S is not returned.
+- Forward EV/Sales and Forward EV/EBITDA cannot be negative.
+- Positive P/FCF and FCF Yield satisfy the reciprocal invariant.
+- No provider calls occur during GET.
+- Theme assignments remain unchanged.
+
+==================================================
+PART 10 — ONE FULL DETACHED BACKFILL
+==================================================
+
+Because EPS Growth and the stored raw valuation inputs have changed, run one complete forced refresh of the current eligible Watchlist universe.
+
+Use only:
+
+FmpFundamentalsRefresher.refresh_symbols(..., dev_force=True)
+
+Requirements:
+
+- Existing current eligible universe
+- Existing ten calls per symbol
+- Existing FMP pacing
+- Sequential batches of 25–50
+- No concurrent batches
+- Detached process
+- Restart-safe checkpoint
+- Progress log
+- Zero Agent polling after launch
+
+Do not run separate targeted Neon cleanups before the backfill.
+
+The refreshed snapshots should naturally overwrite the old invalid values.
+
+After completion, run a zero-provider-call invariant scan.
+
+Only if legacy invalid values remain because particular symbols failed refresh may you perform a narrowly scoped snapshot cleanup for those exact remaining fields.
+
+Do not create a permanent cleanup endpoint.
+
+==================================================
+PART 11 — ACCEPTANCE CHECKS
+==================================================
+
+After the backfill reaches completion:
+
+1. Confirm eligible total, refreshed, failed and remaining.
+2. Run the full zero-provider-call invariant scan.
+
+Required results:
+
+- PE Ratio <= 0: 0 numeric rows
+- PS Ratio <= 0: 0 numeric rows
+- EV/EBITDA <= 0: 0 numeric rows
+- Forward P/E <= 0: 0 numeric rows
+- Forward P/S <= 0: 0 numeric rows
+- Forward EV/Sales <= 0: 0 numeric rows
+- Forward EV/EBITDA <= 0: 0 numeric rows
+- P/FCF <= 0: 0 numeric rows
+- EPS Growth still using sequential QoQ: 0 rows
+- Positive P/FCF/FCF Yield reciprocal mismatches: 0
+- Internally derived metrics missing provenance: 0
+- Numeric value beside contradictory N/M reason: 0
+
+3. Call the workspace Watchlist GET.
+
+For every representative symbol print:
+
+- current quote price
+- refresh price
+- live Market Cap
+- live P/E
+- live P/S
+- live EV/EBITDA
+- live P/FCF
+- live FCF Yield
+- live Forward P/E
+- live Forward P/S
+- live Forward EV/Sales
+- live Forward EV/EBITDA
+- valuation timestamp
+- source/provenance
+
+4. Independently recompute those figures from the returned raw inputs and prove the API values match.
+
+5. Confirm:
+
+- No frontend files changed
+- No new endpoint
+- No new table
+- No separate scheduler
+- No provider calls during page render
+- Weekly Fundamental refresh remains the sole recurring refresher
+- Current Theme assignments are unchanged
+
+==================================================
+PART 12 — PUBLISHING
+==================================================
+
+Do not publish automatically.
+
+After all workspace acceptance checks pass, return:
+
+- Exact files changed
+- Formula changes
+- Raw valuation inputs added
+- Live overlay injection point
+- Backfill final status
+- Invariant scan results
+- Representative symbol proof
+- Confirmation existing paths were reused
+- Whether backend is safe to publish
+
+Then stop and wait for approval.

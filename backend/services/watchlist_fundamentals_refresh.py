@@ -107,6 +107,11 @@ _EARNINGS_PY_TOLERANCE_DAYS = 60
 
 _BS_CARRY_FIELDS: frozenset[str] = frozenset({
     "Cash", "Net Cash / Debt",
+    # Net Debt / EBITDA is computed post-BS (Part 3) — carry when BS fails transiently.
+    "Net Debt / EBITDA",
+    # Raw valuation inputs stored for live overlay — carry when BS fails transiently.
+    "_valuation_total_debt",
+    "_valuation_cash_and_short_term_investments",
     # Cash Runway Months, Cash Runway Status, _cash_runway_not_meaningful_reason
     # intentionally excluded — always recomputed after carry (see Issue 1).
 })
@@ -119,6 +124,8 @@ _EST_CARRY_FIELDS: frozenset[str] = frozenset({
     "_eps_revision_prior_date", "_eps_revision_reason",
     "_forward_estimate_fy1_date", "_forward_estimate_fy1_n_analysts",
     "_forward_fy1_years_ahead", "_forward_fy1_actual_fy_date",
+    # FY1 raw inputs for live overlay — carry when estimates call fails transiently.
+    "_valuation_fy1_revenue", "_valuation_fy1_ebitda", "_valuation_fy1_eps",
 })
 
 _SCORES_CARRY_FIELDS: frozenset[str] = frozenset({
@@ -213,6 +220,23 @@ def _is_current_ratio_not_meaningful(sector: str, industry: str) -> bool:
 
     Uses the same narrow industry match as _is_cash_runway_not_meaningful.
     REITs are not blocked here.
+    """
+    i = str(industry or "").lower()
+    return (
+        any(kw in i for kw in _DEPOSIT_FUNDED_INDUSTRY_KW)
+        or any(kw in i for kw in _INSURANCE_INDUSTRY_KW)
+    )
+
+
+def _is_leverage_metrics_not_meaningful(sector: str, industry: str) -> bool:
+    """
+    Net Debt/EBITDA and Interest Coverage are not economically meaningful for
+    deposit-funded banks (liability structure is funding, not leverage) and
+    traditional insurers (float is the liability).
+
+    Uses the same narrow industry match as _is_cash_runway_not_meaningful.
+    Operating companies in broad 'Financial Services' (IREN, COIN, HOOD, etc.)
+    return False — their debt/coverage ratios ARE informative.
     """
     i = str(industry or "").lower()
     return (
@@ -538,6 +562,8 @@ class FmpFundamentalsRefresher:
         cf_rows: list[dict],
         rtm: dict,
         kmtm: dict,
+        sector: str = "",
+        industry: str = "",
     ) -> tuple[dict, set[str]]:
         """
         Derive Quality fields from already-fetched FMP data. Zero additional calls.
@@ -571,38 +597,57 @@ class FmpFundamentalsRefresher:
                 pass
 
         # ── Interest Coverage ─────────────────────────────────────────────
-        # FMP reports 0 as a sentinel when it cannot compute (e.g. AAPL which
-        # nets interest income against expense).  Fall back to EBIT / |IE| from
-        # income statement; skip entirely if denominator is zero.
-        ic_raw    = rtm.get("interestCoverageRatioTTM")
-        ic_stored = False
-        if ic_raw is not None:
-            try:
-                ic_f = float(ic_raw)
-                if ic_f != 0.0:
-                    q["Interest Coverage"] = round(ic_f, 4)
-                    ic_stored = True
-            except (ValueError, TypeError):
-                pass
-        if not ic_stored and is_rows:
+        # Strict TTM EBIT / TTM interest expense (income-statement basis).
+        # N/M for deposit-funded banks and insurers.
+        # N/M when interest expense is zero (no debt), negative (net interest
+        # income — e.g. AAPL nets interest income against expense), or missing.
+        # Do NOT use FMP interestCoverageRatioTTM — it produces economically
+        # misleading values for cash-rich companies and financial companies.
+        if _is_leverage_metrics_not_meaningful(sector, industry):
+            q["_interest_coverage_not_meaningful_reason"] = (
+                "not_meaningful_for_financial_company"
+            )
+            nm.add("Interest Coverage")
+        elif is_rows:
             ttm_ebit_ic = (
                 self._ttm_sum_strict(is_rows, "ebit")
                 or self._ttm_sum_strict(is_rows, "operatingIncome")
             )
-            ttm_ie = self._ttm_sum_strict(is_rows, "interestExpense")
-            if ttm_ebit_ic is not None and ttm_ie is not None and abs(float(ttm_ie)) > 0:
+            ttm_ie_ic = self._ttm_sum_strict(is_rows, "interestExpense")
+            if ttm_ebit_ic is not None and ttm_ie_ic is not None:
                 try:
-                    q["Interest Coverage"] = round(
-                        float(ttm_ebit_ic) / abs(float(ttm_ie)), 4
-                    )
+                    ttm_ie_f = float(ttm_ie_ic)
+                    if ttm_ie_f > 0:
+                        q["Interest Coverage"] = round(
+                            float(ttm_ebit_ic) / ttm_ie_f, 4
+                        )
+                        q["_interest_coverage_method"] = (
+                            "strict_ttm_ebit_over_absolute_interest_expense"
+                        )
+                    elif ttm_ie_f == 0.0:
+                        q["_interest_coverage_not_meaningful_reason"] = (
+                            "zero_interest_expense"
+                        )
+                        nm.add("Interest Coverage")
+                    else:
+                        # Negative = net interest income (cash-rich, no net debt)
+                        q["_interest_coverage_not_meaningful_reason"] = (
+                            "net_interest_income_not_meaningful"
+                        )
+                        nm.add("Interest Coverage")
                 except (ValueError, TypeError, ZeroDivisionError):
                     pass
+            else:
+                q["_interest_coverage_not_meaningful_reason"] = (
+                    "missing_ebit_or_interest_data"
+                )
 
-        # ── ROIC (direct from key-metrics-ttm) ───────────────────────────
+        # ── ROIC (provider-direct from key-metrics-ttm) ───────────────────
         roic = kmtm.get("returnOnInvestedCapitalTTM")
         if roic is not None:
             try:
                 q["ROIC"] = self._fmt_pct(float(roic) * 100)
+                q["_roic_source"] = "fmp_key_metrics_ttm_provider_direct"
             except (ValueError, TypeError):
                 pass
 
@@ -954,23 +999,44 @@ class FmpFundamentalsRefresher:
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
 
-        # Forward EV/Sales = enterprise value / FY1 revenue
-        if ev and fy1_rev and float(fy1_rev) > 0:
+        # Forward EV/Sales = enterprise value / FY1 revenue.
+        # Only stored when EV > 0 AND result > 0 (Part 4 invalid multiple gate).
+        # Negative EV (e.g. heavy net-cash small caps) → N/M.
+        if ev and float(ev) > 0 and fy1_rev and float(fy1_rev) > 0:
             try:
-                q["Forward EV/Sales"] = round(float(ev) / float(fy1_rev), 4)
+                _fwd_ev_sales = round(float(ev) / float(fy1_rev), 4)
+                if _fwd_ev_sales > 0:
+                    q["Forward EV/Sales"] = _fwd_ev_sales
+                else:
+                    q["_forward_ev_sales_not_meaningful_reason"] = (
+                        "nonpositive_result"
+                    )
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
+        elif ev is not None and float(ev) <= 0:
+            q["_forward_ev_sales_not_meaningful_reason"] = "nonpositive_enterprise_value"
+        elif not fy1_rev or float(fy1_rev) <= 0:
+            q["_forward_ev_sales_not_meaningful_reason"] = "missing_or_nonpositive_fy1_revenue"
 
-        # Forward EV/EBITDA = enterprise value / FY1 EBITDA (positive result only).
-        # Negative EV (heavy net-cash companies) or negative EBITDA → not meaningful.
-        if ev and fy1_ebitda and float(fy1_ebitda) > 0:
+        # Forward EV/EBITDA = enterprise value / FY1 EBITDA.
+        # Requires: EV > 0, FY1 EBITDA > 0, calculated result > 0 (Part 4 gate).
+        if ev and float(ev) > 0 and fy1_ebitda and float(fy1_ebitda) > 0:
             try:
                 _fwd_ev_ebitda = round(float(ev) / float(fy1_ebitda), 4)
                 if _fwd_ev_ebitda > 0:
                     q["Forward EV/EBITDA"] = _fwd_ev_ebitda
-                # negative result → omit (renders as N/M on frontend)
+                else:
+                    q["_forward_ev_ebitda_not_meaningful_reason"] = (
+                        "nonpositive_result"
+                    )
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
+        elif ev is not None and float(ev) <= 0:
+            q["_forward_ev_ebitda_not_meaningful_reason"] = "nonpositive_enterprise_value"
+        elif not fy1_ebitda or float(fy1_ebitda) <= 0:
+            q["_forward_ev_ebitda_not_meaningful_reason"] = (
+                "missing_or_nonpositive_fy1_ebitda"
+            )
 
         # ── Estimate revision 90D (Part 6) ────────────────────────────────
         # Pass fresh current_value so revision does not lag by one cycle.
@@ -1073,6 +1139,10 @@ class FmpFundamentalsRefresher:
                 q["Piotroski Score"] = int(piotroski)
             except (ValueError, TypeError):
                 pass
+
+        # Provenance tags — these scores are provider-direct, not independently verified
+        q["_altman_z_source"]   = "fmp_financial_scores_provider_direct"
+        q["_piotroski_source"]  = "fmp_financial_scores_provider_direct"
 
         return q, "success_with_data"
 
@@ -1299,6 +1369,21 @@ class FmpFundamentalsRefresher:
             _completed_fy_label, _completed_fy_date, _completed_fy_revenue = (
                 self._identify_completed_fiscal_year(is_rows)
             )
+
+            # ── Raw valuation inputs (Part 2) ─────────────────────────────
+            # Store slow-changing TTM inputs so the live overlay can recompute
+            # price-sensitive metrics without another FMP call.
+            _val_ttm_ni    = self._ttm_sum_strict(is_rows, "netIncome")
+            _val_ttm_rev   = self._ttm_sum_strict(is_rows, "revenue")
+            # Prefer direct IS ebitda field per spec Part 2 (do not derive from CF D&A)
+            _val_ttm_ebitda = self._ttm_sum_strict(is_rows, "ebitda")
+            _val_ttm_ebit   = (
+                self._ttm_sum_strict(is_rows, "ebit")
+                or self._ttm_sum_strict(is_rows, "operatingIncome")
+            )
+            _val_ttm_ie  = self._ttm_sum_strict(is_rows, "interestExpense")
+            _val_stmt_ccy = str(is_rows[0].get("reportedCurrency") or "") if is_rows else ""
+
         else:
             for f in [
                 "Revenue", "Operating Income", "EBIT",
@@ -1309,6 +1394,12 @@ class FmpFundamentalsRefresher:
             _completed_fy_label    = None
             _completed_fy_date     = None
             _completed_fy_revenue  = None
+            _val_ttm_ni      = None
+            _val_ttm_rev     = None
+            _val_ttm_ebitda  = None
+            _val_ttm_ebit    = None
+            _val_ttm_ie      = None
+            _val_stmt_ccy    = ""
 
         # ── 3. Income Statement Growth (quarterly, 2Q) — EPS Growth only ─────
         raw = await self._get(
@@ -1317,14 +1408,87 @@ class FmpFundamentalsRefresher:
         )
         calls += 1
         isg_rows: list[dict] = raw if isinstance(raw, list) else []
-        if isg_rows:
-            growth_eps = isg_rows[0].get("growthEPSDiluted")
-            if growth_eps is not None:
-                fields["EPS Growth"] = self._fmt_pct(float(growth_eps) * 100)
-            else:
-                missing.append("EPS Growth")
-        else:
-            missing += ["EPS Growth"]
+        # NOTE: isg_rows retained for backward compat; EPS Growth is now
+        # derived from the IS rows fetched in step 2 (true YoY diluted EPS).
+
+        # ── EPS Growth (Part 1) — True quarterly diluted EPS YoY ─────────
+        # Replace growthEPSDiluted (sequential QoQ basic EPS) with:
+        #   latest-quarter diluted EPS / same fiscal quarter prior year - 1
+        # Uses exact fiscalYear + period matching from the 8 IS rows.
+        _eps_growth_stored = False
+        if is_rows:
+            _q0 = is_rows[0]
+            _q0_fy  = str(_q0.get("fiscalYear", "") or "")
+            _q0_per = str(_q0.get("period", "") or "")
+            _q0_eps_raw = _q0.get("epsDiluted")
+
+            fields["_eps_growth_method"] = "diluted_eps_yoy_fiscal_exact"
+            if _q0_fy and _q0_per:
+                fields["_eps_growth_current_period"] = f"FY{_q0_fy} {_q0_per}"
+
+            if _q0_eps_raw is not None and _q0_fy and _q0_per:
+                try:
+                    _q0_eps_f = float(_q0_eps_raw)
+                    fields["_eps_growth_current_eps"] = round(_q0_eps_f, 4)
+
+                    # Exact prior-year same-period match
+                    try:
+                        _py_fy = str(int(_q0_fy) - 1)
+                    except (ValueError, TypeError):
+                        _py_fy = None
+
+                    _py_row = (
+                        self._get_fiscal_period_row(is_rows, _py_fy, _q0_per)
+                        if _py_fy else None
+                    )
+                    if _py_row is not None:
+                        _py_fy_r  = str(_py_row.get("fiscalYear", "") or "")
+                        _py_per_r = str(_py_row.get("period", "") or "")
+                        fields["_eps_growth_prior_period"] = f"FY{_py_fy_r} {_py_per_r}"
+                        _py_eps_raw = _py_row.get("epsDiluted")
+                        if _py_eps_raw is not None:
+                            _py_eps_f = float(_py_eps_raw)
+                            fields["_eps_growth_prior_eps"] = round(_py_eps_f, 4)
+                            if _py_eps_f > 0 and _q0_eps_f >= 0:
+                                # Standard case — both positive; calculate YoY
+                                _eps_pct = round(
+                                    (_q0_eps_f / _py_eps_f - 1) * 100, 4
+                                )
+                                fields["EPS Growth"] = self._fmt_pct(_eps_pct)
+                                _eps_growth_stored = True
+                            elif _py_eps_f <= 0 and _q0_eps_f > 0:
+                                # Loss → profit turnaround
+                                fields["_eps_growth_status"] = "turned_profitable"
+                                _eps_growth_stored = True  # meaningful, just not a pct
+                            elif _py_eps_f > 0 and _q0_eps_f < 0:
+                                # Profit → loss
+                                fields["_eps_growth_status"] = "turned_unprofitable"
+                                _eps_growth_stored = True
+                            else:
+                                # Both <= 0 — loss deepening or flat
+                                fields["_eps_growth_not_meaningful_reason"] = (
+                                    "negative_eps_basis"
+                                )
+                        else:
+                            fields["_eps_growth_not_meaningful_reason"] = (
+                                "missing_prior_fiscal_period"
+                            )
+                    else:
+                        fields["_eps_growth_not_meaningful_reason"] = (
+                            "missing_prior_fiscal_period"
+                        )
+                        fields["_eps_growth_prior_period"] = (
+                            f"FY{_py_fy} {_q0_per}" if _py_fy else "unknown"
+                        )
+                except (ValueError, TypeError):
+                    pass
+            elif not _q0_fy or not _q0_per:
+                fields["_eps_growth_not_meaningful_reason"] = "missing_fiscal_metadata"
+            elif _q0_eps_raw is None:
+                fields["_eps_growth_not_meaningful_reason"] = "missing_diluted_eps"
+
+        if not _eps_growth_stored:
+            missing.append("EPS Growth")
 
         # ── 4. Cash Flow Statement (quarterly, 5Q) ───────────────────────────
         raw = await self._get(
@@ -1391,7 +1555,22 @@ class FmpFundamentalsRefresher:
                     missing.append("PE Ratio")
             else:
                 missing.append("PE Ratio")
-            _map_ratio("priceToSalesRatioTTM",    "PS Ratio")
+            # PS Ratio: only store strictly positive values (Part 4 gate).
+            # Negative P/S arises when revenue is negative (restatement) or
+            # FMP uses a negative base — not a meaningful multiple.
+            _ps_raw = rtm.get("priceToSalesRatioTTM")
+            if _ps_raw is not None:
+                try:
+                    _ps_f = float(_ps_raw)
+                    if _ps_f > 0:
+                        fields["PS Ratio"] = round(_ps_f, 6)
+                    else:
+                        fields["_ps_not_meaningful_reason"] = "negative_or_zero_revenue"
+                        missing.append("PS Ratio")
+                except (ValueError, TypeError):
+                    missing.append("PS Ratio")
+            else:
+                missing.append("PS Ratio")
             _map_ratio("debtToEquityRatioTTM",    "Debt / Equity")
         else:
             missing += ["Gross Margin", "PE Ratio", "PS Ratio", "Debt / Equity"]
@@ -1403,20 +1582,42 @@ class FmpFundamentalsRefresher:
             raw[0] if isinstance(raw, list) and raw
             else (raw if isinstance(raw, dict) else {})
         )
+        # Also capture EV from key-metrics for _valuation_* inputs and forward multiples
+        _val_ev: float | None = None
+        _val_shares: float | None = None
         if kmtm and "_status" not in kmtm:
+            _ev_raw_km = kmtm.get("enterpriseValueTTM")
+            if _ev_raw_km is not None:
+                try:
+                    _val_ev = float(_ev_raw_km)
+                except (ValueError, TypeError):
+                    pass
+
+            # EV/EBITDA: positive-only gate per Part 4.
+            # Negative EV/EBITDA arises when EBITDA is negative (pre-profitability
+            # companies) or very rarely when EV is negative (deep net-cash).
+            # Showing a negative multiple is misleading — omit and mark reason.
             ev_ebitda = kmtm.get("evToEBITDATTM")
             if ev_ebitda is not None:
-                fields["EV/EBITDA"] = round(float(ev_ebitda), 4)
+                try:
+                    _ev_ebitda_f = float(ev_ebitda)
+                    if _ev_ebitda_f > 0:
+                        fields["EV/EBITDA"] = round(_ev_ebitda_f, 4)
+                    else:
+                        fields["_ev_ebitda_not_meaningful_reason"] = (
+                            "negative_ebitda_or_negative_ev"
+                        )
+                        missing.append("EV/EBITDA")
+                except (ValueError, TypeError):
+                    missing.append("EV/EBITDA")
             else:
                 missing.append("EV/EBITDA")
 
-            nd_ebitda = kmtm.get("netDebtToEBITDATTM")
-            if nd_ebitda is not None:
-                fields["Net Debt / EBITDA"] = round(float(nd_ebitda), 4)
-            else:
-                missing.append("Net Debt / EBITDA")
+            # Net Debt / EBITDA is now computed from BS data in step 9
+            # (see post-BS-call section) to use independently validated inputs.
+            # Do NOT source from netDebtToEBITDATTM here.
         else:
-            missing += ["EV/EBITDA", "Net Debt / EBITDA"]
+            missing += ["EV/EBITDA"]
 
         # ── 7. Earnings (upcoming date + TQ/NQ estimate growth) ──────────────
         raw = await self._get("earnings", {"symbol": sym, "limit": 8})
@@ -1495,7 +1696,8 @@ class FmpFundamentalsRefresher:
 
         # ── 8. Quality from existing data (0 new calls) ──────────────────────
         _dq, _not_meaningful_active = self._compute_derived_quality(
-            is_rows, cf_rows, rtm, kmtm
+            is_rows, cf_rows, rtm, kmtm,
+            sector=_sector, industry=_industry,
         )
         for _k, _v in _dq.items():
             if _v is not None:
@@ -1537,18 +1739,71 @@ class FmpFundamentalsRefresher:
                     except (ValueError, TypeError, ZeroDivisionError):
                         pass
 
+        # ── Post-BS: Net Debt / EBITDA (Part 3) ─────────────────────────────
+        # Computed from independently validated inputs (not FMP netDebtToEBITDATTM).
+        # Formula: (total_debt - cash_and_short_term_investments) / strict_ttm_ebitda_is
+        # N/M for financial companies (deposit-funded / insurers).
+        # N/M when TTM EBITDA ≤ 0 (pre-profitability companies).
+        # Negative result is valid (net-cash company — more cash than gross debt).
+        if _bs_row:
+            _bs_total_debt_raw = _bs_row.get("totalDebt")
+            _bs_cash_raw       = _bs_row.get("cashAndShortTermInvestments")
+            if _bs_total_debt_raw is not None:
+                try:
+                    _val_total_debt = float(_bs_total_debt_raw)
+                    fields["_valuation_total_debt"] = int(_val_total_debt)
+                except (ValueError, TypeError):
+                    _val_total_debt = None
+            else:
+                _val_total_debt = None
+
+            if _bs_cash_raw is not None:
+                try:
+                    _val_cash_stinv = float(_bs_cash_raw)
+                    fields["_valuation_cash_and_short_term_investments"] = int(_val_cash_stinv)
+                except (ValueError, TypeError):
+                    _val_cash_stinv = None
+            else:
+                _val_cash_stinv = None
+
+            # Compute Net Debt / EBITDA
+            if _is_leverage_metrics_not_meaningful(_sector, _industry):
+                fields["_net_debt_ebitda_not_meaningful_reason"] = (
+                    "not_meaningful_for_financial_company"
+                )
+                _not_meaningful_active.add("Net Debt / EBITDA")
+            elif (
+                _val_total_debt is not None
+                and _val_cash_stinv is not None
+                and _val_ttm_ebitda is not None
+            ):
+                try:
+                    _ebitda_f = float(_val_ttm_ebitda)
+                    if _ebitda_f > 0:
+                        _net_debt_f = _val_total_debt - _val_cash_stinv
+                        fields["Net Debt / EBITDA"] = round(
+                            _net_debt_f / _ebitda_f, 4
+                        )
+                        fields["_net_debt_ebitda_method"] = (
+                            "total_debt_minus_cash_stinv_over_strict_ttm_ebitda"
+                        )
+                    else:
+                        fields["_net_debt_ebitda_not_meaningful_reason"] = (
+                            "nonpositive_ebitda"
+                        )
+                        _not_meaningful_active.add("Net Debt / EBITDA")
+                except (ValueError, TypeError, ZeroDivisionError):
+                    pass
+            else:
+                fields["_net_debt_ebitda_not_meaningful_reason"] = (
+                    "missing_bs_or_ebitda_data"
+                )
+
         # ── 10. Analyst estimates annual + Forward P/E upgrade ──────────────
         _mkt_cap_int: int | None = (
             int(float(mkt_cap)) if mkt_cap is not None and float(mkt_cap) > 0 else None
         )
-        _ev_float: float | None = None
-        if kmtm:
-            _ev_raw = kmtm.get("enterpriseValueTTM")
-            if _ev_raw is not None:
-                try:
-                    _ev_float = float(_ev_raw)
-                except (ValueError, TypeError):
-                    pass
+        _ev_float: float | None = _val_ev  # reuse EV already captured from kmtm
 
         est_quality, _fy1_row, _est_outcome = await self._fetch_analyst_estimates_quality(
             sym,
@@ -1620,6 +1875,57 @@ class FmpFundamentalsRefresher:
         runway = self._compute_cash_runway(_cash_val, _ttm_fcf_val, _sector, _industry)
         for _k, _v in runway.items():
             fields[_k] = _v
+
+        # ── Store raw valuation inputs (Part 2) ──────────────────────────────
+        # These slow-moving IS + BS inputs let the live overlay in the GET
+        # response recompute price-sensitive multiples without a new FMP call.
+        # Stored with "_valuation_" prefix so carry-forward logic skips them
+        # (they come from the same IS/BS calls that produced the other fields).
+        if _val_ttm_ni is not None:
+            fields["_valuation_ttm_net_income"]   = int(_val_ttm_ni)
+        if _val_ttm_rev is not None:
+            fields["_valuation_ttm_revenue"]      = int(_val_ttm_rev)
+        if _val_ttm_ebitda is not None:
+            fields["_valuation_ttm_ebitda"]       = int(_val_ttm_ebitda)
+        if _val_ttm_ebit is not None:
+            fields["_valuation_ttm_ebit"]         = int(_val_ttm_ebit)
+        if _val_ttm_ie is not None:
+            fields["_valuation_ttm_interest_expense"] = int(_val_ttm_ie)
+        if _val_ev is not None:
+            fields["_valuation_ev_at_refresh"]    = int(_val_ev)
+        if _val_stmt_ccy:
+            fields["_valuation_stmt_currency"]    = _val_stmt_ccy
+        # FCF from CF statement
+        _val_ttm_fcf = fields.get("Free Cash Flow")
+        if _val_ttm_fcf is not None:
+            fields["_valuation_ttm_fcf"]          = int(_val_ttm_fcf)
+        # Implied shares (from market cap resolver — set by refresh_symbols post-step)
+        # stored as _market_cap_implied_shares (already present if resolver ran)
+
+        # ── FY1 forward inputs (stored for live overlay) ──────────────────
+        _fy1_rev_f    = fields.get("_forward_fy1_rev_raw")
+        _fy1_ebitda_f = fields.get("_forward_fy1_ebitda_raw")
+        _fy1_eps_f    = fields.get("_forward_fy1_eps_raw")
+        # Also capture FY1 consensus stored by _fetch_analyst_estimates_quality
+        if _fy1_row is not None:
+            try:
+                _fyr = _fy1_row.get("revenueAvg")
+                if _fyr is not None:
+                    fields["_valuation_fy1_revenue"] = int(float(_fyr))
+            except (ValueError, TypeError):
+                pass
+            try:
+                _fye = _fy1_row.get("ebitdaAvg")
+                if _fye is not None:
+                    fields["_valuation_fy1_ebitda"] = int(float(_fye))
+            except (ValueError, TypeError):
+                pass
+            try:
+                _fyeps = _fy1_row.get("epsAvg")
+                if _fyeps is not None:
+                    fields["_valuation_fy1_eps"] = round(float(_fyeps), 4)
+            except (ValueError, TypeError):
+                pass
 
         # CSV fallback fields — always marked missing; caller preserves CSV values.
         for csv_fallback in [
@@ -1908,6 +2214,168 @@ def merge_fmp_into_csv_row(csv_row: dict, fmp_fields: dict) -> dict:
         if v is not None:
             merged[k] = v
     return merged
+
+
+def compute_live_valuation_overlay(
+    fund_fields: dict,
+    live_market_cap: float | None,
+    live_price: float | None,
+) -> dict:
+    """
+    Pure function — no I/O, no FMP calls.
+
+    Re-derives all price-sensitive valuation multiples using the live market
+    cap / price and the slow-moving income-statement inputs stored during
+    the last FMP refresh cycle (_valuation_* fields).
+
+    Returns a dict of overlay fields to MERGE into fundamentals["fields"].
+    Only non-None results are included so callers can do a clean dict-update.
+
+    Part 6 — Live Valuation Overlay contract:
+      • Market Cap      = live_market_cap (pass-through)
+      • EV              = Market Cap + _valuation_total_debt
+                         − _valuation_cash_and_short_term_investments
+      • PE Ratio        = live_price / (TTM Net Income / implied_shares)  [+ gate]
+      • PS Ratio        = live_market_cap / TTM Revenue  [+ gate]
+      • EV/EBITDA       = EV / TTM EBITDA  [+ gate]
+      • P/FCF           = live_market_cap / TTM FCF  [+ gate]
+      • FCF Yield       = TTM FCF / live_market_cap * 100  [no 100% cap]
+      • Forward P/E     = live_price / FY1 EPS  [+ gate]
+      • Forward P/S     = live_market_cap / FY1 Revenue  [+ gate]
+      • Forward EV/Sales  = EV / FY1 Revenue  [EV>0 + result>0 gate]
+      • Forward EV/EBITDA = EV / FY1 EBITDA   [EV>0 + result>0 gate]
+    """
+    overlay: dict = {}
+
+    def _safe(v) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    mc   = _safe(live_market_cap)
+    px   = _safe(live_price)
+
+    ttm_ni    = _safe(fund_fields.get("_valuation_ttm_net_income"))
+    ttm_rev   = _safe(fund_fields.get("_valuation_ttm_revenue"))
+    ttm_ebitda= _safe(fund_fields.get("_valuation_ttm_ebitda"))
+    ttm_fcf   = _safe(fund_fields.get("_valuation_ttm_fcf"))
+    total_debt= _safe(fund_fields.get("_valuation_total_debt"))
+    cash_stinv= _safe(fund_fields.get("_valuation_cash_and_short_term_investments"))
+    shares    = _safe(fund_fields.get("_market_cap_implied_shares"))
+    fy1_rev   = _safe(fund_fields.get("_valuation_fy1_revenue"))
+    fy1_ebitda= _safe(fund_fields.get("_valuation_fy1_ebitda"))
+    fy1_eps   = _safe(fund_fields.get("_valuation_fy1_eps"))
+
+    # Market Cap
+    if mc is not None and mc > 0:
+        overlay["Market Cap"] = int(mc)
+
+    # Enterprise Value = Market Cap + Total Debt − Cash & ST Investments
+    ev: float | None = None
+    if mc is not None and total_debt is not None and cash_stinv is not None:
+        ev = mc + total_debt - cash_stinv
+        overlay["_valuation_live_ev"] = int(ev)
+        overlay["_enterprise_value_method"] = (
+            "live_market_cap_plus_debt_minus_cash_stinv"
+        )
+
+    # PE Ratio (TTM) — live price / EPS (net income / shares)
+    if px is not None and ttm_ni is not None and shares is not None and shares > 0:
+        try:
+            _ttm_eps = ttm_ni / shares
+            if _ttm_eps > 0:
+                _pe = round(px / _ttm_eps, 4)
+                if _pe > 0:
+                    overlay["PE Ratio"] = _pe
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # PS Ratio — live market cap / TTM revenue
+    if mc is not None and mc > 0 and ttm_rev is not None and ttm_rev > 0:
+        try:
+            _ps = round(mc / ttm_rev, 4)
+            if _ps > 0:
+                overlay["PS Ratio"] = _ps
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # EV/EBITDA — EV / TTM EBITDA
+    if ev is not None and ev > 0 and ttm_ebitda is not None and ttm_ebitda > 0:
+        try:
+            _ev_ebitda = round(ev / ttm_ebitda, 4)
+            if _ev_ebitda > 0:
+                overlay["EV/EBITDA"] = _ev_ebitda
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # P/FCF — live market cap / TTM FCF
+    if mc is not None and mc > 0 and ttm_fcf is not None and ttm_fcf > 0:
+        try:
+            _pfcf = round(mc / ttm_fcf, 4)
+            if _pfcf > 0:
+                overlay["P/FCF"] = _pfcf
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # FCF Yield — TTM FCF / live market cap * 100 (no 100% cap per spec)
+    # Negative FCF Yield may remain visible as a negative cash-burn yield.
+    # When |FCF Yield| > 100%, flag as outlier but retain the correct value.
+    if mc is not None and mc > 0 and ttm_fcf is not None:
+        try:
+            _fcf_yield_val = round((ttm_fcf / mc) * 100, 4)
+            overlay["FCF Yield"] = _fcf_yield_val
+            if abs(_fcf_yield_val) > 100.0:
+                overlay["_fcf_yield_outlier"] = True
+                overlay["_fcf_yield_outlier_reason"] = "absolute_fcf_exceeds_market_cap"
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # Forward P/E — live price / FY1 EPS
+    if px is not None and px > 0 and fy1_eps is not None and fy1_eps > 0:
+        try:
+            _fwd_pe = round(px / fy1_eps, 2)
+            if 1.0 <= _fwd_pe <= 500.0:
+                overlay["Forward P/E"] = _fwd_pe
+                overlay["_valuation_overlay_forward_pe_source"] = "live_price_over_fy1_eps"
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # Forward P/S — live market cap / FY1 revenue
+    if mc is not None and mc > 0 and fy1_rev is not None and fy1_rev > 0:
+        try:
+            _fwd_ps = round(mc / fy1_rev, 4)
+            if _fwd_ps > 0:
+                overlay["Forward P/S"] = _fwd_ps
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # Forward EV/Sales — EV / FY1 revenue (EV > 0 AND result > 0 gate)
+    if ev is not None and ev > 0 and fy1_rev is not None and fy1_rev > 0:
+        try:
+            _fwd_ev_s = round(ev / fy1_rev, 4)
+            if _fwd_ev_s > 0:
+                overlay["Forward EV/Sales"] = _fwd_ev_s
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # Forward EV/EBITDA — EV / FY1 EBITDA (EV > 0 AND result > 0 gate)
+    if ev is not None and ev > 0 and fy1_ebitda is not None and fy1_ebitda > 0:
+        try:
+            _fwd_ev_ebitda = round(ev / fy1_ebitda, 4)
+            if _fwd_ev_ebitda > 0:
+                overlay["Forward EV/EBITDA"] = _fwd_ev_ebitda
+        except (ZeroDivisionError, TypeError):
+            pass
+
+    # Provenance tag
+    if overlay:
+        overlay["_valuation_overlay_live_price"] = px
+        overlay["_valuation_overlay_live_mc"]    = mc
+
+    return overlay
 
 
 def apply_fmp_overlays(csv_rows: list, snaps: dict) -> list:

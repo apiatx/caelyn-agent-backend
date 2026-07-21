@@ -1219,6 +1219,38 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
             _fund_snap_q   = fund_snaps.get(sym) or {}
             _fund_fields_q = _fund_snap_q.get("fields") or {}
             if _fund_fields_q:
+                # Part 6 — Live Valuation Overlay: recompute price-sensitive
+                # multiples using the live price + resolved market cap so
+                # stale refreshed-at values don't cause misleading multiples.
+                try:
+                    from services.watchlist_fundamentals_refresh import (
+                        compute_live_valuation_overlay as _live_overlay,
+                    )
+                    _overlay_fields = _fund_fields_q.copy()
+                    # Inject implied shares from resolver into overlay inputs
+                    if enriched.get("market_cap_implied_shares") is not None:
+                        _overlay_fields["_market_cap_implied_shares"] = (
+                            enriched["market_cap_implied_shares"]
+                        )
+                    _live_mc  = enriched.get("market_cap_display") or enriched.get("market_cap_live")
+                    _live_px  = _price_f
+                    _overlay = _live_overlay(_overlay_fields, _live_mc, _live_px)
+                    if _overlay:
+                        # Inject market-cap resolver provenance (Part 5 contract)
+                        _mc_src = enriched.get("market_cap_display_source")
+                        if _mc_src:
+                            _overlay["_valuation_market_cap_source"] = _mc_src
+                        if _live_px is not None:
+                            _overlay["_valuation_price_used"] = _live_px
+                        _is_live = _mc_src not in (None, "static", "fmp_stored")
+                        _overlay["_valuation_is_live"] = _is_live
+                        _freshness = enriched.get("market_cap_display_freshness")
+                        if _freshness:
+                            _overlay["_valuation_price_timestamp"] = _freshness
+                        _fund_fields_q = {**_fund_fields_q, **_overlay}
+                except Exception:
+                    pass  # non-fatal: fall back to stored snapshot values
+
                 enriched["fundamentals"] = {
                     "fields":        _fund_fields_q,
                     "refreshed_at":  _fund_snap_q.get("refreshed_at"),
@@ -2089,9 +2121,11 @@ async def debug_fundamentals_backfill(
     dev_force: bool = True,
 ):
     """
-    DEV-ONLY: Fire-and-forget full watchlist backfill.
-    Spawns as asyncio background task inside the running server.
-    Returns immediately; poll GET /debug/fundamentals/backfill/status for progress.
+    DEV-ONLY: Fire-and-forget full fundamentals backfill.
+
+    Universe = all symbols already present in watchlist_fundamentals_cache (existing
+    eligible universe). Spawns as asyncio background task; returns immediately.
+    Poll GET /debug/fundamentals/backfill/status for progress.
     """
     import asyncio as _aio, os as _os
     global _backfill_state
@@ -2099,25 +2133,24 @@ async def debug_fundamentals_backfill(
     if _backfill_state.get("status") == "running":
         return {"status": "already_running", "state": _backfill_state}
 
-    wl_id = watchlist_id or "23eec278-074a-4706-a62a-c35d38b384ea"
     fmp_key = _os.getenv("FMP_API_KEY", "")
     if not fmp_key:
         raise HTTPException(status_code=503, detail="FMP_API_KEY not configured")
 
-    store = load_watchlist(wl_id)
-    if not store:
-        raise HTTPException(status_code=404, detail=f"Watchlist {wl_id} not found")
+    # Universe = all symbols already in the fundamentals cache table.
+    # This is the canonical "current eligible universe" (Part 10).
+    from data.watchlist_fundamentals_store import get_all_cached_symbols as _get_all
+    eligible = _get_all()
 
-    from services.watchlist_quote_cache import is_fmp_symbol_eligible as _elig
-    from data.watchlist_fundamentals_store import get_snapshots_bulk as _snaps_bulk
-    all_tickers = store.get("tickers") or []
-    eligible = [s.strip().upper() for s in all_tickers if s and _elig(s.strip())]
+    to_refresh = eligible  # dev_force=True always: overwrite all snapshots
 
-    if dev_force:
-        to_refresh = eligible
-    else:
-        snaps = _snaps_bulk(eligible)
-        to_refresh = [s for s in eligible if s not in snaps or not (snaps[s].get("fields") or {})]
+    # Optionally restrict to a named watchlist's tickers when watchlist_id is passed
+    # and that watchlist actually has a tickers list populated.
+    if watchlist_id:
+        _wl = load_watchlist(watchlist_id)
+        _wl_tickers = (_wl or {}).get("tickers") or []
+        if _wl_tickers:
+            to_refresh = [s for s in eligible if s in set(_wl_tickers)]
 
     _backfill_state.update({
         "status": "running", "refreshed": 0, "failed": 0,
@@ -2126,11 +2159,14 @@ async def debug_fundamentals_backfill(
         "finished_at": None,
     })
 
+    wl_id = watchlist_id or "00a0e3ea-31dc-4223-97bc-470720dd3215"
+
     async def _run():
         global _backfill_state
         from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
         from data.watchlist_fundamentals_store import upsert_snapshot as _upsert
         refresher = FmpFundamentalsRefresher(fmp_key)
+        batch_n = 0
         for sym in to_refresh:
             try:
                 result = await refresher.normalize_symbol(sym)
@@ -2147,6 +2183,11 @@ async def debug_fundamentals_backfill(
                 _backfill_state["failed"] += 1
                 _backfill_state["failed_symbols"].append(sym)
                 print(f"[BACKFILL] {sym} error: {_e}")
+            batch_n += 1
+            if batch_n % 25 == 0:
+                _done = _backfill_state["refreshed"] + _backfill_state["failed"]
+                print(f"[BACKFILL] checkpoint {_done}/{_backfill_state['total']} "
+                      f"ok={_backfill_state['refreshed']} fail={_backfill_state['failed']}")
         _backfill_state["status"] = "done"
         _backfill_state["finished_at"] = __import__("datetime").datetime.utcnow().isoformat()
         print(f"[BACKFILL] complete: refreshed={_backfill_state['refreshed']} "
