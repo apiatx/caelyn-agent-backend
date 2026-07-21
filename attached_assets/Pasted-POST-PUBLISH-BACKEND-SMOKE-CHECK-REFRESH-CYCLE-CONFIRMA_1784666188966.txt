@@ -1,0 +1,118 @@
+POST-PUBLISH BACKEND SMOKE CHECK + REFRESH-CYCLE CONFIRMATION ONLY.
+
+Do not change code.
+Do not launch a backfill.
+Do not call FMP.
+Do not poll or run sleep commands.
+Do not inspect or reference the separate frontend Replit.
+
+1. Confirm the published backend started successfully.
+
+2. Call the workspace Watchlist GET once and confirm it succeeds.
+
+3. For AMD, MU and NET, print only:
+
+- current quote price
+- valuation price timestamp
+- P/E
+- P/S
+- EV/EBITDA
+- P/FCF
+- FCF Yield
+- Forward P/E
+- Forward P/S
+- Forward EV/Sales
+- Forward EV/EBITDA
+
+4. Confirm compute_live_valuation_overlay() used only:
+
+- the existing cached quote/market-cap data
+- the stored Neon fundamentals snapshot inputs
+
+Confirm zero FMP, Tradier or other provider calls occurred during Watchlist GET.
+
+5. Confirm the four cache-only snapshots lacking
+_eps_growth_method are not members of the current canonical Watchlist and are not returned in the current Watchlist response.
+
+6. Confirm the active recurring/backfill universe uses:
+
+watchlist_list()
+→ load_watchlist().get("tickers")
+→ is_fmp_symbol_eligible()
+
+==================================================
+REFRESH-CYCLE CONFIRMATION
+==================================================
+
+7. Report the exact recurring refresh schedule currently active for Watchlist fundamentals:
+
+- scheduler function name
+- cadence
+- scheduled day
+- scheduled time
+- timezone
+- freshness/due rule
+- maximum symbols per scheduled run, if capped
+
+8. Confirm whether the following are refreshed together by the same canonical FmpFundamentalsRefresher and written into the same watchlist_fundamentals_cache snapshot:
+
+Fundamental-toggle fields:
+- Revenue
+- Revenue Growth Q
+- Revenue Growth YoY
+- Gross Margin
+- FCF Margin
+- Free Cash Flow
+- Operating Income
+- EBIT
+- Debt / Equity
+- Market Cap
+- analyst estimates
+
+Quality fields:
+- Cash
+- Net Cash / Debt
+- Current Ratio
+- Interest Coverage
+- Net Debt / EBITDA
+- EPS Growth
+- Operating Margin
+- ROIC
+- FCF Conversion
+- Diluted Shares Growth
+- SBC / Revenue
+- Revenue Acceleration
+- Gross Margin Change
+- Incremental Operating Margin
+- FY1 estimate inputs
+- raw valuation denominator inputs
+
+Answer explicitly:
+
+- SAME REFRESH PIPELINE: yes or no
+- SAME SCHEDULE: yes or no
+- SAME NEON SNAPSHOT: yes or no
+- SEPARATE QUALITY PROVIDER JOB EXISTS: yes or no
+
+9. Separate the fields into these two categories:
+
+A. WEEKLY/SCHEDULED FUNDAMENTAL INPUTS
+
+List the values that update only when the canonical FMP fundamentals refresher runs.
+
+B. LIVE CACHED-QUOTE OVERLAYS
+
+List the valuation fields recalculated during Watchlist GET from the current cached quote plus stored weekly inputs.
+
+10. Confirm:
+
+- Opening or refreshing the Watchlist page does not trigger FMP calls.
+- Switching between Fundamental and Quality toggles does not trigger FMP calls.
+- Quality does not have an independent recurring refresher.
+- The weekly Fundamental refresh remains the sole recurring FMP fundamentals job.
+- Newly added eligible Watchlist symbols are picked up through the canonical dynamic Watchlist universe.
+- Removed symbols are not treated as active solely because an old Neon cache row remains.
+
+11. Return a concise report and state whether the backend is safe to publish/use.
+
+Stop after the report. No further investigation.
