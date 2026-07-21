@@ -98,11 +98,17 @@ _EARNINGS_PY_TOLERANCE_DAYS = 60
 # Fields are ONLY carried forward when the responsible endpoint suffered a
 # transient failure (_outcome == "transient_failure").  Semantically-invalid
 # fields are additionally blocked by _not_meaningful_active (see Part 7).
+#
+# Issue 1: Cash Runway fields are NOT carried — they are always recomputed
+# after carry-forward using the current refresh's strict TTM FCF.  Carrying
+# runway directly could preserve a stale "self_funding" status when FCF has
+# since turned negative (or vice-versa).  Only the raw balance-sheet inputs
+# (Cash, Net Cash / Debt) are eligible for carry.
 
 _BS_CARRY_FIELDS: frozenset[str] = frozenset({
     "Cash", "Net Cash / Debt",
-    "Cash Runway Months", "Cash Runway Status",
-    "_cash_runway_not_meaningful_reason",
+    # Cash Runway Months, Cash Runway Status, _cash_runway_not_meaningful_reason
+    # intentionally excluded — always recomputed after carry (see Issue 1).
 })
 
 _EST_CARRY_FIELDS: frozenset[str] = frozenset({
@@ -172,6 +178,60 @@ class FmpFundamentalsRefresher:
             log.debug("[FMP_FUND] %s error: %s", endpoint, exc)
             await asyncio.sleep(_CALL_DELAY)
             return []
+
+    async def _get_quality(
+        self, endpoint: str, params: dict | None = None
+    ) -> tuple[list | dict, str]:
+        """
+        Issue 2 — Status-aware HTTP helper for the three optional Quality
+        endpoints (balance-sheet, analyst-estimates, financial-scores).
+
+        Returns (data, outcome) where outcome is one of:
+          'success_with_data'  — HTTP 200, non-empty payload; use only this data
+          'success_no_data'    — HTTP 200 empty payload, or HTTP 404; do NOT carry
+          'not_entitled'       — HTTP 402 or 403; do NOT carry
+          'transient_failure'  — HTTP 429, 5xx, timeout, connection error,
+                                 or invalid JSON; MAY carry prior source values
+
+        Does NOT break the seven existing _get() consumers — those still use
+        the backward-compatible method above.
+        """
+        p: dict[str, Any] = {**(params or {}), "apikey": self._key}
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.get(f"{_FMP_BASE}/{endpoint}", params=p)
+            await asyncio.sleep(_CALL_DELAY)
+            sc = resp.status_code
+            if sc in (402, 403):
+                log.debug("[FMP_FUND] %s HTTP %s (not_entitled)", endpoint, sc)
+                return [], "not_entitled"
+            if sc == 404:
+                return [], "success_no_data"
+            if sc == 429 or sc >= 500:
+                log.debug("[FMP_FUND] %s HTTP %s (transient_failure)", endpoint, sc)
+                return [], "transient_failure"
+            if sc == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    log.debug("[FMP_FUND] %s invalid JSON → transient_failure", endpoint)
+                    return [], "transient_failure"
+                if isinstance(data, list):
+                    return (data, "success_with_data") if data else (data, "success_no_data")
+                if isinstance(data, dict):
+                    return (data, "success_with_data") if data else (data, "success_no_data")
+                return [], "success_no_data"
+            # Other unexpected status codes
+            log.debug("[FMP_FUND] %s HTTP %s (unexpected → transient)", endpoint, sc)
+            return [], "transient_failure"
+        except httpx.TimeoutException:
+            log.debug("[FMP_FUND] %s timeout → transient_failure", endpoint)
+            await asyncio.sleep(_CALL_DELAY)
+            return [], "transient_failure"
+        except Exception as exc:
+            log.debug("[FMP_FUND] %s error: %s → transient_failure", endpoint, exc)
+            await asyncio.sleep(_CALL_DELAY)
+            return [], "transient_failure"
 
     # ── Numeric helpers ──────────────────────────────────────────────────────
 
@@ -329,12 +389,18 @@ class FmpFundamentalsRefresher:
         is_rows: list[dict],
     ) -> tuple[str | None, str | None, float | None]:
         """
-        Part 4 — identify the latest completed fiscal year from IS rows.
-        A fiscal year is "complete" when Q1+Q2+Q3+Q4 are all present in the
-        dataset (matching by the ``fiscalYear`` and ``period`` FMP fields).
+        Part 4 / Issue 4 — identify the latest completed fiscal year from IS rows.
+
+        A fiscal year is "complete" when exactly one canonical row exists for
+        each of Q1, Q2, Q3, and Q4.  Duplicates (restated quarters sharing the
+        same fiscalYear+period) are deduplicated by selecting the row with the
+        latest ``date`` value (most-recent restatement wins).  Revenue must be
+        non-null for all four quarters.  The FY revenue is the sum of exactly
+        those four canonical revenue values — never more.
+
         Returns (fy_label, fy_end_date_str, fy_actual_revenue).
         All three are None when no complete fiscal year can be determined.
-        fy_end_date_str is the date field of the Q4 row (the fiscal year-end).
+        fy_end_date_str is the date field of the canonical Q4 row.
         """
         by_fy: dict[str, list[dict]] = defaultdict(list)
         for r in is_rows:
@@ -345,21 +411,43 @@ class FmpFundamentalsRefresher:
 
         complete: list[tuple[str, str, float]] = []
         for fy_label, fy_rows in by_fy.items():
-            periods = {str(r.get("period", "")) for r in fy_rows}
-            if not {"Q1", "Q2", "Q3", "Q4"} <= periods:
+            # Issue 4: select exactly one canonical row per quarter.
+            # When duplicates exist for the same (fiscalYear, period) pair,
+            # prefer the row with the latest date (most-recent restatement).
+            canonical: dict[str, dict] = {}
+            for r in fy_rows:
+                p = str(r.get("period", "") or "")
+                if p not in ("Q1", "Q2", "Q3", "Q4"):
+                    continue
+                d = str(r.get("date", "") or "")
+                if p not in canonical or d > str(canonical[p].get("date", "") or ""):
+                    canonical[p] = r
+
+            # All four quarters must be present
+            if not all(qk in canonical for qk in ("Q1", "Q2", "Q3", "Q4")):
                 continue
-            q4_rows = [r for r in fy_rows if str(r.get("period", "")) == "Q4"]
-            if not q4_rows:
+
+            # Revenue must be non-null and convertible for every quarter
+            revenues: list[float] = []
+            valid = True
+            for qk in ("Q1", "Q2", "Q3", "Q4"):
+                rev = canonical[qk].get("revenue")
+                if rev is None:
+                    valid = False
+                    break
+                try:
+                    revenues.append(float(rev))
+                except (ValueError, TypeError):
+                    valid = False
+                    break
+            if not valid:
                 continue
-            fy_end_date = str(q4_rows[0].get("date", "") or "")
+
+            fy_end_date = str(canonical["Q4"].get("date", "") or "")
             if not fy_end_date:
                 continue
-            fy_rev = sum(
-                float(r.get("revenue", 0) or 0)
-                for r in fy_rows
-                if r.get("revenue") is not None
-            )
-            complete.append((fy_label, fy_end_date, fy_rev))
+
+            complete.append((fy_label, fy_end_date, sum(revenues)))
 
         if not complete:
             return None, None, None
@@ -533,10 +621,13 @@ class FmpFundamentalsRefresher:
                     pass
 
         # ── Revenue Acceleration ──────────────────────────────────────────
-        # Part 3: latest-Q YoY growth minus previous-Q YoY growth.
-        # Use fiscalYear+period matching so non-calendar companies compare
-        # the correct fiscal quarters.  Positional fallback (rows[4]/[5])
-        # is used only when period metadata is unavailable.
+        # Issue 3: latest-Q YoY growth minus previous-Q YoY growth.
+        # When both current rows carry fiscal metadata (fiscalYear + period):
+        #   • Require an EXACT prior-fiscal-year, same-period match.
+        #   • If no match is found, leave Revenue Acceleration missing.
+        #   • Do NOT use a positional fallback (rows[4]/[5]).
+        # Positional fallback is allowed ONLY when the current row has no
+        # fiscal metadata at all, and is clearly marked as approximate.
         if len(is_rows) >= 2:
             q0 = is_rows[0]
             q1 = is_rows[1]
@@ -546,34 +637,43 @@ class FmpFundamentalsRefresher:
             q1_fy  = str(q1.get("fiscalYear", "") or "")
             q1_per = str(q1.get("period", "") or "")
 
-            py_q0: dict | None = None
-            py_q1: dict | None = None
+            _ra_method = "unavailable"
 
-            if q0_fy and q0_per:
+            if q0_fy and q0_per and q1_fy and q1_per:
+                # Both rows have fiscal metadata — exact match required; no fallback
+                py_q0: dict | None = None
+                py_q1: dict | None = None
                 try:
                     py_q0 = self._get_fiscal_period_row(
                         is_rows, str(int(q0_fy) - 1), q0_per
                     )
                 except (ValueError, TypeError):
                     pass
-            if py_q0 is None and len(is_rows) >= 5:
-                py_q0 = is_rows[4]  # positional fallback
-
-            if q1_fy and q1_per:
                 try:
                     py_q1 = self._get_fiscal_period_row(
                         is_rows, str(int(q1_fy) - 1), q1_per
                     )
                 except (ValueError, TypeError):
                     pass
-            if py_q1 is None and len(is_rows) >= 6:
-                py_q1 = is_rows[5]  # positional fallback
+                if py_q0 is not None and py_q1 is not None:
+                    g0 = self._pct(q0.get("revenue"), py_q0.get("revenue"))
+                    g1 = self._pct(q1.get("revenue"), py_q1.get("revenue"))
+                    if g0 is not None and g1 is not None:
+                        q["Revenue Acceleration"] = round(g0 - g1, 4)
+                        _ra_method = "fiscal_year_period_exact"
+                # If no exact match found, metric stays missing (no fallback)
+            else:
+                # No fiscal metadata on current rows → positional fallback allowed
+                py_q0_pos: dict | None = is_rows[4] if len(is_rows) >= 5 else None
+                py_q1_pos: dict | None = is_rows[5] if len(is_rows) >= 6 else None
+                if py_q0_pos is not None and py_q1_pos is not None:
+                    g0 = self._pct(q0.get("revenue"), py_q0_pos.get("revenue"))
+                    g1 = self._pct(q1.get("revenue"), py_q1_pos.get("revenue"))
+                    if g0 is not None and g1 is not None:
+                        q["Revenue Acceleration"] = round(g0 - g1, 4)
+                        _ra_method = "position_approximate"
 
-            if py_q0 is not None and py_q1 is not None:
-                g0 = self._pct(q0.get("revenue"), py_q0.get("revenue"))
-                g1 = self._pct(q1.get("revenue"), py_q1.get("revenue"))
-                if g0 is not None and g1 is not None:
-                    q["Revenue Acceleration"] = round(g0 - g1, 4)
+            q["_revenue_acceleration_alignment_method"] = _ra_method
 
         # ── Gross Margin Change YoY (percentage points) ───────────────────
         # Requires complete strict TTM for both current and prior periods.
@@ -627,17 +727,22 @@ class FmpFundamentalsRefresher:
         """
         Call 8: quarterly balance sheet.
         Returns (quality_fields, raw_bs_row, outcome).
-        outcome: 'success_with_data' | 'transient_failure'
+        outcome: 'success_with_data' | 'success_no_data' | 'not_entitled' | 'transient_failure'
+
+        Issue 2: uses _get_quality() so HTTP 200+empty is success_no_data (don't carry)
+        and HTTP 402/429/5xx are correctly classified.
         """
-        raw = await self._get(
+        raw, outcome = await self._get_quality(
             "balance-sheet-statement",
             {"symbol": sym, "period": "quarter", "limit": 2},
         )
         bs: dict = (raw[0] if isinstance(raw, list) and raw else {})
         q: dict[str, Any] = {}
 
-        if not bs:
-            return q, bs, "transient_failure"
+        if outcome != "success_with_data" or not bs:
+            # Preserve the specific outcome so carry-forward logic can act correctly.
+            final_outcome = outcome if outcome != "success_with_data" else "success_no_data"
+            return q, {}, final_outcome
 
         # Cash = cashAndShortTermInvestments preferred; fall back to cash + stinv sum.
         cash_st = bs.get("cashAndShortTermInvestments")
@@ -699,15 +804,16 @@ class FmpFundamentalsRefresher:
         Returns (quality_fields, fy1_row_or_None, outcome).
         outcome: 'success_with_data' | 'success_no_data' | 'transient_failure'
         """
-        raw = await self._get(
+        raw, _http_outcome = await self._get_quality(
             "analyst-estimates",
             {"symbol": sym, "period": "annual", "limit": 6},
         )
         rows: list[dict] = raw if isinstance(raw, list) else []
         q: dict[str, Any] = {}
 
-        if not rows:
-            return q, None, "transient_failure"
+        if _http_outcome != "success_with_data":
+            # Propagate: not_entitled / success_no_data / transient_failure
+            return q, None, _http_outcome
 
         # Sort ascending by FMP date
         try:
@@ -843,17 +949,22 @@ class FmpFundamentalsRefresher:
         """
         Call 10: FMP financial scores.
         Returns (quality_fields, outcome).
-        outcome: 'success_with_data' | 'transient_failure'
+        outcome: 'success_with_data' | 'success_no_data' | 'not_entitled' | 'transient_failure'
+
+        Issue 2: HTTP 200 + empty list → 'success_no_data' (NOT transient_failure).
+        This prevents a stale Altman Z score from being retained indefinitely when
+        FMP stops returning scores data for a symbol.
         """
-        raw = await self._get("financial-scores", {"symbol": sym})
+        raw, _http_outcome = await self._get_quality("financial-scores", {"symbol": sym})
         fs: dict = (
             raw[0] if isinstance(raw, list) and raw else
             (raw if isinstance(raw, dict) else {})
         )
         q: dict[str, Any] = {}
 
-        if not fs:
-            return q, "transient_failure"
+        if _http_outcome != "success_with_data" or not fs:
+            final = _http_outcome if _http_outcome != "success_with_data" else "success_no_data"
+            return q, final
 
         is_fin   = _is_financial_company(sector, industry)
         altman_z = fs.get("altmanZScore")
@@ -1009,6 +1120,12 @@ class FmpFundamentalsRefresher:
         if _profile_meta:
             fields["profile"] = _profile_meta
 
+        # Extract sector/industry early — needed for Current Ratio BS fallback
+        # (Issue 5) and Cash Runway (step 12).  These are also used in
+        # _fetch_scores_quality and _is_financial_company checks below.
+        _sector   = str(_profile_meta.get("sector",   "") or "")
+        _industry = str(_profile_meta.get("industry", "") or "")
+
         # ── 2. Income Statement (quarterly, 8Q) ──────────────────────────────
         raw = await self._get(
             "income-statement",
@@ -1053,35 +1170,48 @@ class FmpFundamentalsRefresher:
                 missing.append("Revenue Growth (YoY)")
 
             # Revenue Growth (Q): latest Q vs same Q prior year
-            # Part 3: use fiscal-period matching when available; positional fallback.
-            _rg_q_computed = False
-            q0_fy  = str(is_rows[0].get("fiscalYear", "") or "")
-            q0_per = str(is_rows[0].get("period", "") or "")
-            if q0_fy and q0_per and len(is_rows) >= 2:
+            # Issue 3: when fiscal metadata (fiscalYear + period) exists on the
+            # current row, require an exact prior-FY same-period match.  If no
+            # match is found, leave the metric missing — do NOT fall back to a
+            # positional row.  Positional fallback is allowed only when the row
+            # has no fiscal metadata at all (marked as approximate).
+            _rgq_method = "unavailable"
+            _rg_q0_fy  = str(is_rows[0].get("fiscalYear", "") or "")
+            _rg_q0_per = str(is_rows[0].get("period", "") or "")
+            if _rg_q0_fy and _rg_q0_per:
+                # Fiscal metadata present → exact match required; no fallback
                 try:
-                    py_q0 = self._get_fiscal_period_row(
-                        is_rows, str(int(q0_fy) - 1), q0_per
+                    _rg_py_row = self._get_fiscal_period_row(
+                        is_rows, str(int(_rg_q0_fy) - 1), _rg_q0_per
                     )
-                    if py_q0 is not None:
+                    if _rg_py_row is not None:
                         rev_q_pct = self._pct(
-                            is_rows[0].get("revenue"), py_q0.get("revenue")
+                            is_rows[0].get("revenue"), _rg_py_row.get("revenue")
                         )
                         if rev_q_pct is not None:
                             fields["Revenue Growth (Q)"] = self._fmt_pct(rev_q_pct)
-                            _rg_q_computed = True
+                            _rgq_method = "fiscal_year_period_exact"
+                        else:
+                            missing.append("Revenue Growth (Q)")
+                    else:
+                        # No exact prior-year match — metric stays missing
+                        missing.append("Revenue Growth (Q)")
                 except (ValueError, TypeError):
-                    pass
-            if not _rg_q_computed:
+                    missing.append("Revenue Growth (Q)")
+            else:
+                # No fiscal metadata → positional fallback allowed (approximate)
                 if len(is_rows) >= 5:
                     rev_q_pct = self._pct(
                         is_rows[0].get("revenue"), is_rows[4].get("revenue")
                     )
                     if rev_q_pct is not None:
                         fields["Revenue Growth (Q)"] = self._fmt_pct(rev_q_pct)
+                        _rgq_method = "position_approximate"
                     else:
                         missing.append("Revenue Growth (Q)")
                 else:
                     missing.append("Revenue Growth (Q)")
+            fields["_revenue_growth_q_alignment_method"] = _rgq_method
 
             # Part 4: Identify last completed fiscal year (FY/FY anchor for estimates)
             _completed_fy_label, _completed_fy_date, _completed_fy_revenue = (
@@ -1280,18 +1410,28 @@ class FmpFundamentalsRefresher:
             if _v is not None:
                 fields[_k] = _v
 
-        # Part 9: Current Ratio fallback from balance sheet when rtm absent
+        # Issue 5: Current Ratio BS fallback — skip for financial companies.
+        # Banks, insurers and REITs are deposit-funded; the current-ratio
+        # balance-sheet formula is not economically meaningful for them.
+        # The direct FMP TTM ratio from ratios-ttm is also questionable for
+        # financial firms but comes from FMP directly (not derived here) and
+        # has different consumer expectations, so it is left unchanged.
         if "Current Ratio" not in fields and _bs_row:
-            _ca = _bs_row.get("totalCurrentAssets")
-            _cl = _bs_row.get("totalCurrentLiabilities")
-            if _ca is not None and _cl is not None:
-                try:
-                    _cl_f = float(_cl)
-                    if _cl_f != 0.0:
-                        fields["Current Ratio"] = round(float(_ca) / _cl_f, 4)
-                        fields["_current_ratio_source"] = "balance_sheet_fallback"
-                except (ValueError, TypeError, ZeroDivisionError):
-                    pass
+            if _is_financial_company(_sector, _industry):
+                fields["_current_ratio_not_meaningful_reason"] = (
+                    "financial_sector_balance_sheet_fallback_suppressed"
+                )
+            else:
+                _ca = _bs_row.get("totalCurrentAssets")
+                _cl = _bs_row.get("totalCurrentLiabilities")
+                if _ca is not None and _cl is not None:
+                    try:
+                        _cl_f = float(_cl)
+                        if _cl_f != 0.0:
+                            fields["Current Ratio"] = round(float(_ca) / _cl_f, 4)
+                            fields["_current_ratio_source"] = "balance_sheet_fallback"
+                    except (ValueError, TypeError, ZeroDivisionError):
+                        pass
 
         # ── 10. Analyst estimates annual + Forward P/E upgrade ──────────────
         _mkt_cap_int: int | None = (
@@ -1356,8 +1496,7 @@ class FmpFundamentalsRefresher:
             missing.append("Forward P/E")
 
         # ── 11. Financial scores ─────────────────────────────────────────────
-        _sector   = str((_profile_meta or {}).get("sector",   "") or "")
-        _industry = str((_profile_meta or {}).get("industry", "") or "")
+        # _sector/_industry already extracted early (after _profile_meta build)
         scores_quality, _scores_outcome = await self._fetch_scores_quality(
             sym, _sector, _industry
         )
@@ -1497,8 +1636,17 @@ class FmpFundamentalsRefresher:
                             ):
                                 result["fields"][_qk] = _old_fields[_qk]
 
+                    # Issue 2: only carry on genuine transient failures.
+                    # not_entitled (402/429) and success_no_data (200+empty)
+                    # are authoritative: the server responded and data is absent,
+                    # so retaining stale values would be misleading.  Record
+                    # metadata flags so callers can surface data-quality signals.
                     if _bs_outcome == "transient_failure":
                         _carry_group(_BS_CARRY_FIELDS)
+                    elif _bs_outcome == "not_entitled":
+                        result["fields"]["_bs_not_entitled"] = True
+                    elif _bs_outcome == "success_no_data":
+                        result["fields"]["_bs_no_data"] = True
 
                     if _est_outcome == "transient_failure":
                         _carry_group(_EST_CARRY_FIELDS)
@@ -1508,9 +1656,40 @@ class FmpFundamentalsRefresher:
                             result["fields"].pop("Revenue Estimate Revision 90D", None)
                         if result["fields"].get("_eps_revision_reason") == "history_building":
                             result["fields"].pop("EPS Estimate Revision 90D", None)
+                    elif _est_outcome == "not_entitled":
+                        result["fields"]["_est_not_entitled"] = True
+                    elif _est_outcome == "success_no_data":
+                        result["fields"]["_est_no_data"] = True
 
                     if _scores_outcome == "transient_failure":
                         _carry_group(_SCORES_CARRY_FIELDS)
+                    elif _scores_outcome == "not_entitled":
+                        result["fields"]["_scores_not_entitled"] = True
+                    elif _scores_outcome == "success_no_data":
+                        result["fields"]["_scores_no_data"] = True
+
+                    # Issue 1: Recompute Cash Runway after carry-forward.
+                    # normalize_symbol computed runway using the Cash value it
+                    # fetched live.  If the BS endpoint failed (transient) and
+                    # we just carried a prior Cash value, the runway that was
+                    # stored in step 12 used the live (possibly stale/absent)
+                    # Cash — not the carried value.  We always recompute here
+                    # using whatever effective Cash and FCF are now in fields,
+                    # so the three runway fields are always internally coherent.
+                    _eff_cash    = result["fields"].get("Cash")
+                    _eff_ttm_fcf = result["fields"].get("Free Cash Flow")
+                    _eff_profile = result["fields"].get("profile") or {}
+                    _eff_sector  = str(_eff_profile.get("sector",   "") or "")
+                    _eff_industry= str(_eff_profile.get("industry", "") or "")
+                    # Clear stale runway fields before recomputing
+                    for _rk in ("Cash Runway Months", "Cash Runway Status",
+                                "_cash_runway_not_meaningful_reason"):
+                        result["fields"].pop(_rk, None)
+                    _runway = FmpFundamentalsRefresher._compute_cash_runway(
+                        _eff_cash, _eff_ttm_fcf, _eff_sector, _eff_industry
+                    )
+                    for _rk, _rv in _runway.items():
+                        result["fields"][_rk] = _rv
 
                 # ── Prevent empty payload from erasing prior good snapshot ────
                 _new_f = result.get("fields") or {}

@@ -1,0 +1,220 @@
+You are working inside the CaelynAI backend Replit.
+
+This is a very small final correctness patch to the existing Quality fundamentals implementation.
+
+Do not rebuild anything.
+
+Do not touch frontend files.
+
+Do not change the 10-call architecture, scheduler, Neon snapshot, existing canonical keys, or Confluence scoring.
+
+The current implementation is committed to GitHub `main`. Patch the live files in place.
+
+Primary file:
+
+* `backend/services/watchlist_fundamentals_refresh.py`
+
+Only change `backend/data/watchlist_estimate_history_store.py` if genuinely necessary.
+
+## Issue 1 — Cash Runway must be recomputed after Cash carry-forward
+
+Current problem:
+
+The balance-sheet carry group contains:
+
+* Cash
+* Net Cash / Debt
+* Cash Runway Months
+* Cash Runway Status
+* Cash-runway reason
+
+When the balance-sheet endpoint fails, the old Cash Runway result is carried directly.
+
+This is incorrect because current TTM FCF may have changed.
+
+Example:
+
+* Prior snapshot FCF positive → `self_funding`
+* Current FCF negative
+* Current balance-sheet request fails
+* Old `self_funding` status must not survive
+
+Fix:
+
+1. Remove all Cash Runway fields and reasons from `_BS_CARRY_FIELDS`.
+2. Carry only the balance-sheet inputs that remain valid during a transient failure:
+
+   * `Cash`
+   * `Net Cash / Debt`
+3. Perform source-aware carry-forward.
+4. After carry-forward is complete, recalculate Cash Runway using:
+
+   * Effective current/carried Cash
+   * Current refresh’s strict TTM Free Cash Flow
+   * Current sector and industry
+5. Clear old runway fields and reasons before writing the newly calculated result.
+6. If current FCF is missing, do not blindly preserve an old runway classification unless explicit stale metadata is supplied.
+
+Prove these transitions:
+
+* old self-funding → current negative FCF + BS failure
+* old 18 months → current positive FCF + BS failure
+* old financial-sector N/M → current non-financial classification
+* old numeric runway → current Cash unavailable and FCF available
+
+## Issue 2 — Preserve HTTP/result-state information from FMP calls
+
+Current `_get()` collapses all of these into `[]`:
+
+* HTTP 200 with empty payload
+* HTTP 402
+* HTTP 403
+* HTTP 404
+* HTTP 429
+* HTTP 500
+* Timeout
+* Connection error
+* Invalid JSON
+
+That prevents correct source-aware carry-forward.
+
+Refactor `_get()` or add a compatible result wrapper so optional Quality endpoint callers can distinguish:
+
+* `success_with_data`
+* `success_no_data`
+* `not_entitled`
+* `transient_failure`
+
+Classification:
+
+* HTTP 200 + populated payload → `success_with_data`
+* HTTP 200 + valid empty payload → `success_no_data`
+* HTTP 402 or 403 → `not_entitled`
+* HTTP 404 for a symbol-specific unsupported result → `success_no_data` unless the endpoint itself is invalid
+* HTTP 429, 5xx, timeout, connection error or invalid response → `transient_failure`
+
+Do not break the seven existing endpoint consumers.
+
+A backward-compatible helper may be added for the three optional Quality endpoints if changing `_get()` globally is risky.
+
+Carry-forward rules:
+
+* `transient_failure` → prior source fields may be carried
+* `success_no_data` → do not preserve obsolete numeric values; expose missing reason
+* `not_entitled` → do not preserve obsolete numeric values; expose entitlement reason
+* `success_with_data` → use only current results
+
+Apply this to:
+
+* Balance sheet
+* Annual analyst estimates
+* Financial scores
+
+Test Financial Scores returning HTTP 200 with an empty list and prove that an old Altman Z score is not retained forever.
+
+## Issue 3 — Remove unsafe positional fiscal fallback
+
+Current Revenue Growth Q and Revenue Acceleration code attempts fiscal-year/period matching and then falls back to positional rows when no match is found.
+
+Change the rule:
+
+* When both current fiscal year and fiscal period metadata exist:
+
+  * Require an exact prior-fiscal-year, same-period match.
+  * If no match exists, leave the metric missing.
+  * Do not use a positional fallback.
+* Positional fallback may be used only when fiscal metadata itself is absent from the relevant current row and the fallback can be clearly marked approximate.
+
+Expose provenance:
+
+* `_revenue_growth_q_alignment_method`
+* `_revenue_acceleration_alignment_method`
+
+Possible values:
+
+* `fiscal_year_period_exact`
+* `position_approximate`
+* `unavailable`
+
+Validate with:
+
+* MU
+* IREN
+* AAPL
+* A synthetic missing-prior-quarter case
+* A synthetic duplicate/restatement case
+
+## Issue 4 — Deduplicate completed fiscal-year rows
+
+Current `_identify_completed_fiscal_year()` confirms Q1–Q4 exist but sums all rows assigned to the fiscal year.
+
+Replace this with exact quarter selection:
+
+1. Group by fiscal year.
+2. For each fiscal year, select exactly one canonical row for:
+
+   * Q1
+   * Q2
+   * Q3
+   * Q4
+3. Deduplicate rows using period plus date.
+4. Prefer the latest/restated canonical row consistently when duplicates exist.
+5. Require non-null numeric revenue for all four quarters.
+6. Sum exactly those four revenue values.
+7. Reject the fiscal year if any quarter is missing or invalid.
+8. Use the selected Q4 row’s date as fiscal-year end.
+
+Add a test where Q2 appears twice and prove the duplicate is not double-counted.
+
+## Issue 5 — Current Ratio treatment for financial companies
+
+The balance-sheet Current Ratio fallback currently runs for every company.
+
+Before deriving the fallback:
+
+* Check `_is_financial_company(sector, industry)`.
+* For banks, insurers, REITs and other currently gated financial companies:
+
+  * Do not derive the balance-sheet Current Ratio fallback.
+  * Return an explicit not-meaningful reason.
+
+Do not necessarily delete a direct FMP TTM Current Ratio without first auditing how existing consumers use it. Report whether direct and derived Current Ratio should follow the same financial-sector rule.
+
+## Required validation
+
+Run the existing test suite plus focused simulations for:
+
+1. Balance-sheet transient failure with current FCF changing sign
+2. Balance-sheet HTTP 200 empty result
+3. Financial Scores HTTP 200 empty result with prior Altman value
+4. Analyst Estimates HTTP 402
+5. Analyst Estimates timeout
+6. Exact fiscal match absent despite fiscal metadata being present
+7. Fiscal metadata completely absent
+8. Duplicate Q2 row in completed fiscal year
+9. One completed-fiscal-year quarter with null revenue
+10. Financial-company Current Ratio fallback
+
+Force-refresh:
+
+* AAPL
+* SOFI
+* ASTS
+* IREN
+* MU
+
+Prove:
+
+* No stale contradictory runway survives
+* Only transient failures carry source values
+* Valid empty responses do not masquerade as outages
+* Revenue Growth Q and Revenue Acceleration do not silently use the wrong quarter
+* Completed FY revenue uses exactly Q1–Q4 once each
+* IREN FY1 remains 2026-06-30
+* Existing P/E, P/S, EV/EBITDA and Forward P/E keys remain unchanged
+* FMP calls remain 10 per symbol
+* No page-render calls are introduced
+* No frontend files are changed
+* Confluence actionability counts remain stable
+
+Return the exact files changed and focused test results. Do not repeat the full 11-part implementation.
