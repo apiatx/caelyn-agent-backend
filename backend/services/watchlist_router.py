@@ -1212,6 +1212,21 @@ async def _enrich_store_with_quotes(store: dict) -> dict:
         except Exception:
             pass  # non-fatal: fall back to CSV _mc value
 
+        # ── Quality fundamentals snapshot (zero extra Neon calls) ───────────────
+        # fund_snaps was loaded in the parallel gather above.  We re-read the
+        # same sym key here — no second DB round-trip, just a dict lookup.
+        try:
+            _fund_snap_q   = fund_snaps.get(sym) or {}
+            _fund_fields_q = _fund_snap_q.get("fields") or {}
+            if _fund_fields_q:
+                enriched["fundamentals"] = {
+                    "fields":        _fund_fields_q,
+                    "refreshed_at":  _fund_snap_q.get("refreshed_at"),
+                    "missing_fields": _fund_snap_q.get("missing_fields") or [],
+                }
+        except Exception:
+            pass  # non-fatal: fundamentals simply absent from this ticker row
+
         enriched.update(_vol_mc_fields(_price_f, _vol_f, _mc))
 
         # ── More-specific unavail reasons ──────────────────────────────────
@@ -6083,6 +6098,11 @@ async def get_watchlist_alignment(watchlist_id: str):
 
             # ── Nested V4.2 object (consistent with /api/alpha/confluence shape) ─
             "confluence_v42":                           row.get("confluence_v42"),
+
+            # ── Quality fundamentals snapshot (FMP weekly cache, read-only) ──────
+            # Populated by _build_ticker_row from the pre-loaded fund_snaps dict.
+            # Shape: {fields: {Cash, ROIC, FCF Conversion, …}, refreshed_at, missing_fields}
+            "fundamentals":                             row.get("fundamentals"),
         })
 
     # ── v3: theme leadership (cross-symbol ranking, computed after all rows) ──

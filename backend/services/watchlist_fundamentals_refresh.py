@@ -1860,3 +1860,45 @@ class FmpFundamentalsRefresher:
             "elapsed_seconds":         round(elapsed, 1),
             "fmp_calls_per_symbol":    10,
         }
+
+
+# ── Read-path helpers (imported by watchlist_router GET path) ─────────────────
+
+def merge_fmp_into_csv_row(csv_row: dict, fmp_fields: dict) -> dict:
+    """
+    Merge FMP snapshot fields into a single CSV row dict.
+
+    Merge precedence: FMP non-null value > existing CSV value.
+    Null FMP values never overwrite existing CSV values (no-null-overwrite rule).
+    Returns a new dict; does not mutate the caller's csv_row.
+    """
+    merged = dict(csv_row)
+    for k, v in fmp_fields.items():
+        if v is not None:
+            merged[k] = v
+    return merged
+
+
+def apply_fmp_overlays(csv_rows: list, snaps: dict) -> list:
+    """
+    Merge FMP fundamentals snapshots into every row of a csv_data list.
+
+    csv_rows : list of raw CSV row dicts (each has a Symbol / Ticker key).
+    snaps    : {SYMBOL_UPPER: {"fields": {...}, "refreshed_at": ..., "missing_fields": [...]}}
+               as returned by watchlist_fundamentals_store.get_snapshots_bulk().
+
+    Returns a new list.  Rows for symbols not in snaps are passed through
+    unchanged.  Uses merge_fmp_into_csv_row so FMP non-null > CSV value.
+    """
+    result: list = []
+    for row in csv_rows:
+        sym = (
+            row.get("Symbol") or row.get("symbol") or row.get("Ticker") or ""
+        ).strip().upper()
+        snap = snaps.get(sym) if sym else None
+        if snap:
+            fmp_fields = snap.get("fields") or {}
+            if fmp_fields:
+                row = merge_fmp_into_csv_row(row, fmp_fields)
+        result.append(row)
+    return result
