@@ -1,0 +1,114 @@
+TARGETED FOLLOW-UP ONLY.
+
+Do not perform another full audit.
+Do not launch a full backfill.
+Do not poll or run sleep commands.
+Do not change code during this check.
+Do not publish.
+
+1. Check the existing in-memory quote-cache entries once for:
+
+- AMD
+- MU
+- NET
+
+Print:
+
+- cached price
+- cached quote timestamp
+- quote source
+- whether each cache entry is considered valid by the canonical market-cap resolver
+
+2. The previous smoke test returned sections=0, so _build_ticker_row() and
+compute_live_valuation_overlay() were never exercised.
+
+Use the actual canonical Watchlist response path that supplies:
+
+analysis.sections[].tickers[]
+
+Ensure the existing analysis/LKG path is populated once using the normal existing mechanism.
+
+Do not call FMP to populate analysis.
+
+Then call the canonical Watchlist GET once.
+
+For AMD, MU and NET print the actual frontend-ready ticker-row values:
+
+- top-level current quote price
+- Market Cap
+- PE Ratio
+- PS Ratio
+- EV/EBITDA
+- P/FCF
+- FCF Yield
+- Forward P/E
+- Forward P/S
+- Forward EV/Sales
+- Forward EV/EBITDA
+- _valuation_price_used
+- _valuation_price_timestamp
+- _valuation_market_cap_source
+- _valuation_is_live
+- _valuation_overlay_live_price
+- _valuation_overlay_live_mc
+
+Explicitly state for each symbol:
+
+LIVE OVERLAY APPLIED: yes or no
+
+Do not substitute the stored Neon snapshot for this response test.
+
+3. If the canonical response still has zero sections, report:
+
+- why the normal frontend-ready row path is not populated
+- what existing request or background process normally warms it
+
+Do not fix it during this task.
+
+4. Refresh only these four current eligible Watchlist members through the existing canonical refresher:
+
+- VIVO
+- BTQ
+- UFO
+- PBLS
+
+Use:
+
+FmpFundamentalsRefresher.refresh_symbols(
+    symbols,
+    watchlist_id,
+    dev_force=True
+)
+
+Run one sequential four-symbol batch only.
+
+Maximum expected FMP calls: 40.
+
+Do not launch another universe backfill.
+
+5. Confirm all four now contain:
+
+- _eps_growth_method = diluted_eps_yoy_fiscal_exact
+- _valuation_ttm_net_income
+- _valuation_ttm_revenue
+- _valuation_ttm_ebitda
+- _valuation_ttm_fcf
+- _valuation_total_debt
+- _valuation_cash_and_short_term_investments
+- _market_cap_implied_shares
+
+6. Report:
+
+- current canonical eligible symbol count
+- symbols with new-engine snapshots
+- remaining current members with old snapshots
+
+These counts must reconcile.
+
+7. Confirm the FCF Yield API contract:
+
+- Stored snapshots may contain strings such as "0.97%"
+- Live overlays may contain numeric percentage-point values such as 0.97
+- Both mean 0.97%, not 97%
+
+Return the concise report and stop.
