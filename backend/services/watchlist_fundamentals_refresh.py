@@ -1188,6 +1188,710 @@ class FmpFundamentalsRefresher:
         )
         return {"Cash Runway Months": months, "Cash Runway Status": status}
 
+    # ── Earnings Intelligence helpers ─────────────────────────────────────────
+
+    @staticmethod
+    def _infer_timing_from_accepted_date(accepted_date_str: str) -> tuple:
+        """
+        Infer BMO/AMC report timing from SEC EDGAR acceptedDate.
+
+        SEC EDGAR acceptedDate is documented in Eastern Time and confirmed by
+        observation: COIN acceptedDate "16:29 ET" maps to AMC (post-market).
+
+        Returns (timing, timing_confidence, timing_source).
+          timing:            "bmo" | "amc" | "during_market" | "unknown"
+          timing_confidence: "inferred_low" | "unknown"
+          timing_source:     description string
+        """
+        if not accepted_date_str:
+            return "unknown", "unknown", "no_accepted_date_available"
+        try:
+            parts = str(accepted_date_str).strip().split(" ")
+            if len(parts) >= 2:
+                hour = int(parts[1].split(":")[0])
+            elif "T" in accepted_date_str:
+                hour = int(accepted_date_str.split("T")[1][:2])
+            else:
+                return "unknown", "unknown", "accepted_date_unparseable"
+
+            src = "income_stmt_accepted_date_heuristic_et"
+            if hour >= 16:
+                return "amc", "inferred_low", src
+            elif hour < 10:
+                return "bmo", "inferred_low", src
+            else:
+                return "during_market", "inferred_low", src
+        except Exception:
+            return "unknown", "unknown", "accepted_date_parse_error"
+
+    @staticmethod
+    def _eps_growth_info(current, prior) -> dict:
+        """
+        EPS growth with semantic transition_type.
+
+        Handles zero-crossing (turned_profitable / turned_negative),
+        loss narrowing/widening, and flat transitions.
+        Returns {"raw_growth_pct": float|None, "transition_type": str}.
+        """
+        if current is None or prior is None:
+            return {"raw_growth_pct": None, "transition_type": "unavailable"}
+        try:
+            cf, pf = float(current), float(prior)
+        except (ValueError, TypeError):
+            return {"raw_growth_pct": None, "transition_type": "unavailable"}
+
+        if pf == 0:
+            return {"raw_growth_pct": None, "transition_type": "unavailable"}
+
+        pct = round((cf - pf) / abs(pf) * 100, 2)
+
+        if pf > 0 and cf > 0:
+            if abs(pct) < 0.05:
+                return {"raw_growth_pct": pct, "transition_type": "flat"}
+            return {"raw_growth_pct": pct, "transition_type": "profit_increased" if pct > 0 else "profit_decreased"}
+        if pf < 0 and cf > 0:
+            return {"raw_growth_pct": pct, "transition_type": "turned_profitable"}
+        if pf > 0 and cf < 0:
+            return {"raw_growth_pct": pct, "transition_type": "turned_negative"}
+        if pf < 0 and cf < 0:
+            if abs(pct) < 0.05:
+                return {"raw_growth_pct": pct, "transition_type": "flat"}
+            return {"raw_growth_pct": pct, "transition_type": "loss_narrowed" if cf > pf else "loss_widened"}
+        return {"raw_growth_pct": pct, "transition_type": "unavailable"}
+
+    @staticmethod
+    def _compute_reaction_summary(events: list) -> dict:
+        """
+        Aggregate reaction statistics across completed, timing-confirmed events.
+
+        Only events with reactions_final=True AND calculation_method NOT containing
+        "unknown_timing" are included in primary stats.  Double-beat/miss cohorts
+        require valid estimates on both EPS and Revenue dimensions.
+        """
+        def _avg(lst):
+            return round(sum(lst) / len(lst), 2) if lst else None
+        def _median(lst):
+            if not lst:
+                return None
+            s = sorted(lst)
+            n = len(s)
+            return round(s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2, 2)
+        def _avg_abs(lst):
+            return round(sum(abs(v) for v in lst) / len(lst), 2) if lst else None
+
+        e1, e3, e5 = [], [], []
+        db1, dm1, mx1 = [], [], []
+        most_recent_completed = None
+
+        for ev in events:
+            pr = ev.get("price_reaction") or {}
+            if not pr.get("reactions_final"):
+                continue
+            if "unknown_timing" in (pr.get("calculation_method") or ""):
+                continue
+
+            r1 = pr.get("reaction_1d_pct")
+            r3 = pr.get("reaction_3d_pct")
+            r5 = pr.get("reaction_5d_pct")
+            if r1 is not None:
+                e1.append(r1)
+            if r3 is not None:
+                e3.append(r3)
+            if r5 is not None:
+                e5.append(r5)
+
+            eps_est = ev.get("eps_estimate")
+            eps_act = ev.get("eps_actual")
+            rev_est = ev.get("revenue_estimate")
+            rev_act = ev.get("revenue_actual")
+
+            if (eps_est is not None and eps_act is not None and
+                    rev_est is not None and rev_act is not None and r1 is not None):
+                try:
+                    eps_beat = float(eps_act) > float(eps_est)
+                    rev_beat = float(rev_act) > float(rev_est)
+                    if eps_beat and rev_beat:
+                        db1.append(r1)
+                    elif not eps_beat and not rev_beat:
+                        dm1.append(r1)
+                    else:
+                        mx1.append(r1)
+                except Exception:
+                    pass
+
+            if most_recent_completed is None and pr.get("baseline_date"):
+                most_recent_completed = pr.get("baseline_date")
+
+        return {
+            "observations_1d": len(e1),
+            "observations_3d": len(e3),
+            "observations_5d": len(e5),
+            "average_1d_pct":           _avg(e1),
+            "median_1d_pct":            _median(e1),
+            "average_absolute_1d_pct":  _avg_abs(e1),
+            "average_3d_pct":           _avg(e3),
+            "average_5d_pct":           _avg(e5),
+            "positive_1d_count": sum(1 for v in e1 if v > 0),
+            "negative_1d_count": sum(1 for v in e1 if v < 0),
+            "positive_1d_rate":  round(sum(1 for v in e1 if v > 0) / len(e1) * 100, 1) if e1 else None,
+            "largest_positive_1d_pct": max(e1) if e1 else None,
+            "largest_negative_1d_pct": min(e1) if e1 else None,
+            "average_1d_after_double_beat":  _avg(db1),
+            "average_1d_after_double_miss":  _avg(dm1),
+            "average_1d_after_mixed_result": _avg(mx1),
+            "most_recent_completed_reaction": most_recent_completed,
+        }
+
+    async def _fetch_earnings_intelligence(self, sym: str) -> dict | None:
+        """
+        Fetch and compute full earnings intelligence for one US stock symbol.
+
+        Makes up to 8 FMP calls (7 guaranteed + 1 optional FMP-bars fallback):
+          Parallel batch A (2): earnings + income-statement
+          Parallel batch B (5): grades-consensus + grades-historical + grades
+                                + price-target-consensus + price-target-summary
+          Optional (1): historical-price-eod/dividend-adjusted (FMP bars fallback
+                        only when canonical_history_service returns no bars)
+
+        Returns the full earnings_intelligence dict, or None on total failure.
+        The dict includes a "_call_count" key (int) that is popped by the caller
+        before persisting to Neon.
+
+        SEC filings are NOT included: edgar_cache is keyed by CIK, not ticker
+        symbol, and no safe symbol-level cached read path exists without a CIK
+        resolution step.  A narrow background-cache task is recommended to build
+        a ticker→CIK→filing index.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        call_count = 0
+        errors: dict = {}
+
+        # ── Batch A: earnings history + income statement (parallel) ──────────
+        earnings_raw: list = []
+        income_raw: list = []
+        try:
+            _ea_r, _ia_r = await asyncio.gather(
+                self._get("earnings", {"symbol": sym, "limit": 20}),
+                self._get("income-statement", {"symbol": sym, "period": "quarter", "limit": 20}),
+                return_exceptions=True,
+            )
+            call_count += 2
+            if isinstance(_ea_r, list):
+                earnings_raw = _ea_r
+            if isinstance(_ia_r, list):
+                income_raw = _ia_r
+        except Exception as exc:
+            errors["batch_a"] = str(exc)
+
+        # ── Income statement lookup: filingDate → row ─────────────────────────
+        income_by_filing: dict = {}
+        for row in income_raw:
+            if not isinstance(row, dict):
+                continue
+            fd = str(row.get("filingDate") or row.get("date") or "")[:10]
+            if fd:
+                income_by_filing[fd] = row
+
+        # ── Normalize historical earnings events ──────────────────────────────
+        # Keep only reported quarters (epsActual is not None)
+        hist_events = [
+            e for e in earnings_raw
+            if isinstance(e, dict) and e.get("epsActual") is not None
+        ]
+        hist_events.sort(key=lambda e: str(e.get("date") or ""))
+
+        normalized_events = []
+        for i, ev in enumerate(hist_events):
+            ev_date = str(ev.get("date") or "")[:10]
+            eps_actual = ev.get("epsActual")
+            eps_est    = ev.get("epsEstimated")
+            rev_actual = ev.get("revenueActual")
+            rev_est    = ev.get("revenueEstimated")
+
+            # EPS surprise
+            eps_surp_amt, eps_surp_pct = None, None
+            if eps_actual is not None and eps_est is not None:
+                try:
+                    eps_surp_amt = round(float(eps_actual) - float(eps_est), 4)
+                    if float(eps_est) != 0:
+                        eps_surp_pct = round(
+                            (float(eps_actual) - float(eps_est)) / abs(float(eps_est)) * 100, 2
+                        )
+                except Exception:
+                    pass
+
+            # Revenue surprise
+            rev_surp_amt, rev_surp_pct = None, None
+            if rev_actual is not None and rev_est is not None:
+                try:
+                    rev_surp_amt = round(float(rev_actual) - float(rev_est), 0)
+                    if float(rev_est) != 0:
+                        rev_surp_pct = round(
+                            (float(rev_actual) - float(rev_est)) / abs(float(rev_est)) * 100, 2
+                        )
+                except Exception:
+                    pass
+
+            # QoQ EPS growth (i-1 = prior quarter)
+            eps_qoq = None
+            if i > 0 and eps_actual is not None:
+                eps_qoq = self._eps_growth_info(eps_actual, hist_events[i - 1].get("epsActual"))
+
+            # YoY EPS growth (i-4 = same quarter prior year)
+            eps_yoy = None
+            if i >= 4 and eps_actual is not None:
+                eps_yoy = self._eps_growth_info(eps_actual, hist_events[i - 4].get("epsActual"))
+
+            # Revenue QoQ / YoY
+            rev_qoq_pct, rev_yoy_pct = None, None
+            if rev_actual is not None:
+                try:
+                    if i > 0:
+                        pr = hist_events[i - 1].get("revenueActual")
+                        if pr and float(pr) != 0:
+                            rev_qoq_pct = round(
+                                (float(rev_actual) - float(pr)) / abs(float(pr)) * 100, 2
+                            )
+                    if i >= 4:
+                        yr = hist_events[i - 4].get("revenueActual")
+                        if yr and float(yr) != 0:
+                            rev_yoy_pct = round(
+                                (float(rev_actual) - float(yr)) / abs(float(yr)) * 100, 2
+                            )
+                except Exception:
+                    pass
+
+            # Fiscal period + timing via income statement join
+            fiscal_year, fiscal_period = None, None
+            timing, timing_conf, timing_src = "unknown", "unknown", "no_source"
+            join_method = "none"
+
+            is_row = income_by_filing.get(ev_date)
+            if is_row:
+                join_method = "exact_filing_date"
+                fiscal_year   = is_row.get("fiscalYear")
+                fiscal_period = is_row.get("period")
+                accepted      = is_row.get("acceptedDate") or ""
+                timing, timing_conf, timing_src = self._infer_timing_from_accepted_date(accepted)
+            else:
+                # Fuzzy match: closest income row within 7 calendar days
+                best_delta, best_row = None, None
+                for fd, row in income_by_filing.items():
+                    try:
+                        from datetime import datetime as _dt
+                        delta = abs(
+                            (_dt.strptime(ev_date, "%Y-%m-%d") -
+                             _dt.strptime(fd, "%Y-%m-%d")).days
+                        )
+                        if delta <= 7 and (best_delta is None or delta < best_delta):
+                            best_delta, best_row = delta, row
+                    except Exception:
+                        continue
+                if best_row is not None:
+                    join_method = f"closest_filing_within_{best_delta}d"
+                    fiscal_year   = best_row.get("fiscalYear")
+                    fiscal_period = best_row.get("period")
+                    accepted      = best_row.get("acceptedDate") or ""
+                    timing, timing_conf, timing_src = self._infer_timing_from_accepted_date(accepted)
+
+            normalized_events.append({
+                "date":          ev_date,
+                "fiscal_year":   str(fiscal_year) if fiscal_year is not None else None,
+                "fiscal_period": fiscal_period,
+                # EPS
+                "eps_estimate":        eps_est,
+                "eps_actual":          eps_actual,
+                "eps_surprise_amount": eps_surp_amt,
+                "eps_surprise_pct":    eps_surp_pct,
+                # Revenue
+                "revenue_estimate":        int(float(rev_est))    if rev_est    is not None else None,
+                "revenue_actual":          int(float(rev_actual)) if rev_actual is not None else None,
+                "revenue_surprise_amount": int(rev_surp_amt)      if rev_surp_amt is not None else None,
+                "revenue_surprise_pct":    rev_surp_pct,
+                # Growth
+                "eps_qoq":        eps_qoq,
+                "eps_yoy":        eps_yoy,
+                "revenue_qoq_pct": rev_qoq_pct,
+                "revenue_yoy_pct": rev_yoy_pct,
+                # Timing
+                "timing":            timing,
+                "timing_confidence": timing_conf,
+                "timing_source":     timing_src,
+                "join_method":       join_method,
+                "report_status":     "reported",
+                "price_reaction":    None,
+            })
+
+        # ── Get price bars for reaction calculation ───────────────────────────
+        bars_list: list = []
+        bars_source = "none"
+
+        try:
+            from services.canonical_history_service import get_bars as _ch_get_bars
+            _ch_payload = _ch_get_bars(sym, require_fresh=False)
+            if _ch_payload and _ch_payload.get("bars"):
+                bars_source = _ch_payload.get("provider") or "canonical_cache"
+                bars_list = sorted(
+                    [b for b in _ch_payload["bars"] if isinstance(b, dict) and b.get("date")],
+                    key=lambda b: str(b["date"])[:10],
+                )
+        except Exception:
+            pass
+
+        # FMP adjusted-price fallback when canonical history has no bars
+        if not bars_list:
+            try:
+                _fmp_h = await self._get(
+                    "historical-price-eod/dividend-adjusted",
+                    {"symbol": sym},
+                )
+                call_count += 1
+                historical_raw = (
+                    _fmp_h if isinstance(_fmp_h, list)
+                    else (_fmp_h.get("historical") or [] if isinstance(_fmp_h, dict) else [])
+                )
+                bars_list = sorted(
+                    [b for b in historical_raw if isinstance(b, dict) and b.get("date")],
+                    key=lambda b: str(b["date"])[:10],
+                )
+                if bars_list:
+                    bars_source = "fmp_adjusted_fallback"
+            except Exception:
+                bars_source = "unavailable"
+
+        # Build date→index lookup
+        bar_dates = [str(b["date"])[:10] for b in bars_list]
+        date_to_idx = {d: i for i, d in enumerate(bar_dates)}
+        today_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        def _adj_close(bar: dict):
+            try:
+                v = bar.get("adjClose") or bar.get("close")
+                return float(v) if v is not None else None
+            except Exception:
+                return None
+
+        def _adj_open(bar: dict):
+            try:
+                v = bar.get("adjOpen") or bar.get("open")
+                return float(v) if v is not None else None
+            except Exception:
+                return None
+
+        def _adj_high(bar: dict):
+            try:
+                v = bar.get("adjHigh") or bar.get("high")
+                return float(v) if v is not None else None
+            except Exception:
+                return None
+
+        def _adj_low(bar: dict):
+            try:
+                v = bar.get("adjLow") or bar.get("low")
+                return float(v) if v is not None else None
+            except Exception:
+                return None
+
+        def _pct_vs(value, baseline):
+            if value is None or baseline is None or baseline == 0:
+                return None
+            return round((value - baseline) / abs(baseline) * 100, 2)
+
+        # ── Compute price reactions per event ─────────────────────────────────
+        for evt in normalized_events:
+            ev_date  = evt["date"]
+            timing   = evt["timing"]
+            tim_conf = evt["timing_confidence"]
+
+            react: dict = {
+                "baseline_date":        None,
+                "baseline_close":       None,
+                "first_reaction_session": None,
+                "opening_gap_pct":      None,
+                "reaction_1d_pct":      None,
+                "reaction_3d_pct":      None,
+                "reaction_5d_pct":      None,
+                "max_upside_5d_pct":    None,
+                "max_drawdown_5d_pct":  None,
+                "sessions_used":        [],
+                "calculation_method":   "skipped_no_bars",
+                "calculation_confidence": "low",
+                "reactions_final":      False,
+                "bars_source":          bars_source,
+            }
+
+            if not bar_dates:
+                evt["price_reaction"] = react
+                continue
+
+            try:
+                ev_idx = date_to_idx.get(ev_date)
+
+                if timing == "amc" and tim_conf != "unknown":
+                    if ev_idx is None:
+                        react["calculation_method"] = "skipped_no_report_date_bar"
+                        evt["price_reaction"] = react
+                        continue
+                    baseline_close = _adj_close(bars_list[ev_idx])
+                    if baseline_close is None:
+                        react["calculation_method"] = "skipped_no_baseline_close"
+                        evt["price_reaction"] = react
+                        continue
+                    react["baseline_date"]  = ev_date
+                    react["baseline_close"] = baseline_close
+                    react["calculation_method"] = "amc_inferred"
+                    react["calculation_confidence"] = tim_conf
+                    first_sess_idx = ev_idx + 1
+
+                elif timing == "bmo" and tim_conf != "unknown":
+                    if ev_idx is None:
+                        react["calculation_method"] = "skipped_no_report_date_bar"
+                        evt["price_reaction"] = react
+                        continue
+                    if ev_idx == 0:
+                        react["calculation_method"] = "skipped_no_prior_bar"
+                        evt["price_reaction"] = react
+                        continue
+                    baseline_close = _adj_close(bars_list[ev_idx - 1])
+                    if baseline_close is None:
+                        react["calculation_method"] = "skipped_no_baseline_close"
+                        evt["price_reaction"] = react
+                        continue
+                    react["baseline_date"]  = bar_dates[ev_idx - 1]
+                    react["baseline_close"] = baseline_close
+                    react["calculation_method"] = "bmo_inferred"
+                    react["calculation_confidence"] = tim_conf
+                    first_sess_idx = ev_idx
+
+                else:
+                    # Unknown/during-market timing: close-to-close only, no opening gap
+                    if ev_idx is None:
+                        best_idx, best_delta = None, 9999
+                        for ii, d in enumerate(bar_dates):
+                            try:
+                                from datetime import datetime as _dt
+                                delta = abs(
+                                    (_dt.strptime(ev_date, "%Y-%m-%d") -
+                                     _dt.strptime(d, "%Y-%m-%d")).days
+                                )
+                                if delta < best_delta:
+                                    best_delta, best_idx = delta, ii
+                            except Exception:
+                                continue
+                        if best_idx is None or best_delta > 5:
+                            react["calculation_method"] = "skipped_no_nearby_bar"
+                            evt["price_reaction"] = react
+                            continue
+                        ev_idx = best_idx
+                    baseline_close = _adj_close(bars_list[ev_idx])
+                    if baseline_close is None:
+                        react["calculation_method"] = "skipped_no_baseline_close"
+                        evt["price_reaction"] = react
+                        continue
+                    react["baseline_date"]  = bar_dates[ev_idx]
+                    react["baseline_close"] = baseline_close
+                    react["calculation_method"] = "unknown_timing_close_to_close"
+                    react["calculation_confidence"] = "low"
+                    first_sess_idx = ev_idx + 1
+
+                baseline_close = react["baseline_close"]
+
+                # Collect up to 5 reaction sessions
+                sess = [
+                    bars_list[first_sess_idx + off]
+                    for off in range(5)
+                    if first_sess_idx + off < len(bars_list)
+                ]
+
+                # Opening gap (AMC/BMO only)
+                if timing in ("amc", "bmo") and tim_conf != "unknown" and sess:
+                    react["opening_gap_pct"] = _pct_vs(_adj_open(sess[0]), baseline_close)
+
+                # Close-based reactions
+                if len(sess) >= 1:
+                    react["reaction_1d_pct"] = _pct_vs(_adj_close(sess[0]), baseline_close)
+                if len(sess) >= 3:
+                    react["reaction_3d_pct"] = _pct_vs(_adj_close(sess[2]), baseline_close)
+                if len(sess) >= 5:
+                    react["reaction_5d_pct"] = _pct_vs(_adj_close(sess[4]), baseline_close)
+
+                react["sessions_used"] = [str(b.get("date", ""))[:10] for b in sess]
+                react["first_reaction_session"] = react["sessions_used"][0] if react["sessions_used"] else None
+
+                # Max upside (highest intraday high) and max drawdown (lowest low)
+                if sess:
+                    highs = [_adj_high(b) for b in sess]
+                    lows  = [_adj_low(b)  for b in sess]
+                    valid_highs = [h for h in highs if h is not None]
+                    if valid_highs:
+                        react["max_upside_5d_pct"] = _pct_vs(max(valid_highs), baseline_close)
+                    valid_lows = [lo for lo in lows if lo is not None]
+                    if valid_lows:
+                        raw_dd = _pct_vs(min(valid_lows), baseline_close)
+                        react["max_drawdown_5d_pct"] = raw_dd if (raw_dd is not None and raw_dd < 0) else 0.0
+
+                # reactions_final: True when the T+5 session date is in the past
+                if len(sess) >= 5:
+                    react["reactions_final"] = str(sess[4].get("date", ""))[:10] < today_str
+                else:
+                    react["reactions_final"] = False
+
+            except Exception as exc:
+                log.debug("[EARN_INTEL] reaction error %s %s: %s", sym, ev_date, exc)
+                react["calculation_method"] = f"error_{type(exc).__name__}"
+
+            evt["price_reaction"] = react
+
+        # ── Reaction summary statistics ───────────────────────────────────────
+        # Events are ascending; summary helper expects any order (uses reactions_final gate)
+        reaction_summary = self._compute_reaction_summary(normalized_events)
+
+        # ── Batch B: ratings + targets (5 parallel calls) ────────────────────
+        consensus: dict = {}
+        monthly_dist: list = []
+        recent_actions: list = []
+        price_target: dict = {}
+        price_target_summary: dict = {}
+
+        try:
+            _gc_r, _gh_r, _gr_r, _ptc_r, _pts_r = await asyncio.gather(
+                self._get("grades-consensus",        {"symbol": sym}),
+                self._get("grades-historical",       {"symbol": sym, "limit": 24}),
+                self._get("grades",                  {"symbol": sym, "limit": 20}),
+                self._get("price-target-consensus",  {"symbol": sym}),
+                self._get("price-target-summary",    {"symbol": sym}),
+                return_exceptions=True,
+            )
+            call_count += 5
+
+            # grades-consensus → current distribution snapshot
+            if isinstance(_gc_r, list) and _gc_r:
+                item = _gc_r[0] if isinstance(_gc_r[0], dict) else {}
+                sb = int(item.get("strongBuy")   or 0)
+                bv = int(item.get("buy")         or 0)
+                hv = int(item.get("hold")        or 0)
+                sv = int(item.get("sell")        or 0)
+                ss = int(item.get("strongSell")  or 0)
+                consensus = {
+                    "strong_buy": sb, "buy": bv, "hold": hv,
+                    "sell": sv, "strong_sell": ss,
+                    "consensus_label": item.get("consensus"),
+                    "total_ratings": sb + bv + hv + sv + ss,
+                }
+
+            # grades-historical → monthly distribution timeline
+            if isinstance(_gh_r, list):
+                for item in _gh_r:
+                    if not isinstance(item, dict):
+                        continue
+                    sb = int(item.get("analystRatingsStrongBuy")   or 0)
+                    bv = int(item.get("analystRatingsBuy")         or 0)
+                    hv = int(item.get("analystRatingsHold")        or 0)
+                    sv = int(item.get("analystRatingsSell")        or 0)
+                    ss = int(item.get("analystRatingsStrongSell")  or 0)
+                    monthly_dist.append({
+                        "month": item.get("date"),
+                        "strong_buy": sb, "buy": bv, "hold": hv,
+                        "sell": sv, "strong_sell": ss,
+                        "total_ratings": sb + bv + hv + sv + ss,
+                    })
+
+            # grades → individual firm-level actions
+            if isinstance(_gr_r, list):
+                for item in _gr_r:
+                    if not isinstance(item, dict):
+                        continue
+                    recent_actions.append({
+                        "date":           item.get("date"),
+                        "firm":           item.get("gradingCompany"),
+                        "previous_grade": item.get("previousGrade"),
+                        "new_grade":      item.get("newGrade"),
+                        "action":         item.get("action"),
+                    })
+
+            # price-target-consensus
+            ptc_item = (
+                _ptc_r[0] if isinstance(_ptc_r, list) and _ptc_r and isinstance(_ptc_r[0], dict)
+                else (_ptc_r if isinstance(_ptc_r, dict) else {})
+            )
+            if ptc_item:
+                price_target = {
+                    "high":    ptc_item.get("targetHigh"),
+                    "low":     ptc_item.get("targetLow"),
+                    "median":  ptc_item.get("targetMedian"),
+                    "average": ptc_item.get("targetConsensus"),
+                }
+
+            # price-target-summary
+            pts_item = (
+                _pts_r[0] if isinstance(_pts_r, list) and _pts_r and isinstance(_pts_r[0], dict)
+                else (_pts_r if isinstance(_pts_r, dict) else {})
+            )
+            if pts_item:
+                import json as _json
+                _pub_raw = pts_item.get("publishers")
+                try:
+                    publishers = (
+                        _json.loads(_pub_raw) if isinstance(_pub_raw, str)
+                        else (_pub_raw if isinstance(_pub_raw, list) else [])
+                    )
+                except Exception:
+                    publishers = []
+                price_target_summary = {
+                    "last_month_count":    pts_item.get("lastMonthCount"),
+                    "last_month_average":  pts_item.get("lastMonthAvgPriceTarget"),
+                    "last_quarter_count":  pts_item.get("lastQuarterCount"),
+                    "last_quarter_average": pts_item.get("lastQuarterAvgPriceTarget"),
+                    "last_year_count":     pts_item.get("lastYearCount"),
+                    "last_year_average":   pts_item.get("lastYearAvgPriceTarget"),
+                    "all_time_count":      pts_item.get("allTimeCount"),
+                    "all_time_average":    pts_item.get("allTimeAvgPriceTarget"),
+                    "publishers":          publishers,
+                }
+
+        except Exception as exc:
+            errors["batch_b"] = str(exc)
+
+        # ── Assemble result (newest-first for display) ────────────────────────
+        display_events = list(reversed(normalized_events))
+
+        return {
+            "earnings_history":  display_events,
+            "reaction_summary":  reaction_summary,
+            "ratings": {
+                "consensus":           consensus,
+                "monthly_distribution": monthly_dist,
+                "recent_actions":       recent_actions,
+                "price_target":         price_target,
+                "price_target_summary": price_target_summary,
+            },
+            "sec_filings": None,
+            "source_status": {
+                "earnings_fetched_at":   now_iso,
+                "ratings_fetched_at":    now_iso,
+                "history_bars_source":   bars_source,
+                "sec_filings_omitted_reason": (
+                    "edgar_cache_keyed_by_cik_no_symbol_level_read; "
+                    "recommend ticker→cik→filing background-cache task"
+                ),
+                "coverage": {
+                    "has_earnings_history":    bool(display_events),
+                    "has_reactions": any(
+                        (e.get("price_reaction") or {}).get("reactions_final") is not False
+                        and (e.get("price_reaction") or {}).get("reaction_1d_pct") is not None
+                        for e in display_events
+                    ),
+                    "has_ratings_consensus": bool(consensus),
+                    "has_rating_actions":    bool(recent_actions),
+                    "has_rating_history":    bool(monthly_dist),
+                    "has_price_targets":     bool(price_target),
+                },
+                "errors": {k: str(v) for k, v in errors.items()} if errors else {},
+            },
+            "schema_version": 1,
+            "_call_count": call_count,
+        }
+
     # ── Core normalizer ──────────────────────────────────────────────────────
 
     async def normalize_symbol(self, symbol: str) -> dict:
@@ -2123,6 +2827,27 @@ class FmpFundamentalsRefresher:
                     else:
                         empty_payload_no_prior.append(sym)
                         continue
+
+                # ── Earnings Intelligence (fetched after substantive check) ────
+                # Added to result["fields"] BEFORE upsert so it is persisted
+                # atomically in the single JSONB write (no separate merge needed).
+                _ei_data: dict | None = None
+                try:
+                    _ei_data = await self._fetch_earnings_intelligence(sym)
+                    if _ei_data:
+                        _ei_call_count = _ei_data.pop("_call_count", 0)
+                        result["fields"]["earnings_intelligence"] = _ei_data
+                        result["fmp_call_count"] = result.get("fmp_call_count", 0) + _ei_call_count
+                        log.debug("[FMP_FUND] %s: earnings_intelligence ok (%d calls)", sym, _ei_call_count)
+                except Exception as _ei_exc:
+                    log.warning("[FMP_FUND] %s: earnings_intelligence error: %s", sym, _ei_exc)
+
+                # Carry forward existing earnings_intelligence when new fetch failed
+                if _ei_data is None and _existing_snap:
+                    _old_ei = (_existing_snap.get("fields") or {}).get("earnings_intelligence")
+                    if _old_ei:
+                        result["fields"]["earnings_intelligence"] = _old_ei
+                        log.debug("[FMP_FUND] %s: earnings_intelligence carried forward from prior snapshot", sym)
 
                 outcome = upsert_snapshot(
                     symbol=sym,

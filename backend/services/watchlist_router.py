@@ -4711,6 +4711,31 @@ async def ticker_detail_endpoint(symbol: str):
         print(f"[TICKER_DETAIL] catalyst error {sym}: {_e}")
         coverage["direct_catalyst"] = False
 
+    # ── 8. Earnings Intelligence (from watchlist_fundamentals_cache) ──────────
+    # Populated by FmpFundamentalsRefresher._fetch_earnings_intelligence() on
+    # the weekly fundamentals refresh cycle.  Zero provider calls at request
+    # time — pure Neon JSONB read from the already-loaded snapshot.
+    earnings_intelligence: dict | None = None
+    try:
+        def _fetch_ei():
+            from data.watchlist_fundamentals_store import get_snapshot as _get_fs
+            snap = _get_fs(sym)
+            if snap is None:
+                return None
+            raw_fields: dict = snap.get("fields") or {}
+            ei = raw_fields.get("earnings_intelligence")
+            if not ei or not isinstance(ei, dict):
+                return None
+            return ei
+        earnings_intelligence = await _aio.to_thread(_fetch_ei)
+        coverage["earnings_intelligence"] = bool(
+            earnings_intelligence
+            and earnings_intelligence.get("source_status", {}).get("coverage", {}).get("has_earnings_history")
+        )
+    except Exception as _ei_e:
+        print(f"[TICKER_DETAIL] earnings_intelligence error {sym}: {_ei_e}")
+        coverage["earnings_intelligence"] = False
+
     return {
         "symbol":        sym,
         "company":       company,
@@ -4720,6 +4745,7 @@ async def ticker_detail_endpoint(symbol: str):
         "fundamentals":  fundamentals,
         "news":          news,
         "direct_catalyst": direct_catalyst,
+        "earnings_intelligence": earnings_intelligence,
         "coverage":      coverage,
     }
 

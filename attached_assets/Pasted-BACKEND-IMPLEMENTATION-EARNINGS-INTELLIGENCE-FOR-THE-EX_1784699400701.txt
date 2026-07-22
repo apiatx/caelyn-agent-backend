@@ -1,0 +1,633 @@
+BACKEND IMPLEMENTATION — EARNINGS INTELLIGENCE FOR THE EXISTING WATCHLIST TICKER POPUP
+
+Implement the backend feature now based on the completed audit.
+
+Do not repeat the broad audit.
+Do not create a new endpoint family.
+Do not create a parallel FMP client.
+Do not create a second historical-price system.
+Do not add provider calls to the ticker-popup request path.
+Do not deploy until the required sample verification passes.
+Do not push to Git.
+
+PRIMARY OBJECTIVE
+
+Extend the existing cached response for:
+
+GET /api/watchlist/ticker-detail/{symbol}
+
+to provide, for eligible US operating-company stocks:
+
+1. Historical quarterly earnings
+2. Historical earnings price reactions
+3. Current analyst ratings consensus
+4. Historical analyst rating distributions
+5. Recent firm-level rating actions
+6. Current aggregate price targets
+7. Rolling price-target summaries
+8. Cached SEC filing references only where an existing cache path supports them
+
+Preserve the popup’s zero-provider-call request-time contract.
+
+CANONICAL EXISTING PATHS
+
+Reuse the paths identified in the audit:
+
+- backend/data/fmp_provider.py
+  - FMPProvider
+  - _get_stable()
+  - get_earnings_history()
+  - get_income_statement()
+
+- backend/services/watchlist_fundamentals_refresh.py
+  - FmpFundamentalsRefresher
+  - existing weekly refresh and Neon upsert path
+
+- backend/services/canonical_history_service.py
+  - canonical price-history read and backfill architecture
+
+- backend/services/watchlist_router.py
+  - ticker_detail_endpoint()
+  - existing cached fundamentals snapshot read
+
+- backend/data/sec_edgar_provider.py
+  - SecEdgarProvider
+
+- existing Neon watchlist_fundamentals_cache storage
+
+Do not replace these paths.
+
+SCOPE AND ELIGIBILITY
+
+Only populate this feature for eligible US-listed operating-company stocks.
+
+Reuse:
+
+- is_fmp_symbol_eligible(symbol)
+- existing cached profile/security-type fields
+- existing ETF/fund classification data
+
+Required gate:
+
+- symbol passes existing US/provider eligibility
+- symbol is not exchange-prefixed foreign
+- symbol is not an ETF
+- symbol is not a mutual fund
+- symbol is not an index
+- symbol is active where the current cached profile exposes activity status
+
+Do not make a provider call from ticker_detail_endpoint to determine eligibility.
+
+US-listed ADRs may remain eligible when the existing security classification considers them supported US-listed stocks.
+
+PART 1 — VERIFY STORAGE MERGE SAFETY
+
+Before adding the new data, inspect the exact write semantics for:
+
+watchlist_fundamentals_cache.fields
+
+Confirm whether an upsert:
+
+- merges new JSONB keys with existing fields, or
+- replaces the entire fields object
+
+The new implementation must not erase unrelated fundamentals or independently refreshed data.
+
+If current writes replace the whole object, modify the existing store/upsert path to perform a safe read/merge/write or JSONB merge consistent with repository conventions.
+
+Do not create a second table merely to avoid understanding the existing write behavior.
+
+PART 2 — ADD THE FIVE REQUIRED FMP METHODS
+
+In backend/data/fmp_provider.py, add methods following the existing _get_stable(), cache-key, TTL, error-handling, and normalization patterns.
+
+Required methods:
+
+1. get_grades(symbol, limit=20)
+   Endpoint: /stable/grades
+
+2. get_grades_historical(symbol, limit=24)
+   Endpoint: /stable/grades-historical
+
+3. get_grades_consensus(symbol)
+   Endpoint: /stable/grades-consensus
+
+4. get_price_target_consensus(symbol)
+   Endpoint: /stable/price-target-consensus
+
+5. get_price_target_summary(symbol)
+   Endpoint: /stable/price-target-summary
+
+Normalize each response into internal snake_case fields.
+
+get_grades():
+
+- date
+- firm
+- previous_grade
+- new_grade
+- action
+
+Do not include analyst_name or price-target fields because the verified endpoint does not return them.
+
+get_grades_historical():
+
+- month/date
+- strong_buy
+- buy
+- hold
+- sell
+- strong_sell
+- total_ratings calculated from those buckets
+
+This endpoint is a monthly aggregate distribution, not individual actions.
+
+get_grades_consensus():
+
+- strong_buy
+- buy
+- hold
+- sell
+- strong_sell
+- consensus_label
+- total_ratings calculated from those buckets
+
+Name the calculated total total_ratings, not target_analyst_count.
+
+get_price_target_consensus():
+
+- low
+- median
+- average
+- high
+
+The provider field targetConsensus maps to average.
+
+Do not invent analyst count or provider as-of date.
+
+get_price_target_summary():
+
+- last_month_count
+- last_month_average
+- last_quarter_count
+- last_quarter_average
+- last_year_count
+- last_year_average
+- all_time_count
+- all_time_average
+- publishers
+
+The publishers value may be a string-encoded JSON array. Parse it safely. On malformed JSON, return an empty list or safely normalized fallback; do not fail the whole section.
+
+Every provider method must:
+
+- use the canonical FMP client
+- use existing cache-key helpers
+- handle empty and non-200 responses
+- never expose the API key
+- return normalized empty structures rather than raising into the full refresh loop
+
+PART 3 — HISTORICAL EARNINGS NORMALIZATION
+
+Use FMPProvider.get_earnings_history() with a target of up to 20 quarters where the endpoint supports it.
+
+Use get_income_statement(period="quarter") with enough depth to map fiscal years and fiscal periods across the same history.
+
+For each historical earnings event normalize:
+
+- date
+- fiscal_year
+- fiscal_period
+- eps_estimate
+- eps_actual
+- eps_surprise_amount
+- eps_surprise_pct
+- revenue_estimate
+- revenue_actual
+- revenue_surprise_amount
+- revenue_surprise_pct
+- eps_qoq
+- eps_yoy
+- revenue_qoq_pct
+- revenue_yoy_pct
+- timing
+- timing_confidence
+- timing_source
+- report_status
+
+Missing values remain null.
+
+Do not turn null estimates into zero.
+
+Revenue surprise:
+
+(actual - estimate) / abs(estimate) * 100
+
+EPS surprise:
+
+(actual - estimate) / abs(estimate) * 100
+
+Guard against zero and null denominators.
+
+PART 4 — EPS GROWTH SEMANTICS
+
+Do not expose misleading ordinary percentages when EPS crosses zero or both periods are losses.
+
+For QoQ and YoY EPS comparisons return:
+
+- raw_growth_pct where mathematically meaningful
+- transition_type
+
+Supported transition_type values:
+
+- profit_increased
+- profit_decreased
+- turned_profitable
+- turned_negative
+- loss_narrowed
+- loss_widened
+- flat
+- unavailable
+
+Examples:
+
+- negative to positive = turned_profitable
+- positive to negative = turned_negative
+- -1.00 to -0.40 = loss_narrowed
+- -0.40 to -1.00 = loss_widened
+
+PART 5 — FISCAL-PERIOD JOINING
+
+The /stable/earnings response lacks fiscal period and fiscal year.
+
+Join earnings events to quarterly income-statement rows carefully.
+
+Preferred matching order:
+
+1. Exact match on earnings date and filingDate where valid
+2. Exact match on earnings date and date/report date where available
+3. Closest plausible filing row within a small documented date tolerance
+4. Otherwise fiscal_year and fiscal_period remain null
+
+Do not attach the wrong quarter merely to avoid a null.
+
+Store join_method and join_confidence when helpful for auditing.
+
+PART 6 — BMO/AMC TIMING
+
+Do not classify BMO/AMC solely from income-statement acceptedDate.
+
+Audit and use the strongest existing timing source available in this priority order:
+
+1. Existing earnings-calendar BMO/AMC field
+2. Existing cached catalyst/calendar timing
+3. Verified official earnings-release or webcast metadata already captured
+4. Explicit provider time field tied to the earnings release
+5. Previously persisted confirmed timing
+6. Filing acceptedDate heuristic as low-confidence fallback
+7. Unknown
+
+Return:
+
+- timing: bmo | amc | during_market | unknown
+- timing_confidence: confirmed | inferred_high | inferred_low | unknown
+- timing_source
+
+If acceptedDate is used:
+
+- label timing_confidence as inferred_low unless stronger evidence exists
+- parse timezone only according to the provider’s documented or observed format
+- do not assume a naive timestamp is Eastern or UTC without evidence
+- preserve the raw timestamp for auditability
+
+If timing is unknown, do not silently choose BMO or AMC.
+
+PART 7 — CANONICAL PRICE HISTORY ONLY
+
+Use canonical_history_service as the only source presented to the reaction calculator.
+
+Required behavior:
+
+1. Read bars through the canonical history service.
+2. If history is missing or insufficient, invoke the existing canonical-history backfill/refresh path.
+3. That canonical path may use Tradier or FMP fallback according to its existing provider hierarchy.
+4. Do not call FMP historical prices directly from ticker_detail_endpoint.
+5. Do not embed a second permanent FMP-history implementation inside the fundamentals refresher.
+
+If the existing canonical service has no callable single-symbol fill method, make the smallest extension to that service so a refresh task can request one symbol through its existing provider hierarchy.
+
+Each reaction record should expose the canonical bars_source value already known by that service where possible.
+
+PART 8 — REACTION CALCULATION
+
+Use actual ordered trading sessions, never calendar-day arithmetic.
+
+For confirmed or sufficiently inferred AMC:
+
+- baseline = report-date regular-session close
+- reaction session 1 = next trading session
+- opening_gap_pct = T+1 open versus baseline
+- reaction_1d_pct = T+1 close versus baseline
+- reaction_3d_pct = third subsequent trading-session close versus baseline
+- reaction_5d_pct = fifth subsequent trading-session close versus baseline
+
+For confirmed or sufficiently inferred BMO:
+
+- baseline = prior trading-session close
+- reaction session 1 = report-date trading session
+- opening_gap_pct = report-date open versus baseline
+- reaction_1d_pct = report-date close versus baseline
+- reaction_3d_pct = third applicable reaction-session close versus baseline
+- reaction_5d_pct = fifth applicable reaction-session close versus baseline
+
+For timing_confidence = inferred_low or timing = unknown:
+
+- do not present the result as an exact BMO/AMC reaction
+- either return reaction fields as null, or
+- calculate a clearly labeled close_to_close_approximation
+
+Recommended behavior:
+
+- unknown timing: calculate date-close to next-session-close only as calculation_method = unknown_timing_close_to_close
+- exclude this approximation from BMO/AMC-specific summary statistics
+- do not calculate an opening gap unless the baseline session is unambiguous
+
+For each event return:
+
+- baseline_date
+- baseline_close
+- first_reaction_session
+- opening_gap_pct
+- reaction_1d_pct
+- reaction_3d_pct
+- reaction_5d_pct
+- max_upside_5d_pct
+- max_drawdown_5d_pct
+- sessions_used
+- calculation_method
+- calculation_confidence
+- reactions_final
+- bars_source
+
+max_upside_5d_pct:
+
+- use the highest intraday high in the applicable five-session reaction window versus baseline
+
+max_drawdown_5d_pct:
+
+- use the lowest intraday low in that window versus baseline
+- express downside as a negative percentage
+- if price never trades below baseline, return 0.0 rather than a positive “drawdown”
+
+If fewer than five reaction sessions have elapsed:
+
+- calculate only available horizons
+- leave unavailable horizons null
+- reactions_final = false
+
+Once T+5 has completed:
+
+- reactions_final = true
+- avoid unnecessary recomputation unless historical bars were corrected
+
+PART 9 — EARNINGS-REACTION SUMMARY
+
+Calculate summary statistics using only eligible, non-null observations.
+
+Return:
+
+- observations_1d
+- observations_3d
+- observations_5d
+- average_1d_pct
+- median_1d_pct
+- average_absolute_1d_pct
+- average_3d_pct
+- average_5d_pct
+- positive_1d_count
+- negative_1d_count
+- positive_1d_rate
+- largest_positive_1d_pct
+- largest_negative_1d_pct
+- average_1d_after_double_beat
+- average_1d_after_double_miss
+- average_1d_after_mixed_result
+- most_recent_completed_reaction
+
+Definitions:
+
+- double beat = revenue and EPS both have valid estimates and both beat
+- double miss = revenue and EPS both have valid estimates and both miss
+- mixed = one beats and one misses
+- missing estimate events are excluded from beat/miss cohort statistics
+
+Do not include unknown-timing approximations in the primary summary unless separately labeled.
+
+PART 10 — ASSEMBLE EARNINGS INTELLIGENCE
+
+In FmpFundamentalsRefresher, build one cached structure under:
+
+fields["earnings_intelligence"]
+
+Recommended contract:
+
+{
+  "earnings_history": [...],
+  "reaction_summary": {...},
+  "ratings": {
+    "consensus": {...},
+    "monthly_distribution": [...],
+    "recent_actions": [...],
+    "price_target": {...},
+    "price_target_summary": {...}
+  },
+  "source_status": {
+    "earnings_fetched_at": "...",
+    "ratings_fetched_at": "...",
+    "history_refreshed_at": "...",
+    "coverage": {
+      "has_earnings_history": true,
+      "has_reactions": true,
+      "has_ratings_consensus": true,
+      "has_rating_actions": true,
+      "has_rating_history": true,
+      "has_price_targets": true
+    },
+    "errors": {
+      "earnings": null,
+      "reactions": null,
+      "ratings_consensus": null,
+      "rating_actions": null,
+      "rating_history": null,
+      "price_targets": null
+    }
+  },
+  "schema_version": 1
+}
+
+Each subsection must fail independently.
+
+A failure in price-target-summary must not erase earnings history or ratings consensus.
+
+PART 11 — SEC FILINGS
+
+Do not add a live SecEdgarProvider call to ticker_detail_endpoint.
+
+That would violate its zero-provider-call design.
+
+Inspect the existing EDGAR cache paths identified in the audit:
+
+- backend/data/edgar_cache.py
+- any cached output from SecEdgarProvider
+- any catalyst or deep-dive LKG containing filing references
+
+Use an existing cached filing source only if one already provides safe symbol-level reads.
+
+If a cached symbol-level read exists, include under earnings_intelligence:
+
+"sec_filings": {
+  "earnings_filings": [...],
+  "recent_8k": [...],
+  "fetched_at": "...",
+  "coverage": true
+}
+
+If no reusable cached symbol-level read exists, do not invent a request-time EDGAR call.
+
+Instead:
+
+- omit sec_filings from this implementation
+- report the exact missing cache capability
+- recommend a separate narrow background-cache task afterward
+
+Do not block the earnings and ratings implementation on SEC filings.
+
+PART 12 — POPUP RESPONSE
+
+Extend ticker_detail_endpoint() in backend/services/watchlist_router.py.
+
+The endpoint must:
+
+- read earnings_intelligence from the already-loaded cached fundamentals snapshot
+- return it as a top-level response key
+- add appropriate coverage status
+- perform zero FMP calls
+- perform zero Tradier calls
+- perform zero EDGAR calls
+- remain resilient when earnings_intelligence is absent
+
+Do not add a second frontend-facing endpoint unless the existing response-size or architecture creates a demonstrated blocker.
+
+PART 13 — REFRESH CADENCE
+
+Preserve existing scheduler architecture.
+
+Initial implementation:
+
+- extend the existing FmpFundamentalsRefresher
+- do not create one task per ticker
+- do not create a new scheduler unless existing scheduling cannot support required cadence
+
+Data cadence:
+
+Earnings history:
+- refresh weekly normally
+- refresh targeted symbols shortly after an expected earnings event using an existing earnings/catalyst job or queue if one already exists
+
+Incomplete reactions:
+- refresh only symbols with reactions_final = false until T+5 completes
+
+Ratings and price targets:
+- refresh weekly
+
+Historical finalized reactions:
+- retain and skip recomputation
+
+Do not add a popup-triggered asyncio.create_task refresh. Request-time cache misses should not create uncontrolled background work from web traffic.
+
+If an existing event-aware earnings job can enqueue or call a refresh safely, reuse it.
+
+If no event-aware path exists, keep weekly refresh for phase 1 and identify the limitation in the final report.
+
+PART 14 — INITIAL VALIDATION
+
+Before a full backfill, run the implementation for:
+
+- COIN
+- AAPL
+- RBLX
+- RDDT
+- NVDA
+
+Verify directly in Neon or the canonical cache:
+
+1. No unrelated fundamentals fields were erased
+2. Up to 20 quarters are requested where available
+3. Missing estimates remain null
+4. Fiscal periods join correctly
+5. Timing confidence is truthful
+6. acceptedDate-only timing is not marked confirmed
+7. Market holidays are skipped using actual bars
+8. Max drawdown never becomes positive
+9. Ratings consensus counts match provider data
+10. Grade actions contain firms but no invented analyst names
+11. Price targets contain no invented analyst count
+12. Popup reads the cached result without provider calls
+13. Partial endpoint failures preserve successful sections
+14. Existing ticker-detail fields remain unchanged
+
+For COIN, compare at least one completed historical reaction against the audit’s manually calculated example, but independently recompute from canonical bars.
+
+PART 15 — CONTROLLED BACKFILL
+
+Only after the five-symbol validation passes:
+
+- identify the eligible US operating-stock universe using existing cached metadata
+- run one controlled backfill using the existing refresher/backfill entry point
+- respect the existing FMP budget and limiter behavior
+- do not permanently change WATCHLIST_FUNDAMENTALS_MAX_PER_RUN merely to force completion
+- use an explicit one-time dev/admin invocation if the repository already supports it
+- record successes, partial failures, and skipped ineligible symbols
+
+Do not run the backfill before the validation report is clean.
+
+PART 16 — HARD NON-GOALS
+
+Do not implement:
+
+- earnings transcripts
+- transcript scraping
+- AI earnings summaries
+- investor-event audio
+- historical short interest
+- future quarterly estimates unavailable on the plan
+- individual analyst names
+- individual analyst price-target changes
+- exact historical target-change events
+- frontend code
+- a new page
+- a replacement popup
+- unrelated database cleanup
+- unrelated watchlist or confluence changes
+
+FINAL REPORT
+
+After implementation, return:
+
+1. Files changed
+2. Existing paths reused
+3. Any storage merge-safety change
+4. Five FMP methods added
+5. Final earnings_intelligence response contract
+6. Timing-source hierarchy implemented
+7. Reaction methodology
+8. Canonical-history behavior
+9. SEC filing decision
+10. Refresh cadence
+11. Five-symbol validation results
+12. Provider-call count during popup requests
+13. Backfill command or entry point
+14. Full backfill result, only if validation passed
+15. Known limitations
+
+Do not claim completion if the popup still makes provider calls or if unrelated cached fundamentals were overwritten.

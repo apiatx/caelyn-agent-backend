@@ -516,6 +516,138 @@ class FMPProvider:
                 "year_30": latest.get("year30"),
             }
         return {}
+    # ── Earnings Intelligence methods ─────────────────────────────────────────
+
+    async def get_grades(self, symbol: str, limit: int = 20) -> list:
+        """
+        Individual firm-level grade actions via /stable/grades.
+        Returns: date, firm, previous_grade, new_grade, action.
+        NOTE: analyst_name and price_target are NOT returned by this endpoint.
+        """
+        data = await self._get_stable("grades", {"symbol": symbol.upper(), "limit": limit})
+        if not isinstance(data, list):
+            return []
+        results = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            results.append({
+                "date":           item.get("date"),
+                "firm":           item.get("gradingCompany"),
+                "previous_grade": item.get("previousGrade"),
+                "new_grade":      item.get("newGrade"),
+                "action":         item.get("action"),
+            })
+        return results
+
+    async def get_grades_historical(self, symbol: str, limit: int = 24) -> list:
+        """
+        Monthly aggregate rating distribution via /stable/grades-historical.
+        Returns monthly snapshot counts (strongBuy/buy/hold/sell/strongSell) per month.
+        NOT individual historical grade actions — this is a monthly aggregate.
+        """
+        data = await self._get_stable("grades-historical", {"symbol": symbol.upper(), "limit": limit})
+        if not isinstance(data, list):
+            return []
+        results = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            sb = int(item.get("analystRatingsStrongBuy") or 0)
+            bv = int(item.get("analystRatingsBuy") or 0)
+            hv = int(item.get("analystRatingsHold") or 0)
+            sv = int(item.get("analystRatingsSell") or 0)
+            ss = int(item.get("analystRatingsStrongSell") or 0)
+            results.append({
+                "month":       item.get("date"),
+                "strong_buy":  sb,
+                "buy":         bv,
+                "hold":        hv,
+                "sell":        sv,
+                "strong_sell": ss,
+                "total_ratings": sb + bv + hv + sv + ss,
+            })
+        return results
+
+    async def get_grades_consensus(self, symbol: str) -> dict:
+        """
+        Current Wall Street buy/hold/sell consensus via /stable/grades-consensus.
+        NOT the FMP proprietary letter grade (that is /stable/ratings-snapshot).
+        """
+        data = await self._get_stable("grades-consensus", {"symbol": symbol.upper()})
+        if not data:
+            return {}
+        item = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
+        if not isinstance(item, dict):
+            return {}
+        sb = int(item.get("strongBuy") or 0)
+        bv = int(item.get("buy") or 0)
+        hv = int(item.get("hold") or 0)
+        sv = int(item.get("sell") or 0)
+        ss = int(item.get("strongSell") or 0)
+        return {
+            "strong_buy":     sb,
+            "buy":            bv,
+            "hold":           hv,
+            "sell":           sv,
+            "strong_sell":    ss,
+            "consensus_label": item.get("consensus"),
+            "total_ratings":  sb + bv + hv + sv + ss,
+        }
+
+    async def get_price_target_consensus(self, symbol: str) -> dict:
+        """
+        Price target range via /stable/price-target-consensus.
+        Returns high/low/median/average only. No analyst count or date (not in response).
+        targetConsensus maps to average per spec.
+        """
+        data = await self._get_stable("price-target-consensus", {"symbol": symbol.upper()})
+        if not data:
+            return {}
+        item = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
+        if not isinstance(item, dict):
+            return {}
+        return {
+            "high":    item.get("targetHigh"),
+            "low":     item.get("targetLow"),
+            "median":  item.get("targetMedian"),
+            "average": item.get("targetConsensus"),
+        }
+
+    async def get_price_target_summary(self, symbol: str) -> dict:
+        """
+        Rolling-period target summaries via /stable/price-target-summary.
+        publishers may be string-encoded JSON — parsed safely, empty list on failure.
+        """
+        import json as _json
+        data = await self._get_stable("price-target-summary", {"symbol": symbol.upper()})
+        if not data:
+            return {}
+        item = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
+        if not isinstance(item, dict):
+            return {}
+        publishers_raw = item.get("publishers")
+        try:
+            if isinstance(publishers_raw, str):
+                publishers = _json.loads(publishers_raw)
+            elif isinstance(publishers_raw, list):
+                publishers = publishers_raw
+            else:
+                publishers = []
+        except Exception:
+            publishers = []
+        return {
+            "last_month_count":    item.get("lastMonthCount"),
+            "last_month_average":  item.get("lastMonthAvgPriceTarget"),
+            "last_quarter_count":  item.get("lastQuarterCount"),
+            "last_quarter_average": item.get("lastQuarterAvgPriceTarget"),
+            "last_year_count":     item.get("lastYearCount"),
+            "last_year_average":   item.get("lastYearAvgPriceTarget"),
+            "all_time_count":      item.get("allTimeCount"),
+            "all_time_average":    item.get("allTimeAvgPriceTarget"),
+            "publishers":          publishers,
+        }
+
     async def get_macro_market_data(self) -> dict:
         """
         Full macro market data snapshot.
