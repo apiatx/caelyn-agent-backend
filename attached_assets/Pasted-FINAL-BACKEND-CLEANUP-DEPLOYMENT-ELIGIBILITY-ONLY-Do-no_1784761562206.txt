@@ -1,0 +1,149 @@
+FINAL BACKEND CLEANUP — DEPLOYMENT + ELIGIBILITY ONLY
+
+Do not add features.
+Do not change the frontend.
+Do not rerun the full backfill unless required for corrected eligibility cleanup.
+Do not alter earnings-reaction methodology or response field names.
+
+Two blockers remain before this backend is genuinely frontend-ready.
+
+1. FIX THE DEPLOYED BACKEND ENTRY POINT
+
+The deployed environment currently crashes with:
+
+ERROR: Error loading ASGI app. Could not import module "main".
+
+The backend app entry point is backend/main.py, but deployment runs uvicorn main:app from the repository root.
+
+Inspect the existing Replit deployment configuration and make the smallest correct fix using the project’s existing deployment conventions.
+
+Acceptable outcomes include:
+
+- set the working directory to backend and run:
+  python3.11 -m uvicorn main:app --host 0.0.0.0 --port <deployment port>
+
+or
+
+- run from the root using:
+  python3.11 -m uvicorn backend.main:app --host 0.0.0.0 --port <deployment port>
+
+Use the actual Replit deployment port/environment variable convention already used by the project.
+
+Do not create a duplicate main.py shim unless the deployment system genuinely requires it.
+
+After fixing:
+
+- deploy the backend
+- verify the live health endpoint
+- verify the live ticker-detail endpoint for COIN
+- confirm earnings_intelligence is populated
+- confirm the live popup endpoint makes zero provider calls
+
+2. FIX US OPERATING-STOCK ELIGIBILITY
+
+UFO was included in the earnings-intelligence backfill even though it is an ETF.
+
+This contradicts the required scope and means the current eligibility gate is incomplete.
+
+Audit the exact universe-building logic used by the earnings-intelligence backfill.
+
+The final gate must reuse existing cached metadata and exclude:
+
+- ETFs
+- mutual funds
+- indexes
+- exchange-traded products
+- inactive/delisted securities
+- foreign-prefixed symbols
+- SPAC shells or acquisition vehicles where the existing app classification identifies them
+- other non-operating securities where cached profile/type metadata identifies them
+
+Do not rely only on ":" not being present in the symbol.
+
+Use existing canonical fields such as:
+
+- profile.isEtf
+- profile.isFund
+- security/instrument type
+- active status
+- screener fundamentals classifications
+- existing ETF registry or instrument-type service
+
+Do not make provider calls at popup request time.
+
+3. RECHECK THE SEVEN PARTIAL SYMBOLS
+
+Reclassify:
+
+- UFO
+- CEPL
+- BTQ
+- VIVO
+- PBLS
+- QNT
+- SPCX
+
+For each, report:
+
+- security type
+- whether it belongs in the US operating-stock feature
+- exact cached metadata used for that decision
+- whether it should remain in the eligible universe
+- whether its missing coverage is a real provider gap or an eligibility issue
+
+UFO should not remain labeled as a provider-data gap if it is correctly identified as an ETF.
+
+4. CLEAN INVALID BACKFILL ROWS
+
+For symbols determined to be ineligible:
+
+- do not delete unrelated fundamentals
+- remove only fields["earnings_intelligence"] or mark the section ineligible using the repository’s safest existing JSONB update pattern
+- ensure ticker_detail_endpoint returns earnings_intelligence as null or unavailable for ineligible securities
+- add an explicit eligibility/reason field if the current contract supports it without breaking the frontend schema
+
+Do not leave fake “coverage failure” records on ETFs.
+
+5. VERIFY THE CORRECTED UNIVERSE
+
+After correcting the gate:
+
+- report total cached symbols examined
+- report eligible US operating-company stocks
+- report excluded ETFs/funds/indexes/foreign/inactive/non-operating symbols
+- report populated eligible symbols
+- report eligible partial symbols
+- report eligible failures
+
+The success denominator must be eligible US operating-company stocks, not every snapshot row.
+
+6. FINAL LIVE VERIFICATION
+
+Verify against the deployed backend:
+
+- COIN
+- AAPL
+- RBLX
+- RDDT
+- NVDA
+- NBIS
+- UFO
+
+Expected:
+
+- the six eligible stocks return populated earnings_intelligence
+- UFO is excluded or returns an explicit ineligible/unavailable state
+- existing ticker-detail sections remain intact
+- no provider calls occur during reads
+- no deployment crash loop
+- no startup or runtime errors
+
+End with exactly one result:
+
+FRONTEND READY
+
+or
+
+NOT FRONTEND READY
+
+Only return FRONTEND READY if the production deployment works and ETF/non-stock eligibility is corrected.

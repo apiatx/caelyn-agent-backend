@@ -2513,14 +2513,26 @@ async def debug_ei_backfill(
 
     async def _run():
         global _ei_backfill_state
-        from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
-        from data.watchlist_fundamentals_store import merge_fields as _merge
+        from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher, ei_ineligible_reason as _ei_elig
+        from data.watchlist_fundamentals_store import merge_fields as _merge, get_snapshot as _get_snap
 
         refresher = FmpFundamentalsRefresher(fmp_key)
         checkpoint_n = 0
 
         for sym in to_refresh:
             try:
+                # ── Eligibility gate: skip ETFs, funds, and non-operating securities ──
+                _snap = await __import__("asyncio").get_event_loop().run_in_executor(
+                    None, _get_snap, sym
+                )
+                _inelig = _ei_elig(sym, _snap)
+                if _inelig:
+                    _ei_backfill_state["skipped"] += 1
+                    _ei_backfill_state["skipped_symbols"].append(
+                        {"symbol": sym, "reason": f"ineligible:{_inelig}"}
+                    )
+                    continue
+
                 ei_data = await refresher._fetch_earnings_intelligence(sym)
                 if not ei_data:
                     _ei_backfill_state["skipped"] += 1
@@ -4890,13 +4902,19 @@ async def ticker_detail_endpoint(symbol: str):
     # Populated by FmpFundamentalsRefresher._fetch_earnings_intelligence() on
     # the weekly fundamentals refresh cycle.  Zero provider calls at request
     # time — pure Neon JSONB read from the already-loaded snapshot.
+    # ETFs, funds, and non-operating securities are gated out here so they
+    # always return null regardless of any legacy rows in the DB.
     earnings_intelligence: dict | None = None
     try:
         def _fetch_ei():
             from data.watchlist_fundamentals_store import get_snapshot as _get_fs
+            from services.watchlist_fundamentals_refresh import ei_ineligible_reason as _ei_elig
             snap = _get_fs(sym)
             if snap is None:
                 return None
+            _reason = _ei_elig(sym, snap)
+            if _reason:
+                return None  # ETF / non-operating security — no EI
             raw_fields: dict = snap.get("fields") or {}
             ei = raw_fields.get("earnings_intelligence")
             if not ei or not isinstance(ei, dict):

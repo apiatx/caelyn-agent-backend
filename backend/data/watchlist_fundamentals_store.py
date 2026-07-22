@@ -514,3 +514,32 @@ def get_diagnostics(watchlist_id: str) -> dict:
         return {"error": str(exc)}
 
 
+def remove_ei_field(symbol: str) -> bool:
+    """Remove only the earnings_intelligence key from a snapshot's JSONB fields.
+
+    Uses PostgreSQL's '-' operator so every other field is left intact.
+    Returns True if a row was updated, False otherwise.
+    """
+    if not symbol:
+        return False
+    try:
+        from data.pg_storage import _get_conn, _put_conn
+        conn = _get_conn()
+        if conn is None:
+            return False
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE {_TABLE} SET fields = fields - 'earnings_intelligence' WHERE symbol = %s",
+                (symbol.upper(),),
+            )
+            updated = cur.rowcount
+            conn.commit()
+            cur.close()
+            return updated > 0
+        finally:
+            _put_conn(conn)
+    except Exception as exc:
+        log.warning("[FUND_STORE] remove_ei_field(%s) error: %s", symbol, exc)
+        return False
+

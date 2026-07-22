@@ -253,6 +253,58 @@ def _is_financial_company(sector: str, industry: str) -> bool:
     return _is_altman_z_not_meaningful(sector, industry)
 
 
+# ── EI Eligibility Gate ───────────────────────────────────────────────────────
+# Patterns that indicate the security ITSELF is an ETF/fund product, not merely
+# a company that *mentions* ETFs in its description.
+# NOTE: the pattern guards against common false positives:
+#   - HOOD mentions "(ETFs)" as products it offers → "ETF" followed by ")" → won't match [,.\s]
+#   - INV "identifies, funds, and operates" → "funds" is a verb, not a subject classification
+import re as _ei_re
+
+_EI_ETF_SUBJECT_RE = _ei_re.compile(
+    r"\betf[,\.\s]|"                                    # "ETF," / "ETF." / "ETF " as subject
+    r"exchange.traded fund[,\.\s]|"                     # "exchange-traded fund,"
+    r"seeks to (?:track|replicate|mirror)\b|"           # fund objective language
+    r"designed to (?:track|mirror|replicate)\b|"        # fund objective language
+    r"tracks the (?:performance|index)\b",              # passive index tracker
+    _ei_re.I,
+)
+_EI_ETF_INDUSTRIES = frozenset({"Exchange Traded Fund", "Exchange Traded Funds"})
+
+
+def ei_ineligible_reason(symbol: str, snapshot: dict | None) -> str | None:
+    """
+    Return an exclusion-reason string when *symbol* should NOT receive
+    earnings_intelligence; return None when it is eligible.
+
+    Uses only data already cached in the Neon snapshot — zero provider calls.
+
+    Exclusion cases:
+      - foreign_exchange_prefix  : symbol contains ":"
+      - etf_by_description       : cached description names the security itself
+                                   as an ETF/fund (tight pattern prevents false
+                                   positives for companies that mention ETFs as
+                                   products, e.g. HOOD)
+      - etf_by_industry          : industry is "Exchange Traded Fund" /
+                                   "Exchange Traded Funds"
+    """
+    if not symbol:
+        return "empty_symbol"
+    if ":" in symbol:
+        return "foreign_exchange_prefix"
+    if snapshot is None:
+        return None  # no snapshot yet; eligible by default
+    fields = snapshot.get("fields") or {}
+    profile = fields.get("profile") or {}
+    industry = (profile.get("industry") or "").strip()
+    if industry in _EI_ETF_INDUSTRIES:
+        return f"etf_by_industry:{industry}"
+    description = (profile.get("description") or "").strip()
+    if _EI_ETF_SUBJECT_RE.search(description):
+        return "etf_by_description"
+    return None
+
+
 class FmpFundamentalsRefresher:
     """
     Refreshes FMP fundamentals for a list of symbols.
@@ -2832,23 +2884,28 @@ class FmpFundamentalsRefresher:
                 # ── Earnings Intelligence (fetched after substantive check) ────
                 # Added to result["fields"] BEFORE upsert so it is persisted
                 # atomically in the single JSONB write (no separate merge needed).
+                # Skip entirely for ETFs, funds, and other non-operating securities.
                 _ei_data: dict | None = None
-                try:
-                    _ei_data = await self._fetch_earnings_intelligence(sym)
-                    if _ei_data:
-                        _ei_call_count = _ei_data.pop("_call_count", 0)
-                        result["fields"]["earnings_intelligence"] = _ei_data
-                        result["fmp_call_count"] = result.get("fmp_call_count", 0) + _ei_call_count
-                        log.debug("[FMP_FUND] %s: earnings_intelligence ok (%d calls)", sym, _ei_call_count)
-                except Exception as _ei_exc:
-                    log.warning("[FMP_FUND] %s: earnings_intelligence error: %s", sym, _ei_exc)
+                _ei_skip_reason = ei_ineligible_reason(sym, _existing_snap)
+                if _ei_skip_reason:
+                    log.debug("[FMP_FUND] %s: earnings_intelligence skipped (%s)", sym, _ei_skip_reason)
+                else:
+                    try:
+                        _ei_data = await self._fetch_earnings_intelligence(sym)
+                        if _ei_data:
+                            _ei_call_count = _ei_data.pop("_call_count", 0)
+                            result["fields"]["earnings_intelligence"] = _ei_data
+                            result["fmp_call_count"] = result.get("fmp_call_count", 0) + _ei_call_count
+                            log.debug("[FMP_FUND] %s: earnings_intelligence ok (%d calls)", sym, _ei_call_count)
+                    except Exception as _ei_exc:
+                        log.warning("[FMP_FUND] %s: earnings_intelligence error: %s", sym, _ei_exc)
 
-                # Carry forward existing earnings_intelligence when new fetch failed
-                if _ei_data is None and _existing_snap:
-                    _old_ei = (_existing_snap.get("fields") or {}).get("earnings_intelligence")
-                    if _old_ei:
-                        result["fields"]["earnings_intelligence"] = _old_ei
-                        log.debug("[FMP_FUND] %s: earnings_intelligence carried forward from prior snapshot", sym)
+                    # Carry forward existing earnings_intelligence when new fetch failed
+                    if _ei_data is None and _existing_snap:
+                        _old_ei = (_existing_snap.get("fields") or {}).get("earnings_intelligence")
+                        if _old_ei:
+                            result["fields"]["earnings_intelligence"] = _old_ei
+                            log.debug("[FMP_FUND] %s: earnings_intelligence carried forward from prior snapshot", sym)
 
                 outcome = upsert_snapshot(
                     symbol=sym,
