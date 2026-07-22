@@ -406,7 +406,7 @@ def log_route(
     [ROUTE] example:
         [ROUTE] {"feature":"build_prompt/chat","category":"chat",
                  "classifier_label":"simple_lookup","provider":"claude",
-                 "tier":"balanced","model":"claude-sonnet-4-20250514",
+                 "tier":"balanced","model":"claude-sonnet-4-5-20250929",
                  "downgraded_from":"claude-sonnet-4-5-20250929","latency_ms":412.3}
     """
     record: dict = {

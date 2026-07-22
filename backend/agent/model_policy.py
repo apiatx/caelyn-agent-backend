@@ -86,7 +86,7 @@ _POLICY_ENABLED: bool = os.getenv("MODEL_POLICY_ENABLED", "1").strip() not in ("
 PROVIDER_REGISTRY: dict[str, dict[str, str]] = {
     "claude": {
         "fast":     "claude-haiku-4-5-20251001",   # classification, notifications, backtest digest
-        "balanced": "claude-sonnet-4-20250514",     # orchestration, simpler synthesis, followup
+        "balanced": "claude-sonnet-4-5-20250929",  # orchestration, simpler synthesis, followup
         "premium":  "claude-sonnet-4-5-20250929",  # deep analysis, extended thinking
     },
     "gpt-4o": {
@@ -164,16 +164,16 @@ _LEGACY: dict[str, str] = {
     "whale_discovery":          "sonar",
     "discovery_validation":     "sonar",
     "news_fetch":               "sonar",
-    "orchestrator_routing":     "claude-sonnet-4-20250514",
-    "options_analysis":         "claude-sonnet-4-20250514",
-    "freeform_query":           "claude-sonnet-4-20250514",
-    "multi_source_synthesis":   "claude-sonnet-4-20250514",
+    "orchestrator_routing":     "claude-sonnet-4-5-20250929",
+    "options_analysis":         "claude-sonnet-4-5-20250929",
+    "freeform_query":           "claude-sonnet-4-5-20250929",
+    "multi_source_synthesis":   "claude-sonnet-4-5-20250929",
     "watchlist_ranking":        "claude-opus-4-5",
     "watchlist_synthesis":      "claude-opus-4-5",
     "preset_prompt":            "claude-sonnet-4-5-20250929",
     "fundamental_analysis":     "claude-sonnet-4-5-20250929",
     "ticker_analysis":          "claude-sonnet-4-5-20250929",
-    "high_complexity_research": "claude-sonnet-4-20250514",
+    "high_complexity_research": "claude-sonnet-4-5-20250929",
     "x_sentiment":              "grok-4-1-fast-reasoning",
     "news_grounding":           "sonar-pro",
     "web_research":             "gemini-3-flash-preview",
@@ -187,7 +187,6 @@ _LEGACY: dict[str, str] = {
 _COST_PER_MILLION: dict[str, tuple[float, float]] = {
     # Claude
     "claude-haiku-4-5-20251001":  (0.80,   4.00),
-    "claude-sonnet-4-20250514":   (3.00,  15.00),
     "claude-sonnet-4-5-20250929": (3.00,  15.00),
     # OpenAI
     "gpt-4o":                     (2.50,  10.00),
