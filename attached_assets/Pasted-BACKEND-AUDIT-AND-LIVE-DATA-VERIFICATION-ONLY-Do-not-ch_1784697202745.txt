@@ -1,0 +1,477 @@
+BACKEND AUDIT AND LIVE DATA VERIFICATION ONLY
+
+Do not change code yet.
+Do not create database tables.
+Do not run a full watchlist backfill.
+Do not deploy.
+Do not push to Git.
+
+OBJECTIVE
+
+Determine the smallest, cleanest way to add the following data to the existing Watchlist ticker-click popup backend:
+
+1. Historical quarterly earnings results
+2. Historical earnings price reactions
+3. Analyst ratings and price targets
+4. Existing SEC filing data needed for earnings materials
+
+This is an audit and live-data verification pass only. After the report, I will provide a separate surgical implementation prompt.
+
+IMPORTANT ARCHITECTURE RULE
+
+Preserve the existing backend architecture.
+
+Do not invent:
+
+- a replacement ticker-profile endpoint
+- a parallel FMP client
+- a second historical-price service
+- a separate caching framework
+- a new scheduler
+- duplicate database tables
+- a standalone earnings microservice
+- a second analyst-ratings service
+- a replacement SEC-filings service
+
+You are inside the repository and have better codebase ground truth than the person writing this prompt. Inspect the existing implementation before recommending anything.
+
+SCOPE RULE: US STOCKS ONLY
+
+This feature is only for supported US-listed operating-company stocks.
+
+Do not test or design this feature around:
+
+- foreign-listed symbols
+- exchange-prefixed foreign symbols
+- OTC securities unless the app already classifies them as supported US securities
+- ETFs
+- mutual funds
+- indexes
+- crypto
+
+Find and reuse the app’s existing security-type, exchange, country, and symbol-eligibility logic.
+
+Do not create a new competing definition of “US stock.”
+
+The FMP plan includes the following APIs for US stocks:
+
+- Price Target Summary
+- Price Target Consensus
+- Stock Grades
+- Historical Stock Grades
+- Stock Grades Summary
+
+Do not treat these endpoints as unavailable or blocked by the plan.
+
+Verify their actual response shape, history depth, null rates, and ticker coverage—but entitlement is not an open question.
+
+PART 1 — AUDIT THE CURRENT PATHS
+
+Locate and report the exact existing files, classes, and functions for:
+
+1. Watchlist ticker-click popup backend endpoint or endpoint family
+2. Canonical FMP client
+3. FMP authentication and rate limiting
+4. Earnings-calendar and earnings-history fetching
+5. Financial-estimates fetching
+6. Historical daily-price fetching
+7. Analyst ratings and price-target fetching
+8. SEC filings fetching
+9. US-stock eligibility and symbol normalization
+10. Caching and Neon persistence
+11. Scheduled refresh jobs
+12. Revenue/EPS surprise calculations
+13. Historical earnings-price reaction calculations, if any
+14. Existing ticker-profile response models or schemas
+
+For each area, report:
+
+- exact file path
+- function/class name
+- current responsibility
+- whether it is actively used
+- whether the ticker popup already consumes it
+- whether it should be extended or reused
+- whether overlapping logic already exists
+
+Do not propose new files until you have explained why the existing paths cannot be extended.
+
+PART 2 — IDENTIFY THE EXISTING US-STOCK ELIGIBILITY RULE
+
+Find the existing canonical logic that determines whether a symbol is:
+
+- a US-listed stock
+- an ETF
+- a fund
+- an index
+- foreign-listed
+- exchange-prefixed
+- OTC
+- inactive or delisted
+
+Report the exact path and function.
+
+The new earnings, ratings, and target feature should use that existing rule.
+
+Do not hard-code a new exchange allowlist unless the repository genuinely has no existing eligibility service.
+
+Explain how symbols such as the following would be treated:
+
+- COIN
+- AAPL
+- NBIS
+- a US-listed ADR
+- an ETF
+- an exchange-prefixed foreign ticker
+
+Do not perform FMP probes for unsupported foreign or non-stock symbols.
+
+PART 3 — RUN SMALL LIVE FMP PROBES
+
+Use the existing canonical FMP client and limiter.
+
+Do not write a disposable second FMP client unless no reusable client exists.
+
+Never print or expose the API key.
+
+Run live probes for four eligible US stocks:
+
+1. COIN
+2. One profitable large-cap US stock already supported by the app
+3. One US stock with historically negative EPS
+4. One recent US IPO with shorter history
+
+Choose the additional symbols from the app’s existing supported universe.
+
+A. EARNINGS HISTORY
+
+Verify the actual response contains:
+
+- report date
+- fiscal period
+- fiscal year
+- BMO/AMC timing
+- revenue estimate
+- revenue actual
+- EPS estimate
+- EPS actual
+- surprise fields, if returned
+- historical depth
+- null or missing fields
+
+Report whether earnings timing is represented as:
+
+- before market open
+- after market close
+- time string
+- another provider-specific field
+- unavailable
+
+B. HISTORICAL DAILY PRICES
+
+Verify the response contains:
+
+- date
+- open
+- high
+- low
+- close
+- adjusted close, if supplied
+- volume
+- at least five years of history where the company has traded that long
+
+Confirm whether prices are sorted ascending or descending.
+
+Confirm how corporate actions are handled and whether the existing canonical service uses adjusted or unadjusted values.
+
+C. FINANCIAL ESTIMATES
+
+Verify:
+
+- quarterly versus annual availability
+- future revenue estimates
+- future EPS estimates
+- number of future periods
+- fiscal period labels
+- analyst counts, if supplied
+- null or sparse coverage
+
+D. PRICE TARGETS AND STOCK GRADES
+
+These APIs are included for US stocks. Do not investigate plan entitlement.
+
+Probe and document the actual fields returned by:
+
+- Price Target Summary
+- Price Target Consensus
+- Stock Grades
+- Historical Stock Grades
+- Stock Grades Summary
+
+Confirm whether the responses include:
+
+Price Target Consensus:
+
+- target high
+- target low
+- target median
+- target average
+- analyst count
+- last updated or published date
+
+Price Target Summary:
+
+- period
+- average target
+- high target
+- low target
+- number of analysts
+- historical monthly or rolling values
+
+Stock Grades:
+
+- grading company
+- analyst name, if supplied
+- previous grade
+- new grade
+- action
+- published date
+
+Historical Stock Grades:
+
+- historical actions
+- historical depth
+- firm
+- analyst name
+- previous grade
+- new grade
+- price target fields, if supplied
+
+Stock Grades Summary:
+
+- buy count
+- hold count
+- sell count
+- stronger variants such as strong buy or strong sell, if supplied
+- consensus period
+- total analyst count
+
+Do not assume an analyst name, previous target, new target, or historical target series exists unless the live response actually supplies it.
+
+E. SEC FILINGS
+
+Confirm the current backend can retrieve recent filings by symbol.
+
+Verify whether the existing response exposes:
+
+- filing type
+- filing date
+- accepted timestamp
+- accession number
+- filing URL
+- primary document URL
+- exhibit/document URLs
+- filing description
+
+For COIN, verify that an earnings-related filing can be distinguished from unrelated 8-K filings and Form 4 filings.
+
+PART 4 — REPORT EVERY LIVE PROBE CONSISTENTLY
+
+For every endpoint tested, report:
+
+- FMP endpoint name
+- existing backend client/function used
+- HTTP status
+- symbol
+- number of records
+- oldest record date
+- newest record date
+- important returned fields
+- important missing fields
+- null-field observations
+- whether the data is already cached in Caelyn
+- whether the result is sufficient for the proposed UI
+
+Do not include the API key in URLs, logs, screenshots, or output.
+
+PART 5 — VERIFY ONE HISTORICAL EARNINGS REACTION
+
+Using COIN, choose one historical earnings event with:
+
+- a populated earnings date
+- known BMO or AMC timing
+- sufficient daily OHLC history
+
+Calculate one sample manually using actual trading sessions.
+
+For AMC:
+
+- baseline = earnings-date regular-session close
+- opening gap = next-session open versus baseline
+- 1D reaction = next-session close versus baseline
+- 3D reaction = third subsequent trading-session close versus baseline
+- 5D reaction = fifth subsequent trading-session close versus baseline
+
+For BMO:
+
+- baseline = previous-session close
+- opening gap = report-date open versus baseline
+- 1D reaction = report-date close versus baseline
+- 3D reaction = third applicable trading-session close versus baseline
+- 5D reaction = fifth applicable trading-session close versus baseline
+
+Use actual trading rows, not calendar-day offsets.
+
+Report:
+
+- earnings date
+- timing
+- trading dates selected
+- baseline price
+- reaction-session open
+- opening gap percentage
+- 1D reaction
+- 3D reaction
+- 5D reaction
+- maximum upside over the first five applicable sessions
+- maximum drawdown over the first five applicable sessions
+- any ambiguity encountered
+
+Do not modify or persist anything.
+
+PART 6 — DETERMINE WHAT CAELYN ALREADY HAS
+
+State clearly:
+
+1. Which required raw fields Caelyn already fetches
+2. Which required fields are already persisted
+3. Which required fields FMP returns but Caelyn does not currently request
+4. Which values should be calculated locally
+5. Whether earnings actuals and estimates are already joined
+6. Whether ratings and targets already have canonical endpoints
+7. Whether SEC filings already have a canonical endpoint
+8. Whether any existing popup endpoint already returns part of this data
+9. Whether overlapping caches or tables currently exist
+10. Whether there is architectural drift or duplicated provider logic
+
+PART 7 — RECOMMEND THE SMALLEST IMPLEMENTATION
+
+Recommend one surgical backend implementation focused on:
+
+A. Earnings history
+
+- quarterly revenue actual and estimate
+- quarterly EPS actual and estimate
+- surprise percentages
+- QoQ and YoY calculations
+- semantic handling of negative EPS transitions
+
+B. Historical earnings reactions
+
+- opening gap
+- 1D reaction
+- 3D reaction
+- 5D reaction
+- five-session maximum upside
+- five-session maximum drawdown
+- summary statistics
+
+C. Ratings and targets
+
+- current buy/hold/sell consensus
+- current target low/median/average/high
+- historical grade actions
+- historical target data only where actually supplied
+
+D. SEC filing references
+
+- related earnings filing
+- original document links
+- no AI summary implementation yet
+- no transcript implementation yet
+
+Prefer extending one existing ticker-profile or popup endpoint family.
+
+Do not recommend a disconnected new API family unless the current architecture makes extension genuinely inappropriate.
+
+PART 8 — CACHING AND DATABASE QUESTIONS
+
+Answer:
+
+1. Which existing cache or table should be reused?
+2. Is any schema change genuinely necessary?
+3. Can earnings reactions be calculated lazily and cached?
+4. Should calculations be persisted or generated from stored raw data?
+5. Is a new scheduled job necessary?
+6. Is a one-time backfill useful after implementation?
+7. How should newly reported quarters be refreshed?
+8. How should ratings and targets be refreshed?
+9. How should immutable historical reactions be handled?
+10. How should partial failures be represented?
+
+Do not recommend a full watchlist backfill before the implementation is verified on sample tickers.
+
+PART 9 — CALL-BUDGET ESTIMATE
+
+Estimate FMP calls required for:
+
+- one uncached ticker
+- four audit tickers
+- the full eligible US-stock watchlist
+
+Separate calls by dataset:
+
+- earnings history
+- historical prices
+- financial estimates
+- price-target consensus
+- price-target summary
+- stock grades
+- historical stock grades
+- stock grades summary
+- SEC filings
+
+Account for data that may already be cached.
+
+Do not recommend an overnight run solely because the watchlist is large. The FMP plan supports 300 calls per minute, but the existing project limiter and rate-management rules remain authoritative.
+
+PART 10 — HARD NON-GOALS
+
+Do not implement or investigate:
+
+- full transcripts
+- scraped transcripts
+- investor-event audio
+- historical short-interest charts
+- daily short-sale volume
+- foreign-stock support
+- ETF support
+- frontend work
+- AI summaries
+- a new top-level page
+- unrelated database cleanup
+- unrelated watchlist changes
+
+FINAL REPORT FORMAT
+
+Return:
+
+A. Current architecture map  
+B. Existing US-stock eligibility path  
+C. Existing paths to reuse  
+D. Live FMP probe results  
+E. COIN historical-reaction calculation  
+F. Existing versus missing fields  
+G. Ratings and target field coverage  
+H. Smallest recommended endpoint change  
+I. Cache/database recommendation  
+J. Exact files likely requiring modification  
+K. Estimated FMP call budget  
+L. Risks and edge cases  
+M. Proposed implementation sequence  
+
+Do not say something exists unless you found it in the repository.
+
+Do not say an FMP field exists unless you verified it through the existing authenticated client.
+
+Do not modify code during this audit.
