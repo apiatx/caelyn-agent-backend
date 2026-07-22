@@ -1568,38 +1568,35 @@ class FmpFundamentalsRefresher:
         date_to_idx = {d: i for i, d in enumerate(bar_dates)}
         today_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        def _adj_close(bar: dict):
+        import math as _math
+
+        def _finite(v) -> float | None:
+            """Return v as a finite float, or None for NaN/Inf/None."""
+            if v is None:
+                return None
             try:
-                v = bar.get("adjClose") or bar.get("close")
-                return float(v) if v is not None else None
+                f = float(v)
+                return None if (_math.isnan(f) or _math.isinf(f)) else f
             except Exception:
                 return None
+
+        def _adj_close(bar: dict):
+            return _finite(bar.get("adjClose") or bar.get("close"))
 
         def _adj_open(bar: dict):
-            try:
-                v = bar.get("adjOpen") or bar.get("open")
-                return float(v) if v is not None else None
-            except Exception:
-                return None
+            return _finite(bar.get("adjOpen") or bar.get("open"))
 
         def _adj_high(bar: dict):
-            try:
-                v = bar.get("adjHigh") or bar.get("high")
-                return float(v) if v is not None else None
-            except Exception:
-                return None
+            return _finite(bar.get("adjHigh") or bar.get("high"))
 
         def _adj_low(bar: dict):
-            try:
-                v = bar.get("adjLow") or bar.get("low")
-                return float(v) if v is not None else None
-            except Exception:
-                return None
+            return _finite(bar.get("adjLow") or bar.get("low"))
 
         def _pct_vs(value, baseline):
             if value is None or baseline is None or baseline == 0:
                 return None
-            return round((value - baseline) / abs(baseline) * 100, 2)
+            result = round((value - baseline) / abs(baseline) * 100, 2)
+            return None if (_math.isnan(result) or _math.isinf(result)) else result
 
         # ── Compute price reactions per event ─────────────────────────────────
         for evt in normalized_events:

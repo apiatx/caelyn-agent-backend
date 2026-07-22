@@ -412,11 +412,29 @@ def list_all_symbols() -> list[str]:
         return []
 
 
+def _sanitize_json_floats(obj: Any) -> Any:
+    """
+    Recursively replace float NaN / Inf with None so the value serialises to
+    valid JSON (JSON null).  PostgreSQL JSONB rejects the literal 'NaN'.
+    """
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_json_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json_floats(v) for v in obj]
+    return obj
+
+
 def merge_fields(symbol: str, extra_fields: dict[str, Any]) -> bool:
     """
     Merge extra_fields into the existing fields JSONB for one symbol using
     PostgreSQL's || (jsonb merge) operator.  Keys in extra_fields are written;
     all other existing keys are preserved.  Never replaces good data with null.
+
+    NaN / Inf floats are sanitised to None before serialisation — PostgreSQL
+    JSONB rejects the literal 'NaN' that Python's json.dumps() emits for them.
 
     Returns True on success (row existed and was updated), False otherwise.
     Never raises.
@@ -424,7 +442,9 @@ def merge_fields(symbol: str, extra_fields: dict[str, Any]) -> bool:
     if not symbol or not extra_fields:
         return False
     # Reject any attempted null-overwrites — callers must pass only non-null values
-    clean = {k: v for k, v in extra_fields.items() if v is not None}
+    clean = _sanitize_json_floats(
+        {k: v for k, v in extra_fields.items() if v is not None}
+    )
     if not clean:
         return False
     try:

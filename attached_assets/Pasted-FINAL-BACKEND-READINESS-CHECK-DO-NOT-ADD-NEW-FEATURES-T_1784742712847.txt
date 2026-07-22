@@ -1,0 +1,168 @@
+FINAL BACKEND READINESS CHECK — DO NOT ADD NEW FEATURES
+
+The earnings-intelligence implementation and backfill appear successful.
+
+Before frontend work begins, perform one final verification and make only narrowly necessary corrections.
+
+Do not redesign the feature.
+Do not modify the frontend.
+Do not rerun the entire backfill unless a correction genuinely requires it.
+Do not push to Git.
+
+1. VERIFY THE DEPLOYED ENVIRONMENT
+
+Confirm that:
+
+- the deployed backend contains the latest earnings-intelligence code
+- the completed backfill wrote to the same Neon database used by the deployed backend
+- the live deployed endpoint returns populated earnings_intelligence for:
+  - COIN
+  - AAPL
+  - RBLX
+  - RDDT
+  - NVDA
+- live ticker-detail requests make zero FMP, Tradier, or EDGAR calls
+
+Provide the live endpoint status and section coverage for each symbol. Do not expose secrets or internal IDs.
+
+2. INVESTIGATE NBIS
+
+The full backfill reported NBIS skipped because no snapshot row existed.
+
+Determine exactly why NBIS had no watchlist_fundamentals_cache snapshot:
+
+- absent from the eligible input universe
+- present in the watchlist but missing fundamentals refresh
+- failed earlier fundamentals refresh
+- symbol-normalization mismatch
+- eligibility/classification problem
+- another documented cause
+
+NBIS is a supported US-listed stock for this feature and should not be skipped merely because an unrelated cached fundamentals row is missing.
+
+Make the smallest correction so an eligible US stock can receive earnings_intelligence even when its base fundamentals snapshot has not previously been created.
+
+Preferred behavior:
+
+- create or safely initialize the canonical snapshot through the existing store/refresher path
+- preserve all existing data
+- do not introduce a parallel storage system
+
+Populate and verify NBIS after the correction.
+
+3. INVESTIGATE TSLA AND MSTR
+
+The verification report described TSLA and MSTR as having no snapshot and called this expected for “non-standard tickers.”
+
+That description is not acceptable without explanation. TSLA and MSTR are normal US-listed operating-company stocks for this feature.
+
+Determine whether they:
+
+- are not members of the current watchlist/backfill universe
+- lack canonical fundamentals snapshots
+- were filtered by incorrect security-type logic
+- were only arbitrary spot-check symbols outside the target universe
+
+Report the exact reason for each.
+
+If either symbol is part of the app’s intended eligible US-stock universe, populate and verify earnings_intelligence for it.
+
+Do not broaden the feature to symbols outside the intended product universe merely for a test, but do not misclassify standard US stocks.
+
+4. REPORT THE SEVEN PARTIAL SYMBOLS
+
+Return the exact seven symbols marked partial and, for each, identify which sections are missing:
+
+- earnings history
+- completed reactions
+- ratings consensus
+- rating actions
+- monthly rating distribution
+- price targets
+- canonical history bars
+
+For each missing section state the concrete reason:
+
+- no provider records
+- newly public company
+- missing estimates
+- insufficient price history
+- provider returned empty
+- security eligibility issue
+- implementation error
+- temporary failure
+
+Fix implementation errors only. Do not fabricate unavailable provider data.
+
+5. SECURE THE BACKFILL ENDPOINTS
+
+Audit the dedicated earnings-intelligence backfill and status endpoints added during implementation.
+
+Confirm they are protected by one of:
+
+- existing admin authentication
+- existing debug/development-only gating
+- disabled production registration
+- another repository-standard authorization mechanism
+
+They must not be anonymously callable in production.
+
+If currently public, apply the smallest existing admin/debug protection immediately.
+
+Do not invent a new authentication framework.
+
+Report:
+
+- endpoint paths
+- protection mechanism
+- whether they are accessible in production
+- whether the endpoints should remain or be removed after use
+
+6. CONFIRM STORAGE SAFETY
+
+Provide proof from the implemented code that writing fields["earnings_intelligence"] preserves all unrelated JSONB fields.
+
+Verify with one before/after sample that existing keys such as fundamentals, estimates, profile data, and other cached sections remained present.
+
+7. PROVIDE THE FINAL FRONTEND CONTRACT
+
+Return one exact real response example from COIN, with long arrays shortened to two representative records but without changing field names.
+
+Document:
+
+- exact endpoint path
+- exact top-level earnings_intelligence schema
+- nullable fields
+- enum values
+- ratings structure
+- reaction structure
+- source_status structure
+- missing-data behavior
+- coverage behavior
+- whether timestamps are UTC ISO-8601
+- whether percentages are already expressed as percentage points, e.g. 16.47 means 16.47%
+
+Also provide a TypeScript interface suitable for the frontend agent.
+
+The TypeScript contract must match the deployed JSON exactly. Do not propose fields that are not actually returned.
+
+8. FINAL GO/NO-GO
+
+End with one explicit result:
+
+FRONTEND READY
+
+or
+
+NOT FRONTEND READY
+
+If not ready, list only the unresolved blockers.
+
+Do not claim frontend readiness until:
+
+- deployed data is confirmed
+- NBIS is resolved
+- TSLA/MSTR classification is explained
+- partial symbols are documented
+- backfill endpoints are secured
+- the exact response contract is supplied

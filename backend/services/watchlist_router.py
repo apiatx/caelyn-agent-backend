@@ -2446,11 +2446,14 @@ _ei_backfill_state: dict = {
 
 @router.post("/debug/earnings-intelligence/backfill")
 async def debug_ei_backfill(
+    request: Request,
     symbols: Optional[str] = None,
     watchlist_id: Optional[str] = None,
 ):
     """
     DEV-ONLY: Fire-and-forget earnings-intelligence backfill.
+
+    Auth: Authorization: Bearer <ADMIN_PASSWORD> required.
 
     Universe (when symbols= is omitted):
       All symbols already in watchlist_fundamentals_cache that pass
@@ -2458,12 +2461,27 @@ async def debug_ei_backfill(
       merge_fields() adds earnings_intelligence atomically without erasing
       any existing fundamentals keys.
 
+    When a symbol has no existing snapshot row, falls back to a full
+    refresh_symbols() call so the snapshot is created with EI included,
+    rather than silently skipping eligible watchlist members.
+
     When symbols= is supplied (comma-separated): restricts to those symbols only,
     useful for the five-symbol validation step.
 
     Poll GET /debug/earnings-intelligence/backfill/status for progress.
     """
     import asyncio as _aio, os as _os
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    _auth_hdr = request.headers.get("Authorization", "")
+    _token = _auth_hdr.removeprefix("Bearer ").strip() if _auth_hdr.startswith("Bearer ") else ""
+    _admin_pw = _os.getenv("ADMIN_PASSWORD", "")
+    if not _admin_pw or _token != _admin_pw:
+        try:
+            from auth import require_admin_user_or_api_key as _req_admin
+            await _req_admin(request)
+        except Exception:
+            raise HTTPException(status_code=401, detail="admin_auth_required")
+    # ─────────────────────────────────────────────────────────────────────────
     global _ei_backfill_state
 
     if _ei_backfill_state.get("status") == "running":
@@ -2521,6 +2539,19 @@ async def debug_ei_backfill(
 
                 # Persist via JSONB merge — preserves all other fundamentals keys
                 ok = _merge(sym, {"earnings_intelligence": ei_data})
+                if not ok:
+                    # No existing snapshot row: create one through the canonical
+                    # refresher path (normalize_symbol + upsert_snapshot), which
+                    # already inlines earnings_intelligence before the single write.
+                    print(f"[EI_BACKFILL] {sym}: no snapshot row — running full refresh_symbols() to initialise")
+                    try:
+                        _wl_id = watchlist_id or "ei_backfill_init"
+                        await refresher.refresh_symbols([sym], _wl_id)
+                        ok = True
+                    except Exception as _init_exc:
+                        print(f"[EI_BACKFILL] {sym}: full-refresh fallback failed: {_init_exc}")
+                        ok = False
+
                 if ok:
                     _ei_backfill_state["refreshed"] += 1
                     if not has_hist:
@@ -2532,10 +2563,9 @@ async def debug_ei_backfill(
                             {"symbol": sym, "reason": "no_completed_reactions"}
                         )
                 else:
-                    # merge_fields returned False: no existing snapshot row
                     _ei_backfill_state["skipped"] += 1
                     _ei_backfill_state["skipped_symbols"].append(
-                        {"symbol": sym, "reason": "no_existing_snapshot_row"}
+                        {"symbol": sym, "reason": "no_existing_snapshot_row_and_full_refresh_failed"}
                     )
 
             except Exception as exc:
