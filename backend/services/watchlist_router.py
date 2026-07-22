@@ -2436,6 +2436,151 @@ async def debug_fundamentals_backfill_status():
     return _backfill_state
 
 
+# ── Earnings-intelligence backfill state ──────────────────────────────────────
+_ei_backfill_state: dict = {
+    "status": "idle", "refreshed": 0, "failed": 0, "skipped": 0,
+    "total": 0, "failed_symbols": [], "skipped_symbols": [],
+    "partial_symbols": [], "started_at": None, "finished_at": None,
+}
+
+
+@router.post("/debug/earnings-intelligence/backfill")
+async def debug_ei_backfill(
+    symbols: Optional[str] = None,
+    watchlist_id: Optional[str] = None,
+):
+    """
+    DEV-ONLY: Fire-and-forget earnings-intelligence backfill.
+
+    Universe (when symbols= is omitted):
+      All symbols already in watchlist_fundamentals_cache that pass
+      is_fmp_symbol_eligible() — no re-fetch of raw fundamentals needed.
+      merge_fields() adds earnings_intelligence atomically without erasing
+      any existing fundamentals keys.
+
+    When symbols= is supplied (comma-separated): restricts to those symbols only,
+    useful for the five-symbol validation step.
+
+    Poll GET /debug/earnings-intelligence/backfill/status for progress.
+    """
+    import asyncio as _aio, os as _os
+    global _ei_backfill_state
+
+    if _ei_backfill_state.get("status") == "running":
+        return {"status": "already_running", "state": _ei_backfill_state}
+
+    fmp_key = _os.getenv("FMP_API_KEY", "")
+    if not fmp_key:
+        raise HTTPException(status_code=503, detail="FMP_API_KEY not configured")
+
+    from services.watchlist_quote_cache import is_fmp_symbol_eligible as _fmp_elig
+
+    if symbols:
+        to_refresh = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        to_refresh = [s for s in to_refresh if _fmp_elig(s)]
+    else:
+        from data.watchlist_fundamentals_store import list_all_symbols as _list_syms
+        all_syms = _list_syms()
+        to_refresh = [s for s in all_syms if _fmp_elig(s)]
+
+    _ei_backfill_state.update({
+        "status": "running",
+        "refreshed": 0, "failed": 0, "skipped": 0,
+        "total": len(to_refresh),
+        "failed_symbols": [], "skipped_symbols": [], "partial_symbols": [],
+        "started_at": __import__("datetime").datetime.utcnow().isoformat(),
+        "finished_at": None,
+        "universe": to_refresh,
+    })
+
+    async def _run():
+        global _ei_backfill_state
+        from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher
+        from data.watchlist_fundamentals_store import merge_fields as _merge
+
+        refresher = FmpFundamentalsRefresher(fmp_key)
+        checkpoint_n = 0
+
+        for sym in to_refresh:
+            try:
+                ei_data = await refresher._fetch_earnings_intelligence(sym)
+                if not ei_data:
+                    _ei_backfill_state["skipped"] += 1
+                    _ei_backfill_state["skipped_symbols"].append(
+                        {"symbol": sym, "reason": "no_data_returned"}
+                    )
+                    continue
+
+                # Remove internal _call_count before persisting
+                ei_data.pop("_call_count", None)
+
+                # Track partial coverage
+                cov = (ei_data.get("source_status") or {}).get("coverage") or {}
+                has_hist = cov.get("has_earnings_history", False)
+                has_react = cov.get("has_reactions", False)
+
+                # Persist via JSONB merge — preserves all other fundamentals keys
+                ok = _merge(sym, {"earnings_intelligence": ei_data})
+                if ok:
+                    _ei_backfill_state["refreshed"] += 1
+                    if not has_hist:
+                        _ei_backfill_state["partial_symbols"].append(
+                            {"symbol": sym, "reason": "no_earnings_history"}
+                        )
+                    elif not has_react:
+                        _ei_backfill_state["partial_symbols"].append(
+                            {"symbol": sym, "reason": "no_completed_reactions"}
+                        )
+                else:
+                    # merge_fields returned False: no existing snapshot row
+                    _ei_backfill_state["skipped"] += 1
+                    _ei_backfill_state["skipped_symbols"].append(
+                        {"symbol": sym, "reason": "no_existing_snapshot_row"}
+                    )
+
+            except Exception as exc:
+                _ei_backfill_state["failed"] += 1
+                _ei_backfill_state["failed_symbols"].append(
+                    {"symbol": sym, "error": str(exc)[:200]}
+                )
+                print(f"[EI_BACKFILL] {sym} error: {exc}")
+
+            checkpoint_n += 1
+            if checkpoint_n % 10 == 0:
+                _done = (_ei_backfill_state["refreshed"] +
+                         _ei_backfill_state["failed"] +
+                         _ei_backfill_state["skipped"])
+                print(
+                    f"[EI_BACKFILL] {_done}/{_ei_backfill_state['total']} "
+                    f"ok={_ei_backfill_state['refreshed']} "
+                    f"fail={_ei_backfill_state['failed']} "
+                    f"skip={_ei_backfill_state['skipped']}"
+                )
+
+        _ei_backfill_state["status"] = "done"
+        _ei_backfill_state["finished_at"] = __import__("datetime").datetime.utcnow().isoformat()
+        print(
+            f"[EI_BACKFILL] complete: "
+            f"refreshed={_ei_backfill_state['refreshed']} "
+            f"failed={_ei_backfill_state['failed']} "
+            f"skipped={_ei_backfill_state['skipped']} "
+            f"total={_ei_backfill_state['total']}"
+        )
+
+    _aio.create_task(_run())
+    return {
+        "status": "started",
+        "total": len(to_refresh),
+        "state": _ei_backfill_state,
+    }
+
+
+@router.get("/debug/earnings-intelligence/backfill/status")
+async def debug_ei_backfill_status():
+    """DEV-ONLY: Poll progress of an in-progress earnings-intelligence backfill."""
+    return _ei_backfill_state
+
+
 @router.get("/debug/fundamentals/status")
 async def debug_fundamentals_status(watchlist_id: Optional[str] = None):
     """

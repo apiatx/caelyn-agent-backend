@@ -388,6 +388,30 @@ def schedule_refresh(symbol: str, watchlist_id: str, days: int = 7) -> bool:
         return False
 
 
+def list_all_symbols() -> list[str]:
+    """
+    Return all symbol strings currently in the fundamentals cache.
+    Used by the earnings-intelligence backfill to enumerate the eligible universe
+    without re-building the watchlist membership graph.
+    """
+    try:
+        from data.pg_storage import _get_conn, _put_conn
+        conn = _get_conn()
+        if conn is None:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT symbol FROM {_TABLE} ORDER BY symbol")
+            rows = cur.fetchall()
+            cur.close()
+            return [r[0] for r in rows]
+        finally:
+            _put_conn(conn)
+    except Exception as exc:
+        log.warning("[FUND_STORE] list_all_symbols error: %s", exc)
+        return []
+
+
 def merge_fields(symbol: str, extra_fields: dict[str, Any]) -> bool:
     """
     Merge extra_fields into the existing fields JSONB for one symbol using

@@ -1287,6 +1287,13 @@ class FmpFundamentalsRefresher:
             pr = ev.get("price_reaction") or {}
             if not pr.get("reactions_final"):
                 continue
+
+            # Track most_recent_completed across ALL final reactions (any timing).
+            # Events are sorted ascending, so each overwrite moves us forward in time.
+            if pr.get("baseline_date"):
+                most_recent_completed = pr["baseline_date"]
+
+            # Exclude unknown_timing events from aggregate statistics only
             if "unknown_timing" in (pr.get("calculation_method") or ""):
                 continue
 
@@ -1318,9 +1325,6 @@ class FmpFundamentalsRefresher:
                         mx1.append(r1)
                 except Exception:
                     pass
-
-            if most_recent_completed is None and pr.get("baseline_date"):
-                most_recent_completed = pr.get("baseline_date")
 
         return {
             "observations_1d": len(e1),
