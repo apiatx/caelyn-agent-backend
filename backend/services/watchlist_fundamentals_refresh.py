@@ -1341,6 +1341,17 @@ class FmpFundamentalsRefresher:
         post_after_neg_pre: list[float] = []
         continuation_count = 0
         reversal_count     = 0
+        # Timing confidence distribution
+        timing_conf_counts: dict[str, int] = {
+            "confirmed":     0,
+            "inferred_high": 0,
+            "inferred_low":  0,
+            "unknown":       0,
+        }
+        # Split accumulators: confirmed/high-confidence only
+        e1_hi: list[float] = []
+        pre1_hi: list[float] = []
+        post1_hi: list[float] = []
 
         for ev in events:
             pr = ev.get("price_reaction") or {}
@@ -1385,6 +1396,20 @@ class FmpFundamentalsRefresher:
                 except Exception:
                     pass
 
+            # Timing confidence tracking
+            tc = pr.get("pre_post_confidence") or ev.get("timing_confidence") or "unknown"
+            if tc in ("confirmed",):
+                timing_conf_counts["confirmed"] += 1
+            elif tc in ("inferred_high", "high"):
+                timing_conf_counts["inferred_high"] += 1
+            elif tc in ("inferred_low", "low"):
+                timing_conf_counts["inferred_low"] += 1
+            else:
+                timing_conf_counts["unknown"] += 1
+            is_hi_conf = tc in ("confirmed", "inferred_high", "high")
+            if r1 is not None and is_hi_conf:
+                e1_hi.append(r1)
+
             # Pre/Post stats: only use methodologically valid (amc/bmo, not unknown_timing)
             pp_method = pr.get("pre_post_method") or ""
             if pp_method in ("amc_inferred", "bmo_inferred"):
@@ -1407,9 +1432,30 @@ class FmpFundamentalsRefresher:
                         post_after_pos_pre.append(po1d)
                     elif p1d < 0:
                         post_after_neg_pre.append(po1d)
+                # High-confidence split
+                if is_hi_conf:
+                    if p1d is not None:
+                        pre1_hi.append(p1d)
+                    if po1d is not None:
+                        post1_hi.append(po1d)
 
-        total_cr = continuation_count + reversal_count
+        total_cr   = continuation_count + reversal_count
+        total_tc   = sum(timing_conf_counts.values())
+        hi_tc      = timing_conf_counts["confirmed"] + timing_conf_counts["inferred_high"]
+        # summary_confidence: based on share of high-confidence observations
+        if total_tc == 0:
+            sum_conf = "no_data"
+        elif hi_tc / total_tc >= 0.75:
+            sum_conf = "high"
+        elif hi_tc / total_tc >= 0.40:
+            sum_conf = "medium"
+        else:
+            sum_conf = "low"
+
         return {
+            # ── Core reaction stats (all finalized events, timing-aware exclusions) ──
+            "summary_method":     "pre_post_and_reaction",
+            "summary_confidence": sum_conf,
             "observations_1d": len(e1),
             "observations_3d": len(e3),
             "observations_5d": len(e5),
@@ -1427,7 +1473,21 @@ class FmpFundamentalsRefresher:
             "average_1d_after_double_miss":  _avg(dm1),
             "average_1d_after_mixed_result": _avg(mx1),
             "most_recent_completed_reaction": most_recent_completed,
-            # Pre/Post positioning summary (Part 2)
+            # ── Timing confidence distribution ────────────────────────────────────
+            "timing_confidence_counts":     timing_conf_counts,
+            "eligible_observations_hi_conf": hi_tc,
+            # ── High-confidence-only split summary ────────────────────────────────
+            # Only confirmed + inferred_high events; use to label metrics honestly.
+            "confirmed_or_high_confidence": {
+                "observations_1d":  len(e1_hi),
+                "average_1d_pct":   _avg(e1_hi),
+                "median_1d_pct":    _median(e1_hi),
+                "average_pre_1d_pct":  _avg(pre1_hi),
+                "average_post_1d_pct": _avg(post1_hi),
+                "positive_1d_rate":    round(sum(1 for v in e1_hi if v > 0) / len(e1_hi) * 100, 1) if e1_hi else None,
+            },
+            # ── Pre/Post positioning stats (all amc/bmo inferred events) ─────────
+            # Note: includes inferred_low — see summary_confidence to assess quality.
             "observations_pre_1d":          len(pre1),
             "observations_post_1d":         len(post1),
             "average_pre_1d_pct":           _avg(pre1),
