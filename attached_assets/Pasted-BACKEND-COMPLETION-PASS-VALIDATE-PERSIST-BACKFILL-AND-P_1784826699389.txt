@@ -1,0 +1,400 @@
+BACKEND COMPLETION PASS — VALIDATE, PERSIST, BACKFILL, AND PRODUCE THE FRONTEND CONTRACT
+
+The implementation report shows that code was added, but this feature is not complete until the new data is validated, persisted safely, backfilled, exposed through the existing ticker-detail response, and verified in the deployed environment.
+
+Do not redesign the feature.
+Do not modify the frontend.
+Do not create another endpoint family.
+Do not add provider calls to ticker_detail_endpoint.
+Do not push to Git.
+
+OBJECTIVE
+
+Finish and verify:
+
+1. Pre-earnings and post-earnings movement data
+2. Earnings Materials
+3. Recent SEC filings
+4. Attachment classification
+5. Cached popup response
+6. Full eligible-symbol backfill
+7. Exact frontend integration contract
+
+PART 1 — VERIFY THE MATERIALS STORAGE DECISION
+
+The implementation created:
+
+backend/data/ei_materials_cache.py
+edgar_disk_cache/ei_materials.json
+
+Determine whether this file is genuinely durable and shared in the deployed Replit environment.
+
+Explicitly verify:
+
+- whether it survives an application restart
+- whether it survives a deployment
+- whether the deployed instance reads the same file populated by the backfill
+- whether multiple workers or instances can safely read/write it
+- whether writes are atomic
+- whether concurrent refreshes can corrupt or overwrite the file
+- whether the file is committed or mistakenly bundled into deployment artifacts
+
+If deployed filesystem persistence or instance sharing is not guaranteed, move the materials cache to the smallest appropriate Neon-backed store using existing repository conventions.
+
+Do not keep critical first-party filing data only in ephemeral process-local storage.
+
+If the existing EDGAR disk-cache architecture is demonstrably production-safe, provide the evidence and preserve it.
+
+PART 2 — VERIFY THE EXACT FORMS MONITORED
+
+The report says “40 monitored form types” but does not list them.
+
+Return the exact configured form set.
+
+At minimum verify support for:
+
+- 10-K
+- 10-K/A
+- 10-Q
+- 10-Q/A
+- 8-K
+- 8-K/A
+- 4
+- SC 13D
+- SC 13D/A
+- SC 13G
+- SC 13G/A
+- 6-K
+- 20-F
+- 20-F/A
+- DEF 14A
+- S-1
+- S-1/A
+- 425
+
+Also report whether supported 424B forms are included.
+
+Use the exact SEC form strings returned by EDGAR. Do not invent normalized names that fail to match submissions data.
+
+PART 3 — VALIDATE ATTACHMENT CLASSIFICATION
+
+The requirement is classification by both metadata and document content.
+
+Confirm whether the service currently downloads and parses attachment text.
+
+For each attachment, classification should consider:
+
+1. filing form
+2. filing item codes
+3. attachment description
+4. document/exhibit type
+5. filename
+6. document title/headings
+7. actual attachment text where reasonably retrievable
+8. deterministic keyword scoring
+
+If actual document text is not inspected, add the smallest safe implementation using existing HTML/text parsing utilities.
+
+Do not download huge binaries unnecessarily.
+
+For HTML or text attachments:
+
+- retrieve with the SEC-compliant User-Agent
+- extract clean text
+- cap bytes/text length
+- use deterministic classification first
+
+For PDFs or inaccessible documents:
+
+- use metadata classification
+- do not require OCR
+- mark lower classification confidence where appropriate
+
+Never assume:
+
+EX-99.1 = earnings release
+EX-99.2 = transcript
+
+PART 4 — VALIDATE REAL FILINGS
+
+Run the materials service on at least:
+
+- COIN
+- AAPL
+- CLF
+- one company with an earnings presentation
+- one company with an earnings 8-K but no presentation
+- one supported foreign issuer using 6-K or 20-F, if such a ticker is inside the current product universe
+- one ticker with unrelated recent 8-K filings
+- one ticker with no transcript
+
+For every symbol report:
+
+- filings retrieved
+- accession numbers
+- forms
+- filing item codes
+- attachments discovered
+- attachment descriptions/types
+- final classifications
+- classification confidence
+- selected earnings release
+- selected presentation
+- selected supplemental tables
+- selected guidance document
+- selected prepared remarks
+- webcast URL
+- transcript status
+- related 10-Q/10-K/20-F
+
+Manually inspect and verify the selected document links.
+
+Prove that:
+
+- an unrelated 8-K is not classified as an earnings filing
+- a presentation is not classified as a transcript
+- supplemental tables are not automatically treated as a release
+- Form 4, 13D, and proxy materials appear only in their appropriate filing categories
+
+PART 5 — WEBCAST URL EXTRACTION
+
+Explain exactly how webcast_url is derived.
+
+It must come from verified first-party content such as:
+
+- earnings release attachment text
+- filing text
+- investor presentation
+- cached IR metadata
+
+If the implementation currently only searches attachment metadata, enhance it to extract verified HTTP/HTTPS links from relevant first-party document text.
+
+Do not surface:
+
+- unrelated corporate links
+- social links
+- tracking pixels
+- commercial transcript links
+
+Store:
+
+- webcast_url
+- webcast_source_document
+- extraction_confidence
+
+PART 6 — TRANSCRIPT STATE
+
+Verify transcript-state behavior on the sample symbols.
+
+Allowed values:
+
+- available_official
+- available_sec_exhibit
+- available_licensed
+- processing
+- not_yet_available
+- unavailable
+- unknown
+
+Do not use not_yet_available for old quarters where no transcript source exists indefinitely.
+
+Recommended semantics:
+
+- not_yet_available:
+  recent earnings event where a transcript may still arrive
+
+- unavailable:
+  no verified transcript source after the expected availability window
+
+- available_sec_exhibit:
+  attachment content is genuinely a transcript
+
+- available_official:
+  verified first-party transcript
+
+Do not generate transcript content from summaries or prepared remarks.
+
+PART 7 — PRE/POST TIMING CONFIDENCE
+
+Audit how timing is sourced for every pre/post calculation.
+
+Return counts across the populated universe for:
+
+- confirmed
+- inferred_high
+- inferred_low
+- unknown
+
+Do not mix low-confidence timing into an unlabeled primary summary.
+
+Recommended response structure:
+
+reaction_summary:
+- confirmed_or_high_confidence: {...}
+- all_estimated: {...}
+- timing_confidence_counts: {...}
+
+If preserving the current flat summary for backward compatibility:
+
+- document that it includes inferred-low records
+- add summary_method
+- add summary_confidence
+- add eligible_observation counts by timing confidence
+
+The frontend must be able to label these metrics honestly.
+
+PART 8 — VERIFY PRE/POST CALCULATIONS
+
+Validate manually on:
+
+- one AMC event
+- one BMO event
+- one low-confidence inferred event
+- one event adjacent to a market holiday
+- one event with insufficient price bars
+
+For each report:
+
+- earnings date
+- timing
+- timing source
+- timing confidence
+- trading sessions chosen
+- prior-prior close
+- prior close
+- report-date close
+- next-session close
+- pre_earnings_1d_pct
+- post_earnings_1d_pct
+- existing reaction_1d_pct
+- whether post_earnings_1d_pct matches reaction_1d_pct
+- pre_post_method
+
+Unknown or unsafe events must remain null or explicitly approximate.
+
+PART 9 — TICKER-DETAIL CONTRACT
+
+Call the actual existing endpoint:
+
+GET /api/watchlist/ticker-detail/{symbol}
+
+for:
+
+- COIN
+- CLF
+- AAPL
+- one partial-materials symbol
+- UFO
+
+Confirm:
+
+- earnings_intelligence remains populated
+- materials is present for eligible symbols after backfill
+- UFO remains ineligible/null
+- no FMP calls occur during the request
+- no Tradier calls occur during the request
+- no EDGAR calls occur during the request
+- existing response sections remain intact
+
+Return one exact abbreviated COIN response containing:
+
+- latest two earnings_history records
+- reaction_summary including new pre/post fields
+- ratings
+- materials.latest_earnings_packet
+- two recent_filings
+- source status and coverage
+
+Do not change field names while abbreviating arrays.
+
+PART 10 — BACKFILL
+
+After sample validation passes:
+
+1. Backfill pre/post metrics for the full eligible earnings-intelligence universe.
+2. Backfill materials for the full eligible universe.
+3. Make the operation resumable and idempotent.
+4. Use existing admin protection.
+5. Respect SEC request limits.
+6. Use bounded retries.
+7. Do not retry permanent failures indefinitely.
+8. Preserve stale last-known-good data on temporary failure.
+
+Report:
+
+- total eligible symbols
+- pre/post updated
+- materials refreshed
+- materials partial
+- materials unavailable
+- failures
+- skips
+- classification counts by document type
+- transcript-state counts
+- symbols with no CIK
+- symbols with no filings
+- symbols with no earnings packet
+
+PART 11 — REFRESH CADENCE
+
+The current 24-hour materials refresh does not provide near-real-time earnings detection.
+
+For this materials feature, document the current limitation honestly.
+
+Preserve the daily refresh for normal filings.
+
+If an existing earnings-calendar/catalyst scheduler already knows which symbols report today, add a targeted refresh lane:
+
+- reporting-today symbols
+- limited event window
+- no one-task-per-symbol scheduler
+- safe SEC rate limiting
+
+Do not build the full alerting system in this task.
+
+The goal is for earnings materials to refresh meaningfully sooner than the next 24-hour sweep when a known watchlist company reports.
+
+If no safe existing event-aware hook exists, leave daily refresh and document it as a limitation.
+
+PART 12 — DEPLOYMENT
+
+After validation and backfill:
+
+- restart the backend
+- confirm cache/store survives restart
+- deploy using the existing Replit workflow
+- verify deployed health
+- verify deployed ticker-detail materials for COIN and CLF
+- confirm request-time provider calls remain zero
+
+FINAL REPORT
+
+Return:
+
+1. Files changed
+2. Final storage decision
+3. Storage durability proof
+4. Exact forms monitored
+5. Attachment-text parsing behavior
+6. Classification rules and confidence
+7. Webcast extraction behavior
+8. Transcript-state behavior
+9. Pre/post timing confidence distribution
+10. Manual pre/post validation
+11. Sample materials validation
+12. Final ticker-detail JSON contract
+13. Backfill totals
+14. Refresh cadence
+15. Deployed endpoint verification
+16. Exact TypeScript interfaces for new fields
+17. Remaining limitations
+
+End with exactly:
+
+FRONTEND MATERIALS READY
+
+or
+
+NOT FRONTEND MATERIALS READY
+
+Do not return FRONTEND MATERIALS READY merely because the application starts.
