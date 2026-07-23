@@ -40,20 +40,6 @@ from services.hyperliquid.state import HyperliquidState as _HLState
 from services.hyperliquid.router import router as _hl_router, set_state as _hl_set_state
 from services.hyperliquid.websocket_manager import boot_and_run as _hl_boot_and_run
 from services.sector_rotation.router import router as _sr_router, sectors_router as _sectors_router
-from services.insider_activity_service import (
-    router as _insider_router,
-    insider_activity_background_loop as _insider_bg_loop,
-)
-from services.congressional_trading_service import (
-    router as _cong_router,
-    congressional_trading_background_loop as _cong_bg_loop,
-)
-from services.whale_watch_service import (
-    router as _whale_router,
-    whale_watch_background_loop as _whale_bg_loop,
-    _create_tables as _whale_create_tables,
-    seed_whales as _seed_whales,
-)
 from services.predict.router import router as _predict_router
 from services.predict.investor.router import router as _investor_router
 from services.bittensor.router import router as _bittensor_router
@@ -431,6 +417,26 @@ async def _investor_intelligence_loop():
 
 @asynccontextmanager
 async def lifespan(app):
+    # ── Lazy-load services that pull in heavy deps (edgar, psycopg2 pool) ────
+    # Keeping these out of module-level imports cuts cold-start by ~3-5s.
+    # Routes are registered here before the yield so all endpoints are live.
+    from services.insider_activity_service import (
+        router as _insider_router,
+        insider_activity_background_loop as _insider_bg_loop,
+    )
+    from services.congressional_trading_service import (
+        router as _cong_router,
+        congressional_trading_background_loop as _cong_bg_loop,
+    )
+    from services.whale_watch_service import (
+        router as _whale_router,
+        whale_watch_background_loop as _whale_bg_loop,
+        _create_tables as _whale_create_tables,
+        seed_whales as _seed_whales,
+    )
+    app.include_router(_insider_router, prefix="/api")
+    app.include_router(_cong_router, prefix="/api")
+    app.include_router(_whale_router, prefix="/api")
     # ── Deferred synchronous startup — background thread ────────────────────
     # All Neon DB calls and disk reads that previously ran inline here blocked
     # the lifespan event for ~12s AFTER a ~30s import phase (module-level Neon
@@ -1129,17 +1135,8 @@ app.include_router(_sr_router)
 app.include_router(_sectors_router)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── Insider Activity router ───────────────────────────────────────────────────
-app.include_router(_insider_router, prefix="/api")
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Congressional Trading router ──────────────────────────────────────────────
-app.include_router(_cong_router, prefix="/api")
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Whale Watch router ────────────────────────────────────────────────────────
-app.include_router(_whale_router, prefix="/api")
-# ─────────────────────────────────────────────────────────────────────────────
+# Insider Activity, Congressional Trading, and Whale Watch routers are
+# registered inside lifespan (lazy import — see top of lifespan function).
 
 # ── Predict / Polymarket Intelligence router ──────────────────────────────────
 app.include_router(_predict_router)

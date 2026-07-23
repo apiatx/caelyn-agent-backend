@@ -13,24 +13,29 @@ The cloud container is slower than the dev VM: cold startup reaches **~50s**, ba
 - Cold `import main` measured at 24.3s locally vs 7s warm — delta = 17s from compilation + cold disk I/O
 - Cloud amplifies this 2–7× → ~50s before uvicorn binds on a bad day
 
-## The fix
-Added a deployment **build step** to pre-compile all Python bytecode:
-```
-build = ["bash", "-c", "cd /home/runner/workspace/backend && python3.11 -m compileall -q agent core data routes services scripts *.py && python3.11 -m compileall -q .pythonlibs"]
-```
+## Two-layer fix (both in place)
 
-**Why:**
-- `compileall` creates `__pycache__/*.pyc` files; they're included in the container image
-- On startup Python reads pre-compiled bytecode (smaller files, no compilation step)
+### Layer 1: Build step — pre-compile .pyc bytecode
+```
+build = ["bash", "-c", "cd /home/runner/workspace/backend && python3.11 -m compileall -q agent core data routes services scripts *.py; python3.11 -m compileall -q .pythonlibs; true"]
+```
+- `;` not `&&` — both steps always run regardless of exit code
+- `; true` at end — build step always exits 0 (syntax errors in .pythonlibs are harmless)
+- Both verified to exit 0 even with Python 2 syntax errors
 - Build step takes ~21s total (source dirs 6s + .pythonlibs 15s)
-- Import on next cold start drops from ~50s → ~7s → well within 60s deadline
+- With .pyc files: cold import ~7s → total startup ~12s → well within 60s
+
+### Layer 2: Lazy-load edgar/psycopg2 chain
+`insider_activity_service`, `congressional_trading_service`, `whale_watch_service` moved from module-level imports to **top of lifespan()** in `main.py`.
+- `app.include_router()` for these three also moved inside lifespan (before yield) — valid FastAPI pattern
+- Saves ~3-5s (edgar._filings is 3s cumulative) from cold module import
+- Fallback: even WITHOUT .pyc files → import ~21s + lifespan ~8s = ~29s → still within 60s
 
 ## Key file counts
 - Source dirs (agent/core/data/routes/services/scripts): 287 .py files
-- .pythonlibs (installed packages): 5,774 .py, 5,796 .pyc (already compiled but may not survive container rebuild)
+- .pythonlibs (installed packages): 5,774 .py, 5,796 .pyc (may not survive container rebuild — build step handles this)
 - `compileall .` from backend root also hits `.cache`/`.config`/`.upm` (~5k extra files) → avoid! Use targeted dirs.
 
 **Why:**
 - `.pythonlibs` may be re-installed fresh in the container without .pyc files
 - Targeted dirs avoids wasted time compiling hidden tool directories
-- The SyntaxError in .pythonlibs (Python 2 file) is harmless — compileall `-q` skips it and continues
