@@ -978,106 +978,126 @@ async def lifespan(app):
         asyncio.create_task(_thematic_warmup())
     except Exception as _e:
         print(f"[STARTUP] Thematic context warmup task error: {_e}")
-    # Defiance 2X catalog: load disk LKG on startup, refresh daily off-hours.
-    try:
-        from services.defiance_leveraged_etfs_service import (
-            load_catalog_lkg  as _d2x_load_lkg,
-            refresh_catalog   as _d2x_refresh_catalog,
-        )
-        _d2x_load_lkg()   # synchronous — zero I/O if LKG exists
-
-        async def _defiance_2x_daily_loop():
-            await asyncio.sleep(120)   # 2-min startup delay
-            while True:
-                try:
-                    await _d2x_refresh_catalog()
-                except Exception as _e:
-                    print(f"[DEFIANCE_2X] Daily refresh error: {_e}")
-                await asyncio.sleep(20 * 3600)   # 20-hour cadence
-
-        asyncio.create_task(_defiance_2x_daily_loop())
-    except Exception as _e:
-        print(f"[STARTUP] Defiance 2X catalog init error: {_e}")
     # Dynamic thematic universe: build and refresh every 15 min.
-    # Provides ETF-holdings + FMP-peers + X-consensus tickers to TA Screener and Options Flow.
     asyncio.create_task(_dynamic_thematic_universe_loop())
-    # Themes by Relative Strength warmup: load LKG → seed caches → start background loop.
-    # Non-blocking. 1D refreshes every ~60s market hours, historical every ~15min.
+    # Themes by Relative Strength warmup: non-blocking loop registration.
     try:
         from services.theme_rs_service import warmup_theme_rs as _theme_rs_warmup
         asyncio.create_task(_theme_rs_warmup())
     except Exception as _e:
         print(f"[STARTUP] Theme RS warmup error: {_e}")
-    # Canonical 5-year price history cache — read-only index preload (V4.2.5.2).
-    # Disk bars are written by admin backfill only; startup just reads the index.
-    try:
-        from services.canonical_history_service import preload_index as _canon_preload
-        _canon_preload()   # synchronous, reads _index.json only
-    except Exception as _e:
-        print(f"[STARTUP] Canonical history index preload error: {_e}")
-    # Watchlist Stage 2 — load disk LKG into memory then kick a gentle
-    # background warmup that fetches bars for any stale/missing symbols.
-    try:
-        from services.watchlist_stage2_service import (
-            load_lkg as _wl_stage2_load,
-            warmup_stage2_all_watchlists as _wl_stage2_warmup,
-        )
-        _wl_stage2_load()   # synchronous — zero I/O if disk file exists
-        asyncio.create_task(_wl_stage2_warmup(startup_delay_s=60.0))
-    except Exception as _e:
-        print(f"[STARTUP] Watchlist Stage2 warmup error: {_e}")
-    # Retained Confluence snapshot startup warm (DEFECT 4 fix).
-    # Kicks off exactly one background build so the first request to
-    # /api/alpha/confluence or /{watchlist_id}/alignment does NOT
-    # synchronously pay the ~129-second cold-build cost.
-    # Runs AFTER: theme_merge_refresh (Theme membership), Stage2 disk LKG
-    # load, supplement LKG load, and Sectors LKG load — all canonical
-    # Confluence inputs that are available from disk before this point.
-    # No new producer: delegates to the same _start_background_rebuild()
-    # used by the stale-revalidate path.  Single-flight guard in
-    # get_retained_confluence_snapshot() prevents a duplicate if a request
-    # races in before the background build completes.
-    try:
-        from services.confluence_v2_service import (
-            _RETAINED,
-            _RETAINED_LOCK,
-            _start_background_rebuild,
-        )
-        # _start_background_rebuild() now owns the full atomic state transition:
-        # it clears _RETAINED_BUILD_DONE and sets build_in_progress=True under
-        # _RETAINED_LOCK in a single acquisition — eliminating the race window
-        # where build_in_progress=True was visible while the event was still set.
-        # No manual state manipulation here.
-        with _RETAINED_LOCK:
-            _have_snap = _RETAINED["snapshot"] is not None
-        if not _have_snap:
-            started = _start_background_rebuild()
-            if started:
-                print("[STARTUP] Kicking off background Confluence retained snapshot warm")
-            else:
-                print("[STARTUP] Confluence warm skipped (build already in progress)")
-        else:
-            print("[STARTUP] Confluence warm skipped (snapshot already present)")
-    except Exception as _conf_err:
-        print(f"[STARTUP] Confluence retained warm error (non-fatal): {_conf_err}")
-    try:
-        from data.options_screener_snapshot import load_state as _load_opt_snapshot
-        _load_opt_snapshot()
-    except Exception as _e:
-        print(f"[STARTUP] Options snapshot state load error: {_e}")
     asyncio.create_task(_earnings_calendar_warmup())
-    # Curated earnings snapshot precompute loop.
-    # Loads disk snapshots into memory first (so page loads are instant after restart),
-    # then starts the background loop that builds/refreshes weekly curated snapshots.
-    try:
-        from services.earnings_clean_service import (
-            _load_all_earn_snaps_from_disk as _load_earn_snaps,
-            _earnings_curated_precompute_loop as _earn_precompute_loop,
-        )
-        _load_earn_snaps()   # synchronous — warm in-memory cache from disk before any request
-        asyncio.create_task(_earn_precompute_loop())
-    except Exception as _e:
-        print(f"[STARTUP] Earnings curated precompute init error: {_e}")
+
+    # ── Post-yield deferred bootstrap ────────────────────────────────────────
+    # All synchronous disk reads and optional module imports that do NOT need
+    # to complete before the first HTTP request is served.  Scheduled here but
+    # first runs only after yield returns control to the event loop.
+    # Each step is timed and isolated — a failure does not abort the others.
+    async def _post_yield_bootstrap():
+        import time as _bst
+        _bt0 = _bst.monotonic()
+        _BOOTSTRAP_STATE["started_at"] = _bt0
+        print("[BOOTSTRAP] post-yield bootstrap starting")
+
+        # 1. Defiance 2X leveraged ETFs — load disk LKG + daily refresh loop.
+        _t = _bst.monotonic()
+        try:
+            from services.defiance_leveraged_etfs_service import (
+                load_catalog_lkg as _d2x_load_lkg,
+                refresh_catalog  as _d2x_refresh_catalog,
+            )
+            _d2x_load_lkg()
+
+            async def _defiance_2x_daily_loop():
+                await asyncio.sleep(120)
+                while True:
+                    try:
+                        await _d2x_refresh_catalog()
+                    except Exception as _de:
+                        print(f"[DEFIANCE_2X] Daily refresh error: {_de}")
+                    await asyncio.sleep(20 * 3600)
+
+            asyncio.create_task(_defiance_2x_daily_loop())
+            _BOOTSTRAP_STATE["steps"]["d2x"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Defiance 2X catalog init error: {_e}")
+            _BOOTSTRAP_STATE["steps"]["d2x"] = {"ok": False, "error": str(_e)}
+
+        # 2. Canonical 5-year price history — read-only index preload.
+        _t = _bst.monotonic()
+        try:
+            from services.canonical_history_service import preload_index as _canon_preload
+            _canon_preload()
+            _BOOTSTRAP_STATE["steps"]["canon_preload"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Canonical history index preload error: {_e}")
+            _BOOTSTRAP_STATE["steps"]["canon_preload"] = {"ok": False, "error": str(_e)}
+
+        # 3. Watchlist Stage 2 — load disk LKG then start gentle warmup.
+        _t = _bst.monotonic()
+        try:
+            from services.watchlist_stage2_service import (
+                load_lkg                    as _wl_stage2_load,
+                warmup_stage2_all_watchlists as _wl_stage2_warmup,
+            )
+            _wl_stage2_load()
+            asyncio.create_task(_wl_stage2_warmup(startup_delay_s=60.0))
+            _BOOTSTRAP_STATE["steps"]["stage2_lkg"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Watchlist Stage2 warmup error: {_e}")
+            _BOOTSTRAP_STATE["steps"]["stage2_lkg"] = {"ok": False, "error": str(_e)}
+
+        # 4. Retained Confluence snapshot — kick background rebuild if needed.
+        _t = _bst.monotonic()
+        try:
+            from services.confluence_v2_service import (
+                _RETAINED,
+                _RETAINED_LOCK,
+                _start_background_rebuild,
+            )
+            with _RETAINED_LOCK:
+                _have_snap = _RETAINED["snapshot"] is not None
+            if not _have_snap:
+                _started = _start_background_rebuild()
+                _msg = "started background rebuild" if _started else "warm skipped (build already in progress)"
+            else:
+                _msg = "warm skipped (snapshot already present)"
+            print(f"[BOOTSTRAP] Confluence: {_msg}")
+            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Confluence retained warm error (non-fatal): {_e}")
+            _BOOTSTRAP_STATE["steps"]["confluence_warm"] = {"ok": False, "error": str(_e)}
+
+        # 5. Options screener snapshot — restore in-memory state from disk.
+        _t = _bst.monotonic()
+        try:
+            from data.options_screener_snapshot import load_state as _load_opt_snapshot
+            _load_opt_snapshot()
+            _BOOTSTRAP_STATE["steps"]["opt_snapshot"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Options snapshot state load error: {_e}")
+            _BOOTSTRAP_STATE["steps"]["opt_snapshot"] = {"ok": False, "error": str(_e)}
+
+        # 6. Earnings curated snapshots — load from disk + start precompute loop.
+        _t = _bst.monotonic()
+        try:
+            from services.earnings_clean_service import (
+                _load_all_earn_snaps_from_disk   as _load_earn_snaps,
+                _earnings_curated_precompute_loop as _earn_precompute_loop,
+            )
+            _load_earn_snaps()
+            asyncio.create_task(_earn_precompute_loop())
+            _BOOTSTRAP_STATE["steps"]["earn_snaps"] = {"ok": True, "ms": round((_bst.monotonic()-_t)*1000)}
+        except Exception as _e:
+            print(f"[BOOTSTRAP] Earnings curated precompute init error: {_e}")
+            _BOOTSTRAP_STATE["steps"]["earn_snaps"] = {"ok": False, "error": str(_e)}
+
+        _elapsed = _bst.monotonic() - _bt0
+        _BOOTSTRAP_STATE["done"] = True
+        _BOOTSTRAP_STATE["elapsed_ms"] = round(_elapsed * 1000)
+        print(f"[BOOTSTRAP] post-yield bootstrap complete in {_elapsed:.2f}s")
+
+    asyncio.create_task(_post_yield_bootstrap())
     # Weekly calendar snapshots (Dividends, IPOs, Splits, Economic, Treasury).
     # Reads only from disk on request; refreshes Sunday in ET per per-tab hour.
     # Also runs a startup staleness check (45s delay) so restarts mid-week
@@ -1568,6 +1588,16 @@ data_service = None
 agent = None
 _init_done = False
 _init_error = None  # stores init failure message for fast 503 responses
+
+# ── Post-yield bootstrap state ───────────────────────────────────────────────
+# Tracks the deferred startup work that runs after FastAPI starts serving.
+# Used by GET /api/admin/startup-status and health endpoint.
+_BOOTSTRAP_STATE: dict = {
+    "done":       False,
+    "started_at": None,
+    "elapsed_ms": None,
+    "steps":      {},
+}
 import threading as _threading
 _init_event = _threading.Event()
 
@@ -2037,6 +2067,132 @@ async def health():
         "init_error": _init_error,
         "agent_loaded": agent is not None,
         "data_service_loaded": data_service is not None,
+        "bootstrap_done": _BOOTSTRAP_STATE.get("done", False),
+    }
+
+
+@app.get("/api/admin/startup-status")
+async def admin_startup_status():
+    """
+    Lightweight readiness report for the post-yield deferred bootstrap.
+
+    Returns immediately — never waits for bootstrap to complete.
+    Fields:
+      bootstrap_done   — True once all deferred steps have run
+      elapsed_ms       — total bootstrap wall-clock time (None until done)
+      steps            — per-step {ok, ms, error?} (populated as each step completes)
+      init_complete    — FastAPI _do_init() thread finished
+    """
+    import time as _st
+    return {
+        "bootstrap_done":  _BOOTSTRAP_STATE.get("done", False),
+        "elapsed_ms":      _BOOTSTRAP_STATE.get("elapsed_ms"),
+        "steps":           _BOOTSTRAP_STATE.get("steps", {}),
+        "init_complete":   _init_done,
+        "init_error":      _init_error,
+        "uptime_s":        round(_st.monotonic() - _BOOTSTRAP_STATE["started_at"], 1)
+                           if _BOOTSTRAP_STATE.get("started_at") else None,
+    }
+
+
+@app.get("/api/admin/materials/status")
+async def admin_materials_status():
+    """
+    Report current EI materials cache coverage across all eligible symbols.
+    Cache-only — no EDGAR calls.
+    """
+    try:
+        from data.ei_materials_cache import (
+            count_stale_entries as _count_stale,
+            get_all_symbols     as _all_syms,
+        )
+        stale = _count_stale()
+        syms  = _all_syms()
+        return {
+            "cached_symbols":              len(syms),
+            "version_ok":                  stale["version_ok"],
+            "version_stale":               stale["version_stale"],
+            "ttl_stale":                   stale["ttl_stale"],
+            "required_discovery_version":  stale["required_discovery_version"],
+            "required_classifier_version": stale["required_classifier_version"],
+            "total_entries":               stale["total"],
+        }
+    except Exception as _e:
+        return JSONResponse({"error": str(_e)}, status_code=500)
+
+
+@app.post("/api/admin/materials/backfill")
+async def admin_materials_backfill(request: Request):
+    """
+    Trigger a bounded, resumable SEC materials backfill for all EI-eligible symbols.
+
+    Body (JSON, all optional):
+      force        — bool  — refresh even entries that are version-current (default: false)
+      max_symbols  — int   — cap total symbols refreshed in this run (default: 500)
+
+    The job runs in a background task. Poll GET /api/admin/materials/status for progress.
+    Cache-only reads at request time are unaffected — no EDGAR slots used for reads.
+    """
+    body: dict = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    force       = bool(body.get("force", False))
+    max_symbols = int(body.get("max_symbols", 500))
+
+    from data.ei_materials_cache import needs_refresh as _needs_refresh
+
+    async def _run_backfill():
+        try:
+            from data.watchlist_fundamentals_store import list_all_symbols as _all_syms
+            from services.watchlist_fundamentals_refresh import ei_ineligible_reason as _ei_elig
+            from services.ei_materials_service import fetch_and_cache_materials as _fetch_mats
+
+            raw: list[str] = []
+            try:
+                raw = await asyncio.to_thread(_all_syms)
+            except Exception as _se:
+                print(f"[ADMIN_MATERIALS_BF] symbol list error: {_se}")
+                return
+
+            eligible = []
+            for _sym in raw:
+                try:
+                    from data.watchlist_fundamentals_store import get_snapshot as _get_snap
+                    _snap = await asyncio.to_thread(_get_snap, _sym)
+                    if not _ei_elig(_sym, _snap or {}):
+                        eligible.append(_sym)
+                except Exception:
+                    eligible.append(_sym)
+
+            if max_symbols:
+                eligible = eligible[:max_symbols]
+
+            print(f"[ADMIN_MATERIALS_BF] starting backfill: {len(eligible)} eligible, force={force}")
+            refreshed = skipped = failed = 0
+            for _sym in eligible:
+                try:
+                    if not force and not _needs_refresh(_sym):
+                        skipped += 1
+                        continue
+                    await _fetch_mats(_sym)
+                    refreshed += 1
+                except Exception as _se:
+                    failed += 1
+                    print(f"[ADMIN_MATERIALS_BF] error {_sym}: {_se}")
+                await asyncio.sleep(0.6)   # ~1.67 req/s — SEC-compliant pacing
+
+            print(f"[ADMIN_MATERIALS_BF] done refreshed={refreshed} skipped={skipped} failed={failed}")
+        except Exception as _le:
+            print(f"[ADMIN_MATERIALS_BF] fatal: {_le}")
+
+    asyncio.create_task(_run_backfill())
+    return {
+        "status":      "started",
+        "force":       force,
+        "max_symbols": max_symbols,
+        "poll":        "GET /api/admin/materials/status",
     }
 
 
