@@ -1,0 +1,242 @@
+FINAL COLD-START HARDENING + MATERIALS BACKFILL COMPLETION
+
+Do not add features.
+Do not modify the frontend.
+Do not make unrelated refactors.
+Do not claim completion based only on a warm development restart.
+Do not push to Git.
+
+There are two unfinished requirements:
+
+1. Prove production cold-start reliability.
+2. Complete and verify the SEC Materials backfill.
+
+PART 1 — MAKE STARTUP STRUCTURALLY FAST
+
+The deployment has repeatedly failed because cold startup takes too long, even when warm dev startup appears fast.
+
+The correct invariant is:
+
+FastAPI must reach lifespan yield as quickly as possible, without waiting for nonessential imports, database setup, disk-cache hydration, provider initialization, backfills, or scheduled-service initialization.
+
+Audit everything that executes before lifespan yield, including:
+
+- module-level imports and side effects
+- imports inside lifespan
+- table creation or migration checks
+- Neon connections
+- disk reads
+- cache hydration
+- snapshot loading
+- provider/client construction
+- identity configuration
+- scheduler initialization
+- loops that do work before their first sleep
+- logging configuration that imports heavy dependencies
+
+Classify every pre-yield operation as:
+
+A. Required to construct the FastAPI application
+B. Required before serving any request
+C. Safe to defer until after yield
+
+Move all category-C work into one controlled asynchronous bootstrap task launched after yield.
+
+Where possible, category-B data should use:
+
+- lazy initialization on first actual use, or
+- a lightweight readiness state with graceful section-level degradation
+
+Do not make health-check availability wait for optional features.
+
+Specifically reconsider whether _load_earn_snaps() must run before yield. If not strictly required for the health endpoint and core app startup, defer it.
+
+Do not merely optimize individual calls. Make the architecture resistant to future startup growth.
+
+PART 2 — BACKGROUND BOOTSTRAP SAFETY
+
+Implement or verify one repository-consistent deferred bootstrap mechanism.
+
+It must:
+
+- run after the app has yielded
+- log each initialization step and duration
+- isolate failures by service
+- not crash the entire application when one optional subsystem fails
+- avoid starting duplicate jobs
+- expose a lightweight internal readiness/status report
+- preserve existing functionality once initialization finishes
+
+Health endpoint behavior:
+
+- basic liveness should return immediately once FastAPI is serving
+- optional subsystem readiness may be reported separately
+- do not return unhealthy merely because EDGAR, whale watch, RSS, or another noncritical service is still warming
+
+PART 3 — TRUE COLD-START TEST
+
+A normal dev restart is not sufficient.
+
+Perform a true cold-start simulation as closely as the environment permits:
+
+- stop the process completely
+- start a fresh Python process
+- ensure modules are not already imported
+- ensure no warm in-process pools exist
+- measure from process launch through FastAPI lifespan yield
+- log total import time
+- log pre-yield lifespan time
+- log time until health endpoint first succeeds
+
+Run this at least three times.
+
+Report all three measurements.
+
+Do not remove useful timing instrumentation until production publishing succeeds. Keep concise permanent startup timing logs that can diagnose future regressions.
+
+PART 4 — ACTUAL PRODUCTION PUBLISH
+
+Publish the backend after the structural startup correction.
+
+Then verify from deployment logs:
+
+- process launched
+- FastAPI reached lifespan yield
+- application startup completed
+- health check succeeded
+- no import/runtime exception occurred
+- no startup timeout occurred
+
+Provide:
+
+- cold deployment startup duration
+- first successful health-check timestamp
+- live health response
+- live ticker-detail response for COIN
+
+If publishing fails, continue debugging from the deployment logs. Do not stop after another warm dev success.
+
+PART 5 — MATERIALS BACKFILL STATUS
+
+The previous report showed:
+
+- 344 candidates
+- only 13 refreshed at the last confirmed checkpoint
+- 0 failures at that moment
+
+Determine the actual current job state.
+
+Report:
+
+- whether the old job is still running
+- whether it stopped during restarts
+- refreshed count
+- current/skipped count
+- partial count
+- unavailable count
+- failed count
+- stale discovery-version count remaining
+
+Do not assume an in-memory backfill survived server restarts.
+
+PART 6 — COMPLETE THE MATERIALS BACKFILL
+
+Use the protected existing endpoint or canonical backfill entry point.
+
+Requirements:
+
+- resumable
+- idempotent
+- bounded SEC request rate
+- bounded concurrency
+- no monopolization of resources needed by normal API requests
+- progress status available
+- stale discovery-version entries refreshed
+- valid current entries skipped
+- failures recorded with reasons
+- temporary failures retry with bounded backoff
+- permanent failures do not loop indefinitely
+
+Normal ticker-detail requests must remain responsive while this job runs.
+
+The earlier report said ticker-detail requests timed out because the backfill consumed all EDGAR rate slots. Fix resource isolation so a background cache job cannot degrade ordinary cache-only reads.
+
+A cache-only ticker-detail request should not need an EDGAR rate slot at all. Investigate why those reads timed out and correct any shared lock, event-loop blocking, disk lock, CPU saturation, or worker starvation involved.
+
+PART 7 — FINAL MATERIALS VERIFICATION
+
+After backfill completion, report:
+
+- eligible symbols
+- materials current
+- materials partial
+- materials unavailable
+- failures
+- stale entries remaining
+- canonical index discovery count
+- fallback discovery counts
+- earnings releases found
+- presentations found
+- supplemental tables found
+- guidance documents found
+- webcast links found
+- transcript-state totals
+
+Verify the deployed ticker-detail endpoint for:
+
+- COIN
+- AAPL
+- CLF
+- one partial symbol
+- UFO
+
+Confirm:
+
+- materials are returned from cache
+- no EDGAR call occurs during popup reads
+- no FMP call occurs during popup reads
+- no Tradier call occurs during popup reads
+- UFO remains ineligible
+- document URLs resolve
+- existing Earnings Intelligence remains intact
+
+PART 8 — REGRESSION GUARD
+
+Add a focused startup regression test or script that fails when:
+
+- pre-yield startup exceeds a documented threshold
+- an optional DB/network operation executes synchronously before yield
+- a known heavy optional package is imported during critical startup
+- lifespan startup raises
+
+Use the repository’s existing testing conventions.
+
+The test should be lightweight enough to run after future backend changes.
+
+FINAL REPORT
+
+Return:
+
+1. Exact root causes found
+2. Files changed
+3. What now executes before yield
+4. What was deferred after yield
+5. Three fresh-process startup measurements
+6. Production cold-start measurement
+7. Production publish result
+8. Live health verification
+9. Materials backfill final totals
+10. Stale entries remaining
+11. Live sample endpoint verification
+12. Startup regression protection added
+13. Any remaining limitations
+
+End with exactly one result:
+
+PRODUCTION STABLE — MATERIALS READY
+
+or
+
+NOT COMPLETE
+
+Do not return PRODUCTION STABLE — MATERIALS READY unless the actual production publish succeeds and the full materials job reaches a final documented state.
