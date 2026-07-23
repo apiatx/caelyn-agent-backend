@@ -417,6 +417,9 @@ async def _investor_intelligence_loop():
 
 @asynccontextmanager
 async def lifespan(app):
+    # Timer starts at the very top so it captures the three lazy imports below
+    # (insider/congressional/whale services) which can be slow on cold deployment.
+    _lifespan_t0 = time.monotonic()
     # ── Lazy-load services that pull in heavy deps (edgar, psycopg2 pool) ────
     # Keeping these out of module-level imports cuts cold-start by ~3-5s.
     # Routes are registered here before the yield so all endpoints are live.
@@ -556,7 +559,6 @@ async def lifespan(app):
         print("[STARTUP] _deferred_sync_startup complete")
 
     import threading
-    _lifespan_t0 = time.monotonic()
     threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())

@@ -23,14 +23,19 @@ description: Deployment healthcheck times out when lifespan Neon DB calls block 
 Fix: removed module-level call; extracted block into `_deferred_sync_startup()`.
 
 ### Round 2 — 2026-07-23 (~17s startup, 10 failed deployments in one day)
-Three table-create calls were left inline in the lifespan body because the previous note said "fast since Neon warmed by deferred thread." In practice the thread had microseconds to warm before line 649 ran — Neon was still cold.
+Three table-create calls left inline in the lifespan body. Fix: moved all three into `_deferred_sync_startup()`. Lifespan yield: 0.55s after fix. But deployment STILL timed out (~15s).
 
-Culprits:
-- `_whale_create_tables()` — inline before `asyncio.create_task(_seed_whales())`
-- `_fund_ensure_table()` — inline before `_fund_weekly_lock = asyncio.Lock()`
-- `_rss_ensure_table()` — inline before `asyncio.create_task(_rss_sweeper_loop())`
+### Round 3 — 2026-07-23 (15s startup after Round 2)
+Dev showed 3.89s yield — not the 0.55s we expected. Root causes:
+1. **`_lifespan_t0` was set AFTER the three lazy imports** (lines 423-436) so the timer missed them entirely. The real yield time was higher than measured.
+2. **`insider_activity_service.py` had `from edgar import ...; set_identity(...)` at MODULE LEVEL** — edgartools is a heavy library, taking ~3.7s to import cold.
 
-Fix: moved all three into `_deferred_sync_startup()`. All background loops that consume these tables have ≥ 60s startup delays, so there is no race condition. Lifespan yield: 0.55s after fix.
+Fix: 
+- Moved `_lifespan_t0 = time.monotonic()` to the very first line of lifespan (before any imports).
+- Made edgar import lazy via `_ensure_edgar()` in `insider_activity_service.py`; all three call sites updated.
+- Added granular `[STARTUP_TIMING]` checkpoints A→S to pin remaining cost; used them to confirm `_load_earn_snaps()` is the biggest disk read (~0.47s), which is acceptable.
+
+Final dev timing: **0.64s lifespan yield** (was 3.89s → 50s across all rounds).
 
 ## Regression detection
 The startup timer log line is: `[STARTUP] lifespan yield reached in Xs — healthcheck now active`

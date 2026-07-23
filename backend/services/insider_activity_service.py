@@ -27,13 +27,25 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(__file__)))
 from subscription import require_subscription
 from pydantic import BaseModel
 
-try:
-    from edgar import get_filings, set_identity
-    set_identity("CaelynAI Trading Dashboard admin@caelynai.com")
-    _EDGAR_AVAILABLE = True
-except ImportError:
-    _EDGAR_AVAILABLE = False
-    logging.warning("[INSIDER] edgartools not installed — fetch will be disabled")
+# Lazy edgar init — edgartools (pandas/rich/etc.) is slow to import on cold
+# deployment and blocks the lifespan for ~10-14s if imported at module level.
+# _ensure_edgar() is called on first real use instead.
+_EDGAR_AVAILABLE: bool | None = None   # None = not yet attempted
+_edgar_get_filings = None              # populated on first _ensure_edgar() call
+
+def _ensure_edgar() -> bool:
+    """Lazy-initialize edgartools. Safe to call multiple times (idempotent)."""
+    global _EDGAR_AVAILABLE, _edgar_get_filings
+    if _EDGAR_AVAILABLE is not None:
+        return bool(_EDGAR_AVAILABLE)
+    try:
+        from edgar import get_filings as _gf, set_identity as _si
+        _si("CaelynAI Trading Dashboard admin@caelynai.com")
+        _edgar_get_filings = _gf
+        _EDGAR_AVAILABLE = True
+    except ImportError:
+        _EDGAR_AVAILABLE = False
+    return bool(_EDGAR_AVAILABLE)
 
 logger = logging.getLogger("insider_activity")
 
@@ -1198,7 +1210,7 @@ async def fetch_recent_form4_filings(max_filings: int = 200) -> int:
     if _refresh_in_progress:
         logger.info("[INSIDER] Fetch already in progress — skipping")
         return 0
-    if not _EDGAR_AVAILABLE:
+    if not _ensure_edgar():
         logger.warning("[INSIDER] edgartools not available")
         return 0
 
@@ -1212,7 +1224,7 @@ async def fetch_recent_form4_filings(max_filings: int = 200) -> int:
         loop = asyncio.get_event_loop()
 
         def _get_filings_sync():
-            return get_filings(form="4", filing_date=date_range)
+            return _edgar_get_filings(form="4", filing_date=date_range)
 
         filings = await loop.run_in_executor(_executor, _get_filings_sync)
 
@@ -1352,7 +1364,7 @@ async def fetch_historical_30d(days_back: int = 30, filings_per_week: int = 60) 
         logger.info("[INSIDER_HIST] Fetch in progress — skipping historical load")
         return {"inserted": 0, "windows": 0, "errors": 0, "message": "Fetch already in progress"}
 
-    if not _EDGAR_AVAILABLE:
+    if not _ensure_edgar():
         return {"inserted": 0, "windows": 0, "errors": 0, "message": "edgartools not available"}
 
     _refresh_in_progress = True
@@ -1380,7 +1392,7 @@ async def fetch_historical_30d(days_back: int = 30, filings_per_week: int = 60) 
 
             try:
                 def _get_window_filings(dr=date_range_str):
-                    return get_filings(form="4", filing_date=dr)
+                    return _edgar_get_filings(form="4", filing_date=dr)
 
                 filings = await loop.run_in_executor(_executor, _get_window_filings)
                 if not filings:
