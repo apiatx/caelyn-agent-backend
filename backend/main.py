@@ -531,9 +531,32 @@ async def lifespan(app):
             print(f"[STARTUP] display_name warm-up: loaded {_dname_count} names from screener cache")
         except Exception as _dname_err:
             print(f"[STARTUP] display_name warm-up failed (non-fatal): {_dname_err}")
+        # ── Neon table-create calls (moved here from lifespan body) ─────────
+        # Previously these ran inline in the lifespan before yield.  On a cold
+        # Neon connection each takes 5-8 s, pushing total startup to 15-24 s and
+        # causing the deployment healthcheck to time out.  Running them here,
+        # after _init_postgres_chat_storage_on_startup() has already warmed the
+        # Neon connection, keeps startup fast.  All background tasks that consume
+        # these tables have ≥ 60 s startup delays, so there is no race condition.
+        try:
+            from services.whale_watch_service import _create_tables as _whale_create_tables_d
+            _whale_create_tables_d()
+        except Exception as _whale_tbl_err:
+            print(f"[STARTUP] Whale Watch DB init error (deferred): {_whale_tbl_err}")
+        try:
+            from data.watchlist_fundamentals_store import ensure_table as _fund_ensure_table_d
+            _fund_ensure_table_d()
+        except Exception as _fund_init_e:
+            print(f"[STARTUP] watchlist_fundamentals_cache table init error (deferred, non-fatal): {_fund_init_e}")
+        try:
+            from data.rss_article_archive import ensure_table as _rss_ensure_table_d
+            _rss_ensure_table_d()
+        except Exception as _rss_tbl_err:
+            print(f"[STARTUP] RSS archive table init error (deferred, non-fatal): {_rss_tbl_err}")
         print("[STARTUP] _deferred_sync_startup complete")
 
     import threading
+    _lifespan_t0 = time.monotonic()
     threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()
     threading.Thread(target=_do_init, daemon=True).start()
     asyncio.create_task(_briefing_precompute_loop())
@@ -646,10 +669,10 @@ async def lifespan(app):
         print(f"[STARTUP] canonical history maintenance scheduler failed to start: {_canon_maint_err}")
     asyncio.create_task(_hl_boot_and_run(_hl_state))
     try:
-        _whale_create_tables()
+        # _whale_create_tables() moved to _deferred_sync_startup() — cold Neon was adding 5-8s
         asyncio.create_task(_seed_whales())
     except Exception as _e:
-        print(f"[STARTUP] Whale Watch DB init error: {_e}")
+        print(f"[STARTUP] Whale Watch seed task error: {_e}")
     asyncio.create_task(_whale_bg_loop())
     try:
         from services.bittensor.router import _dashboard_refresh_loop as _bittensor_refresh_loop
@@ -673,12 +696,7 @@ async def lifespan(app):
     # Watchlist Fundamentals weekly FMP refresh — checks every hour, refreshes
     # symbols whose next_refresh_at <= NOW (set to upload_time + 7 days on CSV save).
     # Never runs on page render. Never storms FMP. Uses existing rate limiter cadence.
-    try:
-        from data.watchlist_fundamentals_store import ensure_table as _fund_ensure_table
-        _fund_ensure_table()
-    except Exception as _fund_init_e:
-        print(f"[STARTUP] watchlist_fundamentals_cache table init error (non-fatal): {_fund_init_e}")
-
+    # _fund_ensure_table() moved to _deferred_sync_startup() — cold Neon was adding 5-8s here.
     # Job-level lock — prevents overlap if a prior run is still in progress.
     _fund_weekly_lock = asyncio.Lock()
 
@@ -1103,21 +1121,20 @@ async def lifespan(app):
     asyncio.create_task(_terminal_prewarm())
 
     # Watchlist RSS sweeper — continuous ~2-min full-universe RSS archive sweep.
-    # Creates the watchlist_rss_article_archive Neon table, then registers one
-    # background loop that fetches Yahoo + Google RSS in parallel for every
-    # active Watchlist ticker and upserts 72-hour rolling article associations.
-    # FMP is never called by this sweeper. Registered exactly once.
-    try:
-        from data.rss_article_archive import ensure_table as _rss_ensure_table
-        _rss_ensure_table()
-    except Exception as _rss_tbl_err:
-        print(f"[STARTUP] RSS archive table init error (non-fatal): {_rss_tbl_err}")
+    # Table creation (_rss_ensure_table) moved to _deferred_sync_startup() —
+    # cold Neon was adding 5-8s here.  The sweeper loop starts at ≥ 120s delay
+    # so the table is guaranteed to exist before the first write.
     try:
         from services.watchlist_rss_sweeper import rss_sweeper_loop as _rss_sweeper_loop
         asyncio.create_task(_rss_sweeper_loop())
         print("[STARTUP] Watchlist RSS sweeper loop registered")
     except Exception as _rss_err:
         print(f"[STARTUP] RSS sweeper loop registration error: {_rss_err}")
+
+    _lifespan_elapsed = time.monotonic() - _lifespan_t0
+    print(f"[STARTUP] lifespan yield reached in {_lifespan_elapsed:.2f}s — healthcheck now active")
+    if _lifespan_elapsed > 5.0:
+        print(f"[STARTUP] WARNING: lifespan took {_lifespan_elapsed:.1f}s — deployment healthcheck may time out (target <3s)")
 
     yield
 

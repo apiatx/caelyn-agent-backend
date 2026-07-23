@@ -1,33 +1,37 @@
 ---
 name: Autoscale startup timeout fix
-description: Two-part fix for gunicorn+uvicorn worker taking ~50s to start, causing autoscale health check to time out before GET / could respond.
+description: Deployment healthcheck times out when lifespan Neon DB calls block the yield. Rule: ALL sync Neon calls go in _deferred_sync_startup(), zero exceptions.
 ---
 
 ## The rule
-Never run synchronous Neon DB calls at module import time in main.py. Never run dense blocking I/O synchronously in the FastAPI lifespan event before the yield.
+**Zero synchronous Neon/DB calls in the lifespan body before `yield`.** Every table-create, probe, or audit call must go into `_deferred_sync_startup()`.
 
-**Why:** The autoscale health check probes `GET /` from T=0. With gunicorn `-w 1 -k UvicornWorker`, the single worker cannot serve any request until the lifespan `yield` is reached. A 50s startup means the health check times out, the promote step fails, and the deployment rolls back even though the app eventually comes up.
+**Why:** The autoscale health check probes `GET /` from T=0. The worker cannot serve any request until the lifespan `yield` is reached. Each cold Neon call takes 5-8s. Three such calls = 15-24s startup, which exceeds the deployment healthcheck timeout, causing rollback even though the app eventually comes up. Measured: lifespan yield at 0.55s after fix (was 17s before).
 
 **How to apply:** If you add new startup initialization in `main.py` lifespan:
-- Synchronous DB calls, disk reads, or anything potentially slow → add to `_deferred_sync_startup()` (runs in background thread)
-- `asyncio.create_task()` loops → keep in the lifespan body (non-blocking)
+- Synchronous Neon/DB calls, `ensure_table()`, audit functions → **must** go into `_deferred_sync_startup()` (runs in a background thread AFTER yield)
+- `asyncio.create_task()` loop registrations → safe in lifespan body (non-blocking)
+- Synchronous disk reads (LKG loads, JSON index preloads) → OK in lifespan body if the file is small; move to deferred if uncertain
 - Never add module-level Neon/DB calls outside of functions
+- A startup timer `_lifespan_t0 = time.monotonic()` is set before the thread start, and `[STARTUP] lifespan yield reached in Xs` is logged right before `yield` — if you see X > 3s, a new blocking call crept in
 
-## Root cause (from failed builds at 16:22 and 16:55 UTC 2026-07-13)
+## Root cause history
 
-Two blockers combined to push startup to ~50s:
+### Round 1 — 2026-07-13 (50s startup)
+1. Module-level Neon call at import time: 30-38s cold connection.
+2. Dense synchronous lifespan block: ~12s of sequential Neon calls.
+Fix: removed module-level call; extracted block into `_deferred_sync_startup()`.
 
-1. **Module-level Neon call** (`_init_postgres_chat_storage_on_startup("module_import")` at line 134): Ran at import time in every worker, blocking the import phase for 30–38 seconds while Neon established a cold connection.
+### Round 2 — 2026-07-23 (~17s startup, 10 failed deployments in one day)
+Three table-create calls were left inline in the lifespan body because the previous note said "fast since Neon warmed by deferred thread." In practice the thread had microseconds to warm before line 649 ran — Neon was still cold.
 
-2. **Dense synchronous lifespan block** (lines 411–522): Portfolio audit, manual anchor table init, theme merge refresh, watchlist loads, LKG disk reads, instrument-type warm-ups — all sequential Neon calls adding ~12s.
+Culprits:
+- `_whale_create_tables()` — inline before `asyncio.create_task(_seed_whales())`
+- `_fund_ensure_table()` — inline before `_fund_weekly_lock = asyncio.Lock()`
+- `_rss_ensure_table()` — inline before `asyncio.create_task(_rss_sweeper_loop())`
 
-Total: ~50s. The autoscale health check started probing at T=0, timed out before `Application startup complete`.
+Fix: moved all three into `_deferred_sync_startup()`. All background loops that consume these tables have ≥ 60s startup delays, so there is no race condition. Lifespan yield: 0.55s after fix.
 
-## Fix applied
-
-1. Removed the module-level call — imports now near-instant.
-2. Extracted the dense sync block into `_deferred_sync_startup()` inside the lifespan, fired as `threading.Thread(target=_deferred_sync_startup, daemon=True, name="startup-sync").start()` at the top of the lifespan.
-3. All `asyncio.create_task()` calls and function definitions remain in the lifespan body unchanged.
-4. The three remaining table-create calls (`_whale_create_tables`, `_fund_ensure_table`, `_rss_ensure_table`) stayed inline but are fast since Neon is already warmed by the background thread's PG init.
-
-Result: `Application startup complete` at log line 97 (vs ~50s before). `_deferred_sync_startup complete` logged at line 163, after the server is already serving.
+## Regression detection
+The startup timer log line is: `[STARTUP] lifespan yield reached in Xs — healthcheck now active`
+A WARNING line fires if X > 5s. Check this after any new lifespan initialization is added.
