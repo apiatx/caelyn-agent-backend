@@ -844,6 +844,7 @@ async def lifespan(app):
             await _aio.sleep(60)
 
     asyncio.create_task(_watchlist_fundamentals_weekly_loop())
+    asyncio.create_task(_ei_materials_loop())
 
     # Watchlist rank snapshot cadence — advances RV + vol/MC rank baselines every
     # ~5 minutes using warm quote-cache data.  GET path is read-only (never writes
@@ -1903,6 +1904,70 @@ async def _edgar_cache_loop():
             import traceback
             traceback.print_exc()
             await asyncio.sleep(600)
+
+
+async def _ei_materials_loop():
+    """
+    Background loop: refresh SEC materials disk cache daily for all
+    EI-eligible watchlist symbols.
+
+    Schedule:
+      - Startup pass: 5 min after boot (cold-cache fill)
+      - Repeat:       every 24 h
+
+    Each symbol is fetched sequentially with 0.6 s inter-symbol pacing
+    to stay well under SEC's 10 req/s rate limit (see ei_materials_service).
+    Errors per-symbol are logged and skipped — they don't abort the loop.
+    """
+    await asyncio.sleep(300)   # 5 min initial delay — let other loops stabilise
+
+    while True:
+        try:
+            from data.watchlist_fundamentals_store import list_all_symbols as _all_syms
+            from services.watchlist_fundamentals_refresh import ei_ineligible_reason as _ei_elig
+            from services.ei_materials_service import fetch_and_cache_materials as _fetch_mats
+            from data.ei_materials_cache import needs_refresh as _needs_refresh
+
+            symbols_raw: list[str] = []
+            try:
+                symbols_raw = await asyncio.to_thread(_all_syms)
+            except Exception as _e_syms:
+                print(f"[EI_MATERIALS] symbol list error: {_e_syms}")
+
+            # Filter to EI-eligible equity symbols
+            eligible: list[str] = []
+            for _sym in symbols_raw:
+                try:
+                    from data.watchlist_fundamentals_store import get_snapshot as _get_snap
+                    _snap = await asyncio.to_thread(_get_snap, _sym)
+                    if not _ei_elig(_sym, _snap or {}):
+                        eligible.append(_sym)
+                except Exception:
+                    eligible.append(_sym)   # optimistic — let fetch decide
+
+            print(f"[EI_MATERIALS] Refresh pass: {len(eligible)} eligible symbols")
+            refreshed = skipped = failed = 0
+
+            for _sym in eligible:
+                try:
+                    if not _needs_refresh(_sym):
+                        skipped += 1
+                        continue
+                    await _fetch_mats(_sym)
+                    refreshed += 1
+                except Exception as _sym_e:
+                    failed += 1
+                    print(f"[EI_MATERIALS] error {_sym}: {_sym_e}")
+
+            print(
+                f"[EI_MATERIALS] Pass done — refreshed={refreshed} "
+                f"skipped={skipped} failed={failed}"
+            )
+
+        except Exception as _loop_e:
+            print(f"[EI_MATERIALS] Loop error: {_loop_e}")
+
+        await asyncio.sleep(86400)   # 24 h between passes
 
 
 # ============================================================

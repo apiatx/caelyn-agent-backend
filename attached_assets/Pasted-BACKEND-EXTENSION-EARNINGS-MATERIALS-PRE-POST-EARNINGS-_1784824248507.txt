@@ -1,0 +1,485 @@
+BACKEND EXTENSION — EARNINGS MATERIALS + PRE/POST EARNINGS MOVES
+
+Extend the existing Earnings Intelligence backend.
+
+BACKEND ONLY.
+
+Do not modify the frontend.
+Do not replace the existing earnings_intelligence architecture.
+Do not create a second ticker-detail endpoint.
+Do not add provider calls to GET /api/watchlist/ticker-detail/{symbol}.
+Do not modify unrelated watchlist, confluence, technical, fundamentals, news, or AI features.
+Do not push to Git.
+
+OBJECTIVES
+
+Add:
+
+1. Pre-earnings 1-day price move
+2. Post-earnings 1-day price move
+3. Historical pre/post positioning statistics
+4. A cached Earnings Materials / SEC Filings dataset
+5. Truthful transcript and webcast availability states
+
+Do not implement exact analyst price-target revisions. The currently verified FMP endpoints do not supply individual old and revised targets.
+
+PRESERVE EXISTING PATHS
+
+Reuse the existing:
+
+- FMPProvider
+- FmpFundamentalsRefresher
+- canonical_history_service
+- SecEdgarProvider
+- EDGAR cache/provider infrastructure
+- watchlist_fundamentals_cache / earnings_intelligence storage
+- ticker_detail_endpoint
+- symbol-to-CIK/profile metadata
+- scheduled/background refresh architecture
+
+Do not create parallel provider or cache systems.
+
+PART 1 — PRE/POST EARNINGS PRICE MOVES
+
+Extend every earnings_history record’s price_reaction object.
+
+Add:
+
+- pre_earnings_1d_pct
+- post_earnings_1d_pct
+- pre_earnings_session
+- post_earnings_session
+- pre_post_method
+- pre_post_confidence
+
+Use actual trading sessions from canonical_history_service.
+
+For AMC earnings:
+
+- pre_earnings_session = report-date regular session
+- prior_session = immediately preceding trading session
+- pre_earnings_1d_pct =
+  report-date close / prior-session close - 1
+
+- post_earnings_session = next trading session
+- post_earnings_1d_pct =
+  next-session close / report-date close - 1
+
+For BMO earnings:
+
+- pre_earnings_session = immediately preceding trading session
+- prior_prior_session = trading session before that
+- pre_earnings_1d_pct =
+  prior-session close / prior-prior-session close - 1
+
+- post_earnings_session = report-date session
+- post_earnings_1d_pct =
+  report-date close / prior-session close - 1
+
+The existing reaction_1d_pct should normally equal post_earnings_1d_pct for sufficiently classified BMO/AMC events.
+
+For timing=unknown or timing_confidence=inferred_low:
+
+- do not claim exact release-relative precision
+- return null when the pre/post session cannot be established safely
+- or return a clearly labeled approximation
+- pre_post_method must make the methodology explicit
+- never silently assume AMC
+
+Percentages remain percentage-point values:
+
+6.25 means 6.25%, not 0.0625%.
+
+PART 2 — PRE/POST SUMMARY STATISTICS
+
+Extend reaction_summary with:
+
+- observations_pre_1d
+- observations_post_1d
+- average_pre_1d_pct
+- median_pre_1d_pct
+- average_post_1d_pct
+- median_post_1d_pct
+- average_absolute_pre_1d_pct
+- average_absolute_post_1d_pct
+- continuation_count
+- reversal_count
+- continuation_rate
+- reversal_rate
+- average_post_after_positive_pre
+- average_post_after_negative_pre
+
+Definitions:
+
+Continuation:
+- pre and post are both positive, or
+- pre and post are both negative
+
+Reversal:
+- pre and post have opposite signs
+
+Zero or null observations should not be forced into either group.
+
+Use only observations with methodologically valid pre and post values.
+
+PART 3 — SEC MATERIALS CACHE AUDIT
+
+Audit the existing direct-EDGAR implementation and cache system.
+
+Identify:
+
+- current ticker-to-CIK source
+- current submissions/filing fetch path
+- whether filing metadata is already persisted
+- whether attachment lists are currently cached
+- whether cached records can be read by symbol without a live EDGAR request
+- existing refresh jobs and rate controls
+
+The ticker-detail endpoint must remain cache-only.
+
+If no reusable symbol-level cache exists, create the smallest narrowly scoped persistent cache following existing Neon/store conventions.
+
+Do not embed live EDGAR fetching into ticker_detail_endpoint.
+
+A dedicated structure may be stored under:
+
+earnings_intelligence["materials"]
+
+or in a narrowly scoped table if that is safer for update frequency and row size.
+
+Explain the storage decision in the final report.
+
+PART 4 — FORMS TO MONITOR
+
+Cache and classify these forms, including common amendments where applicable:
+
+- 10-K
+- 10-K/A
+- 10-Q
+- 10-Q/A
+- 8-K
+- 8-K/A
+- Form 4
+- Schedule 13D
+- Schedule 13D/A
+- Schedule 13G
+- Schedule 13G/A
+- 6-K
+- 20-F
+- 20-F/A
+- DEF 14A
+- S-1
+- S-1/A
+- 425
+
+Do not label Form 425 as a generic prospectus. Classify it as a transaction or business-combination communication.
+
+If prospectus forms such as 424B1, 424B2, 424B3, 424B4, or 424B5 are already supported by the existing filing path, include them under offerings/prospectus materials without expanding the task into a full SEC-product redesign.
+
+PART 5 — FILING CATEGORIES
+
+Normalize filings into:
+
+- earnings
+- financial_reports
+- current_reports
+- insider
+- ownership
+- offerings
+- governance
+- transactions
+- other
+
+Suggested mapping:
+
+Earnings:
+- relevant 8-K / 8-K/A
+- relevant 6-K
+- related earnings exhibits
+
+Financial reports:
+- 10-Q / 10-Q/A
+- 10-K / 10-K/A
+- 20-F / 20-F/A
+
+Insider:
+- Form 4
+
+Ownership:
+- Schedule 13D / 13D/A
+- Schedule 13G / 13G/A
+
+Offerings:
+- S-1 / S-1/A
+- supported 424B forms
+
+Governance:
+- DEF 14A
+
+Transactions:
+- Form 425
+- transaction-related 8-K filings
+
+Do not assume every 8-K is earnings-related.
+
+PART 6 — EARNINGS PACKET
+
+For the latest reported quarter, assemble a cached earnings packet:
+
+{
+  "fiscal_year": "...",
+  "fiscal_period": "...",
+  "earnings_date": "...",
+  "detected_at": "...",
+  "primary_filing": {...},
+  "earnings_release": {...},
+  "investor_presentation": {...},
+  "supplemental_tables": [...],
+  "guidance_documents": [...],
+  "prepared_remarks": {...},
+  "related_financial_report": {...},
+  "webcast_url": null,
+  "transcript": {
+    "status": "...",
+    "source_type": null,
+    "source_url": null
+  }
+}
+
+Each document should contain where available:
+
+- form
+- accession_number
+- filed_date
+- accepted_at
+- document_type
+- sequence
+- exhibit_type
+- description
+- filename
+- document_url
+- filing_index_url
+- classification
+- classification_confidence
+- source
+
+Use the exact SEC acceptance timestamp when available.
+
+PART 7 — ATTACHMENT CLASSIFICATION
+
+Do not classify documents based only on exhibit number.
+
+Do not assume:
+
+- EX-99.1 = earnings release
+- EX-99.2 = transcript
+
+Classify using a deterministic combination of:
+
+1. Filing form
+2. 8-K items where available:
+   - 2.02
+   - 7.01
+   - 8.01
+   - 9.01
+3. Attachment description
+4. Document/exhibit type
+5. Filename
+6. Document title and headings
+7. Extracted document text
+8. Keyword scoring
+
+Supported classifications:
+
+- earnings_release
+- investor_presentation
+- supplemental_tables
+- corporate_guidance
+- prepared_remarks
+- transcript
+- webcast_or_replay
+- financial_report
+- proxy
+- insider_filing
+- ownership_filing
+- offering_document
+- transaction_material
+- other
+
+Useful keywords include:
+
+- earnings release
+- quarterly results
+- financial results
+- investor presentation
+- supplemental information
+- prepared remarks
+- conference call
+- earnings call
+- transcript
+- guidance
+- outlook
+- webcast
+- replay
+
+Only use an existing LLM classifier as a fallback when deterministic classification remains ambiguous. Do not require an LLM call for every filing.
+
+PART 8 — WEBCAST AND TRANSCRIPT STATES
+
+Extract call/webcast/replay URLs only from verified first-party sources such as:
+
+- filing attachment text
+- earnings release
+- investor presentation
+- already-cached company IR metadata
+
+Do not scrape or republish commercial transcript sites.
+
+Transcript status enum:
+
+- available_official
+- available_sec_exhibit
+- available_licensed
+- processing
+- not_yet_available
+- unavailable
+- unknown
+
+For the current implementation, most symbols may return:
+
+not_yet_available
+
+or:
+
+unavailable
+
+Do not generate transcript content from an AI summary.
+
+PART 9 — RECENT FILINGS RESPONSE
+
+Return recent filings independently from the latest earnings packet.
+
+Recommended contract:
+
+"materials": {
+  "latest_earnings_packet": {...} | null,
+  "recent_filings": [
+    {
+      "form": "8-K",
+      "category": "earnings",
+      "filed_date": "YYYY-MM-DD",
+      "accepted_at": "...",
+      "accession_number": "...",
+      "title": "...",
+      "summary": null,
+      "filing_index_url": "...",
+      "primary_document_url": "...",
+      "attachments": [...]
+    }
+  ],
+  "source_status": {
+    "fetched_at": "...",
+    "coverage": true,
+    "errors": {}
+  }
+}
+
+Keep recent_filings sorted newest first.
+
+PART 10 — CACHING AND REFRESH
+
+The popup must perform:
+
+- zero FMP calls
+- zero Tradier calls
+- zero EDGAR calls
+
+Use background refresh.
+
+Suggested behavior:
+
+- normal SEC materials refresh daily
+- earnings-date symbols refreshed more frequently through an existing earnings/catalyst scheduler if one exists
+- immutable historical filings retained
+- latest earnings packet replaced only when a newer quarter is detected
+- idempotent writes based on accession number and document filename/sequence
+
+Do not create one scheduler per ticker.
+
+PART 11 — RESPONSE CONTRACT
+
+Extend the existing earnings_intelligence structure without breaking current fields.
+
+Do not rename existing frontend fields.
+
+Add:
+
+- new price_reaction pre/post fields
+- new reaction_summary pre/post fields
+- materials
+
+Increment schema_version only if existing versioning conventions require it.
+
+Document every nullable field and enum for the frontend agent.
+
+PART 12 — VALIDATION
+
+Validate pre/post moves on:
+
+- one confirmed AMC reporter
+- one confirmed BMO reporter
+- one inferred-low timing event
+- one event adjacent to a holiday
+- one newly public ticker with insufficient history
+
+Validate materials on:
+
+- COIN
+- AAPL
+- one company with a relevant earnings 8-K
+- one foreign issuer using 6-K or 20-F if it is inside the supported product universe
+- one ticker with no presentation
+- one ticker with no transcript
+
+Verify:
+
+- no exhibit-number assumptions
+- unrelated 8-Ks are not classified as earnings
+- accepted timestamps are retained
+- attachment URLs work
+- no commercial transcripts are scraped
+- popup reads only cached data
+- existing earnings fields remain intact
+- no NaN/Infinity values reach JSONB
+
+PART 13 — BACKFILL
+
+After sample validation:
+
+- calculate and persist pre/post metrics for all currently eligible earnings-intelligence symbols
+- populate materials caches for the eligible watchlist universe
+- make the backfill resumable and idempotent
+- protect any write/backfill endpoint using existing admin authentication
+- report provider gaps separately from implementation failures
+
+FINAL REPORT
+
+Return:
+
+1. Files changed
+2. Existing paths reused
+3. Pre/post calculation methodology
+4. New reaction fields
+5. New reaction-summary fields
+6. SEC storage/cache decision
+7. Filing forms supported
+8. Attachment classification rules
+9. Final materials response contract
+10. Webcast/transcript behavior
+11. Validation results
+12. Backfill totals
+13. Popup provider-call count
+14. Exact TypeScript-ready contract
+15. Remaining limitations
+
+Do not claim completion unless the data is persisted and the ticker-detail endpoint remains cache-only.

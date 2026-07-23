@@ -1334,6 +1334,13 @@ class FmpFundamentalsRefresher:
         e1, e3, e5 = [], [], []
         db1, dm1, mx1 = [], [], []
         most_recent_completed = None
+        # Pre/Post positioning lists (Part 2)
+        pre1: list[float]  = []
+        post1: list[float] = []
+        post_after_pos_pre: list[float] = []
+        post_after_neg_pre: list[float] = []
+        continuation_count = 0
+        reversal_count     = 0
 
         for ev in events:
             pr = ev.get("price_reaction") or {}
@@ -1378,6 +1385,30 @@ class FmpFundamentalsRefresher:
                 except Exception:
                     pass
 
+            # Pre/Post stats: only use methodologically valid (amc/bmo, not unknown_timing)
+            pp_method = pr.get("pre_post_method") or ""
+            if pp_method in ("amc_inferred", "bmo_inferred"):
+                p1d  = pr.get("pre_earnings_1d_pct")
+                po1d = pr.get("post_earnings_1d_pct")
+                if p1d is not None:
+                    pre1.append(p1d)
+                if po1d is not None:
+                    post1.append(po1d)
+                # Continuation / Reversal: require BOTH pre and post to be non-null and non-zero
+                if p1d is not None and po1d is not None and p1d != 0 and po1d != 0:
+                    same_sign = (p1d > 0) == (po1d > 0)
+                    if same_sign:
+                        continuation_count += 1
+                    else:
+                        reversal_count += 1
+                # Post split by pre direction
+                if p1d is not None and po1d is not None:
+                    if p1d > 0:
+                        post_after_pos_pre.append(po1d)
+                    elif p1d < 0:
+                        post_after_neg_pre.append(po1d)
+
+        total_cr = continuation_count + reversal_count
         return {
             "observations_1d": len(e1),
             "observations_3d": len(e3),
@@ -1396,6 +1427,21 @@ class FmpFundamentalsRefresher:
             "average_1d_after_double_miss":  _avg(dm1),
             "average_1d_after_mixed_result": _avg(mx1),
             "most_recent_completed_reaction": most_recent_completed,
+            # Pre/Post positioning summary (Part 2)
+            "observations_pre_1d":          len(pre1),
+            "observations_post_1d":         len(post1),
+            "average_pre_1d_pct":           _avg(pre1),
+            "median_pre_1d_pct":            _median(pre1),
+            "average_post_1d_pct":          _avg(post1),
+            "median_post_1d_pct":           _median(post1),
+            "average_absolute_pre_1d_pct":  _avg_abs(pre1),
+            "average_absolute_post_1d_pct": _avg_abs(post1),
+            "continuation_count":           continuation_count,
+            "reversal_count":               reversal_count,
+            "continuation_rate": round(continuation_count / total_cr * 100, 1) if total_cr else None,
+            "reversal_rate":     round(reversal_count     / total_cr * 100, 1) if total_cr else None,
+            "average_post_after_positive_pre": _avg(post_after_pos_pre),
+            "average_post_after_negative_pre": _avg(post_after_neg_pre),
         }
 
     async def _fetch_earnings_intelligence(self, sym: str) -> dict | None:
@@ -1671,6 +1717,13 @@ class FmpFundamentalsRefresher:
                 "calculation_confidence": "low",
                 "reactions_final":      False,
                 "bars_source":          bars_source,
+                # Pre/Post 1-day positioning fields (Part 1)
+                "pre_earnings_1d_pct":  None,
+                "post_earnings_1d_pct": None,
+                "pre_earnings_session": None,
+                "post_earnings_session": None,
+                "pre_post_method":      "unavailable_no_bars",
+                "pre_post_confidence":  "low",
             }
 
             if not bar_dates:
@@ -1746,6 +1799,53 @@ class FmpFundamentalsRefresher:
                     react["calculation_method"] = "unknown_timing_close_to_close"
                     react["calculation_confidence"] = "low"
                     first_sess_idx = ev_idx + 1
+
+                # ── Pre/Post 1-day positioning ────────────────────────────────
+                # Computed after timing branch — uses ev_idx + first_sess_idx.
+                # AMC: pre  = report-date close / prior-session close - 1
+                #      post = next-session close / report-date close  - 1
+                # BMO: pre  = prior-session close / prior-prior-session close - 1
+                #      post = report-date close / prior-session close - 1
+                # Unknown: all null, method = unavailable_unknown_timing.
+                _pp_pre1d = _pp_post1d = None
+                _pp_pre_sess = _pp_post_sess = None
+                _pp_method = "unavailable_unknown_timing"
+                _pp_conf   = "low"
+
+                if timing == "amc" and tim_conf != "unknown":
+                    if ev_idx >= 1:
+                        _pre_base = _adj_close(bars_list[ev_idx - 1])
+                        _pre_cur  = _adj_close(bars_list[ev_idx])
+                        _pp_pre1d   = _pct_vs(_pre_cur, _pre_base)
+                        _pp_pre_sess = ev_date
+                    if first_sess_idx < len(bars_list):
+                        _post_ref  = _adj_close(bars_list[ev_idx])
+                        _post_next = _adj_close(bars_list[first_sess_idx])
+                        _pp_post1d   = _pct_vs(_post_next, _post_ref)
+                        _pp_post_sess = bar_dates[first_sess_idx]
+                    _pp_method = "amc_inferred"
+                    _pp_conf   = tim_conf
+
+                elif timing == "bmo" and tim_conf != "unknown":
+                    if ev_idx >= 2:
+                        _pre_base2 = _adj_close(bars_list[ev_idx - 2])
+                        _pre_cur1  = _adj_close(bars_list[ev_idx - 1])
+                        _pp_pre1d   = _pct_vs(_pre_cur1, _pre_base2)
+                        _pp_pre_sess = bar_dates[ev_idx - 1]
+                    if ev_idx < len(bars_list):
+                        _post_ref  = _adj_close(bars_list[ev_idx - 1])
+                        _post_next = _adj_close(bars_list[ev_idx])
+                        _pp_post1d   = _pct_vs(_post_next, _post_ref)
+                        _pp_post_sess = bar_dates[ev_idx]
+                    _pp_method = "bmo_inferred"
+                    _pp_conf   = tim_conf
+
+                react["pre_earnings_1d_pct"]   = _pp_pre1d
+                react["post_earnings_1d_pct"]  = _pp_post1d
+                react["pre_earnings_session"]  = _pp_pre_sess
+                react["post_earnings_session"] = _pp_post_sess
+                react["pre_post_method"]       = _pp_method
+                react["pre_post_confidence"]   = _pp_conf
 
                 baseline_close = react["baseline_close"]
 

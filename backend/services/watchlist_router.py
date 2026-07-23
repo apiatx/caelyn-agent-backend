@@ -4929,6 +4929,35 @@ async def ticker_detail_endpoint(symbol: str):
         print(f"[TICKER_DETAIL] earnings_intelligence error {sym}: {_ei_e}")
         coverage["earnings_intelligence"] = False
 
+    # ── 9. SEC Materials (from ei_materials_cache disk cache) ─────────────────
+    # Populated by background ei_materials_service refresh (daily cadence).
+    # Zero provider calls — disk cache read only.  Falls back to LKG (any age)
+    # when fresh entry is absent.  Returns null when symbol has no cache yet.
+    ei_materials: dict | None = None
+    try:
+        def _fetch_materials():
+            from data.ei_materials_cache import get_materials, get_materials_lkg
+            m = get_materials(sym)
+            if m is None:
+                m = get_materials_lkg(sym)  # stale LKG is better than null
+            return m
+        ei_materials = await _aio.to_thread(_fetch_materials)
+        coverage["ei_materials"] = bool(
+            ei_materials
+            and ei_materials.get("source_status", {}).get("coverage")
+        )
+    except Exception as _mat_e:
+        print(f"[TICKER_DETAIL] ei_materials error {sym}: {_mat_e}")
+        coverage["ei_materials"] = False
+
+    # Inject materials into earnings_intelligence dict so they arrive together
+    if earnings_intelligence and isinstance(earnings_intelligence, dict):
+        earnings_intelligence = dict(earnings_intelligence)
+        earnings_intelligence["materials"] = ei_materials
+    elif ei_materials is not None:
+        # Symbol has materials but no earnings history (e.g. first-run)
+        earnings_intelligence = {"materials": ei_materials}
+
     return {
         "symbol":        sym,
         "company":       company,
@@ -7927,4 +7956,107 @@ async def backfill_market_cap_share_basis(
         "failed":  fail_count,
         "dry_run": body.dry_run,
         "results": results,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin: EI Materials Backfill
+# POST /api/admin/ei-materials/backfill
+# Refreshes SEC materials disk cache for one or more symbols.
+# Requires Bearer token matching ADMIN_PASSWORD env var.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _EiMaterialsBackfillBody(BaseModel):
+    symbols:   list[str] | None = None   # explicit list; None = use all EI-eligible watchlist symbols
+    force:     bool = False               # True = refresh even if cache is fresh
+    max_concurrent: int = 3              # concurrency cap for EDGAR HTTP calls
+
+
+@router.post("/admin/ei-materials/backfill")
+async def admin_ei_materials_backfill(
+    request: Request,
+    body: _EiMaterialsBackfillBody,
+):
+    """
+    Admin endpoint — refresh SEC materials disk cache for watchlist symbols.
+
+    Scoped to EI-eligible equities (same gate as earnings_intelligence).
+    Non-eligible symbols (ETFs, funds) are silently skipped.
+    """
+    import asyncio as _aio2
+    import os as _os
+
+    _admin_pw = _os.environ.get("ADMIN_PASSWORD", "")
+    _auth = request.headers.get("Authorization", "")
+    if not _admin_pw or _auth != f"Bearer {_admin_pw}":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    from data.ei_materials_cache import needs_refresh as _needs_refresh
+    from services.ei_materials_service import fetch_and_cache_materials as _fetch_mats
+    from services.watchlist_fundamentals_refresh import ei_ineligible_reason as _ei_elig
+    from data.watchlist_fundamentals_store import list_all_symbols as _all_syms
+
+    # Resolve symbol list
+    if body.symbols:
+        candidates = [s.upper().strip() for s in body.symbols if s.strip()]
+    else:
+        # All symbols with a fundamentals snapshot (EI-eligible subset)
+        try:
+            candidates = await _aio2.to_thread(_all_syms)
+        except Exception:
+            candidates = []
+
+    # Gate out EI-ineligible symbols
+    eligible: list[str] = []
+    for sym_c in candidates:
+        try:
+            snap = await _aio2.to_thread(
+                lambda s=sym_c: __import__(
+                    "data.watchlist_fundamentals_store", fromlist=["get_snapshot"]
+                ).get_snapshot(s)
+            )
+            if _ei_elig(sym_c, snap or {}):
+                continue  # ETF / non-operating
+        except Exception:
+            pass
+        eligible.append(sym_c)
+
+    # Decide which symbols actually need a refresh
+    to_refresh = [s for s in eligible if body.force or _needs_refresh(s)]
+
+    refreshed = 0
+    skipped   = len(eligible) - len(to_refresh)
+    failed    = 0
+    failed_syms: list[str] = []
+
+    sem = _aio2.Semaphore(min(body.max_concurrent, 5))
+
+    async def _do_one(sym_r: str) -> bool:
+        async with sem:
+            try:
+                result = await _fetch_mats(sym_r)
+                return result is not None
+            except Exception as exc:
+                print(f"[EI_MAT_BF] {sym_r}: {exc}")
+                return False
+
+    tasks = [_aio2.ensure_future(_do_one(s)) for s in to_refresh]
+    oks = await _aio2.gather(*tasks, return_exceptions=True)
+    for sym_r, ok in zip(to_refresh, oks):
+        if isinstance(ok, Exception) or not ok:
+            failed += 1
+            failed_syms.append(sym_r)
+        else:
+            refreshed += 1
+
+    return {
+        "candidates":     len(candidates),
+        "eligible":       len(eligible),
+        "to_refresh":     len(to_refresh),
+        "refreshed":      refreshed,
+        "skipped":        skipped,
+        "failed":         failed,
+        "failed_symbols": failed_syms,
+        "force":          body.force,
     }
