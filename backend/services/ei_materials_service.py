@@ -6,29 +6,48 @@ Architecture:
   Writes to ei_materials_cache.py (disk, keyed by symbol).
   ticker_detail_endpoint reads from disk cache — zero provider calls at request time.
 
-Classification pipeline (in order):
+Canonical attachment-discovery hierarchy (per filing):
+  1. GET {directory}index.json          → discover filenames + locate -index.html
+  2. Parse {acc_dashes}-index.html      → Document Format Files table (seq/type/desc/url)
+  3. Parse {acc_dashes}.txt (SGML)      → <DOCUMENT>/<TYPE>/<FILENAME>/<DESCRIPTION> headers
+  4. EFTS efts.sec.gov/LATEST/search-index → bounded last resort, sets efts_fallback
+  5. Primary-document synthetic fallback → primary_filing classification, attachments_complete=False
+
+Classification pipeline (in order per attachment):
   1. Form type override (4, SC 13D, DEF 14A, etc.)
-  2. Filing item codes (8-K item 2.02 = earnings)
-  3. Attachment metadata (type, description, filename)
-  4. Document body text (HTML/text only, capped at 8 000 chars)
-  5. Keyword scoring across all available signals
+  2. Filing item codes (8-K item 2.02 = earnings-related)
+  3. is_primary_body detection (atype == form → skip presentation check)
+  4. Attachment metadata (type, description, filename)
+  5. Document body text (HTML/text only, capped at 8 000 chars)
+  6. Keyword scoring across all available signals
 
 Text fetch:
   - Only .htm / .html / .txt files fetched (identified by filename extension)
   - Cap: 150 KB download → 8 000 clean text chars passed to classifier
   - Uses BeautifulSoup html.parser for HTML stripping
+  - Hrefs extracted BEFORE stripping — appended to text for webcast URL detection
   - PDFs, XLS, ZIP → metadata-only classification, confidence capped at "low"
 
 Webcast URL extraction:
-  - Extracted from earnings-release and presentation attachment text
+  - Extracted from earnings-release and presentation attachment hrefs + text
+  - Hrefs are preserved separately from get_text() for accurate URL recovery
   - Regex pattern list targets known IR / webcast platforms
   - Stores webcast_url, webcast_source_document, extraction_confidence
   - Never returns tracking pixels, social links, or commercial transcript links
+
+Primary-document fallback mode:
+  - When canonical discovery fails entirely, synthesize one attachment from
+    the submissions JSON primaryDocument field
+  - Primary body classified as primary_filing (not earnings_release)
+  - Upgraded to earnings_release only when body text clearly confirms it
+  - attachments_complete: false in this mode
+  - discovery_method: primary_document_fallback
 
 Transcript state semantics:
   - available_sec_exhibit: attachment text confirmed as transcript
   - not_yet_available:     no transcript source; filing < 5 days ago
   - unavailable:           no transcript source; filing >= 5 days ago
+  - unknown:               filing date could not be parsed
 
 Forms monitored (exact EDGAR strings):
   10-K, 10-K/A, 10-Q, 10-Q/A, 20-F, 20-F/A,
@@ -53,6 +72,13 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 
+# ── Discovery / classifier versions ───────────────────────────────────────────
+# Bump DISCOVERY_VERSION when the attachment enumeration method changes.
+# Bump CLASSIFIER_VERSION when classification rules change.
+# Cache entries with lower versions are considered stale regardless of TTL.
+_DISCOVERY_VERSION = 2
+_CLASSIFIER_VERSION = 3
+
 _EDGAR_HEADERS = {
     "User-Agent": "TradingAnalysisPlatform/1.0 (contact: apixbt@gmail.com)",
     "Accept-Encoding": "gzip, deflate",
@@ -66,16 +92,17 @@ _INDEX_LOOKBACK_DAYS = 180
 _RECENT_FILINGS_LIMIT = 40
 _TEXT_FETCH_MAX_BYTES = 150_000   # 150 KB download cap
 _TEXT_CLEAN_MAX_CHARS = 8_000     # chars fed to classifier after HTML strip
+_SGML_RANGE_BYTES    = 40_960     # 40 KB — enough for all DOCUMENT headers
 
-# ── Fetch-eligible extensions (filename-based) ────────────────────────────────
+# ── Fetch-eligible extensions (filename-based) ─────────────────────────────
 _TEXT_EXTENSIONS = frozenset({".htm", ".html", ".txt"})
 _SKIP_EXTENSIONS = frozenset({
     ".pdf", ".xls", ".xlsx", ".xlsm", ".zip", ".gz",
     ".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico",
-    ".doc", ".docx", ".ppt", ".pptx",
+    ".doc", ".docx", ".ppt", ".pptx", ".xsd", ".xml",
 })
 
-# ── Form-type mappings ────────────────────────────────────────────────────────
+# ── Form-type mappings ───────────────────────────────────────────────────────
 _FORM_CATEGORY_MAP: dict[str, str] = {
     "10-K":     "financial_reports",
     "10-K/A":   "financial_reports",
@@ -126,11 +153,12 @@ _INVESTOR_PRESENTATION_KW = [
     "investor presentation", "corporate presentation", "company presentation",
     "investor day", "analyst day", "capital markets day",
     "investment highlights", "business overview",
-    "slide",     # "slides", "slide deck"
-    "deck",      # "earnings deck", "q1deck", filenames like "earningsdeck-*.htm"
-    "slides",    # plural — PowerPoint-style titles
-    "earnings deck", "q1 deck", "q2 deck", "q3 deck", "q4 deck",
-    "quarterly presentation", "earnings presentation",
+    "slide presentation", "investor deck",
+    "earnings deck", "earnings presentation",
+    "quarterly presentation", "q1 deck", "q2 deck", "q3 deck", "q4 deck",
+    "deck",   # catches filenames like "earningsdeck-*.htm"; guard prevents XBRL body match
+    "slide",  # catches "slides" in filenames/descriptions
+    "slides",
 ]
 _SUPPLEMENTAL_KW = [
     "supplemental", "financial supplement", "data supplement",
@@ -158,29 +186,27 @@ _PREPARED_REMARKS_KW = [
     "management remarks", "opening remarks", "ceo remarks", "cfo remarks",
 ]
 
-# ── Webcast URL extraction ────────────────────────────────────────────────────
-# Match known IR / streaming / webcast domains — avoids social links and tracking pixels.
+# ── Webcast URL extraction ───────────────────────────────────────────────────
 _WEBCAST_URL_RE = re.compile(
-    r'https?://[^\s\'"<>]+'
+    r'https?://[^\s\'"<>)&]+'
     r'(?:webcast|listen|replay|earnings(?:-call)?|'
     r'q4inc\.com|west\.com|streetevents|on24\.com|'
-    r'verint\.com|arkadin\.com|meetup\.com/|'
+    r'verint\.com|arkadin\.com|'
     r'zoom\.us/webinar|teams\.microsoft\.com|'
     r'chorus\.ai|gong\.io|'
-    r'ir\.[a-z0-9-]+\.com|investors\.[a-z0-9-]+\.com|'
+    r'ir\.[a-z0-9-]+\.com|investors?\.[a-z0-9-]+\.com|'
     r'investor\.relations|ir-room|corporate\.ir\.net)',
     re.IGNORECASE,
 )
-# Block known noise / tracker / social domains
 _WEBCAST_BLOCKLIST_RE = re.compile(
     r'(?:facebook|twitter|linkedin|instagram|tiktok|youtube|'
     r'google-analytics|googletagmanager|doubleclick|'
-    r'pixel\.|tracking\.|cdn\.|fonts\.googleapis)',
+    r'pixel\.|tracking\.|cdn\.|fonts\.googleapis|'
+    r'seeking[aA]lpha|motleyfool|streetinsider|briefing\.com)',
     re.IGNORECASE,
 )
-# Earnings release anchor patterns — used to limit URL search to nearby context
 _WEBCAST_CONTEXT_KW = re.compile(
-    r'(?:webcast|conference.?call|listen.?live|dial.?in|replay)',
+    r'(?:webcast|conference.?call|listen.?live|dial.?in|replay|earn(?:ings)?.?call)',
     re.IGNORECASE,
 )
 
@@ -190,20 +216,53 @@ def _kw_score(text: str, keywords: list[str]) -> int:
     return sum(1 for kw in keywords if kw in t)
 
 
-# ── HTML/text cleaning ────────────────────────────────────────────────────────
+# ── HTML / text utilities ───────────────────────────────────────────────────
+
+def _extract_hrefs_text(soup: BeautifulSoup) -> str:
+    """
+    Extract absolute HTTP href URLs from anchor tags before stripping HTML.
+    Returns a space-separated string of 'URL [anchor_text]' pairs, capped at 100 links.
+    This is appended to cleaned body text so webcast URL extraction can find
+    href-only URLs that get lost during HTML stripping.
+    """
+    parts: list[str] = []
+    for a_tag in soup.find_all("a", href=True):
+        href = (a_tag.get("href") or "").strip()
+        if not href.startswith("http"):
+            continue
+        # Skip SEC/EDGAR navigation links
+        if "sec.gov" in href and ("/Archives/edgar" not in href):
+            continue
+        anchor = a_tag.get_text(strip=True)[:80]
+        parts.append(f"{href} {anchor}")
+        if len(parts) >= 100:
+            break
+    return " ".join(parts)
+
 
 def _clean_html(raw: bytes | str, max_chars: int = _TEXT_CLEAN_MAX_CHARS) -> str:
-    """Strip HTML tags and collapse whitespace. Returns up to max_chars characters."""
+    """
+    Strip HTML tags and collapse whitespace. Returns up to max_chars characters.
+    Also extracts href URLs from anchor tags and appends them after the text
+    (separated by __HREFS__) so webcast URL extraction can find URLs even
+    from href= attributes that get lost during tag stripping.
+    """
     try:
         text_input = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
         soup = BeautifulSoup(text_input, "html.parser")
+        # Extract hrefs BEFORE decomposing tags
+        hrefs_text = _extract_hrefs_text(soup)
         for tag in soup(["script", "style", "head"]):
             tag.decompose()
         text = soup.get_text(separator=" ")
     except Exception:
         text = re.sub(r"<[^>]+>", " ", raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace"))
+        hrefs_text = ""
     text = re.sub(r"\s+", " ", text).strip()
-    return text[:max_chars]
+    combined = text[:max_chars]
+    if hrefs_text:
+        combined += f" __HREFS__ {hrefs_text}"
+    return combined
 
 
 def _extract_webcast_url_from_text(
@@ -211,18 +270,18 @@ def _extract_webcast_url_from_text(
     source_url: str = "",
 ) -> tuple[str | None, str | None, str]:
     """
-    Extract a webcast / listen-live URL from cleaned attachment text.
+    Extract a webcast / listen-live URL from attachment text (which includes
+    hrefs appended by _clean_html via the __HREFS__ separator).
 
-    Returns: (webcast_url, extraction_method, confidence)
+    Returns: (webcast_url, source_url, confidence)
       confidence: "high" | "medium" | "low" | "none"
     """
     if not body_text:
         return None, None, "none"
 
-    # Find all candidate https:// URLs
-    all_urls = re.findall(r'https?://[^\s\'"<>\)]+', body_text)
+    # Find all candidate https:// URLs in text + appended hrefs
+    all_urls = re.findall(r'https?://[^\s\'"<>\)&]+', body_text)
 
-    # Filter: remove blocklist + keep only webcast-like
     candidates: list[str] = []
     for url in all_urls:
         if _WEBCAST_BLOCKLIST_RE.search(url):
@@ -233,22 +292,21 @@ def _extract_webcast_url_from_text(
     if not candidates:
         return None, None, "none"
 
-    # Prefer URLs that appear within 200 chars of a webcast context keyword
+    # Prefer URLs appearing within 300 chars of a webcast context keyword
     for url in candidates:
         idx = body_text.find(url)
         if idx >= 0:
-            context = body_text[max(0, idx - 200): idx + 200]
+            context = body_text[max(0, idx - 300): idx + 300]
             if _WEBCAST_CONTEXT_KW.search(context):
-                # Clean trailing punctuation
-                url_clean = url.rstrip(".,;:)'\"")
+                url_clean = url.rstrip(".,;:)'\">")
                 return url_clean, source_url, "high"
 
-    # Fall back to first candidate regardless of context
-    url_clean = candidates[0].rstrip(".,;:)'\"")
+    # No context match — return first candidate with lower confidence
+    url_clean = candidates[0].rstrip(".,;:)'\">")
     return url_clean, source_url, "medium"
 
 
-# ── Rate limiter ──────────────────────────────────────────────────────────────
+# ── Rate limiter ─────────────────────────────────────────────────────────────
 
 _tb_tokens: float = 2.0
 _tb_last:   float = 0.0
@@ -292,17 +350,15 @@ async def _fetch_attachment_text(
     Fetch and clean attachment text for HTML/text files only.
     Returns "" for PDFs, XLS, ZIP, or on any error.
     Capped at _TEXT_FETCH_MAX_BYTES download.
+    Hrefs are extracted before stripping and appended after __HREFS__ separator.
     """
-    # Determine extension
     fname = (filename or url).lower().split("?")[0]
-    ext = ""
-    if "." in fname:
-        ext = "." + fname.rsplit(".", 1)[-1]
+    ext = ("." + fname.rsplit(".", 1)[-1]) if "." in fname else ""
 
     if ext in _SKIP_EXTENSIONS:
         return ""
     if ext and ext not in _TEXT_EXTENSIONS:
-        return ""  # unknown extension — skip
+        return ""
 
     try:
         await _acquire()
@@ -310,7 +366,6 @@ async def _fetch_attachment_text(
             if resp.status_code != 200:
                 return ""
             ct = resp.headers.get("content-type", "").lower()
-            # Skip non-text content types
             if any(x in ct for x in ("pdf", "excel", "zip", "octet-stream", "image")):
                 return ""
             raw_chunks: list[bytes] = []
@@ -327,7 +382,277 @@ async def _fetch_attachment_text(
     return _clean_html(raw)
 
 
-# ── Attachment classifier ─────────────────────────────────────────────────────
+# ── Canonical filing index parsers ───────────────────────────────────────────
+
+
+# ── Types to skip when parsing the HTML filing index ─────────────────────────
+# These are EDGAR meta-files, XBRL inline viewers, or binary assets — not
+# documents we can meaningfully classify.
+_SKIP_ATT_TYPES: frozenset[str] = frozenset({
+    "GRAPHIC", "XBRL INSTANCE DOCUMENT", "XBRL TAXONOMY EXTENSION SCHEMA DOCUMENT",
+    "XBRL TAXONOMY EXTENSION CALCULATION LINKBASE DOCUMENT",
+    "XBRL TAXONOMY EXTENSION DEFINITION LINKBASE DOCUMENT",
+    "XBRL TAXONOMY EXTENSION LABEL LINKBASE DOCUMENT",
+    "XBRL TAXONOMY EXTENSION PRESENTATION LINKBASE DOCUMENT",
+    "XBRL TAXONOMY EXTENSION REFERENCES LINKBASE DOCUMENT",
+    "XBRL SCHEMA WITH EMBEDDED LINKBASE DOCUMENTS",
+    "R-FILE",  # inline XBRL viewer fragment
+})
+
+
+def _is_meta_filename(fname: str, acc_dashes: str) -> bool:
+    """True for EDGAR archive/meta filenames that are not content documents."""
+    fl = fname.lower()
+    # Complete submission archive: 0001679788-26-000053.txt
+    if fl == f"{acc_dashes.lower()}.txt":
+        return True
+    # Filing index pages themselves
+    if fl.endswith("-index.html") or fl.endswith("-index.htm") or fl.endswith("-index-headers.html"):
+        return True
+    # XBRL zip
+    if fl.endswith("-xbrl.zip"):
+        return True
+    # Raw XBRL schema / instance / taxonomy
+    if fl.endswith(".xsd"):
+        return True
+    # Inline XBRL viewer fragments (R2.htm, R3.htm … R50.htm)
+    if re.match(r'^r\d+\.htm$', fl):
+        return True
+    return False
+
+
+def _parse_index_html(
+    html: str,
+    cik_num: str,
+    acc_clean: str,
+    dir_url: str,
+    acc_dashes: str = "",
+) -> list[dict]:
+    """
+    Parse the Document Format Files table from an EDGAR {acc_dashes}-index.html page.
+    Returns list of attachment dicts with sequence/description/filename/type/url.
+    Filters out EDGAR meta-files, XBRL schema/instance files, and inline viewer fragments.
+    """
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        items: list[dict] = []
+        for table in soup.find_all("table", class_="tableFile"):
+            rows = table.find_all("tr")
+            for row in rows[1:]:   # skip header
+                cells = row.find_all(["td", "th"])
+                if len(cells) < 4:
+                    continue
+                seq  = cells[0].get_text(strip=True)
+                desc = cells[1].get_text(strip=True)
+                a_tag = cells[2].find("a")
+                if not a_tag:
+                    continue
+                href  = (a_tag.get("href") or "").strip()
+                fname = a_tag.get_text(strip=True)
+                att_type = cells[3].get_text(strip=True)
+                size = cells[4].get_text(strip=True) if len(cells) > 4 else ""
+                if not fname:
+                    continue
+
+                # Filter meta-files and XBRL noise
+                if att_type.upper() in _SKIP_ATT_TYPES:
+                    continue
+                if _is_meta_filename(fname, acc_dashes):
+                    continue
+                # Skip raw XBRL / JSON / ZIP files by extension
+                ext = ("." + fname.rsplit(".", 1)[-1]).lower() if "." in fname else ""
+                if ext in {".xsd", ".json", ".zip", ".gz", ".xml"}:
+                    continue
+
+                # Resolve URL — strip iXBRL viewer wrapper if present
+                if "/ix?doc=" in href:
+                    href = href.split("/ix?doc=", 1)[1]
+                if href.startswith("/Archives/"):
+                    url = f"https://www.sec.gov{href}"
+                elif href.startswith("/"):
+                    url = f"https://www.sec.gov{href}"
+                else:
+                    url = f"{dir_url}{fname}"
+
+                items.append({
+                    "sequence":    seq,
+                    "description": desc,
+                    "filename":    fname,
+                    "type":        att_type,
+                    "size":        size,
+                    "url":         url,
+                })
+        return items
+    except Exception as exc:
+        print(f"[EI_MATERIALS] HTML index parse error: {exc}")
+        return []
+
+
+def _parse_sgml_headers(text: str, cik_num: str, acc_clean: str) -> list[dict]:
+    """
+    Parse <DOCUMENT> sections from SGML complete-submission header text.
+    Returns list of attachment dicts with sequence/description/filename/type/url.
+    """
+    try:
+        items: list[dict] = []
+        doc_sections = re.split(r'<DOCUMENT>', text, flags=re.IGNORECASE)[1:]
+        for section in doc_sections[:80]:
+            text_match = re.search(r'<TEXT>', section, re.IGNORECASE)
+            header = section[:text_match.start()] if text_match else section[:800]
+
+            m_type = re.search(r'<TYPE>([^\n<]+)', header, re.IGNORECASE)
+            m_seq  = re.search(r'<SEQUENCE>([^\n<]+)', header, re.IGNORECASE)
+            m_fn   = re.search(r'<FILENAME>([^\n<]+)', header, re.IGNORECASE)
+            m_desc = re.search(r'<DESCRIPTION>([^\n<]+)', header, re.IGNORECASE)
+
+            att_type = m_type.group(1).strip() if m_type else ""
+            seq      = m_seq.group(1).strip() if m_seq else ""
+            fname    = m_fn.group(1).strip() if m_fn else ""
+            desc     = m_desc.group(1).strip() if m_desc else ""
+
+            if not fname:
+                continue
+            url = f"{_ARCHIVE_URL}/{cik_num}/{acc_clean}/{fname}"
+            items.append({
+                "sequence":    seq,
+                "description": desc,
+                "filename":    fname,
+                "type":        att_type,
+                "size":        "",
+                "url":         url,
+            })
+        return items
+    except Exception as exc:
+        print(f"[EI_MATERIALS] SGML parse error: {exc}")
+        return []
+
+
+# ── Filing index fetch (canonical hierarchy) ─────────────────────────────────
+
+async def _fetch_filing_index(
+    client: httpx.AsyncClient,
+    cik_num: str,
+    accession: str,
+) -> tuple[list[dict], str, bool, str]:
+    """
+    Fetch the list of documents for one accession.
+
+    Canonical EDGAR attachment discovery hierarchy:
+      1. GET {directory}index.json           → find index HTML filename
+      2. Parse {acc_dashes}-index.html/.htm  → Document Format Files table
+      3. GET {acc_dashes}.txt (Range: 0-40KB) → parse SGML DOCUMENT headers
+      4. EFTS efts.sec.gov/LATEST/search-index (bounded last resort)
+
+    Returns: (items, discovery_method, attachments_complete, filing_index_url)
+      discovery_method: directory_index_html | sgml_headers | efts_fallback | failed
+      attachments_complete: True if a complete exhibit manifest was retrieved
+      filing_index_url: URL of the HTML index page (or directory) for UI reference
+    """
+    acc_dashes = accession        # e.g., "0001679788-26-000053"
+    acc_clean  = accession.replace("-", "")
+    dir_url    = f"{_ARCHIVE_URL}/{cik_num}/{acc_clean}/"
+    index_html_url = dir_url      # fallback — will be updated if we find the HTML index
+
+    # ── Tier 1: directory/index.json ────────────────────────────────────────
+    index_html_name: str | None = None
+    dir_filenames: set[str] = set()
+    try:
+        await _acquire()
+        r = await client.get(f"{dir_url}index.json", timeout=12.0)
+        if r.status_code == 200:
+            raw_items = r.json().get("directory", {}).get("item", [])
+            for it in raw_items:
+                name = it.get("name", "")
+                if not name:
+                    continue
+                dir_filenames.add(name)
+                if index_html_name is None:
+                    nl = name.lower()
+                    if nl.endswith("-index.html") or nl.endswith("-index.htm"):
+                        index_html_name = name
+    except Exception as exc:
+        print(f"[EI_MATERIALS] dir/index.json error {accession}: {exc}")
+
+    # ── Tier 2: HTML filing index ────────────────────────────────────────────
+    if index_html_name:
+        html_url = f"{dir_url}{index_html_name}"
+        index_html_url = html_url
+        try:
+            await _acquire()
+            r = await client.get(html_url, timeout=12.0)
+            if r.status_code == 200:
+                items = _parse_index_html(r.text, cik_num, acc_clean, dir_url, acc_dashes)
+                if items:
+                    return items, "directory_index_html", True, index_html_url
+        except Exception as exc:
+            print(f"[EI_MATERIALS] HTML index error {accession}: {exc}")
+    else:
+        # dir/index.json succeeded but couldn't identify index HTML name — try SGML directly
+        pass
+
+    # ── Tier 3: Complete-submission SGML headers ─────────────────────────────
+    txt_name = f"{acc_dashes}.txt"
+    # Only attempt SGML if we got a directory listing (confirms file exists) or as fallback
+    if txt_name in dir_filenames or not dir_filenames:
+        txt_url = f"{dir_url}{txt_name}"
+        try:
+            await _acquire()
+            range_end = _SGML_RANGE_BYTES - 1
+            r = await client.get(
+                txt_url, timeout=15.0,
+                headers={**_EDGAR_HEADERS, "Range": f"bytes=0-{range_end}"},
+            )
+            if r.status_code in (200, 206) and r.text:
+                items = _parse_sgml_headers(r.text, cik_num, acc_clean)
+                if items:
+                    return items, "sgml_headers", True, index_html_url
+        except Exception as exc:
+            print(f"[EI_MATERIALS] SGML error {accession}: {exc}")
+
+    # ── Tier 4: EFTS (bounded last resort) ───────────────────────────────────
+    try:
+        await _acquire()
+        r = await client.get(
+            _EFTS_URL,
+            params={"q": f'"{acc_dashes}"'},
+            timeout=12.0,
+        )
+        if r.status_code == 200:
+            hits = (r.json().get("hits") or {}).get("hits") or []
+            items: list[dict] = []
+            for hit in hits:
+                hit_id  = hit.get("_id") or ""
+                src     = hit.get("_source") or {}
+                if ":" not in hit_id:
+                    continue
+                filename = hit_id.split(":", 1)[1]
+                if not filename or filename.endswith("/"):
+                    continue
+                att_type = src.get("file_description") or ""
+                seq      = str(src.get("sequence") or "")
+                items.append({
+                    "filename":    filename,
+                    "type":        att_type,
+                    "size":        "",
+                    "description": att_type,
+                    "sequence":    seq,
+                    "url":         f"{_ARCHIVE_URL}/{cik_num}/{acc_clean}/{filename}",
+                })
+            if items:
+                try:
+                    items.sort(key=lambda x: int(x["sequence"]) if x["sequence"].isdigit() else 99)
+                except Exception:
+                    pass
+                return items, "efts_fallback", True, index_html_url
+        elif r.status_code == 403:
+            print(f"[EI_MATERIALS] EFTS 403 for {accession} — all tiers failed")
+    except Exception as exc:
+        print(f"[EI_MATERIALS] EFTS error {accession}: {exc}")
+
+    return [], "failed", False, index_html_url
+
+
+# ── Attachment classifier ────────────────────────────────────────────────────
 
 def _classify_attachment(
     filing_form: str,
@@ -336,18 +661,20 @@ def _classify_attachment(
     att_desc: str,
     filename: str,
     doc_title: str = "",
-    body_text: str = "",     # cleaned attachment text (empty = metadata-only)
+    body_text: str = "",       # cleaned attachment text (includes hrefs section)
+    is_fallback_mode: bool = False,  # True when this is the only attachment (primary doc)
 ) -> tuple[str, str, str]:
     """
     Deterministically classify one attachment.
 
     Returns (classification, confidence, method).
     Classification candidates:
-      earnings_release, investor_presentation, supplemental_tables,
+      primary_filing, earnings_release, investor_presentation, supplemental_tables,
       transcript, prepared_remarks, corporate_guidance,
       webcast_or_replay, financial_report, insider_filing,
-      ownership_filing, proxy, offering_document, transaction_material,
-      other
+      ownership_filing, proxy, offering_document, transaction_material, other
+
+    primary_filing: the 8-K/6-K primary body when exhibit identity cannot be confirmed.
     """
     form   = (filing_form or "").upper().strip()
     items  = items_str or ""
@@ -355,11 +682,11 @@ def _classify_attachment(
     desc   = (att_desc or "").lower().strip()
     fname  = (filename or "").lower().strip()
     title  = (doc_title or "").lower().strip()
-    # Combine metadata + body text for keyword scoring
+    # Combine metadata + first 4000 chars of body text for keyword scoring
     combined_meta = f"{desc} {title} {fname}"
     combined_full = f"{combined_meta} {body_text.lower()[:4000]}"
 
-    # ── Form-level overrides ──────────────────────────────────────────────────
+    # ── Form-level overrides (always high-confidence) ─────────────────────
     if form in ("4", "4/A"):
         return "insider_filing", "high", "form_type_4"
     if form in ("SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A"):
@@ -379,39 +706,50 @@ def _classify_attachment(
 
         # Primary body doc: atype matches the parent form type (e.g. atype="8-K"
         # for the main 8-K HTML body).  Exhibit docs have atype like "EX-99.1".
-        # We skip investor_presentation keyword check for primary body docs because
-        # XBRL/iXBRL content frequently embeds "slide", "deck" etc. in XBRL metadata,
-        # causing false investor_presentation classifications.
-        is_primary_body = (atype.upper() in (form.upper(), form.upper().rstrip("/A")))
+        # We avoid investor_presentation keyword check for primary body docs because
+        # XBRL/iXBRL content embeds "slide", "deck" etc. in XBRL metadata.
+        is_primary_body = (atype.upper() in (form.upper(), form.upper().rstrip("/A"), "8-K", "6-K"))
+
+        # Transcript check first (strong keywords, not form-specific)
+        if _kw_score(combined_full, _TRANSCRIPT_KW) >= 2:
+            conf = "high" if body_text else "medium"
+            meth = "transcript_body_kw" if body_text else "transcript_meta_kw"
+            return "transcript", conf, meth
+
+        if _kw_score(combined_full, _PREPARED_REMARKS_KW) >= 1:
+            return "prepared_remarks", "medium", "prepared_remarks_kw"
 
         if has_202:
-            # Body-text checks first (highest signal)
-            if _kw_score(combined_full, _TRANSCRIPT_KW) >= 2:
-                conf = "high" if body_text else "medium"
-                return "transcript", conf, "item202_transcript_body" if body_text else "item202_transcript_meta"
-            if _kw_score(combined_full, _PREPARED_REMARKS_KW) >= 1:
-                return "prepared_remarks", "medium", "item202_remarks_kw"
             if _kw_score(combined_full, _SUPPLEMENTAL_KW) >= 1:
                 return "supplemental_tables", "medium", "item202_supplemental_kw"
-            # Only classify as investor_presentation for exhibits (EX-*), not the
-            # primary 8-K body — avoids false positives from XBRL metadata content.
+
+            # Investor presentation — exhibits only (not the primary body)
             if not is_primary_body and _kw_score(combined_full, _INVESTOR_PRESENTATION_KW) >= 1:
                 return "investor_presentation", "medium", "item202_presentation_kw"
+
             if _kw_score(combined_full, _EARNINGS_RELEASE_KW) >= 1:
                 conf = "high" if body_text else "medium"
                 return "earnings_release", conf, "item202_earnings_kw"
-            # item 2.02 with no confirming keyword → still likely earnings release
-            return "earnings_release", "low", "item202_no_confirming_kw"
+
+            # item 2.02 but no confirming text:
+            # - For an exhibit (not primary body): earnings_release with low confidence
+            # - For the primary body (XBRL cover form or only-available attachment):
+            #   classify as primary_filing per spec — item 2.02 establishes earnings
+            #   context, not the specific attachment role.
+            if not is_primary_body:
+                return "earnings_release", "low", "item202_exhibit_no_kw"
+            else:
+                return "primary_filing", "low", "item202_primary_body"
 
         # Non-2.02 8-K
-        if _kw_score(combined_full, _TRANSCRIPT_KW) >= 2:
-            return "transcript", "medium", "8k_non202_transcript_kw"
         if not is_primary_body and _kw_score(combined_full, _INVESTOR_PRESENTATION_KW) >= 1:
             return "investor_presentation", "medium", "8k_non202_presentation_kw"
         if _kw_score(combined_full, _GUIDANCE_KW) >= 2:
             return "corporate_guidance", "medium", "8k_non202_guidance_kw"
         if _kw_score(combined_full, _EARNINGS_RELEASE_KW) >= 1:
             return "earnings_release", "low", "8k_non202_earnings_kw"
+        if is_primary_body:
+            return "primary_filing", "low", "8k_primary_body"
         return "other", "low", "8k_non202_no_match"
 
     # ── 10-K / 10-Q / 20-F ───────────────────────────────────────────────────
@@ -494,72 +832,6 @@ async def _resolve_cik(symbol: str, client: httpx.AsyncClient) -> str | None:
     return _cik_cache.get(sym)
 
 
-# ── Filing index fetch ────────────────────────────────────────────────────────
-
-async def _fetch_filing_index(
-    client: httpx.AsyncClient,
-    cik_num: str,
-    accession: str,
-) -> list[dict]:
-    """
-    Fetch the list of documents for one accession via the EFTS search API.
-
-    EDGAR's `-index.json` does not exist as a stable endpoint (returns 404).
-    The EFTS full-text search at efts.sec.gov is the authoritative source:
-      GET https://efts.sec.gov/LATEST/search-index?q="{accession_with_dashes}"
-
-    Response hit structure:
-      _id  = "{accession}:{filename}"
-      _source.file_description = "EX-99.1" | "8-K" | etc.
-      _source.sequence         = document sequence number
-    """
-    acc_clean = accession.replace("-", "")
-    try:
-        await _acquire()
-        resp = await client.get(
-            _EFTS_URL,
-            params={"q": f'"{accession}"'},
-            timeout=12.0,
-        )
-        if resp.status_code != 200:
-            return []
-        data = resp.json()
-    except Exception as exc:
-        print(f"[EI_MATERIALS] EFTS fetch error {accession}: {exc}")
-        return []
-
-    hits = (data.get("hits") or {}).get("hits") or []
-    items = []
-    for hit in hits:
-        hit_id  = hit.get("_id") or ""          # "{accession}:{filename}"
-        src     = hit.get("_source") or {}
-        # Extract filename from id
-        if ":" in hit_id:
-            filename = hit_id.split(":", 1)[1]
-        else:
-            continue
-        if not filename or filename.endswith("/"):
-            continue
-        att_type = src.get("file_description") or ""   # "EX-99.1", "8-K", etc.
-        seq      = str(src.get("sequence") or "")
-        items.append({
-            "filename":    filename,
-            "type":        att_type,
-            "size":        "",
-            "description": att_type,
-            "sequence":    seq,
-            "url":         f"{_ARCHIVE_URL}/{cik_num}/{acc_clean}/{filename}",
-        })
-
-    # Sort by sequence (primary document first)
-    try:
-        items.sort(key=lambda x: int(x["sequence"]) if x["sequence"].isdigit() else 99)
-    except Exception:
-        pass
-
-    return items
-
-
 # ── Attachment builder (async — fetches text for eligible files) ──────────────
 
 async def _build_attachment_async(
@@ -571,13 +843,13 @@ async def _build_attachment_async(
     accession: str,
     acc_clean: str,
     fetch_text: bool = True,
+    is_fallback_mode: bool = False,
 ) -> dict:
     filename = raw_att.get("filename") or ""
     att_type = raw_att.get("type") or ""
     att_desc = raw_att.get("description") or ""
     url      = raw_att.get("url") or f"{_ARCHIVE_URL}/{cik_num}/{acc_clean}/{filename}"
 
-    # Fetch body text for HTML/text eligible files
     body_text = ""
     text_fetched = False
     if fetch_text:
@@ -589,24 +861,24 @@ async def _build_attachment_async(
     cls, conf, method = _classify_attachment(
         filing_form, items_str, att_type, att_desc, filename,
         body_text=body_text,
+        is_fallback_mode=is_fallback_mode,
     )
 
-    # Lower confidence for non-text files where we couldn't inspect content
+    # Cap confidence for non-text files we could not inspect
     ext = _ext_of(filename)
     if ext in _SKIP_EXTENSIONS and conf == "high":
         conf = "medium"
 
     return {
-        "filename":                filename,
-        "document_type":           att_type,
-        "description":             att_desc,
-        "document_url":            url,
-        "classification":          cls,
+        "filename":                  filename,
+        "document_type":             att_type,
+        "description":               att_desc,
+        "document_url":              url,
+        "classification":            cls,
         "classification_confidence": conf,
-        "classification_method":   method,
-        "text_inspected":          text_fetched,
-        # Internal: keep body_text for webcast extraction; stripped from final response
-        "_body_text":              body_text,
+        "classification_method":     method,
+        "text_inspected":            text_fetched,
+        "_body_text":                body_text,   # stripped before persisting
     }
 
 
@@ -615,6 +887,8 @@ async def _build_attachment_async(
 def _assemble_earnings_packet(
     filings_with_atts: list[dict],
     today_str: str,
+    discovery_method: str = "",
+    attachments_complete: bool = True,
 ) -> dict | None:
     earnings_8k: dict | None = None
     for f in filings_with_atts:
@@ -654,10 +928,19 @@ def _assemble_earnings_packet(
     tr_att   = _first_by_cls("transcript")
     wc_att   = _first_by_cls("webcast_or_replay")
 
-    def _att_doc(a: dict | None) -> dict | None:
+    # When discovery is incomplete (primary_document_fallback), treat primary_filing
+    # attachment as a best-available fallback for the earnings release slot.
+    er_is_fallback = False
+    if er_att is None and not attachments_complete:
+        candidate = _first_by_cls("primary_filing")
+        if candidate:
+            er_att = candidate
+            er_is_fallback = True
+
+    def _att_doc(a: dict | None, is_fallback: bool = False) -> dict | None:
         if not a:
             return None
-        return {
+        d = {
             "form":              earnings_8k.get("form"),
             "accession_number":  earnings_8k.get("accession_number"),
             "filed_date":        earnings_8k.get("filed_date"),
@@ -672,14 +955,16 @@ def _assemble_earnings_packet(
             "text_inspected":    a.get("text_inspected", False),
             "source":            "sec_edgar",
         }
+        if is_fallback:
+            d["_discovery_incomplete"] = True
+        return d
 
     # ── Webcast URL extraction ─────────────────────────────────────────────────
-    # Scan: earnings release body, then presentation body, then webcast attachment
     webcast_url: str | None = None
     webcast_source_document: str | None = None
     webcast_extraction_confidence: str = "none"
 
-    for candidate_att in [er_att, pres_att, wc_att]:
+    for candidate_att in [er_att, pres_att, wc_att, rem_att]:
         if not candidate_att:
             continue
         txt = candidate_att.get("_body_text") or ""
@@ -693,15 +978,12 @@ def _assemble_earnings_packet(
                 webcast_extraction_confidence = wc_conf
                 break
         elif candidate_att.get("classification") == "webcast_or_replay":
-            # No text inspected — use the attachment URL directly as the webcast reference
             webcast_url = candidate_att.get("document_url")
             webcast_source_document = candidate_att.get("document_url")
             webcast_extraction_confidence = "low"
             break
 
     # ── Transcript state ───────────────────────────────────────────────────────
-    # not_yet_available → filing < 5 calendar days ago (still in processing window)
-    # unavailable      → filing >= 5 calendar days ago, no transcript found
     filed_str = earnings_8k.get("filed_date") or ""
     days_since_filing: int | None = None
     if filed_str and today_str:
@@ -714,11 +996,10 @@ def _assemble_earnings_packet(
     if tr_att:
         tr_body = tr_att.get("_body_text") or ""
         if tr_body and _kw_score(tr_body, _TRANSCRIPT_KW) >= 2:
-            transcript_status = "available_sec_exhibit"
+            transcript_status  = "available_sec_exhibit"
             transcript_source_type = "sec_exhibit"
         else:
-            # Attachment classified as transcript by metadata but not confirmed by text
-            transcript_status = "available_sec_exhibit"
+            transcript_status  = "available_sec_exhibit"
             transcript_source_type = "sec_exhibit_unconfirmed"
         transcript = {
             "status":      transcript_status,
@@ -726,7 +1007,6 @@ def _assemble_earnings_packet(
             "source_url":  tr_att.get("document_url"),
         }
     else:
-        # Determine not_yet_available vs unavailable by date
         if days_since_filing is not None and days_since_filing < 5:
             ts = "not_yet_available"
         elif days_since_filing is None:
@@ -759,8 +1039,10 @@ def _assemble_earnings_packet(
         "earnings_date":       filed_str,
         "detected_at":         datetime.now(timezone.utc).isoformat(),
         "days_since_filing":   days_since_filing,
+        "attachments_complete": attachments_complete,
+        "discovery_method":    discovery_method,
         "primary_filing":      primary_filing,
-        "earnings_release":    _att_doc(er_att),
+        "earnings_release":    _att_doc(er_att, is_fallback=er_is_fallback),
         "investor_presentation": _att_doc(pres_att),
         "supplemental_tables": [_att_doc(a) for a in sup_atts if a],
         "guidance_documents":  [_att_doc(a) for a in guid_atts if a],
@@ -791,9 +1073,11 @@ async def fetch_and_cache_materials(
     if not sym or ":" in sym:
         return None
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso   = datetime.now(timezone.utc).isoformat()
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     errors: dict = {}
+    # Aggregate discovery method counts across all fetched filings
+    method_counts: dict[str, int] = {}
 
     async with httpx.AsyncClient(
         headers=_EDGAR_HEADERS, timeout=20.0, follow_redirects=True
@@ -806,9 +1090,11 @@ async def fetch_and_cache_materials(
                 "latest_earnings_packet": None,
                 "recent_filings": [],
                 "source_status": {
-                    "fetched_at": now_iso,
-                    "coverage": False,
-                    "errors": {"cik": "not_found"},
+                    "fetched_at":        now_iso,
+                    "coverage":          False,
+                    "discovery_version": _DISCOVERY_VERSION,
+                    "classifier_version": _CLASSIFIER_VERSION,
+                    "errors":            {"cik": "not_found"},
                 },
             }
             set_materials(sym, result)
@@ -828,7 +1114,11 @@ async def fetch_and_cache_materials(
                 "latest_earnings_packet": None,
                 "recent_filings": [],
                 "source_status": {
-                    "fetched_at": now_iso, "coverage": False, "errors": errors,
+                    "fetched_at":        now_iso,
+                    "coverage":          False,
+                    "discovery_version": _DISCOVERY_VERSION,
+                    "classifier_version": _CLASSIFIER_VERSION,
+                    "errors":            errors,
                 },
             }
             set_materials(sym, result)
@@ -858,18 +1148,18 @@ async def fetch_and_cache_materials(
 
             if filed_date < cutoff:
                 continue
-
-            # Match exact EDGAR form strings plus 424B* prefix
             if form not in _MONITORED_FORMS and not form.startswith("424B"):
                 continue
 
             acc_clean = accession.replace("-", "")
-            pri_url   = (
-                f"{_ARCHIVE_URL}/{cik_num}/{acc_clean}/{pri_doc}"
+            cik_num_path = cik_num   # integer-form CIK, no leading zeros
+            pri_url = (
+                f"{_ARCHIVE_URL}/{cik_num_path}/{acc_clean}/{pri_doc}"
                 if acc_clean and pri_doc else ""
             )
+            # Use the directory URL as placeholder; updated after index fetch below
             idx_url = (
-                f"{_ARCHIVE_URL}/{cik_num}/{acc_clean}/{acc_clean}-index.htm"
+                f"{_ARCHIVE_URL}/{cik_num_path}/{acc_clean}/"
                 if acc_clean else ""
             )
 
@@ -890,6 +1180,8 @@ async def fetch_and_cache_materials(
                 "primary_document_url": pri_url,
                 "filing_index_url": idx_url,
                 "attachments":      [],
+                "_primary_doc_url": pri_url,
+                "_primary_doc_name": pri_doc,
             })
 
             if len(raw_filings) >= _RECENT_FILINGS_LIMIT:
@@ -918,30 +1210,35 @@ async def fetch_and_cache_materials(
                 if not f["accession_number"]:
                     continue
                 try:
-                    raw_atts = await _fetch_filing_index(
+                    raw_atts, disc_method, att_complete, idx_url = await _fetch_filing_index(
                         client, cik_num, f["accession_number"]
                     )
+                    # Update filing_index_url with the discovered HTML index URL
+                    if idx_url:
+                        f["filing_index_url"] = idx_url
+
+                    method_counts[disc_method] = method_counts.get(disc_method, 0) + 1
+
                     acc_clean_f = f["accession_number"].replace("-", "")
 
-                    # Fallback: EFTS returned empty (403 / rate-limit / transient).
-                    # Synthesize a single attachment from the primary document URL
-                    # that is already known from the submissions JSON.  The primary
-                    # body gets atype == form type, so the is_primary_body guard in
-                    # _classify_attachment routes it correctly (no false investor_pres).
-                    if not raw_atts and f.get("primary_document_url"):
-                        pri_url  = f["primary_document_url"]
-                        pri_name = (pri_url or "").rsplit("/", 1)[-1] or ""
+                    if not raw_atts and f.get("_primary_doc_url"):
+                        # Primary-document-only fallback
+                        disc_method  = "primary_document_fallback"
+                        att_complete = False
+                        method_counts[disc_method] = method_counts.get(disc_method, 0) + 1
+                        pri_name = (f["_primary_doc_url"] or "").rsplit("/", 1)[-1] or ""
                         raw_atts = [{
                             "filename":    pri_name,
-                            "type":        f["form"],   # e.g. "8-K" — primary body signal
+                            "type":        f["form"],   # primary body signal
                             "size":        "",
                             "description": f.get("title") or f["form"],
                             "sequence":    "1",
-                            "url":         pri_url,
+                            "url":         f["_primary_doc_url"],
                         }]
 
-                    # Build attachments asynchronously (fetches text where eligible)
-                    # Only fetch text for earnings-8K and 10-K/Q (not every filing)
+                    f["_discovery_method"]      = disc_method
+                    f["_attachments_complete"]  = att_complete
+
                     should_fetch_text = f["form"] in (
                         "8-K", "8-K/A", "6-K", "10-K", "10-K/A", "10-Q", "10-Q/A"
                     )
@@ -950,19 +1247,32 @@ async def fetch_and_cache_materials(
                             client, f["form"], f["items"], a,
                             cik_num, f["accession_number"], acc_clean_f,
                             fetch_text=should_fetch_text,
+                            is_fallback_mode=not att_complete,
                         )
                         for a in raw_atts
                     ]
                     built = await asyncio.gather(*tasks, return_exceptions=True)
-                    f["attachments"] = [
-                        a for a in built if isinstance(a, dict)
-                    ]
+                    f["attachments"] = [a for a in built if isinstance(a, dict)]
+
                 except Exception as exc:
                     errors[f"index_{f['accession_number']}"] = str(exc)[:120]
 
         # 5. Assemble earnings packet
+        # Find the first earnings 8-K's discovery metadata for the packet
+        packet_disc_method = ""
+        packet_att_complete = True
+        for f in raw_filings:
+            if _is_earnings_8k(f.get("form", ""), f.get("items", "")):
+                packet_disc_method   = f.get("_discovery_method", "")
+                packet_att_complete  = f.get("_attachments_complete", True)
+                break
+
         try:
-            latest_packet = _assemble_earnings_packet(raw_filings, today_str)
+            latest_packet = _assemble_earnings_packet(
+                raw_filings, today_str,
+                discovery_method=packet_disc_method,
+                attachments_complete=packet_att_complete,
+            )
         except Exception as exc:
             errors["packet_assembly"] = str(exc)[:120]
             latest_packet = None
@@ -972,7 +1282,7 @@ async def fetch_and_cache_materials(
         for f in raw_filings:
             clean_atts = []
             for a in f["attachments"]:
-                a2 = {k: v for k, v in a.items() if k != "_body_text"}
+                a2 = {k: v for k, v in a.items() if not k.startswith("_")}
                 clean_atts.append(a2)
             recent_filings_out.append({
                 "form":                 f["form"],
@@ -984,6 +1294,8 @@ async def fetch_and_cache_materials(
                 "items":                f["items"] or None,
                 "filing_index_url":     f["filing_index_url"],
                 "primary_document_url": f["primary_document_url"],
+                "discovery_method":     f.get("_discovery_method", ""),
+                "attachments_complete": f.get("_attachments_complete", False),
                 "attachments":          clean_atts,
             })
 
@@ -1002,14 +1314,17 @@ async def fetch_and_cache_materials(
             "latest_earnings_packet": latest_packet,
             "recent_filings":         recent_filings_out,
             "source_status": {
-                "fetched_at":         now_iso,
-                "coverage":           bool(raw_filings),
-                "cik":                cik,
-                "filing_count":       len(recent_filings_out),
-                "earnings_8k_count":  sum(1 for f in recent_filings_out if f.get("category") == "earnings"),
-                "classification_counts": cls_counts,
+                "fetched_at":          now_iso,
+                "coverage":            bool(raw_filings),
+                "cik":                 cik,
+                "filing_count":        len(recent_filings_out),
+                "earnings_8k_count":   sum(1 for f in recent_filings_out if f.get("category") == "earnings"),
+                "classification_counts":   cls_counts,
                 "transcript_state_counts": transcript_states,
-                "errors":             errors,
+                "discovery_method_counts": method_counts,
+                "discovery_version":       _DISCOVERY_VERSION,
+                "classifier_version":      _CLASSIFIER_VERSION,
+                "errors":                  errors,
             },
         }
 
@@ -1026,14 +1341,15 @@ async def backfill_materials(
 ) -> dict:
     from data.ei_materials_cache import needs_refresh
 
-    refreshed = 0
-    skipped   = 0
-    failed    = 0
-    no_cik    = 0
-    no_packet = 0
+    refreshed   = 0
+    skipped     = 0
+    failed      = 0
+    no_cik      = 0
+    no_packet   = 0
     failed_syms: list[str] = []
     cls_counts: dict[str, int] = {}
     ts_counts:  dict[str, int] = {}
+    method_counts: dict[str, int] = {}
 
     for sym in symbols:
         if progress_state is not None:
@@ -1041,6 +1357,8 @@ async def backfill_materials(
 
         if not force and not needs_refresh(sym):
             skipped += 1
+            if progress_state is not None:
+                progress_state["skipped"] = progress_state.get("skipped", 0) + 1
             continue
 
         try:
@@ -1048,6 +1366,8 @@ async def backfill_materials(
             if result is None:
                 failed += 1
                 failed_syms.append(sym)
+                if progress_state is not None:
+                    progress_state["failed"] = progress_state.get("failed", 0) + 1
                 continue
 
             ss = result.get("source_status") or {}
@@ -1061,14 +1381,21 @@ async def backfill_materials(
                 cls_counts[c] = cls_counts.get(c, 0) + n
             for t, n in (ss.get("transcript_state_counts") or {}).items():
                 ts_counts[t] = ts_counts.get(t, 0) + n
+            for m, n in (ss.get("discovery_method_counts") or {}).items():
+                method_counts[m] = method_counts.get(m, 0) + n
 
             refreshed += 1
+            if progress_state is not None:
+                progress_state["refreshed"] = progress_state.get("refreshed", 0) + 1
+
         except Exception as exc:
             failed += 1
             failed_syms.append(sym)
+            if progress_state is not None:
+                progress_state["failed"] = progress_state.get("failed", 0) + 1
             print(f"[EI_MATERIALS] backfill error {sym}: {exc}")
 
-        await asyncio.sleep(0.6)   # 1.67 req/s — under SEC 10 req/s cap
+        await asyncio.sleep(0.6)   # ~1.67 req/s — SEC-compliant
 
     return {
         "refreshed":               refreshed,
@@ -1080,4 +1407,5 @@ async def backfill_materials(
         "total":                   len(symbols),
         "classification_counts":   cls_counts,
         "transcript_state_counts": ts_counts,
+        "discovery_method_counts": method_counts,
     }

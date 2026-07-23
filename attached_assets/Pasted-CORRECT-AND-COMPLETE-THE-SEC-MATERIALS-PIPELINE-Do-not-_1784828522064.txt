@@ -1,0 +1,425 @@
+CORRECT AND COMPLETE THE SEC MATERIALS PIPELINE
+
+Do not modify the frontend.
+Do not redesign Earnings Intelligence.
+Do not alter the existing pre/post field names unless validation proves they are wrong.
+Do not create another cache or provider system.
+Do not push to Git.
+
+The current implementation incorrectly switched attachment discovery to EFTS after trying a nonexistent URL shaped like:
+
+{accession}-index.json
+
+That is not the canonical EDGAR directory JSON path.
+
+OBJECTIVE
+
+Replace EFTS as the primary attachment-enumeration dependency with the canonical SEC Archives filing-directory resources, correct the degraded-mode classifications, refresh all stale records, and verify the deployed ticker-detail contract.
+
+PART 1 — USE THE CORRECT EDGAR DIRECTORY PATH
+
+For a filing with:
+
+- CIK
+- accession number such as 0001679788-26-000012
+
+Construct:
+
+cik_path =
+integer-form CIK without leading zeros where required by the current SEC archive convention
+
+accession_compact =
+accession number with dashes removed
+
+filing_directory =
+https://www.sec.gov/Archives/edgar/data/{cik_path}/{accession_compact}/
+
+directory_json =
+{filing_directory}index.json
+
+The SEC documents index.json as a structured representation of each EDGAR directory.
+
+Use the project’s existing SEC-compliant User-Agent and rate limiter.
+
+Do not use EFTS as the normal attachment-manifest path.
+
+PART 2 — CANONICAL ATTACHMENT METADATA
+
+Use canonical filing resources in this order:
+
+1. Filing index page / Document Format Files table
+2. Complete-submission text file and its SGML document sections
+3. Filing-directory index.json as a filename/directory fallback
+4. EFTS only as a bounded last-resort supplement, never as the required primary path
+
+The filing index or complete-submission document metadata should provide, where available:
+
+- sequence
+- description
+- filename
+- document type
+- exhibit type
+- size
+- document URL
+
+For complete-submission SGML, parse document sections such as:
+
+- TYPE
+- SEQUENCE
+- FILENAME
+- DESCRIPTION
+
+Do not scrape the visual EDGAR page when a structured or semi-structured canonical resource already supplies the metadata.
+
+PART 3 — INDEX PAGE DISCOVERY
+
+Do not hardcode only one extension.
+
+Filing directories may expose index documents such as:
+
+- {accession}-index.htm
+- {accession}-index.html
+
+Use the directory listing/index data or existing filing URL metadata to identify the actual filename safely.
+
+Construct every attachment URL relative to the canonical filing directory.
+
+PART 4 — CORRECT DEGRADED-MODE CLASSIFICATION
+
+When complete exhibit discovery fails and only the primary document is available:
+
+Return:
+
+- attachments_complete: false
+- discovery_method: primary_document_fallback
+- classification_confidence reduced appropriately
+
+The primary 8-K body must normally be classified as:
+
+- primary_filing
+- current_report
+
+It must not automatically be classified as:
+
+- earnings_release
+- investor_presentation
+- transcript
+- supplemental_tables
+- corporate_guidance
+
+Only classify the primary document as one of those when its actual inspected text clearly establishes that identity.
+
+A filing containing Item 2.02 means it is earnings-related. It does not prove the primary document itself is the earnings-release exhibit.
+
+PART 5 — KEEP EFTS ONLY AS OPTIONAL FALLBACK
+
+EFTS may remain as an optional last-resort supplement when canonical directory resources fail.
+
+Requirements:
+
+- bounded retry
+- no rapid repeated searching
+- failure does not erase last-known-good attachments
+- a 403 does not turn incomplete metadata into a high-confidence classification
+- record discovery_method = efts_fallback when used
+- record attachments_complete truthfully
+
+The materials pipeline must continue functioning when EFTS is unavailable.
+
+PART 6 — DOCUMENT TEXT CLASSIFICATION
+
+For HTML/text attachments discovered through the canonical filing index:
+
+- fetch actual attachment content
+- parse text with the existing BeautifulSoup support
+- preserve hyperlinks separately before calling get_text()
+- cap download size and extracted-text length
+- skip images and oversized binary files
+- do not use OCR
+
+Classify deterministically using:
+
+1. filing form
+2. filing item codes
+3. sequence
+4. description
+5. document type
+6. filename
+7. headings
+8. extracted text
+9. verified links
+
+Supported classifications:
+
+- primary_filing
+- earnings_release
+- investor_presentation
+- supplemental_tables
+- corporate_guidance
+- prepared_remarks
+- transcript
+- webcast_or_replay
+- financial_report
+- insider_filing
+- ownership_filing
+- offering_document
+- proxy
+- transaction_material
+- other
+
+Do not classify solely from an exhibit number.
+
+PART 7 — PRESENTATION CLASSIFICATION
+
+Keep appropriate presentation terms such as:
+
+- investor presentation
+- earnings presentation
+- earnings deck
+- quarterly presentation
+- slide presentation
+- investor deck
+
+But only use these text keywords for genuine exhibits or documents whose content was inspected.
+
+Do not allow iXBRL metadata in the primary 8-K body to create a false investor-presentation classification.
+
+PART 8 — WEBCAST EXTRACTION
+
+Extract hyperlinks from the original parsed HTML before stripping tags.
+
+Inspect relevant first-party documents:
+
+- earnings release
+- investor presentation
+- prepared remarks
+- earnings-related primary filing
+
+Filter candidate links using anchor text and surrounding context such as:
+
+- webcast
+- earnings call
+- conference call
+- listen live
+- replay
+- investor relations
+
+Exclude:
+
+- SEC navigation
+- XBRL resources
+- tracking pixels
+- social links
+- advertising
+- unrelated company-homepage links
+- commercial transcript sites
+
+Return:
+
+- webcast_url
+- webcast_source_document
+- webcast_extraction_confidence
+
+Do not invent a webcast URL when none is verified.
+
+PART 9 — TRANSCRIPT SEMANTICS
+
+Preserve these states:
+
+- available_official
+- available_sec_exhibit
+- available_licensed
+- processing
+- not_yet_available
+- unavailable
+- unknown
+
+A document must contain genuine transcript structure or explicit transcript identification before it is classified as a transcript.
+
+Prepared remarks are not automatically a transcript.
+
+Use not_yet_available only for a recent event still within the documented availability window.
+
+PART 10 — INVALIDATE STALE CACHE ENTRIES
+
+The existing cache contains approximately 186 records created before attachment discovery was corrected.
+
+Add or use:
+
+- materials schema_version
+- discovery_version
+- classifier_version
+
+Entries created with the broken attachment implementation must be considered stale regardless of normal TTL.
+
+Do not manually clear the entire unrelated EDGAR cache.
+
+Refresh only stale Earnings Materials entries.
+
+Preserve valid last-known-good data during temporary SEC failures.
+
+PART 11 — COMPLETE THE BACKFILL
+
+Use the existing protected endpoint:
+
+POST /api/watchlist/admin/ei-materials/backfill
+
+Confirm its exact authentication requirements and request shape.
+
+Run a resumable controlled backfill for the eligible universe.
+
+A client-side curl timeout does not prove server-side completion.
+
+Use:
+
+- job status
+- progress polling
+- persisted or in-memory task state consistent with existing admin jobs
+- bounded concurrency
+- SEC-compliant rate limits
+- resumable skips for already-current discovery versions
+
+Report final totals:
+
+- eligible
+- refreshed
+- current/skipped
+- partial
+- unavailable
+- failed
+- canonical index success
+- complete-submission fallback
+- directory-index fallback
+- EFTS fallback
+- primary-document-only fallback
+- attachment classifications by type
+- transcript states
+- webcast URLs discovered
+
+Do not claim completion while stale entries remain unprocessed without documented permanent reasons.
+
+PART 12 — SAMPLE VALIDATION
+
+Validate at least:
+
+- COIN
+- AAPL
+- CLF
+- one issuer with an investor presentation
+- one earnings 8-K without a presentation
+- one unrelated 8-K
+- one Form 4
+- one 13D or 13G
+- one DEF 14A
+- one issuer without a transcript
+
+For each sample report:
+
+- filing directory
+- discovery method
+- filing form and items
+- attachment filenames
+- attachment types
+- attachment descriptions
+- content-inspected status
+- classifications
+- confidence
+- selected earnings release
+- selected presentation
+- selected guidance/tables
+- selected related financial report
+- webcast URL
+- transcript state
+- whether attachments_complete is true
+
+Manually open the selected document URLs and verify they resolve.
+
+PART 13 — PRE/POST VALIDATION
+
+Do not rewrite the pre/post feature unless necessary.
+
+Verify the existing fields manually for:
+
+- one AMC report
+- one BMO report
+- one inferred-low event
+- one holiday-adjacent event
+- one insufficient-history event
+
+Report:
+
+- timing
+- timing source
+- timing confidence
+- sessions selected
+- pre_earnings_1d_pct
+- post_earnings_1d_pct
+- existing reaction_1d_pct
+- whether post and reaction_1d agree where expected
+
+Confirm the summary exposes timing-confidence counts and clearly states whether low-confidence observations are included.
+
+PART 14 — TICKER-DETAIL VERIFICATION
+
+Verify:
+
+GET /api/watchlist/ticker-detail/{symbol}
+
+for:
+
+- COIN
+- AAPL
+- CLF
+- one partial-materials symbol
+- UFO
+
+Requirements:
+
+- materials are under earnings_intelligence.materials
+- UFO remains null/ineligible
+- popup requests make zero FMP calls
+- popup requests make zero Tradier calls
+- popup requests make zero EDGAR calls
+- existing earnings, ratings, and reaction data remain intact
+- malformed or missing materials never break the full response
+
+PART 15 — DEPLOYMENT
+
+After sample validation and the completed stale-entry backfill:
+
+- restart the backend
+- verify materials persist across restart
+- deploy using the existing safe Replit workflow
+- verify live health
+- verify live COIN and CLF materials
+- confirm document links work from the deployed response
+- confirm zero request-time provider calls
+
+FINAL REPORT
+
+Return:
+
+1. Files changed
+2. Why the original attachment URL was wrong
+3. Canonical SEC discovery hierarchy implemented
+4. Cache/discovery versions
+5. Stale-entry backfill totals
+6. Attachment classification totals
+7. Sample validation
+8. Webcast extraction results
+9. Transcript-state results
+10. Pre/post validation
+11. Exact deployed JSON contract
+12. TypeScript-ready interfaces
+13. Live endpoint verification
+14. Remaining provider/document gaps
+
+End with exactly:
+
+FRONTEND MATERIALS READY
+
+or
+
+NOT FRONTEND MATERIALS READY
+
+Do not return FRONTEND MATERIALS READY until the stale universe is processed and the deployed endpoint has verified canonical attachment data.
