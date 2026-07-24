@@ -1,0 +1,675 @@
+BACKEND FEATURE — LIVE EARNINGS MONITOR AND ALERT EVENT ENGINE
+
+Implement the first production-ready version of Caelyn’s Live Earnings Monitor.
+
+BACKEND ONLY.
+
+Do not modify the frontend.
+Do not redesign the existing Earnings Intelligence feature.
+Do not replace the existing ticker-detail endpoint.
+Do not add live provider calls to ticker-detail request handling.
+Do not create another FMP client or SEC materials system.
+Do not use an LLM.
+Do not push to Git.
+
+CURRENT PRODUCTION ARCHITECTURE
+
+Existing canonical paths include:
+
+- backend/data/fmp_provider.py
+- backend/services/watchlist_fundamentals_refresh.py
+- backend/services/ei_materials_service.py
+- backend/data/ei_materials_cache.py
+- backend/services/watchlist_router.py
+- backend/services/canonical_history_service.py
+- backend/main.py
+- Neon watchlist/user/calendar storage
+- GET /api/watchlist/ticker-detail/{symbol}
+
+The existing Earnings Intelligence implementation already provides:
+
+- historical EPS and revenue results
+- earnings reactions
+- ratings and targets
+- pre/post earnings moves
+- SEC earnings materials
+- cached popup responses
+
+The new feature must preserve all of that.
+
+PRIMARY OBJECTIVE
+
+Detect earnings releases shortly after they occur and create a durable live event that can:
+
+1. Light up the ticker’s Earnings card
+2. Trigger an in-app alert
+3. Show that an SEC filing was detected before structured numbers arrive
+4. Add EPS and revenue actuals as soon as FMP publishes them
+5. Distinguish double beats, double misses, and mixed results
+6. Detect corrections or later revisions
+7. Avoid duplicate alerts
+8. Work when a release arrives earlier or later than its expected time
+
+PART 1 — TARGETED AUDIT
+
+Before editing, locate and reuse:
+
+- existing earnings calendar tables and services
+- user_earnings_cache
+- calendar_snapshots
+- canonical FMPProvider methods
+- existing FMP rate controls or budget logging
+- existing SEC ticker-to-CIK mapping
+- ei_materials_service refresh entry point
+- Watchlist, Close Watch/favorites, and portfolio symbol stores
+- existing authentication/user ID path
+- existing alerts, notifications, activity feed, SSE, or WebSocket infrastructure
+- Neon database helper and migration conventions
+
+Do not spend the session producing only an audit report.
+
+After identifying the real paths, implement using those paths.
+
+PART 2 — DEPLOYMENT-SAFE EXECUTION MODEL
+
+Create one idempotent function:
+
+run_live_earnings_monitor_once(now_et=None)
+
+All monitoring logic must be callable through that function.
+
+Also create an optional persistent loop:
+
+live_earnings_monitor_loop()
+
+The persistent loop must call run_live_earnings_monitor_once() repeatedly and be started only after FastAPI lifespan yield.
+
+Control it with:
+
+LIVE_EARNINGS_MONITOR_ENABLED
+
+Do not perform provider calls or Neon setup before lifespan yield.
+
+IMPORTANT:
+
+Production currently uses an Autoscale Deployment.
+
+Do not pretend that an in-process loop is guaranteed to remain running while Autoscale is asleep.
+
+The implementation must support both:
+
+A. Reserved VM mode:
+- persistent post-yield monitoring loop
+
+B. Scheduled/external worker mode:
+- a lightweight CLI command that executes run_live_earnings_monitor_once() and exits
+
+Create a canonical command such as:
+
+python -m backend.scripts.run_live_earnings_monitor_once
+
+Use the actual repository import structure rather than blindly copying that example.
+
+Do not silently change the Replit deployment type or billing configuration.
+
+PART 3 — DURABLE NEON STORAGE
+
+Live monitoring data must be stored in Neon.
+
+Do not store the source-of-truth event state only in:
+
+- process memory
+- local JSON
+- deployed filesystem cache
+
+Use existing Neon conventions and create the smallest necessary schema.
+
+Recommended logical structures:
+
+1. earnings_monitor_targets
+
+Stores the event being monitored:
+
+- symbol
+- expected_date
+- expected_timing
+- fiscal_period when known
+- fiscal_year when known
+- monitoring_start_at
+- monitoring_end_at
+- next_sec_check_at
+- next_fmp_check_at
+- status
+- created_at
+- updated_at
+
+2. earnings_live_events
+
+Stores detected state:
+
+- event_id
+- event_key
+- symbol
+- expected_date
+- fiscal_period
+- fiscal_year
+- state
+- detected_at
+- updated_at
+- revision
+- filing payload
+- results payload
+- reaction payload
+- source status
+- classification
+- checksum/version
+- last_error
+
+3. earnings_event_reads or existing notification-delivery table
+
+Stores per-user acknowledgment/read status if an existing notification system does not already handle it.
+
+Use indexes on:
+
+- symbol
+- event_key
+- state
+- updated_at
+- expected_date
+- user/event acknowledgment
+
+Writes must be atomic and idempotent.
+
+PART 4 — MONITORED UNIVERSE
+
+Monitor each distinct symbol once globally, then fan events out to interested users.
+
+Build the target universe from the existing canonical sources:
+
+- active Watchlist symbols
+- Close Watch/favorites
+- portfolio holdings
+
+Use the existing US-operating-stock eligibility gate.
+
+Exclude:
+
+- ETFs and funds
+- exchange-prefixed unsupported foreign symbols
+- symbols whose Earnings Intelligence eligibility is false
+
+Do not create separate provider polling for the same symbol because it appears in multiple user lists.
+
+PART 5 — EARNINGS SCHEDULE
+
+Reuse the existing cached earnings calendar when sufficiently complete.
+
+If the current calendar cache is not suitable, use the canonical FMPProvider and the existing Earnings Calendar endpoint to refresh a limited date range.
+
+Do not create a second FMP HTTP client.
+
+Maintain targets for approximately:
+
+- yesterday
+- today
+- the next seven days
+
+Refresh the schedule periodically rather than before every monitor iteration.
+
+Account for:
+
+- dates changing
+- timing changing from unknown to BMO/AMC
+- delayed reports
+- reports released earlier than the expected call
+- multiple records for the same symbol/date
+
+PART 6 — MONITORING WINDOWS
+
+Suggested windows in America/New_York:
+
+BMO:
+- start around 05:00 ET
+- high-frequency monitoring through 11:00 ET
+
+AMC:
+- start around 15:30 ET
+- high-frequency monitoring through 21:00 ET
+
+Unknown timing:
+- monitor broadly from 05:00 through 21:00 ET
+
+Continue limited monitoring until the end of the next day when results remain missing.
+
+Do not poll every target at high frequency all day.
+
+Each target must carry next_sec_check_at and next_fmp_check_at so run_once() can skip work not yet due.
+
+PART 7 — SEC DETECTION
+
+Use the existing SEC and Earnings Materials architecture.
+
+For active reporting symbols, check for newly disseminated filings such as:
+
+- 8-K
+- 8-K/A
+- 6-K
+- 10-Q
+- 10-K
+- relevant earnings exhibits
+
+Compare accession numbers against the last stored state.
+
+Do not identify an earnings release solely from:
+
+- form type
+- EX-99.1
+- EX-99.2
+
+Reuse the existing canonical attachment discovery and text/metadata classification.
+
+When a new relevant filing appears:
+
+1. Persist an earnings_live_event immediately
+2. Set state = filing_detected
+3. Store accepted timestamp and accession
+4. Trigger a targeted existing Materials refresh
+5. Do not wait for FMP structured actuals before creating the event
+
+The UI must eventually be able to display:
+
+“Earnings materials detected — structured results processing.”
+
+Keep SEC traffic comfortably within the existing shared limiter.
+
+PART 8 — FMP STRUCTURED RESULTS
+
+Reuse FMPProvider.
+
+Do not create raw httpx requests outside the canonical provider.
+
+Add a safe live-refresh option to the existing Earnings Report call so monitoring can bypass a stale weekly or long-lived in-process cache.
+
+Do not disable caching globally.
+
+The live monitor needs a short event-window cache or explicit force-refresh behavior.
+
+Detect and store:
+
+- earnings date
+- timing
+- EPS estimate
+- EPS actual
+- EPS surprise amount
+- EPS surprise percentage
+- revenue estimate
+- revenue actual
+- revenue surprise amount
+- revenue surprise percentage
+
+Support staged publication:
+
+- EPS appears before revenue
+- revenue appears before EPS
+- estimates change
+- actuals are corrected
+
+States:
+
+scheduled
+monitoring
+filing_detected
+results_partial
+results_available
+results_updated
+complete
+unavailable
+error
+
+State rules:
+
+filing_detected:
+- relevant SEC filing found
+- structured actuals are not complete
+
+results_partial:
+- one actual is available but the other is missing
+
+results_available:
+- required structured actuals are present
+
+results_updated:
+- previously stored actual, estimate, filing, or material payload changed materially
+
+complete:
+- results are available and the short correction-monitoring period has elapsed
+
+PART 9 — RESULT CLASSIFICATION
+
+When valid actuals and estimates are present, classify:
+
+double_beat:
+- EPS surprise > 0
+- Revenue surprise > 0
+
+double_miss:
+- EPS surprise < 0
+- Revenue surprise < 0
+
+mixed:
+- one positive and one negative
+- or one is exactly in line
+
+partial:
+- only one valid comparison exists
+
+unclassified:
+- estimates are missing
+
+Never interpret missing values as zero.
+
+Do not use absurd EPS percentages across zero as the sole event classification. Preserve the semantic EPS transition logic already used by Earnings Intelligence.
+
+PART 10 — UPDATE EXISTING EARNINGS INTELLIGENCE
+
+When new structured results become available:
+
+- run the narrowest existing Earnings Intelligence refresh path for that symbol
+- persist the newly reported quarter
+- recompute only unfinished/recent reaction data
+- preserve historical final reactions
+- preserve ratings
+- preserve Materials
+- preserve unrelated fundamentals fields
+
+Do not run the full 343-symbol weekly refresh.
+
+Do not make the popup wait for this refresh.
+
+The live event should appear first; the full cached Earnings Intelligence record can follow.
+
+PART 11 — INITIAL MARKET REACTION
+
+Audit the existing Watchlist quote cache and Tradier extended-hours fields.
+
+When reliable cached extended-hours or regular-session data exists, store:
+
+- baseline price
+- current/extended price
+- initial move percentage
+- price timestamp
+- price session:
+  - premarket
+  - regular
+  - after_hours
+- data source
+- preliminary flag
+
+Do not add a new market-data provider.
+
+Do not fabricate an after-hours move from a stale regular close.
+
+If reliable extended pricing is unavailable, leave the field null.
+
+PART 12 — EVENT IDENTITY AND DEDUPLICATION
+
+Use a stable event key.
+
+Preferred hierarchy:
+
+1. symbol + fiscal_year + fiscal_period
+2. symbol + expected_date when fiscal labels are not known
+
+Individual alert versions should additionally include:
+
+- event type
+- material revision/checksum
+
+Examples:
+
+COIN|2026|Q2|filing_detected
+COIN|2026|Q2|results_available
+COIN|2026|Q2|results_updated|2
+
+The same event must not create repeated alerts on every poll.
+
+Corrections should increment revision and create a distinct results_updated event only when a material field changes.
+
+PART 13 — ALERT FEED
+
+Reuse an existing notification/activity system if one exists.
+
+If none exists, add the smallest authenticated event-feed API:
+
+GET /api/earnings/live-events
+
+Useful parameters:
+
+- since
+- unread_only
+- symbols
+- limit
+
+Return only events relevant to the authenticated user’s:
+
+- watchlist
+- close-watch/favorites
+- portfolio
+
+Also add acknowledgment using existing conventions, for example:
+
+POST /api/earnings/live-events/{event_id}/read
+
+Do not expose other users’ private watchlist or portfolio membership.
+
+The frontend will poll this feed while the app is open.
+
+Do not implement email, SMS, or paid push services in this task unless a fully reusable existing delivery path already exists.
+
+PART 14 — TICKER-DETAIL LIVE STATE
+
+Extend:
+
+GET /api/watchlist/ticker-detail/{symbol}
+
+with cached/database-only live state.
+
+Recommended location:
+
+earnings_intelligence.live_event
+
+or another existing-contract-consistent location determined during audit.
+
+No FMP, SEC, or Tradier call may occur during the ticker-detail request.
+
+The live event should include:
+
+- event_id
+- event_key
+- symbol
+- state
+- expected_date
+- expected_timing
+- fiscal_period
+- fiscal_year
+- detected_at
+- updated_at
+- revision
+- classification
+- filing summary
+- results summary
+- initial market reaction
+- source status
+- preliminary/final status
+
+PART 15 — RECOMMENDED POLLING CADENCE
+
+Use due timestamps and a global monitor budget.
+
+Outside an active event window:
+- do not poll each symbol
+
+Active event, before detection:
+- SEC approximately every 30–60 seconds
+- FMP approximately every 60 seconds
+
+After SEC detection but before FMP actuals:
+- FMP approximately every 30–60 seconds
+
+After structured results:
+- approximately every 5 minutes for 30 minutes to detect corrections
+- then mark complete
+
+If run_once() itself runs less frequently, perform one due check per invocation rather than attempting to replay every missed interval.
+
+Keep significant headroom below the account-wide FMP rate limit because other FMP consumers exist.
+
+PART 16 — RESILIENCE
+
+Requirements:
+
+- bounded timeouts
+- bounded retries
+- exponential backoff for temporary failures
+- no retry storm
+- one failed symbol does not fail the monitoring pass
+- stale last-known-good data is preserved
+- no NaN or Infinity reaches JSON/JSONB
+- database locks are short
+- no work before FastAPI lifespan yield
+- monitor cannot delay health checks
+- monitor cannot monopolize the event loop
+- multiple app instances cannot process the same target concurrently
+
+Use a Neon advisory lock, row claim, lease, or existing distributed-job pattern to prevent duplicate workers.
+
+PART 17 — REPLAY/DRY-RUN TEST MODE
+
+A live earnings release may not occur during development.
+
+Build a safe deterministic replay mode using stored historical data.
+
+Replay at least one historical COIN earnings event through:
+
+scheduled
+monitoring
+filing_detected
+results_partial
+results_available
+complete
+
+Verify:
+
+- one alert per transition
+- no duplicate alert on repeated polling
+- corrected data creates results_updated exactly once
+- null revenue or EPS creates results_partial
+- ticker-detail exposes the active event
+- event feed returns it
+- acknowledgment works
+
+Replay data must be clearly marked synthetic/dry-run and must not leak into production user alerts.
+
+PART 18 — STATUS AND ADMIN TOOLS
+
+Add protected status/debug tools using existing admin auth.
+
+At minimum expose:
+
+- monitor enabled
+- deployment mode detected/configured
+- last run
+- last successful run
+- target count
+- targets currently active
+- checks performed
+- SEC detections
+- FMP results detected
+- events created
+- duplicate events suppressed
+- failures
+- current rate usage
+- worker lease owner/expiry
+
+Add a protected single-symbol force-check for testing.
+
+Do not expose provider keys or sensitive user data.
+
+PART 19 — DEPLOYMENT TRUTH
+
+At completion, inspect the actual Replit deployment type.
+
+If it remains Autoscale:
+
+- report that persistent in-process monitoring is not guaranteed while scaled to zero
+- confirm the run-once CLI works
+- provide the exact command needed for a Scheduled Deployment
+- do not claim 24/7 alerts are live
+
+If moved manually to Reserved VM:
+
+- verify the monitoring loop remains running
+- verify status across a restart
+- verify no duplicate worker starts
+
+Do not change deployment billing/type without explicit user approval.
+
+PART 20 — ACCEPTANCE TESTS
+
+Do not declare completion until all applicable tests pass:
+
+1. Existing backend startup remains fast.
+2. Health endpoint is unaffected.
+3. No provider calls occur in ticker-detail requests.
+4. Targets are sourced from existing watchlist/portfolio data.
+5. ETFs remain excluded.
+6. SEC filing detection creates filing_detected.
+7. FMP partial results create results_partial.
+8. Complete actuals create results_available.
+9. Double beat/miss/mixed classifications are correct.
+10. Corrections create one results_updated revision.
+11. Repeated polling creates no duplicates.
+12. Event data survives process restart.
+13. Event feed is authenticated and user-scoped.
+14. Read acknowledgment persists.
+15. Existing Earnings Intelligence refreshes only the relevant symbol.
+16. Existing historical Earnings fields remain intact.
+17. Monitor respects FMP and SEC budgets.
+18. Multiple workers cannot double-process a target.
+19. Replay mode passes.
+20. Production build/startup passes.
+
+FINAL REPORT
+
+Return:
+
+1. Existing paths reused
+2. Files changed
+3. Neon schema added
+4. Target-universe logic
+5. Monitoring windows and cadence
+6. SEC detection path
+7. FMP result-detection path
+8. State machine
+9. Deduplication logic
+10. Alert-feed contract
+11. Ticker-detail live-event contract
+12. Initial-price-reaction behavior
+13. Replay test results
+14. Provider call-budget results
+15. Startup regression result
+16. Deployment mode
+17. Whether monitoring is genuinely always-on
+18. Exact Scheduled Deployment command if still Autoscale
+19. Exact TypeScript-ready JSON contract
+20. Remaining limitations
+
+End with exactly one:
+
+LIVE EARNINGS BACKEND READY — ALWAYS ON
+
+LIVE EARNINGS BACKEND READY — WORKER SCHEDULING REQUIRED
+
+NOT READY
+
+Do not claim ALWAYS ON while production remains an Autoscale Deployment that can scale to zero.

@@ -4958,6 +4958,62 @@ async def ticker_detail_endpoint(symbol: str):
         # Symbol has materials but no earnings history (e.g. first-run)
         earnings_intelligence = {"materials": ei_materials}
 
+    # ── 10. Live Earnings Event (zero-provider DB-only lookup) ─────────────────
+    live_event: dict | None = None
+    try:
+        def _fetch_live_event():
+            from data.earnings_monitor_store import get_live_event_for_symbol
+            ev = get_live_event_for_symbol(sym, include_dry_run=False)
+            if not ev:
+                return None
+            rp  = ev.get("results_payload") or {}
+            fp  = ev.get("filing_payload")  or {}
+            lep = fp.get("latest_earnings_packet") or {}
+            rxn = ev.get("reaction_payload") or {}
+            def _dt(v):
+                return str(v) if v is not None else None
+            return {
+                "event_id":       ev.get("event_id"),
+                "event_key":      ev.get("event_key"),
+                "symbol":         ev.get("symbol"),
+                "state":          ev.get("state"),
+                "expected_date":  _dt(ev.get("expected_date")),
+                "expected_timing": None,
+                "fiscal_period":  ev.get("fiscal_period"),
+                "fiscal_year":    ev.get("fiscal_year"),
+                "detected_at":    _dt(ev.get("detected_at")),
+                "updated_at":     _dt(ev.get("updated_at")),
+                "revision":       ev.get("revision", 1),
+                "classification": ev.get("classification"),
+                "preliminary":    True,
+                "results_summary": {
+                    "eps_estimate":         rp.get("eps_estimate"),
+                    "eps_actual":           rp.get("eps_actual"),
+                    "eps_surprise_pct":     rp.get("eps_surprise_pct"),
+                    "revenue_estimate":     rp.get("revenue_estimate"),
+                    "revenue_actual":       rp.get("revenue_actual"),
+                    "revenue_surprise_pct": rp.get("revenue_surprise_pct"),
+                } if rp else None,
+                "filing_summary": {
+                    "accession_number": (lep.get("primary_filing") or {}).get("accession_number") or lep.get("accession_number"),
+                    "accepted":         lep.get("accepted"),
+                } if lep else None,
+                "initial_market_reaction": rxn if rxn else None,
+                "source_status": ev.get("source_status"),
+            }
+        live_event = await _aio.to_thread(_fetch_live_event)
+        coverage["live_earnings_event"] = live_event is not None
+    except Exception as _le_e:
+        print(f"[TICKER_DETAIL] live_event error {sym}: {_le_e}")
+        coverage["live_earnings_event"] = False
+
+    # Inject live_event into earnings_intelligence so they arrive together
+    if earnings_intelligence and isinstance(earnings_intelligence, dict):
+        earnings_intelligence = dict(earnings_intelligence)
+        earnings_intelligence["live_event"] = live_event
+    elif live_event is not None:
+        earnings_intelligence = {"live_event": live_event}
+
     return {
         "symbol":        sym,
         "company":       company,

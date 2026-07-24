@@ -453,6 +453,11 @@ async def lifespan(app):
     def _deferred_sync_startup() -> None:
         _init_postgres_chat_storage_on_startup("lifespan")
         try:
+            from data.earnings_monitor_store import init_earnings_monitor_tables
+            init_earnings_monitor_tables()
+        except Exception as _em_e:
+            print(f"[STARTUP] earnings_monitor_tables init error: {_em_e}")
+        try:
             from data.prompt_history import _use_postgres as _ph_pg, _use_object_storage as _ph_obj, _use_replit_db as _ph_db
             from data.chat_history import _use_postgres as _ch_pg, _use_object_storage as _ch_obj, _use_replit_db as _ch_db
             _ph_backend = "PostgreSQL (persistent)" if _ph_pg else ("Object Storage (persistent)" if _ph_obj else ("Replit DB (dev)" if _ph_db else "JSON files (EPHEMERAL!)"))
@@ -999,6 +1004,18 @@ async def lifespan(app):
         _BOOTSTRAP_STATE["started_at"] = _bt0
         print("[BOOTSTRAP] post-yield bootstrap starting")
 
+        # 0. Live Earnings Monitor — optional persistent loop (LIVE_EARNINGS_MONITOR_ENABLED=true)
+        import os as _os
+        if _os.environ.get("LIVE_EARNINGS_MONITOR_ENABLED", "").lower() in ("1", "true", "yes"):
+            try:
+                from services.earnings_monitor_service import live_earnings_monitor_loop as _em_loop
+                asyncio.create_task(_em_loop(interval_seconds=30))
+                print("[EARNINGS_MONITOR] Persistent loop started (Reserved VM mode)")
+            except Exception as _em_loop_err:
+                print(f"[EARNINGS_MONITOR] Loop start error (non-fatal): {_em_loop_err}")
+        else:
+            print("[EARNINGS_MONITOR] Persistent loop disabled — set LIVE_EARNINGS_MONITOR_ENABLED=true to enable")
+
         # 1. Defiance 2X leveraged ETFs — load disk LKG + daily refresh loop.
         _t = _bst.monotonic()
         try:
@@ -1284,6 +1301,14 @@ try:
     print("[EARNINGS_CLEAN] Router registered at /api/catalysts/earnings/*")
 except Exception as _earn_err:
     print(f"[EARNINGS_CLEAN] Router unavailable (non-fatal): {_earn_err}")
+
+# ── Live Earnings Monitor router (/api/earnings/live-events, /api/earnings/monitor/*) ──
+try:
+    from routes.earnings_monitor_router import router as _earnings_monitor_router
+    app.include_router(_earnings_monitor_router)
+    print("[EARNINGS_MONITOR] Router registered at /api/earnings/*")
+except Exception as _em_router_err:
+    print(f"[EARNINGS_MONITOR] Router unavailable (non-fatal): {_em_router_err}")
 
 # ── Pre-IPO Watchlist router (/api/calendar/pre-ipo-watchlist) ───────────────
 # Additive: Perplexity + Polymarket + Finnhub aggregation for high-profile

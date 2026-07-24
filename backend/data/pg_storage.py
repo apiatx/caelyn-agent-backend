@@ -758,6 +758,85 @@ def init_tables():
             "Daily Net Premium snapshots for Options Flow 1D/7D/30D history — 90-day rolling window",
         ))
 
+        # ── Live Earnings Monitor ─────────────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.earnings_monitor_targets (
+                id                      BIGSERIAL PRIMARY KEY,
+                symbol                  TEXT NOT NULL,
+                expected_date           DATE,
+                expected_timing         TEXT,
+                fiscal_period           TEXT,
+                fiscal_year             INTEGER,
+                monitoring_start_at     TIMESTAMPTZ,
+                monitoring_end_at       TIMESTAMPTZ,
+                next_sec_check_at       TIMESTAMPTZ,
+                next_fmp_check_at       TIMESTAMPTZ,
+                status                  TEXT NOT NULL DEFAULT 'scheduled',
+                worker_lease_owner      TEXT,
+                worker_lease_expires_at TIMESTAMPTZ,
+                created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (symbol, expected_date)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_emt_status_date
+            ON public.earnings_monitor_targets (status, expected_date)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_emt_symbol
+            ON public.earnings_monitor_targets (symbol)
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.earnings_live_events (
+                id               BIGSERIAL PRIMARY KEY,
+                event_id         TEXT UNIQUE NOT NULL,
+                event_key        TEXT NOT NULL,
+                symbol           TEXT NOT NULL,
+                expected_date    DATE,
+                fiscal_period    TEXT,
+                fiscal_year      INTEGER,
+                state            TEXT NOT NULL DEFAULT 'scheduled',
+                detected_at      TIMESTAMPTZ,
+                updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                revision         INTEGER NOT NULL DEFAULT 1,
+                is_dry_run       BOOLEAN NOT NULL DEFAULT FALSE,
+                filing_payload   JSONB,
+                results_payload  JSONB,
+                reaction_payload JSONB,
+                source_status    JSONB,
+                classification   TEXT,
+                checksum         TEXT,
+                last_error       TEXT,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ele_symbol_state
+            ON public.earnings_live_events (symbol, state)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ele_event_key
+            ON public.earnings_live_events (event_key)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ele_updated
+            ON public.earnings_live_events (updated_at DESC)
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.earnings_event_reads (
+                id        BIGSERIAL PRIMARY KEY,
+                event_id  TEXT NOT NULL,
+                user_id   TEXT NOT NULL,
+                read_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (event_id, user_id)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_eer_user_event
+            ON public.earnings_event_reads (user_id, event_id)
+        """)
+
         conn.commit()
         cur.close()
         print("[PG_STORAGE] init_tables completed (CREATE TABLE IF NOT EXISTS executed)")

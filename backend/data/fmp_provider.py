@@ -269,6 +269,48 @@ class FMPProvider:
                 "source": "fmp",
             })
         return results
+
+    async def get_earnings_history_live(self, ticker: str, limit: int = 4) -> list:
+        """
+        Short-TTL variant of get_earnings_history() for live monitoring.
+        Uses a separate cache key (fmp:live_monitor:earnings:{ticker}) with 120s TTL
+        so live checks bypass the standard 300s FMP_TTL cache without affecting it.
+        """
+        t = ticker.upper()
+        live_key = f"fmp:live_monitor:earnings:{t}"
+        cached = cache.get(live_key)
+        if cached is not None:
+            return cached
+        data = await self._get_stable("earnings", {"symbol": t, "limit": limit})
+        if not isinstance(data, list):
+            return []
+        results = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            eps_actual = item.get("epsActual")
+            eps_est    = item.get("epsEstimated")
+            rev_actual = item.get("revenueActual")
+            surprise_pct = None
+            if eps_actual is not None and eps_est is not None and eps_est != 0:
+                try:
+                    surprise_pct = round((eps_actual - eps_est) / abs(eps_est) * 100, 2)
+                except (TypeError, ZeroDivisionError):
+                    surprise_pct = None
+            results.append({
+                "ticker":           item.get("symbol", t),
+                "date":             item.get("date"),
+                "eps_estimate":     eps_est,
+                "eps_actual":       eps_actual,
+                "revenue_estimate": item.get("revenueEstimated"),
+                "revenue_actual":   rev_actual,
+                "surprise_pct":     surprise_pct,
+                "report_available": eps_actual is not None,
+                "source":           "fmp_live",
+            })
+        cache.set(live_key, results, 120)  # 2-minute short TTL for live monitoring
+        return results
+
     async def get_income_statement(self, ticker: str, limit: int = 4, period: str = "quarter") -> list:
         """
         Per-ticker income statement (quarterly or annual) via stable/income-statement.
