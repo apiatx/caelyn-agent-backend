@@ -710,19 +710,24 @@ def get_user_event_feed(
         return []
     try:
         cur = conn.cursor()
-        conditions = [f"e.symbol = ANY(ARRAY[{','.join(['%s']*len(symbols))}])"]
-        params: list = [s.upper() for s in symbols]
+        # Build WHERE conditions and their positional params separately.
+        # IMPORTANT: the SQL has r.user_id = %s in the LEFT JOIN ON clause,
+        # which comes BEFORE the WHERE params in psycopg2 substitution order.
+        # Final params order: [user_id, *sym_params, *extra_where_params, limit]
+        conditions   = [f"e.symbol = ANY(ARRAY[{','.join(['%s']*len(symbols))}])"]
+        sym_params   = [s.upper() for s in symbols]
+        extra_params: list = []
 
         if not include_dry_run:
             conditions.append("e.is_dry_run = FALSE")
         if since_iso:
             conditions.append("e.updated_at > %s")
-            params.append(since_iso)
+            extra_params.append(since_iso)
         if unread_only:
             conditions.append("r.read_at IS NULL")
 
-        where = " AND ".join(conditions)
-        params += [user_id, limit]
+        where  = " AND ".join(conditions)
+        params = [user_id] + sym_params + extra_params + [limit]
 
         cur.execute(f"""
             SELECT e.event_id, e.event_key, e.symbol,

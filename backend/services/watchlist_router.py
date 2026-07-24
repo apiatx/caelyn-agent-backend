@@ -4962,44 +4962,75 @@ async def ticker_detail_endpoint(symbol: str):
     live_event: dict | None = None
     try:
         def _fetch_live_event():
-            from data.earnings_monitor_store import get_live_event_for_symbol
+            from data.earnings_monitor_store import (
+                get_live_event_for_symbol, get_active_targets,
+            )
             ev = get_live_event_for_symbol(sym, include_dry_run=False)
             if not ev:
                 return None
+
+            # ── enrich with schedule fields from earnings_monitor_targets ─────
+            sched: dict = {}
+            try:
+                all_targets = get_active_targets(500)
+                for t in all_targets:
+                    if (t.get("symbol") or "").upper() == sym.upper():
+                        ea = t.get("expected_at")
+                        sched = {
+                            "expected_at":         str(ea).replace("+00:00", "Z") if ea else None,
+                            "expected_timing":     t.get("expected_timing"),
+                            "expected_time_local": t.get("expected_time_local"),
+                            "expected_timezone":   "America/New_York",
+                            "report_time_status":  t.get("report_time_status"),
+                            "report_period":       t.get("report_period"),
+                            "schedule_source":     t.get("schedule_source"),
+                        }
+                        break
+            except Exception:
+                pass
+
             rp  = ev.get("results_payload") or {}
             fp  = ev.get("filing_payload")  or {}
-            lep = fp.get("latest_earnings_packet") or {}
             rxn = ev.get("reaction_payload") or {}
+
             def _dt(v):
-                return str(v) if v is not None else None
+                if v is None:
+                    return None
+                s = str(v)
+                return s.replace("+00:00", "Z") if ("+" in s or "Z" in s) else s
+
             return {
-                "event_id":       ev.get("event_id"),
-                "event_key":      ev.get("event_key"),
-                "symbol":         ev.get("symbol"),
-                "state":          ev.get("state"),
-                "expected_date":  _dt(ev.get("expected_date")),
-                "expected_timing": None,
-                "fiscal_period":  ev.get("fiscal_period"),
-                "fiscal_year":    ev.get("fiscal_year"),
-                "detected_at":    _dt(ev.get("detected_at")),
-                "updated_at":     _dt(ev.get("updated_at")),
-                "revision":       ev.get("revision", 1),
-                "classification": ev.get("classification"),
-                "preliminary":    True,
-                "results_summary": {
-                    "eps_estimate":         rp.get("eps_estimate"),
-                    "eps_actual":           rp.get("eps_actual"),
-                    "eps_surprise_pct":     rp.get("eps_surprise_pct"),
-                    "revenue_estimate":     rp.get("revenue_estimate"),
-                    "revenue_actual":       rp.get("revenue_actual"),
-                    "revenue_surprise_pct": rp.get("revenue_surprise_pct"),
-                } if rp else None,
-                "filing_summary": {
-                    "accession_number": (lep.get("primary_filing") or {}).get("accession_number") or lep.get("accession_number"),
-                    "accepted":         lep.get("accepted"),
-                } if lep else None,
-                "initial_market_reaction": rxn if rxn else None,
-                "source_status": ev.get("source_status"),
+                # ── identity ──────────────────────────────────────────────
+                "event_id":            ev.get("event_id"),
+                "event_key":           ev.get("event_key"),
+                "symbol":              ev.get("symbol"),
+                "company_name":        (company or {}).get("name"),
+                # ── state ─────────────────────────────────────────────────
+                "state":               ev.get("state"),
+                "classification":      ev.get("classification"),
+                "revision":            ev.get("revision", 1),
+                # ── timestamps ────────────────────────────────────────────
+                "detected_at":         _dt(ev.get("detected_at")),
+                "updated_at":          _dt(ev.get("updated_at")),
+                # ── schedule (from targets) ────────────────────────────────
+                "expected_date":       _dt(ev.get("expected_date")),
+                "expected_at":         sched.get("expected_at"),
+                "expected_time_local": sched.get("expected_time_local"),
+                "expected_timezone":   sched.get("expected_timezone", "America/New_York"),
+                "expected_timing":     sched.get("expected_timing"),
+                "report_time_status":  sched.get("report_time_status"),
+                "report_period":       sched.get("report_period"),
+                "schedule_source":     sched.get("schedule_source"),
+                # ── fiscal ────────────────────────────────────────────────
+                "fiscal_period":       ev.get("fiscal_period"),
+                "fiscal_year":         ev.get("fiscal_year"),
+                # ── full payloads ─────────────────────────────────────────
+                "results_payload":     rp  if rp  else None,
+                "filing_payload":      fp  if fp  else None,
+                "reaction_payload":    rxn if rxn else None,
+                # ── meta ──────────────────────────────────────────────────
+                "source_status":       ev.get("source_status"),
+                "is_read":             None,   # no per-user state in ticker-detail
             }
         live_event = await _aio.to_thread(_fetch_live_event)
         coverage["live_earnings_event"] = live_event is not None

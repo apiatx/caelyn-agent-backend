@@ -81,46 +81,117 @@ def _get_user_symbols(user_id: str) -> list[str]:
     return sorted(symbols)
 
 
+# ── target schedule enrichment (Neon read, zero provider calls) ────────────────
+
+def _get_target_schedules(symbols: list[str]) -> dict[str, dict]:
+    """
+    Batch-fetch schedule metadata from earnings_monitor_targets for the given
+    symbols.  Pure Neon read — no external API calls.
+    Returns {symbol: schedule_dict}.
+    """
+    if not symbols:
+        return {}
+    try:
+        from data.earnings_monitor_store import get_active_targets
+        all_targets = get_active_targets(500)
+        sym_set = {s.upper() for s in symbols}
+        result: dict[str, dict] = {}
+        for t in all_targets:
+            sym = (t.get("symbol") or "").upper()
+            if sym and sym in sym_set:
+                ea = t.get("expected_at")
+                result[sym] = {
+                    "expected_at":         str(ea).replace("+00:00", "Z") if ea else None,
+                    "expected_timing":     t.get("expected_timing"),
+                    "expected_time_local": t.get("expected_time_local"),
+                    "expected_timezone":   "America/New_York",
+                    "report_time_status":  t.get("report_time_status"),
+                    "report_period":       t.get("report_period"),
+                    "schedule_source":     t.get("schedule_source"),
+                }
+        return result
+    except Exception:
+        return {}
+
+
+def _get_company_names_batch(symbols: list[str]) -> dict[str, str | None]:
+    """
+    Best-effort company name lookup from in-process/Neon caches.
+    Zero provider calls.  Returns None for unknown symbols.
+    """
+    result: dict[str, str | None] = {s: None for s in symbols}
+    try:
+        from services.fmp_cache_service import get_company_profile_cached, get_fundamentals_cached
+        for sym in symbols:
+            try:
+                prof = get_company_profile_cached(sym) or {}
+                name = (prof.get("companyName") or prof.get("company_name")
+                        or prof.get("name") or prof.get("shortName"))
+                if not name:
+                    fdb  = get_fundamentals_cached(sym) or {}
+                    raw_p = fdb.get("profile") or {}
+                    name = raw_p.get("companyName") or raw_p.get("company_name")
+                result[sym] = name or None
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return result
+
+
 # ── event serialiser ───────────────────────────────────────────────────────────
 
 def _serialize_event(row: dict, read_at=None) -> dict:
+    """
+    Serialize one live-event DB row to the full frontend contract.
+
+    `row` should be pre-enriched with target schedule fields
+    (expected_at, expected_timing, etc.) and company_name via
+    _get_target_schedules() / _get_company_names_batch() before calling.
+    """
     def _dt(v):
         if v is None:
             return None
-        return str(v).replace("+00:00", "Z") if "+" in str(v) or "Z" in str(v) else str(v)
+        s = str(v)
+        return s.replace("+00:00", "Z") if ("+" in s or "Z" in s) else s
 
     results  = row.get("results_payload") or {}
-    filing   = row.get("filing_payload") or {}
+    filing   = row.get("filing_payload")  or {}
     reaction = row.get("reaction_payload") or {}
-    lep      = filing.get("latest_earnings_packet") or {}
+    is_read_val = read_at or row.get("read_at")
 
     return {
-        "event_id":       row.get("event_id"),
-        "event_key":      row.get("event_key"),
-        "symbol":         row.get("symbol"),
-        "state":          row.get("state"),
-        "expected_date":  _dt(row.get("expected_date")),
-        "fiscal_period":  row.get("fiscal_period"),
-        "fiscal_year":    row.get("fiscal_year"),
-        "detected_at":    _dt(row.get("detected_at")),
-        "updated_at":     _dt(row.get("updated_at")),
-        "revision":       row.get("revision", 1),
-        "is_dry_run":     row.get("is_dry_run", False),
-        "classification": row.get("classification"),
-        "read_at":        _dt(read_at) if read_at else None,
-        "results_summary": {
-            "eps_estimate":         results.get("eps_estimate"),
-            "eps_actual":           results.get("eps_actual"),
-            "eps_surprise_pct":     results.get("eps_surprise_pct"),
-            "revenue_estimate":     results.get("revenue_estimate"),
-            "revenue_actual":       results.get("revenue_actual"),
-            "revenue_surprise_pct": results.get("revenue_surprise_pct"),
-        } if results else None,
-        "filing_summary": {
-            "accession_number": (lep.get("primary_filing") or {}).get("accession_number") or lep.get("accession_number"),
-            "accepted":         lep.get("accepted"),
-        } if lep else None,
-        "initial_market_reaction": reaction if reaction else None,
+        # ── identity ──────────────────────────────────────────────────────
+        "event_id":            row.get("event_id"),
+        "event_key":           row.get("event_key"),
+        "symbol":              row.get("symbol"),
+        "company_name":        row.get("company_name"),
+        # ── state ─────────────────────────────────────────────────────────
+        "state":               row.get("state"),
+        "classification":      row.get("classification"),
+        "revision":            row.get("revision", 1),
+        # ── timestamps ────────────────────────────────────────────────────
+        "detected_at":         _dt(row.get("detected_at")),
+        "updated_at":          _dt(row.get("updated_at")),
+        # ── schedule (enriched from earnings_monitor_targets) ─────────────
+        "expected_date":       _dt(row.get("expected_date")),
+        "expected_at":         _dt(row.get("expected_at")),
+        "expected_time_local": row.get("expected_time_local"),
+        "expected_timezone":   row.get("expected_timezone", "America/New_York"),
+        "expected_timing":     row.get("expected_timing"),
+        "report_time_status":  row.get("report_time_status"),
+        "report_period":       row.get("report_period"),
+        "schedule_source":     row.get("schedule_source"),
+        # ── fiscal ────────────────────────────────────────────────────────
+        "fiscal_period":       row.get("fiscal_period"),
+        "fiscal_year":         row.get("fiscal_year"),
+        # ── full payloads (safe — no credentials/internal errors) ─────────
+        "results_payload":     results if results else None,
+        "filing_payload":      filing  if filing  else None,
+        "reaction_payload":    reaction if reaction else None,
+        # ── read / meta ───────────────────────────────────────────────────
+        "source_status":       row.get("source_status"),
+        "is_read":             _dt(is_read_val),
     }
 
 
@@ -151,6 +222,8 @@ async def get_live_events(
 
     from data.earnings_monitor_store import get_user_event_feed, get_event_read_ids
 
+    import asyncio as _aio
+
     rows = get_user_event_feed(
         user_id      = user_id,
         symbols      = universe,
@@ -159,14 +232,31 @@ async def get_live_events(
         limit        = limit,
     )
 
-    # attach read status
-    event_ids = [r["event_id"] for r in rows]
-    read_ids  = get_event_read_ids(user_id, event_ids)
+    if not rows:
+        return {
+            "events":       [],
+            "user_id":      user_id,
+            "symbol_count": len(universe),
+            "since":        since,
+            "count":        0,
+        }
 
-    events = [
-        _serialize_event(r, read_at=r.get("read_at"))
-        for r in rows
-    ]
+    # Enrich rows with target schedule data + company names (Neon reads, zero provider calls)
+    event_syms    = list({r["symbol"] for r in rows})
+    target_sched, company_names = await _aio.gather(
+        _aio.to_thread(_get_target_schedules,     event_syms),
+        _aio.to_thread(_get_company_names_batch,  event_syms),
+    )
+
+    enriched: list[dict] = []
+    for r in rows:
+        sym    = (r.get("symbol") or "").upper()
+        merged = dict(r)
+        merged.update(target_sched.get(sym, {}))
+        merged["company_name"] = company_names.get(sym)
+        enriched.append(merged)
+
+    events = [_serialize_event(r, read_at=r.get("read_at")) for r in enriched]
 
     return {
         "events":       events,
