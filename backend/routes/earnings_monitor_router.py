@@ -483,7 +483,9 @@ async def repair_symbol_event(symbol: str, request: Request):
                  if str(t.get("expected_date") or "")[:10] == rd),
                 None,
             )
-            from services.earnings_reaction_service import finalize_reactions_for_event
+            from services.earnings_reaction_service import (
+                finalize_reactions_for_event, backfill_ei_price_reaction,
+            )
             rxn = await _aio.wait_for(
                 finalize_reactions_for_event(ev["event_id"], sym, rd, timing, rp),
                 timeout=40.0,
@@ -495,6 +497,12 @@ async def repair_symbol_event(symbol: str, request: Request):
                 "timing":      timing,
                 "horizons":    rxn.get("horizons_available") if rxn else [],
             })
+            # Always backfill EI after finalization (even if no new horizons)
+            try:
+                ei_ok = await _aio.wait_for(backfill_ei_price_reaction(sym), timeout=30.0)
+                result["steps"].append({"step": "ei_backfill", "ok": ei_ok})
+            except Exception as _bf_exc:
+                result["steps"].append({"step": "ei_backfill", "error": str(_bf_exc)})
         else:
             result["steps"].append({"step": "reaction_finalization", "skipped": "no live event"})
     except _aio.TimeoutError:
@@ -504,3 +512,34 @@ async def repair_symbol_event(symbol: str, request: Request):
 
     result["status"] = "ok"
     return result
+
+
+@router.post("/monitor/admin/backfill-ei-reactions")
+async def trigger_ei_backfill(
+    request: Request,
+    lookback_days: int = 30,
+):
+    """
+    Admin: backfill price_reaction into watchlist_fundamentals_cache
+    earnings_intelligence.earnings_history for all recent complete events
+    that have a finalized reaction_payload.
+
+    This bridges the gap between earnings_live_events.reaction_payload
+    (written by the reaction finalizer) and the cached earnings_intelligence
+    (written by the weekly FmpFundamentalsRefresher), so ticker-detail and
+    the 'Price Reaction Pending' UI show live values without waiting for the
+    next weekly fundamentals refresh cycle.
+    """
+    _check_admin(request)
+    import asyncio as _aio
+    try:
+        from services.earnings_reaction_service import bulk_backfill_ei_reactions
+        result = await _aio.wait_for(
+            bulk_backfill_ei_reactions(lookback_days=min(lookback_days, 60)),
+            timeout=180.0,
+        )
+        return {"status": "ok", "result": result}
+    except _aio.TimeoutError:
+        return {"status": "timeout", "error": "bulk_backfill_ei_reactions exceeded 180s"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}

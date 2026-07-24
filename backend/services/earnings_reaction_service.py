@@ -408,6 +408,12 @@ async def reaction_catchup_pass(lookback_days: int = _REACTION_CATCHUP_LOOKBACK_
             )
             if result and result.get("horizons_available"):
                 finalized += 1
+                # Backfill into watchlist_fundamentals_cache so ticker-detail
+                # reflects the reaction immediately (no wait for weekly refresh).
+                try:
+                    await backfill_ei_price_reaction(sym)
+                except Exception as _bf_exc:
+                    print(f"{_LOG}[catchup] {sym}: backfill_ei warning: {_bf_exc}")
         except Exception as exc:
             print(f"{_LOG}[catchup] {sym}: error: {exc}")
 
@@ -420,4 +426,316 @@ async def reaction_catchup_pass(lookback_days: int = _REACTION_CATCHUP_LOOKBACK_
         "finalized":        finalized,
         "already_complete": already_complete,
         "lookback_days":    lookback_days,
+    }
+
+
+# ── EI price_reaction backfill ─────────────────────────────────────────────────
+
+
+async def backfill_ei_price_reaction(symbol: str) -> bool:
+    """
+    Patch earnings_intelligence.earnings_history[*].price_reaction and
+    reaction_summary in watchlist_fundamentals_cache for the most-recent
+    live event whose reaction_payload has been finalized.
+
+    This bridges the gap between:
+      - earnings_live_events.reaction_payload  (written by finalize_reactions_for_event)
+      - watchlist_fundamentals_cache.fields.earnings_intelligence.earnings_history
+        (written by FmpFundamentalsRefresher, weekly cycle, may be stale)
+
+    The ticker-detail endpoint and "Price Reaction Pending" frontend UI both
+    read from the latter; without this backfill the reaction values are null
+    until the next weekly fundamentals refresh.
+
+    Uses a targeted SQL jsonb_set UPDATE — the rest of the snapshot (ratings,
+    SEC filings, etc.) is left completely untouched.
+    """
+    import asyncio as _aio
+    import json as _json
+    import math as _math
+
+    sym = symbol.upper()
+
+    # ── 1. Get live_event → reaction_payload + fiscal identity ────────────
+    try:
+        from data.earnings_monitor_store import get_live_event_for_symbol
+        ev = await _aio.to_thread(get_live_event_for_symbol, sym, False)
+    except Exception as exc:
+        print(f"{_LOG}[backfill_ei] {sym}: live_event fetch error: {exc}")
+        return False
+
+    if not ev:
+        print(f"{_LOG}[backfill_ei] {sym}: no live_event found")
+        return False
+
+    rp = _coerce_reaction_dict(ev.get("reaction_payload"))
+    if not rp or rp.get("post_1d_pct") is None:
+        print(f"{_LOG}[backfill_ei] {sym}: reaction_payload empty or post_1d_pct absent")
+        return False
+
+    timing      = rp.get("timing") or "unknown"
+    report_date = rp.get("report_date") or str(ev.get("expected_date") or "")[:10]
+    pre_1d_pct  = rp.get("pre_1d_pct")
+    post_1d_pct = rp.get("post_1d_pct")
+    post_3d_pct = rp.get("post_3d_pct")
+    post_5d_pct = rp.get("post_5d_pct")
+
+    fiscal_year   = ev.get("fiscal_year")
+    fiscal_period = ev.get("fiscal_period")
+
+    if not report_date:
+        print(f"{_LOG}[backfill_ei] {sym}: no report_date")
+        return False
+
+    # ── 2. Load bars to resolve session dates + baseline_close ────────────
+    bars: list[dict] = []
+    try:
+        bars = await _fetch_bars_window(sym, report_date, extra_sessions=8)
+    except Exception as exc:
+        print(f"{_LOG}[backfill_ei] {sym}: bars fetch warning: {exc}")
+
+    def _adj_close_b(bar: dict):
+        v = bar.get("adjClose") or bar.get("close")
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (_math.isnan(f) or _math.isinf(f)) else f
+        except Exception:
+            return None
+
+    sorted_bars = sorted(bars, key=lambda b: str(b.get("date", ""))[:10])
+    bar_dates   = [str(b.get("date", ""))[:10] for b in sorted_bars]
+    date_to_idx = {d: i for i, d in enumerate(bar_dates)}
+
+    baseline_close        = None
+    baseline_date         = None
+    first_reaction_session = None
+    sessions_used         = []
+    pre_earnings_session  = None
+    post_earnings_session = None
+
+    ev_idx = date_to_idx.get(report_date)
+    if ev_idx is not None:
+        if timing == "amc":
+            b = sorted_bars[ev_idx]
+            baseline_close        = _adj_close_b(b)
+            baseline_date         = report_date
+            pre_earnings_session  = report_date
+            fsi = ev_idx + 1
+            if fsi < len(sorted_bars):
+                first_reaction_session = bar_dates[fsi]
+                post_earnings_session  = bar_dates[fsi]
+                sessions_used          = bar_dates[fsi: fsi + 5]
+        elif timing == "bmo":
+            if ev_idx >= 1:
+                baseline_close       = _adj_close_b(sorted_bars[ev_idx - 1])
+                baseline_date        = bar_dates[ev_idx - 1]
+                pre_earnings_session = bar_dates[ev_idx - 1]
+            first_reaction_session = report_date
+            post_earnings_session  = report_date
+            sessions_used          = bar_dates[ev_idx: ev_idx + 5]
+
+    calc_method   = f"{timing}_inferred" if timing in ("amc", "bmo") else "unknown_timing_close_to_close"
+    calc_conf     = "inferred_high"
+    reactions_final = post_5d_pct is not None and bool(sessions_used and len(sessions_used) >= 5)
+
+    def _rnd(v):
+        if v is None:
+            return None
+        try:
+            return round(float(v), 4)
+        except Exception:
+            return None
+
+    price_reaction = {
+        "baseline_date":          baseline_date,
+        "baseline_close":         baseline_close,
+        "first_reaction_session": first_reaction_session,
+        "opening_gap_pct":        None,
+        "reaction_1d_pct":        _rnd(post_1d_pct),
+        "reaction_3d_pct":        _rnd(post_3d_pct),
+        "reaction_5d_pct":        _rnd(post_5d_pct),
+        "max_upside_5d_pct":      None,
+        "max_drawdown_5d_pct":    None,
+        "sessions_used":          sessions_used,
+        "calculation_method":     calc_method,
+        "calculation_confidence": calc_conf,
+        "reactions_final":        reactions_final,
+        "bars_source":            "canonical_cache" if bars else "reaction_payload_only",
+        # Pre/Post positioning
+        "pre_earnings_1d_pct":    _rnd(pre_1d_pct),
+        "post_earnings_1d_pct":   _rnd(post_1d_pct),
+        "pre_earnings_session":   pre_earnings_session,
+        "post_earnings_session":  post_earnings_session,
+        "pre_post_method":        calc_method,
+        "pre_post_confidence":    calc_conf,
+    }
+
+    # ── 3. Load watchlist_fundamentals_cache snapshot ─────────────────────
+    try:
+        from data.watchlist_fundamentals_store import get_snapshot as _get_snap
+        snap = await _aio.to_thread(_get_snap, sym)
+    except Exception as exc:
+        print(f"{_LOG}[backfill_ei] {sym}: snapshot fetch error: {exc}")
+        return False
+
+    if not snap:
+        print(f"{_LOG}[backfill_ei] {sym}: no snapshot in watchlist_fundamentals_cache")
+        return False
+
+    fields: dict = snap.get("fields") or {}
+    ei = fields.get("earnings_intelligence")
+    if not ei or not isinstance(ei, dict):
+        print(f"{_LOG}[backfill_ei] {sym}: no earnings_intelligence in snapshot")
+        return False
+
+    eh: list = list(ei.get("earnings_history") or [])
+    if not eh:
+        print(f"{_LOG}[backfill_ei] {sym}: empty earnings_history")
+        return False
+
+    # ── 4. Match event: fiscal_year+period → date fallback ────────────────
+    matched_idx = None
+    for i, entry in enumerate(eh):
+        if (fiscal_year is not None and fiscal_period is not None and
+                str(entry.get("fiscal_year", "")) == str(fiscal_year) and
+                str(entry.get("fiscal_period", "")) == str(fiscal_period)):
+            matched_idx = i
+            break
+    if matched_idx is None and report_date:
+        for i, entry in enumerate(eh):
+            if str(entry.get("date", ""))[:10] == report_date[:10]:
+                matched_idx = i
+                break
+
+    if matched_idx is None:
+        print(
+            f"{_LOG}[backfill_ei] {sym}: no match for "
+            f"{fiscal_period} {fiscal_year} / date={report_date}"
+        )
+        return False
+
+    # ── 5. Merge: don't overwrite already-computed good values ────────────
+    patched = dict(eh[matched_idx])
+    existing_pr = patched.get("price_reaction") or {}
+    if isinstance(existing_pr, dict) and existing_pr.get("reaction_1d_pct") is not None:
+        # Existing has real data — only fill null gaps
+        merged = dict(existing_pr)
+        for k, v in price_reaction.items():
+            if merged.get(k) is None and v is not None:
+                merged[k] = v
+        patched["price_reaction"] = merged
+    else:
+        patched["price_reaction"] = price_reaction
+
+    new_eh = list(eh)
+    new_eh[matched_idx] = patched
+
+    # ── 6. Recompute reaction_summary ─────────────────────────────────────
+    new_summary = ei.get("reaction_summary")
+    try:
+        from services.watchlist_fundamentals_refresh import FmpFundamentalsRefresher as _FMR
+        new_summary = _FMR._compute_reaction_summary(new_eh)
+    except Exception as exc:
+        print(f"{_LOG}[backfill_ei] {sym}: summary recompute error: {exc}")
+
+    # ── 7. Targeted SQL jsonb_set UPDATE ───────────────────────────────────
+    try:
+        from data.pg_storage import _get_conn, _put_conn
+
+        def _do_patch():
+            conn = _get_conn()
+            if conn is None:
+                return False
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE watchlist_fundamentals_cache
+                    SET fields = jsonb_set(
+                                    jsonb_set(
+                                        fields,
+                                        '{earnings_intelligence,earnings_history}',
+                                        %s::jsonb
+                                    ),
+                                    '{earnings_intelligence,reaction_summary}',
+                                    %s::jsonb
+                                ),
+                        refreshed_at = NOW()
+                    WHERE symbol = %s
+                    """,
+                    (
+                        _json.dumps(new_eh),
+                        _json.dumps(new_summary) if new_summary else "{}",
+                        sym,
+                    ),
+                )
+                n = cur.rowcount
+                conn.commit()
+                cur.close()
+                return n > 0
+            finally:
+                _put_conn(conn)
+
+        ok = await _aio.to_thread(_do_patch)
+        if ok:
+            r1 = price_reaction.get("reaction_1d_pct")
+            print(
+                f"{_LOG}[backfill_ei] {sym}: OK — "
+                f"{fiscal_period} {fiscal_year} "
+                f"reaction_1d={r1} post_earnings_1d={price_reaction.get('post_earnings_1d_pct')}"
+            )
+        else:
+            print(f"{_LOG}[backfill_ei] {sym}: UPDATE matched 0 rows")
+        return ok
+    except Exception as exc:
+        print(f"{_LOG}[backfill_ei] {sym}: SQL patch error: {exc}")
+        return False
+
+
+async def bulk_backfill_ei_reactions(lookback_days: int = 30) -> dict:
+    """
+    Run backfill_ei_price_reaction for every complete live event in the
+    last `lookback_days` calendar days that has a finalized reaction_payload.
+    """
+    import asyncio as _aio
+
+    since = (date.today() - timedelta(days=lookback_days)).isoformat()
+    try:
+        from data.earnings_monitor_store import get_recent_live_events
+        rows = await _aio.to_thread(get_recent_live_events, 200, since, False)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    result_states = {"results_available", "results_updated", "complete"}
+    candidates = [
+        r for r in rows
+        if r.get("state") in result_states
+           and _coerce_reaction_dict(r.get("reaction_payload")).get("post_1d_pct") is not None
+    ]
+
+    seen: set[str] = set()
+    ok_count   = 0
+    fail_count = 0
+    for ev in candidates:
+        sym = (ev.get("symbol") or "").upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        try:
+            patched = await backfill_ei_price_reaction(sym)
+            if patched:
+                ok_count += 1
+            else:
+                fail_count += 1
+        except Exception as exc:
+            print(f"{_LOG}[bulk_backfill] {sym}: {exc}")
+            fail_count += 1
+
+    return {
+        "symbols_attempted": len(seen),
+        "ok":   ok_count,
+        "fail": fail_count,
+        "lookback_days": lookback_days,
     }

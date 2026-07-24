@@ -1,0 +1,274 @@
+FINAL BACKEND PRODUCTION FIX — RECENT EARNINGS + FINALIZED REACTION CONTRACT
+
+Complete this entire correction in one pass.
+
+The user has just pushed the current backend workspace to Git.
+
+Do not reset, pull, checkout, or overwrite the current workspace.
+Do not modify the frontend.
+Do not add features or new architecture.
+Do not create new endpoints unless the existing endpoint cannot be corrected.
+Do not stop after local testing.
+Do not push to Git.
+
+CURRENT LIVE FAILURES
+
+1. The Watchlist Recent Earnings toggle renders:
+   “No watchlist earnings reported in the past 30 days.”
+
+The backend implementation previously reported that:
+
+GET /api/watchlist/earnings
+
+returns:
+
+- upcoming
+- recent
+- meta
+
+and that recent contained approximately nine events.
+
+2. GOOGL and NVEC still show “Price Reaction Pending” in the ticker popup even though the backend reaction repair previously calculated:
+
+NVEC:
+- pre_1d approximately -1.65%
+- post_1d approximately +54.83%
+
+GOOGL:
+- post_1d approximately -7.13%
+
+The read contracts are therefore either stale, incomplete, inconsistently named, or not deployed.
+
+PRIMARY OBJECTIVE
+
+Make the published backend return one consistent, production-ready contract that the existing frontend can consume directly.
+
+PART 1 — VERIFY PRODUCTION FIRST
+
+Test the actual deployed backend:
+
+https://fast-api-server-aidanpilon.replit.app
+
+Verify the authenticated/live responses for:
+
+GET /api/watchlist/earnings
+GET /api/watchlist/ticker-detail/NVEC
+GET /api/watchlist/ticker-detail/GOOGL
+GET /api/watchlist/ticker-detail/INTC
+GET /api/earnings/live-events
+
+Do not rely on local development responses.
+
+Report internally:
+
+- whether production contains response.recent
+- recent array length
+- whether NVEC and GOOGL appear
+- exact current reaction field names and nesting
+- whether earnings_history[0].price_reaction contains finalized values
+- whether live_event.reaction_payload contains finalized values
+- whether production is running the latest commit
+
+After identifying the discrepancy, fix it rather than returning an audit.
+
+PART 2 — CANONICAL REACTION WRITE
+
+The reaction finalizer must persist finalized horizons into all canonical cached locations required by existing reads.
+
+For the matching earnings_history event, persist inside price_reaction:
+
+- pre_earnings_1d_pct
+- post_earnings_1d_pct
+- pre_earnings_session
+- post_earnings_session
+- reaction_1d_pct where that is the existing backward-compatible Post 1D field
+- reaction_3d_pct when due
+- reaction_5d_pct when due
+- reactions_final
+- calculation_method
+- calculation_confidence
+
+Do not store the only copy solely as:
+
+live_event.reaction_payload.post_1d_pct
+
+The ticker-detail Earnings History and Price Moves components consume earnings_history.price_reaction and must receive the finalized value there.
+
+Preserve backward compatibility if both post_1d_pct and post_earnings_1d_pct currently exist, but choose and document one canonical field.
+
+PART 3 — MATCH AND UPDATE THE CORRECT QUARTER
+
+Match the event using:
+
+1. fiscal_year + fiscal_period
+2. symbol + report date fallback
+
+Update the existing quarter in place.
+
+Do not create duplicate quarters.
+
+For NVEC:
+
+- Q1 2027
+- report date July 22, 2026
+- AMC
+- Post 1D must use July 23 as the first post-earnings session
+
+For GOOGL:
+
+- Q2 2026
+- report date July 22, 2026
+- AMC
+- Post 1D must use July 23 as the first post-earnings session
+
+PART 4 — REACTION SUMMARY
+
+After updating a historical event, recompute and persist:
+
+- reaction_summary
+- observations_post_1d
+- average_post_1d_pct
+- median_post_1d_pct
+- continuation/reversal metrics
+- most_recent_completed_reaction
+
+Do not leave the detailed event updated while the summary remains stale.
+
+PART 5 — LIVE EVENT REACTION
+
+Keep live_event.reaction_payload synchronized with the historical event.
+
+Return a plain JSON object, never:
+
+- null-plus-object arrays
+- [null, {...}]
+- JSON strings
+- malformed lists
+
+Increment event revision or updated_at once when a reaction horizon becomes newly available so the existing frontend feed can detect the update.
+
+Do not generate a duplicate “earnings reported” alert.
+
+PART 6 — RECENT EARNINGS RESPONSE
+
+Correct the existing:
+
+GET /api/watchlist/earnings
+
+response.
+
+It must return:
+
+{
+  "earnings": [...existing upcoming compatibility array...],
+  "upcoming": [...],
+  "recent": [...],
+  "meta": {...}
+}
+
+Recent requirements:
+
+- previous 30 calendar days
+- newest report first
+- current authenticated user/watchlist universe
+- one row per symbol/reporting event
+- completed/results events only
+- full actual values
+- estimates and surprises when available
+- finalized Post 1D when available
+- truthful nulls when unavailable
+
+Do not filter out completed events merely because the monitor target is no longer active.
+
+Do not accidentally apply the upcoming-date filter to recent events.
+
+Use advanced-state precedence:
+
+complete
+results_updated
+results_available
+results_partial
+
+Do not allow scheduled rows to replace reported rows.
+
+PART 7 — USER/WATCHLIST SCOPING
+
+Verify the production authenticated user used by the frontend receives the same recent rows as the backend test.
+
+Inspect for:
+
+- incorrect user ID
+- wrong symbols parameter order
+- default-user mismatch
+- empty watchlist join
+- auth proxy differences
+
+Do not claim success using an unscoped admin query while the real user response remains empty.
+
+PART 8 — REQUIRED PRODUCTION VALUES
+
+After the fix, production must return:
+
+NVEC ticker detail:
+
+- earnings_history[0] = Q1 2027
+- pre_earnings_1d_pct approximately -1.65%
+- post_earnings_1d_pct approximately +54.83%
+- Post 1D is not null
+
+GOOGL ticker detail:
+
+- earnings_history[0] = Q2 2026
+- post_earnings_1d_pct is non-null
+- expected value approximately -7.13%, subject to the canonical adjusted-history calculation
+
+INTC ticker detail:
+
+- Q2 2026 remains current
+- Post 1D remains finalized
+- no regression
+
+Watchlist earnings:
+
+- recent length is greater than zero
+- recent contains the applicable watchlist symbols
+- rows are sorted newest first
+
+PART 9 — READ-PATH SAFETY
+
+These reads must make zero live provider calls:
+
+- /api/watchlist/earnings
+- ticker-detail
+- live-events
+
+All repair/provider work remains in background/admin paths.
+
+PART 10 — PUBLISH AND PROVE
+
+Publish the backend.
+
+Then verify from the deployed production URL—not localhost:
+
+1. Health returns 200.
+2. /api/watchlist/earnings returns non-empty recent.
+3. NVEC Post 1D is present in earnings_history.
+4. GOOGL Post 1D is present in earnings_history.
+5. live_event reaction payloads are plain objects.
+6. No duplicate quarter rows exist.
+7. Read endpoints are provider-call-free.
+
+Return exact abbreviated production JSON for:
+
+- response.recent[0:3]
+- NVEC earnings_history[0].price_reaction
+- GOOGL earnings_history[0].price_reaction
+- NVEC live_event.reaction_payload
+
+End with exactly:
+
+PRODUCTION EARNINGS CONTRACT FIXED
+
+or:
+
+NOT COMPLETE
