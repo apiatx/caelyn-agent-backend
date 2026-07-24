@@ -397,3 +397,110 @@ async def get_target_by_symbol(symbol: str, request: Request):
         "targets": [_target_to_dict(t) for t in matches],
         "count":   len(matches),
     }
+
+
+@router.post("/monitor/admin/reaction-repair")
+async def trigger_reaction_repair(
+    request: Request,
+    lookback_days: int = 10,
+):
+    """
+    Admin: run reaction_catchup_pass to finalize missing Pre/Post price reactions
+    for complete events in the last N days.
+
+    Fetches fresh Tradier bars for any symbol whose canonical history is stale
+    and merges computed horizons into earnings_live_events.reaction_payload.
+    """
+    _check_admin(request)
+    import asyncio as _aio
+    try:
+        from services.earnings_reaction_service import reaction_catchup_pass
+        result = await _aio.wait_for(
+            reaction_catchup_pass(lookback_days=min(lookback_days, 30)),
+            timeout=120.0,
+        )
+        return {"status": "ok", "result": result}
+    except _aio.TimeoutError:
+        return {"status": "timeout", "error": "reaction_catchup_pass exceeded 120s"}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@router.post("/monitor/admin/repair-symbol/{symbol}")
+async def repair_symbol_event(symbol: str, request: Request):
+    """
+    Admin: targeted repair for one symbol.
+
+    1. Clears next_fmp_check_at on the active target (stops stale polling).
+    2. Runs _earnings_catchup_pass for just this symbol (fills estimates if available).
+    3. Runs reaction finalization for the canonical live event.
+    """
+    _check_admin(request)
+    import asyncio as _aio
+    sym = symbol.upper()
+    result: dict = {"symbol": sym, "steps": []}
+
+    try:
+        from data.earnings_monitor_store import get_targets_for_symbols, update_target
+        sym_targets = await _aio.to_thread(get_targets_for_symbols, [sym])
+        if sym_targets:
+            for t in sym_targets:
+                ok = await _aio.to_thread(update_target, t["id"], next_fmp_check_at=None)
+                result["steps"].append({
+                    "step":      "clear_next_fmp_check_at",
+                    "target_id": t["id"],
+                    "status":    t.get("status"),
+                    "ok":        ok,
+                })
+        else:
+            result["steps"].append({"step": "clear_next_fmp_check_at", "skipped": "no targets found"})
+    except Exception as exc:
+        result["steps"].append({"step": "clear_next_fmp_check_at", "error": str(exc)})
+
+    try:
+        from services.earnings_monitor_service import run_live_earnings_monitor_once
+        catchup = await _aio.wait_for(
+            run_live_earnings_monitor_once(force_symbol=sym),
+            timeout=60.0,
+        )
+        result["steps"].append({"step": "fmp_check", "result": catchup})
+    except _aio.TimeoutError:
+        result["steps"].append({"step": "fmp_check", "error": "timeout"})
+    except Exception as exc:
+        result["steps"].append({"step": "fmp_check", "error": str(exc)})
+
+    try:
+        from data.earnings_monitor_store import (
+            get_live_event_for_symbol, get_targets_for_symbols,
+        )
+        ev = await _aio.to_thread(get_live_event_for_symbol, sym, False)
+        if ev:
+            rp      = ev.get("reaction_payload") or {}
+            rd      = str(ev.get("expected_date") or "")[:10]
+            tgts    = await _aio.to_thread(get_targets_for_symbols, [sym])
+            timing  = next(
+                (t.get("expected_timing") for t in tgts
+                 if str(t.get("expected_date") or "")[:10] == rd),
+                None,
+            )
+            from services.earnings_reaction_service import finalize_reactions_for_event
+            rxn = await _aio.wait_for(
+                finalize_reactions_for_event(ev["event_id"], sym, rd, timing, rp),
+                timeout=40.0,
+            )
+            result["steps"].append({
+                "step":        "reaction_finalization",
+                "event_id":    ev["event_id"],
+                "report_date": rd,
+                "timing":      timing,
+                "horizons":    rxn.get("horizons_available") if rxn else [],
+            })
+        else:
+            result["steps"].append({"step": "reaction_finalization", "skipped": "no live event"})
+    except _aio.TimeoutError:
+        result["steps"].append({"step": "reaction_finalization", "error": "timeout"})
+    except Exception as exc:
+        result["steps"].append({"step": "reaction_finalization", "error": str(exc)})
+
+    result["status"] = "ok"
+    return result

@@ -1381,7 +1381,22 @@ async def _earnings_catchup_pass() -> dict:
             f"[EarnMon][catchup] complete: "
             f"checked={checked} filled={filled} ei_triggered={ei_triggered} retry_set={retry_set}"
         )
-        return {"checked": checked, "filled": filled, "ei_triggered": ei_triggered, "retry_set": retry_set}
+
+        # ── reaction finalization pass (separate concern, non-blocking) ───────
+        reaction_result: dict = {}
+        try:
+            from services.earnings_reaction_service import reaction_catchup_pass
+            reaction_result = await reaction_catchup_pass(lookback_days=10)
+        except Exception as _rex:
+            print(f"[EarnMon][catchup] reaction_catchup_pass error: {_rex}")
+
+        return {
+            "checked": checked,
+            "filled":  filled,
+            "ei_triggered": ei_triggered,
+            "retry_set": retry_set,
+            "reaction": reaction_result,
+        }
 
     except Exception as exc:
         print(f"[EarnMon][catchup] top-level error: {exc}")

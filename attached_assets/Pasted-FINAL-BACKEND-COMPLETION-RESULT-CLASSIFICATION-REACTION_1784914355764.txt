@@ -1,0 +1,464 @@
+FINAL BACKEND COMPLETION — RESULT CLASSIFICATION, REACTION FINALIZATION, AND RECENT EARNINGS
+
+Complete this entire task autonomously in one pass:
+
+1. Audit the actual NVEC data.
+2. Fix the result classification and estimate persistence.
+3. Add automatic post-earnings reaction finalization.
+4. Keep Earnings History and Price Moves current.
+5. Add a cache-only 30-day Recent Earnings dataset for the Watchlist.
+6. Repair recent incomplete events.
+7. Test production behavior.
+8. Publish the backend.
+
+Do not stop after an audit.
+Do not stop after compilation.
+Do not modify the frontend.
+Do not create another Earnings Intelligence system.
+Do not create another scheduler architecture.
+Do not add provider calls to ticker-detail or Watchlist read endpoints.
+Do not push to Git.
+
+CURRENT PROBLEMS
+
+NVEC reported earnings after market close on July 22, 2026.
+
+The frontend currently shows:
+
+- Q1 2027 results
+- Revenue actual: approximately $11.0M
+- EPS actual: approximately $1.32
+- Estimate unavailable
+- Bubble is blue rather than green
+- Before vs After Earnings: Move Pending
+- Price Moves latest event has null Pre/Post/Gap/3D/5D values
+- History includes the newest quarter, but its estimates, surprises, and reaction are incomplete
+
+Today is July 24, 2026.
+
+Because NVEC reported AMC on July 22:
+
+- July 23 was its first completed post-earnings regular session
+- Post 1D should now be calculable from the July 22 close to July 23 close
+- The latest historical earnings record should be refreshed
+- Price Moves should no longer remain stale for the 1D reaction
+
+INTC reported AMC on July 23.
+
+At midday July 24, INTC Post 1D should remain pending until the July 24 regular session has closed. It should then finalize after market close using the same process.
+
+PRIMARY OBJECTIVES
+
+A. Give NVEC the correct beat/miss classification when supported by real estimates.
+B. Automatically finalize post-earnings reactions after the required trading sessions close.
+C. Update earnings_history, reaction_summary, History, and Price Moves without waiting for a weekly refresh.
+D. Provide the Watchlist with all recent earnings from the past 30 days, sorted newest first.
+E. Keep all read endpoints cache/database-only.
+
+PART 1 — AUDIT THE REAL NVEC SOURCES
+
+Inspect all available NVEC records in:
+
+- earnings_monitor_targets
+- earnings_live_events
+- earnings_intelligence.earnings_history
+- existing FMP earnings calendar cache
+- existing FMP live earnings response/cache
+- existing pre-event estimate snapshots
+- existing SEC earnings materials
+- canonical price history
+
+For NVEC’s July 22 event, report:
+
+- expected date
+- expected timing
+- fiscal period/year
+- EPS estimate
+- EPS actual
+- EPS surprise amount
+- EPS surprise percentage
+- revenue estimate
+- revenue actual
+- revenue surprise amount
+- revenue surprise percentage
+- live-event classification
+- estimate source
+- classification source
+- current reaction fields
+- sessions currently selected
+
+Determine exactly why estimates are null and the event is not classified as a beat.
+
+Do not stop at the audit. Fix the canonical data.
+
+PART 2 — ESTIMATE SOURCE AND CLASSIFICATION
+
+Use this precedence for event estimates:
+
+1. Pre-release estimate snapshot already stored with the monitor target/event
+2. Existing cached FMP earnings-calendar estimate for the same symbol/reporting event
+3. Existing FMP live earnings-report estimate
+4. Matching estimate already present in earnings_history
+5. Null when genuinely unavailable
+
+Do not use a revised post-release estimate when a valid pre-release snapshot exists.
+
+Do not fabricate estimates.
+
+Persist the estimate source and snapshot timestamp where the existing schema supports it.
+
+When valid actuals and estimates exist, calculate and persist:
+
+- eps_surprise_amount
+- eps_surprise_pct
+- revenue_surprise_amount
+- revenue_surprise_pct
+
+Classification:
+
+double_beat:
+- EPS surprise > 0
+- Revenue surprise > 0
+
+double_miss:
+- EPS surprise < 0
+- Revenue surprise < 0
+
+mixed:
+- one positive and one negative
+- or one comparison is in line
+
+partial:
+- only one valid actual-versus-estimate comparison exists
+
+unclassified:
+- no valid estimates exist
+
+Do not classify merely because actual values are positive.
+
+For NVEC, verify whether the real source data supports double_beat. If it does, persist double_beat and the corresponding surprise values. If FMP genuinely provides no estimates and no pre-release snapshot exists, preserve unclassified and report the provider gap honestly.
+
+PART 3 — KEEP LIVE EVENT AND EARNINGS HISTORY CONSISTENT
+
+When structured results change or previously missing estimates become available:
+
+- update the canonical live event
+- increment revision/checksum once
+- update results_payload
+- update classification
+- update updated_at
+- trigger the existing narrow single-symbol Earnings Intelligence refresh
+- update the matching earnings_history record
+- preserve all older quarters
+- preserve ratings, targets, materials, fundamentals, and unrelated JSONB fields
+
+Do not create duplicate quarter records.
+
+Match the existing event using:
+
+1. fiscal year + fiscal period
+2. expected/report date fallback
+
+PART 4 — POST-EARNINGS REACTION FINALIZER
+
+Add a targeted reaction-finalization pass to the existing post-yield Live Earnings scheduler.
+
+Do not create another scheduler or worker architecture.
+
+The existing scheduler should wake periodically and process only due incomplete reactions.
+
+Use canonical_history_service and existing Tradier-first/FMP-fallback history behavior.
+
+No frontend or read-request provider calls.
+
+AMC event:
+
+Pre 1D:
+report-date close / prior-session close - 1
+
+Post 1D:
+next-session close / report-date close - 1
+
+BMO event:
+
+Pre 1D:
+prior-session close / prior-prior-session close - 1
+
+Post 1D:
+report-date close / prior-session close - 1
+
+Use actual trading sessions, not calendar-day assumptions.
+
+Handle:
+
+- weekends
+- market holidays
+- missing bars
+- newly listed companies
+- halted symbols
+- split-adjusted data according to the existing canonical history convention
+
+PART 5 — REACTION FINALIZATION SCHEDULE
+
+For a newly reported earnings event, persist or derive the next required reaction check.
+
+Suggested behavior:
+
+Post 1D:
+- check after the first complete post-earnings regular session closes
+- use a reasonable data-availability buffer after 4:00 PM ET
+
+Post 3D:
+- check after the third complete post-earnings regular session closes
+
+Post 5D:
+- check after the fifth complete post-earnings regular session closes
+
+Do not poll continuously throughout the trading day for a closing-session reaction.
+
+Do not calculate a full-day Post 1D move at midday.
+
+For NVEC AMC July 22:
+
+- first post session = July 23
+- Post 1D should be finalized now
+
+For INTC AMC July 23:
+
+- first post session = July 24
+- Post 1D remains pending before the July 24 close
+- it should finalize after the July 24 close plus the normal data buffer
+
+PART 6 — REACTION UPDATE BEHAVIOR
+
+When a new horizon becomes available:
+
+- update the matching earnings_history[].price_reaction
+- update reaction_summary
+- update observations counts
+- update most_recent_completed_reaction
+- update reactions_final truthfully
+- preserve already-final historical horizons
+- do not overwrite a valid finalized value with null
+- keep unavailable future horizons null
+
+Update the matching live event’s reaction_payload and revision/checksum so the frontend’s existing global feed detects the reaction update.
+
+Do not create a fake new earnings-results alert.
+
+A reaction update may use an event revision or source-status update, but it should not generate another “earnings reported” toast unless the existing alert rules explicitly support a price-reaction alert.
+
+PART 7 — STARTUP CATCH-UP FOR INCOMPLETE REACTIONS
+
+Extend the existing post-yield startup catch-up.
+
+On app wake/start:
+
+- inspect recent reported earnings from the previous 10 calendar days
+- find only events with incomplete due reaction horizons
+- determine whether the required trading sessions have completed
+- calculate only horizons now due
+- skip finalized events
+- do not replay every missed scheduler tick
+- do not scan all historical quarters
+
+This guarantees that if the app was asleep after a market close, the missing Post 1D/3D/5D values are filled when it wakes.
+
+PART 8 — TARGETED RECENT-EVENT REPAIR
+
+Run a one-time targeted repair for reported events in the previous 30 days where any of these are missing:
+
+- estimate snapshot
+- surprise fields
+- result classification
+- Post 1D after the required session has completed
+- reaction_summary update
+- newest-quarter history synchronization
+
+Do not run an unrestricted full-history provider backfill.
+
+Report:
+
+- events inspected
+- estimates restored
+- classifications repaired
+- Post 1D reactions finalized
+- 3D reactions finalized
+- 5D reactions finalized
+- still unavailable
+- provider gaps
+- failures
+
+PART 9 — RECENT EARNINGS DATASET FOR WATCHLIST
+
+Audit the existing backend endpoint/cache used by the Watchlist “Upcoming Earnings” section.
+
+Reuse that architecture.
+
+Extend the existing response or existing endpoint so the frontend receives both:
+
+- upcoming earnings
+- recent earnings
+
+Do not create a parallel calendar system.
+
+Recent Earnings requirements:
+
+- same user/watchlist universe and eligibility as Upcoming Earnings
+- reported during the previous 30 calendar days
+- newest report first
+- one logical record per symbol/reporting event
+- actual results must exist
+- partial results may be returned with truthful partial status
+- cache/database-only read path
+
+Recommended response shape:
+
+{
+  "upcoming": [...existing upcoming records...],
+  "recent": [
+    {
+      "symbol": "NVEC",
+      "company_name": "NVE Corp",
+      "fiscal_period": "Q1",
+      "fiscal_year": "2027",
+      "report_date": "2026-07-22",
+      "expected_timing": "amc",
+      "state": "complete",
+      "classification": "double_beat",
+      "eps_actual": 1.32,
+      "eps_estimate": ...,
+      "eps_surprise_amount": ...,
+      "eps_surprise_pct": ...,
+      "revenue_actual": 11000000,
+      "revenue_estimate": ...,
+      "revenue_surprise_amount": ...,
+      "revenue_surprise_pct": ...,
+      "post_1d_pct": ...,
+      "reaction_status": "final",
+      "event_id": "...",
+      "updated_at": "..."
+    }
+  ],
+  "coverage": {...},
+  "updated_at": "..."
+}
+
+Use the actual existing API naming conventions rather than blindly copying this example.
+
+Do not return null as zero.
+
+PART 10 — RECENT-EARNINGS SORTING AND DEDUPLICATION
+
+Recent results must be:
+
+- limited to the last 30 calendar days
+- sorted by report date descending
+- then updated timestamp descending
+- deduplicated by symbol + fiscal period/year
+- scoped consistently with the current Watchlist Upcoming Earnings section
+
+If multiple live transition rows exist, select the most advanced state using:
+
+complete
+results_updated
+results_available
+results_partial
+filing_detected
+monitoring
+scheduled
+
+PART 11 — READ-PATH PERFORMANCE
+
+These endpoints must remain provider-call-free:
+
+- ticker-detail
+- live-events feed
+- Watchlist upcoming/recent earnings endpoint
+
+Provider calls occur only in:
+
+- the existing background scheduler
+- startup catch-up
+- explicit protected admin repair/testing
+
+Do not make opening the Watchlist or ticker popup trigger FMP/Tradier/SEC calls.
+
+PART 12 — REQUIRED NVEC VALIDATION
+
+Verify after implementation:
+
+1. NVEC newest earnings record is Q1 2027, July 22.
+2. Revenue actual remains approximately $11.0M.
+3. EPS actual remains approximately $1.32.
+4. Estimates and surprise fields populate when real source data exists.
+5. Classification is double_beat when supported.
+6. Post 1D is non-null using the July 23 close.
+7. Pre 1D remains correct.
+8. reaction_summary includes the new observation.
+9. Price Moves latest row is updated.
+10. History latest row is updated.
+11. live_event reaction_payload is updated.
+12. Read endpoints make zero provider calls.
+
+PART 13 — REQUIRED INTC VALIDATION
+
+Verify:
+
+1. INTC Q2 2026 remains the newest quarter.
+2. Results remain double_beat.
+3. At midday July 24, Post 1D remains pending.
+4. After the July 24 close and data buffer, the reaction-finalizer can calculate Post 1D.
+5. No premature full-day value is written.
+6. Existing historical data remains intact.
+
+Use a deterministic simulated clock/session test if the market has not yet closed during testing.
+
+Do not write simulated values into production.
+
+PART 14 — PRODUCTION VERIFICATION
+
+Run:
+
+- syntax/tests
+- startup test
+- targeted NVEC repair
+- recent-30-day repair
+- production publish
+- live endpoint verification
+
+Verify production health remains 200.
+
+Return exact abbreviated production payloads for:
+
+- ticker-detail/NVEC
+- ticker-detail/INTC
+- Watchlist upcoming/recent earnings endpoint
+
+FINAL REPORT
+
+Return one report containing:
+
+1. Files changed
+2. NVEC estimate source found
+3. Classification fix
+4. Reaction-finalizer design
+5. Scheduler/catch-up behavior
+6. NVEC Post 1D result
+7. INTC pending/finalization behavior
+8. History and Price Moves synchronization
+9. Recent Earnings response contract
+10. 30-day repair totals
+11. Provider-call counts
+12. Production deployment result
+13. Exact frontend-ready contract
+
+End with exactly:
+
+BACKEND EARNINGS FINALIZATION READY
+
+or:
+
+NOT COMPLETE
+
+Do not declare readiness unless NVEC’s due Post 1D value and recent-earnings dataset are live in production.

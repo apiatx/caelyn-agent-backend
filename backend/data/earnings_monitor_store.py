@@ -737,6 +737,129 @@ def get_recent_live_events(
         _put_conn(conn)
 
 
+# ── reaction payload update ───────────────────────────────────────────────────
+
+def update_reaction_payload(event_id: str, payload: dict, merge: bool = True) -> bool:
+    """
+    Write (or JSON-merge) reaction_payload for an existing live event.
+
+    merge=True  — JSONB || operator: preserves keys already in the row that are
+                  absent from payload (e.g. preliminary snapshot stays when
+                  adding post_3d later).
+    merge=False — full replacement.
+    """
+    conn = _get_conn()
+    if conn is None:
+        return False
+    try:
+        cur = conn.cursor()
+        payload_json = _jdump(payload)
+        if merge:
+            # Guard against JSON null (stored as 'null'::jsonb) which makes
+            # the || operator produce an array instead of a merged object.
+            cur.execute(
+                """
+                UPDATE public.earnings_live_events
+                SET    reaction_payload = CASE
+                           WHEN reaction_payload IS NULL
+                             OR reaction_payload = 'null'::jsonb
+                             OR jsonb_typeof(reaction_payload) <> 'object'
+                           THEN %s::jsonb
+                           ELSE reaction_payload || %s::jsonb
+                       END,
+                       updated_at = NOW()
+                WHERE  event_id = %s
+                """,
+                (payload_json, payload_json, event_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE public.earnings_live_events
+                SET    reaction_payload = %s::jsonb,
+                       updated_at       = NOW()
+                WHERE  event_id = %s
+                """,
+                (payload_json, event_id),
+            )
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as exc:
+        print(f"[EarnMonStore] update_reaction_payload error {event_id}: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _put_conn(conn)
+
+
+def get_recent_complete_events_for_symbols(
+    symbols: list[str],
+    since_date: str,
+    states: tuple[str, ...] = ("results_available", "results_updated", "complete"),
+) -> list[dict]:
+    """
+    Return the most-advanced recent completed event per symbol (DISTINCT ON symbol).
+
+    Used by watchlist earnings endpoint to build the "recent" section: events
+    that already reported (state in states) since since_date.
+
+    Returns a flat list ordered by expected_date DESC.
+    """
+    if not symbols:
+        return []
+    conn = _get_conn()
+    if conn is None:
+        return []
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join(["%s"] * len(symbols))
+        state_ph     = ",".join(["%s"] * len(states))
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (symbol)
+                   event_id, event_key, symbol, expected_date, fiscal_period, fiscal_year,
+                   state, detected_at, updated_at, revision, is_dry_run,
+                   filing_payload, results_payload, reaction_payload,
+                   source_status, classification, checksum, created_at
+            FROM   public.earnings_live_events
+            WHERE  symbol = ANY(ARRAY[{placeholders}])
+              AND  is_dry_run = FALSE
+              AND  state IN ({state_ph})
+              AND  expected_date >= %s
+            ORDER  BY symbol,
+                CASE state
+                    WHEN 'complete'          THEN 0
+                    WHEN 'results_updated'   THEN 1
+                    WHEN 'results_available' THEN 2
+                    ELSE                          9
+                END ASC,
+                revision DESC,
+                updated_at DESC
+            """,
+            [s.upper() for s in symbols] + list(states) + [since_date],
+        )
+        cols = [
+            "event_id", "event_key", "symbol", "expected_date", "fiscal_period",
+            "fiscal_year", "state", "detected_at", "updated_at", "revision",
+            "is_dry_run", "filing_payload", "results_payload", "reaction_payload",
+            "source_status", "classification", "checksum", "created_at",
+        ]
+        rows = cur.fetchall()
+        cur.close()
+        result = [dict(zip(cols, r)) for r in rows]
+        result.sort(key=lambda x: str(x.get("expected_date") or ""), reverse=True)
+        return result
+    except Exception as exc:
+        print(f"[EarnMonStore] get_recent_complete_events_for_symbols error: {exc}")
+        return []
+    finally:
+        _put_conn(conn)
+
+
 # ── per-user event feed ───────────────────────────────────────────────────────
 
 def mark_event_read(event_id: str, user_id: str) -> bool:

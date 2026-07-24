@@ -3491,17 +3491,87 @@ async def watchlist_earnings_endpoint(
     # Sort by date_raw ascending
     normalised.sort(key=lambda x: x.get("date_raw") or "")
 
+    # ── Recent earnings (last 30 days) from earnings_live_events ─────────────
+    recent_normalised: list[dict] = []
+    try:
+        from datetime import date as _date2, timedelta as _td2
+        import asyncio as _aio_re
+
+        _since = (_date2.today() - _td2(days=30)).isoformat()
+        from data.earnings_monitor_store import get_recent_complete_events_for_symbols
+        _recent_raw = await _aio_re.to_thread(
+            get_recent_complete_events_for_symbols,
+            list(symbols),
+            _since,
+        )
+
+        def _parse_jb(v):
+            if v is None:
+                return {}
+            if isinstance(v, dict):
+                return v
+            try:
+                import json as _jj
+                return _jj.loads(v)
+            except Exception:
+                return {}
+
+        def _fmt_iso(dt_val) -> Optional[str]:
+            if dt_val is None:
+                return None
+            if hasattr(dt_val, "isoformat"):
+                return dt_val.isoformat()[:10]
+            s = str(dt_val)
+            return s[:10] if s else None
+
+        for rev in _recent_raw:
+            sym = (rev.get("symbol") or "").upper()
+            if not sym:
+                continue
+            rp  = _parse_jb(rev.get("results_payload"))
+            rxn = _parse_jb(rev.get("reaction_payload"))
+            recent_normalised.append({
+                "ticker":               sym,
+                "earnings_date":        _fmt_iso(rev.get("expected_date")),
+                "earnings_date_fmt":    _fmt_date(_fmt_iso(rev.get("expected_date"))),
+                "fiscal_period":        rev.get("fiscal_period"),
+                "fiscal_year":          rev.get("fiscal_year"),
+                "state":                rev.get("state"),
+                "classification":       rev.get("classification"),
+                "eps_actual":           rp.get("eps_actual"),
+                "eps_estimate":         rp.get("eps_estimate"),
+                "eps_surprise_pct":     rp.get("eps_surprise_pct"),
+                "revenue_actual":       rp.get("revenue_actual"),
+                "revenue_estimate":     rp.get("revenue_estimate"),
+                "revenue_surprise_pct": rp.get("revenue_surprise_pct"),
+                "pre_1d_pct":           rxn.get("pre_1d_pct"),
+                "post_1d_pct":          rxn.get("post_1d_pct"),
+                "post_3d_pct":          rxn.get("post_3d_pct"),
+                "post_5d_pct":          rxn.get("post_5d_pct"),
+                "reaction_computed_at": rxn.get("computed_at"),
+                "in_watchlist":         True,
+                "source":               "earnings_monitor",
+            })
+    except Exception as _re_exc:
+        print(f"[WATCHLIST_EARNINGS] recent events error: {_re_exc}")
+
     _ms = round((_tm.time() - _t0) * 1000)
-    meta["elapsed_ms"]   = _ms
-    meta["from_date"]    = _from
-    meta["to_date"]      = _to
-    meta["events_count"] = len(normalised)
+    meta["elapsed_ms"]        = _ms
+    meta["from_date"]         = _from
+    meta["to_date"]           = _to
+    meta["events_count"]      = len(normalised)
+    meta["recent_count"]      = len(recent_normalised)
 
     print(
-        f"[WATCHLIST_EARNINGS] symbols={len(symbols)} events={len(normalised)} "
-        f"cache_status={meta.get('cache_status')} elapsed_ms={_ms}"
+        f"[WATCHLIST_EARNINGS] symbols={len(symbols)} upcoming={len(normalised)} "
+        f"recent={len(recent_normalised)} cache_status={meta.get('cache_status')} elapsed_ms={_ms}"
     )
-    return {"earnings": normalised, "meta": meta}
+    return {
+        "earnings":  normalised,
+        "upcoming":  normalised,
+        "recent":    recent_normalised,
+        "meta":      meta,
+    }
 
 
 # ── Earnings by Explicit Symbol List ─────────────────────────────────────────
